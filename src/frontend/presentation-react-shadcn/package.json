@@ -1,6 +1,6 @@
 {
   "name": "@cohesive/presentation-react-shadcn",
-  "version": "0.1.0-dev.202607060009",
+  "version": "0.1.0-alpha.1",
   "type": "module",
   "sideEffects": false,
   "exports": {
