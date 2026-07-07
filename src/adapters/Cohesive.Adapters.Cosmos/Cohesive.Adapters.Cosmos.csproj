@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AzureCosmosDisableNewtonsoftJsonCheck>true</AzureCosmosDisableNewtonsoftJsonCheck>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Azure.Identity" Version="1.17.1" />
+    <PackageReference Include="Microsoft.Azure.Cosmos" Version="3.57.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Cohesive.Storage\Cohesive.Storage.csproj" />
+    <ProjectReference Include="..\..\Cohesive.AI\Cohesive.AI.csproj" />
+    <ProjectReference Include="..\..\Cohesive.Processes\Cohesive.Processes.csproj" />
+    <ProjectReference Include="..\..\Cohesive.Transitions\Cohesive.Transitions.csproj" />
+  </ItemGroup>
+
+</Project>

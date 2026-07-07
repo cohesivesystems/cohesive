@@ -1,0 +1,35 @@
+using System.Collections.Immutable;
+using Cohesive.Adapters.TypeScript;
+
+namespace Cohesive.CodeGen.Cli;
+
+/// <summary>
+/// Parsed command-line options for the codegen CLI.
+/// </summary>
+public sealed record CodeGenCliOptions
+{
+    /// <summary>
+    /// Path to the compiled contracts assembly.
+    /// </summary>
+    public required string ContractsAssemblyPath { get; init; }
+
+    /// <summary>
+    /// Output directory for generated artifacts.
+    /// </summary>
+    public required string OutputDirectory { get; init; }
+
+    /// <summary>
+    /// Logical module name used for generated filenames.
+    /// </summary>
+    public required string ModuleName { get; init; }
+
+    /// <summary>
+    /// Artifact kinds to emit.
+    /// </summary>
+    public required ImmutableArray<CodeGenEmitKind> EmitKinds { get; init; }
+
+    /// <summary>
+    /// TypeScript modules that own declarations for external shape namespaces.
+    /// </summary>
+    public ImmutableArray<TypeScriptExternalTypeModule> ExternalTypeScriptShapeModules { get; init; } = [];
+}

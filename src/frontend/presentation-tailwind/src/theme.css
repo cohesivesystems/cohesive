@@ -1,0 +1,7 @@
+@theme {
+  --color-cohesive-surface: hsl(0 0% 100%);
+  --color-cohesive-surface-muted: hsl(210 20% 98%);
+  --color-cohesive-border: hsl(214 32% 91%);
+  --color-cohesive-text: hsl(222 47% 11%);
+  --color-cohesive-text-muted: hsl(215 16% 47%);
+}

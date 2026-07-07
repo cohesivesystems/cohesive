@@ -1,0 +1,23 @@
+<Project>
+  <PropertyGroup>
+    <!-- NuGet audit data can be unavailable in local/offline restores; suppress only that fetch warning. -->
+    <NoWarn>$(NoWarn);NU1900</NoWarn>
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <Authors>Cohesive Systems</Authors>
+    <Company>Cohesive Systems</Company>
+    <PackageProjectUrl>https://cohesive.to</PackageProjectUrl>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <RepositoryType>git</RepositoryType>
+    <RepositoryUrl>https://github.com/cohesivesystems/cohesive</RepositoryUrl>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(MSBuildProjectName)' != 'Cohesive.Analyzers' and '$(EnableCohesiveGlobalUsings)' != 'false'">
+    <!-- Make Prelude helpers available without per-project using declarations. -->
+    <Using Include="Cohesive.Prelude" />
+    <Using Include="Cohesive.Domain" />
+  </ItemGroup>
+</Project>

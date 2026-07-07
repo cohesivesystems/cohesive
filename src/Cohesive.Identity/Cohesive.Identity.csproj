@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cohesive\Cohesive.csproj" />
+    <ProjectReference Include="..\Cohesive.Storage\Cohesive.Storage.csproj" />
+    <ProjectReference Include="..\Cohesive.Transitions\Cohesive.Transitions.csproj" />
+  </ItemGroup>
+
+</Project>

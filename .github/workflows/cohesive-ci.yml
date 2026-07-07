@@ -1,0 +1,57 @@
+name: cohesive-ci
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-pack:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.1.3 --activate
+
+      - name: Restore .NET
+        run: dotnet restore Cohesive.sln
+
+      - name: Build .NET
+        run: dotnet build Cohesive.sln -c Release --no-restore
+
+      - name: Test .NET
+        run: dotnet test Cohesive.sln -c Release --no-build
+
+      - name: Install frontend dependencies
+        run: corepack pnpm install --frozen-lockfile
+
+      - name: Build frontend packages
+        run: corepack pnpm frontend:build
+
+      - name: Test frontend packages
+        run: corepack pnpm frontend:test
+
+      - name: Pack NuGet packages
+        run: bash ./eng/pack-local.sh 0.1.0-ci.${{ github.run_number }}

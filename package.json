@@ -1,0 +1,20 @@
+{
+  "name": "cohesive",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.1.3",
+  "scripts": {
+    "frontend:build": "corepack pnpm -r --filter '@cohesive/*' build",
+    "frontend:test": "corepack pnpm -r --filter '@cohesive/*' test",
+    "pack:local": "bash ./eng/pack-local.sh",
+    "npm:feed": "bash ./eng/npm-feed.sh",
+    "npm:publish-local": "bash ./eng/publish-local-npm.sh",
+    "version:set": "node ./eng/set-version.mjs",
+    "release:notes": "node ./eng/release-notes.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.12.0",
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.7"
+  }
+}

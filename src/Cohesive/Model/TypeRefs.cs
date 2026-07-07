@@ -1,0 +1,470 @@
+using System.Collections.Immutable;
+using System.Text.Json.Serialization;
+
+namespace Cohesive.Model;
+
+/// <summary>
+/// Base type for domain type references.
+/// </summary>
+[JsonPolymorphic(TypeDiscriminatorPropertyName = "$type")]
+[JsonDerivedType(typeof(NamedTypeRef), "named")]
+[JsonDerivedType(typeof(OpaqueRuntimeTypeRef), "opaque")]
+[JsonDerivedType(typeof(ScalarTypeRef), "scalar")]
+[JsonDerivedType(typeof(EnumTypeRef), "enum")]
+[JsonDerivedType(typeof(EntityReferenceTypeRef), "entityRef")]
+[JsonDerivedType(typeof(ArrayTypeRef), "array")]
+[JsonDerivedType(typeof(ObjectTypeRef), "object")]
+[JsonDerivedType(typeof(QuantityTypeRef), "quantity")]
+[JsonDerivedType(typeof(JsonTypeRef), "json")]
+[Union]
+public abstract partial record TypeRef;
+
+/// <summary>
+/// Named type reference via <see cref="TypeId"/>.
+/// </summary>
+/// <remarks>This is an identity-bearing version of <see cref="ObjectTypeRef"/> resolved via <see cref="ShapeGraph"/>.</remarks>
+public sealed record NamedTypeRef : TypeRef
+{
+    /// <summary>
+    /// Creates a named type reference.
+    /// </summary>
+    [JsonConstructor]
+    public NamedTypeRef(TypeId typeId)
+    {
+        TypeId = typeId;
+    }
+
+    /// <summary>
+    /// Stable type id.
+    /// </summary>
+    public TypeId TypeId { get; init; }
+
+}
+
+/// <summary>
+/// Opaque runtime type reference used when semantics are known but portable typing is unavailable.
+/// </summary>
+public sealed record OpaqueRuntimeTypeRef : TypeRef
+{
+    /// <summary>
+    /// Creates an opaque runtime type reference.
+    /// </summary>
+    [JsonConstructor]
+    public OpaqueRuntimeTypeRef(string runtimeType, TypeInferenceDiagnostic? inferenceDiagnostic = null)
+    {
+        RuntimeType = Guard.RequireNotNullOrWhiteSpace(runtimeType);
+        InferenceDiagnostic = inferenceDiagnostic;
+    }
+
+    /// <summary>
+    /// Runtime type identity.
+    /// </summary>
+    public string RuntimeType { get; init; }
+
+    /// <summary>
+    /// Optional diagnostic explaining why CLR type inference emitted an opaque reference.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public TypeInferenceDiagnostic? InferenceDiagnostic { get; init; }
+
+    /// <summary>
+    /// Compares opaque references by semantic runtime type identity only.
+    /// </summary>
+    public bool Equals(OpaqueRuntimeTypeRef? other)
+    {
+        if (ReferenceEquals(this, other))
+            return true;
+        if (other is null)
+            return false;
+
+        return string.Equals(RuntimeType, other.RuntimeType, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Computes a hash code aligned with <see cref="Equals(OpaqueRuntimeTypeRef?)"/>.
+    /// </summary>
+    public override int GetHashCode() => StringComparer.Ordinal.GetHashCode(RuntimeType);
+}
+
+/// <summary>
+/// Diagnostic captured when CLR type inference falls back to an opaque runtime type reference.
+/// </summary>
+public sealed record TypeInferenceDiagnostic
+{
+    /// <summary>
+    /// Creates a type inference diagnostic.
+    /// </summary>
+    [JsonConstructor]
+    public TypeInferenceDiagnostic(string reason, string? message = null)
+    {
+        Reason = Guard.RequireNotNullOrWhiteSpace(reason);
+        Message = string.IsNullOrWhiteSpace(message) ? null : message;
+    }
+
+    /// <summary>
+    /// Stable machine-readable fallback reason.
+    /// </summary>
+    public string Reason { get; init; }
+
+    /// <summary>
+    /// Optional human-readable explanation.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Message { get; init; }
+}
+
+/// <summary>
+/// Standard reasons emitted by CLR type inference when it falls back to opacity.
+/// </summary>
+public static class TypeInferenceDiagnosticReasons
+{
+    /// <summary>
+    /// The type is <see cref="object"/> and carries no structural semantic information.
+    /// </summary>
+    public const string ObjectRuntimeType = "objectRuntimeType";
+
+    /// <summary>
+    /// The type recursively references a CLR type already being mapped.
+    /// </summary>
+    public const string RecursiveType = "recursiveType";
+
+    /// <summary>
+    /// The type uses polymorphic JSON metadata that cannot be represented as a structural type reference.
+    /// </summary>
+    public const string PolymorphicType = "polymorphicType";
+
+    /// <summary>
+    /// The type is abstract or an interface without a dedicated semantic mapping.
+    /// </summary>
+    public const string AbstractType = "abstractType";
+
+    /// <summary>
+    /// The type is a dictionary and the current type reference model has no map shape.
+    /// </summary>
+    public const string UnsupportedDictionary = "unsupportedDictionary";
+
+    /// <summary>
+    /// The type uses a structured quantity representation that cannot be mapped to a supported scalar.
+    /// </summary>
+    public const string UnsupportedQuantityRepresentation = "unsupportedQuantityRepresentation";
+
+    /// <summary>
+    /// The type declares the single-value wrapper JSON converter but does not expose a valid value property.
+    /// </summary>
+    public const string InvalidSingleValueWrapper = "invalidSingleValueWrapper";
+
+    /// <summary>
+    /// The type has no readable public instance properties.
+    /// </summary>
+    public const string NoReadableProperties = "noReadableProperties";
+}
+
+/// <summary>
+/// JSON-compatible value type reference.
+/// </summary>
+public sealed record JsonTypeRef : TypeRef
+{
+    /// <summary>
+    /// Creates a JSON-compatible type reference.
+    /// </summary>
+    [JsonConstructor]
+    public JsonTypeRef(JsonTypeKind kind = JsonTypeKind.Any)
+    {
+        Kind = kind;
+    }
+
+    /// <summary>
+    /// JSON value shape accepted by this type reference.
+    /// </summary>
+    public JsonTypeKind Kind { get; init; }
+}
+
+/// <summary>
+/// JSON value shapes representable by <see cref="JsonTypeRef"/>.
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum JsonTypeKind
+{
+    /// <summary>
+    /// Any non-null JSON value.
+    /// </summary>
+    Any = 0,
+
+    /// <summary>
+    /// JSON object value.
+    /// </summary>
+    Object = 1,
+
+    /// <summary>
+    /// JSON array value.
+    /// </summary>
+    Array = 2,
+
+    /// <summary>
+    /// JSON string value.
+    /// </summary>
+    String = 3,
+
+    /// <summary>
+    /// JSON numeric value.
+    /// </summary>
+    Number = 4,
+
+    /// <summary>
+    /// JSON boolean value.
+    /// </summary>
+    Boolean = 5
+}
+
+/// <summary>
+/// Built-in scalar type kinds.
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum ScalarTypeKind
+{
+    Bool = 0,
+    Int32 = 1,
+    Int64 = 2,
+    Decimal = 3,
+    String = 4,
+    Guid = 5,
+    Date = 6,
+    DateTime = 7,
+    Instant = 8,
+    Bytes = 9
+}
+
+/// <summary>
+/// Scalar type reference.
+/// </summary>
+public sealed record ScalarTypeRef : TypeRef
+{
+    /// <summary>
+    /// Creates a scalar type reference.
+    /// </summary>
+    [JsonConstructor]
+    public ScalarTypeRef(ScalarTypeKind kind, PrimitiveFormat format = PrimitiveFormat.None)
+    {
+        Kind = kind;
+        Format = format;
+    }
+
+    /// <summary>
+    /// Scalar type kind.
+    /// </summary>
+    public ScalarTypeKind Kind { get; init; }
+
+    /// <summary>
+    /// Optional scalar format metadata.
+    /// </summary>
+    public PrimitiveFormat Format { get; init; }
+}
+
+/// <summary>
+/// Enum type definition with allowed members.
+/// </summary>
+public sealed record EnumTypeRef : TypeRef
+{
+    /// <summary>
+    /// Creates an enum type definition.
+    /// </summary>
+    [JsonConstructor]
+    public EnumTypeRef(string name, ImmutableArray<string> members)
+    {
+        Name = Guard.RequireNotNullOrWhiteSpace(value: name);
+        Members = members.IsDefault ? ImmutableArray<string>.Empty : members;
+        if (Members.IsDefaultOrEmpty)
+            throw new ArgumentException(message: "Enum type requires at least one member.");
+    }
+
+    /// <summary>
+    /// Enum type name.
+    /// </summary>
+    public string Name { get; init; }
+
+    /// <summary>
+    /// Allowed enum member names.
+    /// </summary>
+    public ImmutableArray<string> Members { get; init; }
+
+    /// <summary>
+    /// Compares enum type references using value semantics for members.
+    /// </summary>
+    public bool Equals(EnumTypeRef? other)
+    {
+        if (ReferenceEquals(this, other))
+            return true;
+        if (other is null)
+            return false;
+
+        return Name == other.Name
+               && Members.SequenceEqual(other.Members);
+    }
+
+    /// <summary>
+    /// Computes a hash code aligned with <see cref="Equals(EnumTypeRef?)"/>.
+    /// </summary>
+    public override int GetHashCode()
+    {
+        HashCode hash = new();
+        hash.Add(Name, StringComparer.Ordinal);
+        foreach (var member in Members)
+            hash.Add(member, StringComparer.Ordinal);
+        return hash.ToHashCode();
+    }
+}
+
+/// <summary>
+/// Reference to another entity type by name.
+/// </summary>
+public sealed record EntityReferenceTypeRef(EntityTypeName Entity) : TypeRef;
+
+/// <summary>
+/// Array type reference.
+/// </summary>
+public sealed record ArrayTypeRef(TypeRef ElementType) : TypeRef;
+
+/// <summary>
+/// Inline object type composed of named fields.
+/// </summary>
+public sealed record ObjectTypeRef : TypeRef
+{
+    /// <summary>
+    /// Creates an inline object type.
+    /// </summary>
+    /// <exception cref="ArgumentException"></exception>
+    [JsonConstructor]
+    public ObjectTypeRef(ImmutableArray<ObjectFieldTypeDef> fields)
+    {
+        Fields = fields.IsDefault ? ImmutableArray<ObjectFieldTypeDef>.Empty : fields;
+        if (Fields.IsDefaultOrEmpty)
+            throw new ArgumentException(message: "Object type requires at least one field.");
+    }
+
+    /// <summary>
+    /// Inline field definitions for the object.
+    /// </summary>
+    public ImmutableArray<ObjectFieldTypeDef> Fields { get; init; }
+
+    /// <summary>
+    /// Compares object type references using value semantics for fields.
+    /// </summary>
+    public bool Equals(ObjectTypeRef? other)
+    {
+        if (ReferenceEquals(this, other))
+            return true;
+        if (other is null)
+            return false;
+
+        return Fields.SequenceEqual(other.Fields);
+    }
+
+    /// <summary>
+    /// Computes a hash code aligned with <see cref="Equals(ObjectTypeRef?)"/>.
+    /// </summary>
+    public override int GetHashCode()
+    {
+        HashCode hash = new();
+        foreach (var field in Fields)
+            hash.Add(field);
+        return hash.ToHashCode();
+    }
+}
+
+/// <summary>
+/// Named field within an inline object type.
+/// </summary>
+public sealed record ObjectFieldTypeDef
+{
+    /// <summary>
+    /// Creates an inline object field definition.
+    /// </summary>
+    [JsonConstructor]
+    public ObjectFieldTypeDef(
+        string name,
+        TypeRef type,
+        FieldPresence presence = FieldPresence.Required,
+        ImmutableDictionary<AnnotationKey, AnnotationValue>? annotations = null
+        )
+    {
+        Name = Guard.RequireNotNullOrWhiteSpace(name);
+        Type = Guard.RequireNotNull(type);
+        Presence = presence;
+        Annotations = AnnotationMap.Normalize(annotations);
+    }
+
+    /// <summary>
+    /// Field name.
+    /// </summary>
+    public string Name { get; init; }
+
+    /// <summary>
+    /// Field type.
+    /// </summary>
+    public TypeRef Type { get; init; }
+
+    /// <summary>
+    /// Required/optional indicator.
+    /// </summary>
+    public FieldPresence Presence { get; init; }
+
+    /// <summary>
+    /// Optional metadata annotations for inline object fields.
+    /// </summary>
+    public ImmutableDictionary<AnnotationKey, AnnotationValue> Annotations { get; init; }
+
+    /// <summary>
+    /// Compares object field definitions using value semantics for annotations.
+    /// </summary>
+    public bool Equals(ObjectFieldTypeDef? other)
+    {
+        if (ReferenceEquals(this, other))
+            return true;
+        if (other is null)
+            return false;
+
+        return Name == other.Name
+               && EqualityComparer<TypeRef>.Default.Equals(Type, other.Type)
+               && Presence == other.Presence
+               && ShapeValueEquality.AreAnnotationsEqual(Annotations, other.Annotations);
+    }
+
+    /// <summary>
+    /// Computes a hash code aligned with <see cref="Equals(ObjectFieldTypeDef?)"/>.
+    /// </summary>
+    public override int GetHashCode()
+    {
+        HashCode hash = new();
+        hash.Add(Name, StringComparer.Ordinal);
+        hash.Add(Type);
+        hash.Add((int)Presence);
+        hash.Add(ShapeValueEquality.GetAnnotationsHashCode(Annotations));
+        return hash.ToHashCode();
+    }
+}
+
+/// <summary>
+/// Structured quantity type reference (for example, Distance backed by Decimal base values).
+/// </summary>
+public sealed record QuantityTypeRef : TypeRef
+{
+    /// <summary>
+    /// Creates a structured quantity type definition.
+    /// </summary>
+    [JsonConstructor]
+    public QuantityTypeRef(string quantity, ScalarTypeKind baseKind = ScalarTypeKind.Decimal)
+    {
+        Quantity = Guard.RequireNotNullOrWhiteSpace(value: quantity);
+        BaseKind = baseKind;
+    }
+
+    /// <summary>
+    /// Quantity type name.
+    /// </summary>
+    public string Quantity { get; init; }
+
+    /// <summary>
+    /// Scalar kind used for serialized canonical base values.
+    /// </summary>
+    public ScalarTypeKind BaseKind { get; init; }
+}

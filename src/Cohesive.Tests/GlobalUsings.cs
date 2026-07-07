@@ -1,0 +1,16 @@
+global using Cohesive.Transitions.Model;
+global using Cohesive.Transitions.Authoring;
+global using Cohesive.Prelude;
+global using Cohesive.Model;
+global using Cohesive.Adapters.DurableTask;
+global using Cohesive.Processes.Model;
+global using Cohesive.Processes.Runtime;
+global using Cohesive.Host.Configuration;
+global using Cohesive.Relations.Authoring;
+global using Cohesive.Relations.Queries;
+global using Cohesive.Relations.Execution;
+global using Cohesive.Relations.Hydration;
+global using Cohesive.Relations.Mapping;
+global using Cohesive.Relations.Serialization;
+global using Microsoft.Extensions.DependencyInjection;
+global using ProcessEngine = Cohesive.Processes.Runtime.ProcessEngine;

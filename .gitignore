@@ -1,0 +1,100 @@
+.local
+/local-data/
+Library/
+
+############################################
+# OS / Editor
+############################################
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+
+############################################
+# JetBrains Rider / IntelliJ
+############################################
+.idea/
+*.sln.iml
+*.DotSettings.user
+*.DotSettings
+
+############################################
+# Visual Studio / MSBuild
+############################################
+.vs/
+*.user
+*.rsuser
+*.suo
+*.userosscache
+*.sln.docstates
+
+############################################
+# Build output
+############################################
+**/bin/
+**/obj/
+**/out/
+**/artifacts/
+
+############################################
+# NuGet
+############################################
+# Usually keep packages.lock.json (repeatable restores), ignore local caches
+**/.nuget/
+# If you use Paket
+.paket/paket.exe
+paket-files/
+
+############################################
+# Tests / coverage
+############################################
+**/TestResults/
+**/*.trx
+**/*.coverage
+**/*.coveragexml
+**/coverage*/
+**/*.opencover.xml
+**/*.cobertura.xml
+
+############################################
+# Logs
+############################################
+**/*.log
+
+############################################
+# Azure Functions / local dev secrets
+############################################
+local.settings.json
+http-client.private.env.json
+
+############################################
+# ASP.NET Core / IIS Express
+############################################
+**/.iisexpress/
+
+############################################
+# Dotnet tooling
+############################################
+# dotnet tool restore creates this
+.dotnet/
+# optional: if you have local tools folder
+tools/
+tmp/generated/
+
+############################################
+# Optional: Node (if you have a web frontend)
+############################################
+**/node_modules/
+**/dist/
+**/.next/
+**/.turbo/
+**/.cache/
+
+############################################
+# Optional: PowerShell / scripts
+############################################
+*.ps1xml

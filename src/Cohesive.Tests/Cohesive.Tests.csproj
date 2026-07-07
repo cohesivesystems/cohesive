@@ -1,0 +1,50 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+  
+  <ItemGroup>
+    <ProjectReference Include="..\Cohesive\Cohesive.csproj" />
+    <ProjectReference Include="..\Cohesive.Presentation\Cohesive.Presentation.csproj" />
+    <ProjectReference Include="..\Cohesive.Api\Cohesive.Api.csproj" />
+    <ProjectReference Include="..\Cohesive.Transitions\Cohesive.Transitions.csproj" />
+    <ProjectReference Include="..\Cohesive.Relations\Cohesive.Relations.csproj" />
+    <ProjectReference Include="..\Cohesive.Processes\Cohesive.Processes.csproj" />
+    <ProjectReference Include="..\Cohesive.CodeGen.Cli\Cohesive.CodeGen.Cli.csproj" />
+    <ProjectReference Include="..\adapters\Cohesive.Adapters.Cosmos\Cohesive.Adapters.Cosmos.csproj" />
+    <ProjectReference Include="..\adapters\Cohesive.Adapters.DurableTask\Cohesive.Adapters.DurableTask.csproj" />
+    <ProjectReference Include="..\adapters\Cohesive.Adapters.GraphQL\Cohesive.Adapters.GraphQL.csproj" />
+    <ProjectReference Include="..\adapters\Cohesive.Adapters.OpenApi\Cohesive.Adapters.OpenApi.csproj" />
+    <ProjectReference Include="..\adapters\Cohesive.Adapters.TypeScript\Cohesive.Adapters.TypeScript.csproj" />
+    <ProjectReference Include="..\adapters\Cohesive.Adapters.AspNet\Cohesive.Adapters.AspNet.csproj" />
+    <ProjectReference Include="..\Cohesive.Host\Cohesive.Host.csproj" />
+    <ProjectReference Include="..\Cohesive.Storage\Cohesive.Storage.csproj" />
+    <ProjectReference Include="..\Cohesive.Analyzers\Cohesive.Analyzers.csproj" OutputItemType="Analyzer" />
+    <ProjectReference Include="..\adapters\Cohesive.Adapters.Json\Cohesive.Adapters.Json.csproj" />
+  </ItemGroup>
+  
+  <ItemGroup>
+    <Folder Include="Configuration\" />
+  </ItemGroup>
+
+</Project>

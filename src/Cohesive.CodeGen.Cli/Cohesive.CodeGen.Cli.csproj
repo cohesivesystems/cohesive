@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>cohesive-codegen</AssemblyName>
+    <PackageId>Cohesive.CodeGen.Cli</PackageId>
+    <UseAppHost>false</UseAppHost>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);IncludeCodeGenRuntimeFiles</TargetsForTfmSpecificBuildOutput>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cohesive\Cohesive.csproj" />
+    <ProjectReference Include="..\Cohesive.Api\Cohesive.Api.csproj" />
+    <ProjectReference Include="..\adapters\Cohesive.Adapters.GraphQL\Cohesive.Adapters.GraphQL.csproj" />
+    <ProjectReference Include="..\adapters\Cohesive.Adapters.OpenApi\Cohesive.Adapters.OpenApi.csproj" />
+    <ProjectReference Include="..\adapters\Cohesive.Adapters.TypeScript\Cohesive.Adapters.TypeScript.csproj" />
+  </ItemGroup>
+
+  <Target Name="IncludeCodeGenRuntimeFiles">
+    <ItemGroup>
+      <BuildOutputInPackage Include="$(OutputPath)*.dll" Exclude="$(OutputPath)$(AssemblyName).dll" />
+      <BuildOutputInPackage Include="$(OutputPath)$(AssemblyName).deps.json" />
+    </ItemGroup>
+  </Target>
+
+</Project>

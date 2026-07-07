@@ -1,0 +1,595 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cohesive.to/schemas/shape-graph.v1.schema.json",
+  "title": "ShapeGraphDocument",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "graph"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": "shape-graph/v1"
+    },
+    "metadata": {
+      "$ref": "#/$defs/metadata"
+    },
+    "graph": {
+      "$ref": "#/$defs/shapeGraph"
+    }
+  },
+  "$defs": {
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "origin": {
+          "type": [
+            "string",
+            "integer"
+          ]
+        },
+        "name": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "description": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "sourceUri": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "createdAtUtc": {
+          "type": [
+            "null",
+            "string"
+          ],
+          "format": "date-time"
+        },
+        "updatedAtUtc": {
+          "type": [
+            "null",
+            "string"
+          ],
+          "format": "date-time"
+        },
+        "annotations": {
+          "type": "object"
+        }
+      }
+    },
+    "shapeGraph": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "shapes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/shape"
+          }
+        },
+        "namedTypes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/typeDefinition"
+          }
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/graphDiagnostic"
+          }
+        },
+        "annotations": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "shapes"
+      ]
+    },
+    "shape": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/field"
+          }
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/constraint"
+          }
+        },
+        "annotations": {
+          "type": "object"
+        },
+        "role": {
+          "type": [
+            "null",
+            "string"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "fields"
+      ]
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "type": {
+          "$ref": "#/$defs/typeRef"
+        },
+        "cardinality": {
+          "$ref": "#/$defs/enumValue"
+        },
+        "presence": {
+          "$ref": "#/$defs/enumValue"
+        },
+        "nullability": {
+          "$ref": "#/$defs/enumValue"
+        },
+        "role": {
+          "$ref": "#/$defs/enumValue"
+        },
+        "mutability": {
+          "$ref": "#/$defs/enumValue"
+        },
+        "compute": {
+          "type": [
+            "null",
+            "object"
+          ]
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/constraint"
+          }
+        },
+        "annotations": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ]
+    },
+    "structuralField": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/field"
+        }
+      ]
+    },
+    "typeDefinition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "$typeDef": {
+              "const": "structural"
+            },
+            "id": {
+              "$ref": "#/$defs/nonEmptyString"
+            },
+            "name": {
+              "$ref": "#/$defs/nonEmptyString"
+            },
+            "fields": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/structuralField"
+              }
+            },
+            "constraints": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/constraint"
+              }
+            },
+            "annotations": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "$typeDef",
+            "id",
+            "fields"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "$typeDef": {
+              "const": "enum"
+            },
+            "id": {
+              "$ref": "#/$defs/nonEmptyString"
+            },
+            "name": {
+              "$ref": "#/$defs/nonEmptyString"
+            },
+            "underlying": {
+              "$ref": "#/$defs/enumValue"
+            },
+            "values": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "name": {
+                    "$ref": "#/$defs/nonEmptyString"
+                  },
+                  "value": {
+                    "type": [
+                      "null",
+                      "string"
+                    ]
+                  },
+                  "label": {
+                    "type": [
+                      "null",
+                      "string"
+                    ]
+                  },
+                  "description": {
+                    "type": [
+                      "null",
+                      "string"
+                    ]
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              },
+              "minItems": 1
+            },
+            "annotations": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "$typeDef",
+            "id",
+            "underlying",
+            "values"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "$typeDef": {
+              "const": "union"
+            },
+            "id": {
+              "$ref": "#/$defs/nonEmptyString"
+            },
+            "name": {
+              "$ref": "#/$defs/nonEmptyString"
+            },
+            "discriminator": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "fieldName": {
+                  "$ref": "#/$defs/nonEmptyString"
+                },
+                "type": {
+                  "$ref": "#/$defs/enumValue"
+                }
+              },
+              "required": [
+                "fieldName"
+              ]
+            },
+            "cases": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "name": {
+                    "$ref": "#/$defs/nonEmptyString"
+                  },
+                  "type": {
+                    "$ref": "#/$defs/typeRef"
+                  },
+                  "discriminatorValue": {
+                    "$ref": "#/$defs/nonEmptyString"
+                  }
+                },
+                "required": [
+                  "name",
+                  "type"
+                ]
+              },
+              "minItems": 1
+            },
+            "annotations": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "$typeDef",
+            "id",
+            "discriminator",
+            "cases"
+          ]
+        }
+      ]
+    },
+    "typeRef": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "$type": {
+              "const": "named"
+            },
+            "typeId": {
+              "$ref": "#/$defs/nonEmptyString"
+            }
+          },
+          "required": [
+            "$type",
+            "typeId"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "$type": {
+              "const": "opaque"
+            },
+            "runtimeType": {
+              "$ref": "#/$defs/nonEmptyString"
+            }
+          },
+          "required": [
+            "$type",
+            "runtimeType"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "$type": {
+              "const": "json"
+            },
+            "kind": {
+              "enum": [
+                "Any",
+                "Object",
+                "Array",
+                "String",
+                "Number",
+                "Boolean"
+              ]
+            }
+          },
+          "required": [
+            "$type",
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "$type": {
+              "const": "scalar"
+            },
+            "kind": {
+              "$ref": "#/$defs/enumValue"
+            },
+            "format": {
+              "$ref": "#/$defs/enumValue"
+            }
+          },
+          "required": [
+            "$type",
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "$type": {
+              "const": "enum"
+            },
+            "name": {
+              "$ref": "#/$defs/nonEmptyString"
+            },
+            "members": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/nonEmptyString"
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "$type",
+            "name",
+            "members"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "$type": {
+              "const": "entityRef"
+            },
+            "entity": {
+              "$ref": "#/$defs/nonEmptyString"
+            }
+          },
+          "required": [
+            "$type",
+            "entity"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "$type": {
+              "const": "array"
+            },
+            "elementType": {
+              "$ref": "#/$defs/typeRef"
+            }
+          },
+          "required": [
+            "$type",
+            "elementType"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "$type": {
+              "const": "object"
+            },
+            "fields": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/field"
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "$type",
+            "fields"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "$type": {
+              "const": "quantity"
+            },
+            "quantity": {
+              "$ref": "#/$defs/nonEmptyString"
+            },
+            "baseKind": {
+              "$ref": "#/$defs/enumValue"
+            }
+          },
+          "required": [
+            "$type",
+            "quantity"
+          ]
+        }
+      ]
+    },
+    "constraint": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "$constraint": {
+          "enum": [
+            "required",
+            "minLength",
+            "maxLength",
+            "range",
+            "regex",
+            "allowedValues",
+            "occurrence"
+          ]
+        }
+      },
+      "required": [
+        "$constraint"
+      ]
+    },
+    "graphDiagnostic": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "severity": {
+          "$ref": "#/$defs/enumValue"
+        },
+        "message": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "shapeId": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "fieldIdentity": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "typeId": {
+          "type": [
+            "null",
+            "string"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "severity",
+        "message"
+      ]
+    },
+    "enumValue": {
+      "type": [
+        "string",
+        "integer"
+      ]
+    },
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

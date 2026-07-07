@@ -1,0 +1,42 @@
+{
+  "name": "@cohesive/presentation-react-mui",
+  "version": "0.1.0-dev.202607060009",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node ../../../eng/fix-package-js-imports.mjs dist",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@cohesive/presentation-core": "workspace:*",
+    "@cohesive/presentation-react": "workspace:*"
+  },
+  "peerDependencies": {
+    "@emotion/react": ">=11",
+    "@emotion/styled": ">=11",
+    "@mui/material": ">=9",
+    "@mui/system": ">=9",
+    "react": ">=19",
+    "react-dom": ">=19"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.7"
+  },
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public"
+  }
+}
