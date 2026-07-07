@@ -451,6 +451,12 @@ Create local NuGet packages for downstream sample applications:
 bash ./eng/pack-local.sh 0.1.0-dev.local
 ```
 
+Point the downstream app at the local NuGet feed with:
+
+```bash
+dotnet nuget add source /Users/eulerfx/code/.feeds/nuget/cohesive-local --name cohesive-local
+```
+
 Create local npm packages for downstream applications. Start the local feed in one terminal:
 
 ```bash
