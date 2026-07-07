@@ -2,6 +2,12 @@
 
 `Cohesive.CodeGen.Cli` is the build-facing entry point for Cohesive code generation.
 
+## Install
+
+```bash
+dotnet add package Cohesive.CodeGen.Cli
+```
+
 Its current job is:
 
 1. load a compiled contracts assembly
