@@ -4,7 +4,7 @@ import {
   dataSourceKinds,
   dataSourcePaginationKinds,
   type DataSourceDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   applyPresentationPaginationToRequest,
   createNextPresentationPaginationState,

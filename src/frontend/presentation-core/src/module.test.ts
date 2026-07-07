@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { viewChromeSlotKinds } from '@cohesive/presentation-contracts'
+import { viewChromeSlotKinds } from '@cohesivesystems/presentation-contracts'
 import {
   findPresentationView,
   resolvePresentationViewActionPlacements,

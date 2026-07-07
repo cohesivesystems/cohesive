@@ -451,6 +451,45 @@ Create local NuGet packages for downstream sample applications:
 bash ./eng/pack-local.sh 0.1.0-dev.local
 ```
 
+Create local npm packages for downstream applications. Start the local feed in one terminal:
+
+```bash
+corepack pnpm npm:feed
+```
+
+Then publish dev packages to it from another terminal:
+
+```bash
+corepack pnpm npm:publish-local 0.1.0-dev.local
+```
+
+Point the downstream app at the local feed with:
+
+```ini
+@cohesivesystems:registry=http://localhost:4873/
+```
+
+The public package repository itself should keep `.npmrc` pointed at `https://registry.npmjs.org/`. Local feed routing belongs in consuming app repositories such as Ari or sample applications.
+
+## Public Package Publishing
+
+The `release-packages` workflow publishes packages from a tag such as `v0.1.0-alpha.1` or from a manual workflow run with a SemVer version.
+
+- NuGet packages publish with NuGet trusted publishing through `NuGet/login`.
+- npm packages are packed with pnpm, then published to npmjs.org with npm trusted publishing.
+- Prerelease versions map to npm dist-tags: `alpha.*` to `alpha`, `preview.*` to `preview`, `rc.*` to `rc`, and other prereleases to `next`.
+- Stable versions publish with the `latest` npm dist-tag.
+
+Before the first npm trusted-publishing release, each `@cohesivesystems/*` package must already exist on npmjs.com. Bootstrap each package once with a temporary/manual publish, then configure its trusted publisher:
+
+```bash
+npm install --global npm@^11.15.0
+npm login
+npm trust github @cohesivesystems/presentation-contracts --repo cohesivesystems/cohesive --file release-packages.yml --allow-publish
+```
+
+Repeat the `npm trust github` command for each frontend package under `src/frontend/*`. On npmjs.com, the equivalent trusted publisher settings are GitHub Actions, organization/user `cohesivesystems`, repository `cohesive`, workflow filename `release-packages.yml`, no environment, and allowed action `npm publish`.
+
 Useful focused runs:
 
 ```bash

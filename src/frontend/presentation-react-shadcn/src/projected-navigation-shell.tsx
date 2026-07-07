@@ -5,7 +5,7 @@ import {
   findPresentationView,
   projectNavigationShellDiagnostics,
   resolveProjectedNavigationShellSlots,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   getNavigationShellFrameRendererRegistryKeys,
   resolveNavigationShellFrameRenderer,
@@ -15,7 +15,7 @@ import {
   projectNavigationShellLayoutDiagnostics,
   resolveProjectedNavigationShellLayout,
   resolveProjectedNavigationShellSlotLayout,
-} from '@cohesive/presentation-tailwind'
+} from '@cohesivesystems/presentation-tailwind'
 import type {
   PresentationShadcnComponentSystem as PresentationComponentSystem,
 } from './presentation-shadcn-component-system'
@@ -23,7 +23,7 @@ import {
   projectPresentationDesignSystemBindingDiagnostics,
   projectPresentationComponentSystemDiagnostics,
 } from './presentation-component-system-diagnostics'
-import type { PresentationDesignSystem } from '@cohesive/presentation-tailwind'
+import type { PresentationDesignSystem } from '@cohesivesystems/presentation-tailwind'
 import {
   getNavigationShellSlotRendererRegistryKeys,
   resolveNavigationShellSlotRenderer,
@@ -32,19 +32,19 @@ import {
 import {
   usePresentationModule,
   useRegisterPresentationProjectionDiagnostics,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 import {
   standardNavigationShellSlotRenderers,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 import {
   standardNavigationShellFrameRenderers,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 import type {
   NavigationDefinition,
   NavigationNodeDefinition,
   NavigationShellRegionDefinition,
   NavigationShellSlotDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export interface ProjectedNavigationShellProps {
   readonly activePath: string

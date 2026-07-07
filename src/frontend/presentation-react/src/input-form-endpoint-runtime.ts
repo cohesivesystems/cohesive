@@ -12,7 +12,7 @@ import {
   type ProjectedInputFormActionContext,
   type ProjectedInputFormRuntime,
   writeObjectPath,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   PresentationActionEndpointExecutionRequest,
   PresentationActionEndpointExecutor,
@@ -20,7 +20,7 @@ import type {
 import {
   inputFormTargetKinds,
   presentationValueKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 type InputFormEndpointRequestOption<TValue extends object, TOption> =
   | TOption

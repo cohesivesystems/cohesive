@@ -15,7 +15,7 @@ import {
   type ViewChromeSlotDefinition,
   type ViewDefinition,
   type ViewRegionDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   PresentationActionGroup,
   type PresentationActionGroupOptions,
@@ -24,7 +24,7 @@ import {
 import type {
   PresentationShadcnComponentSystem as PresentationComponentSystem,
 } from './presentation-shadcn-component-system'
-import type { PresentationDesignSystem } from '@cohesive/presentation-tailwind'
+import type { PresentationDesignSystem } from '@cohesivesystems/presentation-tailwind'
 import {
   renderPresentationIcon,
 } from './presentation-icon-registry'
@@ -33,7 +33,7 @@ import {
 } from './presentation-icon-diagnostics'
 import {
   useRegisterPresentationProjectionDiagnostics,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 import {
   ProjectedViewChrome,
   resolveViewChromeSlotPlacement,
@@ -45,7 +45,7 @@ import {
   viewChromeSlotKinds,
   viewChromeSlotPlacements,
   viewRegionKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export interface ProjectedPromptViewProps<TContext> {
   readonly actionGroupOptions?: PresentationActionGroupOptions<TContext>

@@ -11,8 +11,8 @@ import {
   flowStateKinds,
   presentationTestSelectors as generatedPresentationTestSelectors,
   residencyHints,
-} from '@cohesive/presentation-contracts'
-import type { FlowDefinition } from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
+import type { FlowDefinition } from '@cohesivesystems/presentation-contracts'
 
 describe('presentation test selectors', () => {
   it('uses generated presentation test attribute constants', () => {

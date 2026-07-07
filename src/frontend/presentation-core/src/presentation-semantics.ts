@@ -34,7 +34,7 @@ import {
   viewChromeSlotKinds,
   viewKinds,
   type WorkspaceRefDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 /**
  * Semantic navigation state resolved from a route. The route is addressable;

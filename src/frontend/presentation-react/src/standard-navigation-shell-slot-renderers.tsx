@@ -6,13 +6,13 @@ import {
   type NavigationNodeDefinition,
   type NavigationShellRegionDefinition,
   type NavigationShellSlotDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   createProjectedNavigationShellItems,
   isProjectedNavigationShellItemActive,
   resolveNavigationShellSlotRegions,
   type ProjectedNavigationShellItem,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   createNavigationShellSlotRendererRegistry,
   getNavigationShellSlotRendererRegistryKeys,

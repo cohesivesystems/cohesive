@@ -9,7 +9,7 @@ import {
   createPresentationTestAttributes,
   defaultPresentationComponentSet,
   resolveCollectionChromeIconSubjects,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   findPresentationView,
   isCollectionChromeSlotKind,
@@ -23,7 +23,7 @@ import {
   type NavigationRouteParameters,
   type PresentationActionRuntimeBinding,
   type ViewDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   projectProjectedCollectionActionRuntimeDiagnostics,
 } from './projected-collection-action-runtime-diagnostics'
@@ -38,7 +38,7 @@ import {
   usePresentationModule,
   usePresentationNavigationRuntime,
   useRegisterPresentationProjectionDiagnostics,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 import {
   renderPresentationIcon,
 } from './presentation-icon-registry'
@@ -61,17 +61,17 @@ import {
   type ProjectedCollectionRuntime,
   type ResolvedProjectedCollectionRowAction,
   type ResolvedProjectedCollectionSelectionAction,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   collectionChromeSlotKinds,
   collectionChromeSlotPlacements,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export type {
   ProjectedActionPlacementLike,
   ProjectedRowActionExecutionContext,
   ProjectedSelectionActionExecutionContext,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 type ProjectedFieldDefinitionLike = FieldPresentationDefinition
 type ProjectedViewDefinitionLike = ViewDefinition

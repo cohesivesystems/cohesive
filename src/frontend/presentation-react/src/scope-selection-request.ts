@@ -3,7 +3,7 @@ import { useLayoutEffect } from 'react'
 import type {
   PresentationScopeRequestSelection,
   PresentationScopeRequestStore,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 /**
  * Synchronizes a mounted route or surface with the current request-scope store.

@@ -6,14 +6,14 @@ import {
 
 import type {
   CollectionSelectionMode,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   CollectionSelectionStateContext,
   type CollectionSelectionStateContextValue,
 } from './collection-selection-state-context'
 import {
   collectionSelectionModes,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export function CollectionSelectionStateProvider({
   children,

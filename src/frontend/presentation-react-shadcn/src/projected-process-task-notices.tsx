@@ -5,7 +5,7 @@ import {
   findPresentationField,
   resolvePresentationContent,
   resolvePresentationFieldValueTone,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   projectPresentationIconDiagnostics,
 } from './presentation-icon-diagnostics'
@@ -19,13 +19,13 @@ import type {
   ProcessTask,
   ProcessTaskSelector,
   ProcessTaskSelectorDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   usePresentationModule,
   usePresentationNavigationRuntime,
   useRegisterPresentationProjectionDiagnostics,
-} from '@cohesive/presentation-react'
-import type { PresentationDesignSystem } from '@cohesive/presentation-tailwind'
+} from '@cohesivesystems/presentation-react'
+import type { PresentationDesignSystem } from '@cohesivesystems/presentation-tailwind'
 import type {
   PresentationShadcnComponentSystem as PresentationComponentSystem,
 } from './presentation-shadcn-component-system'
@@ -38,7 +38,7 @@ import {
 } from './process-task-icons'
 import {
   documentProcessTaskNoticeActionTargetKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export interface ProjectedProcessTaskNoticeRenderContext {
   readonly notice: DocumentProcessTaskNoticeDefinition

@@ -7,7 +7,7 @@ import {
   type ViewChromeSlotDefinition,
   type ViewDefinition,
   type ViewRegionDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   PresentationShadcnComponentSystem as PresentationComponentSystem,
 } from './presentation-shadcn-component-system'
@@ -20,7 +20,7 @@ import {
 import {
   usePresentationModule,
   useRegisterPresentationProjectionDiagnostics,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 import { ProjectedStatusBlock } from './projected-activity-state'
 import {
   ProjectedViewChrome,
@@ -32,7 +32,7 @@ import {
   viewChromeSlotKinds,
   viewChromeSlotPlacements,
   viewRegionKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export interface ProjectedTabsViewProps {
   readonly chromeAfterContentClassName?: string

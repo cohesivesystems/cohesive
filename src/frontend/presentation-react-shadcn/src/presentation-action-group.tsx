@@ -7,7 +7,7 @@ import {
   type PresentationActionButtonSize,
   type PresentationActionButtonVariant,
   type PresentationDesignSystem,
-} from '@cohesive/presentation-tailwind'
+} from '@cohesivesystems/presentation-tailwind'
 import {
   defaultPresentationComponentSet,
   findPresentationAction,
@@ -23,7 +23,7 @@ import {
   type PresentationModuleDefinition,
   type PresentationActionRuntimeRegistry,
   type ViewDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   renderPresentationIcon,
   standardLucidePresentationIconRegistry,
@@ -35,7 +35,7 @@ import {
 } from './presentation-icon-diagnostics'
 import {
   useRegisterPresentationProjectionDiagnostics,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 
 export interface PresentationActionGroupOptions<TContext> {
   /** Default button size used when no per-action resolver or design rule applies. */

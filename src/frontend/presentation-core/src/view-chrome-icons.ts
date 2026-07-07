@@ -9,7 +9,7 @@ import {
 } from './view-chrome-slot-renderer-registry'
 import {
   viewChromeSlotKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export const viewChromeIconIds = {
   layoutSingle: 'view-chrome.layout.single',

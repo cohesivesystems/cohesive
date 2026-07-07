@@ -4,7 +4,7 @@ import {
   presentationValueKinds,
   type PresentationModuleDefinition,
   type ViewDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   projectViewChromeContentDiagnostics,
 } from './index'

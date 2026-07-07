@@ -5,13 +5,13 @@ import type {
   PresentationModuleDefinition,
   ProjectedDocumentFieldDefinitionLike,
   ResolvedPresentationBadge,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   PresentationShadcnComponentSystem as PresentationComponentSystem,
 } from './presentation-shadcn-component-system'
 import type {
   PresentationDesignSystem,
-} from '@cohesive/presentation-tailwind'
+} from '@cohesivesystems/presentation-tailwind'
 
 export interface PresentationBadgeTargetInterpretationContext {
   readonly badge: PresentationBadgeDefinition

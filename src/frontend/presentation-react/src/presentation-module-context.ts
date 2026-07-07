@@ -1,6 +1,6 @@
 import { createContext, useContext } from 'react'
 
-import type { PresentationModuleDefinition } from '@cohesive/presentation-core'
+import type { PresentationModuleDefinition } from '@cohesivesystems/presentation-core'
 
 export const PresentationModuleContext =
   createContext<PresentationModuleDefinition | null>(null)

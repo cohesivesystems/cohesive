@@ -1,17 +1,17 @@
 import type {
   ProjectedNavigationShellLayout as CoreProjectedNavigationShellLayout,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   projectNavigationShellLayoutDiagnostics as projectCoreNavigationShellLayoutDiagnostics,
   projectPresentationDesignIntentDiagnostics,
   resolveProjectedNavigationShellLayout as resolveCoreProjectedNavigationShellLayout,
   type PresentationProjectionDiagnostic,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type { PresentationDesignSystem } from './presentation-design-system'
 import type {
   NavigationDefinition,
   NavigationShellSlotDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export type ProjectedNavigationShellLayout =
   CoreProjectedNavigationShellLayout<

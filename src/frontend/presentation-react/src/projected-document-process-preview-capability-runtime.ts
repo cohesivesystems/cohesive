@@ -1,12 +1,12 @@
 import type {
   ProjectedDocumentResource,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   PresentationActionRuntimeBinding,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   ProjectedActionStatusSource,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   useProjectedDocumentProcessPreviewActionRuntime,
   type ProjectedDocumentProcessPreviewActionRuntime,
@@ -20,13 +20,13 @@ import {
 } from './projected-document-process-preview-action-runtime-bindings'
 import type {
   ProjectedInputFormRuntime,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   PresentationProjectionDiagnostic,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   ProjectedPromptDocumentPreviewResource,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 export type ProjectedDocumentProcessPreviewCapabilityState<
   TPreviewResponse = unknown,

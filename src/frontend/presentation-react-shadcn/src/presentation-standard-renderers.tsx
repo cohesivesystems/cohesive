@@ -23,7 +23,7 @@ import {
   type ViewChromeSlotDefinition,
   type ViewDefinition,
   type ViewRegionDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   renderStandardCollectionChromeSlot,
 } from './standard-collection-chrome-slot-renderers'
@@ -35,7 +35,7 @@ import {
 } from './standard-view-chrome-slot-renderers'
 import type {
   PresentationDesignSystem,
-} from '@cohesive/presentation-tailwind'
+} from '@cohesivesystems/presentation-tailwind'
 import type {
   ProjectedCollectionChromeSlotRenderContext,
   ProjectedCollectionDetailFieldRenderContext,
@@ -46,7 +46,7 @@ import {
   type PresentationRendererRegistry,
   type PresentationViewRenderContext,
   type PresentationViewRenderer,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 import {
   ProjectedActivityStateBoundary,
   ProjectedStatusBlock,
@@ -91,10 +91,10 @@ import {
   viewKinds,
   viewRegionKindLabels,
   viewRegionKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   presentationViewComponentRoles,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export type PresentationFieldRenderer<TData extends object = object> = (
   context: ProjectedFieldRenderContext<TData>,

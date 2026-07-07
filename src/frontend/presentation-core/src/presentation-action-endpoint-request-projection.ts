@@ -4,7 +4,7 @@ import type {
   ActionEndpointRequestValueBindingDefinition,
   PresentationValueDefinition,
 } from './module'
-import { presentationValueKinds } from '@cohesive/presentation-contracts'
+import { presentationValueKinds } from '@cohesivesystems/presentation-contracts'
 import {
   readObjectPath,
   writeObjectPath,

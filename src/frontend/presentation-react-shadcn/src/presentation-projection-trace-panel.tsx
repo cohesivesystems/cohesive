@@ -1,7 +1,7 @@
 import type {
   PresentationProjectionTrace,
   PresentationProjectionTraceView,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 export interface PresentationProjectionTracePanelProps {
   readonly enabled?: boolean

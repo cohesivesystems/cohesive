@@ -6,16 +6,16 @@ import {
   componentSystemComponentRoles,
   presentationViewComponentRoles,
   promptChildViewComponentRoles,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   createPresentationProjectionDiagnostic,
   type PresentationProjectionDiagnostic,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   DesignSystemBindingDefinition,
   PresentationBindingDefinition,
   PresentationModuleDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export interface ProjectPresentationComponentSystemDiagnosticsOptions {
   readonly componentSystem: PresentationComponentSystem

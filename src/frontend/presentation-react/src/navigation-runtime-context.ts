@@ -2,7 +2,7 @@ import { createContext, useContext } from 'react'
 
 import type {
   PresentationNavigationRuntime,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 /**
  * Re-exports the core navigation runtime contracts used by React navigation
@@ -13,7 +13,7 @@ export type {
   PresentationNavigationHrefFactory,
   PresentationNavigationRuntime,
   PresentationRouteNavigator,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 /**
  * React context carrying navigation services for projected presentation

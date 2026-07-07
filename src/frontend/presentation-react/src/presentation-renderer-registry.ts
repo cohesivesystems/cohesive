@@ -14,8 +14,8 @@ import {
   type PresentationViewRendererResolution as CorePresentationViewRendererResolution,
   type PresentationViewRendererResolutionSource,
   type ViewDefinition,
-} from '@cohesive/presentation-core'
-import { presentationTargetKinds } from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-core'
+import { presentationTargetKinds } from '@cohesivesystems/presentation-contracts'
 
 /**
  * Options that let a view renderer project only selected regions of a view.

@@ -12,7 +12,7 @@ import {
   type DesignIntent,
   type InputFormGroupDefinition,
   type NavigationShellSlotDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   tailwindPresentationDesignSystem,
 } from './presentation-design-system'

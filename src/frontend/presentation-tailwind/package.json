@@ -1,5 +1,5 @@
 {
-  "name": "@cohesive/presentation-tailwind",
+  "name": "@cohesivesystems/presentation-tailwind",
   "version": "0.1.0-alpha.1",
   "type": "module",
   "sideEffects": [
@@ -14,15 +14,19 @@
   },
   "files": [
     "dist",
-    "src"
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "!src/**/*.test.ts",
+    "!src/**/*.test.tsx",
+    "src/theme.css"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node ../../../eng/fix-package-js-imports.mjs dist",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@cohesive/presentation-contracts": "workspace:*",
-    "@cohesive/presentation-core": "workspace:*"
+    "@cohesivesystems/presentation-contracts": "workspace:*",
+    "@cohesivesystems/presentation-core": "workspace:*"
   },
   "peerDependencies": {
     "tailwindcss": ">=4"
@@ -34,5 +38,22 @@
   "license": "Apache-2.0",
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "description": "Tailwind CSS helpers and theme primitives for Cohesive presentation modules.",
+  "keywords": [
+    "cohesive",
+    "presentation",
+    "tailwindcss",
+    "theme"
+  ],
+  "author": "Cohesive Systems",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cohesivesystems/cohesive.git",
+    "directory": "src/frontend/presentation-tailwind"
+  },
+  "bugs": {
+    "url": "https://github.com/cohesivesystems/cohesive/issues"
+  },
+  "homepage": "https://github.com/cohesivesystems/cohesive#readme"
 }

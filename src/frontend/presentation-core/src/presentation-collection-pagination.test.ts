@@ -11,7 +11,7 @@ import {
 } from './presentation-collection-pagination'
 import {
   dataSourceKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 describe('createPresentationCollectionPaginationBindings', () => {
   it('uses the configured fallback page size when the IR has no default', () => {

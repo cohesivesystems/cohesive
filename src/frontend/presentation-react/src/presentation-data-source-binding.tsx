@@ -3,7 +3,7 @@ import { type ReactNode } from 'react'
 import {
   type PresentationDataSourceBinding,
   type PresentationDataSourceStateMap,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import { usePresentationDataSources } from './presentation-data-source-binding-runtime'
 
 export interface PresentationDataSourceBinderProps {

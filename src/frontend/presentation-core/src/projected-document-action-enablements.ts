@@ -8,7 +8,7 @@ import {
 } from './target-bindings'
 import {
   actionEnablementCriterionKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export interface ProjectedDocumentLocalActionEnablementContext {
   readonly isDocumentDirty?: boolean

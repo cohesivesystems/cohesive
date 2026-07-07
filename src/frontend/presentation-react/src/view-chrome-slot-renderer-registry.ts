@@ -13,12 +13,12 @@ import {
   viewChromeSlotAnyPlacement,
   type ViewChromeSlotRendererBinding as CoreViewChromeSlotRendererBinding,
   type ViewChromeSlotRendererRegistry as CoreViewChromeSlotRendererRegistry,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   ViewChromeSlotDefinition,
   ViewChromeSlotKind,
   ViewChromeSlotPlacement,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export {
   createViewChromeSlotRendererKey,

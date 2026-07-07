@@ -1,12 +1,12 @@
 import type {
   DesignIntent,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import type { PresentationDesignSystem } from './presentation-design-system'
 import {
   projectPresentationDesignIntentDiagnostics,
   type PresentationProjectionDiagnostic,
   type PresentationSurface,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 export interface PresentationRoutedSurfaceLayoutContext {
   readonly designSystem: PresentationDesignSystem

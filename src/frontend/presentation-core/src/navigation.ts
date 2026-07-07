@@ -5,7 +5,7 @@ import type {
   NavigationShellRegionDefinition,
   PageHostDefinition,
   PageHostKind,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   layoutNodeKinds,
   layoutOrientations,
@@ -17,7 +17,7 @@ import {
   pageHostKinds,
   pageRegionKinds,
   workspaceInstantiationModes,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 /**
  * Primitive parameter bag used when resolving semantic navigation route

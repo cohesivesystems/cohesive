@@ -11,7 +11,7 @@ import {
   type CollectionChromeSlotDefinition,
   type PresentationModuleDefinition,
   type ViewDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   createPresentationProjectionDiagnostic,
   createProjectedCollectionRuntime,

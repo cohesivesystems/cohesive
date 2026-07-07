@@ -5,7 +5,7 @@ import {
   type ViewChromeSlotDefinition,
   type ViewChromeSlotPlacement,
   type ViewDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   PresentationShadcnComponentSystem as PresentationComponentSystem,
 } from './presentation-shadcn-component-system'
@@ -13,12 +13,12 @@ import type {
   PresentationViewSurfaceContentTopInset,
   PresentationViewSurfaceVerticalResizeOptions,
 } from './presentation-component-groups'
-import { usePresentationModule } from '@cohesive/presentation-react'
+import { usePresentationModule } from '@cohesivesystems/presentation-react'
 import {
   ProjectedViewChrome,
   resolveViewChromeSlots,
 } from './projected-view-chrome'
-import { viewChromeSlotPlacements } from '@cohesive/presentation-contracts'
+import { viewChromeSlotPlacements } from '@cohesivesystems/presentation-contracts'
 
 interface ProjectedViewSurfaceProps {
   readonly action?: ReactNode

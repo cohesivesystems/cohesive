@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import type {
   PresentationShadcnComponentSystem as PresentationComponentSystem,
 } from './presentation-shadcn-component-system'
-import type { ProjectedActivityState } from '@cohesive/presentation-core'
+import type { ProjectedActivityState } from '@cohesivesystems/presentation-core'
 
 export interface ProjectedActivityStateBoundaryProps {
   readonly children: ReactNode

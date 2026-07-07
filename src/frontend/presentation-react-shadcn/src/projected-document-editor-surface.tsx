@@ -20,7 +20,7 @@ import {
   type ViewDefinition,
   type WorkspaceDefinition,
   type WorkspaceLayoutDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   type PresentationActionGroupOptions,
 } from './presentation-action-group'
@@ -29,12 +29,12 @@ import type {
 } from './presentation-shadcn-component-system'
 import type {
   PresentationDesignSystem,
-} from '@cohesive/presentation-tailwind'
+} from '@cohesivesystems/presentation-tailwind'
 import type { ProjectedMetricValue } from './projected-metric-strip'
 import {
   resolvePresentationRoutedSurfaceClassName,
   resolvePresentationRoutedSurfaceContentClassName,
-} from '@cohesive/presentation-tailwind'
+} from '@cohesivesystems/presentation-tailwind'
 import {
   layoutNodeKindLabels,
   layoutNodeKinds,
@@ -43,7 +43,7 @@ import {
   viewChromeSlotKinds,
   viewRegionKindLabels,
   viewRegionKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import type {
   PresentationBadgeTargetInterpreterRegistry,
 } from './presentation-badge-target-interpreter'
@@ -62,11 +62,11 @@ import {
 import {
   usePresentationModule,
   useRegisterPresentationProjectionDiagnostics,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 
 export type {
   DocumentEditorLayout,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 type ProjectedDocumentModuleLike = ReturnType<typeof usePresentationModule>
 

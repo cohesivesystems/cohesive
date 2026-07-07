@@ -5,7 +5,7 @@ import type {
 } from './presentation-shadcn-component-system'
 import {
   documentBadgeIconIds,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   renderPresentationIcon,
 } from './presentation-icon-registry'
@@ -15,11 +15,11 @@ import {
 import {
   usePresentationModule,
   useRegisterPresentationProjectionDiagnostics,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 import {
   getPresentationTextBadgeClassName,
   type PresentationTextBadgeTone,
-} from '@cohesive/presentation-tailwind'
+} from '@cohesivesystems/presentation-tailwind'
 
 export function TextBadge({
   children,

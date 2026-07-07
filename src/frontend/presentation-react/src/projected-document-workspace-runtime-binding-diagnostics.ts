@@ -1,24 +1,24 @@
 import type {
   PresentationModuleDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   createPresentationProjectionDiagnostic,
   type PresentationProjectionDiagnostic,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   createPresentationEnumDiscriminator,
   findPresentationComponentBinding,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   DocumentWorkspaceRuntimeSnapshot,
 } from './document-workspace-runtime'
 import {
   workspaceRuntimeComponentRoles,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   presentationBindingKinds,
   presentationTargetKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export interface ProjectDocumentWorkspaceRuntimeBindingDiagnosticsOptions {
   readonly componentSet?: string | null

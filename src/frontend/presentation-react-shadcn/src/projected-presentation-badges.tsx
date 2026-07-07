@@ -4,10 +4,10 @@ import type { PresentationBadgeVariant } from './presentation-component-groups'
 import type {
   PresentationShadcnComponentSystem as PresentationComponentSystem,
 } from './presentation-shadcn-component-system'
-import type { PresentationDesignSystem } from '@cohesive/presentation-tailwind'
+import type { PresentationDesignSystem } from '@cohesivesystems/presentation-tailwind'
 import type {
   ResolvedPresentationBadge,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 export interface ProjectedPresentationBadgeItem
   extends Omit<ResolvedPresentationBadge, 'label'> {

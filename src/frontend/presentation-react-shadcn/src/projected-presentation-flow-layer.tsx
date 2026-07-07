@@ -5,20 +5,20 @@ import type {
   PresentationModuleDefinition,
   ViewChromeSlotDefinition,
   ViewDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   createPresentationTestAttributes,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   PresentationShadcnComponentSystem as PresentationComponentSystem,
 } from './presentation-shadcn-component-system'
-import type { PresentationDesignSystem } from '@cohesive/presentation-tailwind'
+import type { PresentationDesignSystem } from '@cohesivesystems/presentation-tailwind'
 import type {
   PresentationActionGroupOptions,
 } from './presentation-action-group'
 import type {
   ProjectedDocumentActionStatusMap,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   ProjectedViewSurfaceChromeSlotRenderer,
 } from './projected-view-surface'
@@ -28,7 +28,7 @@ import {
 import type {
   PresentationFlowRuntimeEntry,
   PresentationFlowRuntimeRegistrySnapshot,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 import {
   createProjectedPromptChildViewRenderer,
   projectPromptChildViewRendererDiagnostics,
@@ -37,7 +37,7 @@ import {
 import { ProjectedPromptView } from './projected-prompt-view'
 import {
   useRegisterPresentationProjectionDiagnostics,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 
 export interface ProjectedPresentationFlowLayerProps<TContext> {
   readonly actionGroupOptions?: PresentationActionGroupOptions<TContext>

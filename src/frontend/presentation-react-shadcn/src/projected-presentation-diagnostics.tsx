@@ -1,7 +1,7 @@
 import type {
   PresentationProjectionDiagnostic,
   PresentationProjectionDiagnosticSeverity,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 export interface ProjectedPresentationDiagnosticsProps {
   readonly diagnostics: readonly PresentationProjectionDiagnostic[]

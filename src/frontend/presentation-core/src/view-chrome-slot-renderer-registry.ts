@@ -6,7 +6,7 @@ import type {
 import {
   viewChromeSlotKindLabels,
   viewChromeSlotPlacementLabels,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export const viewChromeSlotAnyPlacement = '*'
 

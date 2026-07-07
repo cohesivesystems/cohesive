@@ -37,7 +37,7 @@ import {
   type PresentationSurface,
   type QueryFormDefinition,
   type ViewDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   PresentationShadcnComponentSystem as PresentationComponentSystem,
 } from './presentation-shadcn-component-system'
@@ -54,12 +54,12 @@ import {
   type PresentationQueryFormStateEntry,
   type PresentationRendererRegistry,
   type RouteParameterValues,
-} from '@cohesive/presentation-react'
-import type { PresentationDesignSystem } from '@cohesive/presentation-tailwind'
+} from '@cohesivesystems/presentation-react'
+import type { PresentationDesignSystem } from '@cohesivesystems/presentation-tailwind'
 import {
   projectPresentationRoutedSurfaceLayoutDiagnostics,
   resolvePresentationRoutedSurfaceLayout,
-} from '@cohesive/presentation-tailwind'
+} from '@cohesivesystems/presentation-tailwind'
 import {
   PresentationRoutedSurfaceHost,
 } from './presentation-routed-surface-host'

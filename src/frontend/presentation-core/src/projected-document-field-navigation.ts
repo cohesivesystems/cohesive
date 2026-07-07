@@ -15,7 +15,7 @@ import {
 } from './target-bindings'
 import {
   presentationBindingKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 /**
  * Inputs used to project a document field value into a navigation binding.

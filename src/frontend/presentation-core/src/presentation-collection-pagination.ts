@@ -24,7 +24,7 @@ import {
   dataSourceKindLabels,
   dataSourceKinds,
   type DataSourceKind,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export type PresentationCollectionPaginationRequestMap = Readonly<Record<string, object>>
 

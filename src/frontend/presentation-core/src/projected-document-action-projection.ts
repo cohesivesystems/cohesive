@@ -21,7 +21,7 @@ import {
   presentationBindingKinds,
   preparationKinds,
   type DocumentWorkspaceActionKind,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export interface ProjectedDocumentAction {
   readonly action: ActionDefinition

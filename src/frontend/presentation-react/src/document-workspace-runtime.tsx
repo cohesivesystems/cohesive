@@ -20,13 +20,13 @@ import {
   type ViewDefinition,
   type WorkspaceDefinition,
   type WorkspaceRefDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import { usePresentationModule } from './presentation-module-context'
 import {
   createPresentationEnumDiscriminator,
   findPresentationComponentBinding,
   matchesPresentationEnum,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   coordinationActionKinds,
   coordinationTriggerKinds,
@@ -35,8 +35,8 @@ import {
   projectionKindLabels,
   projectionSubjectKindLabels,
   semanticReferenceKindLabels,
-} from '@cohesive/presentation-contracts'
-import type { CoordinationDefinition } from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
+import type { CoordinationDefinition } from '@cohesivesystems/presentation-contracts'
 
 /**
  * Client-side display mode for a document workspace. The available modes are

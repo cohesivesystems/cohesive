@@ -9,7 +9,7 @@ import {
   presentationBindingKinds,
   type ActionDefinition,
   type PresentationModuleDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import { createPresentationActionRuntimeBinding } from './index'
 
 describe('presentation action runtime binding', () => {

@@ -1,5 +1,5 @@
 {
-  "name": "@cohesive/presentation-core",
+  "name": "@cohesivesystems/presentation-core",
   "version": "0.1.0-alpha.1",
   "type": "module",
   "sideEffects": false,
@@ -11,14 +11,17 @@
   },
   "files": [
     "dist",
-    "src"
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "!src/**/*.test.ts",
+    "!src/**/*.test.tsx"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node ../../../eng/fix-package-js-imports.mjs dist",
     "test": "vitest run"
   },
   "dependencies": {
-    "@cohesive/presentation-contracts": "workspace:*"
+    "@cohesivesystems/presentation-contracts": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24.12.0",
@@ -28,5 +31,23 @@
   "license": "Apache-2.0",
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "description": "Runtime-agnostic TypeScript helpers for interpreting Cohesive presentation IR.",
+  "keywords": [
+    "cohesive",
+    "presentation",
+    "ir",
+    "runtime",
+    "typescript"
+  ],
+  "author": "Cohesive Systems",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cohesivesystems/cohesive.git",
+    "directory": "src/frontend/presentation-core"
+  },
+  "bugs": {
+    "url": "https://github.com/cohesivesystems/cohesive/issues"
+  },
+  "homepage": "https://github.com/cohesivesystems/cohesive#readme"
 }

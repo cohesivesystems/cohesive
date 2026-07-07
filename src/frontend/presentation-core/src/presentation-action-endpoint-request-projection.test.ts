@@ -8,7 +8,7 @@ import {
   type ActionDefinition,
   type ActionEndpointRequestProjectionDefinition,
   type PresentationValueDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   projectPresentationActionEndpointRequest,
   projectRequiredPresentationActionEndpointRequest,

@@ -8,7 +8,7 @@ import {
   type ViewKind,
   viewKindLabels,
   viewKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import { getPresentationViewSemanticRole } from './presentation-semantics'
 import {
   createPresentationEnumDiscriminator,

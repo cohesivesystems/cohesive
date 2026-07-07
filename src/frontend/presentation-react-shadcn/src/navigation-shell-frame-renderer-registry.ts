@@ -1,12 +1,12 @@
 import type {
   ProjectedNavigationShellLayout,
-} from '@cohesive/presentation-tailwind'
+} from '@cohesivesystems/presentation-tailwind'
 import type {
   NavigationShellFrameRenderer as ReactNavigationShellFrameRenderer,
   NavigationShellFrameRendererBinding as ReactNavigationShellFrameRendererBinding,
   NavigationShellFrameRendererRegistry as ReactNavigationShellFrameRendererRegistry,
   ProjectedNavigationShellFrameRenderContext as ReactProjectedNavigationShellFrameRenderContext,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 
 export {
   createNavigationShellFrameRendererKey,
@@ -14,7 +14,7 @@ export {
   getNavigationShellFrameRendererRegistryKeys,
   hasNavigationShellFrameRendererBinding,
   resolveNavigationShellFrameRenderer,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 
 export type ProjectedNavigationShellFrameRenderContext =
   ReactProjectedNavigationShellFrameRenderContext<ProjectedNavigationShellLayout>

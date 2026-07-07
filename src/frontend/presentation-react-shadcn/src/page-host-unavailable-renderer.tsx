@@ -2,14 +2,14 @@ import type { ReactNode } from 'react'
 
 import type {
   NavigationDefinitionProjection,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   NavigationRouteDefinition,
   PageHostDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import type {
   UnknownPageHostRenderContext,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 import { ProjectedStatusBlock } from './projected-activity-state'
 
 type UnavailablePageHostReason = UnknownPageHostRenderContext<

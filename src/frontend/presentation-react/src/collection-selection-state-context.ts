@@ -7,12 +7,12 @@ import {
 import type {
   CollectionSelectionStateContextValue,
   CollectionSelectionStateEntry,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 export type {
   CollectionSelectionStateContextValue,
   CollectionSelectionStateEntry,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 export const CollectionSelectionStateContext =
   createContext<CollectionSelectionStateContextValue | null>(null)

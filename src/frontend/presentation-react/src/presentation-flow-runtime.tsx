@@ -11,12 +11,12 @@ import {
   type FlowTransitionDefinition,
   type PresentationModuleDefinition,
   type ViewDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   flowStateKindLabels,
   flowStateKinds,
   preparationKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export interface PresentationFlowInstance {
   readonly data: Readonly<Record<string, unknown>>

@@ -5,7 +5,7 @@ import {
   createNavigationHref,
   type NavigationDefinitionProjection,
   type PresentationNavigationRuntime,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   PresentationNavigationRuntimeContext,
 } from './navigation-runtime-context'

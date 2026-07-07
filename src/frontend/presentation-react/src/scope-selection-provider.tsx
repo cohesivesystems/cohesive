@@ -12,7 +12,7 @@ import {
   normalizeScopeIds,
   type PresentationScopeAccess,
   type PresentationScopeRequestStore,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   PresentationScopeSelectionContext,
   type PresentationScopeSelectionContextValue,

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   viewKinds,
   type ViewDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   createNavigationRoute,
   createPageHost,

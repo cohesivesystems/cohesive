@@ -5,19 +5,19 @@ import {
   renderDocumentWorkspaceProjection,
   type DocumentWorkspaceProjectionRendererRegistry,
   usePresentationModule,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 import type {
   PresentationShadcnComponentSystem as PresentationComponentSystem,
 } from './presentation-shadcn-component-system'
 import type {
   PresentationDesignSystem,
-} from '@cohesive/presentation-tailwind'
+} from '@cohesivesystems/presentation-tailwind'
 import {
   type PromptDocumentPreviewDefinition,
   resolvePresentationTemplate,
   resolvePresentationBadges,
   resolvePromptDocumentPreviewTitle,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   ProjectedPresentationBadge,
   ProjectedPresentationBadges,

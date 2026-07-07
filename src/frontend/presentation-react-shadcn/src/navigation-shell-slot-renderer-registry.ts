@@ -1,6 +1,6 @@
 import type {
   ProjectedNavigationShellSlotLayout,
-} from '@cohesive/presentation-tailwind'
+} from '@cohesivesystems/presentation-tailwind'
 import type {
   PresentationShadcnComponentSystem as PresentationComponentSystem,
 } from './presentation-shadcn-component-system'
@@ -9,7 +9,7 @@ import type {
   NavigationShellSlotRendererBinding as ReactNavigationShellSlotRendererBinding,
   NavigationShellSlotRendererRegistry as ReactNavigationShellSlotRendererRegistry,
   ProjectedNavigationShellSlotRenderContext as ReactProjectedNavigationShellSlotRenderContext,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 
 export {
   createNavigationShellSlotRendererKey,
@@ -19,7 +19,7 @@ export {
   hasNavigationShellSlotRendererBinding,
   navigationShellSlotAnyPlacement,
   resolveNavigationShellSlotRenderer,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 
 export type ProjectedNavigationShellSlotRenderContext =
   ReactProjectedNavigationShellSlotRenderContext<

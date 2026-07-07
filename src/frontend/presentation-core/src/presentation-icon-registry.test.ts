@@ -4,7 +4,7 @@ import {
   presentationBindingKinds,
   presentationTargetKinds,
   type PresentationBindingDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   createPresentationIconRegistry,
   projectPresentationActionIconDiagnostics,

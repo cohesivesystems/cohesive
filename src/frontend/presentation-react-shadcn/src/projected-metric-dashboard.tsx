@@ -6,17 +6,17 @@ import {
   isViewChromeSlotKind,
   type PresentationDataSourceResolver,
   type ViewDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   PresentationShadcnComponentSystem as PresentationComponentSystem,
 } from './presentation-shadcn-component-system'
-import { usePresentationModule } from '@cohesive/presentation-react'
+import { usePresentationModule } from '@cohesivesystems/presentation-react'
 import { ProjectedMetricStrip, type ProjectedMetricValue } from './projected-metric-strip'
 import {
   ProjectedViewSurface,
   type ProjectedViewSurfaceChromeSlotRenderer,
 } from './projected-view-surface'
-import { viewChromeSlotKinds } from '@cohesive/presentation-contracts'
+import { viewChromeSlotKinds } from '@cohesivesystems/presentation-contracts'
 
 export interface ProjectedMetricDashboardProps {
   readonly action?: ReactNode

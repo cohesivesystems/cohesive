@@ -34,7 +34,7 @@ import {
   type DataSourceAggregateQuery,
   type DataSourceKind,
   type ParameterDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   readPresentationQueryFormAppliedValue,
   type PresentationQueryFormStateMap,

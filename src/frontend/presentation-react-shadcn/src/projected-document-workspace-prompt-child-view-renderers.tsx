@@ -1,12 +1,12 @@
 import type {
   DocumentWorkspaceProjectionRendererRegistry,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 import type {
   PresentationShadcnComponentSystem as PresentationComponentSystem,
 } from './presentation-shadcn-component-system'
 import type {
   PresentationDesignSystem,
-} from '@cohesive/presentation-tailwind'
+} from '@cohesivesystems/presentation-tailwind'
 import {
   findPromptDocumentPreviewRegionId,
   findPromptDocumentPreviewStatusRegionId,
@@ -20,7 +20,7 @@ import {
   type ProjectedDocumentActionStatusMap,
   type ProjectedPromptDocumentPreviewData,
   type ViewDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   ProjectedStatusBlock,
 } from './projected-activity-state'

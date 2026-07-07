@@ -11,20 +11,20 @@ import {
   type PresentationDataSourceProjectionContext,
   type PresentationDataSourceTargetInterpretation,
   type ViewDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   PresentationDataSourceBinder,
   usePresentationModule,
   useRegisterPresentationProjectionDiagnostics,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 import type {
   PresentationRendererRegistry,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 import { PresentationSurfaceRenderer } from './presentation-surface-renderer'
 import { ProjectedStatusBlock } from './projected-activity-state'
 import type {
   NavigationShellRegionDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export interface ProjectedNavigationShellViewHostProps<TContext> {
   readonly bindings: readonly PresentationDataSourceBinding[]

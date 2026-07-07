@@ -1,12 +1,12 @@
 import type {
   PresentationActionRuntimeBinding,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   createPresentationActionRuntimeBinding,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   resolveActionPendingLabel,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   ProjectedDocumentActionRuntime,
   ProjectedDocumentJsonValidationState,
@@ -15,7 +15,7 @@ import {
   actionSemanticsKinds,
   documentWorkspaceActionKinds,
   localDocumentEditorActionKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export interface ProjectDocumentActionRuntimeBindingsOptions<
   TLabel = string,

@@ -16,7 +16,7 @@ const forbiddenImportPatterns = [
   /from\s+['"]\.\.\/\.\.\/products\//,
 ]
 
-describe('@cohesive/presentation-core package boundary', () => {
+describe('@cohesivesystems/presentation-core package boundary', () => {
   it('does not import framework, design-system, editor, or application modules', () => {
     const offenders = listSourceFiles(sourceRoot)
       .filter((filePath) => !filePath.endsWith('package-boundary.test.ts'))

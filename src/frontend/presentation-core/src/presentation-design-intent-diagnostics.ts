@@ -4,7 +4,7 @@ import {
 } from './presentation-projection-diagnostics'
 import type {
   DesignIntent,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export const presentationDesignIntentFieldNames = [
   'Role',

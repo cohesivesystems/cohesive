@@ -13,12 +13,12 @@ import {
   resolveCollectionChromeSlotRenderer as resolveCoreCollectionChromeSlotRenderer,
   type CollectionChromeSlotRendererBinding as CoreCollectionChromeSlotRendererBinding,
   type CollectionChromeSlotRendererRegistry as CoreCollectionChromeSlotRendererRegistry,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   CollectionChromeSlotDefinition,
   CollectionChromeSlotKind,
   CollectionChromeSlotPlacement,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export {
   collectionChromeSlotAnyPlacement,

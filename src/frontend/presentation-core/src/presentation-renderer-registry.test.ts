@@ -7,7 +7,7 @@ import {
   type PresentationBindingDefinition,
   type ViewDefinition,
   type ViewKind,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   mergePresentationRendererRegistries,
   resolvePresentationViewRenderer,

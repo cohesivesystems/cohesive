@@ -4,7 +4,7 @@ import type {
   ViewChromeSlotDefinition,
   ViewChromeSlotPlacement,
   ViewDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   PresentationShadcnComponentSystem as PresentationComponentSystem,
 } from './presentation-shadcn-component-system'
@@ -12,18 +12,18 @@ import {
   isViewChromeSlotKind,
   isViewChromeSlotPlacementValue,
   resolveViewChromeIconSubjects,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   projectPresentationIconDiagnostics,
 } from './presentation-icon-diagnostics'
 import {
   usePresentationModule,
   useRegisterPresentationProjectionDiagnostics,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 import {
   viewChromeSlotKinds,
   viewChromeSlotPlacements,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export interface ProjectedViewChromeProps {
   readonly className?: string

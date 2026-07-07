@@ -75,7 +75,7 @@ import {
   presentationBindingKinds,
   viewKinds,
   viewChromeSlotKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export interface ProjectPresentationTraceCoverageDiagnosticsOptions {
   readonly collectionChromeSlotRendererKeys?: readonly string[]

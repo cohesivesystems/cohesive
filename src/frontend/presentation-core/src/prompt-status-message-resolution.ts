@@ -14,7 +14,7 @@ import type { ViewDefinition } from './module'
 import {
   promptStatusMessageKinds,
   type PromptStatusMessageDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export interface ProjectedPromptStatusMessage {
   readonly definition: PromptStatusMessageDefinition

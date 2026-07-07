@@ -10,14 +10,14 @@ import {
   type PresentationDataSourceStateMap,
   type PresentationSurface,
   type ViewDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   usePresentationModule,
   resolvePresentationViewRenderer,
   type PresentationRendererRegistry,
   type PresentationViewRegionRenderOptions,
   type PresentationViewRendererResolution,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 import { ProjectedStatusBlock } from './projected-activity-state'
 
 export interface PresentationSurfaceRendererProps<TContext> {

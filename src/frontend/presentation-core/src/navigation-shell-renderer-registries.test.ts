@@ -8,7 +8,7 @@ import {
   type NavigationShellRegionDefinition,
   type NavigationShellSlotDefinition,
   type PresentationBindingDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   createNavigationShellFrameRendererRegistry,
   getNavigationShellFrameRendererRegistryKeys,

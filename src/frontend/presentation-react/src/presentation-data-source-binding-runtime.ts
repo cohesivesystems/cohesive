@@ -11,7 +11,7 @@ import {
   type PresentationDataSourceStateMap,
   type PresentationLocalValueDataSourceBinding,
   type PresentationTanStackQueryDataSourceBinding,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import { usePresentationModule } from './presentation-module-context'
 
 interface PresentationAsyncDataSourceResult {

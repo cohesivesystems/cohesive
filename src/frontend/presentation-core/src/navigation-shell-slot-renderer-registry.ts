@@ -2,7 +2,7 @@ import {
   navigationShellSlotKindLabels,
   type NavigationShellSlotDefinition,
   type NavigationShellSlotKind,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export const navigationShellSlotAnyPlacement = '*'
 

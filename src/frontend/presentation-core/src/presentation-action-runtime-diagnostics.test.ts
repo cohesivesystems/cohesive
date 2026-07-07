@@ -7,7 +7,7 @@ import {
   type ActionDefinition,
   type ActionPlacementDefinition,
   type PresentationModuleDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import { projectPresentationActionRuntimeBindingDiagnostics } from './index'
 
 describe('presentation action runtime diagnostics', () => {

@@ -12,20 +12,20 @@ import {
   type PresentationProjectionDiagnostic,
   type PresentationDataSourceResolver,
   type ViewDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   PresentationShadcnComponentSystem as PresentationComponentSystem,
 } from './presentation-shadcn-component-system'
 import type {
   PresentationDesignSystem,
-} from '@cohesive/presentation-tailwind'
+} from '@cohesivesystems/presentation-tailwind'
 import { ProjectedStatusBlock } from './projected-activity-state'
 import {
   presentationBindingKinds,
   presentationTargetKinds,
   type ViewKind,
   viewKindLabels,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export interface ProjectedPromptChildViewRenderContext<TContext> {
   readonly componentKey: string | null

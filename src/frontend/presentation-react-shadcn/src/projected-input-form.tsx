@@ -28,11 +28,11 @@ import {
   type QueryFormDefinition,
   type ViewChromeSlotDefinition,
   type ViewDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   PresentationShadcnComponentSystem as PresentationComponentSystem,
 } from './presentation-shadcn-component-system'
-import type { PresentationDesignSystem } from '@cohesive/presentation-tailwind'
+import type { PresentationDesignSystem } from '@cohesivesystems/presentation-tailwind'
 import {
   projectPresentationActionIconDiagnostics,
 } from './presentation-icon-diagnostics'
@@ -46,20 +46,20 @@ import {
 } from './projected-view-surface'
 import {
   useRegisterPresentationProjectionDiagnostics,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 import {
   inputFormChoiceDefaultSelections,
   inputFormFieldControlKinds,
   inputFormFieldKinds,
   viewChromeSlotKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export type {
   ProjectedInputFormActionContext,
   ProjectedInputFormRuntime,
   ProjectedInputFormTargetContext,
   ProjectedInputFormValueChangeContext,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 /**
  * Context supplied to a domain-specific input-form field renderer.

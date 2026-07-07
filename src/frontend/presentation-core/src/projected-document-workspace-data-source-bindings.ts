@@ -16,7 +16,7 @@ import {
 import {
   documentDataSourceRoles,
   type DocumentDataSourceRole,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 const defaultDocumentWorkspaceDataSourceRoles = [
   documentDataSourceRoles.resource,

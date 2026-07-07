@@ -7,7 +7,7 @@ import {
   navigationShellSlotKinds,
   type NavigationDefinition,
   type NavigationShellSlotDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   createNavigationShellFrameRendererKey,
 } from './navigation-shell-frame-renderer-registry'

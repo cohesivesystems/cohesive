@@ -6,7 +6,7 @@ import {
 import {
   viewChromeSlotKinds,
   viewRegionKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 /**
  * Resolves document workspace metadata fields from page/header chrome.

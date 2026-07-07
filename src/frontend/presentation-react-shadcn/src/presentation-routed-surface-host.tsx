@@ -1,7 +1,7 @@
-import type { PresentationDataSourceBinding } from '@cohesive/presentation-core'
-import { PresentationDataSourceBinder } from '@cohesive/presentation-react'
-import type { PresentationRendererRegistry } from '@cohesive/presentation-react'
-import type { PresentationSurface } from '@cohesive/presentation-core'
+import type { PresentationDataSourceBinding } from '@cohesivesystems/presentation-core'
+import { PresentationDataSourceBinder } from '@cohesivesystems/presentation-react'
+import type { PresentationRendererRegistry } from '@cohesivesystems/presentation-react'
+import type { PresentationSurface } from '@cohesivesystems/presentation-core'
 import { PresentationSurfaceRenderer } from './presentation-surface-renderer'
 
 export interface PresentationRoutedSurfaceHostProps<TContext = undefined> {

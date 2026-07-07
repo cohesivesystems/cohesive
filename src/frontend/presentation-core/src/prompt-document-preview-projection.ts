@@ -5,7 +5,7 @@ import {
   type PromptDocumentPreviewDefinition,
   type ViewDefinition,
 } from './module'
-import { conventionalPreviewResourceFields } from '@cohesive/presentation-contracts'
+import { conventionalPreviewResourceFields } from '@cohesivesystems/presentation-contracts'
 import {
   presentationDataSourceBindings,
   type PresentationDataSourceAuthorizationRequirement,

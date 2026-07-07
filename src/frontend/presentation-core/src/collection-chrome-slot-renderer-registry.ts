@@ -6,7 +6,7 @@ import type {
 import {
   collectionChromeSlotKindLabels,
   collectionChromeSlotPlacementLabels,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 /**
  * Placement token used by collection chrome renderer keys that apply to any

@@ -29,7 +29,7 @@ importers:
 
   src/frontend/presentation-core:
     dependencies:
-      '@cohesive/presentation-contracts':
+      '@cohesivesystems/presentation-contracts':
         specifier: workspace:*
         version: link:../presentation-contracts
     devDependencies:
@@ -45,7 +45,7 @@ importers:
 
   src/frontend/presentation-monaco:
     dependencies:
-      '@cohesive/presentation-core':
+      '@cohesivesystems/presentation-core':
         specifier: workspace:*
         version: link:../presentation-core
       monaco-editor:
@@ -61,10 +61,10 @@ importers:
 
   src/frontend/presentation-react:
     dependencies:
-      '@cohesive/presentation-contracts':
+      '@cohesivesystems/presentation-contracts':
         specifier: workspace:*
         version: link:../presentation-contracts
-      '@cohesive/presentation-core':
+      '@cohesivesystems/presentation-core':
         specifier: workspace:*
         version: link:../presentation-core
       '@tanstack/react-query':
@@ -95,10 +95,10 @@ importers:
 
   src/frontend/presentation-react-mui:
     dependencies:
-      '@cohesive/presentation-core':
+      '@cohesivesystems/presentation-core':
         specifier: workspace:*
         version: link:../presentation-core
-      '@cohesive/presentation-react':
+      '@cohesivesystems/presentation-react':
         specifier: workspace:*
         version: link:../presentation-react
       '@emotion/react':
@@ -135,16 +135,16 @@ importers:
 
   src/frontend/presentation-react-shadcn:
     dependencies:
-      '@cohesive/presentation-contracts':
+      '@cohesivesystems/presentation-contracts':
         specifier: workspace:*
         version: link:../presentation-contracts
-      '@cohesive/presentation-core':
+      '@cohesivesystems/presentation-core':
         specifier: workspace:*
         version: link:../presentation-core
-      '@cohesive/presentation-react':
+      '@cohesivesystems/presentation-react':
         specifier: workspace:*
         version: link:../presentation-react
-      '@cohesive/presentation-tailwind':
+      '@cohesivesystems/presentation-tailwind':
         specifier: workspace:*
         version: link:../presentation-tailwind
       class-variance-authority:
@@ -190,10 +190,10 @@ importers:
 
   src/frontend/presentation-tailwind:
     dependencies:
-      '@cohesive/presentation-contracts':
+      '@cohesivesystems/presentation-contracts':
         specifier: workspace:*
         version: link:../presentation-contracts
-      '@cohesive/presentation-core':
+      '@cohesivesystems/presentation-core':
         specifier: workspace:*
         version: link:../presentation-core
       tailwindcss:

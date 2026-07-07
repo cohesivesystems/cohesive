@@ -3,11 +3,11 @@ import type { ReactNode } from 'react'
 import type {
   NavigationDefinitionProjection,
   NavigationTarget,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   NavigationRouteDefinition,
   PageHostDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 /**
  * Route parameter values resolved by the frontend router for a projected

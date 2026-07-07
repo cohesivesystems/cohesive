@@ -20,7 +20,7 @@ uplinks:
     url: https://registry.npmjs.org/
 
 packages:
-  '@cohesive/*':
+  '@cohesivesystems/*':
     access: \$all
     publish: \$all
     unpublish: \$all

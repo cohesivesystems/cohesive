@@ -3,8 +3,8 @@ import type {
   DataSourceQueryEndpointBindingDefinition,
   QueryFieldBindingDefinition,
   QueryLoweringDefinition,
-} from '@cohesive/presentation-contracts'
-import { queryLoweringKinds } from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
+import { queryLoweringKinds } from '@cohesivesystems/presentation-contracts'
 import {
   readObjectPath,
   writeObjectPath,

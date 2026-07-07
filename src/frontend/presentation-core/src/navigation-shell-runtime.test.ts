@@ -9,7 +9,7 @@ import {
   type NavigationDefinition,
   type NavigationShellRegionDefinition,
   type NavigationShellSlotDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   createProjectedNavigationShellItems,
   findNavigationShellSlot,

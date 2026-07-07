@@ -18,7 +18,7 @@ import {
 } from './target-bindings'
 import {
   actionEnablementCriterionKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 type ProcessTaskScalarMetadataKey = {
   [K in keyof ProcessTaskMetadata]-?: NonNullable<ProcessTaskMetadata[K]> extends string
