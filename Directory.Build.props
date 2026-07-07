@@ -9,7 +9,7 @@
     <Description>Cohesive semantic system definition and orchestration building blocks.</Description>
     <PackageProjectUrl>https://cohesive.to</PackageProjectUrl>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
-    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageReadmeFile Condition="Exists('$(MSBuildProjectDirectory)/README.md')">README.md</PackageReadmeFile>
     <RepositoryType>git</RepositoryType>
     <RepositoryUrl>https://github.com/cohesivesystems/cohesive</RepositoryUrl>
     <PackageTags>cohesive;semantic;orchestration;relations;presentation;processes;configuration</PackageTags>
@@ -21,7 +21,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="/" Condition="Exists('$(MSBuildThisFileDirectory)README.md')" />
+    <None Include="$(MSBuildProjectDirectory)/README.md" Pack="true" PackagePath="/" Link="README.md" Condition="Exists('$(MSBuildProjectDirectory)/README.md')" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(MSBuildProjectName)' != 'Cohesive.Analyzers' and '$(EnableCohesiveGlobalUsings)' != 'false'">
