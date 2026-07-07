@@ -1,13 +1,13 @@
 import type {
   PresentationBindingDefinition,
   ViewDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   NavigationDefinitionProjection,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   createPresentationProjectionTrace as createCorePresentationProjectionTrace,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   resolvePageHostRenderer,
   type PresentationPageHostRendererModuleProjection,
@@ -26,7 +26,7 @@ export type {
   PresentationProjectionTraceRoute,
   PresentationProjectionTraceSurface,
   PresentationProjectionTraceView,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 export interface PresentationProjectionTraceModule
   extends PresentationPageHostRendererModuleProjection {

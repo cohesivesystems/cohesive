@@ -11,7 +11,7 @@ import {
 import {
   presentationBindingKinds,
   presentationTargetKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 interface PresentationTargetBindingProjection {
   readonly Bindings: readonly PresentationBindingDefinition[]

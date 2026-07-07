@@ -1,25 +1,25 @@
 import type {
   PresentationActionRuntimeBinding,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   createPresentationActionRuntimeBinding,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   resolveActionPendingLabel,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   ProjectedActionStatusSource,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   ProjectedDocumentProcessPreviewActionRuntime,
 } from './projected-document-process-preview-action-runtime'
 import type {
   ProjectedPromptDocumentPreviewResource,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   actionSemanticsKinds,
   documentWorkspaceActionKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export interface ProjectDocumentProcessPreviewActionRuntimeBindingsOptions<
   TLabel = string,

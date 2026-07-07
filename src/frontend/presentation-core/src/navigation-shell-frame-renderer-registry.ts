@@ -1,7 +1,7 @@
 import {
   navigationShellKindLabels,
   type NavigationShellKind,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export type NavigationShellFrameRendererRegistry<TRenderer = unknown> = Readonly<
   Record<string, TRenderer>

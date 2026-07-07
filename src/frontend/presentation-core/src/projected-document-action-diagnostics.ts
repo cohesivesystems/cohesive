@@ -17,7 +17,7 @@ import {
   actionSemanticsKinds,
   localDocumentEditorActionKindLabels,
   localDocumentEditorActionKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export type LocalDocumentEditorActionBindingIntent = 'format' | 'reset'
 

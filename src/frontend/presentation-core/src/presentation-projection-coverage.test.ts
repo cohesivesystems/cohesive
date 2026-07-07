@@ -10,7 +10,7 @@ import {
   viewKinds,
   viewSubjectKinds,
   type ViewDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   projectPresentationDataSourceCoverageDiagnostics,
   projectPresentationTraceCoverageDiagnostics,

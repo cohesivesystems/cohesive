@@ -8,9 +8,9 @@ import {
   type PresentationDataSourceBinding,
   type PresentationModuleDefinition,
   type ViewDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type { PresentationFlowRuntimeEntry } from './presentation-flow-runtime'
-import { viewSubjectKinds } from '@cohesive/presentation-contracts'
+import { viewSubjectKinds } from '@cohesivesystems/presentation-contracts'
 
 export interface LocalFlowStateDataSourceState {
   readonly data?: unknown

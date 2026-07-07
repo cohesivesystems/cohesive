@@ -26,7 +26,7 @@ import {
   type ProjectedDocumentFieldDefinitionLike,
   type ViewChromeSlotDefinition,
   type ViewDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   PresentationActionGroup,
   type PresentationActionGroupOptions,
@@ -37,11 +37,11 @@ import {
 import {
   usePresentationNavigationRuntime,
   useRegisterPresentationProjectionDiagnostics,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 import type {
   PresentationShadcnComponentSystem as PresentationComponentSystem,
 } from './presentation-shadcn-component-system'
-import type { PresentationDesignSystem } from '@cohesive/presentation-tailwind'
+import type { PresentationDesignSystem } from '@cohesivesystems/presentation-tailwind'
 import {
   interpretPresentationBadgeTarget,
   type PresentationBadgeTargetInterpreterRegistry,
@@ -59,7 +59,7 @@ import {
 } from './projected-metric-strip'
 import {
   viewChromeSlotKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export type ProjectedViewChromeMetadataRole = string
 

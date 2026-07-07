@@ -1,6 +1,6 @@
 {
-  "name": "@cohesive/presentation-contracts",
-  "version": "0.1.0-dev.202607060009",
+  "name": "@cohesivesystems/presentation-contracts",
+  "version": "0.1.0-alpha.1",
   "type": "module",
   "sideEffects": false,
   "exports": {
@@ -15,7 +15,10 @@
   },
   "files": [
     "dist",
-    "src"
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "!src/**/*.test.ts",
+    "!src/**/*.test.tsx"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node ../../../eng/fix-package-js-imports.mjs dist",
@@ -28,5 +31,22 @@
   "license": "Apache-2.0",
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "description": "Generated TypeScript contracts for Cohesive presentation models.",
+  "keywords": [
+    "cohesive",
+    "presentation",
+    "contracts",
+    "typescript"
+  ],
+  "author": "Cohesive Systems",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cohesivesystems/cohesive.git",
+    "directory": "src/frontend/presentation-contracts"
+  },
+  "bugs": {
+    "url": "https://github.com/cohesivesystems/cohesive/issues"
+  },
+  "homepage": "https://github.com/cohesivesystems/cohesive#readme"
 }

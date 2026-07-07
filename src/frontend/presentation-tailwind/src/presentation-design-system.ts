@@ -4,14 +4,14 @@ import type {
   DesignIntent,
   InputFormGroupDefinition,
   NavigationShellSlotDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   inputFormGroupKinds,
   navigationShellSlotKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import type {
   PresentationDesignIntentFieldName,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 export interface PresentationDesignSystemDesignIntentInterpretation {
   readonly ignoredFields: readonly PresentationDesignIntentFieldName[]

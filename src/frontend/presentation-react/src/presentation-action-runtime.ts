@@ -3,16 +3,16 @@ import { useMemo } from 'react'
 
 import type {
   PresentationActionEndpointExecutionRequest,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   findPresentationAction,
   type ActionDefinition,
   type PresentationBindingDefinition,
   type PresentationModuleDefinition,
   resolvePresentationActionEndpointBinding,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
-export type { PresentationActionEndpointExecutionRequest } from '@cohesive/presentation-core'
+export type { PresentationActionEndpointExecutionRequest } from '@cohesivesystems/presentation-core'
 
 export type PresentationActionEndpointExecutor = <TResult = unknown>(
   endpointId: string,

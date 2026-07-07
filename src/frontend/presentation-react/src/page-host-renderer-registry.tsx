@@ -4,7 +4,7 @@ import {
   presentationTargetKinds,
   type NavigationRouteDefinition,
   type PageHostDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   createPresentationEnumDiscriminator,
   presentationPageHostComponentRoles,
@@ -16,7 +16,7 @@ import {
   type PageHostRendererResolutionSource,
   type PageHostTargetBindingSource,
   type PresentationPageHostRendererModuleProjection,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   PageHostComponentRenderer,
   PageHostRenderContext,

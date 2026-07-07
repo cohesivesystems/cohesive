@@ -5,10 +5,10 @@ import type {
   FieldPresentationDefinition,
   PresentationIconDiagnosticSubject,
   ProcessTask,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   resolvePresentationFieldValueIcon,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   PresentationIconModuleProjection,
 } from './presentation-icon-registry'

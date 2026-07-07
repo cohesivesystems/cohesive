@@ -5,8 +5,8 @@ import type {
   ProjectedQueryFormRuntime,
   ProjectedQueryFormValueChangeContext,
   QueryFormDefinition,
-} from '@cohesive/presentation-core'
-import { queryFormExecutionModes } from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-core'
+import { queryFormExecutionModes } from '@cohesivesystems/presentation-contracts'
 
 const debouncedDraftExecutionTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
@@ -16,13 +16,13 @@ export type {
   ProjectedQueryFormActionContext,
   ProjectedQueryFormRuntime,
   ProjectedQueryFormValueChangeContext,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 export {
   findPresentationQueryFormStateForDataSource,
   readPresentationQueryFormAppliedValue,
   readPresentationQueryFormDraftValue,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 export interface PresentationQueryFormValueContext<TValue extends object> {
   readonly choiceValuesByFieldId: Readonly<Record<string, readonly string[]>>

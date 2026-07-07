@@ -5,7 +5,7 @@ import {
   type PropsWithChildren,
 } from 'react'
 
-import type { PresentationStandardsComposer } from '@cohesive/presentation-core'
+import type { PresentationStandardsComposer } from '@cohesivesystems/presentation-core'
 
 export interface PresentationStandardsProviderProps<TStandards, TContribution>
   extends PropsWithChildren {

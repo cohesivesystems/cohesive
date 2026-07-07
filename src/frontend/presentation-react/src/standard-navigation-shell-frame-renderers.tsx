@@ -3,10 +3,10 @@ import type { ReactNode } from 'react'
 import {
   navigationShellKinds,
   type NavigationShellSlotDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import type {
   ProjectedNavigationShellLayout,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   createNavigationShellFrameRendererRegistry,
   getNavigationShellFrameRendererRegistryKeys,

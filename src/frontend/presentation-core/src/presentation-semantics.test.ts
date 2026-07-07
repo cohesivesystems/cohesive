@@ -5,7 +5,7 @@ import {
   collectionSelectionActionParameterSources,
   viewChromeSlotKinds,
   type ViewDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   createPresentationSurfaceFromRootView,
   getPresentationSurfaceSemanticNodes,

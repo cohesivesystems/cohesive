@@ -9,11 +9,11 @@ import {
   type PresentationHrefNavigator,
   type PresentationNavigationHrefFactory,
   type ViewDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   usePresentationModule,
   usePresentationNavigationRuntime,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 import type {
   PresentationShadcnComponentSystem as PresentationComponentSystem,
 } from './presentation-shadcn-component-system'

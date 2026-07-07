@@ -4,8 +4,8 @@ import {
   type ProjectedDocumentActionStatus,
   type ProjectedDocumentActionStatusMap,
   resolvePresentationContent,
-} from '@cohesive/presentation-core'
-import { documentActionStatusNoticeKinds } from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-core'
+import { documentActionStatusNoticeKinds } from '@cohesivesystems/presentation-contracts'
 import { ProjectedStatusBlock } from './projected-activity-state'
 
 export type {

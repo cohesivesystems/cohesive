@@ -6,11 +6,11 @@ import {
   resolveNavigationTarget,
   type NavigationDefinitionProjection,
   type NavigationTarget,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   NavigationRouteDefinition,
   PageHostDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   renderPageHost,
   type PageHostComponentRegistry,

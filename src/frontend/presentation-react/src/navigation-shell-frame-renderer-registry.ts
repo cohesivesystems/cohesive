@@ -6,18 +6,18 @@ import type {
   NavigationShellKind,
   NavigationShellRegionDefinition,
   NavigationShellSlotDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   createNavigationShellFrameRendererRegistry as createCoreNavigationShellFrameRendererRegistry,
   resolveNavigationShellFrameRenderer as resolveCoreNavigationShellFrameRenderer,
   type NavigationShellFrameRendererBinding as CoreNavigationShellFrameRendererBinding,
   type NavigationShellFrameRendererRegistry as CoreNavigationShellFrameRendererRegistry,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 export {
   createNavigationShellFrameRendererKey,
   getNavigationShellFrameRendererRegistryKeys,
   hasNavigationShellFrameRendererBinding,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 export interface ProjectedNavigationShellFrameRenderContext<TLayout = unknown> {
   readonly activePath: string

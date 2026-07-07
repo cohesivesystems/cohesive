@@ -5,7 +5,7 @@ import {
 } from './presentation-projection-diagnostics-context'
 import type {
   PresentationProjectionDiagnostic,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 export function usePresentationProjectionDiagnostics() {
   return useContext(PresentationProjectionDiagnosticsContext)?.diagnostics ?? []

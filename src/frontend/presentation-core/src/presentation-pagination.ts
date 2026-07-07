@@ -9,7 +9,7 @@ import {
   dataSourcePaginationKinds,
   type DataSourcePaginationDefinition,
   type DataSourcePaginationKind,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export const presentationPaginationKinds = {
   cursor: 'cursor',

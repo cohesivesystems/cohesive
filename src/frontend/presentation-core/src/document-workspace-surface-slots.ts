@@ -17,7 +17,7 @@ import {
   documentWorkspaceSurfaceSlotRoles,
   viewRegionKindLabels,
   viewRegionKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export interface DocumentWorkspaceSurfaceSlotDescriptor {
   readonly expectsHostedView: boolean

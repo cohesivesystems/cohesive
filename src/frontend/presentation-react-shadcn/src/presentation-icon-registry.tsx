@@ -43,7 +43,7 @@ import {
   type PresentationIconRegistry as CorePresentationIconRegistry,
   type PresentationIconRenderContext,
   type PresentationIconResolution as CorePresentationIconResolution,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 export {
   createPresentationIconRegistry,

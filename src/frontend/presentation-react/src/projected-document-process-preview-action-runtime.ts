@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react'
 import type {
   ProjectedDocumentResource,
   PresentationNavigationHrefFactory,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import { useProjectedInputFormEndpointRuntime } from './input-form-endpoint-runtime'
 import type {
   ActionDefinition,
@@ -14,23 +14,23 @@ import type {
   PromptDocumentPreviewDefinition,
   ProcessTaskSelectorDefinition,
   ViewDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   findPresentationFlow,
   findPresentationInputFormForView,
   findPresentationView,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   getPresentationViewProjectedActionPlacements,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   projectRequiredPresentationActionEndpointRequest,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   projectDocumentLocalActionEnablement,
   type ProjectedDocumentActionEnablement,
   type ProjectedDocumentLocalActionEnablementContext,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   PresentationActionEndpointExecutionRequest,
   PresentationActionEndpointExecutor,
@@ -52,31 +52,31 @@ import type {
   PresentationProjectionDiagnostic,
   ProjectedInputFormActionContext,
   ProjectedInputFormRuntime,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   findDocumentProcessPreviewAction,
   findInputFormActionPlacement,
   findPromptCommitAction,
   findPromptDismissAction,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   findPromptDocumentPreviewView,
   projectPromptDocumentPreviewData,
   type ProjectedPromptDocumentPreviewData,
   type ProjectedPromptDocumentPreviewResource,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   type ProcessTask,
   type ProcessTaskSelector,
   type ProcessTaskStartRegistration,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   projectProcessTaskActionEnablement,
   projectProcessTaskStartRegistration,
   projectProcessTaskSelector,
   type ProjectedProcessTaskActionEnablement,
-} from '@cohesive/presentation-core'
-import { flowStateKinds } from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-core'
+import { flowStateKinds } from '@cohesivesystems/presentation-contracts'
 
 /**
  * Active preview data produced by a document-scoped process preview action.

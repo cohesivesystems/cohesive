@@ -2,7 +2,7 @@ import { createContext, useContext } from 'react'
 
 import type {
   PresentationScopeAccess,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 /**
  * React scope-selection state shared by a presentation host.

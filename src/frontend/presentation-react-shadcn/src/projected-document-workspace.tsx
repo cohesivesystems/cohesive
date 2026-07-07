@@ -5,17 +5,17 @@ import {
   type DocumentWorkspaceRuntimeSnapshot,
   renderDocumentWorkspaceProjection,
   usePresentationModule,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 import {
   findDocumentProfileDataSource,
   documentSummaryStructuralMessageFieldPath,
   type PresentationDataSourceResolver,
   type DocumentMetricSourceProjection,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   PresentationShadcnComponentSystem as PresentationComponentSystem,
 } from './presentation-shadcn-component-system'
-import type { PresentationDesignSystem } from '@cohesive/presentation-tailwind'
+import type { PresentationDesignSystem } from '@cohesivesystems/presentation-tailwind'
 import {
   ProjectedDocumentEditorSurface,
   type ProjectedDocumentEditorSurfaceProps,
@@ -26,7 +26,7 @@ import type {
 import { ProjectedStatusBlock } from './projected-activity-state'
 import type { PresentationActionGroupOptions } from './presentation-action-group'
 import { type ProjectedMetricValue } from './projected-metric-strip'
-import { documentDataSourceRoles } from '@cohesive/presentation-contracts'
+import { documentDataSourceRoles } from '@cohesivesystems/presentation-contracts'
 
 const emptyMetricValues = {} as const
 

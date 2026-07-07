@@ -2,7 +2,7 @@ import { createContext } from 'react'
 
 import type {
   PresentationProjectionDiagnostic,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 export interface PresentationProjectionDiagnosticsRegistry {
   readonly clearDiagnostics: (sourceId: string) => void

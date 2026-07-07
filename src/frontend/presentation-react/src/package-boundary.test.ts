@@ -11,20 +11,20 @@ const forbiddenSpecifiers = [
   {
     reason: 'presentation-react source should use relative imports for its own modules',
     matches: (specifier: string) =>
-      specifier === '@cohesive/presentation-react' ||
-      specifier.startsWith('@cohesive/presentation-react/'),
+      specifier === '@cohesivesystems/presentation-react' ||
+      specifier.startsWith('@cohesivesystems/presentation-react/'),
   },
   {
     reason: 'presentation-react must not depend on concrete presentation adapters',
     matches: (specifier: string) =>
-      specifier === '@cohesive/presentation-react-shadcn' ||
-      specifier.startsWith('@cohesive/presentation-react-shadcn/') ||
-      specifier === '@cohesive/presentation-react-mui' ||
-      specifier.startsWith('@cohesive/presentation-react-mui/') ||
-      specifier === '@cohesive/presentation-tailwind' ||
-      specifier.startsWith('@cohesive/presentation-tailwind/') ||
-      specifier === '@cohesive/presentation-monaco' ||
-      specifier.startsWith('@cohesive/presentation-monaco/'),
+      specifier === '@cohesivesystems/presentation-react-shadcn' ||
+      specifier.startsWith('@cohesivesystems/presentation-react-shadcn/') ||
+      specifier === '@cohesivesystems/presentation-react-mui' ||
+      specifier.startsWith('@cohesivesystems/presentation-react-mui/') ||
+      specifier === '@cohesivesystems/presentation-tailwind' ||
+      specifier.startsWith('@cohesivesystems/presentation-tailwind/') ||
+      specifier === '@cohesivesystems/presentation-monaco' ||
+      specifier.startsWith('@cohesivesystems/presentation-monaco/'),
   },
   {
     reason: 'presentation-react must not depend on design-system packages',
@@ -50,7 +50,7 @@ const forbiddenSpecifiers = [
   },
 ]
 
-describe('@cohesive/presentation-react package boundary', () => {
+describe('@cohesivesystems/presentation-react package boundary', () => {
   it('does not import concrete adapters, design systems, table renderers, or application modules', () => {
     const offenders = listSourceFiles(sourceRoot)
       .filter((filePath) => !filePath.endsWith('package-boundary.test.ts'))

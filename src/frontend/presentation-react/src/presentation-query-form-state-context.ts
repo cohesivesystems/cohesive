@@ -9,7 +9,7 @@ import type {
   InputFormDefinition,
   PresentationQueryFormStateMap,
   QueryFormDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 export interface PresentationQueryFormStateEntry<TValue = unknown> {
   readonly appliedValue: TValue

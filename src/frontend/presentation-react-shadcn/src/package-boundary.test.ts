@@ -11,16 +11,16 @@ const forbiddenSpecifiers = [
   {
     reason: 'presentation-react-shadcn source should use relative imports for its own modules',
     matches: (specifier: string) =>
-      specifier === '@cohesive/presentation-react-shadcn' ||
-      specifier.startsWith('@cohesive/presentation-react-shadcn/'),
+      specifier === '@cohesivesystems/presentation-react-shadcn' ||
+      specifier.startsWith('@cohesivesystems/presentation-react-shadcn/'),
   },
   {
     reason: 'presentation-react-shadcn must not depend on other concrete presentation adapters',
     matches: (specifier: string) =>
-      specifier === '@cohesive/presentation-react-mui' ||
-      specifier.startsWith('@cohesive/presentation-react-mui/') ||
-      specifier === '@cohesive/presentation-monaco' ||
-      specifier.startsWith('@cohesive/presentation-monaco/'),
+      specifier === '@cohesivesystems/presentation-react-mui' ||
+      specifier.startsWith('@cohesivesystems/presentation-react-mui/') ||
+      specifier === '@cohesivesystems/presentation-monaco' ||
+      specifier.startsWith('@cohesivesystems/presentation-monaco/'),
   },
   {
     reason: 'presentation-react-shadcn must not depend on MUI or Monaco packages',
@@ -36,7 +36,7 @@ const forbiddenSpecifiers = [
   },
 ]
 
-describe('@cohesive/presentation-react-shadcn package boundary', () => {
+describe('@cohesivesystems/presentation-react-shadcn package boundary', () => {
   it('does not import other concrete adapters, MUI, Monaco, or application modules', () => {
     const offenders = listSourceFiles(sourceRoot)
       .filter((filePath) => !filePath.endsWith('package-boundary.test.ts'))

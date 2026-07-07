@@ -2,7 +2,7 @@ import type {
   NavigationRouteDefinition,
   PageHostDefinition,
   ViewDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   findNavigationRoute,
   resolveNavigationRouteId,

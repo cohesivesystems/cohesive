@@ -10,7 +10,7 @@ import {
 import {
   actionKinds,
   presentationBindingKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export interface ProjectPresentationNavigationActionRuntimeBindingsOptions {
   readonly navigateHref: (href: string) => void

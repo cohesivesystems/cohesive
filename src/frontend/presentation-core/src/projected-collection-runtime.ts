@@ -55,7 +55,7 @@ import {
   collectionSelectionActionParameterSources,
   collectionSelectionModes,
   presentationValueKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 /**
  * Collection definition projected from a presentation view.

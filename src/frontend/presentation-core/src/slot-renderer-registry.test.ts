@@ -7,7 +7,7 @@ import {
   viewChromeSlotPlacements,
   type CollectionChromeSlotDefinition,
   type ViewChromeSlotDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   createCollectionChromeSlotRendererRegistry,
   createViewChromeSlotRendererRegistry,

@@ -2,21 +2,21 @@ import { useMemo } from 'react'
 
 import type {
   ProjectedDocumentResource,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   ActionDefinition,
   ActionPlacementDefinition,
   FlowDefinition,
   PresentationModuleDefinition,
   ViewDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   findPresentationFlow,
   findPresentationView,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   getPresentationViewProjectedActionPlacements,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   PresentationActionEndpointExecutor,
   PresentationActionSuccessContext,
@@ -26,7 +26,7 @@ import {
 } from './presentation-action-runtime'
 import {
   projectRequiredPresentationActionEndpointRequest,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   advancePresentationFlowToStateKind,
   findPresentationFlowErrorSurfaceState,
@@ -39,18 +39,18 @@ import {
 } from './presentation-flow-runtime'
 import {
   type PresentationProjectionDiagnostic,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   findDocumentSaveAction,
   findLocalDocumentEditorAction,
   findPromptCommitAction,
   findPromptDismissAction,
   findPromptLocalAction,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   projectLocalDocumentEditorActionBindingDiagnostics,
-} from '@cohesive/presentation-core'
-import { flowStateKinds } from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-core'
+import { flowStateKinds } from '@cohesivesystems/presentation-contracts'
 
 export interface ProjectedDocumentJsonValidationState {
   readonly ok: boolean

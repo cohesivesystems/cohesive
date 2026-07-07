@@ -1,6 +1,6 @@
 import type {
   PresentationModuleDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   DocumentWorkspaceProjectionRendererRegistry,
   DocumentWorkspaceProjectionRendererResolution,
@@ -12,15 +12,15 @@ import {
 } from './document-workspace-runtime'
 import type {
   PresentationProjectionDiagnostic,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   createPresentationEnumDiscriminator,
   matchesPresentationEnum,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   coordinationActionKinds,
   coordinationTriggerKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export interface ProjectDocumentWorkspaceProjectionRendererDiagnosticsOptions<
   TContext,

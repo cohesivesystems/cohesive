@@ -6,20 +6,20 @@ import type {
   NavigationShellRegionDefinition,
   NavigationShellSlotDefinition,
   NavigationShellSlotKind,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   createNavigationShellSlotRendererRegistry as createCoreNavigationShellSlotRendererRegistry,
   resolveNavigationShellSlotRenderer as resolveCoreNavigationShellSlotRenderer,
   type NavigationShellSlotRendererBinding as CoreNavigationShellSlotRendererBinding,
   type NavigationShellSlotRendererRegistry as CoreNavigationShellSlotRendererRegistry,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 export {
   createNavigationShellSlotRendererKey,
   getNavigationShellSlotRendererCandidateKeys,
   getNavigationShellSlotRendererRegistryKeys,
   hasNavigationShellSlotRendererBinding,
   navigationShellSlotAnyPlacement,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 export interface ProjectedNavigationShellSlotRenderContext<
   TSlotLayout = unknown,

@@ -3,7 +3,7 @@ import type {
 } from './module'
 import {
   fieldDisplayKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export function isProjectedDocumentBadgeField(field: FieldPresentationDefinition) {
   return matchesFieldDisplayKind(field, fieldDisplayKinds.badge, 'Badge') ||

@@ -5,7 +5,7 @@ import {
   presentationBindingKinds,
   type DataSourceDefinition,
   type PresentationModuleDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   createLocalStateDataSourceBindingProjectionRegistry,
   createPresentationDataSourceTargetInterpretation,

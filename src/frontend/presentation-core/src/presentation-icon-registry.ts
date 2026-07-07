@@ -8,7 +8,7 @@ import {
 import {
   presentationBindingKinds,
   presentationTargetKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export interface PresentationIconRenderContext<TSubject = unknown> {
   readonly className?: string

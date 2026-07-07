@@ -3,7 +3,7 @@ import {
   type ActionResultPolicy,
   type ActionResultStateWriteDefinition,
   type ActionResultStateWriteMode,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 import {
   readObjectPath,

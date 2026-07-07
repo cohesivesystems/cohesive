@@ -1,4 +1,4 @@
-import { viewChromeSlotKinds } from '@cohesive/presentation-contracts'
+import { viewChromeSlotKinds } from '@cohesivesystems/presentation-contracts'
 import {
   createCollectionChromeRuntime,
   resolveCollectionChromeDataSourceIds,
@@ -16,7 +16,7 @@ import type {
   TargetBindingDefinition,
   ViewDefinition,
   WorkspaceDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export type {
   ActionDefinition,
@@ -89,7 +89,7 @@ export type {
   WorkspaceLayoutDefinition,
   WorkspaceLayoutModeDefinition,
   WorkspaceRefDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 type IdentifiedDefinition = { readonly Id: string }
 

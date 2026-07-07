@@ -1,11 +1,11 @@
 import {
   presentationTestSelectors as generatedPresentationTestSelectors,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import type {
   FlowDefinition,
   FlowStateDefinition,
   FlowTransitionDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 /**
  * Stable DOM attribute names emitted by Cohesive presentation renderers for

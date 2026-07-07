@@ -1,7 +1,7 @@
 import {
   projectProjectedCollectionActionRuntimeDiagnostics as projectCoreProjectedCollectionActionRuntimeDiagnostics,
   type ProjectProjectedCollectionActionRuntimeDiagnosticsOptions,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 import {
   projectPresentationActionIconDiagnostics,
@@ -10,7 +10,7 @@ import {
 export type {
   ProjectProjectedCollectionActionIconDiagnosticsOptions,
   ProjectProjectedCollectionActionRuntimeDiagnosticsOptions,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 export function projectProjectedCollectionActionRuntimeDiagnostics<TData extends object>(
   options: ProjectProjectedCollectionActionRuntimeDiagnosticsOptions<TData>,

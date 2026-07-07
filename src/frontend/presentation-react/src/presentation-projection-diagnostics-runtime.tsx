@@ -11,7 +11,7 @@ import {
 import {
   mergePresentationProjectionDiagnostics,
   type PresentationProjectionDiagnostic,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 interface PresentationProjectionDiagnosticsProviderProps {
   readonly children: ReactNode

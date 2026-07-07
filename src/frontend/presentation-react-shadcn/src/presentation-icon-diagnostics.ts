@@ -5,7 +5,7 @@ import {
   type PresentationIconDiagnosticSubject,
   type ProjectPresentationActionIconDiagnosticsOptions as CoreProjectPresentationActionIconDiagnosticsOptions,
   type ProjectPresentationIconDiagnosticsOptions as CoreProjectPresentationIconDiagnosticsOptions,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 import {
   standardLucidePresentationIconRegistry,
@@ -16,7 +16,7 @@ export type {
   PresentationActionIconPlacement,
   PresentationIconDiagnosticSubject,
   PresentationIconModuleProjection,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 export interface ProjectPresentationIconDiagnosticsOptions<
   TSubject extends PresentationIconDiagnosticSubject,

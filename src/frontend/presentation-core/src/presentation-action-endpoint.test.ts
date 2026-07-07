@@ -8,7 +8,7 @@ import {
   type ActionDefinition,
   type PresentationBindingDefinition,
   type PresentationModuleDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import { resolvePresentationActionEndpointBinding } from './index'
 
 describe('presentation action endpoint binding resolution', () => {

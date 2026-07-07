@@ -18,14 +18,14 @@ import type {
   InputFormGroupDefinition,
   ViewChromeSlotDefinition,
   ViewRegionDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   createPresentationTestAttributes,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   PresentationActionButtonSize,
   PresentationActionButtonVariant,
-} from '@cohesive/presentation-tailwind'
+} from '@cohesivesystems/presentation-tailwind'
 
 /** Props accepted by action buttons projected from presentation actions. */
 export interface PresentationActionButtonProps {

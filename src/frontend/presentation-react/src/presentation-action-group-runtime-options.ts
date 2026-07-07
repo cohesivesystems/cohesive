@@ -6,10 +6,10 @@ import type {
   PresentationDataSourceResolver,
   PresentationModuleDefinition,
   ViewDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   PresentationActionRuntimeRegistry,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 export interface PresentationActionRenderState {
   readonly disabledReason?: ReactNode

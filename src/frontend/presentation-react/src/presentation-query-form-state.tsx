@@ -12,7 +12,7 @@ import {
   type InputFormDefinition,
   type PresentationModuleDefinition,
   type QueryFormDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import { usePresentationModule } from './presentation-module-context'
 import {
   PresentationQueryFormStateContext,
@@ -22,7 +22,7 @@ import { resolvePresentationQueryFormStateAdapters } from './presentation-query-
 import type {
   PresentationQueryFormState,
   PresentationQueryFormStateMap,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 export interface PresentationQueryFormStateAdapter<TValue extends object = object> {
   readonly queryFormId: string

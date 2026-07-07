@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { queryLoweringKinds, type DataSourceDefinition } from '@cohesive/presentation-contracts'
+import { queryLoweringKinds, type DataSourceDefinition } from '@cohesivesystems/presentation-contracts'
 import {
   createDataSourceEndpointQueryRequest,
   createDataSourcePaginationRequest,

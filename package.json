@@ -4,17 +4,30 @@
   "type": "module",
   "packageManager": "pnpm@11.1.3",
   "scripts": {
-    "frontend:build": "corepack pnpm -r --filter '@cohesive/*' build",
-    "frontend:test": "corepack pnpm -r --filter '@cohesive/*' test",
+    "frontend:build": "corepack pnpm -r --filter '@cohesivesystems/*' build",
+    "frontend:test": "corepack pnpm -r --filter '@cohesivesystems/*' test",
     "pack:local": "bash ./eng/pack-local.sh",
     "npm:feed": "bash ./eng/npm-feed.sh",
     "npm:publish-local": "bash ./eng/publish-local-npm.sh",
     "version:set": "node ./eng/set-version.mjs",
-    "release:notes": "node ./eng/release-notes.mjs"
+    "release:notes": "node ./eng/release-notes.mjs",
+    "nuget:pack": "dotnet pack Cohesive.sln -c Release",
+    "npm:pack": "bash ./eng/pack-npm.sh",
+    "npm:publish:dry-run": "bash ./eng/pack-npm.sh",
+    "npm:publish-local:dry-run": "COHESIVE_NPM_DRY_RUN=true bash ./eng/publish-local-npm.sh"
   },
   "devDependencies": {
     "@types/node": "^24.12.0",
     "typescript": "~5.9.3",
     "vitest": "^4.1.7"
-  }
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cohesivesystems/cohesive.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cohesivesystems/cohesive/issues"
+  },
+  "homepage": "https://github.com/cohesivesystems/cohesive#readme"
 }

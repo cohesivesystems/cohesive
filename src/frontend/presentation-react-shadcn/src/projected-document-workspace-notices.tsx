@@ -1,11 +1,11 @@
-import type { PresentationDesignSystem } from '@cohesive/presentation-tailwind'
+import type { PresentationDesignSystem } from '@cohesivesystems/presentation-tailwind'
 import type {
   DocumentProfileProjection,
   ProcessTask,
   ProcessTaskSelector,
   ProcessTaskSelectorDefinition,
   ProjectedDocumentActionStatusMap,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   PresentationShadcnComponentSystem as PresentationComponentSystem,
 } from './presentation-shadcn-component-system'

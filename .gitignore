@@ -83,7 +83,7 @@ http-client.private.env.json
 .dotnet/
 # optional: if you have local tools folder
 tools/
-tmp/generated/
+tmp/
 
 ############################################
 # Optional: Node (if you have a web frontend)

@@ -25,13 +25,13 @@ import type {
   DocumentIdentityDefinition,
   DocumentMetricSourceDefinition,
   PageHostDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   dataSourceKinds,
   documentKindLabels,
   documentDataSourceRoles,
   documentDataSourceRoleLabels,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 /**
  * Frontend projection of a backend document profile.

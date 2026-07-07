@@ -1,6 +1,6 @@
 import { type PropsWithChildren } from 'react'
 
-import type { PresentationModuleDefinition } from '@cohesive/presentation-core'
+import type { PresentationModuleDefinition } from '@cohesivesystems/presentation-core'
 import { PresentationModuleContext } from './presentation-module-context'
 
 export interface PresentationModuleProviderProps extends PropsWithChildren {

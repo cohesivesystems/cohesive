@@ -3,7 +3,7 @@ import type { ComponentType, ReactNode } from 'react'
 import {
   presentationTargetKinds,
   type NavigationShellRegionDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   createPresentationEnumDiscriminator,
   createNavigationShellRegionComponentRegistry as createCoreNavigationShellRegionComponentRegistry,
@@ -15,7 +15,7 @@ import {
   type NavigationShellRegionComponentRegistry as CoreNavigationShellRegionComponentRegistry,
   type NavigationShellRegionComponentResolution as CoreNavigationShellRegionComponentResolution,
   type ResolveNavigationShellRegionComponentOptions as CoreResolveNavigationShellRegionComponentOptions,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 export {
   getNavigationShellRegionComponentRegistryKeys,

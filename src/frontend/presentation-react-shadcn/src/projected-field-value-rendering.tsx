@@ -4,43 +4,43 @@ import type {
   FieldPresentationDefinition,
   NavigationRouteParameters,
   PresentationModuleDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   ResourceLinkBadge,
   TextBadge,
 } from './projected-document-badges'
 import type {
   PresentationTextBadgeTone,
-} from '@cohesive/presentation-tailwind'
+} from '@cohesivesystems/presentation-tailwind'
 import {
   resolvePresentationFieldValueLabel,
   resolvePresentationFieldValueIcon,
   resolvePresentationFieldValueTone,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   renderPresentationIcon,
 } from './presentation-icon-registry'
 import type {
   PresentationShadcnComponentSystem as PresentationComponentSystem,
 } from './presentation-shadcn-component-system'
-import { formatBadgeValue } from '@cohesive/presentation-core'
+import { formatBadgeValue } from '@cohesivesystems/presentation-core'
 import {
   projectDocumentFieldNavigationBinding,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   readObjectPath,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   isProjectedDocumentBadgeField,
   isProjectedDocumentEntityReferenceField,
   matchesFieldDisplayKind,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   fieldEntityReferenceFallbackKinds,
   fieldDisplayKinds,
   fieldJsonDisplayModes,
   formatKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 /**
  * Runtime inputs required to render a projected field value through the

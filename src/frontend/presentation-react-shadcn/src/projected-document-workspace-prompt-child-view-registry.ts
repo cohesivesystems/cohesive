@@ -2,16 +2,16 @@ import { createElement } from 'react'
 
 import type {
   DocumentWorkspaceProjectionRendererRegistry,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 import type {
   PresentationShadcnComponentSystem as PresentationComponentSystem,
 } from './presentation-shadcn-component-system'
 import type {
   PresentationDesignSystem,
-} from '@cohesive/presentation-tailwind'
+} from '@cohesivesystems/presentation-tailwind'
 import type {
   ProjectedDocumentActionStatusMap,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   mergeProjectedPromptChildViewRendererRegistries,
   promptChildViewSemanticRoles,
@@ -25,7 +25,7 @@ import {
 } from './projected-document-workspace-prompt-child-view-renderers'
 import {
   promptChildViewComponentRoles,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export type {
   ProjectedDocumentWorkspacePromptPreviewRenderContextOptions,

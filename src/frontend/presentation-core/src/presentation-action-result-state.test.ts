@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   actionResultStateWriteModes,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   applyPresentationActionResultPolicyStateWrites,
   applyPresentationActionResultStateWrites,

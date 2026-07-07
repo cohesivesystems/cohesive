@@ -7,7 +7,7 @@ import {
   type PresentationDataSourceResolver,
   type FieldPresentationDefinition,
   type ViewDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   renderPresentationIcon,
 } from './presentation-icon-registry'
@@ -20,8 +20,8 @@ import type {
 import {
   usePresentationModule,
   useRegisterPresentationProjectionDiagnostics,
-} from '@cohesive/presentation-react'
-import { fieldDisplayKinds } from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-react'
+import { fieldDisplayKinds } from '@cohesivesystems/presentation-contracts'
 
 export interface ProjectedMetricValue {
   readonly icon?: ReactNode

@@ -17,7 +17,7 @@ import {
   type ProjectedCollectionActionRuntimeRegistry,
   type ProjectedCollectionRuntime,
   type ViewDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   projectProjectedCollectionActionRuntimeDiagnostics,
 } from './projected-collection-action-runtime-diagnostics'
@@ -29,7 +29,7 @@ import {
   usePresentationModule,
   usePresentationNavigationRuntime,
   useRegisterPresentationProjectionDiagnostics,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 import {
   ProjectedCollectionRowActions,
   type ProjectedActionPlacementLike,
@@ -41,7 +41,7 @@ import {
 import {
   collectionChromeSlotKinds,
   collectionChromeSlotPlacements,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 type ProjectedInlineListModule = NonNullable<ReturnType<typeof usePresentationModule>>
 

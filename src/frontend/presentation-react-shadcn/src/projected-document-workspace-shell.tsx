@@ -23,7 +23,7 @@ import {
   type DocumentWorkspaceProfileProjection,
   type ProjectedDocumentKind,
   type ProjectedDocumentResource,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   type DocumentWorkspaceProjectionRendererRegistry,
   type DocumentWorkspaceRuntimeSnapshot,
@@ -31,14 +31,14 @@ import {
   usePresentationDataSources,
   type LocalFlowStateDataSourceState,
   type PresentationFlowRuntimeRegistrySnapshot,
-} from '@cohesive/presentation-react'
+} from '@cohesivesystems/presentation-react'
 import type { PresentationActionGroupOptions } from './presentation-action-group'
 import type {
   PresentationShadcnComponentSystem as PresentationComponentSystem,
 } from './presentation-shadcn-component-system'
 import type {
   PresentationDesignSystem,
-} from '@cohesive/presentation-tailwind'
+} from '@cohesivesystems/presentation-tailwind'
 import {
   ProjectedActivityStateBoundary,
   ProjectedStatusBlock,
@@ -54,7 +54,7 @@ import {
 import {
   createPromptDocumentPreviewDataSourceBindings,
   type PromptDocumentPreviewDataSourceState,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   ProjectedPromptChildViewRendererRegistry,
 } from './projected-prompt-child-view-renderer'

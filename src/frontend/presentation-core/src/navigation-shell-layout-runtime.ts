@@ -3,7 +3,7 @@ import {
   navigationShellSlotKinds,
   type NavigationDefinition,
   type NavigationShellSlotDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   hasNavigationShellFrameRendererBinding,
 } from './navigation-shell-frame-renderer-registry'

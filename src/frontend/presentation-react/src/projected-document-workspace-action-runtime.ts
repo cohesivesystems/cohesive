@@ -3,12 +3,12 @@ import { useMemo, type ReactNode } from 'react'
 import type {
   DocumentWorkspaceProfileProjection,
   ProjectedDocumentResource,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   ActionDefinition,
   ActionPlacementDefinition,
   PresentationModuleDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   PresentationActionRenderContext,
   PresentationActionGroupOptions,
@@ -22,29 +22,29 @@ import type {
 } from './presentation-action-runtime'
 import {
   projectPresentationActionRuntimeBindingDiagnostics,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   PresentationActionRuntimeRegistry,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   projectPresentationActionRuntimeRegistry,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   projectPresentationNavigationActionRuntimeBindings,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   PresentationFlowRuntimeRegistrySnapshot,
 } from './presentation-flow-runtime'
 import {
   mergePresentationProjectionDiagnostics,
   type PresentationProjectionDiagnostic,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   projectDocumentActionRuntimeBindings,
 } from './projected-document-action-runtime-bindings'
 import type {
   ProjectedDocumentActionRuntimeProfileSpec,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   mergeActionPlacements,
   useProjectedDocumentActionRuntime,
@@ -59,18 +59,18 @@ import {
   projectDocumentActionStatusMap,
   type ProjectedDocumentActionStatusMap,
   type ProjectedActionStatusSource,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   ProjectedInputFormRuntime,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   ProcessTask,
   ProcessTaskSelector,
   ProcessTaskStartRegistration,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   ProjectedPromptDocumentPreviewResource,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 type DocumentWorkspaceActionExecuteContext<TActionContext> =
   PresentationActionRenderContext<TActionContext>

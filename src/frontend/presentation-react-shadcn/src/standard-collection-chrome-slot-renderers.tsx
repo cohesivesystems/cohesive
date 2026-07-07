@@ -9,7 +9,7 @@ import {
   getCollectionChromeSlotRendererRegistryKeys,
   resolveCollectionChromeSlotRenderer,
   type CollectionChromeSlotDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   renderPresentationIcon,
 } from './presentation-icon-registry'
@@ -23,7 +23,7 @@ import {
 import {
   collectionChromeSlotKinds,
   collectionChromeSlotPlacements,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 /**
  * Default shadcn-backed renderers for the semantic collection chrome slots

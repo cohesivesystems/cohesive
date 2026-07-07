@@ -17,7 +17,7 @@ import {
   type LocalDocumentEditorActionKind,
   type PreparationKind,
   type PresentationBindingKind,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export interface PresentationActionRuntime<TExecuteContext = unknown, TLabel = string> {
   readonly canExecute?: (context: TExecuteContext) => boolean

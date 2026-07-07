@@ -2,7 +2,7 @@ import {
   presentationBindingKinds,
   type PresentationBindingDefinition,
   type ViewDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import { getPresentationViewSemanticRole } from './presentation-semantics'
 import {
   createPresentationEnumDiscriminator,

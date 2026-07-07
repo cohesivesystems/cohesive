@@ -12,13 +12,13 @@ import {
   type ProjectedQueryFormValueChangeContext,
   type QueryFormDefinition,
   type ViewDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import { useMemo } from 'react'
-import { useRegisterPresentationProjectionDiagnostics } from '@cohesive/presentation-react'
+import { useRegisterPresentationProjectionDiagnostics } from '@cohesivesystems/presentation-react'
 import type {
   PresentationShadcnComponentSystem as PresentationComponentSystem,
 } from './presentation-shadcn-component-system'
-import type { PresentationDesignSystem } from '@cohesive/presentation-tailwind'
+import type { PresentationDesignSystem } from '@cohesivesystems/presentation-tailwind'
 import {
   ProjectedInputForm,
   type ProjectedInputFormChoice,
@@ -48,7 +48,7 @@ export type {
   ProjectedQueryFormActionContext,
   ProjectedQueryFormRuntime,
   ProjectedQueryFormValueChangeContext,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 
 /**
  * Props required to project a backend-declared query form into React controls.

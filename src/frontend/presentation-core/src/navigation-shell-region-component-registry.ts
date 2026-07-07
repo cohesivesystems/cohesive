@@ -2,7 +2,7 @@ import {
   presentationBindingKinds,
   type NavigationShellRegionDefinition,
   type PresentationBindingDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   createPresentationEnumDiscriminator,
   resolvePresentationComponentBinding,

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   presentationValueKinds,
   type ActionDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import { resolveActionPendingLabel } from './index'
 
 describe('presentation action runtime labels', () => {

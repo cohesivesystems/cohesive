@@ -14,7 +14,7 @@ import type {
 import {
   actionKinds,
   presentationBindingKinds,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export interface ProjectProjectedCollectionActionRuntimeBindingsOptions {
   readonly navigateHref?: ProjectedNavigateHref

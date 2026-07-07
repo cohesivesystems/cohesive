@@ -6,7 +6,7 @@ import {
   type NavigationShellRegionDefinition,
   type NavigationShellSlotDefinition,
   type NavigationShellSlotKind,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   createNavigationHref,
   getNavigationShellRegions,

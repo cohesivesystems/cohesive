@@ -16,7 +16,7 @@ import {
   type FieldPresentationDefinition,
   type PresentationModuleDefinition,
   type ViewDefinition,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 import {
   createProjectedCollectionRuntime,
   type CollectionSelectionStateEntry,

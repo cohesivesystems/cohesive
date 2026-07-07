@@ -1,4 +1,4 @@
-import type { PresentationModuleDefinition } from '@cohesive/presentation-core'
+import type { PresentationModuleDefinition } from '@cohesivesystems/presentation-core'
 import type {
   PresentationQueryFormStateAdapter,
   PresentationQueryFormStateAdapterRegistry,

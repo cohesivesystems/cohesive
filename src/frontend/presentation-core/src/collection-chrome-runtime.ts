@@ -8,7 +8,7 @@ import type {
 import {
   collectionChromeSlotKinds,
   collectionChromeSlotPlacements,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 export type CollectionChromeRuntimeDefinition = NonNullable<ViewDefinition['Collection']>
 

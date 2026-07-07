@@ -4,22 +4,22 @@ import {
   documentWorkspaceSurfaceSlotRoleKeys,
   resolveDocumentWorkspaceSurfaceSlotRoleKey,
   type ResolvedDocumentWorkspaceSurfaceSlot,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   PresentationShadcnComponentSystem as PresentationComponentSystem,
 } from './presentation-shadcn-component-system'
 import {
   createPresentationProjectionDiagnostic,
   type PresentationProjectionDiagnostic,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import { ProjectedViewSurface } from './projected-view-surface'
 import type {
   ViewChromeSlotDefinition,
   ViewDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import {
   documentWorkspaceSurfaceSlotComponentRoles,
-} from '@cohesive/presentation-contracts'
+} from '@cohesivesystems/presentation-contracts'
 
 const standardDocumentWorkspaceSurfaceSlotComponentRoleIds = Object.values(
   documentWorkspaceSurfaceSlotComponentRoles,

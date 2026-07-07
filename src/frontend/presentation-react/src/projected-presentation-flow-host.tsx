@@ -4,7 +4,7 @@ import type {
   FlowDefinition,
   FlowStateDefinition,
   ViewDefinition,
-} from '@cohesive/presentation-core'
+} from '@cohesivesystems/presentation-core'
 import type {
   PresentationFlowInstance,
   PresentationFlowRuntimeSnapshot,
