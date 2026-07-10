@@ -24,6 +24,9 @@ public sealed record ObservationRecord(
 /// </summary>
 public enum ObservationStreamRecordKind
 {
+    /// <summary>Represents the entity change option.</summary>
     EntityChange = 0,
+    
+    /// <summary>Represents the outbox event option.</summary>
     OutboxEvent = 1
 }

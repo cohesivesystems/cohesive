@@ -10,6 +10,7 @@ namespace Cohesive.Adapters.AzureML;
 /// </summary>
 public sealed record AzureMLOptions
 {
+    /// <summary>Identifies the default name.</summary>
     public const string DefaultName = "Default";
     
     /// <summary>
@@ -17,6 +18,7 @@ public sealed record AzureMLOptions
     /// </summary>
     public string? SubscriptionId { get; init; }
 
+    /// <summary>Gets the resource group name.</summary>
     public string? ResourceGroupName { get; init; }
 
     /// <summary>
@@ -29,11 +31,14 @@ public sealed record AzureMLOptions
     /// </summary>
     public string? RegistryName { get; init; }
 
+    /// <summary>Gets or sets whether the default Azure credential is used.</summary>
     public bool UseDefaultAzureCredential { get; init; } = true;
 
+    /// <summary>Gets token credential.</summary>
     public TokenCredential? GetTokenCredential() => 
         UseDefaultAzureCredential ? new DefaultAzureCredential() : null;
     
+    /// <summary>Gets whether the Azure ML workspace identifiers are configured.</summary>
     [MemberNotNullWhen(true, nameof(SubscriptionId))]
     [MemberNotNullWhen(true, nameof(ResourceGroupName))]
     [MemberNotNullWhen(true, nameof(WorkspaceName))]
@@ -42,6 +47,7 @@ public sealed record AzureMLOptions
     AzureMLDatasetRegistryOptions? TryGetDatasetRegistryOptions() => 
         IsConfigured ? new(SubscriptionId: SubscriptionId, ResourceGroupName: ResourceGroupName, WorkspaceName: WorkspaceName, RegistryName: RegistryName) : null;
     
+    /// <summary>Gets registry.</summary>
     public AzureMLDatasetRegistry GetRegistry()
     {
         var credential = GetTokenCredential() ?? throw new InvalidOperationException("Azure ML options are not configured.");
@@ -49,6 +55,7 @@ public sealed record AzureMLOptions
         return new(credential, options);
     }
 
+    /// <summary>Gets model trainer.</summary>
     public AzureMLModelTrainer GetModelTrainer()
     {
         var credential = GetTokenCredential() ?? throw new InvalidOperationException("Azure ML options are not configured.");
@@ -59,6 +66,7 @@ public sealed record AzureMLOptions
     }
 }
 
+/// <summary>Provides operations for azure ml options extensions.</summary>
 public static class AzureMLOptionsExtensions
 {
     static string? NormalizeAzureMLName(string? name) =>
@@ -69,6 +77,7 @@ public static class AzureMLOptionsExtensions
         || string.Equals(name, AzureMLOptions.DefaultName, StringComparison.OrdinalIgnoreCase)
         || string.Equals(name, Options.DefaultName, StringComparison.Ordinal);
 
+    /// <summary>Gets required options.</summary>
     public static KeyValuePair<string, AzureMLOptions> GetRequiredOptions(this IReadOnlyDictionary<string, AzureMLOptions>? optionsByName, string? name)
     {
         var normalizedName = NormalizeAzureMLName(name) ?? throw new InvalidOperationException("Azure ML profile name must be configured.");

@@ -4,7 +4,7 @@ namespace Cohesive.Relations.Queries;
 /// Root observation query specification for a composed relations query.
 /// </summary>
 /// <param name="Source">Query source.</param>
-/// <oaram name="Request">Query request.</oaram>
+/// <param name="Request">Query request.</param>
 public sealed record RootQuery(
     QuerySource Source,
     EntityQuery Request

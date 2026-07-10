@@ -52,48 +52,70 @@ public abstract record Expr
     /// </summary>
     public static Expr Const(string value) => new ConstantExpr(ObservationValue.FromString(value));
 
+    /// <summary>Creates a constant expression.</summary>
     public static Expr Const(int value) => new ConstantExpr(ObservationValue.FromInt64(value));
 
+    /// <summary>Creates a constant expression.</summary>
     public static Expr Const(long value) => new ConstantExpr(ObservationValue.FromInt64(value));
 
+    /// <summary>Creates a constant expression.</summary>
     public static Expr Const(decimal value) => new ConstantExpr(ObservationValue.FromDouble((double)value));
 
+    /// <summary>Creates a constant expression.</summary>
     public static Expr Const(double value) => new ConstantExpr(ObservationValue.FromDouble(value));
 
+    /// <summary>Creates a constant expression.</summary>
     public static Expr Const(bool value) => new ConstantExpr(ObservationValue.FromBool(value));
 
+    /// <summary>Creates a constant expression.</summary>
     public static Expr Const(Guid value) => new ConstantExpr(ObservationValue.FromString(value.ToString()));
 
+    /// <summary>Creates a constant expression.</summary>
     public static Expr Const(DateTimeOffset value) => new ConstantExpr(ObservationValue.FromString(value.ToString("O")));
 
+    /// <summary>Creates a null constant expression.</summary>
     public static Expr Null() => new ConstantExpr(ObservationValue.Null);
 
+    /// <summary>Creates an equality expression.</summary>
     public static Expr Eq(Expr left, Expr right) => new BinaryExpr(BinaryOperator.Eq, left, right);
 
+    /// <summary>Creates an inequality expression.</summary>
     public static Expr Ne(Expr left, Expr right) => new BinaryExpr(BinaryOperator.Ne, left, right);
 
+    /// <summary>Creates a greater-than expression.</summary>
     public static Expr Gt(Expr left, Expr right) => new BinaryExpr(BinaryOperator.Gt, left, right);
 
+    /// <summary>Creates a greater-than-or-equal expression.</summary>
     public static Expr Ge(Expr left, Expr right) => new BinaryExpr(BinaryOperator.Ge, left, right);
 
+    /// <summary>Creates a less-than expression.</summary>
     public static Expr Lt(Expr left, Expr right) => new BinaryExpr(BinaryOperator.Lt, left, right);
 
+    /// <summary>Creates a less-than-or-equal expression.</summary>
     public static Expr Le(Expr left, Expr right) => new BinaryExpr(BinaryOperator.Le, left, right);
 
+    /// <summary>Creates a logical-and expression.</summary>
     public static Expr And(Expr left, Expr right) => new BinaryExpr(BinaryOperator.And, left, right);
 
+    /// <summary>Creates a logical-or expression.</summary>
     public static Expr Or(Expr left, Expr right) => new BinaryExpr(BinaryOperator.Or, left, right);
 
+    /// <summary>Creates an addition expression.</summary>
     public static Expr Add(Expr left, Expr right) => new BinaryExpr(BinaryOperator.Add, left, right);
 
+    /// <summary>Creates a subtraction expression.</summary>
     public static Expr Sub(Expr left, Expr right) => new BinaryExpr(BinaryOperator.Sub, left, right);
 
+    /// <summary>Creates a multiplication expression.</summary>
     public static Expr Mul(Expr left, Expr right) => new BinaryExpr(BinaryOperator.Mul, left, right);
 
+    /// <summary>Creates a division expression.</summary>
     public static Expr Div(Expr left, Expr right) => new BinaryExpr(BinaryOperator.Div, left, right);
 
+    /// <summary>Creates a logical-negation expression.</summary>
     public static Expr Not(Expr operand) => new UnaryExpr(UnaryOperator.Not, operand);
 
+    /// <summary>Creates a conditional expression.</summary>
     public static Expr If(Expr test, Expr ifTrue, Expr ifFalse) => new ConditionalExpr(test, ifTrue, ifFalse);
 
     /// <summary>
@@ -101,15 +123,19 @@ public abstract record Expr
     /// </summary>
     public static Expr Call(string function, params Expr[] arguments) => new CallExpr(function, [.. arguments]);
 
+    /// <summary>Creates a join expression.</summary>
     public static Expr Join(Expr leftKey, Expr rightKey, Expr rightCollection) =>
         Call(function: ExprFunctionNames.Join, leftKey, rightKey, rightCollection);
 
+    /// <summary>Creates a grouping expression.</summary>
     public static Expr GroupItems(Expr source, Expr keySelector) =>
         Call(function: ExprFunctionNames.GroupBy, source, keySelector);
 
+    /// <summary>Creates an aggregate expression.</summary>
     public static Expr Aggregate(string aggregate, Expr source, params Expr[] args) =>
         Call(function: aggregate, [source, .. args]);
 
+    /// <summary>Creates a related-field expression.</summary>
     public static Expr RelatedField(Expr schema, Expr entityOrKey, Expr fieldName) =>
         Call(function: ExprFunctionNames.RelatedField, schema, entityOrKey, fieldName);
 }
@@ -169,11 +195,17 @@ public sealed record LiteralExpr : Expr
 /// </summary>
 public enum AggregateOperator
 {
+    /// <summary>Represents the count option.</summary>
     Count = 0,
+    /// <summary>Represents the sum option.</summary>
     Sum = 1,
+    /// <summary>Represents the min option.</summary>
     Min = 2,
+    /// <summary>Represents the max option.</summary>
     Max = 3,
+    /// <summary>Represents the any option.</summary>
     Any = 4,
+    /// <summary>Represents the all option.</summary>
     All = 5
 }
 
@@ -312,6 +344,7 @@ public sealed record ConstantExpr(ObservationValue Value) : Expr;
 /// </summary>
 public enum UnaryOperator
 {
+    /// <summary>Represents the not option.</summary>
     Not = 0
 }
 
@@ -320,17 +353,29 @@ public enum UnaryOperator
 /// </summary>
 public enum BinaryOperator
 {
+    /// <summary>Represents the eq option.</summary>
     Eq = 0,
+    /// <summary>Represents the ne option.</summary>
     Ne = 1,
+    /// <summary>Represents the gt option.</summary>
     Gt = 2,
+    /// <summary>Represents the ge option.</summary>
     Ge = 3,
+    /// <summary>Represents the lt option.</summary>
     Lt = 4,
+    /// <summary>Represents the le option.</summary>
     Le = 5,
+    /// <summary>Represents the and option.</summary>
     And = 6,
+    /// <summary>Represents the or option.</summary>
     Or = 7,
+    /// <summary>Represents the add option.</summary>
     Add = 8,
+    /// <summary>Represents the sub option.</summary>
     Sub = 9,
+    /// <summary>Represents the mul option.</summary>
     Mul = 10,
+    /// <summary>Represents the div option.</summary>
     Div = 11
 }
 

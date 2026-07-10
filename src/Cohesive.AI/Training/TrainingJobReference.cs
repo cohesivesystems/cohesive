@@ -15,10 +15,21 @@ public sealed record TrainingJobReference(
 /// </summary>
 public enum TrainingJobStatus
 {
+    /// <summary>Represents the pending job option.</summary>
     Pending = 0,
+    
+    /// <summary>Represents the running job option.</summary>
     Running = 1,
+    
+    /// <summary>Represents the completed job option.</summary>
     Completed = 2,
+    
+    /// <summary>Represents the failed job option.</summary>
     Failed = 3,
+    
+    /// <summary>Represents the canceled job option.</summary>
     Cancelled = 4,
+    
+    /// <summary>Represents an unknown job option.</summary>
     Unknown = 5
 }

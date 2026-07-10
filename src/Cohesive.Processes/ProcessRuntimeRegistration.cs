@@ -9,11 +9,13 @@ public static class ProcessRuntimeRegistration
 {
     extension(IServiceProvider sp)
     {
+        /// <summary>Resolves the process engine for a service key.</summary>
         public IProcessEngine ResolveProcessEngine(object? serviceKey) =>
             serviceKey is null
                 ? sp.GetRequiredService<IProcessEngine>()
                 : sp.GetRequiredKeyedService<IProcessEngine>(serviceKey);
         
+        /// <summary>Resolves a typed process definition by process type and name.</summary>
         public TypedProcessDefinition<TInput, TOutput> ResolveProcessDefinition<TProcess, TInput, TOutput>(string? processName) 
             where TProcess : class, IProcessDefinition<TInput, TOutput> =>
             ActivatorUtilities.GetServiceOrCreateInstance<TProcess>(sp).Define(processName: processName);

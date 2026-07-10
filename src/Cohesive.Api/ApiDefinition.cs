@@ -615,8 +615,11 @@ public sealed class HttpParameter
 /// </summary>
 public enum HttpParameterSource
 {
+    /// <summary>Represents the route option.</summary>
     Route = 0,
+    /// <summary>Represents the query option.</summary>
     Query = 1,
+    /// <summary>Represents the header option.</summary>
     Header = 2
 }
 

@@ -28,6 +28,7 @@ public readonly record struct GraphId
     /// </summary>
     public static GraphId New() => new(Guid.NewGuid().ToString("N"));
 
+    /// <inheritdoc />
     public override string ToString() => Value;
 }
 
@@ -51,6 +52,7 @@ public readonly record struct DiagnosticId
     /// </summary>
     public string Value { get; }
 
+    /// <inheritdoc />
     public override string ToString() => Value;
 }
 
@@ -74,8 +76,10 @@ public readonly record struct FieldName
     /// </summary>
     public string Value { get; }
 
+    /// <inheritdoc />
     public override string ToString() => Value;
     
+    /// <summary>Converts a field name to its string value.</summary>
     public static implicit operator string(FieldName fieldName) => fieldName.Value;
 }
 
@@ -99,7 +103,9 @@ public readonly record struct TypeId
     /// </summary>
     public string Value { get; }
 
+    /// <inheritdoc />
     public override string ToString() => Value;
     
+    /// <summary>Converts a type identifier to its string value.</summary>
     public static implicit operator string(TypeId typeId) => typeId.Value;
 }

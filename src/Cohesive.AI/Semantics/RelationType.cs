@@ -120,6 +120,7 @@ public sealed record RelationType : IEquatable<RelationType>
         }
     }
 
+    /// <summary>Creates relation.</summary>
     public ConceptRelation CreateRelation(string sourceConceptId, string targetConceptId) => 
         new(sourceConceptId: sourceConceptId, targetConceptId: targetConceptId, relationTypeId: RelationTypeId);
 }
@@ -129,13 +130,28 @@ public sealed record RelationType : IEquatable<RelationType>
 /// </summary>
 public static class StandardRelationTypeIds
 {
+    /// <summary>Identifies the 'sub concept of' relation.</summary>
     public const string SubConceptOf = "subconcept_of";
+    
+    /// <summary>Identifies the 'equivalent to' relation.</summary>
     public const string EquivalentTo = "equivalent_to";
+    
+    /// <summary>Identifies the 'disjoint with' relation.</summary>
     public const string DisjointWith = "disjoint_with";
+    
+    /// <summary>Identifies the 'part of' relation.</summary>
     public const string PartOf = "part_of";
+    
+    /// <summary>Identifies the 'has property' relation.</summary>
     public const string HasProperty = "has_property";
+    
+    /// <summary>Identifies the 'derived from' relation.</summary>
     public const string DerivedFrom = "derived_from";
+    
+    /// <summary>Identifies the 'related to' relation.</summary>
     public const string RelatedTo = "related_to";
+    
+    /// <summary>Identifies the 'requires' relation.</summary>
     public const string Requires = "requires";
 }
 

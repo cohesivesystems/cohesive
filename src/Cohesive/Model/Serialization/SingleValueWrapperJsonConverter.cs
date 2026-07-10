@@ -15,9 +15,11 @@ public sealed class SingleValueWrapperJsonConverter : JsonConverterFactory
     static readonly ConcurrentDictionary<Type, WrapperMetadata?> WrapperMetadataCache = new();
     static readonly ConcurrentDictionary<Type, JsonConverter> ConverterCache = new();
 
+    /// <inheritdoc />
     public override bool CanConvert(Type typeToConvert) =>
         TryGetWrapperMetadata(typeToConvert, out _);
 
+    /// <inheritdoc />
     public override JsonConverter CreateConverter(Type typeToConvert, JsonSerializerOptions options)
     {
         ArgumentNullException.ThrowIfNull(typeToConvert);

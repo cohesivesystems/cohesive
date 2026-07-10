@@ -17,6 +17,7 @@ public class CliCommandContext(
 {
     readonly IServiceProvider? serviceProvider = serviceProvider;
 
+    /// <summary>Initializes a derived command context from an existing context.</summary>
     protected CliCommandContext(CliCommandContext source, IServiceProvider? serviceProvider = null)
         : this(
             configurationRoot: source.ConfigurationRoot,
@@ -74,6 +75,7 @@ public class CliCommandContext(
     internal bool TryResolveInvocationDependency(Type dependencyType, out object? value) =>
         TryResolveDependency(dependencyType, out value);
 
+    /// <summary>Gets service.</summary>
     public object? GetService(Type serviceType)
     {
         if (serviceProvider is null)
@@ -88,6 +90,7 @@ public class CliCommandContext(
 /// <typeparam name="TConfiguration">Typed configuration bound for the invoked command.</typeparam>
 public class CliCommandContext<TConfiguration> : CliCommandContext, ICliTypedCommandContext
 {
+    /// <summary>Initializes a new instance of the cli command context type.</summary>
     public CliCommandContext(
         TConfiguration configuration,
         IConfigurationRoot configurationRoot,
@@ -100,6 +103,7 @@ public class CliCommandContext<TConfiguration> : CliCommandContext, ICliTypedCom
         Configuration = configuration;
     }
 
+    /// <summary>Initializes a derived typed command context from an existing context.</summary>
     protected CliCommandContext(CliCommandContext<TConfiguration> source, IServiceProvider? serviceProvider = null)
         : base(source, serviceProvider)
     {

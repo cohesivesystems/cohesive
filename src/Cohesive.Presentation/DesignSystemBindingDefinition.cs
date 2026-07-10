@@ -37,8 +37,12 @@ public sealed record DesignToneDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum DesignSystemKind
 {
+    /// <summary>Represents the react component stack option.</summary>
     ReactComponentStack = 0,
+    /// <summary>Represents the web component stack option.</summary>
     WebComponentStack = 1,
+    /// <summary>Represents the css framework option.</summary>
     CssFramework = 2,
+    /// <summary>Represents the native component stack option.</summary>
     NativeComponentStack = 3
 }

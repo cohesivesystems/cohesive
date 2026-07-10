@@ -1,5 +1,6 @@
 namespace Cohesive.Relations.Queries;
 
+/// <summary>Represents a query source.</summary>
 public sealed record QuerySource
 {
     /// <summary>

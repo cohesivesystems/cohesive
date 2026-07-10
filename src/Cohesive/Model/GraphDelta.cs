@@ -138,6 +138,7 @@ public sealed record GraphFieldPath
     /// </summary>
     public static GraphFieldPath ForType(TypeId typeId, FieldPath path) => new(null, typeId, path);
 
+    /// <inheritdoc />
     public override string ToString()
     {
         var anchor = ShapeId?.Value ?? TypeId?.Value ?? "<unknown>";

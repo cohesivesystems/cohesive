@@ -15,6 +15,7 @@ public sealed class AzureMLDatasetRegistry : ITrainingDatasetRegistry
     readonly ArmClient armClient;
     readonly AzureMLDatasetRegistryOptions options;
 
+    /// <summary>Initializes a new instance of the azure ml dataset registry type.</summary>
     public AzureMLDatasetRegistry(
         TokenCredential credential,
         AzureMLDatasetRegistryOptions options,
@@ -26,6 +27,7 @@ public sealed class AzureMLDatasetRegistry : ITrainingDatasetRegistry
         this.options.Validate();
     }
 
+    /// <summary>Registers a training dataset with Azure ML.</summary>
     public async ValueTask<TrainingDatasetRegistration> RegisterAsync(TrainingDatasetRegistrationRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);

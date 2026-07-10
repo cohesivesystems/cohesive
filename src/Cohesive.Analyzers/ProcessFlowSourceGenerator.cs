@@ -64,6 +64,7 @@ public sealed class ProcessFlowSourceGenerator : IIncrementalGenerator
         isEnabledByDefault: true,
         description: "Class-level process-definition generation must point to exactly one source-declared authoring method on the same type.");
 
+    /// <inheritdoc />
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var candidates = context.SyntaxProvider.ForAttributeWithMetadataName(

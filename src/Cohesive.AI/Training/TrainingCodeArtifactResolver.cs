@@ -9,6 +9,7 @@ public sealed class TrainingCodeArtifactResolver(
     ICodeArtifactCache cache
     )
 {
+    /// <summary>Resolves a code reference to a packaged training artifact.</summary>
     public async ValueTask<TrainingCodeArtifact> ResolveAsync(CodeReference reference, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();

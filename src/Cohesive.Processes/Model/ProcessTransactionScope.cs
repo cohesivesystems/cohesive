@@ -5,10 +5,15 @@ namespace Cohesive.Processes.Model;
 /// </summary>
 public enum ProcessTransactionScopeKind
 {
+    /// <summary>Represents the single entity option.</summary>
     SingleEntity = 0,
+    /// <summary>Represents the single partition option.</summary>
     SinglePartition = 1,
+    /// <summary>Represents the multi entity option.</summary>
     MultiEntity = 2,
+    /// <summary>Represents the database transaction option.</summary>
     DatabaseTransaction = 3,
+    /// <summary>Represents the absence of a selected option.</summary>
     None = 4
 }
 

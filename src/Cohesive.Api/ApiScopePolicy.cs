@@ -181,7 +181,7 @@ public static class ApiResourceScopeDerivationStrategies
 public static class ApiResourceIdFormats
 {
     /// <summary>
-    /// Resource id format represented by <see cref="Cohesive.Processes.Runtime.ScopedProcessInstanceId"/>.
+    /// Resource identifier format used for scoped process instances.
     /// </summary>
     public const string ScopedProcessInstanceId = "scopedProcessInstanceId";
 }

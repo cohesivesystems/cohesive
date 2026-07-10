@@ -81,7 +81,10 @@ public sealed record ProcessConflictContext(
 /// </summary>
 public enum ConflictResolutionDecision
 {
+    /// <summary>Represents the retry option.</summary>
     Retry = 0,
+    /// <summary>Represents the fail option.</summary>
     Fail = 1,
+    /// <summary>Represents the convert to saga option.</summary>
     ConvertToSaga = 2
 }

@@ -25,12 +25,16 @@ public sealed class CliOutput(
         };
     }
     
+    /// <summary>Gets the standard output.</summary>
     public TextWriter StandardOutput { get; } = Guard.RequireNotNull(standardOutput);
 
+    /// <summary>Gets the error output.</summary>
     public TextWriter ErrorOutput { get; } = Guard.RequireNotNull(errorOutput);
     
+    /// <summary>Writes line.</summary>
     public void WriteLine(string? value) => StandardOutput.WriteLine(value);
 
+    /// <summary>Writes error line.</summary>
     public void WriteErrorLine(string? value) => ErrorOutput.WriteLine(value);
 
     /// <summary>
@@ -41,6 +45,7 @@ public sealed class CliOutput(
     public void WriteJson(object obj, JsonSerializerOptions? jsonOptionsOverride = null) => 
         WriteLine(JsonSerializer.Serialize(obj, jsonOptionsOverride ?? jsonOptions));
     
+    /// <summary>Writes json error.</summary>
     public void WriteJsonError(object obj) => 
         WriteErrorLine(JsonSerializer.Serialize(obj, jsonOptions));
 

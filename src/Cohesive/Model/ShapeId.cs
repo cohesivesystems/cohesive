@@ -23,5 +23,6 @@ public readonly record struct ShapeId
     /// </summary>
     public string Value { get; }
 
+    /// <inheritdoc />
     public override string ToString() => Value;
 }

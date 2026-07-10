@@ -134,8 +134,11 @@ public sealed record FieldValueIconDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum FieldEntityReferenceFallbackKind
 {
+    /// <summary>Represents the code option.</summary>
     Code = 0,
+    /// <summary>Represents the badge option.</summary>
     Badge = 1,
+    /// <summary>Represents the text option.</summary>
     Text = 2
 }
 
@@ -145,7 +148,9 @@ public enum FieldEntityReferenceFallbackKind
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum FieldJsonDisplayMode
 {
+    /// <summary>Represents the preformatted option.</summary>
     Preformatted = 0,
+    /// <summary>Represents the inline option.</summary>
     Inline = 1
 }
 
@@ -156,12 +161,18 @@ public enum FieldJsonDisplayMode
 /// <param name="Name"></param>
 public readonly record struct FieldPresentationCapability(string Name)
 {
+    /// <summary>Gets the navigate.</summary>
     public static readonly FieldPresentationCapability Navigate = new(nameof(Navigate).ToLowerInvariant());
+    /// <summary>Gets the edit.</summary>
     public static readonly FieldPresentationCapability Edit = new(nameof(Edit).ToLowerInvariant());
+    /// <summary>Gets the filter.</summary>
     public static readonly FieldPresentationCapability Filter = new(nameof(Filter).ToLowerInvariant());
+    /// <summary>Gets the sort.</summary>
     public static readonly FieldPresentationCapability Sort = new(nameof(Sort).ToLowerInvariant());
+    /// <summary>Gets the aggregate.</summary>
     public static readonly FieldPresentationCapability Aggregate = new(nameof(Aggregate).ToLowerInvariant());
 
+    /// <summary>Converts the capability to its semantic name.</summary>
     public static implicit operator string(FieldPresentationCapability capability) => capability.Name;
 }
 
@@ -191,9 +202,13 @@ public sealed record FieldValueSourceDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum FieldValueSourceKind
 {
+    /// <summary>Represents the data source field option.</summary>
     DataSourceField = 0,
+    /// <summary>Represents the local aggregate option.</summary>
     LocalAggregate = 1,
+    /// <summary>Represents the expression option.</summary>
     Expression = 2,
+    /// <summary>Represents the local state option.</summary>
     LocalState = 3
 }
 
@@ -203,11 +218,17 @@ public enum FieldValueSourceKind
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum FieldAggregationKind
 {
+    /// <summary>Represents the count option.</summary>
     Count = 0,
+    /// <summary>Represents the sum option.</summary>
     Sum = 1,
+    /// <summary>Represents the average option.</summary>
     Average = 2,
+    /// <summary>Represents the min option.</summary>
     Min = 3,
+    /// <summary>Represents the max option.</summary>
     Max = 4,
+    /// <summary>Represents the exists option.</summary>
     Exists = 5
 }
 
@@ -232,19 +253,33 @@ public sealed record FormatDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum FormatKind
 {
+    /// <summary>Represents the text option.</summary>
     Text = 0,
+    /// <summary>Represents the number option.</summary>
     Number = 1,
+    /// <summary>Represents the date option.</summary>
     Date = 2,
+    /// <summary>Represents the date time option.</summary>
     DateTime = 3,
+    /// <summary>Represents the time option.</summary>
     Time = 4,
+    /// <summary>Represents the currency option.</summary>
     Currency = 5,
+    /// <summary>Represents the percent option.</summary>
     Percent = 6,
+    /// <summary>Represents the unit option.</summary>
     Unit = 7,
+    /// <summary>Represents the duration option.</summary>
     Duration = 8,
+    /// <summary>Represents the relative time option.</summary>
     RelativeTime = 9,
+    /// <summary>Represents the json option.</summary>
     Json = 10,
+    /// <summary>Represents the markdown option.</summary>
     Markdown = 11,
+    /// <summary>Represents the code option.</summary>
     Code = 12,
+    /// <summary>Represents the diff option.</summary>
     Diff = 13
 }
 
@@ -254,23 +289,41 @@ public enum FormatKind
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum FieldDisplayKind
 {
+    /// <summary>Represents the text option.</summary>
     Text = 0,
+    /// <summary>Represents the number option.</summary>
     Number = 1,
+    /// <summary>Represents the date option.</summary>
     Date = 2,
+    /// <summary>Represents the date time option.</summary>
     DateTime = 3,
+    /// <summary>Represents the currency option.</summary>
     Currency = 4,
+    /// <summary>Represents the badge option.</summary>
     Badge = 5,
+    /// <summary>Represents the status option.</summary>
     Status = 6,
+    /// <summary>Represents the link option.</summary>
     Link = 7,
+    /// <summary>Represents the entity reference option.</summary>
     EntityReference = 8,
+    /// <summary>Represents the code option.</summary>
     Code = 9,
+    /// <summary>Represents the markdown option.</summary>
     Markdown = 10,
+    /// <summary>Represents the json option.</summary>
     Json = 11,
+    /// <summary>Represents the diff option.</summary>
     Diff = 12,
+    /// <summary>Represents the sparkline option.</summary>
     Sparkline = 13,
+    /// <summary>Represents the metric option.</summary>
     Metric = 14,
+    /// <summary>Represents the avatar option.</summary>
     Avatar = 15,
+    /// <summary>Represents the boolean option.</summary>
     Boolean = 16,
+    /// <summary>Represents the choice option.</summary>
     Choice = 17
 }
 
@@ -280,19 +333,34 @@ public enum FieldDisplayKind
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum FieldEditKind
 {
+    /// <summary>Represents the read only option.</summary>
     ReadOnly = 0,
+    /// <summary>Represents the text option.</summary>
     Text = 1,
+    /// <summary>Represents the number option.</summary>
     Number = 2,
+    /// <summary>Represents the date option.</summary>
     Date = 3,
+    /// <summary>Represents the date time option.</summary>
     DateTime = 4,
+    /// <summary>Represents the select option.</summary>
     Select = 5,
+    /// <summary>Represents the multi select option.</summary>
     MultiSelect = 6,
+    /// <summary>Represents the checkbox option.</summary>
     Checkbox = 7,
+    /// <summary>Represents the toggle option.</summary>
     Toggle = 8,
+    /// <summary>Represents the json editor option.</summary>
     JsonEditor = 9,
+    /// <summary>Represents the code editor option.</summary>
     CodeEditor = 10,
+    /// <summary>Represents the markdown editor option.</summary>
     MarkdownEditor = 11,
+    /// <summary>Represents the entity reference option.</summary>
     EntityReference = 12,
+    /// <summary>Represents the choice option.</summary>
     Choice = 13,
+    /// <summary>Represents the boolean option.</summary>
     Boolean = 14
 }

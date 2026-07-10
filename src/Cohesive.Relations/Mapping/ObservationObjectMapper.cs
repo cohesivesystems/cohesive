@@ -15,6 +15,7 @@ public sealed class ObservationObjectMapper<T> : IObservationObjectMapper<T>
         this.map = Guard.RequireNotNull(map);
     }
     
+    /// <summary>Gets the layout.</summary>
     public ObservationLayout Layout { get; }
 
     /// <inheritdoc />

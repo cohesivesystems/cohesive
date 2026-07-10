@@ -85,13 +85,21 @@ public sealed record CollectionChromeSlotDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum CollectionChromeSlotKind
 {
+    /// <summary>Represents the query form option.</summary>
     QueryForm = 0,
+    /// <summary>Represents the pagination option.</summary>
     Pagination = 1,
+    /// <summary>Represents the selection actions option.</summary>
     SelectionActions = 2,
+    /// <summary>Represents the row actions option.</summary>
     RowActions = 3,
+    /// <summary>Represents the detail option.</summary>
     Detail = 4,
+    /// <summary>Represents the summary option.</summary>
     Summary = 5,
+    /// <summary>Represents the custom option.</summary>
     Custom = 6,
+    /// <summary>Represents the body option.</summary>
     Body = 7
 }
 
@@ -101,13 +109,21 @@ public enum CollectionChromeSlotKind
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum CollectionChromeSlotPlacement
 {
+    /// <summary>Represents the absence of a selected option.</summary>
     None = 0,
+    /// <summary>Represents the header option.</summary>
     Header = 1,
+    /// <summary>Represents the toolbar option.</summary>
     Toolbar = 2,
+    /// <summary>Represents the above option.</summary>
     Above = 3,
+    /// <summary>Represents the inline option.</summary>
     Inline = 4,
+    /// <summary>Represents the footer option.</summary>
     Footer = 5,
+    /// <summary>Represents the side panel option.</summary>
     SidePanel = 6,
+    /// <summary>Represents the drawer option.</summary>
     Drawer = 7
 }
 
@@ -163,10 +179,15 @@ public sealed record CollectionSelectionActionParameterBindingDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum CollectionSelectionActionParameterSource
 {
+    /// <summary>Represents the selected row identity option.</summary>
     SelectedRowIdentity = 0,
+    /// <summary>Represents the selected row identity list option.</summary>
     SelectedRowIdentityList = 1,
+    /// <summary>Represents the selected row value option.</summary>
     SelectedRowValue = 2,
+    /// <summary>Represents the selected row value list option.</summary>
     SelectedRowValueList = 3,
+    /// <summary>Represents the selection count option.</summary>
     SelectionCount = 4
 }
 
@@ -176,8 +197,11 @@ public enum CollectionSelectionActionParameterSource
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum CollectionSelectionMode
 {
+    /// <summary>Represents the absence of a selected option.</summary>
     None = 0,
+    /// <summary>Represents the single option.</summary>
     Single = 1,
+    /// <summary>Represents the multiple option.</summary>
     Multiple = 2
 }
 
@@ -187,9 +211,13 @@ public enum CollectionSelectionMode
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum CollectionDetailActivation
 {
+    /// <summary>Represents the absence of a selected option.</summary>
     None = 0,
+    /// <summary>Represents the selection option.</summary>
     Selection = 1,
+    /// <summary>Represents the row activation option.</summary>
     RowActivation = 2,
+    /// <summary>Represents the hover option.</summary>
     Hover = 3
 }
 
@@ -241,7 +269,9 @@ public sealed record CollectionRowActionParameterBindingDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum CollectionRowActionKind
 {
+    /// <summary>Represents the primary option.</summary>
     Primary = 0,
+    /// <summary>Represents the context menu option.</summary>
     ContextMenu = 1
 }
 

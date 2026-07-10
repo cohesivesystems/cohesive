@@ -23,6 +23,8 @@ public sealed record TrainingDatasetArtifact(
 /// </summary>
 public enum TrainingDatasetArtifactKind : byte
 {
+    /// <summary>Represents the file option.</summary>
     File = 0,
+    /// <summary>Represents the folder option.</summary>
     Folder = 1
 }

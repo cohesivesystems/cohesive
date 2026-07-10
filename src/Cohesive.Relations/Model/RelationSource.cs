@@ -18,6 +18,7 @@ public sealed record SourceAlias
     /// </summary>
     public string Value { get; init; }
 
+    /// <inheritdoc />
     public override string ToString() => Value;
 }
 
@@ -26,7 +27,9 @@ public sealed record SourceAlias
 /// </summary>
 public enum SourceCardinality
 {
+    /// <summary>Represents the single option.</summary>
     Single = 0,
+    /// <summary>Represents the many option.</summary>
     Many = 1
 }
 

@@ -7,6 +7,7 @@ namespace Cohesive.Adapters.AzureStorage;
 /// </summary>
 public sealed class AzureBlobDatasetOutputStreamProvider(IBlobClientByNameResolver clientResolver) : IDatasetOutputStreamProvider
 {
+    /// <summary>Opens a writable dataset output target.</summary>
     public async ValueTask<DatasetOutputWriteTarget> OpenWriteAsync(string fileName, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(fileName);

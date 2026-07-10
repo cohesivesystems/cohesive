@@ -292,7 +292,9 @@ public sealed class ExecuteEntityTransitionNode : ProcessNodeWithNext
 /// </summary>
 public enum ProcessWaitType
 {
+    /// <summary>Represents the timer option.</summary>
     Timer = 0,
+    /// <summary>Represents the external event option.</summary>
     ExternalEvent = 1
 }
 

@@ -27,12 +27,19 @@ public sealed record TargetBindingDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum PresentationTargetKind
 {
+    /// <summary>Represents the react option.</summary>
     React = 0,
+    /// <summary>Represents the blazor option.</summary>
     Blazor = 1,
+    /// <summary>Represents the blazor server option.</summary>
     BlazorServer = 2,
+    /// <summary>Represents the blazor web assembly option.</summary>
     BlazorWebAssembly = 3,
+    /// <summary>Represents the blazor hybrid option.</summary>
     BlazorHybrid = 4,
+    /// <summary>Represents the html option.</summary>
     Html = 5,
+    /// <summary>Represents the native option.</summary>
     Native = 6
 }
 
@@ -67,19 +74,34 @@ public sealed record PresentationBindingDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum PresentationBindingKind
 {
+    /// <summary>Represents the api endpoint option.</summary>
     ApiEndpoint = 0,
+    /// <summary>Represents the component option.</summary>
     Component = 1,
+    /// <summary>Represents the view component option.</summary>
     ViewComponent = 2,
+    /// <summary>Represents the action endpoint option.</summary>
     ActionEndpoint = 3,
+    /// <summary>Represents the navigation route option.</summary>
     NavigationRoute = 4,
+    /// <summary>Represents the flow event option.</summary>
     FlowEvent = 5,
+    /// <summary>Represents the local state option.</summary>
     LocalState = 6,
+    /// <summary>Represents the transition option.</summary>
     Transition = 7,
+    /// <summary>Represents the relation query option.</summary>
     RelationQuery = 8,
+    /// <summary>Represents the external uri option.</summary>
     ExternalUri = 9,
+    /// <summary>Represents the projection renderer option.</summary>
     ProjectionRenderer = 10,
+    /// <summary>Represents the workspace runtime option.</summary>
     WorkspaceRuntime = 11,
+    /// <summary>Represents the page host component option.</summary>
     PageHostComponent = 12,
+    /// <summary>Represents the navigation shell region component option.</summary>
     NavigationShellRegionComponent = 13,
+    /// <summary>Represents the icon option.</summary>
     Icon = 14
 }

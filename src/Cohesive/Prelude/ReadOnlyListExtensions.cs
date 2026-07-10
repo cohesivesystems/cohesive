@@ -94,10 +94,12 @@ public readonly struct ReadOnlyListSlice<T> : IReadOnlyList<T>
             index = start - 1;
         }
 
+        /// <summary>Gets the current.</summary>
         public T Current => source[index];
 
         object IEnumerator.Current => Current!;
 
+        /// <inheritdoc />
         public bool MoveNext()
         {
             var next = index + 1;
@@ -111,8 +113,10 @@ public readonly struct ReadOnlyListSlice<T> : IReadOnlyList<T>
             return true;
         }
 
+        /// <summary>Resets the value.</summary>
         public void Reset() => index = start - 1;
 
+        /// <inheritdoc />
         public void Dispose()
         {
         }
@@ -174,7 +178,7 @@ public static class ReadOnlyListExtensions
         }
 
         /// <summary>
-        /// Same as <see cref="IReadOnlyList{T}.Count"/>.
+        /// Same as <see cref="IReadOnlyCollection{T}.Count"/>.
         /// </summary>
         public int Length => source.Count;
         

@@ -212,6 +212,7 @@ public readonly record struct FieldPath : IEquatable<FieldPath>
         return false;
     }
 
+    /// <inheritdoc />
     public bool Equals(FieldPath other)
     {
         if (Segments.Length != other.Segments.Length)
@@ -226,6 +227,7 @@ public readonly record struct FieldPath : IEquatable<FieldPath>
         return true;
     }
     
+    /// <inheritdoc />
     public override int GetHashCode()
     {
         HashCode hash = new();
@@ -365,6 +367,7 @@ public readonly record struct FieldPathSegment : IEquatable<FieldPathSegment>
     /// </summary>
     public static FieldPathSegment Element() => new(SegmentKind.Element);
 
+    /// <inheritdoc />
     public override string ToString()
     {
         return Kind switch
@@ -375,6 +378,7 @@ public readonly record struct FieldPathSegment : IEquatable<FieldPathSegment>
         };
     }
 
+    /// <summary>Writes string.</summary>
     public void WriteString(ref ValueStringBuilder builder)
     {
         switch (Kind)

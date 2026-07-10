@@ -58,8 +58,11 @@ public sealed record DataSourcePaginationDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum DataSourcePaginationKind
 {
+    /// <summary>Represents the cursor option.</summary>
     Cursor = 0,
+    /// <summary>Represents the offset option.</summary>
     Offset = 1,
+    /// <summary>Represents the page number option.</summary>
     PageNumber = 2
 }
 

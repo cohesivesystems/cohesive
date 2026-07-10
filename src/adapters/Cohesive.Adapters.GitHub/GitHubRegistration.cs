@@ -5,19 +5,26 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Cohesive.Adapters.GitHub;
 
+/// <summary>Defines git hub code repository settings.</summary>
 public sealed record GitHubCodeRepositorySettings
 {
+    /// <summary>Gets the app id.</summary>
     public string? AppId { get; init; }
 
+    /// <summary>Gets the key vault uri.</summary>
     public string? KeyVaultUri { get; init; }
 
+    /// <summary>Gets the private key secret name.</summary>
     public string? PrivateKeySecretName { get; init; }
 
+    /// <summary>Gets the api base uri.</summary>
     public string? ApiBaseUri { get; init; }
 
+    /// <summary>Creates token credential.</summary>
     public TokenCredential CreateTokenCredential() => new DefaultAzureCredential();
 }
 
+/// <summary>Provides operations for git hub registration.</summary>
 public static class GitHubRegistration
 {
     const string GitHubHttpClientName = "GitHubApi";

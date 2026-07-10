@@ -5,11 +5,22 @@ namespace Cohesive.Model;
 /// </summary>
 public static class ShapeRoles
 {
+    /// <summary>A shape that represents an entity.</summary>
     public const string Entity = "entity";
+    
+    /// <summary>A shape that represents a value object.</summary>
     public const string ValueObject = "valueObject";
+    
+    /// <summary>A shape that represents a DTO.</summary>
     public const string Dto = "dto";
+    
+    /// <summary>A shape that represents a contract.</summary>
     public const string Contract = "contract";
+    
+    /// <summary>A shape that represents a projection.</summary>
     public const string Projection = "projection";
+    
+    /// <summary>A shape that represents a transport message.</summary>
     public const string Transport = "transport";
 }
 

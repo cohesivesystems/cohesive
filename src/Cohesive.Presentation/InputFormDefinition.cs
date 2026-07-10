@@ -104,11 +104,17 @@ public sealed record InputFormTargetDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum InputFormTargetKind
 {
+    /// <summary>Represents the relation query option.</summary>
     RelationQuery = 0,
+    /// <summary>Represents the entity transition option.</summary>
     EntityTransition = 1,
+    /// <summary>Represents the process invocation option.</summary>
     ProcessInvocation = 2,
+    /// <summary>Represents the endpoint request option.</summary>
     EndpointRequest = 3,
+    /// <summary>Represents the enrichment option.</summary>
     Enrichment = 4,
+    /// <summary>Represents the local state option.</summary>
     LocalState = 5
 }
 
@@ -140,16 +146,27 @@ public sealed record InputFormGroupDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum InputFormGroupKind
 {
+    /// <summary>Represents the section option.</summary>
     Section = 0,
+    /// <summary>Represents the identity option.</summary>
     Identity = 1,
+    /// <summary>Represents the lifecycle option.</summary>
     Lifecycle = 2,
+    /// <summary>Represents the time option.</summary>
     Time = 3,
+    /// <summary>Represents the advanced option.</summary>
     Advanced = 4,
+    /// <summary>Represents the review option.</summary>
     Review = 5,
+    /// <summary>Represents the step option.</summary>
     Step = 6,
+    /// <summary>Represents the toolbar option.</summary>
     Toolbar = 7,
+    /// <summary>Represents the sidebar option.</summary>
     Sidebar = 8,
+    /// <summary>Represents the inline option.</summary>
     Inline = 9,
+    /// <summary>Represents the facet region option.</summary>
     FacetRegion = 10
 }
 
@@ -177,15 +194,25 @@ public sealed record InputFormGroupDisplayIntentDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum InputFormGroupContainerIntent
 {
+    /// <summary>Represents the inline option.</summary>
     Inline = 0,
+    /// <summary>Represents the section option.</summary>
     Section = 1,
+    /// <summary>Represents the panel option.</summary>
     Panel = 2,
+    /// <summary>Represents the accordion option.</summary>
     Accordion = 3,
+    /// <summary>Represents the tabs option.</summary>
     Tabs = 4,
+    /// <summary>Represents the wizard step option.</summary>
     WizardStep = 5,
+    /// <summary>Represents the sidebar option.</summary>
     Sidebar = 6,
+    /// <summary>Represents the modal option.</summary>
     Modal = 7,
+    /// <summary>Represents the toolbar option.</summary>
     Toolbar = 8,
+    /// <summary>Represents the card option.</summary>
     Card = 9
 }
 
@@ -246,7 +273,9 @@ public sealed record InputFormFieldDisplayOptions(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum InputFormFieldControlKind
 {
+    /// <summary>Represents the default option.</summary>
     Default = 0,
+    /// <summary>Represents the date time filter option.</summary>
     DateTimeFilter = 1
 }
 
@@ -256,18 +285,31 @@ public enum InputFormFieldControlKind
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum InputFormFieldKind
 {
+    /// <summary>Represents the text option.</summary>
     Text = 0,
+    /// <summary>Represents the select option.</summary>
     Select = 1,
+    /// <summary>Represents the multi select option.</summary>
     MultiSelect = 2,
+    /// <summary>Represents the date option.</summary>
     Date = 3,
+    /// <summary>Represents the date time option.</summary>
     DateTime = 4,
+    /// <summary>Represents the date time range option.</summary>
     DateTimeRange = 5,
+    /// <summary>Represents the number option.</summary>
     Number = 6,
+    /// <summary>Represents the number range option.</summary>
     NumberRange = 7,
+    /// <summary>Represents the boolean option.</summary>
     Boolean = 8,
+    /// <summary>Represents the dynamic facet region option.</summary>
     DynamicFacetRegion = 9,
+    /// <summary>Represents the relation projection editor option.</summary>
     RelationProjectionEditor = 10,
+    /// <summary>Represents the relation predicate editor option.</summary>
     RelationPredicateEditor = 11,
+    /// <summary>Represents the relation aggregation editor option.</summary>
     RelationAggregationEditor = 12
 }
 
@@ -299,14 +341,23 @@ public sealed record InputFormChoiceSourceDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum InputFormChoiceSourceKind
 {
+    /// <summary>Represents the static choices option.</summary>
     StaticChoices = 0,
+    /// <summary>Represents the data source option.</summary>
     DataSource = 1,
+    /// <summary>Represents the enriched facts option.</summary>
     EnrichedFacts = 2,
+    /// <summary>Represents the entity lookup option.</summary>
     EntityLookup = 3,
+    /// <summary>Represents the relation query option.</summary>
     RelationQuery = 4,
+    /// <summary>Represents the ontology terms option.</summary>
     OntologyTerms = 5,
+    /// <summary>Represents the recent values option.</summary>
     RecentValues = 6,
+    /// <summary>Represents the endpoint option.</summary>
     Endpoint = 7,
+    /// <summary>Represents the derived from context option.</summary>
     DerivedFromContext = 8
 }
 
@@ -316,8 +367,11 @@ public enum InputFormChoiceSourceKind
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum InputFormChoiceDefaultSelection
 {
+    /// <summary>Represents the absence of a selected option.</summary>
     None = 0,
+    /// <summary>Represents the all option.</summary>
     All = 1,
+    /// <summary>Represents the first option.</summary>
     First = 2
 }
 
@@ -357,14 +411,23 @@ public sealed record InputFormValidationSourceDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum InputFormValidationSourceKind
 {
+    /// <summary>Represents the shape option.</summary>
     Shape = 0,
+    /// <summary>Represents the form option.</summary>
     Form = 1,
+    /// <summary>Represents the relation query option.</summary>
     RelationQuery = 2,
+    /// <summary>Represents the transition option.</summary>
     Transition = 3,
+    /// <summary>Represents the process invocation option.</summary>
     ProcessInvocation = 4,
+    /// <summary>Represents the endpoint request option.</summary>
     EndpointRequest = 5,
+    /// <summary>Represents the capability planner option.</summary>
     CapabilityPlanner = 6,
+    /// <summary>Represents the authorization option.</summary>
     Authorization = 7,
+    /// <summary>Represents the enrichment option.</summary>
     Enrichment = 8
 }
 
@@ -402,14 +465,23 @@ public sealed record InputFormValidationDiagnosticDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum InputFormValidationScope
 {
+    /// <summary>Represents the field option.</summary>
     Field = 0,
+    /// <summary>Represents the group option.</summary>
     Group = 1,
+    /// <summary>Represents the form option.</summary>
     Form = 2,
+    /// <summary>Represents the target option.</summary>
     Target = 3,
+    /// <summary>Represents the query option.</summary>
     Query = 4,
+    /// <summary>Represents the transition option.</summary>
     Transition = 5,
+    /// <summary>Represents the process option.</summary>
     Process = 6,
+    /// <summary>Represents the endpoint option.</summary>
     Endpoint = 7,
+    /// <summary>Represents the shape option.</summary>
     Shape = 8
 }
 
@@ -449,11 +521,17 @@ public sealed record InputFormEnrichmentStageDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum InputFormEnrichmentStageKind
 {
+    /// <summary>Represents the normalize option.</summary>
     Normalize = 0,
+    /// <summary>Represents the resolve facts option.</summary>
     ResolveFacts = 1,
+    /// <summary>Represents the suggest option.</summary>
     Suggest = 2,
+    /// <summary>Represents the validate option.</summary>
     Validate = 3,
+    /// <summary>Represents the lower option.</summary>
     Lower = 4,
+    /// <summary>Represents the estimate cost option.</summary>
     EstimateCost = 5
 }
 
@@ -511,13 +589,21 @@ public sealed record InputFormSuggestionSourceDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum InputFormSuggestionSourceKind
 {
+    /// <summary>Represents the static choices option.</summary>
     StaticChoices = 0,
+    /// <summary>Represents the entity autocomplete option.</summary>
     EntityAutocomplete = 1,
+    /// <summary>Represents the relation query option.</summary>
     RelationQuery = 2,
+    /// <summary>Represents the ontology terms option.</summary>
     OntologyTerms = 3,
+    /// <summary>Represents the recent values option.</summary>
     RecentValues = 4,
+    /// <summary>Represents the endpoint option.</summary>
     Endpoint = 5,
+    /// <summary>Represents the derived from context option.</summary>
     DerivedFromContext = 6,
+    /// <summary>Represents the enriched facts option.</summary>
     EnrichedFacts = 7
 }
 
@@ -561,9 +647,13 @@ public sealed record InputFormSuggestionValueBindingDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum InputFormSuggestionWriteTarget
 {
+    /// <summary>Represents the draft value option.</summary>
     DraftValue = 0,
+    /// <summary>Represents the facts option.</summary>
     Facts = 1,
+    /// <summary>Represents the target input option.</summary>
     TargetInput = 2,
+    /// <summary>Represents the query fragment option.</summary>
     QueryFragment = 3
 }
 
@@ -665,8 +755,11 @@ public sealed record QueryFormExecutionPolicyDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum QueryFormExecutionMode
 {
+    /// <summary>Represents the manual option.</summary>
     Manual = 0,
+    /// <summary>Represents the live option.</summary>
     Live = 1,
+    /// <summary>Represents the debounced live option.</summary>
     DebouncedLive = 2
 }
 
@@ -713,13 +806,21 @@ public sealed record QueryFormPredicateBindingDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum QueryFormPredicateKind
 {
+    /// <summary>Represents the exact option.</summary>
     Exact = 0,
+    /// <summary>Represents the prefix option.</summary>
     Prefix = 1,
+    /// <summary>Represents the contains option.</summary>
     Contains = 2,
+    /// <summary>Represents the full text option.</summary>
     FullText = 3,
+    /// <summary>Represents the in option.</summary>
     In = 4,
+    /// <summary>Represents the date range option.</summary>
     DateRange = 5,
+    /// <summary>Represents the number range option.</summary>
     NumberRange = 6,
+    /// <summary>Represents the exists option.</summary>
     Exists = 7
 }
 

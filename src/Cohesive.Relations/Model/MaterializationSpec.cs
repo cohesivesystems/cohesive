@@ -5,9 +5,16 @@ namespace Cohesive.Relations.Model;
 /// </summary>
 public enum MaterializationStrategy
 {
+    /// <summary>Represents the on-demand materialization strategy.</summary>
     OnDemand = 0,
+    
+    /// <summary>Represents the async index materialization strategy.</summary>
     AsyncIndex = 1,
+    
+    /// <summary>Represents the change feed materialization strategy.</summary>
     ChangeFeed = 2,
+    
+    /// <summary>Represents the snapshot materialization strategy.</summary>
     Snapshot = 3
 }
 
@@ -16,8 +23,13 @@ public enum MaterializationStrategy
 /// </summary>
 public enum FreshnessPolicy
 {
+    /// <summary>Represents the strong option.</summary>
     Strong = 0,
+    
+    /// <summary>Represents the eventual option.</summary>
     Eventual = 1,
+    
+    /// <summary>Represents the bounded staleness option.</summary>
     BoundedStaleness = 2
 }
 

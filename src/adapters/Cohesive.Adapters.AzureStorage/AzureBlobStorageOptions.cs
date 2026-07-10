@@ -31,6 +31,7 @@ public sealed record AzureBlobStorageOptions
         !string.IsNullOrWhiteSpace(ConnectionString)
         || !string.IsNullOrWhiteSpace(AccountName);
 
+    /// <summary>Gets account name.</summary>
     public string? GetAccountName() => AccountName;
     
     string? GetAccountHost() =>
@@ -38,6 +39,7 @@ public sealed record AzureBlobStorageOptions
             ? null
             : AzureBlobStorageTargetResolver.AccountHost(AccountName);
     
+    /// <summary>Gets service uri.</summary>
     public Uri GetServiceUri()
     {
         if (!string.IsNullOrEmpty(ConnectionString))
@@ -50,6 +52,7 @@ public sealed record AzureBlobStorageOptions
         throw new InvalidOperationException("Neither AccountName nor ConnectionString is provided for AzureBlobStorageOptions.");
     }
 
+    /// <summary>Attempts to create token credential.</summary>
     public TokenCredential? TryCreateTokenCredential()
     {
         if (!string.IsNullOrWhiteSpace(ConnectionString))
@@ -88,10 +91,12 @@ public sealed record AzureBlobContainerOptions
     /// </summary>
     public string? StorageRoot { get; init; }
 
+    /// <summary>Gets whether the storage options contain usable connection settings.</summary>
     public bool IsConfigured =>
         !string.IsNullOrWhiteSpace(ContainerName)
         || !string.IsNullOrWhiteSpace(StorageRoot);
 
+    /// <summary>Gets required container name.</summary>
     public string GetRequiredContainerName()
     {
         if (!string.IsNullOrWhiteSpace(ContainerName))
@@ -103,6 +108,7 @@ public sealed record AzureBlobContainerOptions
         throw new InvalidOperationException("Azure blob container profile requires a configured container name or storage root.");
     }
 
+    /// <summary>Attempts to get blob prefix.</summary>
     public string? TryGetBlobPrefix()
     {
         if (string.IsNullOrWhiteSpace(StorageRoot))
@@ -112,6 +118,7 @@ public sealed record AzureBlobContainerOptions
         return string.IsNullOrWhiteSpace(target.BlobName) ? null : target.BlobName;
     }
 
+    /// <summary>Gets storage root.</summary>
     public string GetStorageRoot(AzureBlobStorageOptions account)
     {
         ArgumentNullException.ThrowIfNull(account);
@@ -127,6 +134,7 @@ public sealed record AzureBlobContainerOptions
     }
 }
 
+/// <summary>Provides operations for azure blob storage options extensions.</summary>
 public static class AzureBlobStorageOptionsExtensions
 {
     static string? NormalizeAzureBlobStorageName(string? name) =>

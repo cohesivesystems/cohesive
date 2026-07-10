@@ -1470,18 +1470,31 @@ public readonly struct ObservationValue(
 /// </summary>
 public enum ObservationValueKind
 {
+    /// <summary>Represents the undefined option.</summary>
     Undefined = 0,
+    /// <summary>Represents the null option.</summary>
     Null = 1,
+    /// <summary>Represents the int64 option.</summary>
     Int64 = 2,
+    /// <summary>Represents the double option.</summary>
     Double = 3,
+    /// <summary>Represents the bool option.</summary>
     Bool = 4,
+    /// <summary>Represents the string option.</summary>
     String = 5,
+    /// <summary>Represents the object option.</summary>
     Object = 6,
+    /// <summary>Represents the array option.</summary>
     Array = 7,
+    /// <summary>Represents the bytes option.</summary>
     Bytes = 8,
+    /// <summary>Represents the date time offset option.</summary>
     DateTimeOffset = 9,
+    /// <summary>Represents the date only option.</summary>
     DateOnly = 10,
+    /// <summary>Represents the time only option.</summary>
     TimeOnly = 11,
+    /// <summary>Represents the time span option.</summary>
     TimeSpan = 12
 }
 
@@ -1490,6 +1503,8 @@ public enum ObservationValueKind
 /// </summary>
 public enum ObservationBytesJsonEncoding
 {
+    /// <summary>Represents the throw option.</summary>
     Throw = 0,
+    /// <summary>Represents the base64 string option.</summary>
     Base64String = 1
 }

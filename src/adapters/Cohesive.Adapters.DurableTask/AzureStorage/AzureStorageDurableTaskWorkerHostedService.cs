@@ -11,6 +11,7 @@ public sealed class AzureStorageDurableTaskWorkerHostedService(
     ILogger<AzureStorageDurableTaskWorkerHostedService> logger
     ) : IHostedService, IAsyncDisposable
 {
+    /// <summary>Starts the Durable Task worker.</summary>
     public async Task StartAsync(CancellationToken ct)
     {
         await host.CreateIfNotExistsAsync();
@@ -23,6 +24,7 @@ public sealed class AzureStorageDurableTaskWorkerHostedService(
             );
     }
 
+    /// <summary>Stops the Durable Task worker.</summary>
     public async Task StopAsync(CancellationToken ct)
     {
         await host.StopAsync();
@@ -33,5 +35,6 @@ public sealed class AzureStorageDurableTaskWorkerHostedService(
             );
     }
 
+    /// <inheritdoc />
     public ValueTask DisposeAsync() => host.DisposeAsync();
 }

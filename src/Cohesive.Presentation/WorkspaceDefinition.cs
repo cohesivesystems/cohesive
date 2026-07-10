@@ -46,9 +46,13 @@ public sealed record DocumentWorkspaceSurfaceSlotDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum DocumentWorkspaceSurfaceSlotRole
 {
+    /// <summary>Represents the header option.</summary>
     Header = 0,
+    /// <summary>Represents the primary surface option.</summary>
     PrimarySurface = 1,
+    /// <summary>Represents the auxiliary option.</summary>
     Auxiliary = 2,
+    /// <summary>Represents the custom option.</summary>
     Custom = 3
 }
 
@@ -146,6 +150,7 @@ public sealed record DocumentActionStatusNoticeDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum DocumentActionStatusNoticeKind
 {
+    /// <summary>Represents the error option.</summary>
     Error = 0
 }
 
@@ -219,8 +224,11 @@ public sealed record DocumentProcessTaskNoticeActionDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum DocumentProcessTaskNoticeActionTargetKind
 {
+    /// <summary>Represents the details option.</summary>
     Details = 0,
+    /// <summary>Represents the target option.</summary>
     Target = 1,
+    /// <summary>Represents the source option.</summary>
     Source = 2
 }
 
@@ -280,11 +288,17 @@ public sealed record DocumentDataSourceActivationPolicyDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum DocumentDataSourceRole
 {
+    /// <summary>Represents the resource option.</summary>
     Resource = 0,
+    /// <summary>Represents the metadata option.</summary>
     Metadata = 1,
+    /// <summary>Represents the summary option.</summary>
     Summary = 2,
+    /// <summary>Represents the working document option.</summary>
     WorkingDocument = 3,
+    /// <summary>Represents the validation option.</summary>
     Validation = 4,
+    /// <summary>Represents the process task option.</summary>
     ProcessTask = 5
 }
 
@@ -294,13 +308,21 @@ public enum DocumentDataSourceRole
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum DocumentKind
 {
+    /// <summary>Represents the edi spec option.</summary>
     EdiSpec = 0,
+    /// <summary>Represents the shape graph option.</summary>
     ShapeGraph = 1,
+    /// <summary>Represents the json document option.</summary>
     JsonDocument = 2,
+    /// <summary>Represents the ontology option.</summary>
     Ontology = 3,
+    /// <summary>Represents the transition graph option.</summary>
     TransitionGraph = 4,
+    /// <summary>Represents the presentation ir option.</summary>
     PresentationIr = 5,
+    /// <summary>Represents the training example option.</summary>
     TrainingExample = 6,
+    /// <summary>Represents the fix spec option.</summary>
     FixSpec = 7
 }
 
@@ -358,13 +380,21 @@ public sealed record ProjectionDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ProjectionKind
 {
+    /// <summary>Represents the json text option.</summary>
     JsonText = 0,
+    /// <summary>Represents the tree view option.</summary>
     TreeView = 1,
+    /// <summary>Represents the type tree option.</summary>
     TypeTree = 2,
+    /// <summary>Represents the graph view option.</summary>
     GraphView = 3,
+    /// <summary>Represents the form view option.</summary>
     FormView = 4,
+    /// <summary>Represents the segment view option.</summary>
     SegmentView = 5,
+    /// <summary>Represents the validation view option.</summary>
     ValidationView = 6,
+    /// <summary>Represents the table view option.</summary>
     TableView = 7
 }
 
@@ -386,12 +416,19 @@ public sealed record ProjectionSubjectDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ProjectionSubjectKind
 {
+    /// <summary>Represents the document option.</summary>
     Document = 0,
+    /// <summary>Represents the structure option.</summary>
     Structure = 1,
+    /// <summary>Represents the shape graph option.</summary>
     ShapeGraph = 2,
+    /// <summary>Represents the shape option.</summary>
     Shape = 3,
+    /// <summary>Represents the type system option.</summary>
     TypeSystem = 4,
+    /// <summary>Represents the segment catalog option.</summary>
     SegmentCatalog = 5,
+    /// <summary>Represents the diagnostics option.</summary>
     Diagnostics = 6
 }
 
@@ -415,12 +452,19 @@ public sealed record ProjectionCoordinateSystemDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ProjectionCoordinateKind
 {
+    /// <summary>Represents the json pointer option.</summary>
     JsonPointer = 0,
+    /// <summary>Represents the text range option.</summary>
     TextRange = 1,
+    /// <summary>Represents the tree node id option.</summary>
     TreeNodeId = 2,
+    /// <summary>Represents the graph node id option.</summary>
     GraphNodeId = 3,
+    /// <summary>Represents the type id option.</summary>
     TypeId = 4,
+    /// <summary>Represents the field binding option.</summary>
     FieldBinding = 5,
+    /// <summary>Represents the diagnostic id option.</summary>
     DiagnosticId = 6
 }
 
@@ -444,8 +488,11 @@ public sealed record ProjectionMappingDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ProjectionMappingDirection
 {
+    /// <summary>Represents the local to semantic option.</summary>
     LocalToSemantic = 0,
+    /// <summary>Represents the semantic to local option.</summary>
     SemanticToLocal = 1,
+    /// <summary>Represents the bidirectional option.</summary>
     Bidirectional = 2
 }
 
@@ -481,16 +528,27 @@ public sealed record SemanticReference(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum SemanticReferenceKind
 {
+    /// <summary>Represents the document option.</summary>
     Document = 0,
+    /// <summary>Represents the json pointer option.</summary>
     JsonPointer = 1,
+    /// <summary>Represents the edi segment option.</summary>
     EdiSegment = 2,
+    /// <summary>Represents the edi loop option.</summary>
     EdiLoop = 3,
+    /// <summary>Represents the edi element option.</summary>
     EdiElement = 4,
+    /// <summary>Represents the shape graph option.</summary>
     ShapeGraph = 5,
+    /// <summary>Represents the shape option.</summary>
     Shape = 6,
+    /// <summary>Represents the shape field option.</summary>
     ShapeField = 7,
+    /// <summary>Represents the type option.</summary>
     Type = 8,
+    /// <summary>Represents the type field option.</summary>
     TypeField = 9,
+    /// <summary>Represents the diagnostic option.</summary>
     Diagnostic = 10
 }
 
@@ -611,8 +669,11 @@ public sealed record ValidationMarkerDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ValidationMarkerSeverity
 {
+    /// <summary>Represents the info option.</summary>
     Info = 0,
+    /// <summary>Represents the warning option.</summary>
     Warning = 1,
+    /// <summary>Represents the error option.</summary>
     Error = 2
 }
 
@@ -662,11 +723,17 @@ public sealed record CoordinationTriggerDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum CoordinationTriggerKind
 {
+    /// <summary>Represents the selection changed option.</summary>
     SelectionChanged = 0,
+    /// <summary>Represents the cursor changed option.</summary>
     CursorChanged = 1,
+    /// <summary>Represents the expanded changed option.</summary>
     ExpandedChanged = 2,
+    /// <summary>Represents the validation changed option.</summary>
     ValidationChanged = 3,
+    /// <summary>Represents the search changed option.</summary>
     SearchChanged = 4,
+    /// <summary>Represents the focus changed option.</summary>
     FocusChanged = 5
 }
 
@@ -687,13 +754,21 @@ public sealed record CoordinationActionDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum CoordinationActionKind
 {
+    /// <summary>Represents the set semantic selection option.</summary>
     SetSemanticSelection = 0,
+    /// <summary>Represents the reveal semantic selection option.</summary>
     RevealSemanticSelection = 1,
+    /// <summary>Represents the highlight semantic selection option.</summary>
     HighlightSemanticSelection = 2,
+    /// <summary>Represents the sync cursor option.</summary>
     SyncCursor = 3,
+    /// <summary>Represents the sync expanded option.</summary>
     SyncExpanded = 4,
+    /// <summary>Represents the sync validation markers option.</summary>
     SyncValidationMarkers = 5,
+    /// <summary>Represents the sync search results option.</summary>
     SyncSearchResults = 6,
+    /// <summary>Represents the set focus option.</summary>
     SetFocus = 7
 }
 
@@ -734,13 +809,21 @@ public sealed record LayoutNodeDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum LayoutNodeKind
 {
+    /// <summary>Represents the projection option.</summary>
     Projection = 0,
+    /// <summary>Represents the view option.</summary>
     View = 1,
+    /// <summary>Represents the tab group option.</summary>
     TabGroup = 2,
+    /// <summary>Represents the split group option.</summary>
     SplitGroup = 3,
+    /// <summary>Represents the dock region option.</summary>
     DockRegion = 4,
+    /// <summary>Represents the floating panel option.</summary>
     FloatingPanel = 5,
+    /// <summary>Represents the inspector panel option.</summary>
     InspectorPanel = 6,
+    /// <summary>Represents the tool window option.</summary>
     ToolWindow = 7
 }
 
@@ -750,7 +833,10 @@ public enum LayoutNodeKind
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum LayoutOrientation
 {
+    /// <summary>Represents the absence of a selected option.</summary>
     None = 0,
+    /// <summary>Represents the horizontal option.</summary>
     Horizontal = 1,
+    /// <summary>Represents the vertical option.</summary>
     Vertical = 2
 }

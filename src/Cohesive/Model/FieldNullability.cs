@@ -8,6 +8,9 @@ namespace Cohesive.Model;
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum FieldNullability
 {
+    /// <summary>Represents the 'non nullable' option.</summary>
     NonNullable = 0,
+    
+    /// <summary>Represents the nullable option.</summary>
     Nullable = 1
 }

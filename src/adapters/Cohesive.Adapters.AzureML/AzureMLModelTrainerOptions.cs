@@ -9,6 +9,7 @@ public sealed record AzureMLModelTrainerOptions(
     string WorkspaceName
     )
 {
+    /// <summary>Validates the value.</summary>
     public void Validate()
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(SubscriptionId);

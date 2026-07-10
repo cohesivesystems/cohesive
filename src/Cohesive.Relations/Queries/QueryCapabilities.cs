@@ -6,21 +6,37 @@ namespace Cohesive.Relations.Queries;
 [Flags]
 public enum QueryCapability
 {
+    /// <summary>Represents the absence of a selected option.</summary>
     None = 0,
+    /// <summary>Represents the equality option.</summary>
     Equality = 1 << 0,
+    /// <summary>Represents the prefix option.</summary>
     Prefix = 1 << 1,
+    /// <summary>Represents the suffix option.</summary>
     Suffix = 1 << 2,
+    /// <summary>Represents the contains option.</summary>
     Contains = 1 << 3,
+    /// <summary>Represents the full text option.</summary>
     FullText = 1 << 4,
+    /// <summary>Represents the exists option.</summary>
     Exists = 1 << 5,
+    /// <summary>Represents the number range option.</summary>
     NumberRange = 1 << 6,
+    /// <summary>Represents the date range option.</summary>
     DateRange = 1 << 7,
+    /// <summary>Represents the set membership option.</summary>
     SetMembership = 1 << 8,
+    /// <summary>Represents the nested any option.</summary>
     NestedAny = 1 << 9,
+    /// <summary>Represents the geo distance option.</summary>
     GeoDistance = 1 << 10,
+    /// <summary>Represents the scoped fields option.</summary>
     ScopedFields = 1 << 11,
+    /// <summary>Represents the negation option.</summary>
     Negation = 1 << 12,
+    /// <summary>Represents the aggregation option.</summary>
     Aggregation = 1 << 13,
+    /// <summary>Represents the case insensitive string comparison option.</summary>
     CaseInsensitiveStringComparison = 1 << 14
 }
 

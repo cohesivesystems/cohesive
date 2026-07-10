@@ -34,7 +34,7 @@ public static class Guard
     /// <param name="paramName">The name of the parameter with which the argument corresponds. If you omit this parameter, the name of the argument is used.</param>
     /// <exception cref="ArgumentException">argument is empty or consists only of white-space characters.</exception>
     /// <exception cref="ArgumentNullException">argument is null.</exception>
-    /// <remarks>Use <see cref="ArgumentNullException.ThrowIfNullOrWhiteSpace(string?, string?)"/> if the return value is not required</remarks>
+    /// <remarks>Use <see cref="ArgumentException.ThrowIfNullOrWhiteSpace"/> if the return value is not required.</remarks>
     /// <returns>The <paramref name="value"/> if validated.</returns>
     [StackTraceHidden]
     [Pure]

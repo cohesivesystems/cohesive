@@ -7,28 +7,39 @@ using Microsoft.Extensions.Hosting;
 
 namespace Cohesive.Adapters.AzureAppConfiguration;
 
+/// <summary>Defines Azure app configuration bootstrap options.</summary>
 public sealed class AzureAppConfigurationBootstrapOptions
 {
+    /// <summary>Gets the section path.</summary>
     public required string SectionPath { get; init; }
 
+    /// <summary>Gets the default endpoint configuration key.</summary>
     public string? DefaultEndpointConfigurationKey { get; init; }
 
+    /// <summary>Gets the skip local environment when unspecified.</summary>
     public bool SkipLocalEnvironmentWhenUnspecified { get; init; }
     
+    /// <summary>Gets or sets whether the default Azure credential is used.</summary>
     public bool UseDefaultCredential { get; init; } = true;
     
+    /// <summary>Gets credential.</summary>
     public TokenCredential GetCredential() => 
         UseDefaultCredential ? new DefaultAzureCredential() : throw new InvalidOperationException("Azure App Configuration is not configured."); 
 }
 
+/// <summary>Defines azure app configuration registration options.</summary>
 public sealed class AzureAppConfigurationRegistrationOptions
 {
+    /// <summary>Gets or sets whether this registration is enabled.</summary>
     public bool? Enabled { get; init; }
 
+    /// <summary>Gets the endpoint.</summary>
     public string? Endpoint { get; init; }
 
+    /// <summary>Gets the endpoint setting.</summary>
     public string? EndpointSetting { get; init; }
 
+    /// <summary>Gets or sets whether an unavailable configuration endpoint is tolerated.</summary>
     public bool Optional { get; init; } = true;
 
     /// <summary>
@@ -38,8 +49,10 @@ public sealed class AzureAppConfigurationRegistrationOptions
     public string[] Labels { get; init; } = [];
 }
 
+/// <summary>Provides operations for azure app configuration extensions.</summary>
 public static class AzureAppConfigurationExtensions
 {
+    /// <summary>Adds configured azure app configuration.</summary>
     public static bool AddConfiguredAzureAppConfiguration(this IConfigurationBuilder builder, IConfiguration configuration, IHostEnvironment environment, AzureAppConfigurationBootstrapOptions options)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -63,7 +76,7 @@ public static class AzureAppConfigurationExtensions
         {
             if (settings.Optional)
                 return false;
-
+            
             throw new InvalidOperationException("Azure App Configuration is enabled but no endpoint was configured.");
         }
 

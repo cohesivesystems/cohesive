@@ -31,6 +31,7 @@ public readonly record struct Unit
 /// </summary>
 public sealed class UnitJsonConverter : JsonConverter<Unit>
 {
+    /// <inheritdoc />
     public override Unit Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         if (reader.TokenType == JsonTokenType.Null)
@@ -45,6 +46,7 @@ public sealed class UnitJsonConverter : JsonConverter<Unit>
             : Unit.Value;
     }
     
+    /// <inheritdoc />
     public override void Write(Utf8JsonWriter writer, Unit value, JsonSerializerOptions options)
     {
         writer.WriteStringValue(value: Unit.UnitString);

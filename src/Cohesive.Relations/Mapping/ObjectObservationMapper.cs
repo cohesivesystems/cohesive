@@ -39,6 +39,7 @@ public sealed class ObjectObservationMapper<T> : IObjectObservationMapper<T>
         hasValueBitMask = BuildFullPresenceBitMask(layout.Count);
     }
     
+    /// <summary>Gets the layout.</summary>
     public ObservationLayout Layout { get; }
 
     /// <inheritdoc />

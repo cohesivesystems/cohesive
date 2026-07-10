@@ -8,7 +8,9 @@ namespace Cohesive.Prelude;
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ResultType
 {
+    /// <summary>Represents the success option.</summary>
     Success = 1,
+    /// <summary>Represents the failure option.</summary>
     Failure = 2,
 }
 

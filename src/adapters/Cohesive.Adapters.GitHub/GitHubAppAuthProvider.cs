@@ -11,6 +11,7 @@ namespace Cohesive.Adapters.GitHub;
 /// <summary>
 /// Options for authenticating to GitHub as an installation-scoped GitHub App.
 /// </summary>
+/// <param name="AppId">The GitHub App identifier.</param>
 /// <param name="KeyVaultUri">The KeyVault used to store the GitHub App private key.</param>
 /// <param name="PrivateKeySecretName">The name of the KeyVault secret containing the GitHub App private key.</param>
 public sealed record GitHubAppAuthProviderOptions(
@@ -34,6 +35,7 @@ public sealed class GitHubAppAuthProvider(
     readonly ConcurrentDictionary<string, long> installationIdCache = new(StringComparer.OrdinalIgnoreCase);
     string? privateKeyPem;
 
+    /// <summary>Gets access token asynchronously.</summary>
     public async ValueTask<string> GetAccessTokenAsync(string owner, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);

@@ -7,7 +7,10 @@ namespace Cohesive.Model;
 /// </summary>
 public enum NavigationCardinality
 {
+    /// <summary>A one-to-one relationship.</summary>
     One = 0,
+    
+    /// <summary>A one-to-many relationship.</summary>
     Many = 1
 }
 
@@ -16,6 +19,7 @@ public enum NavigationCardinality
 /// </summary>
 public sealed record ShapeNavigation
 {
+    /// <summary>Initializes a new instance of the shape navigation type.</summary>
     public ShapeNavigation(string viaField, ShapeId target, NavigationCardinality cardinality)
     {
         ViaField = Guard.RequireNotNullOrWhiteSpace(viaField);
@@ -23,12 +27,14 @@ public sealed record ShapeNavigation
         Cardinality = cardinality;
     }
 
+    /// <summary>Gets the field via which navigation takes place.</summary>
     public string ViaField { get; init; }
 
+    /// <summary>Gets the target shape id.</summary>
     public ShapeId Target { get; init; }
 
+    /// <summary>Gets the cardinality of the relationship.</summary>
     public NavigationCardinality Cardinality { get; init; }
-
 }
 
 /// <summary>
@@ -43,7 +49,8 @@ public sealed record ShapeDescriptor
         ShapeId id,
         EntityTypeName entityType,
         IReadOnlyList<string> fields,
-        IReadOnlyList<ShapeNavigation>? navigations = null)
+        IReadOnlyList<ShapeNavigation>? navigations = null
+        )
     {
         Id = id;
         EntityType = entityType;

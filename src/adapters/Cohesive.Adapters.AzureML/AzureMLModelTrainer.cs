@@ -19,6 +19,7 @@ public sealed class AzureMLModelTrainer : IModelTrainer
     readonly ArmClient armClient;
     readonly AzureMLModelTrainerOptions options;
 
+    /// <summary>Initializes a new instance of the azure ml model trainer type.</summary>
     public AzureMLModelTrainer(TokenCredential credential, AzureMLModelTrainerOptions options, ArmClientOptions? armClientOptions = null)
     {
         this.armClient = new(credential, defaultSubscriptionId: options.SubscriptionId, armClientOptions);
@@ -26,6 +27,7 @@ public sealed class AzureMLModelTrainer : IModelTrainer
         this.options.Validate();
     }
     
+    /// <summary>Starts an Azure ML training job.</summary>
     public async ValueTask<TrainingJobReference> StartAsync(TrainingRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -43,6 +45,7 @@ public sealed class AzureMLModelTrainer : IModelTrainer
         return new(jobId, MapStatus(operation.Value.Data.Properties.Status));
     }
 
+    /// <summary>Gets status asynchronously.</summary>
     public async ValueTask<TrainingJobState> GetStatusAsync(string jobId, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(jobId);

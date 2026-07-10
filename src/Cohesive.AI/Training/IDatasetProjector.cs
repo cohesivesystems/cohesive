@@ -44,6 +44,7 @@ public sealed class DatasetProjectionMaterializer<TExample>(
 {
     readonly Func<IReadOnlyCollection<TExample>, Stream, ValueTask<DatasetMaterializationResult>> materialize = materialize ?? throw new ArgumentNullException(nameof(materialize));
 
+    /// <summary>Materializes examples into a dataset stream.</summary>
     public ValueTask<DatasetMaterializationResult> Materialize(IReadOnlyCollection<TExample> rows, Stream stream)
     {
         ArgumentNullException.ThrowIfNull(rows);
@@ -51,6 +52,7 @@ public sealed class DatasetProjectionMaterializer<TExample>(
         return materialize(rows, stream);
     }
 
+    /// <summary>Creates a materializer for projected dataset rows.</summary>
     public static DatasetProjectionMaterializer<TExample> Create<TRow>(IDatasetProjector<TExample, TRow> projector, IStreamRowWriter<TRow> streamRowWriter)
     {
         ArgumentNullException.ThrowIfNull(projector);

@@ -1490,6 +1490,9 @@ static class UnionSupportSourceEmitter
             .AppendLine("> : IDiscriminatedUnion");
         builder.AppendLine("{");
 
+        builder.AppendLine("    /// <summary>");
+        builder.AppendLine("    /// Matches the active case and projects it to a result value.");
+        builder.AppendLine("    /// </summary>");
         builder.Append("    TResult Match<TResult>(");
         builder.Append(string.Join(", ", Enumerable.Range(start: 1, count: arity)
             .Select(index => $"global::System.Func<TCase{index}, TResult> onCase{index}")));
@@ -1497,6 +1500,12 @@ static class UnionSupportSourceEmitter
 
         for (var index = 1; index <= arity; index++)
         {
+            builder.AppendLine("    /// <summary>");
+            builder
+                .Append("    /// Attempts to get the value for case ")
+                .Append(index)
+                .AppendLine(".");
+            builder.AppendLine("    /// </summary>");
             builder
                 .Append("    bool TryGetCase")
                 .Append(index)
@@ -1525,9 +1534,14 @@ static class UnionSupportSourceEmitter
             .Append(arity)
             .AppendLine("Type");
         builder.AppendLine("{");
+        builder.AppendLine("    /// <summary>Represents an uninitialized Either value.</summary>");
         builder.AppendLine("    None = 0,");
         for (var index = 1; index <= arity; index++)
         {
+            builder
+                .Append("    /// <summary>Represents case ")
+                .Append(index)
+                .AppendLine(".</summary>");
             builder
                 .Append("    Case")
                 .Append(index)
@@ -1607,6 +1621,9 @@ static class UnionSupportSourceEmitter
 
         builder.AppendLine("    }");
         builder.AppendLine();
+        builder.AppendLine("    /// <summary>");
+        builder.AppendLine("    /// Gets the active case discriminator.");
+        builder.AppendLine("    /// </summary>");
         builder
             .Append("    public ")
             .Append(enumName)
@@ -1669,6 +1686,12 @@ static class UnionSupportSourceEmitter
         for (var index = 1; index <= arity; index++)
         {
             builder.AppendLine();
+            builder.AppendLine("    /// <summary>");
+            builder
+                .Append("    /// Determines whether case ")
+                .Append(index)
+                .AppendLine(" is active.");
+            builder.AppendLine("    /// </summary>");
             builder
                 .Append("    public bool IsCase")
                 .Append(index)
@@ -1678,6 +1701,12 @@ static class UnionSupportSourceEmitter
                 .Append(index)
                 .AppendLine(";");
             builder.AppendLine();
+            builder.AppendLine("    /// <summary>");
+            builder
+                .Append("    /// Attempts to get the value for case ")
+                .Append(index)
+                .AppendLine(".");
+            builder.AppendLine("    /// </summary>");
             builder
                 .Append("    public bool TryGetCase")
                 .Append(index)
@@ -1705,6 +1734,9 @@ static class UnionSupportSourceEmitter
         }
 
         builder.AppendLine();
+        builder.AppendLine("    /// <summary>");
+        builder.AppendLine("    /// Matches the active case and projects it to a result value.");
+        builder.AppendLine("    /// </summary>");
         builder.Append("    public TResult Match<TResult>(");
         builder.Append(string.Join(", ", Enumerable.Range(start: 1, count: arity)
             .Select(index => $"global::System.Func<TCase{index}, TResult> onCase{index}")));
@@ -1743,6 +1775,12 @@ static class UnionSupportSourceEmitter
         for (var index = 1; index <= arity; index++)
         {
             builder.AppendLine();
+            builder.AppendLine("    /// <summary>");
+            builder
+                .Append("    /// Creates an Either value containing case ")
+                .Append(index)
+                .AppendLine(".");
+            builder.AppendLine("    /// </summary>");
             builder
                 .Append("    public static ")
                 .Append(typeName)
@@ -1830,6 +1868,7 @@ static class UnionSupportSourceEmitter
             .Append(typeName)
             .AppendLine(">");
         builder.AppendLine("    {");
+        builder.AppendLine("        /// <inheritdoc />");
         builder
             .Append("        public override ")
             .Append(typeName)
@@ -1990,6 +2029,7 @@ static class UnionSupportSourceEmitter
         builder.AppendLine("            };");
         builder.AppendLine("        }");
         builder.AppendLine();
+        builder.AppendLine("        /// <inheritdoc />");
         builder
             .Append("        public override void Write(global::System.Text.Json.Utf8JsonWriter writer, ")
             .Append(typeName)

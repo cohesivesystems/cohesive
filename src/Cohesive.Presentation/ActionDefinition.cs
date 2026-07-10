@@ -90,7 +90,9 @@ public sealed record ActionSemanticsDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ActionSemanticsKind
 {
+    /// <summary>Represents the local document editor option.</summary>
     LocalDocumentEditor = 0,
+    /// <summary>Represents the document workspace option.</summary>
     DocumentWorkspace = 1
 }
 
@@ -111,7 +113,9 @@ public sealed record LocalDocumentEditorActionSemantics(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum LocalDocumentEditorActionKind
 {
+    /// <summary>Represents the reset option.</summary>
     Reset = 0,
+    /// <summary>Represents the format option.</summary>
     Format = 1
 }
 
@@ -132,12 +136,19 @@ public sealed record DocumentWorkspaceActionSemantics(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum DocumentWorkspaceActionKind
 {
+    /// <summary>Represents the save review option.</summary>
     SaveReview = 0,
+    /// <summary>Represents the save commit option.</summary>
     SaveCommit = 1,
+    /// <summary>Represents the save cancel option.</summary>
     SaveCancel = 2,
+    /// <summary>Represents the save revert option.</summary>
     SaveRevert = 3,
+    /// <summary>Represents the process preview option.</summary>
     ProcessPreview = 4,
+    /// <summary>Represents the process start option.</summary>
     ProcessStart = 5,
+    /// <summary>Represents the process cancel option.</summary>
     ProcessCancel = 6
 }
 
@@ -197,9 +208,13 @@ public sealed record ActionEnablementCriterionDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ActionEnablementCriterionKind
 {
+    /// <summary>Represents the no active process task option.</summary>
     NoActiveProcessTask = 0,
+    /// <summary>Represents the local document clean option.</summary>
     LocalDocumentClean = 1,
+    /// <summary>Represents the local document valid option.</summary>
     LocalDocumentValid = 2,
+    /// <summary>Represents the no pending action option.</summary>
     NoPendingAction = 3
 }
 
@@ -209,16 +224,27 @@ public enum ActionEnablementCriterionKind
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ActionKind
 {
+    /// <summary>Represents the transition action option.</summary>
     TransitionAction = 0,
+    /// <summary>Represents the relation action option.</summary>
     RelationAction = 1,
+    /// <summary>Represents the local state action option.</summary>
     LocalStateAction = 2,
+    /// <summary>Represents the prompt action option.</summary>
     PromptAction = 3,
+    /// <summary>Represents the flow action option.</summary>
     FlowAction = 4,
+    /// <summary>Represents the navigation action option.</summary>
     NavigationAction = 5,
+    /// <summary>Represents the external action option.</summary>
     ExternalAction = 6,
+    /// <summary>Represents the effect action option.</summary>
     EffectAction = 7,
+    /// <summary>Represents the composite action option.</summary>
     CompositeAction = 8,
+    /// <summary>Represents the no op action option.</summary>
     NoOpAction = 9,
+    /// <summary>Represents the process start action option.</summary>
     ProcessStartAction = 10
 }
 
@@ -228,15 +254,25 @@ public enum ActionKind
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ActionScopeKind
 {
+    /// <summary>Represents the global option.</summary>
     Global = 0,
+    /// <summary>Represents the page option.</summary>
     Page = 1,
+    /// <summary>Represents the view option.</summary>
     View = 2,
+    /// <summary>Represents the collection option.</summary>
     Collection = 3,
+    /// <summary>Represents the row option.</summary>
     Row = 4,
+    /// <summary>Represents the entity option.</summary>
     Entity = 5,
+    /// <summary>Represents the flow option.</summary>
     Flow = 6,
+    /// <summary>Represents the field option.</summary>
     Field = 7,
+    /// <summary>Represents the selection option.</summary>
     Selection = 8,
+    /// <summary>Represents the system option.</summary>
     System = 9
 }
 
@@ -262,9 +298,13 @@ public sealed record ActionPreparation(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum PreparationKind
 {
+    /// <summary>Represents the absence of a selected option.</summary>
     None = 0,
+    /// <summary>Represents the prompt option.</summary>
     Prompt = 1,
+    /// <summary>Represents the preview flow option.</summary>
     PreviewFlow = 2,
+    /// <summary>Represents the confirmation option.</summary>
     Confirmation = 3
 }
 
@@ -287,11 +327,17 @@ public sealed record ActionExecutionPolicy(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ActionExecutionMode
 {
+    /// <summary>Represents the local option.</summary>
     Local = 0,
+    /// <summary>Represents the immediate option.</summary>
     Immediate = 1,
+    /// <summary>Represents the request acknowledge poll option.</summary>
     RequestAcknowledgePoll = 2,
+    /// <summary>Represents the optimistic option.</summary>
     Optimistic = 3,
+    /// <summary>Represents the background option.</summary>
     Background = 4,
+    /// <summary>Represents the deferred option.</summary>
     Deferred = 5
 }
 
@@ -327,9 +373,13 @@ public sealed record ActionResultStateWriteDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ActionResultStateWriteMode
 {
+    /// <summary>Represents the replace option.</summary>
     Replace = 0,
+    /// <summary>Represents the merge option.</summary>
     Merge = 1,
+    /// <summary>Represents the append option.</summary>
     Append = 2,
+    /// <summary>Represents the clear option.</summary>
     Clear = 3
 }
 

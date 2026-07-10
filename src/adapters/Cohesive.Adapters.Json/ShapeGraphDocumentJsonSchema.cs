@@ -224,7 +224,9 @@ public sealed class ShapeGraphDocumentJsonSchemaProvider : IJsonSchemaProvider
 /// </summary>
 public static class ShapeGraphDocumentJsonSchema
 {
+    /// <summary>Identifies the schema id.</summary>
     public const string SchemaId = "https://cohesive.to/schemas/shape-graph.v1.schema.json";
+    /// <summary>Identifies the file name.</summary>
     public const string FileName = "shape-graph.v1.schema.json";
 
     /// <summary>

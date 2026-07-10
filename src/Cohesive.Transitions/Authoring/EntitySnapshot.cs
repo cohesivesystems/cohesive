@@ -107,5 +107,6 @@ public sealed class EntitySnapshot<TEntity>(TEntity entity, EntityState state) w
         return current;
     }
     
+    /// <summary>Extracts the entity state from a snapshot.</summary>
     public static implicit operator EntityState(EntitySnapshot<TEntity> snapshot) => snapshot.State;
 }

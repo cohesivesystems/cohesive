@@ -97,6 +97,7 @@ public class TelemetryEffectHandlerWrapper<TRequest, TResult>(
             log.LogInformation("effect_handler_completed request={Request} result={Result}", request.ToString(), result?.ToString());
     });
     
+    /// <summary>Handles an effect request while recording telemetry.</summary>
     public async Task<TResult> HandleAsync(OperationContext context, TRequest request)
     {
         TResult? result = default;

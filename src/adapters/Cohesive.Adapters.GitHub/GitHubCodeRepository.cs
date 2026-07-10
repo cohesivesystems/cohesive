@@ -11,6 +11,7 @@ public sealed class GitHubCodeRepository(
     IGitHubAuthProvider authProvider
     ) : ICodeRepository
 {
+    /// <summary>Resolves revision asynchronously.</summary>
     public async ValueTask<CodeRevision> ResolveRevisionAsync(CodeReference reference, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
@@ -34,6 +35,7 @@ public sealed class GitHubCodeRepository(
         return new(repository.CanonicalName, commitHash, reference.SubPath);
     }
 
+    /// <summary>Opens a repository revision as a code archive.</summary>
     public async ValueTask<CodeArchive> OpenArchiveAsync(CodeRevision revision, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();

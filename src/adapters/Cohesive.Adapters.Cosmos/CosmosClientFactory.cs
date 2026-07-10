@@ -11,17 +11,23 @@ namespace Cohesive.Adapters.Cosmos;
 /// </summary>
 public record CosmosClientFactoryOptions
 {
+    /// <summary>Gets the endpoint.</summary>
     public string? Endpoint { get; init; }
     
+    /// <summary>Gets the account key.</summary>
     public string? AccountKey { get; init; }
     
+    /// <summary>Gets or sets whether insecure server certificates are allowed.</summary>
     public bool? AllowInsecureServerCertificate { get; init; }
 
+    /// <summary>Gets or sets whether the default Azure credential is used.</summary>
     public bool UseDefaultCredential { get; init; } = true;
 
+    /// <summary>Gets whether a usable Cosmos endpoint and credential are configured.</summary>
     [MemberNotNullWhen(true, nameof(Endpoint))]
     public bool IsConfigured => !string.IsNullOrWhiteSpace(Endpoint) && (!string.IsNullOrEmpty(AccountKey) || UseDefaultCredential);
     
+    /// <summary>Gets credential.</summary>
     public TokenCredential? GetCredential() => 
         UseDefaultCredential ? new DefaultAzureCredential() : null;
 }

@@ -22,6 +22,7 @@ public sealed record MappingId
     /// </summary>
     public string Value { get; init; }
 
+    /// <inheritdoc />
     public override string ToString() => Value;
 }
 
@@ -43,6 +44,7 @@ public sealed record MappingName
     /// </summary>
     public string Value { get; init; }
 
+    /// <inheritdoc />
     public override string ToString() => Value;
 }
 
@@ -51,8 +53,13 @@ public sealed record MappingName
 /// </summary>
 public enum MappingDirection
 {
+    /// <summary>Represents the source to target mapping option.</summary>
     SourceToTarget = 0,
+    
+    /// <summary>Represents the target to source mapping option.</summary>
     TargetToSource = 1,
+    
+    /// <summary>Represents the bidirectional mapping option.</summary>
     Bidirectional = 2
 }
 
@@ -61,7 +68,10 @@ public enum MappingDirection
 /// </summary>
 public enum MappingKind
 {
+    /// <summary>Represents the relation option.</summary>
     Relation = 0,
+    
+    /// <summary>Represents the object option.</summary>
     Object = 1
 }
 
@@ -70,7 +80,10 @@ public enum MappingKind
 /// </summary>
 public enum MappingScope
 {
+    /// <summary>Represents the rooted option.</summary>
     Rooted = 0,
+    
+    /// <summary>Represents the set option.</summary>
     Set = 1
 }
 
@@ -145,8 +158,11 @@ public sealed record CollectionMapping
 /// </summary>
 public enum MappingExecutionPreference
 {
+    /// <summary>Represents the in memory option.</summary>
     InMemory = 0,
+    /// <summary>Represents the materialized option.</summary>
     Materialized = 1,
+    /// <summary>Represents the code generated option.</summary>
     CodeGenerated = 2
 }
 

@@ -23,8 +23,10 @@ public readonly record struct EntityTypeName
     /// </summary>
     public string Value { get; }
 
+    /// <inheritdoc />
     public override string ToString() => Value;
     
+    /// <summary>Converts an entity type name to its string value.</summary>
     public static implicit operator string(EntityTypeName entityTypeName) => entityTypeName.Value;
 
     /// <summary>

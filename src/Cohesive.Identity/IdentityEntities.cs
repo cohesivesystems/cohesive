@@ -31,6 +31,7 @@ public sealed class IdentityScope : Entity<IdentityScope>
     /// <param name="ArchivedAtUtc">Archive timestamp.</param>
     public sealed record ArchiveScopeInput(DateTimeOffset ArchivedAtUtc);
 
+    /// <summary>Initializes a new instance of the identity scope type.</summary>
     public IdentityScope()
     {
         Id = WriteOnceField<string>(nameof(Id));
@@ -118,6 +119,7 @@ public sealed class PrincipalAccount : Entity<PrincipalAccount>
     /// <param name="DeactivatedAtUtc">Deactivation timestamp.</param>
     public sealed record DeactivatePrincipalInput(DateTimeOffset DeactivatedAtUtc);
 
+    /// <summary>Initializes a new instance of the principal account type.</summary>
     public PrincipalAccount()
     {
         Id = WriteOnceField<string>(nameof(Id));
@@ -200,6 +202,7 @@ public sealed class ScopeMembership : Entity<ScopeMembership>
     /// <param name="RevokedAtUtc">Revocation timestamp.</param>
     public sealed record RevokeMembershipInput(DateTimeOffset RevokedAtUtc);
 
+    /// <summary>Initializes a new instance of the scope membership type.</summary>
     public ScopeMembership()
     {
         Id = WriteOnceField<string>(nameof(Id));

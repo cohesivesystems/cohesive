@@ -73,5 +73,6 @@ public sealed class ObservationLayout
         return new(schema, [.. fields.Distinct(StringComparer.Ordinal)]);
     }
 
+    /// <inheritdoc />
     public override string ToString() => $"{Schema} [{string.Join(", ", fieldNames)}]";
 }

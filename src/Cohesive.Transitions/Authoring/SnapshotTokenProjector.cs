@@ -4,6 +4,7 @@ using System.Text;
 
 namespace Cohesive.Transitions.Authoring;
 
+/// <summary>Provides operations for snapshot token projector.</summary>
 public static class SnapshotTokenProjector
 {
     const byte NullMarker = 0;
@@ -15,6 +16,7 @@ public static class SnapshotTokenProjector
     const byte ObjectMarker = 6;
     const byte ArrayMarker = 7;
 
+    /// <summary>Computes the value.</summary>
     public static string Compute(
         IReadOnlyDictionary<string, ObservationValue> stateByFieldName,
         IReadOnlyList<string> fieldNames

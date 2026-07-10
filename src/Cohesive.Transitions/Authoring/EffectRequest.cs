@@ -29,6 +29,7 @@ public sealed record EffectRequest(
             Snapshot: snapshot
             );
     
+    /// <summary>Creates a named effect request.</summary>
     public static EffectRequest Named<TRequest>(
         TRequest? payload = default,
         EffectContinuation? continuation = null,

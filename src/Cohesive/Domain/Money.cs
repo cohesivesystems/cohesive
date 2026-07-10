@@ -91,18 +91,25 @@ public static class CurrencyMinorUnits
 /// </summary>
 public static class CurrencyTable
 {
+    /// <summary>Gets the USD.</summary>
     public static readonly Currency USD = Currency.Parse(code: "USD");
 
+    /// <summary>Gets the MXN.</summary>
     public static readonly Currency MXN = Currency.Parse(code: "MXN");
 
+    /// <summary>Gets the CAD.</summary>
     public static readonly Currency CAD = Currency.Parse(code: "CAD");
 
+    /// <summary>Gets the EUR.</summary>
     public static readonly Currency EUR = Currency.Parse(code: "EUR");
 
+    /// <summary>Gets the GBP.</summary>
     public static readonly Currency GBP = Currency.Parse(code: "GBP");
 
+    /// <summary>Gets the JPY.</summary>
     public static readonly Currency JPY = Currency.Parse(code: "JPY");
 
+    /// <summary>Gets the CNY.</summary>
     public static readonly Currency CNY = Currency.Parse(code: "CNY");
 
     /// <summary>
@@ -376,22 +383,27 @@ public readonly record struct Money
         return results;
     }
 
+    /// <summary>Adds two values.</summary>
     public static Money operator +(Money left, Money right)
     {
         EnsureSameCurrency(left: left, right: right, operation: "add");
         return new(amount: left.Amount + right.Amount, currency: left.Currency);
     }
 
+    /// <summary>Subtracts one value from another.</summary>
     public static Money operator -(Money left, Money right)
     {
         EnsureSameCurrency(left: left, right: right, operation: "subtract");
         return new(amount: left.Amount - right.Amount, currency: left.Currency);
     }
 
+    /// <summary>Subtracts one value from another.</summary>
     public static Money operator -(Money value) => new(amount: -value.Amount, currency: value.Currency);
 
+    /// <summary>Multiplies two values.</summary>
     public static Money operator *(Money value, decimal scalar) => new(amount: value.Amount * scalar, currency: value.Currency);
 
+    /// <summary>Multiplies two values.</summary>
     public static Money operator *(decimal scalar, Money value) => value * scalar;
 
     /// <exception cref="DivideByZeroException"></exception>

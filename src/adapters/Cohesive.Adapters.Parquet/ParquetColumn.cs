@@ -7,6 +7,7 @@ namespace Cohesive.Adapters.Parquet;
 /// </summary>
 public static class ParquetColumn
 {
+    /// <summary>Creates a typed Parquet column configuration.</summary>
     public static ParquetColumnConfiguration<TRow> Create<TRow, TValue>(Column<TValue> column, Func<TRow, TValue> valueSelector)
     {
         ArgumentNullException.ThrowIfNull(column);
@@ -14,6 +15,7 @@ public static class ParquetColumn
         return new(column, new ParquetColumnWriter<TRow, TValue>(valueSelector));
     }
 
+    /// <summary>Creates a batched Parquet column configuration.</summary>
     public static ParquetColumnConfiguration<TRow> Create<TRow, TValue>(Column<TValue> column, Func<IReadOnlyList<TRow>, TValue[]> valuesFactory)
     {
         ArgumentNullException.ThrowIfNull(column);

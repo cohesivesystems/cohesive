@@ -29,6 +29,7 @@ public readonly record struct QualifiedShapeId
     /// </summary>
     public ShapeId ShapeId { get; }
 
+    /// <inheritdoc />
     public override string ToString() => $"{GraphId.Value}:{ShapeId.Value}";
 
     static GraphId RequireGraphId(GraphId graphId) =>
@@ -80,8 +81,10 @@ public readonly record struct GraphShapeId
     [JsonIgnore]
     public QualifiedShapeId QualifiedId => new(Graph.Id, ShapeId);
 
+    /// <summary>Extracts the qualified shape identifier from a graph shape identifier.</summary>
     public static implicit operator QualifiedShapeId(GraphShapeId value) => value.QualifiedId;
 
+    /// <inheritdoc />
     public override string ToString() => QualifiedId.ToString();
 
     static ShapeId RequireShapeId(ShapeId shapeId) =>

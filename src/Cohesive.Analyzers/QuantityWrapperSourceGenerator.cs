@@ -400,6 +400,7 @@ public sealed class QuantityWrapperSourceGenerator : IIncrementalGenerator
             .Append(typeName)
             .AppendLine();
         source.AppendLine("{");
+        source.AppendLine("    /// <summary>Creates a wrapper from its underlying quantity value.</summary>");
         source.Append("    public static ").Append(wrapperTypeName).Append(" FromValue(").Append(valueTypeName).AppendLine(" value) => new(value);");
         source.AppendLine();
 
@@ -409,41 +410,59 @@ public sealed class QuantityWrapperSourceGenerator : IIncrementalGenerator
             var escapedFromName = EscapeIdentifier(identifier: $"From{member.MemberName}");
             var unitTypeName = member.UnitType.ToDisplayString(format: FullyQualifiedFormat);
 
+            source
+                .Append("    /// <summary>Creates a quantity expressed in ")
+                .Append(member.MemberName)
+                .AppendLine(".</summary>");
             source.Append("    public static ").Append(wrapperTypeName).Append(' ').Append(escapedFromName).Append('(').Append(representationTypeName).Append(" value) => new(")
                 .Append(valueTypeName).Append(".From<").Append(unitTypeName).AppendLine(">(value));");
             source.AppendLine();
+            source
+                .Append("    /// <summary>Gets the quantity expressed in ")
+                .Append(member.MemberName)
+                .AppendLine(".</summary>");
             source.Append("    public ").Append(representationTypeName).Append(' ').Append(escapedName).Append(" => global::Cohesive.Domain.QuantityMath.As<")
                 .Append(wrapperTypeName).Append(", ").Append(dimensionTypeName).Append(", ").Append(representationTypeName).Append(", ").Append(unitTypeName).AppendLine(">(quantity: this);");
             source.AppendLine();
         }
 
+        source.AppendLine("    /// <inheritdoc />");
         source.Append("    public int CompareTo(").Append(wrapperTypeName).AppendLine(" other) => global::Cohesive.Domain.QuantityMath.Compare<")
             .Append("        ").Append(wrapperTypeName).Append(", ").Append(dimensionTypeName).Append(", ").Append(representationTypeName).AppendLine(">(left: this, right: other);");
         source.AppendLine();
+        source.AppendLine("    /// <summary>Gets the additive identity for the quantity.</summary>");
         source.Append("    public static ").Append(wrapperTypeName).Append(" AdditiveIdentity => FromValue(").Append(valueTypeName).AppendLine(".Zero);");
         source.AppendLine();
+        source.AppendLine("    /// <inheritdoc />");
         source.Append("    public override string ToString() => global::Cohesive.Domain.QuantityMath.Format<")
             .Append(wrapperTypeName).Append(", ").Append(dimensionTypeName).Append(", ").Append(representationTypeName).Append(", ").Append(defaultUnitTypeName).Append(">(")
             .Append("quantity: this, format: ").Append(EscapeStringLiteral(text: defaultFormat)).AppendLine(");");
         source.AppendLine();
 
+        source.AppendLine("    /// <summary>Adds two quantities.</summary>");
         source.Append("    public static ").Append(wrapperTypeName).Append(" operator +(").Append(wrapperTypeName).Append(" left, ").Append(wrapperTypeName).AppendLine(" right) =>")
             .Append("        global::Cohesive.Domain.QuantityMath.Add<").Append(wrapperTypeName).Append(", ").Append(dimensionTypeName).Append(", ").Append(representationTypeName).AppendLine(">(left: left, right: right);");
         source.AppendLine();
+        source.AppendLine("    /// <summary>Subtracts one quantity from another.</summary>");
         source.Append("    public static ").Append(wrapperTypeName).Append(" operator -(").Append(wrapperTypeName).Append(" left, ").Append(wrapperTypeName).AppendLine(" right) =>")
             .Append("        global::Cohesive.Domain.QuantityMath.Subtract<").Append(wrapperTypeName).Append(", ").Append(dimensionTypeName).Append(", ").Append(representationTypeName).AppendLine(">(left: left, right: right);");
         source.AppendLine();
+        source.AppendLine("    /// <summary>Negates a quantity.</summary>");
         source.Append("    public static ").Append(wrapperTypeName).Append(" operator -(").Append(wrapperTypeName).AppendLine(" value) =>")
             .Append("        global::Cohesive.Domain.QuantityMath.Negate<").Append(wrapperTypeName).Append(", ").Append(dimensionTypeName).Append(", ").Append(representationTypeName).AppendLine(">(value: value);");
         source.AppendLine();
+        source.AppendLine("    /// <summary>Scales a quantity by a scalar value.</summary>");
         source.Append("    public static ").Append(wrapperTypeName).Append(" operator *(").Append(wrapperTypeName).Append(" value, ").Append(representationTypeName).AppendLine(" scalar) =>")
             .Append("        global::Cohesive.Domain.QuantityMath.Scale<").Append(wrapperTypeName).Append(", ").Append(dimensionTypeName).Append(", ").Append(representationTypeName).AppendLine(">(value: value, scalar: scalar);");
         source.AppendLine();
+        source.AppendLine("    /// <summary>Scales a quantity by a scalar value.</summary>");
         source.Append("    public static ").Append(wrapperTypeName).Append(" operator *(").Append(representationTypeName).Append(" scalar, ").Append(wrapperTypeName).AppendLine(" value) => value * scalar;");
         source.AppendLine();
+        source.AppendLine("    /// <summary>Divides a quantity by a scalar value.</summary>");
         source.Append("    public static ").Append(wrapperTypeName).Append(" operator /(").Append(wrapperTypeName).Append(" value, ").Append(representationTypeName).AppendLine(" scalar) =>")
             .Append("        global::Cohesive.Domain.QuantityMath.Divide<").Append(wrapperTypeName).Append(", ").Append(dimensionTypeName).Append(", ").Append(representationTypeName).AppendLine(">(value: value, scalar: scalar);");
         source.AppendLine();
+        source.AppendLine("    /// <summary>Computes the ratio of two quantities.</summary>");
         source.Append("    public static ").Append(representationTypeName).Append(" operator /(").Append(wrapperTypeName).Append(" left, ").Append(wrapperTypeName).AppendLine(" right) =>")
             .Append("        global::Cohesive.Domain.QuantityMath.Ratio<").Append(wrapperTypeName).Append(", ").Append(dimensionTypeName).Append(", ").Append(representationTypeName).AppendLine(">(left: left, right: right);");
         source.AppendLine("}");

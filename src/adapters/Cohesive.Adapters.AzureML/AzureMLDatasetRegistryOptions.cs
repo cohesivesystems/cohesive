@@ -10,6 +10,7 @@ public sealed record AzureMLDatasetRegistryOptions(
     string? RegistryName = null
     )
 {
+    /// <summary>Validates the value.</summary>
     public void Validate()
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(SubscriptionId);

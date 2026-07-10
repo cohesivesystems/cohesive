@@ -13,6 +13,7 @@ public sealed class ParquetRowWriter<TRow> : IStreamRowWriter<TRow>
     readonly Action<RowGroupWriter, IReadOnlyList<TRow>>[] columnWriters;
     readonly Compression compression;
 
+    /// <summary>Initializes a new instance of the parquet row writer type.</summary>
     public ParquetRowWriter(IReadOnlyList<ParquetColumnConfiguration<TRow>> columns, Compression compression = Compression.Snappy)
     {
         ArgumentNullException.ThrowIfNull(columns);
@@ -24,6 +25,7 @@ public sealed class ParquetRowWriter<TRow> : IStreamRowWriter<TRow>
         this.compression = compression;
     }
 
+    /// <summary>Writes the value.</summary>
     public ValueTask<StreamRowWriterResult> Write(IReadOnlyCollection<TRow> rows, Stream stream)
     {
         ArgumentNullException.ThrowIfNull(stream);
@@ -64,8 +66,10 @@ public static class ParquetRowWriter
     {
         readonly List<ParquetColumnConfiguration<TRow>> columns = [];
         
+        /// <summary>Converts the value to writer.</summary>
         public ParquetRowWriter<TRow> ToWriter() => new([..columns]);
         
+        /// <summary>Adds a typed column to the row writer.</summary>
         public RowScopedColumns<TRow> Column<TValue>(Column<TValue> column, Func<TRow, TValue> valueSelector)
         {
             ArgumentNullException.ThrowIfNull(column);
@@ -74,6 +78,7 @@ public static class ParquetRowWriter
             return this;
         }
 
+        /// <summary>Adds a batched column to the row writer.</summary>
         public RowScopedColumns<TRow> Column<TValue>(Column<TValue> column, Func<IReadOnlyList<TRow>, TValue[]> valuesFactory)
         {
             ArgumentNullException.ThrowIfNull(column);

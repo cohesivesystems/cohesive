@@ -53,6 +53,7 @@ public abstract class Entity<TEntity>(string? entityName = null)
         return Snapshot(CreateState(entityId, stateObject, version));
     }
     
+    /// <summary>Adds an invariant to the entity definition.</summary>
     protected void Invariant(string name, Expression<Func<TEntity, bool>> predicate, string? message = null) =>
         base.Invariant(name, predicate, message);
     
@@ -67,6 +68,7 @@ public abstract class Entity<TEntity>(string? entityName = null)
     protected Field<T> ComputedField<T>(string name, Expression<Func<TEntity, T>> compute, Action<FieldBuilder>? configure = null) =>
         base.ComputedField(name, compute, configure);
 
+    /// <summary>Defines a transition for the entity.</summary>
     protected Transition<TEntity, TInput> Transition<TInput>(string name, Action<TransitionExpressionBuilder<TEntity, TInput>> configure) =>
         base.Transition(name, configure);
 }

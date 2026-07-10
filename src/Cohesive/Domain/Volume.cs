@@ -13,32 +13,47 @@ public readonly record struct VolumeDimension : IQuantityDimension;
 public readonly record struct Liter<TRep> : IQuantityUnit<VolumeDimension, TRep>
     where TRep : IFloatingPoint<TRep>
 {
+    /// <summary>Gets the unit symbol.</summary>
     public static string Symbol => "L";
+    /// <summary>Converts the value to base.</summary>
     public static TRep ToBase(TRep value) => value;
+    /// <summary>Creates a value from base.</summary>
     public static TRep FromBase(TRep baseValue) => baseValue;
 }
 
+/// <summary>Represents a struct.</summary>
 public readonly record struct Milliliter<TRep> : IQuantityUnit<VolumeDimension, TRep>
     where TRep : IFloatingPoint<TRep>
 {
+    /// <summary>Gets the unit symbol.</summary>
     public static string Symbol => "mL";
+    /// <summary>Converts the value to base.</summary>
     public static TRep ToBase(TRep value) => value * TRep.CreateChecked(0.001m);
+    /// <summary>Creates a value from base.</summary>
     public static TRep FromBase(TRep baseValue) => baseValue / TRep.CreateChecked(0.001m);
 }
 
+/// <summary>Represents a struct.</summary>
 public readonly record struct CubicMeter<TRep> : IQuantityUnit<VolumeDimension, TRep>
     where TRep : IFloatingPoint<TRep>
 {
+    /// <summary>Gets the unit symbol.</summary>
     public static string Symbol => "m3";
+    /// <summary>Converts the value to base.</summary>
     public static TRep ToBase(TRep value) => value * TRep.CreateChecked(1_000m);
+    /// <summary>Creates a value from base.</summary>
     public static TRep FromBase(TRep baseValue) => baseValue / TRep.CreateChecked(1_000m);
 }
 
+/// <summary>Represents a struct.</summary>
 public readonly record struct UsGallon<TRep> : IQuantityUnit<VolumeDimension, TRep>
     where TRep : IFloatingPoint<TRep>
 {
+    /// <summary>Gets the unit symbol.</summary>
     public static string Symbol => "gal";
+    /// <summary>Converts the value to base.</summary>
     public static TRep ToBase(TRep value) => value * TRep.CreateChecked(3.785411784m);
+    /// <summary>Creates a value from base.</summary>
     public static TRep FromBase(TRep baseValue) => baseValue / TRep.CreateChecked(3.785411784m);
 }
 

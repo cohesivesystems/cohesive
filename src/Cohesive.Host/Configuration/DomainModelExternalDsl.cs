@@ -12,8 +12,11 @@ namespace Cohesive.Host.Configuration;
 /// </summary>
 public enum DomainModelExternalDslFormat
 {
+    /// <summary>Represents the auto option.</summary>
     Auto = 0,
+    /// <summary>Represents the json option.</summary>
     Json = 1,
+    /// <summary>Represents the yaml option.</summary>
     Yaml = 2
 }
 

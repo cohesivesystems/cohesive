@@ -112,10 +112,16 @@ public sealed record DataSourceAggregatePredicate(
 /// </summary>
 public enum DataSourceAggregatePredicateKind
 {
+    /// <summary>Represents the field equals option.</summary>
     FieldEquals = 0,
+    /// <summary>Represents the field not equals option.</summary>
     FieldNotEquals = 1,
+    /// <summary>Represents the field has value option.</summary>
     FieldHasValue = 2,
+    /// <summary>Represents the and option.</summary>
     And = 3,
+    /// <summary>Represents the or option.</summary>
     Or = 4,
+    /// <summary>Represents the not option.</summary>
     Not = 5
 }

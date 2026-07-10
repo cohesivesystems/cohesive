@@ -13,6 +13,7 @@ public sealed class AzureBlobCodePackager(
 {
     static readonly DateTimeOffset ZipMinimumTimestamp = new(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
+    /// <summary>Packages a code archive into a training artifact.</summary>
     public async ValueTask<TrainingCodeArtifact> PackageAsync(CodeRevision revision, CodeArchive archive, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(archive);

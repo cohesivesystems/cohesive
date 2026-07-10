@@ -16,18 +16,23 @@ public sealed class CliValidationResult
 
     CliValidationResult(IReadOnlyList<string> errors) => this.errors = errors;
 
+    /// <summary>Gets the success.</summary>
     public static CliValidationResult Success { get; } = new([]);
 
+    /// <summary>Gets the errors.</summary>
     public IReadOnlyList<string> Errors => errors;
 
+    /// <summary>Gets whether validation succeeded.</summary>
     public bool IsValid => errors.Count == 0;
 
+    /// <summary>Creates a failed validation result from error messages.</summary>
     public static CliValidationResult Failure(params string[] errors)
     {
         ArgumentNullException.ThrowIfNull(errors);
         return Failure((IEnumerable<string>)errors);
     }
 
+    /// <summary>Creates a failed validation result from error messages.</summary>
     public static CliValidationResult Failure(IEnumerable<string> errors)
     {
         ArgumentNullException.ThrowIfNull(errors);

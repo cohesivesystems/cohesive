@@ -23,7 +23,10 @@ public abstract record JoinSpec(
 /// </summary>
 public enum JoinCardinality
 {
+    /// <summary>Represents a one-to-one join.</summary>
     One = 0,
+    
+    /// <summary>Represents a one-to-many join.</summary>
     Many = 1
 }
 
@@ -41,7 +44,7 @@ public sealed record OneJoinSpec(
     string RootKeyField,
     FieldSelection? Options = null,
     EntityPredicate? SourcePredicate = null
-) : JoinSpec(Alias, JoinCardinality.One, FromAlias: null, Source, Options, SourcePredicate);
+    ) : JoinSpec(Alias, JoinCardinality.One, FromAlias: null, Source, Options, SourcePredicate);
 
 /// <summary>
 /// One-to-one join resolved from a previously hydrated alias.
@@ -59,7 +62,7 @@ public sealed record OneJoinFromSpec(
     string SourceKeyField,
     FieldSelection? Options = null,
     EntityPredicate? SourcePredicate = null
-) : JoinSpec(Alias, JoinCardinality.One, FromAlias, Source, Options, SourcePredicate);
+    ) : JoinSpec(Alias, JoinCardinality.One, FromAlias, Source, Options, SourcePredicate);
 
 /// <summary>
 /// One-to-many join resolved from a root observation field and a foreign-key field.
@@ -79,6 +82,7 @@ public sealed record ManyJoinSpec(
     EntityPredicate? SourcePredicate = null
 ) : JoinSpec(Alias, JoinCardinality.Many, FromAlias: null, Source, Options, SourcePredicate)
 {
+    /// <summary>Initializes a new instance of the many join spec type.</summary>
     public ManyJoinSpec(
         string Alias,
         QuerySource Source,

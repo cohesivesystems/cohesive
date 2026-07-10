@@ -456,6 +456,7 @@ public sealed class CliCommandBuilder<TConfiguration>(
         return errors is null ? CliValidationResult.Success : CliValidationResult.Failure(errors);
     }
 
+    /// <summary>Validates the value.</summary>
     public CliCommandBuilder<TConfiguration> Validate(Delegate validate)
     {
         dynamicValidators.Add(Guard.RequireNotNull(validate));

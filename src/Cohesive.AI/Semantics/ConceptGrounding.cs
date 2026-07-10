@@ -241,7 +241,12 @@ public sealed record InferredGroundingOrigin : GroundingOrigin
 /// </summary>
 public enum GroundingStrength
 {
+    /// <summary>The concept grounding is explictly asserted.</summary>
     Asserted = 0,
+    
+    /// <summary>The concept grounding is conditional.</summary>
     Conditional = 1,
+    
+    /// <summary>The concept grounding is inferred.</summary>
     Inferred = 2
 }

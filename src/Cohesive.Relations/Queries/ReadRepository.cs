@@ -56,6 +56,7 @@ public sealed class InMemoryReadRepository : IQueryRepository
         | QueryCapability.CaseInsensitiveStringComparison
         );
 
+    /// <summary>Initializes a new instance of the in memory read repository type.</summary>
     public InMemoryReadRepository(IEnumerable<Observation> records)
     {
         ArgumentNullException.ThrowIfNull(records);

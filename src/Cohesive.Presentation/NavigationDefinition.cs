@@ -36,8 +36,11 @@ public sealed record NavigationDefinition(
 /// </summary>
 public enum NavigationNodeKind
 {
+    /// <summary>Represents the page option.</summary>
     Page = 0,
+    /// <summary>Represents the collection option.</summary>
     Collection = 1,
+    /// <summary>Represents the entity detail option.</summary>
     EntityDetail = 2
 }
 
@@ -46,8 +49,11 @@ public enum NavigationNodeKind
 /// </summary>
 public enum NavigationEdgeKind
 {
+    /// <summary>Represents the primary navigation option.</summary>
     PrimaryNavigation = 0,
+    /// <summary>Represents the related entity route option.</summary>
     RelatedEntityRoute = 1,
+    /// <summary>Represents the drill down option.</summary>
     DrillDown = 2
 }
 
@@ -56,7 +62,9 @@ public enum NavigationEdgeKind
 /// </summary>
 public enum NavigationRouteKind
 {
+    /// <summary>Represents the page option.</summary>
     Page = 0,
+    /// <summary>Represents the entity detail option.</summary>
     EntityDetail = 1
 }
 
@@ -65,13 +73,21 @@ public enum NavigationRouteKind
 /// </summary>
 public enum PageHostKind
 {
+    /// <summary>Represents the workspace option.</summary>
     Workspace = 0,
+    /// <summary>Represents the single view option.</summary>
     SingleView = 1,
+    /// <summary>Represents the tabbed host option.</summary>
     TabbedHost = 2,
+    /// <summary>Represents the split host option.</summary>
     SplitHost = 3,
+    /// <summary>Represents the dashboard option.</summary>
     Dashboard = 4,
+    /// <summary>Represents the wizard option.</summary>
     Wizard = 5,
+    /// <summary>Represents the modal host option.</summary>
     ModalHost = 6,
+    /// <summary>Represents the shell host option.</summary>
     ShellHost = 7
 }
 
@@ -80,15 +96,25 @@ public enum PageHostKind
 /// </summary>
 public enum PageRegionKind
 {
+    /// <summary>Represents the content option.</summary>
     Content = 0,
+    /// <summary>Represents the header option.</summary>
     Header = 1,
+    /// <summary>Represents the toolbar option.</summary>
     Toolbar = 2,
+    /// <summary>Represents the sidebar option.</summary>
     Sidebar = 3,
+    /// <summary>Represents the footer option.</summary>
     Footer = 4,
+    /// <summary>Represents the tab option.</summary>
     Tab = 5,
+    /// <summary>Represents the split pane option.</summary>
     SplitPane = 6,
+    /// <summary>Represents the modal option.</summary>
     Modal = 7,
+    /// <summary>Represents the shell option.</summary>
     Shell = 8,
+    /// <summary>Represents the custom option.</summary>
     Custom = 9
 }
 
@@ -97,12 +123,19 @@ public enum PageRegionKind
 /// </summary>
 public enum NavigationActionKind
 {
+    /// <summary>Represents the navigate to route option.</summary>
     NavigateToRoute = 0,
+    /// <summary>Represents the return to previous context option.</summary>
     ReturnToPreviousContext = 1,
+    /// <summary>Represents the open modal option.</summary>
     OpenModal = 2,
+    /// <summary>Represents the close modal option.</summary>
     CloseModal = 3,
+    /// <summary>Represents the replace route option.</summary>
     ReplaceRoute = 4,
+    /// <summary>Represents the open workspace option.</summary>
     OpenWorkspace = 5,
+    /// <summary>Represents the open page host option.</summary>
     OpenPageHost = 6
 }
 
@@ -111,10 +144,15 @@ public enum NavigationActionKind
 /// </summary>
 public enum NavigationContextEffectKind
 {
+    /// <summary>Represents the push option.</summary>
     Push = 0,
+    /// <summary>Represents the replace option.</summary>
     Replace = 1,
+    /// <summary>Represents the preserve option.</summary>
     Preserve = 2,
+    /// <summary>Represents the clear option.</summary>
     Clear = 3,
+    /// <summary>Represents the return option.</summary>
     Return = 4
 }
 
@@ -123,9 +161,13 @@ public enum NavigationContextEffectKind
 /// </summary>
 public enum NavigationContextKind
 {
+    /// <summary>Represents the browser option.</summary>
     Browser = 0,
+    /// <summary>Represents the workspace option.</summary>
     Workspace = 1,
+    /// <summary>Represents the modal option.</summary>
     Modal = 2,
+    /// <summary>Represents the embedded option.</summary>
     Embedded = 3
 }
 
@@ -134,9 +176,13 @@ public enum NavigationContextKind
 /// </summary>
 public enum NavigationHistoryKind
 {
+    /// <summary>Represents the absence of a selected option.</summary>
     None = 0,
+    /// <summary>Represents the browser option.</summary>
     Browser = 1,
+    /// <summary>Represents the in memory option.</summary>
     InMemory = 2,
+    /// <summary>Represents the persistent option.</summary>
     Persistent = 3
 }
 
@@ -187,9 +233,13 @@ public enum NavigationRouteInstanceIdentityKind
 /// </summary>
 public enum NavigationShellKind
 {
+    /// <summary>Represents the top navigation option.</summary>
     TopNavigation = 0,
+    /// <summary>Represents the side navigation option.</summary>
     SideNavigation = 1,
+    /// <summary>Represents the bottom navigation option.</summary>
     BottomNavigation = 2,
+    /// <summary>Represents the command navigation option.</summary>
     CommandNavigation = 3
 }
 
@@ -198,10 +248,15 @@ public enum NavigationShellKind
 /// </summary>
 public enum NavigationShellRegionKind
 {
+    /// <summary>Represents the process task drawer option.</summary>
     ProcessTaskDrawer = 0,
+    /// <summary>Represents the toolbar actions option.</summary>
     ToolbarActions = 1,
+    /// <summary>Represents the user menu option.</summary>
     UserMenu = 2,
+    /// <summary>Represents the notifications option.</summary>
     Notifications = 3,
+    /// <summary>Represents the authentication prompt option.</summary>
     AuthenticationPrompt = 4
 }
 
@@ -484,11 +539,17 @@ public sealed record NavigationShellSlotDefinition(
 /// </summary>
 public enum NavigationShellSlotKind
 {
+    /// <summary>Represents the brand option.</summary>
     Brand = 0,
+    /// <summary>Represents the primary navigation option.</summary>
     PrimaryNavigation = 1,
+    /// <summary>Represents the utility actions option.</summary>
     UtilityActions = 2,
+    /// <summary>Represents the system notices option.</summary>
     SystemNotices = 3,
+    /// <summary>Represents the routed content option.</summary>
     RoutedContent = 4,
+    /// <summary>Represents the custom option.</summary>
     Custom = 5
 }
 

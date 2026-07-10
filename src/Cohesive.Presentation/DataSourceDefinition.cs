@@ -156,9 +156,14 @@ public sealed record CachePolicy(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum CachePolicyKind
 {
+    /// <summary>Represents the absence of a selected option.</summary>
     None = 0,
+    /// <summary>Represents the react query option.</summary>
     ReactQuery = 1,
+    /// <summary>Represents the stale while revalidate option.</summary>
     StaleWhileRevalidate = 2,
+    /// <summary>Represents the session option.</summary>
     Session = 3,
+    /// <summary>Represents the memory option.</summary>
     Memory = 4
 }

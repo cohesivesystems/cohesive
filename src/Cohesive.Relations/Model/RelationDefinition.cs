@@ -21,6 +21,7 @@ public sealed record RelationId
     /// </summary>
     public string Value { get; init; }
 
+    /// <inheritdoc />
     public override string ToString() => Value;
 }
 
@@ -42,6 +43,7 @@ public sealed record RelationName
     /// </summary>
     public string Value { get; init; }
 
+    /// <inheritdoc />
     public override string ToString() => Value;
 }
 

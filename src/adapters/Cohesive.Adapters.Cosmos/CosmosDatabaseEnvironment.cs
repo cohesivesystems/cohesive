@@ -21,12 +21,16 @@ public sealed class CosmosDatabaseEnvironment(
     bool deleteDatabaseOnDispose
     ) : IAsyncDisposable
 {
+    /// <summary>Gets the database.</summary>
     public Database Database { get; } = database ?? throw new ArgumentNullException(nameof(database));
 
+    /// <summary>Gets the database name.</summary>
     public string DatabaseName => Database.Id;
 
+    /// <summary>Gets the containers by name.</summary>
     public IReadOnlyDictionary<string, (ContainerProperties, Container)> ContainersByName { get; } = Guard.RequireNotNull(containersByName);
     
+    /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
         if (!deleteDatabaseOnDispose)
@@ -45,6 +49,7 @@ public sealed class CosmosDatabaseEnvironment(
     }
 }
 
+/// <summary>Provides operations for cosmos client factory extensions.</summary>
 public static class CosmosClientFactoryExtensions
 {
     /// <summary>

@@ -5,6 +5,7 @@ namespace Cohesive.Host.Cli.Testing;
 /// </summary>
 public static class CliApplicationTestHarness
 {
+    /// <summary>Invokes a CLI application and captures its outputs.</summary>
     public static async Task<CliInvocationCapture> InvokeAsync(CliApplication app, IReadOnlyList<string> args, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(app);

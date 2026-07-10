@@ -32,8 +32,10 @@ public sealed record TrainingDatasetRegistration(
     );
 
 
+/// <summary>Represents a passthrough training dataset registry.</summary>
 public sealed class PassthroughTrainingDatasetRegistry : ITrainingDatasetRegistry
 {
+    /// <summary>Registers the value asynchronously.</summary>
     public ValueTask<TrainingDatasetRegistration> RegisterAsync(TrainingDatasetRegistrationRequest request, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();

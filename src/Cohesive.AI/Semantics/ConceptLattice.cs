@@ -12,6 +12,7 @@ public sealed class FormalContext<TObject, TAttribute>
 {
     readonly ImmutableDictionary<TObject, ImmutableHashSet<TAttribute>> objectAttributes;
 
+    /// <summary>Initializes a new instance of the formal context type.</summary>
     public FormalContext(
         IEnumerable<TObject> objects,
         IEnumerable<TAttribute> attributes,
@@ -170,6 +171,7 @@ public sealed record ConceptLatticeNode<TObject, TAttribute>
     where TObject : notnull
     where TAttribute : notnull
 {
+    /// <summary>Initializes a new instance of the concept lattice node type.</summary>
     public ConceptLatticeNode(
         int id,
         FormalConcept<TObject, TAttribute> concept,
@@ -183,12 +185,16 @@ public sealed record ConceptLatticeNode<TObject, TAttribute>
         Children = children.IsDefault ? [] : children;
     }
 
+    /// <summary>Gets the id.</summary>
     public int Id { get; }
 
+    /// <summary>Gets the concept.</summary>
     public FormalConcept<TObject, TAttribute> Concept { get; }
 
+    /// <summary>Gets the parents.</summary>
     public ImmutableArray<int> Parents { get; }
 
+    /// <summary>Gets the children.</summary>
     public ImmutableArray<int> Children { get; }
 }
 
@@ -202,8 +208,10 @@ public sealed class ConceptLattice<TObject, TAttribute>(
     where TObject : notnull
     where TAttribute : notnull
 {
+    /// <summary>Gets the context.</summary>
     public FormalContext<TObject, TAttribute> Context { get; } = context ?? throw new ArgumentNullException(nameof(context));
 
+    /// <summary>Gets the nodes.</summary>
     public ImmutableArray<ConceptLatticeNode<TObject, TAttribute>> Nodes { get; } = nodes.IsDefault ? [] : nodes;
 }
 
@@ -212,6 +220,7 @@ public sealed class ConceptLattice<TObject, TAttribute>(
 /// </summary>
 public static class ConceptLatticeBuilder
 {
+    /// <summary>Builds a concept lattice from a formal context.</summary>
     public static ConceptLattice<TObject, TAttribute> Build<TObject, TAttribute>(FormalContext<TObject, TAttribute> context)
         where TObject : notnull
         where TAttribute : notnull
@@ -353,32 +362,46 @@ public sealed class ConceptLatticeIndex<TObject, TAttribute>
         NodeDistance = nodeDistance;
     }
 
+    /// <summary>Gets the source lattice.</summary>
     public ConceptLattice<TObject, TAttribute> SourceLattice { get; }
 
+    /// <summary>Gets the node count.</summary>
     public int NodeCount => NodeIds.Length;
 
+    /// <summary>Gets the object count.</summary>
     public int ObjectCount => Objects.Length;
 
+    /// <summary>Gets the attribute count.</summary>
     public int AttributeCount => Attributes.Length;
 
+    /// <summary>Gets the node ids.</summary>
     public int[] NodeIds { get; }
 
+    /// <summary>Gets the objects.</summary>
     public TObject[] Objects { get; }
 
+    /// <summary>Gets the attributes.</summary>
     public TAttribute[] Attributes { get; }
 
+    /// <summary>Gets the dense object by value.</summary>
     public ImmutableDictionary<TObject, int> DenseObjectByValue { get; }
 
+    /// <summary>Gets the dense attribute by value.</summary>
     public ImmutableDictionary<TAttribute, int> DenseAttributeByValue { get; }
 
+    /// <summary>Gets the parents.</summary>
     public int[][] Parents { get; }
 
+    /// <summary>Gets the children.</summary>
     public int[][] Children { get; }
 
+    /// <summary>Gets the extent bits.</summary>
     public ulong[][] ExtentBits { get; }
 
+    /// <summary>Gets the intent bits.</summary>
     public ulong[][] IntentBits { get; }
 
+    /// <summary>Gets the node distance.</summary>
     public int[,] NodeDistance { get; }
 }
 
@@ -387,6 +410,7 @@ public sealed class ConceptLatticeIndex<TObject, TAttribute>
 /// </summary>
 public static class ConceptLatticeCompiler
 {
+    /// <summary>Compiles a concept lattice into an indexed representation.</summary>
     public static ConceptLatticeIndex<TObject, TAttribute> Compile<TObject, TAttribute>(ConceptLattice<TObject, TAttribute> lattice)
         where TObject : notnull
         where TAttribute : notnull
@@ -483,24 +507,31 @@ public sealed class ConceptLatticeReasoner<TObject, TAttribute>(ConceptLatticeIn
 {
     readonly ConceptLatticeIndex<TObject, TAttribute> index = index ?? throw new ArgumentNullException(nameof(index));
 
+    /// <summary>Determines whether a lattice node contains an object.</summary>
     public bool NodeContainsObject(int nodeId, int denseObjectId)
         => DenseBitSet.Get(index.ExtentBits[nodeId], denseObjectId);
 
+    /// <summary>Determines whether a lattice node contains an attribute.</summary>
     public bool NodeContainsAttribute(int nodeId, int denseAttributeId)
         => DenseBitSet.Get(index.IntentBits[nodeId], denseAttributeId);
 
+    /// <summary>Counts attributes shared by two node intents.</summary>
     public int SharedIntentCount(int leftNodeId, int rightNodeId)
         => DenseBitSet.IntersectionCount(index.IntentBits[leftNodeId], index.IntentBits[rightNodeId]);
 
+    /// <summary>Counts objects shared by two node extents.</summary>
     public int SharedExtentCount(int leftNodeId, int rightNodeId)
         => DenseBitSet.IntersectionCount(index.ExtentBits[leftNodeId], index.ExtentBits[rightNodeId]);
 
+    /// <summary>Computes Jaccard similarity between two node intents.</summary>
     public double IntentJaccard(int leftNodeId, int rightNodeId)
         => DenseBitSet.Jaccard(index.IntentBits[leftNodeId], index.IntentBits[rightNodeId]);
 
+    /// <summary>Computes Jaccard similarity between two node extents.</summary>
     public double ExtentJaccard(int leftNodeId, int rightNodeId)
         => DenseBitSet.Jaccard(index.ExtentBits[leftNodeId], index.ExtentBits[rightNodeId]);
 
+    /// <summary>Gets the shortest-path distance between two lattice nodes.</summary>
     public int ShortestPathDistance(int leftNodeId, int rightNodeId)
         => index.NodeDistance[leftNodeId, rightNodeId];
 }

@@ -5,9 +5,13 @@ namespace Cohesive.Processes.Runtime;
 /// </summary>
 public enum ProcessExecutionPlanKind
 {
+    /// <summary>Represents the advance option.</summary>
     Advance = 0,
+    /// <summary>Represents the execute node option.</summary>
     ExecuteNode = 1,
+    /// <summary>Represents the wait option.</summary>
     Wait = 2,
+    /// <summary>Represents the complete option.</summary>
     Complete = 3
 }
 

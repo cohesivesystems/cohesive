@@ -76,8 +76,12 @@ public sealed record WorkspaceRefDefinition
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum WorkspaceInstantiationMode
 {
+    /// <summary>Represents the shared option.</summary>
     Shared = 0,
+    /// <summary>Represents the route scoped option.</summary>
     RouteScoped = 1,
+    /// <summary>Represents the transient option.</summary>
     Transient = 2,
+    /// <summary>Represents the singleton option.</summary>
     Singleton = 3
 }

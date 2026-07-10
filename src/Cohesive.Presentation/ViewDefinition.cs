@@ -87,9 +87,13 @@ public sealed record PromptStatusMessageDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum PromptStatusMessageKind
 {
+    /// <summary>Represents the action pending option.</summary>
     ActionPending = 0,
+    /// <summary>Represents the action error option.</summary>
     ActionError = 1,
+    /// <summary>Represents the data field equals option.</summary>
     DataFieldEquals = 2,
+    /// <summary>Represents the data field truthy option.</summary>
     DataFieldTruthy = 3
 }
 
@@ -177,9 +181,13 @@ public enum ViewKind
     /// The view is a page as a visual surface onto which the rest of the components of a navigation target are rendered.
     /// </summary>
     Page = 0,
+    /// <summary>Represents the panel option.</summary>
     Panel = 1,
+    /// <summary>Represents the collection option.</summary>
     Collection = 2,
+    /// <summary>Represents the record detail option.</summary>
     RecordDetail = 3,
+    /// <summary>Represents the form option.</summary>
     Form = 4,
 
     /// <summary>
@@ -187,16 +195,27 @@ public enum ViewKind
     /// </summary>
     Dashboard = 5,
 
+    /// <summary>Represents the graph option.</summary>
     Graph = 6,
+    /// <summary>Represents the timeline option.</summary>
     Timeline = 7,
+    /// <summary>Represents the search option.</summary>
     Search = 8,
+    /// <summary>Represents the wizard option.</summary>
     Wizard = 9,
+    /// <summary>Represents the prompt option.</summary>
     Prompt = 10,
+    /// <summary>Represents the modal option.</summary>
     Modal = 11,
+    /// <summary>Represents the drawer option.</summary>
     Drawer = 12,
+    /// <summary>Represents the navigation shell option.</summary>
     NavigationShell = 13,
+    /// <summary>Represents the command surface option.</summary>
     CommandSurface = 14,
+    /// <summary>Represents the surface option.</summary>
     Surface = 15,
+    /// <summary>Represents the document workspace option.</summary>
     DocumentWorkspace = 16,
 
     /// <summary>
@@ -211,28 +230,51 @@ public enum ViewKind
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ViewRegionKind
 {
+    /// <summary>Represents the content option.</summary>
     Content = 0,
+    /// <summary>Represents the primary option.</summary>
     Primary = 1,
+    /// <summary>Represents the header option.</summary>
     Header = 2,
+    /// <summary>Represents the toolbar option.</summary>
     Toolbar = 3,
+    /// <summary>Represents the footer option.</summary>
     Footer = 4,
+    /// <summary>Represents the sidebar option.</summary>
     Sidebar = 5,
+    /// <summary>Represents the tab option.</summary>
     Tab = 6,
+    /// <summary>Represents the list option.</summary>
     List = 7,
+    /// <summary>Represents the collection option.</summary>
     Collection = 8,
+    /// <summary>Represents the record detail option.</summary>
     RecordDetail = 9,
+    /// <summary>Represents the detail option.</summary>
     Detail = 10,
+    /// <summary>Represents the status list option.</summary>
     StatusList = 11,
+    /// <summary>Represents the form option.</summary>
     Form = 12,
+    /// <summary>Represents the modal option.</summary>
     Modal = 13,
+    /// <summary>Represents the panel option.</summary>
     Panel = 14,
+    /// <summary>Represents the drawer option.</summary>
     Drawer = 15,
+    /// <summary>Represents the inspector option.</summary>
     Inspector = 16,
+    /// <summary>Represents the split pane option.</summary>
     SplitPane = 17,
+    /// <summary>Represents the surface option.</summary>
     Surface = 18,
+    /// <summary>Represents the badge strip option.</summary>
     BadgeStrip = 19,
+    /// <summary>Represents the metric strip option.</summary>
     MetricStrip = 20,
+    /// <summary>Represents the view switch option.</summary>
     ViewSwitch = 21,
+    /// <summary>Represents the component host option.</summary>
     ComponentHost = 22
 }
 
@@ -266,20 +308,35 @@ public sealed record ViewSubjectDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ViewSubjectKind
 {
+    /// <summary>Represents the shape option.</summary>
     Shape = 0,
+    /// <summary>Represents the entity option.</summary>
     Entity = 1,
+    /// <summary>Represents the relation projection option.</summary>
     RelationProjection = 2,
+    /// <summary>Represents the transition input form option.</summary>
     TransitionInputForm = 3,
+    /// <summary>Represents the effect stream option.</summary>
     EffectStream = 4,
+    /// <summary>Represents the local flow state option.</summary>
     LocalFlowState = 5,
+    /// <summary>Represents the navigation node option.</summary>
     NavigationNode = 6,
+    /// <summary>Represents the generated search result option.</summary>
     GeneratedSearchResult = 7,
+    /// <summary>Represents the dashboard aggregate option.</summary>
     DashboardAggregate = 8,
+    /// <summary>Represents the route option.</summary>
     Route = 9,
+    /// <summary>Represents the data source option.</summary>
     DataSource = 10,
+    /// <summary>Represents the flow option.</summary>
     Flow = 11,
+    /// <summary>Represents the processes option.</summary>
     Processes = 12,
+    /// <summary>Represents the prompt input option.</summary>
     PromptInput = 13,
+    /// <summary>Represents the query form option.</summary>
     QueryForm = 14
 }
 
@@ -312,13 +369,21 @@ public sealed record ViewRegionDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ViewChromeSlotKind
 {
+    /// <summary>Represents the actions option.</summary>
     Actions = 0,
+    /// <summary>Represents the badge strip option.</summary>
     BadgeStrip = 1,
+    /// <summary>Represents the metric strip option.</summary>
     MetricStrip = 2,
+    /// <summary>Represents the view switch option.</summary>
     ViewSwitch = 3,
+    /// <summary>Represents the layout switch option.</summary>
     LayoutSwitch = 4,
+    /// <summary>Represents the heading trailing option.</summary>
     HeadingTrailing = 5,
+    /// <summary>Represents the status option.</summary>
     Status = 6,
+    /// <summary>Represents the custom option.</summary>
     Custom = 7
 }
 
@@ -328,11 +393,17 @@ public enum ViewChromeSlotKind
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ViewChromeSlotPlacement
 {
+    /// <summary>Represents the absence of a selected option.</summary>
     None = 0,
+    /// <summary>Represents the header option.</summary>
     Header = 1,
+    /// <summary>Represents the toolbar option.</summary>
     Toolbar = 2,
+    /// <summary>Represents the before content option.</summary>
     BeforeContent = 3,
+    /// <summary>Represents the after content option.</summary>
     AfterContent = 4,
+    /// <summary>Represents the footer option.</summary>
     Footer = 5
 }
 
@@ -342,9 +413,13 @@ public enum ViewChromeSlotPlacement
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ViewStateKind
 {
+    /// <summary>Represents the choice option.</summary>
     Choice = 0,
+    /// <summary>Represents the toggle option.</summary>
     Toggle = 1,
+    /// <summary>Represents the value option.</summary>
     Value = 2,
+    /// <summary>Represents the document address option.</summary>
     DocumentAddress = 3
 }
 
@@ -396,9 +471,13 @@ public sealed record ViewChromeDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum PresentationValueKind
 {
+    /// <summary>Represents the literal option.</summary>
     Literal = 0,
+    /// <summary>Represents the field option.</summary>
     Field = 1,
+    /// <summary>Represents the expression option.</summary>
     Expression = 2,
+    /// <summary>Represents the state option.</summary>
     State = 3
 }
 
@@ -480,7 +559,9 @@ public sealed record DocumentAddressDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum DocumentAddressKind
 {
+    /// <summary>Represents the json pointer option.</summary>
     JsonPointer = 0,
+    /// <summary>Represents the uri option.</summary>
     Uri = 1
 }
 

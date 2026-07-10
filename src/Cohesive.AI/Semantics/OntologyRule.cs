@@ -8,14 +8,31 @@ namespace Cohesive.AI.Semantics;
 [Flags]
 public enum RelationLawFlags
 {
+    /// <summary>Represents the absence of a selected option.</summary>
     None = 0,
+    
+    /// <summary>Represents the reflexive option.</summary>
     Reflexive = 1 << 0,
+    
+    /// <summary>Represents the irreflexive option.</summary>
     Irreflexive = 1 << 1,
+    
+    /// <summary>Represents the symmetric option.</summary>
     Symmetric = 1 << 2,
+    
+    /// <summary>Represents the antisymmetric option.</summary>
     Antisymmetric = 1 << 3,
+    
+    /// <summary>Represents the asymmetric option.</summary>
     Asymmetric = 1 << 4,
+    
+    /// <summary>Represents the transitive option.</summary>
     Transitive = 1 << 5,
+    
+    /// <summary>Represents the functional option.</summary>
     Functional = 1 << 6,
+    
+    /// <summary>Represents the inverse functional option.</summary>
     InverseFunctional = 1 << 7
 }
 

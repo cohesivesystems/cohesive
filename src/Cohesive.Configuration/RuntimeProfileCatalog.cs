@@ -1,5 +1,6 @@
 namespace Cohesive.Configuration;
 
+/// <summary>Represents a runtime host context.</summary>
 public sealed record RuntimeHostContext<TSettings>(
     ConfigurationProfileContext Profile,
     TSettings Settings
@@ -13,6 +14,7 @@ public sealed record RuntimeProfileResolution<TSettings>(
     TSettings Settings
 );
 
+/// <summary>Represents a runtime profile definition.</summary>
 public sealed record RuntimeProfileDefinition<TSettings>(
     string Name,
     IReadOnlyList<string> Extends,
@@ -55,6 +57,7 @@ public class RuntimeProfileCatalog<TSettings>(
         ordered.Add(profile);
     }
     
+    /// <summary>Resolves the value.</summary>
     public RuntimeProfileResolution<TSettings> Resolve(ConfigurationProfileContext context, string defaultProfile, Func<string, TSettings> settingsFactory) =>
         Resolve(context.ActiveProfile, defaultProfile, context.EnvironmentName, settingsFactory);
     
@@ -100,12 +103,15 @@ public class RuntimeProfileCatalog<TSettings>(
     }
 }
 
+/// <summary>Builds runtime profile catalog values.</summary>
 public class RuntimeProfileCatalogBuilder<TSettings>
 {
     readonly Dictionary<string, RuntimeProfileDefinition<TSettings>> profiles = [];
 
+    /// <summary>Builds the value.</summary>
     public RuntimeProfileCatalog<TSettings> Build() => new(profiles);
     
+    /// <summary>Creates an addition expression.</summary>
     public RuntimeProfileCatalogBuilder<TSettings> Add(RuntimeProfileDefinition<TSettings> profile)
     {
         if (!profiles.TryAdd(profile.Name, profile))

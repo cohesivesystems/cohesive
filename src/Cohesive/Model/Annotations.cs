@@ -26,6 +26,7 @@ public readonly record struct AnnotationKey
     /// </summary>
     public string Value { get; }
 
+    /// <inheritdoc />
     public override string ToString() => Value;
 }
 
@@ -196,6 +197,7 @@ public static class AnnotationMap
     public static ImmutableDictionary<AnnotationKey, AnnotationValue> Normalize(ImmutableDictionary<AnnotationKey, AnnotationValue>? annotations)
         => annotations ?? [];
     
+    /// <summary>Merges annotation sets using later values for duplicate keys.</summary>
     public static ImmutableDictionary<AnnotationKey, AnnotationValue> Merge(params ImmutableDictionary<AnnotationKey, AnnotationValue>[] annotationSets)
     {
         var builder = ImmutableDictionary.CreateBuilder<AnnotationKey, AnnotationValue>();
@@ -207,12 +209,14 @@ public static class AnnotationMap
         return [..builder];
     }
 
+    /// <summary>Creates an annotation dictionary containing one value.</summary>
     public static ImmutableDictionary<AnnotationKey, AnnotationValue> Create(string key, AnnotationValue value)
     {
         ArgumentNullException.ThrowIfNull(value);
         return ImmutableDictionary.CreateRange([(new AnnotationKey(key), value)]);
     }
 
+    /// <summary>Creates an annotation dictionary from a typed value.</summary>
     public static ImmutableDictionary<AnnotationKey, AnnotationValue> Create<TValue>(string key, TValue value) =>
         Create(key, AnnotationValue.FromObject(value));
 }

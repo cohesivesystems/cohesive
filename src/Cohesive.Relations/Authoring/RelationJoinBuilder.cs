@@ -8,7 +8,9 @@ namespace Cohesive.Relations.Authoring;
 /// </summary>
 public enum RelationJoinKind
 {
+    /// <summary>Represents the inner option.</summary>
     Inner = 0,
+    /// <summary>Represents the left option.</summary>
     Left = 1
 }
 

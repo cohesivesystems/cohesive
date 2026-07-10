@@ -104,14 +104,19 @@ public readonly record struct Quantity<TDimension, TRep>
     /// <inheritdoc />
     public override string ToString() => BaseValue.ToString(format: null, formatProvider: CultureInfo.InvariantCulture);
 
+    /// <summary>Adds two values.</summary>
     public static Quantity<TDimension, TRep> operator +(Quantity<TDimension, TRep> left, Quantity<TDimension, TRep> right) => new(left.BaseValue + right.BaseValue);
 
+    /// <summary>Subtracts one value from another.</summary>
     public static Quantity<TDimension, TRep> operator -(Quantity<TDimension, TRep> left, Quantity<TDimension, TRep> right) => new(left.BaseValue - right.BaseValue);
 
+    /// <summary>Subtracts one value from another.</summary>
     public static Quantity<TDimension, TRep> operator -(Quantity<TDimension, TRep> value) => new(-value.BaseValue);
 
+    /// <summary>Multiplies two values.</summary>
     public static Quantity<TDimension, TRep> operator *(Quantity<TDimension, TRep> value, TRep scalar) => new(value.BaseValue * scalar);
 
+    /// <summary>Multiplies two values.</summary>
     public static Quantity<TDimension, TRep> operator *(TRep scalar, Quantity<TDimension, TRep> value) => value * scalar;
 
     /// <exception cref="DivideByZeroException"></exception>

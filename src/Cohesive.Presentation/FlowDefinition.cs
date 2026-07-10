@@ -45,11 +45,17 @@ public sealed record FlowStateDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum FlowStateKind
 {
+    /// <summary>Represents the idle option.</summary>
     Idle = 0,
+    /// <summary>Represents the pending option.</summary>
     Pending = 1,
+    /// <summary>Represents the prompt option.</summary>
     Prompt = 2,
+    /// <summary>Represents the process option.</summary>
     Process = 3,
+    /// <summary>Represents the terminal option.</summary>
     Terminal = 4,
+    /// <summary>Represents the error option.</summary>
     Error = 5
 }
 

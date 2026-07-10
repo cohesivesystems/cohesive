@@ -18,6 +18,7 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
     readonly EntityPartitionKeyPolicy partitionKeyPolicy;
     long nextConcurrencyVersion;
 
+    /// <summary>Initializes a new instance of the in memory entity outbox repository type.</summary>
     public InMemoryEntityOutboxRepository(
         EntityDefinition entityDefinition,
         string partitionKeyFieldName,
@@ -31,6 +32,7 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
     {
     }
 
+    /// <summary>Initializes a new instance of the in memory entity outbox repository type.</summary>
     public InMemoryEntityOutboxRepository(
         EntityDefinition entityDefinition,
         EntityPartitionKeyPolicy partitionKeyPolicy,
@@ -49,6 +51,7 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
             SeedSnapshot(snapshot);
     }
 
+    /// <summary>Initializes a new instance of the in memory entity outbox repository type.</summary>
     public InMemoryEntityOutboxRepository(
         EntityDefinition entityDefinition,
         Func<Observation, string> partitionKeySelector,
@@ -62,6 +65,7 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
     {
     }
 
+    /// <summary>Initializes a new instance of the in memory entity outbox repository type.</summary>
     public InMemoryEntityOutboxRepository(
         EntityDefinition entityDefinition,
         IEnumerable<object>? seedData,
@@ -79,12 +83,16 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
             SeedSnapshot(CreateSeedSnapshot(entityDefinition, seed, idFieldName));
     }
 
+    /// <summary>Gets the entity definition.</summary>
     public EntityDefinition EntityDefinition => entityDefinition;
 
+    /// <summary>Gets the mapping context.</summary>
     public ShapeMappingContext MappingContext { get; }
 
+    /// <summary>Gets the entity type.</summary>
     public string EntityType => entityDefinition.Shape.Id.Value;
 
+    /// <summary>Gets the outbox messages.</summary>
     public IReadOnlyList<EntityOutboxMessage> OutboxMessages
     {
         get
@@ -94,6 +102,7 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
         }
     }
 
+    /// <summary>Attempts to get the value.</summary>
     public Task<EntitySnapshot?> TryGet(
         OperationContext context,
         string id,
@@ -120,6 +129,7 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
         }
     }
 
+    /// <summary>Upserts the value.</summary>
     public Task<EntitySnapshot> Upsert(OperationContext context, EntityWriteRequest write)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -148,6 +158,7 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
         }
     }
 
+    /// <summary>Atomically upserts an entity snapshot and appends its outbox messages.</summary>
     public async Task<EntityCommitResult> UpsertWithOutbox(OperationContext context, EntityOutboxCommit commit)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -161,6 +172,7 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
         return new(snapshot, commit.Messages);
     }
 
+    /// <summary>Queries the value.</summary>
     public Task<EntityQueryResponse<EntitySnapshot>> Query(OperationContext context, EntityQuery query)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -240,9 +252,11 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
             HasMore: hasMore);
     }
 
+    /// <summary>Gets change stream.</summary>
     public IObservationStream GetChangeStream(string processorName, DateTimeOffset? startTime = null) =>
         throw new NotSupportedException("In-memory observation repository does not implement change streams.");
 
+    /// <summary>Gets outbox stream.</summary>
     public IObservationStream GetOutboxStream(string processorName, string? streamName = null, DateTimeOffset? startTime = null) =>
         throw new NotSupportedException("In-memory observation repository does not implement outbox streams.");
 

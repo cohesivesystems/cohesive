@@ -29,13 +29,22 @@ public sealed record PresentationExpressionDefinition(
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum PresentationExpressionUsage
 {
+    /// <summary>Represents the predicate option.</summary>
     Predicate = 0,
+    /// <summary>Represents the projection option.</summary>
     Projection = 1,
+    /// <summary>Represents the metric option.</summary>
     Metric = 2,
+    /// <summary>Represents the visibility option.</summary>
     Visibility = 3,
+    /// <summary>Represents the enablement option.</summary>
     Enablement = 4,
+    /// <summary>Represents the label option.</summary>
     Label = 5,
+    /// <summary>Represents the navigation option.</summary>
     Navigation = 6,
+    /// <summary>Represents the data source parameter option.</summary>
     DataSourceParameter = 7,
+    /// <summary>Represents the state derivation option.</summary>
     StateDerivation = 8
 }

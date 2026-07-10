@@ -228,6 +228,7 @@ public sealed record EntityBatchWriteResult(
 /// </summary>
 public readonly record struct EntityConcurrencyToken(string Value)
 {
+    /// <inheritdoc />
     public override string ToString() => Value;
 }
 

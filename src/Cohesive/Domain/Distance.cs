@@ -7,35 +7,51 @@ namespace Cohesive.Domain;
 /// </summary>
 public readonly record struct LengthDimension : IQuantityDimension;
 
+/// <summary>Represents a struct.</summary>
 public readonly record struct Centimeter<TRep> : IQuantityUnit<LengthDimension, TRep>
     where TRep : IFloatingPoint<TRep>
 {
+    /// <summary>Gets the unit symbol.</summary>
     public static string Symbol => "cm";
+    /// <summary>Converts the value to base.</summary>
     public static TRep ToBase(TRep value) => value * TRep.CreateChecked(0.01m);
+    /// <summary>Creates a value from base.</summary>
     public static TRep FromBase(TRep baseValue) => baseValue / TRep.CreateChecked(0.01m);
 }
 
+/// <summary>Represents a struct.</summary>
 public readonly record struct Millimeter<TRep> : IQuantityUnit<LengthDimension, TRep>
     where TRep : IFloatingPoint<TRep>
 {
+    /// <summary>Gets the unit symbol.</summary>
     public static string Symbol => "mm";
+    /// <summary>Converts the value to base.</summary>
     public static TRep ToBase(TRep value) => value * TRep.CreateChecked(0.001m);
+    /// <summary>Creates a value from base.</summary>
     public static TRep FromBase(TRep baseValue) => baseValue / TRep.CreateChecked(0.001m);
 }
 
+/// <summary>Represents a struct.</summary>
 public readonly record struct Foot<TRep> : IQuantityUnit<LengthDimension, TRep>
     where TRep : IFloatingPoint<TRep>
 {
+    /// <summary>Gets the unit symbol.</summary>
     public static string Symbol => "ft";
+    /// <summary>Converts the value to base.</summary>
     public static TRep ToBase(TRep value) => value * TRep.CreateChecked(0.3048m);
+    /// <summary>Creates a value from base.</summary>
     public static TRep FromBase(TRep baseValue) => baseValue / TRep.CreateChecked(0.3048m);
 }
 
+/// <summary>Represents a struct.</summary>
 public readonly record struct Inch<TRep> : IQuantityUnit<LengthDimension, TRep>
     where TRep : IFloatingPoint<TRep>
 {
+    /// <summary>Gets the unit symbol.</summary>
     public static string Symbol => "in";
+    /// <summary>Converts the value to base.</summary>
     public static TRep ToBase(TRep value) => value * TRep.CreateChecked(0.0254m);
+    /// <summary>Creates a value from base.</summary>
     public static TRep FromBase(TRep baseValue) => baseValue / TRep.CreateChecked(0.0254m);
 }
 
@@ -45,24 +61,35 @@ public readonly record struct Inch<TRep> : IQuantityUnit<LengthDimension, TRep>
 public readonly record struct Meter<TRep> : IQuantityUnit<LengthDimension, TRep>
     where TRep : IFloatingPoint<TRep>
 {
+    /// <summary>Gets the unit symbol.</summary>
     public static string Symbol => "m";
+    /// <summary>Converts the value to base.</summary>
     public static TRep ToBase(TRep value) => value;
+    /// <summary>Creates a value from base.</summary>
     public static TRep FromBase(TRep baseValue) => baseValue;
 }
 
+/// <summary>Represents a struct.</summary>
 public readonly record struct Kilometer<TRep> : IQuantityUnit<LengthDimension, TRep>
     where TRep : IFloatingPoint<TRep>
 {
+    /// <summary>Gets the unit symbol.</summary>
     public static string Symbol => "km";
+    /// <summary>Converts the value to base.</summary>
     public static TRep ToBase(TRep value) => value * TRep.CreateChecked(1_000m);
+    /// <summary>Creates a value from base.</summary>
     public static TRep FromBase(TRep baseValue) => baseValue / TRep.CreateChecked(1_000m);
 }
 
+/// <summary>Represents a struct.</summary>
 public readonly record struct Mile<TRep> : IQuantityUnit<LengthDimension, TRep>
     where TRep : IFloatingPoint<TRep>
 {
+    /// <summary>Gets the unit symbol.</summary>
     public static string Symbol => "mi";
+    /// <summary>Converts the value to base.</summary>
     public static TRep ToBase(TRep value) => value * TRep.CreateChecked(1_609.344m);
+    /// <summary>Creates a value from base.</summary>
     public static TRep FromBase(TRep baseValue) => baseValue / TRep.CreateChecked(1_609.344m);
 }
 

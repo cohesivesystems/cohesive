@@ -9,8 +9,10 @@ namespace Cohesive.Domain;
 /// </summary>
 public sealed class StructuredQuantityJsonConverterFactory : JsonConverterFactory
 {
+    /// <inheritdoc />
     public override bool CanConvert(Type typeToConvert) => TryGetStructuredQuantityInterface(typeToConvert, out _);
 
+    /// <inheritdoc />
     public override JsonConverter CreateConverter(Type typeToConvert, JsonSerializerOptions options)
     {
         if (!TryGetStructuredQuantityInterface(typeToConvert, out var structuredQuantityInterface))
