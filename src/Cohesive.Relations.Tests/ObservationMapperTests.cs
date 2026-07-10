@@ -39,21 +39,16 @@ public sealed class ObservationMapperTests
     {
         var mapper = ObjectObservationMapper
             .For<JsonNamedOrderRecord>(new(nameof(JsonNamedOrderRecord)))
-            .MapAllFromJsonPropertyName(
-                requireAttribute: false,
-                resolveFieldIdentity: property => property.Name)
+            .MapAllFromJsonPropertyName(requireAttribute: false, resolveFieldIdentity: property => property.Name)
             .Build();
 
         var dto = new JsonNamedOrderRecord(
             OrderNumber: "ORD-77",
             CustomerId: "cust-77",
-            StopCount: 6);
-        var observation = mapper.Map(
-            dto,
-            new ObjectObservationMetadata
-            {
-                Id = "order-77"
-            });
+            StopCount: 6
+            );
+        
+        var observation = mapper.Map(dto, new() { Id = "order-77" });
 
         Assert.Equal("ORD-77", observation.GetField(nameof(JsonNamedOrderRecord.OrderNumber)).GetString());
         Assert.Equal("cust-77", observation.GetField(nameof(JsonNamedOrderRecord.CustomerId)).GetString());
@@ -66,7 +61,8 @@ public sealed class ObservationMapperTests
         var ex = Assert.Throws<InvalidOperationException>(() => ObjectObservationMapper
             .For<JsonNamedOrderRecord>(new(nameof(JsonNamedOrderRecord)))
             .MapAllFromJsonPropertyName(requireAttribute: true)
-            .Build());
+            .Build()
+        );
 
         Assert.Contains(nameof(JsonNamedOrderRecord.StopCount), ex.Message, StringComparison.Ordinal);
     }
@@ -82,7 +78,9 @@ public sealed class ObservationMapperTests
         var dto = new ConventionMetadataRecord(
             DocumentId: "order-301",
             VersionToken: 17,
-            OrderNumber: "ORD-301");
+            OrderNumber: "ORD-301"
+            );
+        
         var observation = mapper.Map(dto);
 
         Assert.Equal("order-301", observation.Id);

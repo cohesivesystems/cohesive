@@ -5,7 +5,7 @@ using Cohesive.Relations.Model;
 namespace Cohesive.Relations.Mapping;
 
 /// <summary>
-/// Reflection-configured object mapper factory.
+/// Factory for reflection-configured builder for object-to-observed-shape mapping.
 /// </summary>
 public static class ObjectObservationMapper
 {
