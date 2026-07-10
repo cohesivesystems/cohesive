@@ -21,6 +21,12 @@
     <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(CohesiveLocalPackage)' == 'true'">
+    <!-- Keep portable symbols beside local package assemblies so IDEs can resolve this checkout's editable source. -->
+    <DebugType>portable</DebugType>
+    <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
+  </PropertyGroup>
+
   <ItemGroup>
     <None Include="$(MSBuildProjectDirectory)/README.md" Pack="true" PackagePath="/" Link="README.md" Condition="Exists('$(MSBuildProjectDirectory)/README.md')" />
   </ItemGroup>

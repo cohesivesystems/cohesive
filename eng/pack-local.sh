@@ -12,6 +12,7 @@ mkdir -p "$feed"
 dotnet pack "$repo_root/Cohesive.sln" \
   --configuration Release \
   --output "$feed" \
-  /p:PackageVersion="$version"
+  /p:PackageVersion="$version" \
+  /p:CohesiveLocalPackage=true
 
 echo "$version"

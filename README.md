@@ -72,14 +72,33 @@ corepack pnpm frontend:test
 Create local NuGet packages for downstream applications:
 
 ```bash
-bash ./eng/pack-local.sh 0.1.0-dev.local
+./eng/pack-local.sh
 ```
 
-Point the downstream app at the local NuGet feed:
+The script writes a uniquely versioned `0.1.0-dev.<timestamp>` package set to
+the shared sibling feed at `.feeds/nuget/cohesive-local`. Pass an explicit
+version as the first argument when needed. Local packages include portable PDBs
+beside their assemblies, allowing IDE navigation to resolve back to the editable
+files in this checkout.
+
+Point downstream applications at the local NuGet feed:
 
 ```bash
-dotnet nuget add source /Users/eulerfx/code/.feeds/nuget/cohesive-local --name cohesive-local
+dotnet nuget add source ../.feeds/nuget/cohesive-local --name cohesive-local
 ```
+
+Reference Cohesive packages with the floating development version
+`0.1.0-dev.*`. After changing Cohesive, package it again and force downstream
+restore evaluation so NuGet selects the new immutable package version:
+
+```bash
+./eng/pack-local.sh
+dotnet restore /path/to/Consumer.sln --force-evaluate
+```
+
+Do not overwrite an existing local package version. NuGet caches restored
+packages by ID and version, so a new version is required for source and binary
+changes to propagate reliably.
 
 Start a local npm feed in one terminal:
 
