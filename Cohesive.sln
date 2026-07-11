@@ -26,9 +26,9 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Adapters.AspNet", 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Host", "src\Cohesive.Host\Cohesive.Host.csproj", "{77A3471A-9958-4127-B988-A5E386110062}"
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Tests", "Tests", "{5751A714-1C63-4459-AE6F-B239AFE570E4}"
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{5751A714-1C63-4459-AE6F-B239AFE570E4}"
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Adapters", "Adapters", "{E43C7668-D288-496F-90C4-887287F717D4}"
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "adapters", "adapters", "{E43C7668-D288-496F-90C4-887287F717D4}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Relations.Tests", "src\Cohesive.Relations.Tests\Cohesive.Relations.Tests.csproj", "{0394D0C1-4862-4DF8-BC16-12F370ECD70C}"
 EndProject
@@ -73,6 +73,12 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Relations.Contracts", "src\Cohesive.Relations.Contracts\Cohesive.Relations.Contracts.csproj", "{4FDB867D-BDEE-4101-A8BE-5982E842174D}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Adapters.Json", "src\adapters\Cohesive.Adapters.Json\Cohesive.Adapters.Json.csproj", "{05FD9E64-5AE4-4271-993B-63B7FF4824A7}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{6F2CE868-7A5C-4DAE-8016-66309C69FDFE}"
+	ProjectSection(SolutionItems) = preProject
+		AGENTS.md = AGENTS.md
+		README.md = README.md
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
