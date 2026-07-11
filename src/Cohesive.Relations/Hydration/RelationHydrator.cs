@@ -12,7 +12,7 @@ public interface IRelationHydrator
     /// <summary>
     /// Hydrates observations for the provided projection and root ids.
     /// </summary>
-    Task<IReadOnlyList<RootedObservation>> HydrateAsync(RelationDefinition definition, IReadOnlyList<string> rootIds, CancellationToken token = default);
+    Task<IReadOnlyList<RootedObservation>> HydrateAsync(RelationDefinition definition, IReadOnlyList<string> rootIds, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -27,31 +27,21 @@ public sealed class RelationHydrator : IRelationHydrator
     /// <summary>
     /// Creates a projection hydrator.
     /// </summary>
-    public RelationHydrator(
-        IObservationHydrationStore store,
-        RelationHydrationPlanner? planner = null)
+    public RelationHydrator(IObservationHydrationStore store, RelationHydrationPlanner? planner = null)
     {
         this.store = Guard.RequireNotNull(store);
         this.planner = planner ?? new();
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<RootedObservation>> HydrateAsync(
-        RelationDefinition definition,
-        IReadOnlyList<string> rootIds,
-        CancellationToken token = default)
+    public async Task<IReadOnlyList<RootedObservation>> HydrateAsync(RelationDefinition definition, IReadOnlyList<string> rootIds, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(rootIds);
-        token.ThrowIfCancellationRequested();
+        ct.ThrowIfCancellationRequested();
 
         var plan = planner.Plan(definition);
-        var roots = await store.QueryAsync(
-            new(
-                Schema: plan.RootSchema,
-                Fields: plan.RootFields,
-                Keys: rootIds.Distinct(StringComparer.Ordinal).ToArray()),
-            token);
+        var roots = await store.QueryAsync(new(Schema: plan.RootSchema, Fields: plan.RootFields, Keys: [..rootIds.Distinct(StringComparer.Ordinal)]), ct);
 
         var rootedRoots = roots
             .OrderBy(x => x.Id, StringComparer.Ordinal)
@@ -65,17 +55,12 @@ public sealed class RelationHydrator : IRelationHydrator
 
         foreach (var related in plan.Related)
         {
-            token.ThrowIfCancellationRequested();
+            ct.ThrowIfCancellationRequested();
             var lookupIds = ResolveLookupIds(rootedRoots, related.LookupKeyExpressions);
             if (lookupIds.Count == 0)
                 continue;
 
-            var queried = await store.QueryAsync(
-                new(
-                    Schema: related.Schema,
-                    Fields: related.Fields,
-                    Keys: lookupIds.ToArray()),
-                token);
+            var queried = await store.QueryAsync(new(Schema: related.Schema, Fields: related.Fields, Keys: [..lookupIds]), ct);
 
             var relatedIndex = BuildRelatedIndex(queried);
             relatedBySchemaAndId[related.Schema.Value] = relatedIndex;
@@ -84,7 +69,7 @@ public sealed class RelationHydrator : IRelationHydrator
         var emittedRelated = new HashSet<string>(StringComparer.Ordinal);
         foreach (var root in rootedRoots)
         {
-            token.ThrowIfCancellationRequested();
+            ct.ThrowIfCancellationRequested();
             foreach (var related in plan.Related)
             {
                 if (!relatedBySchemaAndId.TryGetValue(related.Schema.Value, out var index))
@@ -111,9 +96,7 @@ public sealed class RelationHydrator : IRelationHydrator
             .ToArray();
     }
 
-    HashSet<string> ResolveLookupIds(
-        IReadOnlyList<RootedObservation> roots,
-        IReadOnlyList<Expr> lookupExpressions)
+    HashSet<string> ResolveLookupIds(IReadOnlyList<RootedObservation> roots, IReadOnlyList<Expr> lookupExpressions)
     {
         var ids = new HashSet<string>(StringComparer.Ordinal);
         foreach (var root in roots)

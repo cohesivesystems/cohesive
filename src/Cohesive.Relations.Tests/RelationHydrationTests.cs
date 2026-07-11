@@ -1,7 +1,3 @@
-using System.Text.Json;
-using Cohesive.Relations.Model;
-using Cohesive.Relations.Execution;
-
 namespace Cohesive.Relations.Tests;
 
 public sealed class RelationHydrationTests
@@ -10,6 +6,7 @@ public sealed class RelationHydrationTests
     public async Task HydrateAsync_OrderToSearchIndex_SelectsOnlyRequiredRootAndRelatedFields()
     {
         var definition = CreateSearchRelation();
+        
         var rootOrder = new Observation(
             shapeId: new(nameof(OrderDto)),
             id: "order-1",
@@ -21,6 +18,7 @@ public sealed class RelationHydrationTests
                 CustomerId = "cust-99",
                 Unused = "ignore"
             }));
+        
         var relatedCustomer = new Observation(
             shapeId: new(nameof(CustomerDto)),
             id: "cust-99",
@@ -31,11 +29,13 @@ public sealed class RelationHydrationTests
                 Segment = "Enterprise",
                 Unused = "ignore"
             }));
+        
         var store = new InMemoryHydrationStore(new Dictionary<ShapeId, IReadOnlyList<Observation>>
         {
             [new(nameof(OrderDto))] = [rootOrder],
             [new(nameof(CustomerDto))] = [relatedCustomer]
         });
+        
         var hydrator = new RelationHydrator(store);
 
         var inputs = await hydrator.HydrateAsync(definition, rootIds: ["order-1"]);
@@ -162,7 +162,7 @@ public sealed class RelationHydrationTests
     {
         public List<ObservationHydrationOptions> Queries { get; } = [];
 
-        public Task<IReadOnlyList<Observation>> QueryAsync(ObservationHydrationOptions options, CancellationToken token = default)
+        public Task<IReadOnlyList<Observation>> QueryAsync(ObservationHydrationOptions options, CancellationToken ct = default)
         {
             Queries.Add(options);
 

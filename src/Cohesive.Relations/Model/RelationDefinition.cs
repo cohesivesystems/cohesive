@@ -131,12 +131,6 @@ public sealed record RelationDefinition
                 paramName: nameof(mappings)
                 );
         
-        if (Mappings.Any(x => !x.IsRelationMapping))
-            throw new ArgumentException(
-                message: "Relation mappings must be relation mapping definitions.",
-                paramName: nameof(mappings)
-                );
-        
         var duplicateSourceByAlias = Sources.TryGetDuplicateByKey(x => x.Alias.Value, StringComparer.Ordinal);
         if (duplicateSourceByAlias is not null)
             throw new ArgumentException(

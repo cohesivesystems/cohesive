@@ -16,7 +16,7 @@ public sealed record MappingMetadata
         bool transportMapping,
         MappingExecutionPreference executionPreference,
         ImmutableDictionary<string, string>? hints = null
-    )
+        )
     {
         AllowCodegen = allowCodegen;
         Deterministic = deterministic;

@@ -11,7 +11,7 @@ public sealed class RelationExecutorTests
         var definition = CreateEdiTenderMappingDefinition();
 
         var input = new Observation(
-            shapeId: new ShapeId("edi.204"),
+            shapeId: new("edi.204"),
             id: "edi-msg-1",
             version: 1,
             fields: Fields(new

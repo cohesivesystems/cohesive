@@ -7,18 +7,19 @@ using Cohesive.Relations.Model;
 namespace Cohesive.Relations.Mapping;
 
 /// <summary>
-/// Shared mapper configuration and reflection cache access across multiple CLR shapes.
+/// Shared mapper configuration and reflection cache across multiple CLR shapes.
 /// </summary>
 public sealed class ShapeMappingContext
 {
-    static readonly Lazy<ShapeMappingContext> Shared = new(static () => new ShapeMappingContext());
-    readonly ConcurrentDictionary<ObjectMapperCacheKey, object> objectObservationMappers = [];
-    readonly ConcurrentDictionary<ObservedMapperCacheKey, object> observationObjectMappers = [];
-
+    static readonly Lazy<ShapeMappingContext> Shared = new(static () => new());
+    
     /// <summary>
     /// Global default context used by static mapper factories.
     /// </summary>
     public static ShapeMappingContext Default => Shared.Value;
+    
+    readonly ConcurrentDictionary<ObjectMapperCacheKey, object> objectObservationMappers = [];
+    readonly ConcurrentDictionary<ObservedMapperCacheKey, object> observationObjectMappers = [];
 
     /// <summary>
     /// True to use <see cref="JsonPropertyNameAttribute"/> when deriving implicit field identities.
@@ -26,7 +27,7 @@ public sealed class ShapeMappingContext
     public bool UseJsonPropertyNameAttributesForFieldIdentity
     {
         get;
-        set
+        init
         {
             if (field == value)
                 return;
@@ -41,7 +42,7 @@ public sealed class ShapeMappingContext
     public bool RequireJsonPropertyNameAttributeForFieldIdentity
     {
         get;
-        set
+        init
         {
             if (field == value)
                 return;
@@ -56,7 +57,7 @@ public sealed class ShapeMappingContext
     public Func<PropertyInfo, string>? ResolveFieldIdentityFallback
     {
         get;
-        set
+        init
         {
             if (ReferenceEquals(field, value))
                 return;
@@ -86,7 +87,7 @@ public sealed class ShapeMappingContext
     public JsonSerializerOptions ObservationObjectSerializerOptions
     {
         get;
-        set
+        init
         {
             if (ReferenceEquals(field, value))
                 return;
@@ -101,7 +102,7 @@ public sealed class ShapeMappingContext
     public ObservationObjectMissingFieldBehavior ObservationObjectMissingFieldBehavior
     {
         get;
-        set
+        init
         {
             if (field == value)
                 return;
@@ -116,7 +117,7 @@ public sealed class ShapeMappingContext
     public ObjectObservationMetadataConventionOptions ObjectObservationMetadataConventions
     {
         get;
-        set
+        init
         {
             if (ReferenceEquals(field, value))
                 return;
@@ -131,7 +132,7 @@ public sealed class ShapeMappingContext
     public Observation Map<T>(T source, ObjectObservationMetadata? metadata = null)
     {
         ArgumentNullException.ThrowIfNull(source);
-        return Map(source, schemaId: new ShapeId(typeof(T).Name), metadata);
+        return Map(source, schemaId: new(typeof(T).Name), metadata);
     }
 
     /// <summary>
@@ -193,7 +194,7 @@ public sealed class ShapeMappingContext
     /// <summary>
     /// Gets readable public instance properties for a CLR shape using a shared type cache.
     /// </summary>
-    public PropertyInfo[] GetReadableProperties(Type type) => ShapeTypeInspector.GetReadableProperties(type);
+    public IReadOnlyList<PropertyInfo> GetReadableProperties(Type type) => ShapeTypeInspector.GetReadableProperties(type);
 
     /// <summary>
     /// Clears all cached compiled mappers for this context.
@@ -229,13 +230,8 @@ public sealed class ShapeMappingContext
 
     IObservationObjectMapper<T> GetObservationObjectMapper<T>(ObservationLayout layout)
     {
-        var key = new ObservedMapperCacheKey(
-            ObjectType: typeof(T),
-            SchemaId: layout.Schema.Value,
-            FieldSignature: BuildFieldSignature(layout));
-        return (IObservationObjectMapper<T>)observationObjectMappers.GetOrAdd(
-            key,
-            _ => ForObservationObject<T>(layout).Build());
+        var key = new ObservedMapperCacheKey(ObjectType: typeof(T), SchemaId: layout.Schema.Value, FieldSignature: BuildFieldSignature(layout));
+        return (IObservationObjectMapper<T>)observationObjectMappers.GetOrAdd(key, _ => ForObservationObject<T>(layout).Build());
     }
 
     static string BuildFieldSignature(ObservationLayout layout)

@@ -1,5 +1,3 @@
-using System.Text.Json;
-using Cohesive.Model;
 using Cohesive.Relations.Model;
 
 namespace Cohesive.Relations.Mapping;
@@ -12,10 +10,7 @@ public static class ObjectObservationMapper
     /// <summary>
     /// Starts a mapper builder for <typeparamref name="T"/>.
     /// </summary>
-    public static ObjectObservationMapperBuilder<T> For<T>(
-        ShapeId schemaId,
-        ShapeMappingContext? context = null
-        ) => new(schemaId, context);
+    public static ObjectObservationMapperBuilder<T> For<T>(ShapeId schemaId, ShapeMappingContext? context = null) => new(schemaId, context);
 }
 
 /// <summary>

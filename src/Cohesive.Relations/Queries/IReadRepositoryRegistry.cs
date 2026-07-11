@@ -15,7 +15,7 @@ public interface IReadRepositoryRegistry
 }
 
 /// <summary>
-/// Mutable repository registry keyed by query-source name.
+/// A mutable repository registry that resolves repositories by <see cref="QuerySource"/>.
 /// </summary>
 public sealed class DispatchingReadRepositoryRegistry : IReadRepositoryRegistry
 {

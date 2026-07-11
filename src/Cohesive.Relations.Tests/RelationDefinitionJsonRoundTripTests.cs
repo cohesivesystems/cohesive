@@ -79,6 +79,7 @@ public sealed class RelationDefinitionJsonRoundTripTests
                     "id": { "value": "map_tender" },
                     "name": { "value": "InboundTender" },
                     "kind": "Relation",
+                    "sourceShapeId": null,
                     "targetShapeId": { "value": "domain.inboundTender" },
                     "assignments": [
                       {
@@ -105,5 +106,12 @@ public sealed class RelationDefinitionJsonRoundTripTests
 
         var canonicalJson = RelationJsonMapper.ToJson(parsed, indented: false);
         Assert.Contains("\"targetField\":\"TenderId\"", canonicalJson, StringComparison.Ordinal);
+        var canonicalMapping = JsonNode.Parse(canonicalJson)?["relation"]?["mappings"]?[0];
+        var canonicalMappingObject = Assert.IsType<JsonObject>(canonicalMapping);
+        Assert.False(canonicalMappingObject.ContainsKey("kind"));
+        Assert.False(canonicalMappingObject.ContainsKey("sourceShapeId"));
+        Assert.False(canonicalMappingObject.ContainsKey("direction"));
+        Assert.False(canonicalMappingObject.ContainsKey("nestedMappings"));
+        Assert.False(canonicalMappingObject.ContainsKey("collectionMappings"));
     }
 }

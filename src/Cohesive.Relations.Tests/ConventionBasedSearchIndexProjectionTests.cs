@@ -16,8 +16,7 @@ public sealed class ConventionBasedSearchIndexProjectionTests
     [Fact]
     public async Task RelationMappingRuntime_MinimalConfiguration_ExecuteObservedAsync_ProjectsObservation()
     {
-        var (relation, runtime, inputs, expected) = 
-            CreateMinimalConfigurationFixture();
+        var (relation, runtime, inputs, expected) = CreateMinimalConfigurationFixture();
         
         var outputs = await runtime.ExecuteObservedAsync(relation, inputs);
 
@@ -62,9 +61,7 @@ public sealed class ConventionBasedSearchIndexProjectionTests
         Assert.NotEmpty(fixture.Listener.Traces);
     }
 
-    static void AssertProjected(
-        SearchOrderDto projected,
-        SearchOrderDto expected)
+    static void AssertProjected(SearchOrderDto projected, SearchOrderDto expected)
     {
         Assert.Equal(expected.OrderNumber, projected.OrderNumber);
         Assert.Equal(expected.Stops, projected.Stops.ToArray());
@@ -79,15 +76,15 @@ public sealed class ConventionBasedSearchIndexProjectionTests
             .From<OrderDto>()
             .Join<CustomerDto>((order, customer) => order.CustomerId == customer.Id)
             .Join<ContractDto>((order, customer, contract) => order.ContractId == contract.Id)
-            .Select((order, customer, contract) => new SearchOrderDto(
+            .Select((order, customer, contract) => new(
                 OrderNumber: order.OrderNumber,
                 Stops: order.Stops,
                 StopCount: order.Stops.Count,
-                Customer: new SearchCustomerDto(
+                Customer: new(
                     Id: order.CustomerId,
                     Name: customer.Name
                     ),
-                LaneContract: new SearchLaneContractDto(
+                LaneContract: new(
                     Id: order.ContractId,
                     Lane: contract.Lane,
                     Mode: contract.Mode,
@@ -100,11 +97,12 @@ public sealed class ConventionBasedSearchIndexProjectionTests
     static MinimalConfigurationFixture CreateMinimalConfigurationFixture()
     {
         var sample = CreateMinimalConfigurationSample();
-        return new MinimalConfigurationFixture(
+        return new(
             Definition: CreateSearchProjection(),
-            Runtime: new RelationMappingRuntime(),
+            Runtime: new(),
             ObjectInputs: ToObjectInputs(sample),
-            Expected: ToExpected(sample));
+            Expected: ToExpected(sample)
+            );
     }
 
     static ProgressiveOverridesFixture CreateProgressiveOverridesFixture()
@@ -116,127 +114,136 @@ public sealed class ConventionBasedSearchIndexProjectionTests
             RequireJsonPropertyNameAttributeForFieldIdentity = true,
             ObservationObjectSerializerOptions = CaseInsensitiveJson
         };
-        return new ProgressiveOverridesFixture(
+        return new(
             Definition: CreateSearchProjection(),
-            Runtime: new RelationMappingRuntime(
+            Runtime: new(
                 mappingContext: mappingContext,
-                relationExecutor: new RelationExecutor(
-                    options: new RelationExecutionOptions
-                    {
-                        Listener = listener
-                    })),
+                relationExecutor: new RelationExecutor(options: new() { Listener = listener})
+                ),
             RuntimeInputs: ToProgressiveRuntimeInputs(sample, mappingContext),
             Expected: ToExpected(sample),
-            Listener: listener);
+            Listener: listener
+            );
     }
 
     static SearchProjectionSample CreateMinimalConfigurationSample()
     {
-        return new SearchProjectionSample(
-            Order: new OrderDto(
+        return new(
+            Order: new(
                 Id: "order-8821",
                 OrderNumber: "ORD-8821",
                 Stops: ["PICKUP", "MID", "DELIVERY"],
                 CustomerId: "cust-9",
-                ContractId: "contract-77"),
-            Customer: new CustomerDto(
+                ContractId: "contract-77"
+                ),
+            Customer: new(
                 Id: "cust-9",
-                Name: "Acme Foods"),
-            Contract: new ContractDto(
+                Name: "Acme Foods"
+                ),
+            Contract: new(
                 Id: "contract-77",
                 Lane: "DAL-HOU",
                 Mode: "Reefer",
-                Rate: 1350.25m),
-            Projected: new SearchOrderDto(
+                Rate: 1350.25m
+                ),
+            Projected: new(
                 OrderNumber: "ORD-8821",
                 Stops: ["PICKUP", "MID", "DELIVERY"],
                 StopCount: 3,
-                Customer: new SearchCustomerDto(
+                Customer: new(
                     Id: "cust-9",
-                    Name: "Acme Foods"),
-                LaneContract: new SearchLaneContractDto(
+                    Name: "Acme Foods"
+                    ),
+                LaneContract: new(
                     Id: "contract-77",
                     Lane: "DAL-HOU",
                     Mode: "Reefer",
-                    Rate: 1350.25m)));
+                    Rate: 1350.25m
+                    )
+                )
+            );
     }
 
     static SearchProjectionSample CreateProgressiveOverridesSample()
     {
-        return new SearchProjectionSample(
-            Order: new OrderDto(
+        return new(
+            Order: new(
                 Id: "order-9901",
                 OrderNumber: "ORD-9901",
                 Stops: ["PICKUP", "DELIVERY"],
                 CustomerId: "cust-44",
-                ContractId: "contract-44"),
-            Customer: new CustomerDto(
+                ContractId: "contract-44"
+                ),
+            Customer: new(
                 Id: "cust-44",
-                Name: "Northwind"),
-            Contract: new ContractDto(
+                Name: "Northwind"
+                ),
+            Contract: new(
                 Id: "contract-44",
                 Lane: "SEA-PDX",
                 Mode: "DryVan",
-                Rate: 920.5m),
-            Projected: new SearchOrderDto(
+                Rate: 920.5m
+                ),
+            Projected: new(
                 OrderNumber: "ORD-9901",
                 Stops: ["PICKUP", "DELIVERY"],
                 StopCount: 2,
-                Customer: new SearchCustomerDto(
+                Customer: new(
                     Id: "cust-44",
-                    Name: "Northwind"),
-                LaneContract: new SearchLaneContractDto(
+                    Name: "Northwind"
+                    ),
+                LaneContract: new(
                     Id: "contract-44",
                     Lane: "SEA-PDX",
                     Mode: "DryVan",
-                    Rate: 920.5m)));
+                    Rate: 920.5m
+                    )
+                )
+            );
     }
 
-    static IReadOnlyList<object> ToObjectInputs(SearchProjectionSample sample)
-        => [sample.Order, sample.Customer, sample.Contract];
+    static IReadOnlyList<object> ToObjectInputs(SearchProjectionSample sample) => [sample.Order, sample.Customer, sample.Contract];
 
-    static IReadOnlyList<RelationRuntimeInput> ToProgressiveRuntimeInputs(
-        SearchProjectionSample sample,
-        ShapeMappingContext mappingContext)
+    static IReadOnlyList<RelationRuntimeInput> ToProgressiveRuntimeInputs(SearchProjectionSample sample, ShapeMappingContext mappingContext)
     {
         var orderObserved = mappingContext.Map(sample.Order);
         return
         [
             RelationRuntimeInput.From(orderObserved),
             RelationRuntimeInput.From(sample.Customer),
-            RelationRuntimeInput.From(
-                sample.Contract,
-                schemaId: new ShapeId(nameof(ContractDto)))
+            RelationRuntimeInput.From(sample.Contract, schemaId: new ShapeId(nameof(ContractDto)))
         ];
     }
 
     static SearchProjectionExpected ToExpected(SearchProjectionSample sample)
-        => new(
-            OutputSchema: new ShapeId(nameof(SearchOrderDto)),
-            OutputDto: sample.Projected);
+        => new(OutputSchema: new(nameof(SearchOrderDto)), OutputDto: sample.Projected);
 
     sealed record SearchProjectionSample(
         OrderDto Order,
         CustomerDto Customer,
         ContractDto Contract,
-        SearchOrderDto Projected);
+        SearchOrderDto Projected
+        );
 
     sealed record SearchProjectionExpected(
         ShapeId OutputSchema,
-        SearchOrderDto OutputDto);
+        SearchOrderDto OutputDto
+        );
 
     sealed record MinimalConfigurationFixture(
         RelationDefinition Definition,
         RelationMappingRuntime Runtime,
         IReadOnlyList<object> ObjectInputs,
-        SearchProjectionExpected Expected);
+        SearchProjectionExpected Expected
+        );
 
     sealed record ProgressiveOverridesFixture(
         RelationDefinition Definition,
         RelationMappingRuntime Runtime,
         IReadOnlyList<RelationRuntimeInput> RuntimeInputs,
         SearchProjectionExpected Expected,
-        CapturingExecutionListener Listener);
+        CapturingExecutionListener Listener
+        );
 
     sealed record OrderDto(
         [property: JsonPropertyName("fld_order_id")] string Id,

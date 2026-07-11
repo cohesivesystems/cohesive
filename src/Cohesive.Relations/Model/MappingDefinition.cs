@@ -49,33 +49,6 @@ public sealed record MappingName
 }
 
 /// <summary>
-/// Mapping direction semantics.
-/// </summary>
-public enum MappingDirection
-{
-    /// <summary>Represents the source to target mapping option.</summary>
-    SourceToTarget = 0,
-    
-    /// <summary>Represents the target to source mapping option.</summary>
-    TargetToSource = 1,
-    
-    /// <summary>Represents the bidirectional mapping option.</summary>
-    Bidirectional = 2
-}
-
-/// <summary>
-/// Mapping semantic kind.
-/// </summary>
-public enum MappingKind
-{
-    /// <summary>Represents the relation option.</summary>
-    Relation = 0,
-    
-    /// <summary>Represents the object option.</summary>
-    Object = 1
-}
-
-/// <summary>
 /// Mapping evaluation scope.
 /// </summary>
 public enum MappingScope
@@ -88,80 +61,16 @@ public enum MappingScope
 }
 
 /// <summary>
-/// Nested object mapping reference.
-/// </summary>
-public sealed record NestedMapping
-{
-    /// <summary>
-    /// Creates a nested mapping.
-    /// </summary>
-    public NestedMapping(FieldPath source, FieldPath target, MappingId nestedMappingId)
-    {
-        Source = source;
-        Target = target;
-        NestedMappingId = Guard.RequireNotNull(nestedMappingId);
-    }
-
-    /// <summary>
-    /// Source object path.
-    /// </summary>
-    public FieldPath Source { get; init; }
-
-    /// <summary>
-    /// Target object path.
-    /// </summary>
-    public FieldPath Target { get; init; }
-
-    /// <summary>
-    /// Nested mapping id.
-    /// </summary>
-    public MappingId NestedMappingId { get; init; }
-}
-
-/// <summary>
-/// Collection mapping reference.
-/// </summary>
-public sealed record CollectionMapping
-{
-    /// <summary>
-    /// Creates a collection mapping.
-    /// </summary>
-    public CollectionMapping(
-        FieldPath sourceCollection,
-        FieldPath targetCollection,
-        MappingId itemMappingId
-        )
-    {
-        SourceCollection = sourceCollection;
-        TargetCollection = targetCollection;
-        ItemMappingId = Guard.RequireNotNull(itemMappingId);
-    }
-
-    /// <summary>
-    /// Source collection path.
-    /// </summary>
-    public FieldPath SourceCollection { get; init; }
-
-    /// <summary>
-    /// Target collection path.
-    /// </summary>
-    public FieldPath TargetCollection { get; init; }
-
-    /// <summary>
-    /// Mapping used per collection item.
-    /// </summary>
-    public MappingId ItemMappingId { get; init; }
-}
-
-/// <summary>
 /// Mapping execution preference.
 /// </summary>
 public enum MappingExecutionPreference
 {
     /// <summary>Represents the in memory option.</summary>
     InMemory = 0,
+    
     /// <summary>Represents the materialized option.</summary>
     Materialized = 1,
+    
     /// <summary>Represents the code generated option.</summary>
     CodeGenerated = 2
 }
@@ -175,11 +84,9 @@ public sealed record MappingDefinition
     /// Creates a mapping definition.
     /// </summary>
     [JsonConstructor]
-    MappingDefinition(
+    public MappingDefinition(
         MappingId id,
         MappingName name,
-        MappingKind kind,
-        ShapeId? sourceShapeId,
         ShapeId targetShapeId,
         ImmutableArray<FieldAssignment> assignments = default,
         Expr? predicate = null,
@@ -187,16 +94,11 @@ public sealed record MappingDefinition
         Expr? key = null,
         Expr? entity = null,
         MappingScope scope = MappingScope.Rooted,
-        MappingDirection direction = MappingDirection.SourceToTarget,
-        ImmutableArray<NestedMapping> nestedMappings = default,
-        ImmutableArray<CollectionMapping> collectionMappings = default,
         MappingMetadata? metadata = null
         )
     {
         Id = Guard.RequireNotNull(id);
         Name = Guard.RequireNotNull(name);
-        Kind = kind;
-        SourceShapeId = sourceShapeId;
         TargetShapeId = targetShapeId;
         Assignments = assignments.IsDefault ? [] : assignments;
         Predicate = predicate;
@@ -204,54 +106,11 @@ public sealed record MappingDefinition
         Key = key;
         Entity = entity;
         Scope = scope;
-        Direction = direction;
-        NestedMappings = nestedMappings.IsDefault ? [] : nestedMappings;
-        CollectionMappings = collectionMappings.IsDefault ? [] : collectionMappings;
         Metadata = metadata ?? MappingMetadata.Default;
 
-        if (Kind == MappingKind.Relation)
-        {
-            if (Assignments.IsDefaultOrEmpty)
-                throw new ArgumentException("Relation mapping requires at least one assignment.", nameof(assignments));
-            return;
-        }
-
-        if (SourceShapeId is null)
-            throw new ArgumentException("Object mapping requires a source shape id.", nameof(sourceShapeId));
+        if (Assignments.IsDefaultOrEmpty)
+            throw new ArgumentException("Relation mapping requires at least one assignment.", nameof(assignments));
     }
-
-    /// <summary>
-    /// Creates a relation mapping definition.
-    /// </summary>
-    public MappingDefinition(
-        MappingId id,
-        MappingName name,
-        ShapeId targetShapeId,
-        ImmutableArray<FieldAssignment> assignments,
-        Expr? predicate = null,
-        Expr? forEach = null,
-        Expr? key = null,
-        Expr? entity = null,
-        MappingScope scope = MappingScope.Rooted,
-        MappingMetadata? metadata = null
-        )
-        : this(
-            id: id,
-            name: name,
-            kind: MappingKind.Relation,
-            sourceShapeId: null,
-            targetShapeId: targetShapeId,
-            assignments: assignments,
-            predicate: predicate,
-            forEach: forEach,
-            key: key,
-            entity: entity,
-            scope: scope,
-            direction: MappingDirection.SourceToTarget,
-            nestedMappings: [],
-            collectionMappings: [],
-            metadata: metadata)
-    { }
 
     /// <summary>
     /// Mapping identifier.
@@ -262,16 +121,6 @@ public sealed record MappingDefinition
     /// Mapping name.
     /// </summary>
     public MappingName Name { get; init; }
-
-    /// <summary>
-    /// Mapping semantic kind.
-    /// </summary>
-    public MappingKind Kind { get; init; }
-
-    /// <summary>
-    /// Source shape id for object mappings.
-    /// </summary>
-    public ShapeId? SourceShapeId { get; init; }
 
     /// <summary>
     /// Target shape id.
@@ -309,40 +158,7 @@ public sealed record MappingDefinition
     public MappingScope Scope { get; init; }
 
     /// <summary>
-    /// Mapping direction for object mappings.
-    /// </summary>
-    public MappingDirection Direction { get; init; }
-    
-    /// <summary>
-    /// Nested object mappings.
-    /// </summary>
-    public ImmutableArray<NestedMapping> NestedMappings { get; init; }
-
-    /// <summary>
-    /// Collection item mappings.
-    /// </summary>
-    public ImmutableArray<CollectionMapping> CollectionMappings { get; init; }
-    
-    /// <summary>
     /// Mapping metadata.
     /// </summary>
     public MappingMetadata Metadata { get; init; }
-
-    /// <summary>
-    /// True when this is a relation mapping.
-    /// </summary>
-    [JsonIgnore]
-    public bool IsRelationMapping => Kind == MappingKind.Relation;
-
-    /// <summary>
-    /// True when this is an object mapping.
-    /// </summary>
-    [JsonIgnore]
-    public bool IsObjectMapping => Kind == MappingKind.Object;
-
-    /// <summary>
-    /// True when object mapping may be evaluated in both directions.
-    /// </summary>
-    [JsonIgnore]
-    public bool IsBidirectional => IsObjectMapping && Direction is MappingDirection.Bidirectional;
 }

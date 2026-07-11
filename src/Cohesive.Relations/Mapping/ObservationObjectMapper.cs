@@ -35,10 +35,7 @@ public sealed class ObservationObjectMapper<T> : IObservationObjectMapper<T>
 public static class ObservationObjectMapper
 {
     /// <summary>
-    /// Starts a builder for mapping observations to <typeparamref name="T"/>.
+    /// Create a builder for mapping observations to type <typeparamref name="T"/>.
     /// </summary>
-    public static ObservationObjectMapperBuilder<T> For<T>(
-        ObservationLayout layout,
-        ShapeMappingContext? context = null
-        ) => new(layout, context);
+    public static ObservationObjectMapperBuilder<T> For<T>(ObservationLayout layout, ShapeMappingContext? context = null) => new(layout, context);
 }

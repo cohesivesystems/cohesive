@@ -20,7 +20,7 @@ public interface IReadRepository
 public interface IQueryRepository : IReadRepository
 {
     /// <summary>
-    /// Optional advertised query capabilities for diagnostics and future planner use.
+    /// Optional advertised query capabilities for diagnostics and planner use.
     /// </summary>
     QueryCapabilitySet? Capabilities { get; }
 
@@ -31,7 +31,7 @@ public interface IQueryRepository : IReadRepository
 }
 
 /// <summary>
-/// In-memory observation repository used by tests and lightweight experiments.
+/// In-memory observation repository used by tests.
 /// </summary>
 public sealed class InMemoryReadRepository : IQueryRepository
 {
@@ -64,7 +64,7 @@ public sealed class InMemoryReadRepository : IQueryRepository
     }
 
     /// <summary>
-    /// Creates an in-memory repository from CLR records using observation mapping conventions.
+    /// Creates an in-memory repository from the given records using observation mapping conventions.
     /// </summary>
     public static InMemoryReadRepository From<TRecord>(IEnumerable<TRecord> records, Func<TRecord, string> idSelector, ShapeId? schemaId = null, ShapeMappingContext? mappingContext = null)
     {
@@ -72,12 +72,7 @@ public sealed class InMemoryReadRepository : IQueryRepository
         ArgumentNullException.ThrowIfNull(idSelector);
         var mapping = mappingContext ?? ShapeMappingContext.Default;
         var schema = schemaId ?? new ShapeId(typeof(TRecord).Name);
-        return new(records.Select(record => mapping.Map(
-            record,
-            schema,
-            new() { Id = Guard.RequireNotNullOrWhiteSpace(idSelector(record)) })
-            )
-        );
+        return new(records.Select(record => mapping.Map(record, schemaId: schema, metadata: new() { Id = Guard.RequireNotNullOrWhiteSpace(idSelector(record)) })));
     }
 
     /// <summary>

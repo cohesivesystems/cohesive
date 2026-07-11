@@ -1,7 +1,7 @@
 namespace Cohesive.Relations.Authoring;
 
 /// <summary>
-/// Typed relation DSL entry point.
+/// Typed relation factory.
 /// </summary>
 /// <typeparam name="TTarget">Target CLR shape.</typeparam>
 public static class Relation<TTarget>

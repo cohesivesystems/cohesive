@@ -3,7 +3,6 @@ using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Cohesive.Model;
 using Cohesive.Relations.Model;
 
 namespace Cohesive.Relations.Mapping;
@@ -59,10 +58,7 @@ public sealed class ObjectObservationMapperBuilder<T>
     /// <param name="requireAttribute">True to require every mapped property to define <see cref="JsonPropertyNameAttribute"/>; false to allow fallback resolution.</param>
     /// <param name="resolveFieldIdentity">Optional fallback resolver used when <see cref="JsonPropertyNameAttribute"/> is missing. If omitted, property name is used as the field identity.</param>
     /// <exception cref="InvalidOperationException"><see cref="JsonPropertyNameAttribute"/> is missing</exception>
-    public ObjectObservationMapperBuilder<T> MapAllFromJsonPropertyName(
-        bool requireAttribute = false,
-        Func<PropertyInfo, string>? resolveFieldIdentity = null
-        )
+    public ObjectObservationMapperBuilder<T> MapAllFromJsonPropertyName(bool requireAttribute = false, Func<PropertyInfo, string>? resolveFieldIdentity = null)
     {
         foreach (var property in GetReadableProperties())
             Map(propertyName: property.Name, ResolveFieldIdentityFromJsonPropertyName(property, requireAttribute, resolveFieldIdentity));
@@ -128,14 +124,12 @@ public sealed class ObjectObservationMapperBuilder<T>
         var effectiveMappings = BuildEffectiveMappings(readableProperties);
         if (effectiveMappings.Count == 0)
             throw new InvalidOperationException($"Mapper for '{typeof(T).Name}' must define at least one property mapping.");
+        
+        var duplicateTargetField = effectiveMappings.TryGetDuplicateByKey(x => x.FieldIdentity);
+        if (duplicateTargetField is not null)
+            throw new InvalidOperationException($"Mapper for '{typeof(T).Name}' contains duplicate target field identity '{duplicateTargetField.FieldIdentity}'.");
 
         var properties = readableProperties.ToDictionary(x => x.Name, StringComparer.Ordinal);
-        var duplicateTargetField = effectiveMappings
-            .GroupBy(x => x.FieldIdentity, StringComparer.Ordinal)
-            .FirstOrDefault(g => g.Count() > 1);
-        if (duplicateTargetField is not null)
-            throw new InvalidOperationException($"Mapper for '{typeof(T).Name}' contains duplicate target field identity '{duplicateTargetField.Key}'.");
-
         List<PropertyAccessor<T>> accessors = [];
         foreach (var mapping in effectiveMappings)
         {
@@ -185,7 +179,7 @@ public sealed class ObjectObservationMapperBuilder<T>
         return this;
     }
 
-    ObjectObservationMetadataAccessors<T> ResolveMetadataAccessors(PropertyInfo[] properties)
+    ObjectObservationMetadataAccessors<T> ResolveMetadataAccessors(IReadOnlyList<PropertyInfo> properties)
     {
         var byName = properties.ToDictionary(x => x.Name, StringComparer.OrdinalIgnoreCase);
         var id = idExtractorOverride ?? ResolveIdExtractorByConvention(properties, byName);
@@ -261,7 +255,7 @@ public sealed class ObjectObservationMapperBuilder<T>
         return null;
     }
 
-    PropertyInfo[] GetReadableProperties() => context.GetReadableProperties(typeof(T));
+    IReadOnlyList<PropertyInfo> GetReadableProperties() => context.GetReadableProperties(typeof(T));
 
     static string ResolveFieldIdentityFromJsonPropertyName(
         PropertyInfo property,

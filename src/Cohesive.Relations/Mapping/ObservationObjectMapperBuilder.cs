@@ -178,9 +178,7 @@ public sealed class ObservationObjectMapperBuilder<T>
             })
             .ToArray();
 
-        NewExpression body = constructor is null
-            ? Expression.New(typeof(T))
-            : Expression.New(constructor, constructorArguments);
+        var body = constructor is null ? Expression.New(typeof(T)) : Expression.New(constructor, constructorArguments);
 
         var constructorPropertyNames = constructorParameters
             .Select(x => x.Name ?? string.Empty)
@@ -309,7 +307,7 @@ public sealed class ObservationObjectMapperBuilder<T>
         return property;
     }
 
-    PropertyInfo[] GetReadableProperties() => context.GetReadableProperties(typeof(T));
+    IReadOnlyList<PropertyInfo> GetReadableProperties() => context.GetReadableProperties(typeof(T));
 
     static string ResolveFieldIdentityFromJsonPropertyName(PropertyInfo property, bool requireAttribute, Func<PropertyInfo, string>? fallback)
     {

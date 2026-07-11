@@ -14,20 +14,21 @@ public sealed class QueryProjectionTests
         var repositories = new DispatchingReadRepositoryRegistry()
             .Register(SegmentSource,
                 InMemoryReadRepository.From<SegmentRecord>(
-                    [new("segment-enterprise", "enterprise")],
+                    [new(SegmentId: "segment-enterprise", DisplayName: "enterprise")],
                     idSelector: static segment => segment.SegmentId)
                 )
             .Register(OrderSource,
                 InMemoryReadRepository.From<OrderRecord>(
                     [
-                        new("order-1", "customer-1", 42.5m),
-                        new("order-2", "customer-1", 99.0m)
+                        new(OrderId: "order-1", CustomerId: "customer-1", Total: 42.5m),
+                        new(OrderId: "order-2", CustomerId: "customer-1", Total: 99.0m)
                     ],
-                    idSelector: static order => order.OrderId)
-                );
-
+                    idSelector: static order => order.OrderId
+                )
+            );
+        
         var query = Query.From<CustomerRecord>(
-                [new("customer-1", "segment-enterprise")],
+                [new(CustomerId: "customer-1", SegmentId: "segment-enterprise")],
                 rootId: static customer => customer.CustomerId
             )
             .JoinOne<CustomerRecord, string>(
@@ -49,6 +50,7 @@ public sealed class QueryProjectionTests
             );
 
         var result = await query.ExecuteAsync(OperationContext.Create(), repositories);
+        
         var projection = Assert.Single(result);
         Assert.Equal("customer-1", projection.CustomerId);
         Assert.Equal("enterprise", projection.Segment.DisplayName);
@@ -91,21 +93,17 @@ public sealed class QueryProjectionTests
     [Fact]
     public void QueryCapabilityInspector_ReportsCaseInsensitiveStringComparison()
     {
-        var caseSensitive = new EntityPredicate(
-            new FieldPredicate(
-                FieldPath.FromField("status"),
-                new ContainsValuePredicate("active")));
-        var caseInsensitive = new EntityPredicate(
-            new FieldPredicate(
-                FieldPath.FromField("status"),
-                new ContainsValuePredicate("active", CaseSensitive: false)));
+        var caseSensitive = new EntityPredicate(new FieldPredicate(FieldPath.FromField("status"), new ContainsValuePredicate("active")));
+        var caseInsensitive = new EntityPredicate(new FieldPredicate(FieldPath.FromField("status"), new ContainsValuePredicate("active", CaseSensitive: false)));
 
         Assert.False(QueryCapabilityInspector
             .GetRequiredCapabilities(caseSensitive)
-            .Supports(QueryCapability.CaseInsensitiveStringComparison));
+            .Supports(QueryCapability.CaseInsensitiveStringComparison)
+        );
         Assert.True(QueryCapabilityInspector
             .GetRequiredCapabilities(caseInsensitive)
-            .Supports(QueryCapability.CaseInsensitiveStringComparison));
+            .Supports(QueryCapability.CaseInsensitiveStringComparison)
+        );
     }
 
     [Fact]
@@ -144,10 +142,7 @@ public sealed class QueryProjectionTests
         var query = 
             Query.From(
                 CustomerSource,
-                new(new FieldPredicate(
-                    FieldPath.FromField("Status"),
-                    new ExactValuePredicate("active")
-                )),
+                new(new FieldPredicate(FieldPath.FromField("Status"), new ExactValuePredicate("active"))),
                 fields: FieldSelection.ForFields("CustomerId", "SegmentId")
             )
             .JoinOne<QueriedCustomerRecord, string>(
@@ -208,16 +203,15 @@ public sealed class QueryProjectionTests
     public async Task QueryBuilder_JoinMany_WithPointReadRepository_UsesIdFallback()
     {
         var repositories = new DispatchingReadRepositoryRegistry()
-            .Register(
-                OrderSource,
+            .Register(OrderSource,
                 new PointReadOrderRepository(
                 [
-                    new("order-1", "paid", 42.5m),
-                    new("order-2", "draft", 13.0m)
+                    new(Id: "order-1", Status: "paid", Total: 42.5m),
+                    new(Id: "order-2", Status: "draft", Total: 13.0m)
                 ]));
 
         var query = Query.From<FavoriteOrderRoot>(
-                [new("root-1", "order-1")],
+                [new(RootId: "root-1", OrderId: "order-1")],
                 rootId: static root => root.RootId
             )
             .JoinMany<FavoriteOrderRoot, PointReadOrderRecord, string>(
@@ -225,10 +219,8 @@ public sealed class QueryProjectionTests
                 source: OrderSource,
                 rootKey: static root => root.OrderId,
                 foreignKey: static order => order.Id,
-                sourcePredicate: new(
-                    new FieldPredicate(
-                        FieldPath.FromField("Status"),
-                        new ExactValuePredicate("paid"))))
+                sourcePredicate: new( new FieldPredicate(FieldPath.FromField("Status"), new ExactValuePredicate("paid")))
+                )
             .Select(ctx => ctx.Many<PointReadOrderRecord>("orders"));
 
         var result = await query.ExecuteAsync(OperationContext.Create(), repositories);
@@ -251,7 +243,8 @@ public sealed class QueryProjectionTests
                     new("projection-b", "ready", 13.0m),
                     new("projection-c", "draft", 7.0m)
                 ],
-                idSelector: static order => order.Id));
+                idSelector: static order => order.Id)
+                );
 
         var query = Query.From<ProjectionPolicyRoot>(
                 [new("policy-1", [new("projection-a"), new("projection-b")])],
@@ -261,8 +254,10 @@ public sealed class QueryProjectionTests
                 alias: "orders",
                 source: BoundOrderSource,
                 rootKeyPath: FieldPath.Parse("ProjectionBindings.[].ProjectionId"),
-                foreignKeyField: "Id")
-            .Select(ctx => ctx.Many<PointReadOrderRecord>("orders"));
+                foreignKeyField: "Id"
+            )
+            .Select(ctx => ctx.Many<PointReadOrderRecord>("orders")
+            );
 
         var result = await query.ExecuteAsync(OperationContext.Create(), repositories);
 
@@ -284,10 +279,10 @@ public sealed class QueryProjectionTests
 
         var query = Query.From(
                 BoundOrderSource,
-                new(new FieldPredicate(
-                    FieldPath.FromField("Id"),
-                    new ExactValuePredicate("projection-b"))))
-            .Select(ctx => ctx.RootAs<PointReadOrderRecord>());
+                new(new FieldPredicate(FieldPath.FromField("Id"), new ExactValuePredicate("projection-b")))
+            )
+            .Select(ctx => ctx.RootAs<PointReadOrderRecord>()
+            );
 
         var result = await query.ExecuteAsync(OperationContext.Create(), repositories);
 
@@ -300,7 +295,7 @@ public sealed class QueryProjectionTests
     public void ScopedFieldPredicateEvaluator_EvaluatesScopedPredicatesInMemory()
     {
         var observation = new Observation(
-            shapeId: new ShapeId("OrderBatch"),
+            shapeId: new("OrderBatch"),
             id: "batch-1",
             fields: new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
             {
@@ -391,14 +386,14 @@ public sealed class QueryProjectionTests
             new("task-3", "review", "complete", 8, new DateTimeOffset(2026, 05, 05, 12, 0, 0, TimeSpan.Zero)),
             new("task-4", "compile", "complete", 7, new DateTimeOffset(2026, 04, 30, 9, 0, 0, TimeSpan.Zero))
         ], static record => record.Id);
-        var failed = new EntityPredicate(
-            new FieldPredicate(
-                FieldPath.FromField(nameof(ProcessTaskRecord.Status)),
-                new ExactValuePredicate("failed")));
+        
+        var failed = new EntityPredicate(new FieldPredicate(FieldPath.FromField(nameof(ProcessTaskRecord.Status)), new ExactValuePredicate("failed")));
+        
         var thisWeek = new EntityPredicate(
             new FieldPredicate(
                 FieldPath.FromField(nameof(ProcessTaskRecord.StartedAt)),
                 new DateRangeValuePredicate(new DateTimeOffset(2026, 05, 01, 0, 0, 0, TimeSpan.Zero), End: null)));
+        
         var plan = new AggregationPlan(
             Roots:
             [

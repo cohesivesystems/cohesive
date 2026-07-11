@@ -10,7 +10,6 @@ namespace Cohesive.Relations.Execution;
 /// </summary>
 public sealed record CompiledRelation(RelationDefinition Definition, RelationPlan Plan);
 
-
 /// <summary>
 /// Compiler that maps JSON or IR relation mappings into executable form.
 /// </summary>

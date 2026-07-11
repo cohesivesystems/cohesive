@@ -320,14 +320,10 @@ public readonly struct ObservationValue(
     /// <exception cref="InvalidOperationException"></exception>
     public static IReadOnlyDictionary<string, ObservationValue> ToFieldDictionary(object value, JsonSerializerOptions? options = null)
     {
-        var observed = value is ObservationValue observationValue
-            ? observationValue
-            : FromClrPropertyBag(value, options);
-
+        var observed = value is ObservationValue observationValue ? observationValue : FromClrPropertyBag(value, options);
         if (observed.Kind != ObservationValueKind.Object || observed.Fields is null)
             throw new InvalidOperationException($"Value of CLR type '{value.GetType().FullName}' did not project to an object-shaped observation value.");
-
-        //return new ReadOnlyDictionary<string, ObservationValue>(new Dictionary<string, ObservationValue>(observed.Fields, StringComparer.Ordinal));
+        
         return observed.Fields;
     }
 

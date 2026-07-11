@@ -1,5 +1,4 @@
 using System.Globalization;
-using Cohesive.Model;
 using Cohesive.Relations.Model;
 
 namespace Cohesive.Relations.Queries;
@@ -27,7 +26,7 @@ public static class EntityPredicateEvaluator
         ArgumentNullException.ThrowIfNull(predicate);
 
         var normalized = predicate.Predicate.Normalize();
-        return predicate.Scope is { } scope
+        return predicate.Scope is { } scope 
             ? EvaluateScoped(root, scope, normalized)
             : EvaluateFieldPredicate(root, normalized);
     }

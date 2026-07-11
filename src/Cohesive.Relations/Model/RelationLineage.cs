@@ -29,7 +29,7 @@ public static class RelationLineage
         if (definition.Filter is not null && ReferencesField(definition.Filter, field))
             nodeIds.Add("<relation.filter>");
 
-        foreach (var mapping in definition.Mappings.Where(x => x.IsRelationMapping))
+        foreach (var mapping in definition.Mappings)
         {
             if (mapping.Predicate is not null && ReferencesField(mapping.Predicate, field))
                 nodeIds.Add($"{mapping.Id.Value}.predicate");

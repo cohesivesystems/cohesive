@@ -32,15 +32,14 @@ public static class AggregationPlanEvaluator
             | QueryCapability.ScopedFields
             | QueryCapability.Negation
             | QueryCapability.Aggregation
-            | QueryCapability.CaseInsensitiveStringComparison));
+            | QueryCapability.CaseInsensitiveStringComparison
+            )
+        );
 
     /// <summary>
     /// Evaluates an aggregation plan against observations in memory.
     /// </summary>
-    public static IReadOnlyDictionary<string, AggregationResult> Evaluate(
-        IEnumerable<Observation> observations,
-        AggregationPlan plan
-        )
+    public static IReadOnlyDictionary<string, AggregationResult> Evaluate(IEnumerable<Observation> observations, AggregationPlan plan)
     {
         ArgumentNullException.ThrowIfNull(observations);
         ArgumentNullException.ThrowIfNull(plan);

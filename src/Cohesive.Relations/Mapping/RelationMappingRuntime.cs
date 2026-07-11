@@ -5,7 +5,7 @@ using Cohesive.Relations.Model;
 namespace Cohesive.Relations.Mapping;
 
 /// <summary>
-/// Facade that composes relation execution and DTO/observed-shape mapping ergonomics.
+/// A facade that combines relation execution and DTO/observed-shape mapping.
 /// </summary>
 public sealed class RelationMappingRuntime
 {
@@ -39,8 +39,8 @@ public sealed class RelationMappingRuntime
     public ValueTask<IReadOnlyList<Observation>> ExecuteObservedAsync(
         RelationDefinition definition,
         IReadOnlyList<Observation> inputs,
-        CancellationToken token = default
-        ) => RelationExecutor.ExecuteAsync(definition, inputs, token);
+        CancellationToken ct = default
+        ) => RelationExecutor.ExecuteAsync(definition, inputs, ct);
 
     /// <summary>
     /// Executes relation mappings over mixed DTO/observed-shape inputs.
@@ -48,12 +48,12 @@ public sealed class RelationMappingRuntime
     public ValueTask<IReadOnlyList<Observation>> ExecuteObservedAsync(
         RelationDefinition definition,
         IReadOnlyList<RelationRuntimeInput> inputs,
-        CancellationToken token = default
+        CancellationToken ct = default
         )
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(inputs);
-        return RelationExecutor.ExecuteAsync(definition, ToObservedInputs(inputs), token);
+        return RelationExecutor.ExecuteAsync(definition, ToObservedInputs(inputs), ct);
     }
 
     /// <summary>
@@ -62,55 +62,39 @@ public sealed class RelationMappingRuntime
     public ValueTask<IReadOnlyList<Observation>> ExecuteObservedAsync(
         RelationDefinition definition,
         IReadOnlyList<object> inputs,
-        CancellationToken token = default
+        CancellationToken ct = default
         )
     {
         ArgumentNullException.ThrowIfNull(inputs);
         var runtimeInputs = inputs.Select(x => RelationRuntimeInput.From(x)).ToArray();
-        return ExecuteObservedAsync(definition, runtimeInputs, token);
+        return ExecuteObservedAsync(definition, runtimeInputs, ct);
     }
 
     /// <summary>
     /// Executes relation mappings and maps outputs to DTOs.
     /// </summary>
-    public async ValueTask<IReadOnlyList<TOutput>> ExecuteAsync<TOutput>(
-        RelationDefinition definition,
-        IReadOnlyList<Observation> inputs,
-        CancellationToken token = default
-        )
+    public async ValueTask<IReadOnlyList<TOutput>> ExecuteAsync<TOutput>(RelationDefinition definition, IReadOnlyList<Observation> inputs, CancellationToken ct = default)
     {
-        var observed = await ExecuteObservedAsync(definition, inputs, token);
+        var observed = await ExecuteObservedAsync(definition, inputs, ct);
         return observed.Select(MappingContext.Map<TOutput>).ToArray();
     }
 
     /// <summary>
     /// Executes relation mappings over mixed DTO/observed-shape inputs and maps outputs to DTOs.
     /// </summary>
-    public async ValueTask<IReadOnlyList<TOutput>> ExecuteAsync<TOutput>(
-        RelationDefinition definition,
-        IReadOnlyList<RelationRuntimeInput> inputs,
-        CancellationToken token = default
-        )
+    public async ValueTask<IReadOnlyList<TOutput>> ExecuteAsync<TOutput>(RelationDefinition definition, IReadOnlyList<RelationRuntimeInput> inputs, CancellationToken ct = default)
     {
-        var observed = await ExecuteObservedAsync(definition, inputs, token);
+        var observed = await ExecuteObservedAsync(definition, inputs, ct);
         return [..observed.Select(MappingContext.Map<TOutput>)];
     }
 
     /// <summary>
     /// Executes relation mappings over mixed DTO/observed-shape inputs and maps outputs to DTOs.
     /// </summary>
-    public ValueTask<IReadOnlyList<TOutput>> ExecuteAsync<TOutput>(
-        RelationDefinition definition,
-        IReadOnlyList<object> inputs,
-        CancellationToken token = default
-        )
+    public ValueTask<IReadOnlyList<TOutput>> ExecuteAsync<TOutput>(RelationDefinition definition, IReadOnlyList<object> inputs, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(inputs);
-        return ExecuteAsync<TOutput>(
-            definition, 
-            [..inputs.Select(static x => RelationRuntimeInput.From(x))], 
-            token
-            );
+        return ExecuteAsync<TOutput>(definition, [..inputs.Select(static x => RelationRuntimeInput.From(x))], ct);
     }
 
     IReadOnlyList<Observation> ToObservedInputs(IReadOnlyList<RelationRuntimeInput> inputs)
@@ -145,11 +129,7 @@ public sealed class RelationMappingRuntime
 
     interface IObjectInputMapper
     {
-        Observation Map(
-            object value,
-            ShapeId? schemaId,
-            ObjectObservationMetadata? metadata,
-            ShapeMappingContext context);
+        Observation Map(object value, ShapeId? schemaId, ObjectObservationMetadata? metadata, ShapeMappingContext context);
     }
 
     sealed class ObjectInputMapper<T> : IObjectInputMapper

@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Cohesive.Model;
 using Cohesive.Relations.Execution;
 using Cohesive.Relations.Model;
 
@@ -32,7 +31,7 @@ public sealed class RelationHydrationPlanner
         if (definition.Filter is not null)
             CollectFromExpression(definition.Filter, relatedBySchema);
 
-        foreach (var mapping in definition.Mappings.Where(x => x.IsRelationMapping))
+        foreach (var mapping in definition.Mappings)
         {
             if (mapping.Predicate is not null)
                 CollectFromExpression(mapping.Predicate, relatedBySchema);
@@ -47,17 +46,14 @@ public sealed class RelationHydrationPlanner
             .Select(x => x.Value.Build())
             .ToArray();
 
-        return new RelationHydrationPlan(
+        return new(
             RootSchema: definition.RootSourceShapeId,
-            RootFields: projectionPlan.ReferencedFields
-                .OrderBy(x => x, StringComparer.Ordinal)
-                .ToArray(),
-            Related: related);
+            RootFields: [..projectionPlan.ReferencedFields.OrderBy(x => x, StringComparer.Ordinal)],
+            Related: related
+            );
     }
 
-    static void CollectFromExpression(
-        Expr relExpression,
-        IDictionary<string, RelatedAccumulator> relatedBySchema)
+    static void CollectFromExpression(Expr relExpression, IDictionary<string, RelatedAccumulator> relatedBySchema)
     {
         switch (relExpression)
         {

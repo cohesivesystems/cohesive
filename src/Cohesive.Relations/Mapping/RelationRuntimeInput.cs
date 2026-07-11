@@ -11,7 +11,8 @@ public sealed record RelationRuntimeInput
     public RelationRuntimeInput(
         object value,
         ShapeId? schemaId = null,
-        ObjectObservationMetadata? metadata = null)
+        ObjectObservationMetadata? metadata = null
+        )
     {
         Value = Guard.RequireNotNull(value);
         SchemaId = schemaId;
@@ -36,9 +37,6 @@ public sealed record RelationRuntimeInput
     /// <summary>
     /// Creates a runtime input with optional mapping overrides.
     /// </summary>
-    public static RelationRuntimeInput From(
-        object value,
-        ShapeId? schemaId = null,
-        ObjectObservationMetadata? metadata = null)
+    public static RelationRuntimeInput From(object value, ShapeId? schemaId = null, ObjectObservationMetadata? metadata = null)
         => new(value, schemaId, metadata);
 }

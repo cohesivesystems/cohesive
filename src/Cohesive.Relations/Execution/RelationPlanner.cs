@@ -34,27 +34,29 @@ public sealed class RelationPlanner
     {
         ArgumentNullException.ThrowIfNull(definition);
 
-        var relationMappings = definition.Mappings.Where(x => x.IsRelationMapping).ToArray();
-        var planMappings = relationMappings.Select(mapping =>
+        var planMappings = definition.Mappings.Select(mapping =>
         {
             var referenced = CollectReferencedFields(definition.Filter, mapping).ToArray();
             var assigned = mapping.Assignments
                 .Select(x => x.TargetField)
                 .Distinct()
                 .ToArray();
+            
             return new RelationPlanMapping(
                 MappingId: mapping.Id.Value,
                 TargetShapeId: mapping.TargetShapeId,
                 ReferencedFields: referenced,
                 AssignedFields: assigned,
-                HasForEach: mapping.ForEach is not null);
+                HasForEach: mapping.ForEach is not null
+                );
         }).ToArray();
 
         var allReferenced = planMappings
             .SelectMany(x => x.ReferencedFields)
             .Distinct()
             .ToArray();
-        return new RelationPlan(definition.RootSourceShapeId, planMappings, allReferenced);
+        
+        return new(definition.RootSourceShapeId, planMappings, allReferenced);
     }
 
     static IEnumerable<string> CollectReferencedFields(Expr? relationFilter, MappingDefinition mapping)

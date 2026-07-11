@@ -7,7 +7,7 @@ public sealed class RelationSyntaxTests
     {
         var relation = Relation<CarrierDto>
             .From<Carrier>()
-            .Select(c => new CarrierDto
+            .Select(c => new()
             {
                 Id = c.Id,
                 Name = c.LegalName,

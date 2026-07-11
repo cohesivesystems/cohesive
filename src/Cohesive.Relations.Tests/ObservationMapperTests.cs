@@ -102,7 +102,9 @@ public sealed class ObservationMapperTests
             ExternalOrderKey: "order-override-1",
             ExternalEntityReference: "cust-override-1",
             Revision: "29",
-            OrderNumber: "ORD-OVR-1");
+            OrderNumber: "ORD-OVR-1"
+            );
+        
         var observation = mapper.Map(dto);
 
         Assert.Equal("order-override-1", observation.Id);
@@ -128,7 +130,7 @@ public sealed class ObservationMapperTests
         var mapper = ObjectObservationMapper
             .For<CustomConventionMetadataRecord>(new(nameof(CustomConventionMetadataRecord)))
             .Map(nameof(CustomConventionMetadataRecord.OrderNumber), nameof(CustomConventionMetadataRecord.OrderNumber))
-            .WithMetadataConventions(new ObjectObservationMetadataConventionOptions
+            .WithMetadataConventions(new()
             {
                 IdPropertyNames = [nameof(CustomConventionMetadataRecord.RecordKey)],
                 IdJsonPropertyNames = [],
@@ -156,22 +158,18 @@ public sealed class ObservationMapperTests
                 StopCount = 8,
                 Customer = new { id = "cust-500", name = "Contoso", segment = "Enterprise" }
             }),
-            version: 1);
+            version: 1
+            );
 
         var mapper = ObservationObjectMapper
             .For<SearchOrderRecord>(observation.Layout)
             .Map(nameof(SearchOrderRecord.OrderNumber), x => x.OrderNumber)
             .Map(nameof(SearchOrderRecord.StopCount), x => x.StopCount)
-            .Map(
-                nameof(SearchOrderRecord.Customer),
-                x => x.Customer,
-                element => element.Deserialize<SearchCustomerRecord>(new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true
-                })!)
+            .Map(nameof(SearchOrderRecord.Customer), x => x.Customer, element => element.Deserialize<SearchCustomerRecord>(new() { PropertyNameCaseInsensitive = true }))
             .Build();
 
         var projected = mapper.Map(observation);
+        
         Assert.Equal("ORD-500", projected.OrderNumber);
         Assert.Equal(8, projected.StopCount);
         Assert.Equal("cust-500", projected.Customer.Id);
@@ -179,8 +177,7 @@ public sealed class ObservationMapperTests
         Assert.Equal("Enterprise", projected.Customer.Segment);
     }
 
-    static IReadOnlyDictionary<string, ObservationValue> Fields(object expression)
-        => ObservationValue.ToFieldDictionary(expression);
+    static IReadOnlyDictionary<string, ObservationValue> Fields(object expression) => ObservationValue.ToFieldDictionary(expression);
 
     [Fact]
     public void Observation_FromJsonDocument_MapsStateObjectByLayoutOrdinals()
@@ -209,7 +206,8 @@ public sealed class ObservationMapperTests
             document: document,
             id: "order-100",
             version: 9,
-            statePropertyName: "state");
+            statePropertyName: "state"
+            );
 
         Assert.Equal("ORD-100", observation.GetField("OrderNumber").GetString());
         Assert.Equal("cust-1", observation.GetField("CustomerId").GetString());

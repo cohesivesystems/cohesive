@@ -140,7 +140,7 @@ public sealed class QueryBuilder(
         ValidateAlias(alias);
         ArgumentNullException.ThrowIfNull(source);
         ArgumentException.ThrowIfNullOrWhiteSpace(foreignKeyField);
-        joins.Add(new ManyJoinSpec(alias, source, rootKeyPath, foreignKeyField, options, sourcePredicate));
+        joins.Add(new ManyJoinSpec(Alias: alias, source, RootKeyPath: rootKeyPath, ForeignKeyField: foreignKeyField, options, sourcePredicate));
         return this;
     }
 
@@ -283,7 +283,7 @@ public sealed class QueryBuilder(
 }
 
 /// <summary>
-/// Query builder accessor.
+/// Query builder factory.
 /// </summary>
 public static class Query
 {

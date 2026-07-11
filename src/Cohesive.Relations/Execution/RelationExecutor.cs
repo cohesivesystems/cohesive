@@ -71,8 +71,8 @@ public sealed class RelationExecutor : IRelationExecutor
         if (roots.Length == 0)
             return ValueTask.FromResult<IReadOnlyList<Observation>>([]);
 
-        var rootedMappings = relation.Mappings.Where(x => x.IsRelationMapping && x.Scope == MappingScope.Rooted).ToArray();
-        var setMappings = relation.Mappings.Where(x => x.IsRelationMapping && x.Scope == MappingScope.Set).ToArray();
+        var rootedMappings = relation.Mappings.Where(x => x.Scope == MappingScope.Rooted).ToArray();
+        var setMappings = relation.Mappings.Where(x => x.Scope == MappingScope.Set).ToArray();
 
         List<Observation> outputs = [];
 
