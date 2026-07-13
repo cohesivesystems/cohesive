@@ -126,7 +126,12 @@ That is where integration with external storage, runtimes, ML systems, transport
 
 - Reusable components should be well-documented. 
 - Public APIs, semantic models, adapter boundaries, and performance-sensitive behavior should be explained clearly enough that other contributors can extend the system without reverse-engineering intent from implementation details alone.
-- Document record ctor parameters, enum cases, method parameters unless clear from context.
+- Document public and protected APIs using XML documentation, including record constructor parameters, method and constructor parameters, return values, enum cases, and expected exceptions.
+- Add a `<param>` element for every method, constructor, delegate, and record constructor parameter. Documentation may repeat information conveyed by the parameter name or type when that repetition improves readability. Include additional semantics such as units, valid ranges, null behavior, ownership, lifetime, defaults, and interpretation where relevant.
+- Add a `<returns>` element for every non-`void` method. Describe what the returned value represents and any important nullability, ownership, mutability, caching, laziness, or lifetime behavior. For `Task`, `ValueTask`, and other wrappers, document the resolved result rather than merely restating the wrapper type.
+- Add an `<exception>` element for exceptions that form part of a method's or constructor's failure contract. Include directly thrown exceptions and predictable propagated exceptions callers may need to handle. State the precise condition that causes each exception.
+- Do not omit documentation solely because a member, parameter, or return value appears self-explanatory. Brief documentation is acceptable when the contract is simple; prefer clarity and consistency over avoiding repetition.
+- Keep parameter, return-value, and exception documentation synchronized with the implementation as contracts evolve. Do not enumerate incidental failures or universal runtime exceptions that are not meaningful parts of the API contract.
 
 
 ## Coding Style
@@ -269,6 +274,7 @@ Performance techniques for hot paths:
 
 ### Documentation
 - Document contracts, invariants, ownership, lifetimes, and failure semantics.
+- Document the failure contract of methods and constructors, including expected exception types, triggering conditions, and whether failures may originate from delegated operations.
 - Provide minimal examples for common use cases.
 - Distinguish supported extension points from internal implementation details.
 - Record performance characteristics and known tradeoffs.

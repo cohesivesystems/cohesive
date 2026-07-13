@@ -52,66 +52,10 @@ public sealed class RelationDefinitionJsonRoundTripTests
 
         var relationNode = originalNode?["relation"];
         Assert.NotNull(relationNode);
-        Assert.Equal("rel_edi_tender", relationNode!["id"]!["value"]!.GetValue<string>());
-        Assert.Equal("EdiTender", relationNode["name"]!["value"]!.GetValue<string>());
+        Assert.Equal("rel_edi_tender", relationNode!["id"]!.GetValue<string>());
+        Assert.Equal("EdiTender", relationNode["name"]!.GetValue<string>());
         _ = Assert.Single(relationNode["sources"]!.AsArray());
         _ = Assert.Single(relationNode["mappings"]!.AsArray());
         Assert.NotNull(relationNode["mappings"]![0]!["assignments"]);
-    }
-
-    [Fact]
-    public void ParseJson_AcceptsLegacyTargetFieldWrapper_AndWritesCanonicalString()
-    {
-        var json = """
-            {
-              "relation": {
-                "id": { "value": "rel_edi_tender" },
-                "name": { "value": "EdiTender" },
-                "sources": [
-                  {
-                    "alias": { "value": "src" },
-                    "shapeId": { "value": "edi.204" },
-                    "cardinality": "Many"
-                  }
-                ],
-                "mappings": [
-                  {
-                    "id": { "value": "map_tender" },
-                    "name": { "value": "InboundTender" },
-                    "kind": "Relation",
-                    "sourceShapeId": null,
-                    "targetShapeId": { "value": "domain.inboundTender" },
-                    "assignments": [
-                      {
-                        "targetField": { "value": "TenderId" },
-                        "expr": { "$expr": "field", "path": { "segments": [ { "kind": "Field", "segment": "EdiTenderId" } ] } }
-                      }
-                    ],
-                    "scope": "Rooted",
-                    "direction": "SourceToTarget",
-                    "nestedMappings": [],
-                    "collectionMappings": [],
-                    "metadata": { "allowCodegen": true, "deterministic": true, "hints": {} }
-                  }
-                ],
-                "metadata": { "allowCodegen": true, "deterministic": true, "hints": {} }
-              }
-            }
-            """;
-
-        var parsed = RelationJsonMapper.ParseJson(json);
-        var mapping = Assert.Single(parsed.Mappings);
-        var assignment = Assert.Single(mapping.Assignments);
-        Assert.Equal("TenderId", assignment.TargetField);
-
-        var canonicalJson = RelationJsonMapper.ToJson(parsed, indented: false);
-        Assert.Contains("\"targetField\":\"TenderId\"", canonicalJson, StringComparison.Ordinal);
-        var canonicalMapping = JsonNode.Parse(canonicalJson)?["relation"]?["mappings"]?[0];
-        var canonicalMappingObject = Assert.IsType<JsonObject>(canonicalMapping);
-        Assert.False(canonicalMappingObject.ContainsKey("kind"));
-        Assert.False(canonicalMappingObject.ContainsKey("sourceShapeId"));
-        Assert.False(canonicalMappingObject.ContainsKey("direction"));
-        Assert.False(canonicalMappingObject.ContainsKey("nestedMappings"));
-        Assert.False(canonicalMappingObject.ContainsKey("collectionMappings"));
     }
 }

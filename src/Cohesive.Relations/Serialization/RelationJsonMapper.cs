@@ -1,16 +1,15 @@
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using Cohesive.Relations.Model;
 
 namespace Cohesive.Relations.Serialization;
 
 /// <summary>
-/// JSON mapper for canonical relation IR.
+/// JSON mapper for the prototype executable relation model.
 /// </summary>
 public static class RelationJsonMapper
 {
     /// <summary>
-    /// Converts IR to relation JSON contract.
+    /// Converts an executable relation definition to its JSON contract.
     /// </summary>
     public static RelationJsonDocument ToJsonContract(RelationDefinition definition)
     {
@@ -19,7 +18,7 @@ public static class RelationJsonMapper
     }
 
     /// <summary>
-    /// Converts relation JSON contract to IR.
+    /// Converts a relation JSON contract to an executable relation definition.
     /// </summary>
     public static RelationDefinition ToDefinition(RelationJsonDocument document)
     {
@@ -44,41 +43,9 @@ public static class RelationJsonMapper
     public static RelationDefinition ParseJson(string json)
     {
         var source = Guard.RequireNotNullOrWhiteSpace(json);
-        var root = JsonNode.Parse(source) ?? throw new InvalidOperationException("Failed to parse relation JSON.");
-        NormalizeLegacyAssignmentTargetFields(root);
-        var contract = root.Deserialize<RelationJsonDocument>(RelationJsonSerializer.CreateOptions());
+        var contract = JsonSerializer.Deserialize<RelationJsonDocument>(source, RelationJsonSerializer.CreateOptions());
         return contract is null
             ? throw new InvalidOperationException("Failed to deserialize relation JSON document.")
             : ToDefinition(contract);
-    }
-
-    static void NormalizeLegacyAssignmentTargetFields(JsonNode root)
-    {
-        if (root is not JsonObject obj
-            || obj["relation"] is not JsonObject relation
-            || relation["mappings"] is not JsonArray mappings)
-        {
-            return;
-        }
-
-        foreach (var mappingNode in mappings)
-        {
-            if (mappingNode is not JsonObject mapping || mapping["assignments"] is not JsonArray assignments)
-                continue;
-
-            foreach (var assignmentNode in assignments)
-            {
-                if (assignmentNode is not JsonObject assignment)
-                    continue;
-
-                if (assignment["targetField"] is JsonObject fieldObject
-                    && fieldObject["value"] is JsonValue raw
-                    && raw.TryGetValue<string>(out var fieldIdentity)
-                    && !string.IsNullOrWhiteSpace(fieldIdentity))
-                {
-                    assignment["targetField"] = fieldIdentity;
-                }
-            }
-        }
     }
 }
