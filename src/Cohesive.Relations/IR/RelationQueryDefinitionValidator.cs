@@ -7,7 +7,7 @@ namespace Cohesive.Relations.IR;
 /// <summary>
 /// Validates cross-node invariants for canonical relation/query definitions.
 /// </summary>
-public static class RelationQueryDefinitionValidator
+public static partial class RelationQueryDefinitionValidator
 {
     /// <summary>
     /// Validates a canonical relation or query definition without selecting a physical interpretation.
@@ -189,12 +189,27 @@ public static class RelationQueryDefinitionValidator
                         code: "relationQuery.traversal.relationshipMissing",
                         message: $"Relationship traversal '{traversal.Id.Value}' must reference a relationship id.",
                         location: $"{NodeLocation(traversal.Id)}/relationship");
-                    if (traversal.JoinKind is JoinKind.Right or JoinKind.Full)
+                    if (!Enum.IsDefined(traversal.Direction))
+                    {
+                        Add(
+                            code: "relationQuery.traversal.directionInvalid",
+                            message: $"Relationship traversal '{traversal.Id.Value}' declares unsupported direction '{traversal.Direction}'.",
+                            location: $"{NodeLocation(traversal.Id)}/direction");
+                    }
+                    if (!Enum.IsDefined(traversal.JoinKind)
+                        || traversal.JoinKind is JoinKind.Right or JoinKind.Full)
                     {
                         Add(
                             code: "relationQuery.traversal.joinKindInvalid",
                             message: $"Relationship traversal '{traversal.Id.Value}' supports only inner or left join semantics.",
                             location: $"{NodeLocation(traversal.Id)}/joinKind");
+                    }
+                    if (!Enum.IsDefined(traversal.Requirement))
+                    {
+                        Add(
+                            code: "relationQuery.traversal.requirementInvalid",
+                            message: $"Relationship traversal '{traversal.Id.Value}' declares unsupported input requirement '{traversal.Requirement}'.",
+                            location: $"{NodeLocation(traversal.Id)}/requirement");
                     }
                     break;
                 case ExpandCollectionQueryNode expansion:
@@ -739,10 +754,9 @@ public static class RelationQueryDefinitionValidator
                 code: "relationQuery.relation.outputNodeIdMissing",
                 message: "A relation output must reference a non-empty node id.",
                 location: "/definition/output/node");
-            ValidateIdentifier(
-                relation.Output.Shape.Value,
-                code: "relationQuery.shape.idMissing",
-                message: "A relation output must declare a non-empty shape id.",
+            ValidateShape(
+                relation.Output.Shape,
+                context: "A relation output",
                 location: "/definition/output/shape");
 
             if (!nodes.TryGetValue(relation.Output.Node, out var outputNode))
@@ -758,7 +772,7 @@ public static class RelationQueryDefinitionValidator
             {
                 ProjectQueryNode project => project.ResultShape,
                 AggregateQueryNode aggregate => aggregate.ResultShape,
-                _ => (ShapeId?)null
+                _ => (QualifiedShapeId?)null
             };
             if (outputShape is null)
             {
@@ -771,7 +785,7 @@ public static class RelationQueryDefinitionValidator
             {
                 Add(
                     code: "relationQuery.relation.outputShapeMismatch",
-                    message: $"Relation output shape '{relation.Output.Shape.Value}' does not match node shape '{outputShape.Value.Value}'.",
+                    message: $"Relation output shape '{relation.Output.Shape}' does not match node shape '{outputShape.Value}'.",
                     location: "/definition/output/shape");
             }
 
@@ -919,13 +933,24 @@ public static class RelationQueryDefinitionValidator
                 location: $"{NodeLocation(nodeId)}/{property}");
         }
 
-        void ValidateShape(ShapeId shape, QueryNodeId nodeId, string property)
+        void ValidateShape(QualifiedShapeId shape, QueryNodeId nodeId, string property) =>
+            ValidateShape(
+                shape,
+                context: $"Node '{nodeId.Value}'",
+                location: $"{NodeLocation(nodeId)}/{property}");
+
+        void ValidateShape(QualifiedShapeId shape, string context, string location)
         {
             ValidateIdentifier(
-                shape.Value,
+                shape.GraphId.Value,
+                code: "relationQuery.shape.graphIdMissing",
+                message: $"{context} must declare a non-empty shape graph id.",
+                location: $"{location}/graphId");
+            ValidateIdentifier(
+                shape.ShapeId.Value,
                 code: "relationQuery.shape.idMissing",
-                message: $"Node '{nodeId.Value}' must declare a non-empty shape id.",
-                location: $"{NodeLocation(nodeId)}/{property}");
+                message: $"{context} must declare a non-empty shape id.",
+                location: $"{location}/shapeId");
         }
 
         void ValidateFieldPath(FieldPath path, string location)

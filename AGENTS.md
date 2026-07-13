@@ -163,7 +163,7 @@ Performance techniques for hot paths:
 
 ## C# Performance Guidelines
 
-- Don't optimize prematurely but avoid design decisions that are likely to be costly to change later.
+Don't optimize prematurely but avoid design decisions that are likely to be costly to change later.
 
 ### Memory
 - Minimize allocations and object lifetimes.
@@ -215,7 +215,7 @@ Performance techniques for hot paths:
 
 ## Framework Design Guidelines
 
-- Note that this framework is still in early stages, so API stability and backwards compatibility is not mandatory. 
+Note that this framework is still in early stages, so API stability and backwards compatibility are not mandatory. 
 
 ### API Design
 - Keep the public API small, explicit, and difficult to misuse.

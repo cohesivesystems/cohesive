@@ -1,7 +1,9 @@
 using System.Collections.Immutable;
 using System.Globalization;
+using System.Text.Json.Nodes;
 using Cohesive.Adapters.TypeScript.Ast;
 using Cohesive.Model;
+using Cohesive.Model.Serialization;
 
 namespace Cohesive.Adapters.TypeScript;
 
@@ -138,6 +140,9 @@ public sealed class TypeScriptShapeAstBuilder
 
     TsStatement TranslateNamedType(TypeDefinition namedType)
     {
+        if (TryTranslateJsonRepresentation(GetAnnotations(namedType), out var representation))
+            return new TsTypeAliasDeclaration(ResolveDefinitionName(namedType.Id), representation);
+
         return namedType switch
         {
             TypeDefinition.Structural structural => TranslateStructuralType(structural),
@@ -160,6 +165,9 @@ public sealed class TypeScriptShapeAstBuilder
 
     TsStatement TranslateShape(Shape shape)
     {
+        if (TryTranslateJsonRepresentation(shape.Annotations, out var representation))
+            return new TsTypeAliasDeclaration(ResolveShapeName(shape.Id), representation);
+
         var members = ImmutableArray.CreateBuilder<TsPropertySignature>(shape.Fields.Length);
         for (var i = 0; i < shape.Fields.Length; i++)
             members.Add(TranslateField(shape.Fields[i]));
@@ -173,7 +181,11 @@ public sealed class TypeScriptShapeAstBuilder
 
     TsPropertySignature TranslateField(StructuralField field)
     {
-        var type = TranslateFieldType(field.Type, field.Cardinality, field.Nullability);
+        var type = TranslateWireFieldType(
+            field.Type,
+            field.Cardinality,
+            field.Nullability,
+            field.Annotations);
         return new TsPropertySignature(
             name: field.Name.Value,
             type: type,
@@ -182,12 +194,44 @@ public sealed class TypeScriptShapeAstBuilder
 
     TsPropertySignature TranslateField(FieldDefinition field)
     {
-        var type = TranslateFieldType(field.Type, field.Cardinality, field.Nullability);
+        var type = TranslateWireFieldType(
+            field.Type,
+            field.Cardinality,
+            field.Nullability,
+            field.Annotations);
         return new TsPropertySignature(
             name: field.Name.Value,
             type: type,
             isOptional: field.Presence == FieldPresence.Optional,
             isReadonly: field.Mutability != FieldMutability.Mutable);
+    }
+
+    TsTypeNode TranslateWireFieldType(
+        TypeRef type,
+        FieldCardinality cardinality,
+        FieldNullability nullability,
+        IReadOnlyDictionary<AnnotationKey, AnnotationValue> annotations)
+    {
+        if (!HasBooleanAnnotation(annotations, SystemTextJsonShapeAnnotations.Dictionary))
+            return TranslateFieldType(type, cardinality, nullability);
+
+        if (type is not ObjectTypeRef dictionaryEntry
+            || dictionaryEntry.Fields.SingleOrDefault(static field =>
+                string.Equals(field.Name, "Value", StringComparison.Ordinal)) is not { } valueField)
+        {
+            throw new InvalidOperationException(
+                "A System.Text.Json dictionary field must retain a key/value entry type in its CLR shape projection.");
+        }
+
+        TsTypeNode result = new TsTypeReference(
+            "Record",
+            [
+                new TsKeywordType(TsKeyword.String),
+                TranslateType(valueField.Type)
+            ]);
+        return nullability == FieldNullability.Nullable
+            ? UnionWithNull(result)
+            : result;
     }
 
     TsTypeNode TranslateFieldType(TypeRef type, FieldCardinality cardinality, FieldNullability nullability)
@@ -269,7 +313,7 @@ public sealed class TypeScriptShapeAstBuilder
         for (var i = 0; i < @enum.Values.Length; i++)
         {
             var value = @enum.Values[i];
-            members.Add(BuildEnumLiteral(@enum.Underlying, value));
+            members.Add(BuildEnumLiteral(@enum, value));
         }
 
         return members.Count == 1
@@ -277,15 +321,16 @@ public sealed class TypeScriptShapeAstBuilder
             : new TsUnionType(members.ToImmutable());
     }
 
-    TsTypeNode BuildEnumLiteral(PrimitiveType underlying, EnumValue value)
+    TsTypeNode BuildEnumLiteral(TypeDefinition.Enum @enum, EnumValue value)
     {
-        if ((underlying == PrimitiveType.Int32 || underlying == PrimitiveType.Int64)
+        if (!TryGetJsonEnumValue(@enum, value, out var wireValue)
+            && (@enum.Underlying == PrimitiveType.Int32 || @enum.Underlying == PrimitiveType.Int64)
             && long.TryParse(value.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var numeric))
         {
             return new TsLiteralType(numeric);
         }
 
-        return new TsLiteralType(value.Value ?? value.Name);
+        return new TsLiteralType(wireValue ?? value.Value ?? value.Name);
     }
 
     TsStatement BuildEnumLabelMap(TypeDefinition.Enum @enum)
@@ -296,9 +341,9 @@ public sealed class TypeScriptShapeAstBuilder
         {
             var value = @enum.Values[i];
             properties.Add(new TsObjectProperty(
-                name: GetEnumObjectKey(@enum.Underlying, value),
+                name: GetEnumObjectKey(@enum, value),
                 value: new TsStringLiteralExpression(GetEnumLabel(value)),
-                isNumericName: IsNumericEnum(@enum.Underlying)));
+                isNumericName: IsNumericEnum(@enum)));
         }
 
         return new TsConstDeclaration(
@@ -316,7 +361,7 @@ public sealed class TypeScriptShapeAstBuilder
             var value = @enum.Values[i];
             properties.Add(new TsObjectProperty(
                 name: ToCamelCase(value.Name),
-                value: BuildEnumLiteralExpression(@enum.Underlying, value)));
+                value: BuildEnumLiteralExpression(@enum, value)));
         }
 
         return new TsConstDeclaration(
@@ -326,38 +371,131 @@ public sealed class TypeScriptShapeAstBuilder
             asConst: true);
     }
 
-    TsExpression BuildEnumLiteralExpression(PrimitiveType underlying, EnumValue value)
+    TsExpression BuildEnumLiteralExpression(TypeDefinition.Enum @enum, EnumValue value)
     {
-        if (IsNumericEnum(underlying)
+        if (!TryGetJsonEnumValue(@enum, value, out var wireValue)
+            && IsNumericEnum(@enum)
             && long.TryParse(value.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var numeric))
         {
             return new TsNumberLiteralExpression(numeric);
         }
 
-        if (underlying == PrimitiveType.Bool && bool.TryParse(value.Value, out var boolean))
+        if (wireValue is null
+            && @enum.Underlying == PrimitiveType.Bool
+            && bool.TryParse(value.Value, out var boolean))
             return new TsBooleanLiteralExpression(boolean);
 
-        return new TsStringLiteralExpression(value.Value ?? value.Name);
+        return new TsStringLiteralExpression(wireValue ?? value.Value ?? value.Name);
     }
 
-    static string GetEnumObjectKey(PrimitiveType underlying, EnumValue value)
+    static string GetEnumObjectKey(TypeDefinition.Enum @enum, EnumValue value)
     {
-        if (IsNumericEnum(underlying)
+        if (!TryGetJsonEnumValue(@enum, value, out var wireValue)
+            && IsNumericEnum(@enum)
             && long.TryParse(value.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var numeric))
         {
             return numeric.ToString(CultureInfo.InvariantCulture);
         }
 
-        return value.Value ?? value.Name;
+        return wireValue ?? value.Value ?? value.Name;
     }
 
-    static bool IsNumericEnum(PrimitiveType underlying) =>
-        underlying == PrimitiveType.Int32 || underlying == PrimitiveType.Int64;
+    static bool IsNumericEnum(TypeDefinition.Enum @enum) =>
+        !HasAnnotation(@enum.Annotations, SystemTextJsonShapeAnnotations.EnumValues)
+        && (@enum.Underlying == PrimitiveType.Int32 || @enum.Underlying == PrimitiveType.Int64);
 
     static string GetEnumLabel(EnumValue value)
     {
         var normalized = value.Label?.Trim();
         return string.IsNullOrWhiteSpace(normalized) ? value.Name : normalized;
+    }
+
+    static bool TryGetJsonEnumValue(
+        TypeDefinition.Enum @enum,
+        EnumValue value,
+        out string? wireValue)
+    {
+        if (!@enum.Annotations.TryGetValue(
+                new AnnotationKey(SystemTextJsonShapeAnnotations.EnumValues),
+                out var annotation))
+        {
+            wireValue = null;
+            return false;
+        }
+
+        if (annotation.Value is not JsonObject values
+            || values[value.Name] is not JsonValue jsonValue
+            || !jsonValue.TryGetValue<string>(out wireValue))
+        {
+            throw new InvalidOperationException(
+                $"System.Text.Json enum metadata for '{@enum.Id.Value}' does not define string member '{value.Name}'.");
+        }
+
+        return true;
+    }
+
+    static bool TryTranslateJsonRepresentation(
+        IReadOnlyDictionary<AnnotationKey, AnnotationValue> annotations,
+        out TsTypeNode representation)
+    {
+        if (!TryGetStringAnnotation(
+                annotations,
+                SystemTextJsonShapeAnnotations.Representation,
+                out var value))
+        {
+            representation = null!;
+            return false;
+        }
+
+        representation = value switch
+        {
+            SystemTextJsonShapeAnnotations.String => new TsKeywordType(TsKeyword.String),
+            SystemTextJsonShapeAnnotations.Number => new TsKeywordType(TsKeyword.Number),
+            SystemTextJsonShapeAnnotations.Boolean => new TsKeywordType(TsKeyword.Boolean),
+            SystemTextJsonShapeAnnotations.Unknown => new TsKeywordType(TsKeyword.Unknown),
+            _ => throw new InvalidOperationException(
+                $"Unsupported System.Text.Json shape representation '{value}'.")
+        };
+        return true;
+    }
+
+    static IReadOnlyDictionary<AnnotationKey, AnnotationValue> GetAnnotations(TypeDefinition definition) =>
+        definition switch
+        {
+            TypeDefinition.Structural structural => structural.Annotations,
+            TypeDefinition.Enum @enum => @enum.Annotations,
+            TypeDefinition.Union union => union.Annotations,
+            _ => throw new InvalidOperationException(
+                $"Unsupported named type definition '{definition.GetType().Name}'.")
+        };
+
+    static bool HasBooleanAnnotation(
+        IReadOnlyDictionary<AnnotationKey, AnnotationValue> annotations,
+        string key) =>
+        annotations.TryGetValue(new(key), out var annotation)
+        && annotation.Value is JsonValue value
+        && value.TryGetValue<bool>(out var result)
+        && result;
+
+    static bool HasAnnotation(
+        IReadOnlyDictionary<AnnotationKey, AnnotationValue> annotations,
+        string key) => annotations.ContainsKey(new(key));
+
+    static bool TryGetStringAnnotation(
+        IReadOnlyDictionary<AnnotationKey, AnnotationValue> annotations,
+        string key,
+        out string value)
+    {
+        if (annotations.TryGetValue(new(key), out var annotation)
+            && annotation.Value is JsonValue jsonValue
+            && jsonValue.TryGetValue<string>(out var text))
+        {
+            value = text;
+            return true;
+        }
+
+        value = string.Empty;
+        return false;
     }
 
     TsTypeNode BuildUnionType(TypeDefinition.Union union)

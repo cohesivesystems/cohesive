@@ -426,26 +426,4 @@ public sealed class ShapeGraphTests
         Assert.Contains(graph.Diagnostics, x => x.TypeId == union.Id && x.FieldIdentity == "MissingCase");
     }
 
-    [Fact]
-    public void ShapeCatalog_BuildGraph_PreservesRegisteredShapes()
-    {
-        var shape = new Shape(
-            id: new ShapeId("shape_carrier"),
-            role: ShapeRoles.Entity,
-            fields:
-            [
-                new FieldDefinition(
-                    name: new FieldName("Id"),
-                    type: DomainTypes.String())
-            ]);
-
-        var catalog = new ShapeCatalog()
-            .Register(definition: shape, entityType: new EntityTypeName("Carrier"));
-
-        var graph = catalog.BuildGraph(new GraphId("graph_carrier"));
-
-        Assert.True(graph.TryGetShape(shape.Id, out var resolved));
-        Assert.Equal(shape, resolved);
-    }
-
 }

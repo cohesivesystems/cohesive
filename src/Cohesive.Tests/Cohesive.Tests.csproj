@@ -34,6 +34,7 @@
     <ProjectReference Include="..\Cohesive.Processes\Cohesive.Processes.csproj" />
     <ProjectReference Include="..\Cohesive.CodeGen.Cli\Cohesive.CodeGen.Cli.csproj" />
     <ProjectReference Include="..\adapters\Cohesive.Adapters.Cosmos\Cohesive.Adapters.Cosmos.csproj" />
+    <ProjectReference Include="..\adapters\Cohesive.Adapters.CSharp\Cohesive.Adapters.CSharp.csproj" />
     <ProjectReference Include="..\adapters\Cohesive.Adapters.DurableTask\Cohesive.Adapters.DurableTask.csproj" />
     <ProjectReference Include="..\adapters\Cohesive.Adapters.GraphQL\Cohesive.Adapters.GraphQL.csproj" />
     <ProjectReference Include="..\adapters\Cohesive.Adapters.OpenApi\Cohesive.Adapters.OpenApi.csproj" />

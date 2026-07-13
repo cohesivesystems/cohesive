@@ -388,15 +388,21 @@ public sealed record TsRawType : TsTypeNode
 /// </summary>
 public sealed record TsTypeReference : TsTypeNode
 {
-    /// <summary>Initializes a new instance of the ts type reference type.</summary>
-    public TsTypeReference(string name)
+    /// <summary>Creates a reference to a named, optionally generic TypeScript type.</summary>
+    /// <param name="name">Referenced type name.</param>
+    /// <param name="typeArguments">Optional generic type arguments.</param>
+    public TsTypeReference(string name, ImmutableArray<TsTypeNode> typeArguments = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         Name = name;
+        TypeArguments = typeArguments.IsDefault ? [] : typeArguments;
     }
 
     /// <summary>Gets the name.</summary>
     public string Name { get; init; }
+
+    /// <summary>Gets the generic type arguments.</summary>
+    public ImmutableArray<TsTypeNode> TypeArguments { get; init; }
 }
 
 /// <summary>

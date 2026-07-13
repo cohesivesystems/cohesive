@@ -1,0 +1,151 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Cohesive.Model.Serialization;
+
+namespace Cohesive.Relations.Serialization;
+
+/// <summary>
+/// Shared strict JSON behavior for persisted Cohesive.Relations semantic documents.
+/// </summary>
+static class StrictDocumentJson
+{
+    /// <summary>Creates serializer options for a closed, case-sensitive portable wire contract.</summary>
+    /// <param name="indented">Whether serialized JSON should be indented.</param>
+    /// <returns>Serializer options configured for strict portable document JSON.</returns>
+    public static JsonSerializerOptions CreateOptions(bool indented)
+    {
+        JsonSerializerOptions options = new(JsonSerializerDefaults.Web)
+        {
+            AllowOutOfOrderMetadataProperties = true,
+            PropertyNameCaseInsensitive = false,
+            UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+            WriteIndented = indented
+        };
+        options.Converters.Add(SingleValueWrapperJsonConverter.ScalarOnly);
+        options.Converters.Add(new StrictStringEnumJsonConverterFactory());
+        return options;
+    }
+
+    /// <summary>Finds the first duplicate JSON object property using ordinal property-name equality.</summary>
+    /// <param name="element">JSON element to inspect recursively.</param>
+    /// <param name="path">JSON Pointer path of <paramref name="element"/> without a trailing slash.</param>
+    /// <param name="duplicateLocation">JSON Pointer location of the first duplicate property when found.</param>
+    /// <returns><see langword="true"/> when a duplicate property is found; otherwise <see langword="false"/>.</returns>
+    public static bool TryFindDuplicateProperty(
+        JsonElement element,
+        string path,
+        out string duplicateLocation)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                HashSet<string> names = new(StringComparer.Ordinal);
+                foreach (var property in element.EnumerateObject())
+                {
+                    var propertyPath = $"{path}/{EscapeJsonPointerSegment(property.Name)}";
+                    if (!names.Add(property.Name))
+                    {
+                        duplicateLocation = propertyPath;
+                        return true;
+                    }
+
+                    if (TryFindDuplicateProperty(property.Value, propertyPath, out duplicateLocation))
+                        return true;
+                }
+                break;
+            case JsonValueKind.Array:
+                var index = 0;
+                foreach (var item in element.EnumerateArray())
+                {
+                    if (TryFindDuplicateProperty(item, $"{path}/{index}", out duplicateLocation))
+                        return true;
+                    index++;
+                }
+                break;
+        }
+
+        duplicateLocation = string.Empty;
+        return false;
+    }
+
+    /// <summary>Creates a one-error structured validation result.</summary>
+    /// <param name="code">Stable diagnostic code.</param>
+    /// <param name="message">Human-readable diagnostic message.</param>
+    /// <param name="location">JSON Pointer or root location associated with the error.</param>
+    /// <returns>A validation result containing the supplied error.</returns>
+    public static DocumentValidationResult Error(string code, string message, string location) =>
+        DocumentValidationResult.FromDiagnostics([
+            new(
+                Code: code,
+                Severity: DiagnosticSeverity.Error,
+                Message: message,
+                Location: location)
+        ]);
+
+    static string EscapeJsonPointerSegment(string value) =>
+        value.Replace("~", "~0", StringComparison.Ordinal)
+            .Replace("/", "~1", StringComparison.Ordinal);
+}
+
+/// <summary>Case-sensitive canonical string encoding for enum values.</summary>
+sealed class StrictStringEnumJsonConverterFactory : JsonConverterFactory
+{
+    public override bool CanConvert(Type typeToConvert) => typeToConvert.IsEnum;
+
+    public override JsonConverter CreateConverter(Type typeToConvert, JsonSerializerOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(typeToConvert);
+        ArgumentNullException.ThrowIfNull(options);
+        if (!typeToConvert.IsEnum)
+            throw new ArgumentException($"Type '{typeToConvert}' is not an enum.", nameof(typeToConvert));
+
+        var converterType = typeof(StrictStringEnumJsonConverter<>).MakeGenericType(typeToConvert);
+        return (JsonConverter)(Activator.CreateInstance(converterType)
+            ?? throw new InvalidOperationException(
+                $"Failed to create a strict string enum converter for '{typeToConvert}'."));
+    }
+
+    sealed class StrictStringEnumJsonConverter<TEnum> : JsonConverter<TEnum>
+        where TEnum : struct, Enum
+    {
+        public override TEnum Read(
+            ref Utf8JsonReader reader,
+            Type typeToConvert,
+            JsonSerializerOptions options)
+        {
+            if (reader.TokenType != JsonTokenType.String)
+                throw new JsonException($"Enum '{typeToConvert.Name}' must be encoded as a string.");
+
+            var text = reader.GetString();
+            if (text is null
+                || !Enum.TryParse<TEnum>(text, ignoreCase: false, out var value)
+                || !string.Equals(value.ToString(), text, StringComparison.Ordinal)
+                || IsNumeric(text))
+            {
+                throw new JsonException(
+                    $"'{text}' is not a canonical case-sensitive value of enum '{typeToConvert.Name}'.");
+            }
+
+            return value;
+        }
+
+        public override void Write(
+            Utf8JsonWriter writer,
+            TEnum value,
+            JsonSerializerOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(writer);
+            var text = value.ToString();
+            if (IsNumeric(text))
+            {
+                throw new JsonException(
+                    $"Value '{text}' is not a declared value of enum '{typeof(TEnum).Name}'.");
+            }
+
+            writer.WriteStringValue(text);
+        }
+
+        static bool IsNumeric(string value) =>
+            value.Length > 0 && (char.IsDigit(value[0]) || value[0] is '-' or '+');
+    }
+}

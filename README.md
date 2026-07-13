@@ -53,7 +53,7 @@ TypeScript packages live under `src/frontend/*` and publish under the `@cohesive
 - Node.js 24
 - pnpm 11 through Corepack
 
-## Build And Test
+## Build and Test
 
 ```bash
 dotnet restore Cohesive.sln

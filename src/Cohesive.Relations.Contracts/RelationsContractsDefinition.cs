@@ -26,6 +26,12 @@ public static class RelationsContractsDefinition
             .Action("QualifiedShapeId")
             .Route("GET", "/relations/contracts/qualified-shape-id")
             .Returns<QualifiedShapeId>()
+            .Build(),
+        CohesiveApi
+            .Define("RelationsContracts")
+            .Action("RelationshipCatalogDocument")
+            .Route("GET", "/relations/contracts/relationship-catalog-document")
+            .Returns<RelationshipCatalogDocument>()
             .Build()
     );
 }

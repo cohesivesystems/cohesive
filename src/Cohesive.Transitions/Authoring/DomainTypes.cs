@@ -27,7 +27,7 @@ public static class DomainTypes
     public static TypeRef Enum(string name, params string[] members) => new EnumTypeRef(name: name, members: [.. members]);
     
     /// <summary>Creates an entity-reference type reference.</summary>
-    public static TypeRef EntityRef(string entity) => new EntityReferenceTypeRef(Entity: new(value: entity));
+    public static TypeRef EntityRef(string entity) => new EntityReferenceTypeRef(entity: new(value: entity));
     
     /// <summary>Creates an array type reference.</summary>
     public static TypeRef Array(TypeRef elementType) => new ArrayTypeRef(ElementType: elementType);

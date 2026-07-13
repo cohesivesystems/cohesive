@@ -33,6 +33,8 @@ public static class RelationQueryDocumentSemanticValidator
             return DocumentValidationResult.FromDiagnostics(diagnostics);
         }
 
+        var definitionValidation = RelationQueryDefinitionValidator.Validate(document.Definition);
+
         if (!string.Equals(document.SchemaVersion, RelationQueryDocument.CurrentSchemaVersion, StringComparison.Ordinal))
         {
             diagnostics.Add(new(
@@ -70,7 +72,7 @@ public static class RelationQueryDocumentSemanticValidator
                 Message: "The definition fingerprint value must be a 64-character lowercase hexadecimal SHA-256 digest.",
                 Location: "/definitionFingerprint/value"));
         }
-        else
+        else if (definitionValidation.IsValid)
         {
             var expected = RelationQueryDefinitionFingerprinter.Compute(document.Definition);
             if (!string.Equals(expected.Value, document.DefinitionFingerprint.Value, StringComparison.Ordinal))
@@ -85,6 +87,6 @@ public static class RelationQueryDocumentSemanticValidator
 
         return DocumentValidationResult.Combine(
             DocumentValidationResult.FromDiagnostics(diagnostics),
-            RelationQueryDefinitionValidator.Validate(document.Definition));
+            definitionValidation);
     }
 }

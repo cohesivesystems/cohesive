@@ -13,19 +13,41 @@ namespace Cohesive.Model.Serialization;
 public sealed class SingleValueWrapperJsonConverter : JsonConverterFactory
 {
     static readonly ConcurrentDictionary<Type, WrapperMetadata?> WrapperMetadataCache = new();
-    static readonly ConcurrentDictionary<Type, JsonConverter> ConverterCache = new();
+    static readonly ConcurrentDictionary<(Type Type, bool AllowLegacyNestedObjects), JsonConverter> ConverterCache = new();
+
+    readonly bool allowLegacyNestedObjects;
+
+    /// <summary>
+    /// Scalar-only converter used by strict canonical document formats that reject legacy wrapper objects.
+    /// </summary>
+    public static SingleValueWrapperJsonConverter ScalarOnly { get; } = new(allowLegacyNestedObjects: false);
+
+    /// <summary>
+    /// Creates a converter that reads canonical scalar values and legacy nested wrapper objects.
+    /// </summary>
+    public SingleValueWrapperJsonConverter()
+        : this(allowLegacyNestedObjects: true)
+    {
+    }
+
+    SingleValueWrapperJsonConverter(bool allowLegacyNestedObjects)
+    {
+        this.allowLegacyNestedObjects = allowLegacyNestedObjects;
+    }
 
     /// <inheritdoc />
     public override bool CanConvert(Type typeToConvert) =>
-        TryGetWrapperMetadata(typeToConvert, out _);
+        (allowLegacyNestedObjects || DeclaresSingleValueWrapperConverter(typeToConvert))
+        && TryGetWrapperMetadata(typeToConvert, out _);
 
     /// <inheritdoc />
     public override JsonConverter CreateConverter(Type typeToConvert, JsonSerializerOptions options)
     {
         ArgumentNullException.ThrowIfNull(typeToConvert);
 
-        return ConverterCache.GetOrAdd(typeToConvert, static type =>
+        return ConverterCache.GetOrAdd((typeToConvert, allowLegacyNestedObjects), static key =>
         {
+            var type = key.Type;
             if (!TryGetWrapperMetadata(type, out var metadata))
                 throw new InvalidOperationException($"Type '{type}' is not a supported single-value wrapper.");
 
@@ -35,7 +57,8 @@ public sealed class SingleValueWrapperJsonConverter : JsonConverterFactory
                 metadata.ValueProperty,
                 metadata.Constructor,
                 metadata.AcceptedNestedPropertyNames,
-                metadata.AcceptedNestedPropertyNamesUtf8
+                metadata.AcceptedNestedPropertyNamesUtf8,
+                key.AllowLegacyNestedObjects
                 ) ?? throw new InvalidOperationException($"Failed to create a single-value wrapper converter for '{type}'."));
         });
     }
@@ -73,6 +96,10 @@ public sealed class SingleValueWrapperJsonConverter : JsonConverterFactory
         metadata = cachedMetadata.Value;
         return true;
     }
+
+    static bool DeclaresSingleValueWrapperConverter(Type type) =>
+        type.GetCustomAttribute<JsonConverterAttribute>()?.ConverterType
+        == typeof(SingleValueWrapperJsonConverter);
 
     static PropertyInfo? ResolveValueProperty(Type typeToConvert)
     {
@@ -160,12 +187,14 @@ public sealed class SingleValueWrapperJsonConverter : JsonConverterFactory
         readonly string[] acceptedNestedPropertyNames;
         readonly byte[][] acceptedNestedPropertyNamesUtf8;
         readonly string expectedPropertyNames;
+        readonly bool allowLegacyNestedObjects;
 
         public SpecialSingleValueWrapperJsonConverter(
             PropertyInfo valueProperty,
             ConstructorInfo constructor,
             string[] acceptedNestedPropertyNames,
-            byte[][] acceptedNestedPropertyNamesUtf8
+            byte[][] acceptedNestedPropertyNamesUtf8,
+            bool allowLegacyNestedObjects
             )
         {
             ArgumentNullException.ThrowIfNull(valueProperty);
@@ -175,6 +204,7 @@ public sealed class SingleValueWrapperJsonConverter : JsonConverterFactory
 
             this.acceptedNestedPropertyNames = acceptedNestedPropertyNames;
             this.acceptedNestedPropertyNamesUtf8 = acceptedNestedPropertyNamesUtf8;
+            this.allowLegacyNestedObjects = allowLegacyNestedObjects;
             expectedPropertyNames = string.Join(", ", acceptedNestedPropertyNames.Order(StringComparer.OrdinalIgnoreCase));
 
             var wrapperParameter = Expression.Parameter(typeof(TWrapper), "wrapper");
@@ -193,7 +223,15 @@ public sealed class SingleValueWrapperJsonConverter : JsonConverterFactory
         public override TWrapper Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         {
             if (reader.TokenType == JsonTokenType.StartObject)
+            {
+                if (!allowLegacyNestedObjects)
+                {
+                    throw new JsonException(
+                        $"Strict canonical JSON requires '{typeToConvert.Name}' to be encoded as a scalar value.");
+                }
+
                 return ReadNestedValueObject(ref reader, typeToConvert, options);
+            }
 
             var value = JsonSerializer.Deserialize<TValue>(ref reader, options);
             return createWrapper(value!);

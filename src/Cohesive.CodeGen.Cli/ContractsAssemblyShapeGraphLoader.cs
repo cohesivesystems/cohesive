@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 using Cohesive.Api;
 using Cohesive.Model;
+using Cohesive.Model.Serialization;
 
 namespace Cohesive.CodeGen.Cli;
 
@@ -13,7 +14,38 @@ public static class ContractsAssemblyShapeGraphLoader
     /// <summary>
     /// Builds a shape graph from exported contract types.
     /// </summary>
-    public static ShapeGraph Load(string assemblyPath, string moduleName)
+    /// <param name="assemblyPath">Path to the compiled contracts assembly.</param>
+    /// <param name="moduleName">Logical module name used to qualify the graph.</param>
+    /// <returns>A CLR-semantic contract shape graph.</returns>
+    public static ShapeGraph Load(string assemblyPath, string moduleName) =>
+        Load(assemblyPath, moduleName, metadataProvider: null);
+
+    /// <summary>
+    /// Builds a shape graph projected through an explicit System.Text.Json wire contract.
+    /// </summary>
+    /// <param name="assemblyPath">Path to the compiled contracts assembly.</param>
+    /// <param name="moduleName">Logical module name used to qualify the graph.</param>
+    /// <param name="jsonSerializerOptions">Serializer options defining property, enum, and converter representations.</param>
+    /// <returns>A JSON-wire contract shape graph.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="jsonSerializerOptions"/> is <see langword="null"/>.
+    /// </exception>
+    public static ShapeGraph Load(
+        string assemblyPath,
+        string moduleName,
+        JsonSerializerOptions jsonSerializerOptions)
+    {
+        ArgumentNullException.ThrowIfNull(jsonSerializerOptions);
+        return Load(
+            assemblyPath,
+            moduleName,
+            new SystemTextJsonClrShapeMetadataProvider(jsonSerializerOptions));
+    }
+
+    static ShapeGraph Load(
+        string assemblyPath,
+        string moduleName,
+        IClrShapeMetadataProvider? metadataProvider)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(assemblyPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
@@ -33,6 +65,8 @@ public static class ContractsAssemblyShapeGraphLoader
             }
 
             var builder = new ClrShapeGraphBuilder();
+            if (metadataProvider is not null)
+                builder.AddMetadataProvider(metadataProvider);
             for (var i = 0; i < roots.Count; i++)
                 builder.AddShape(roots[i], ShapeRoles.ValueObject);
 

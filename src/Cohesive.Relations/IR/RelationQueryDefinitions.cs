@@ -154,7 +154,7 @@ public sealed record RelationOutputDefinition
     /// <param name="key">Optional expression defining stable output identity.</param>
     public RelationOutputDefinition(
         QueryNodeId node,
-        ShapeId shape,
+        QualifiedShapeId shape,
         RelationOutputMode mode,
         Expr? key = null)
     {
@@ -168,7 +168,7 @@ public sealed record RelationOutputDefinition
     public QueryNodeId Node { get; init; }
 
     /// <summary>Semantic shape of every output row.</summary>
-    public ShapeId Shape { get; init; }
+    public QualifiedShapeId Shape { get; init; }
 
     /// <summary>Output cardinality relative to relation roots.</summary>
     public RelationOutputMode Mode { get; init; }

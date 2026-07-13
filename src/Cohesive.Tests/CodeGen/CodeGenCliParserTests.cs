@@ -64,4 +64,25 @@ public sealed class CodeGenCliParserTests
                 Assert.Equal("./cohesive.shapes.generated", model.ImportPath);
             });
     }
+
+    [Fact]
+    public void TryParse_RecognizesCanonicalJsonShapeProjection()
+    {
+        var parsed = CodeGenCliParser.TryParse(
+            [
+                "--contracts", "/tmp/contracts.dll",
+                "--out", "/tmp/generated",
+                "--emit", "shapes",
+                "--module", "sample",
+                "--shape-projection", "canonical-json"
+            ],
+            out var options,
+            out var error,
+            out var showHelp);
+
+        Assert.True(parsed);
+        Assert.False(showHelp);
+        Assert.Null(error);
+        Assert.Equal(ContractShapeProjection.CanonicalJson, options!.ShapeProjection);
+    }
 }

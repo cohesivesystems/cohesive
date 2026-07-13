@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 
 namespace Cohesive.Tests.Model;
 
@@ -94,6 +95,20 @@ public sealed class ClrShapeGraphBuilderMetadataTests
         Assert.DoesNotContain(graph.NamedTypes, x => x.Id.Value.Contains(nameof(JsonNode), StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void Build_IncludesConditionallyIgnoredJsonPropertiesAndExcludesAlwaysIgnoredProperties()
+    {
+        var graph = new ClrShapeGraphBuilder()
+            .AddShape<JsonIgnoreEnvelope>()
+            .Build(new("graph.json-ignore.test"));
+
+        var shape = Assert.Single(graph.Shapes);
+
+        Assert.True(shape.TryGetField(nameof(JsonIgnoreEnvelope.Conditional), out _));
+        Assert.True(shape.TryGetField(nameof(JsonIgnoreEnvelope.Visible), out _));
+        Assert.False(shape.TryGetField(nameof(JsonIgnoreEnvelope.AlwaysIgnored), out _));
+    }
+
     static string? GetAnnotation(
         IReadOnlyDictionary<AnnotationKey, AnnotationValue> annotations,
         string key
@@ -138,4 +153,9 @@ public sealed class ClrShapeGraphBuilderMetadataTests
     sealed record TimeEnvelope(TimeOnly Time);
 
     sealed record JsonEnvelope(JsonElement Element, JsonNode? Node, JsonObject Object, JsonArray Array);
+
+    sealed record JsonIgnoreEnvelope(
+        [property: JsonIgnore] string AlwaysIgnored,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Conditional,
+        string Visible);
 }
