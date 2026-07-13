@@ -1,11 +1,13 @@
 using System.Collections.Immutable;
 using System.Text.Json.Serialization;
+using Cohesive.Model.Serialization;
 
 namespace Cohesive.Relations.Model;
 
 /// <summary>
 /// Stable relation identifier.
 /// </summary>
+[JsonConverter(typeof(SingleValueWrapperJsonConverter))]
 public sealed record RelationId
 {
     /// <summary>
@@ -28,6 +30,7 @@ public sealed record RelationId
 /// <summary>
 /// Stable relation name.
 /// </summary>
+[JsonConverter(typeof(SingleValueWrapperJsonConverter))]
 public sealed record RelationName
 {
     /// <summary>
@@ -90,7 +93,7 @@ public sealed record RelationMetadata
 }
 
 /// <summary>
-/// Canonical relation definition.
+/// Prototype executable relation definition retained while runtime interpreters are retargeted to the relation/query IR.
 /// </summary>
 public sealed record RelationDefinition
 {

@@ -1,6 +1,6 @@
 using Cohesive.Api;
 using Cohesive.Model;
-using Cohesive.Relations.Model;
+using Cohesive.Relations.Serialization;
 using CohesiveApi = Cohesive.Api.Api;
 
 namespace Cohesive.Relations.Contracts;
@@ -17,9 +17,9 @@ public static class RelationsContractsDefinition
     public static ApiDefinition Definition { get; } = ApiDefinition.From(
         CohesiveApi
             .Define("RelationsContracts")
-            .Action("RelationDefinition")
-            .Route("GET", "/relations/contracts/relation-definition")
-            .Returns<RelationDefinition>()
+            .Action("RelationQueryDocument")
+            .Route("GET", "/relations/contracts/relation-query-document")
+            .Returns<RelationQueryDocument>()
             .Build(),
         CohesiveApi
             .Define("RelationsContracts")

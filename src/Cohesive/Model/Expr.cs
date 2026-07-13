@@ -23,14 +23,40 @@ public abstract record Expr
     /// <summary>
     /// Expression that references a source field/path.
     /// </summary>
-    /// <param name="path"></param>
-    /// <returns></returns>
+    /// <param name="path">Field path within the current value binding.</param>
+    /// <returns>An unqualified field expression.</returns>
     public static Expr Field(FieldPath path) => new FieldExpr(path);
+
+    /// <summary>
+    /// Expression that references a field/path from a specific value binding.
+    /// </summary>
+    /// <param name="binding">Value binding containing the field.</param>
+    /// <param name="path">Field path within the bound value.</param>
+    /// <returns>A binding-qualified field expression.</returns>
+    public static Expr Field(ValueBindingId binding, FieldPath path) => new FieldExpr(path, binding);
     
     /// <summary>
     /// Expression that references a source field/path.
     /// </summary>
+    /// <param name="path">Dotted field path within the current value binding.</param>
+    /// <returns>An unqualified field expression.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="path"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="path"/> is empty, consists only of white-space characters, or contains no field segments.
+    /// </exception>
     public static Expr Field(string path) => Field(FieldPath.Parse(path));
+
+    /// <summary>
+    /// Expression that references a field/path from a specific value binding.
+    /// </summary>
+    /// <param name="binding">Value binding containing the field.</param>
+    /// <param name="path">Dotted field path within the bound value.</param>
+    /// <returns>A binding-qualified field expression.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="path"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="path"/> is empty, consists only of white-space characters, or contains no field segments.
+    /// </exception>
+    public static Expr Field(ValueBindingId binding, string path) => Field(binding, FieldPath.Parse(path));
 
     /// <summary>
     /// Expression that references the current item while iterating a collection.
@@ -320,9 +346,14 @@ public sealed record ConditionalExpr : Expr
 }
 
 /// <summary>
-/// Expression that references a source field/path.
+/// Expression that references a source field/path, optionally qualified by a value binding.
 /// </summary>
-public sealed record FieldExpr(FieldPath Path) : Expr;
+/// <param name="Path">Field path within the bound value.</param>
+/// <param name="Binding">Optional binding that disambiguates the source value.</param>
+public sealed record FieldExpr(
+    FieldPath Path,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ValueBindingId? Binding = null
+    ) : Expr;
 
 /// <summary>
 /// Expression that references the current item while iterating a collection.
