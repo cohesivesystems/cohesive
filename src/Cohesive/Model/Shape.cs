@@ -90,9 +90,59 @@ public sealed record Shape
     public string? Role => TryGetStringAnnotation(Annotations, ShapeAnnotationKeys.Role);
 
     /// <summary>
+    /// Logical entity type represented by this shape when declared through
+    /// <see cref="ShapeAnnotationKeys.EntityType"/>.
+    /// </summary>
+    public EntityTypeName? EntityType
+    {
+        get
+        {
+            var value = TryGetStringAnnotation(Annotations, ShapeAnnotationKeys.EntityType);
+            return string.IsNullOrWhiteSpace(value) ? null : new(value);
+        }
+    }
+
+    /// <summary>
     /// Returns true when this shape has the requested role.
     /// </summary>
     public bool HasRole(string role) => string.Equals(Role, role, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Returns a shape carrying the supplied logical entity type, preserving every other semantic member.
+    /// </summary>
+    /// <param name="entityType">Logical entity type represented by this shape.</param>
+    /// <returns>This shape when the annotation already matches; otherwise an annotated copy.</returns>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="entityType"/> is default, or this shape already declares a different entity type.
+    /// </exception>
+    public Shape WithEntityType(EntityTypeName entityType)
+    {
+        if (string.IsNullOrWhiteSpace(entityType.Value))
+            throw new ArgumentException("An entity type name is required.", nameof(entityType));
+        var annotationKey = new AnnotationKey(ShapeAnnotationKeys.EntityType);
+        if (Annotations.ContainsKey(annotationKey) && EntityType is null)
+        {
+            throw new ArgumentException(
+                $"Shape '{Id.Value}' has an invalid '{ShapeAnnotationKeys.EntityType}' annotation.",
+                nameof(entityType));
+        }
+        if (EntityType is { } existing && existing != entityType)
+        {
+            throw new ArgumentException(
+                $"Shape '{Id.Value}' represents entity type '{existing.Value}', not '{entityType.Value}'.",
+                nameof(entityType));
+        }
+
+        if (EntityType == entityType)
+            return this;
+
+        return this with
+        {
+            Annotations = Annotations.SetItem(
+                annotationKey,
+                AnnotationValue.FromString(entityType.Value))
+        };
+    }
 
     /// <summary>
     /// Looks up a field by canonical field name.

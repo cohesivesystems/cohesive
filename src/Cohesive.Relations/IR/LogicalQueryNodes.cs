@@ -17,6 +17,18 @@ public enum QueryInputRequirement
 }
 
 /// <summary>
+/// Direction in which a declared semantic relationship is traversed.
+/// </summary>
+public enum RelationshipTraversalDirection
+{
+    /// <summary>Traverse from the relationship source endpoint to its target endpoint.</summary>
+    Forward = 0,
+
+    /// <summary>Traverse from the relationship target endpoint to its source endpoint.</summary>
+    Inverse = 1
+}
+
+/// <summary>
 /// Sort direction for a logical query ordering.
 /// </summary>
 public enum QuerySortDirection
@@ -85,7 +97,7 @@ public sealed record SourceQueryNode : LogicalQueryNode
     /// <param name="id">Stable node identifier.</param>
     /// <param name="binding">Binding introduced by the source.</param>
     /// <param name="shape">Semantic shape of source values.</param>
-    public SourceQueryNode(QueryNodeId id, ValueBindingId binding, ShapeId shape)
+    public SourceQueryNode(QueryNodeId id, ValueBindingId binding, QualifiedShapeId shape)
         : base(id)
     {
         Binding = binding;
@@ -96,7 +108,7 @@ public sealed record SourceQueryNode : LogicalQueryNode
     public ValueBindingId Binding { get; init; }
 
     /// <summary>Semantic shape of source values.</summary>
-    public ShapeId Shape { get; init; }
+    public QualifiedShapeId Shape { get; init; }
 
     /// <inheritdoc />
     public override ImmutableArray<QueryNodeId> Inputs => [];
@@ -147,18 +159,21 @@ public sealed record TraverseRelationshipQueryNode : LogicalQueryNode
     /// <param name="input">Input rowset.</param>
     /// <param name="from">Visible binding from which traversal starts.</param>
     /// <param name="relationship">Semantic relationship to traverse.</param>
+    /// <param name="direction">Direction in which the relationship is traversed.</param>
     /// <param name="result">Binding introduced for the related value.</param>
     /// <param name="joinKind">Join behavior when related values are absent.</param>
     /// <param name="requirement">Whether the related value must be resolved.</param>
     /// <exception cref="ArgumentOutOfRangeException">
-    /// <paramref name="joinKind"/> is <see cref="JoinKind.Right"/> or <see cref="JoinKind.Full"/>;
-    /// forward traversal supports only inner or left join semantics.
+    /// <paramref name="direction"/> or <paramref name="requirement"/> is unsupported, or
+    /// <paramref name="joinKind"/> is unsupported, <see cref="JoinKind.Right"/>, or
+    /// <see cref="JoinKind.Full"/>. Relationship traversal supports only inner or left join semantics.
     /// </exception>
     public TraverseRelationshipQueryNode(
         QueryNodeId id,
         QueryNodeId input,
         ValueBindingId from,
         RelationshipId relationship,
+        RelationshipTraversalDirection direction,
         ValueBindingId result,
         JoinKind joinKind,
         QueryInputRequirement requirement)
@@ -167,16 +182,33 @@ public sealed record TraverseRelationshipQueryNode : LogicalQueryNode
         Input = input;
         From = from;
         Relationship = relationship;
+        Direction = direction;
         Result = result;
         JoinKind = joinKind;
         Requirement = requirement;
 
-        if (JoinKind is JoinKind.Right or JoinKind.Full)
+        if (!Enum.IsDefined(Direction))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(direction),
+                direction,
+                "Unsupported relationship traversal direction.");
+        }
+
+        if (!Enum.IsDefined(JoinKind) || JoinKind is JoinKind.Right or JoinKind.Full)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(joinKind),
                 joinKind,
-                "A forward relationship traversal supports only inner or left join semantics.");
+                "A relationship traversal supports only inner or left join semantics.");
+        }
+
+        if (!Enum.IsDefined(Requirement))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(requirement),
+                requirement,
+                "Unsupported relationship input requirement.");
         }
     }
 
@@ -188,6 +220,10 @@ public sealed record TraverseRelationshipQueryNode : LogicalQueryNode
 
     /// <summary>Relationship to traverse.</summary>
     public RelationshipId Relationship { get; init; }
+
+    /// <summary>Direction in which the relationship is traversed.</summary>
+    [JsonRequired]
+    public RelationshipTraversalDirection Direction { get; init; }
 
     /// <summary>Binding introduced for related values.</summary>
     public ValueBindingId Result { get; init; }
@@ -336,7 +372,7 @@ public sealed record ProjectQueryNode : LogicalQueryNode
         QueryNodeId id,
         QueryNodeId input,
         ValueBindingId resultBinding,
-        ShapeId resultShape,
+        QualifiedShapeId resultShape,
         ImmutableArray<ProjectionAssignment> assignments)
         : base(id)
     {
@@ -356,7 +392,7 @@ public sealed record ProjectQueryNode : LogicalQueryNode
     public ValueBindingId ResultBinding { get; init; }
 
     /// <summary>Semantic shape produced by the projection.</summary>
-    public ShapeId ResultShape { get; init; }
+    public QualifiedShapeId ResultShape { get; init; }
 
     /// <summary>Output field assignments.</summary>
     public ImmutableArray<ProjectionAssignment> Assignments { get; init; }
@@ -483,7 +519,7 @@ public sealed record AggregateQueryNode : LogicalQueryNode
         QueryNodeId id,
         QueryNodeId input,
         ValueBindingId resultBinding,
-        ShapeId resultShape,
+        QualifiedShapeId resultShape,
         ImmutableArray<QueryGrouping> groupings = default,
         ImmutableArray<QueryAggregateAssignment> aggregates = default)
         : base(id)
@@ -505,7 +541,7 @@ public sealed record AggregateQueryNode : LogicalQueryNode
     public ValueBindingId ResultBinding { get; init; }
 
     /// <summary>Semantic shape produced by aggregation.</summary>
-    public ShapeId ResultShape { get; init; }
+    public QualifiedShapeId ResultShape { get; init; }
 
     /// <summary>Grouping assignments.</summary>
     public ImmutableArray<QueryGrouping> Groupings { get; init; }

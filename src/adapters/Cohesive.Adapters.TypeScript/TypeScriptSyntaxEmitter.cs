@@ -283,6 +283,12 @@ public static class TypeScriptSyntaxEmitter
 
             case TsTypeReference reference:
                 writer.Write(reference.Name);
+                if (!reference.TypeArguments.IsDefaultOrEmpty)
+                {
+                    writer.Write('<');
+                    WriteDelimitedTypes(reference.TypeArguments, ", ", ref writer);
+                    writer.Write('>');
+                }
                 return;
 
             case TsArrayType array:

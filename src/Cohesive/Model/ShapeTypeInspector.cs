@@ -33,7 +33,7 @@ public static class ShapeTypeInspector
                 var property = allProperties[i];
                 if (property.GetMethod is null || property.GetMethod.IsStatic || property.GetIndexParameters().Length != 0)
                     continue;
-                if (property.GetCustomAttribute<JsonIgnoreAttribute>(inherit: true) is not null)
+                if (IsAlwaysIgnored(property))
                     continue;
 
                 readableCount++;
@@ -49,7 +49,7 @@ public static class ShapeTypeInspector
                 var property = allProperties[i];
                 if (property.GetMethod is null || property.GetMethod.IsStatic || property.GetIndexParameters().Length != 0)
                     continue;
-                if (property.GetCustomAttribute<JsonIgnoreAttribute>(inherit: true) is not null)
+                if (IsAlwaysIgnored(property))
                     continue;
 
                 readable[writeIndex++] = property;
@@ -58,6 +58,12 @@ public static class ShapeTypeInspector
             return readable;
         });
     }
+
+    static bool IsAlwaysIgnored(PropertyInfo property) =>
+        property.GetCustomAttribute<JsonIgnoreAttribute>(inherit: true) is
+        {
+            Condition: JsonIgnoreCondition.Always
+        };
 
     /// <summary>
     /// Returns cached readable public instance properties ordered by metadata token.

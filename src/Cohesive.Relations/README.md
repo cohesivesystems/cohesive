@@ -8,7 +8,7 @@ SQL makes it possible to describe facts, relationships, projections, filters, an
 
 Cohesive separates those relational semantics from their physical realization. Facts may come from PostgreSQL, Cosmos DB, a search index, an API, supplied CLR objects, observations, caches, or several sources together. The same semantic definition may be interpreted as SQL, a compiled mapper, a batch hydration plan, an in-memory computation, an index-maintenance plan, a lineage report, or a diagnostic explanation.
 
-The canonical relation/query IR is the source of truth. Authoring DSLs, importers, and inference systems such as Ari produce that IR; compilers and interpreters decide how to realize it.
+The canonical relationship catalog and relation/query IR are the sources of semantic truth. Authoring DSLs, importers, and inference systems such as Ari produce these IRs; compilers and interpreters decide how to realize them.
 
 ## Mental Model
 
@@ -35,10 +35,34 @@ Relationships describe semantic connections between facts.
 For example:
 
 ```text
-Load.CustomerId → Customer.Id
+Load.CustomerId → Customer observation identity
 ```
 
 A relationship may be traversed during querying, DTO enrichment, hydration, dependency analysis, or incremental materialization. Its physical realization might be a SQL join, a Cosmos point read, a batched lookup, a cache lookup, or an in-memory hash join.
+
+The canonical `RelationshipDefinition` is an oriented edge from the graph-qualified shape that
+holds a reference to the graph-qualified shape it addresses. It stores the source field path,
+target-key semantics, and any global uniqueness guarantee. It does not duplicate the source
+field's presence, nullability, or cardinality; those remain authoritative on the source
+`ShapeGraph`.
+
+For example, a single `Load.CustomerId` yields at most one customer when traversed forward. The
+inverse traversal yields many loads by default. Declaring the reference globally unique reduces
+the inverse result to at most one load. A required `CustomerId` means the reference key must be
+present; it does not claim that the customer observation exists.
+
+Relationships can be authored directly or through the typed producer:
+
+```csharp
+var loadCustomer = Relationship
+    .From<Load>(loadShape)
+    .Reference(static load => load.CustomerId)
+    .To(customerShape);
+```
+
+Typed selectors are immediately lowered to canonical field paths. CLR reflection and expression
+objects are not retained in persisted relationship IR. `Cohesive.Transitions` can compile
+`EntityReferenceTypeRef` fields into the same definitions and deterministic IDs.
 
 ### Derivations
 
@@ -117,6 +141,69 @@ They differ in their semantic contract:
 The distinction is semantic rather than physical. Neither construct chooses a database, join algorithm, batching strategy, or execution runtime.
 
 A Cohesive relation is also not synonymous with a table in the relational-database sense. A compiler may realize a relation as a SQL expression, view, materialized view, or application-side plan, but the relation itself remains portable.
+
+## Relationship to GraphQL
+
+GraphQL and `Cohesive.Relations` both support querying heterogeneous data sources through a
+uniform interface, but they operate at different levels of abstraction.
+
+GraphQL defines a remote API contract through which remote clients submit queries and receive
+results. `Cohesive.Relations` defines a node-level semantic protocol through which application
+components describe relationships, queries, projections, aggregations, and data requirements.
+Node-level does not mean that the data or execution must be local: a Relations interpreter may
+read from local memory, databases, remote services, or several heterogeneous sources. It describes
+the level at which the semantic contract is consumed rather than the placement of its data.
+
+The Relations IR is independent of the remote API used to expose it, but it is itself a protocol
+between authoring tools, compilers, planners, repositories, and interpreters. It may also be
+persisted, transferred between nodes, and projected into other host languages.
+
+### Resolvers and read repositories
+
+A GraphQL implementation binds field resolvers to fields in its remote API schema. The current
+Relations query runtime similarly resolves `QuerySource` values through `IReadRepository`
+implementations registered with an `IReadRepositoryRegistry`. Either mechanism can acquire data
+from heterogeneous backends.
+
+The contracts are different. A GraphQL resolver satisfies a field in a particular client-facing
+schema. A Relations read repository supplies semantic data independently of whether or how that
+data is exposed remotely. Relations definitions also preserve enough meaning for an interpreter
+to analyze and optimize the complete query, potentially replacing a sequence of individual reads
+with a native backend query, batched lookup, or in-memory join.
+
+### Remote API exposure
+
+`Cohesive.Relations` does not itself establish a remote client/server interface or define a remote
+invocation protocol. `Cohesive.Api` can expose Relations semantics through GraphQL, REST, gRPC, or
+another remote API technology. A GraphQL interpretation could lower a client selection set into
+relation/query IR, execute it through the selected repositories and adapters, and project the
+result into the GraphQL response shape.
+
+```text
+Remote client
+→ Cohesive.Api GraphQL operation
+→ Cohesive.Relations query
+→ read repositories and backend adapters
+→ heterogeneous data sources
+```
+
+### Mutations and workflows
+
+`Cohesive.Relations` models data acquisition and computation rather than state mutation. A GraphQL
+mutation defines a remote API operation, but not the underlying state-change semantics.
+`Cohesive.Api` may expose an operation as a GraphQL mutation, REST action, or gRPC method;
+`Cohesive.Transitions` defines its entity state changes and invariants; and `Cohesive.Processes`
+coordinates multistep workflows involving transitions, queries, waits, external effects, and
+recovery or compensation behavior.
+
+```text
+Remote client
+→ Cohesive.Api operation
+→ Cohesive.Transitions transition or Cohesive.Processes process
+→ state changes and external effects
+→ Cohesive.Relations result projection
+→ remote API response
+```
 
 ## DTO Mapping as Relational Programming
 
@@ -493,19 +580,29 @@ Execution plans, generated queries, compiled mappers, diagnostics, and materiali
 
 ## Portable Documents
 
-Canonical relation and query definitions can be persisted in the versioned `relation-query/v1` document format.
+Canonical relationships are persisted independently in `relationship-catalog/v1`; relation and
+query definitions reference them by stable `RelationshipId` from `relation-query/v1`. A catalog
+can therefore serve many definitions and evolve as its own explicitly versioned semantic model.
 
 The format provides:
 
-- Closed relation, query, node, result, and paging discriminators.
+- Closed relationship-target, relation, query, node, result, and paging discriminators.
 - Stable semantic identifiers.
+- Graph-qualified relationship and query shapes.
+- Explicit forward and inverse relationship traversal.
 - Binding-qualified field references.
 - Strict JSON parsing.
 - Structured semantic validation.
-- Deterministic definition fingerprints.
+- Deterministic catalog and definition fingerprints.
 - Host-language contract projection.
 
 Document metadata and physical plans do not participate in the semantic definition fingerprint.
+
+The existing `JoinSpec` executor inputs and `relatedField(...)` hydration expressions remain
+compatibility paths for the prototype runtime. They are physical/execution representations, not
+relationship declarations. Their migration direction is to lower legacy authoring into canonical
+relation/query IR and then derive joins and hydration work from that IR plus an explicit relationship
+catalog snapshot.
 
 ## Current Status
 
@@ -515,8 +612,10 @@ The current foundation includes:
 
 - Relation, mapping, hydration, query, and aggregation APIs.
 - A shared canonical relation/query IR.
-- Explicit value bindings and relationship traversal.
-- Versioned persisted relation/query documents.
+- Explicit value bindings and directional relationship traversal.
+- Canonical relationship catalogs and deterministic relationship IDs.
+- Standalone typed/semantic relationship authoring and entity-reference compilation.
+- Versioned persisted relationship-catalog and relation/query documents.
 - Structural and semantic diagnostics.
 - Deterministic definition fingerprints.
 - In-memory execution and mapping components.
@@ -525,7 +624,7 @@ The current foundation includes:
 Active areas of development include:
 
 - Lowering existing authoring APIs into the canonical IR.
-- First-class relationship catalogs and entity relationship declarations.
+- Relationship execution and hydration from canonical catalog traversal.
 - Capability-driven physical planning.
 - PostgreSQL, Cosmos SQL, Gremlin, and search-backend compilers.
 - Cross-source batching and in-memory joins.
@@ -542,9 +641,10 @@ dotnet add package Cohesive.Relations
 ## Related Packages
 
 - `Cohesive` provides the core shape, expression, observation, and type models.
-- `Cohesive.Relations.Contracts` exposes relation/query contracts for code generation.
+- `Cohesive.Relations.Contracts` exposes relation/query contracts for canonical JSON wire projection and other code generation.
 - `Cohesive.Storage` provides generic storage abstractions.
 - `Cohesive.Transitions` defines entity transitions and invariants that can participate in relationship and dependency analysis.
+- `Cohesive.Adapters.CSharp` projects canonical catalogs into deterministic, collision-checked relationship identifiers.
 - `Cohesive.Adapters.Cosmos` provides Cosmos-oriented interpretations.
 - `Cohesive.Adapters.Elastic` provides search-oriented interpretations.
 - `Cohesive.Adapters.TypeScript` projects semantic contracts into TypeScript.

@@ -26,6 +26,7 @@ public static class CodeGenCliParser
         string? contracts = null;
         string? output = null;
         string? module = null;
+        var shapeProjection = ContractShapeProjection.Clr;
         var emitKinds = ImmutableArray.CreateBuilder<CodeGenEmitKind>();
         var externalShapeModules = ImmutableArray.CreateBuilder<TypeScriptExternalTypeModule>();
 
@@ -76,6 +77,17 @@ public static class CodeGenCliParser
                 continue;
             }
 
+            if (string.Equals(current, "--shape-projection", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!TryParseShapeProjection(value, out shapeProjection))
+                {
+                    error = $"Unsupported shape projection '{value}'.";
+                    return false;
+                }
+
+                continue;
+            }
+
             error = $"Unknown option '{current}'.";
             return false;
         }
@@ -110,7 +122,8 @@ public static class CodeGenCliParser
             OutputDirectory = Path.GetFullPath(output),
             ModuleName = module,
             EmitKinds = emitKinds.ToImmutable(),
-            ExternalTypeScriptShapeModules = externalShapeModules.ToImmutable()
+            ExternalTypeScriptShapeModules = externalShapeModules.ToImmutable(),
+            ShapeProjection = shapeProjection
         };
 
         return true;
@@ -258,6 +271,25 @@ public static class CodeGenCliParser
         }
 
         emitKind = default;
+        return false;
+    }
+
+    static bool TryParseShapeProjection(string value, out ContractShapeProjection projection)
+    {
+        if (string.Equals(value, "clr", StringComparison.OrdinalIgnoreCase))
+        {
+            projection = ContractShapeProjection.Clr;
+            return true;
+        }
+
+        if (string.Equals(value, "canonical-json", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "json", StringComparison.OrdinalIgnoreCase))
+        {
+            projection = ContractShapeProjection.CanonicalJson;
+            return true;
+        }
+
+        projection = default;
         return false;
     }
 }

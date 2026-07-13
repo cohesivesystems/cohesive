@@ -327,7 +327,23 @@ public sealed record EnumTypeRef : TypeRef
 /// <summary>
 /// Reference to another entity type by name.
 /// </summary>
-public sealed record EntityReferenceTypeRef(EntityTypeName Entity) : TypeRef;
+public sealed record EntityReferenceTypeRef : TypeRef
+{
+    /// <summary>Creates a reference to a logical entity type.</summary>
+    /// <param name="entity">Stable non-empty target entity type name.</param>
+    /// <exception cref="ArgumentException"><paramref name="entity"/> is default.</exception>
+    [JsonConstructor]
+    public EntityReferenceTypeRef(EntityTypeName entity)
+    {
+        if (string.IsNullOrWhiteSpace(entity.Value))
+            throw new ArgumentException("A referenced entity type name is required.", nameof(entity));
+
+        Entity = entity;
+    }
+
+    /// <summary>Stable target entity type name.</summary>
+    public EntityTypeName Entity { get; init; }
+}
 
 /// <summary>
 /// Array type reference.

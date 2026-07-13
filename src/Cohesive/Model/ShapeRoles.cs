@@ -33,4 +33,9 @@ public static class ShapeAnnotationKeys
     /// Coarse shape role such as transport, dto, entity, or projection.
     /// </summary>
     public const string Role = "shape.role";
+
+    /// <summary>
+    /// Stable logical entity type represented by an entity shape.
+    /// </summary>
+    public const string EntityType = "shape.entityType";
 }

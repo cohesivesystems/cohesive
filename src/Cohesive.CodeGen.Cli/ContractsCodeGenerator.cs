@@ -1,9 +1,12 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Cohesive.Adapters.GraphQL;
 using Cohesive.Adapters.TypeScript;
 using Cohesive.Adapters.OpenApi;
 using Cohesive.Api.CodeGen;
 using Cohesive.CodeGen;
 using Cohesive.Model;
+using Cohesive.Model.Serialization;
 
 namespace Cohesive.CodeGen.Cli;
 
@@ -29,7 +32,7 @@ public static class ContractsCodeGenerator
             {
                 case CodeGenEmitKind.Shapes:
                 {
-                    var graph = ContractsAssemblyShapeGraphLoader.Load(options.ContractsAssemblyPath, options.ModuleName);
+                    var graph = LoadShapeGraph(options);
                     var emission = new TypeScriptShapeEmitter(new TypeScriptEmitterOptions
                     {
                         FileName = $"{SanitizeFileNameSegment(options.ModuleName)}.shapes.generated.ts",
@@ -202,5 +205,22 @@ public static class ContractsCodeGenerator
         {
             builder.Dispose();
         }
+    }
+
+    static ShapeGraph LoadShapeGraph(CodeGenCliOptions options)
+    {
+        if (options.ShapeProjection == ContractShapeProjection.Clr)
+            return ContractsAssemblyShapeGraphLoader.Load(options.ContractsAssemblyPath, options.ModuleName);
+
+        if (options.ShapeProjection != ContractShapeProjection.CanonicalJson)
+            throw new InvalidOperationException($"Unsupported shape projection '{options.ShapeProjection}'.");
+
+        JsonSerializerOptions serializerOptions = new(JsonSerializerDefaults.Web);
+        serializerOptions.Converters.Add(SingleValueWrapperJsonConverter.ScalarOnly);
+        serializerOptions.Converters.Add(new JsonStringEnumConverter());
+        return ContractsAssemblyShapeGraphLoader.Load(
+            options.ContractsAssemblyPath,
+            options.ModuleName,
+            serializerOptions);
     }
 }

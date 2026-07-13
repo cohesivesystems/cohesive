@@ -81,6 +81,34 @@ public sealed class ShapeGraph
     public Shape? TryGetShape(ShapeId id) => TryGetShape(id, out var definition) ? definition : null;
 
     /// <summary>
+    /// Looks up a graph-qualified shape and rejects identities belonging to another graph.
+    /// </summary>
+    /// <param name="id">Graph-qualified shape identifier.</param>
+    /// <param name="definition">Resolved shape when the graph and local shape identifiers match.</param>
+    /// <returns><see langword="true"/> when this graph contains the qualified shape; otherwise <see langword="false"/>.</returns>
+    public bool TryGetShape(
+        QualifiedShapeId id,
+        [MaybeNullWhen(false)] out Shape definition)
+    {
+        if (id.GraphId != Id)
+        {
+            definition = null!;
+            return false;
+        }
+
+        return TryGetShape(id.ShapeId, out definition);
+    }
+
+    /// <summary>
+    /// Looks up a graph-qualified shape and returns <see langword="null"/> when it belongs to
+    /// another graph or is not present.
+    /// </summary>
+    /// <param name="id">Graph-qualified shape identifier.</param>
+    /// <returns>The resolved shape, or <see langword="null"/>.</returns>
+    public Shape? TryGetShape(QualifiedShapeId id) =>
+        TryGetShape(id, out var definition) ? definition : null;
+
+    /// <summary>
     /// Gets a shape by id, throwing if the shape is not present.
     /// </summary>
     /// <exception cref="KeyNotFoundException">The shape was not found.</exception>
@@ -90,6 +118,30 @@ public sealed class ShapeGraph
             return definition;
 
         throw new KeyNotFoundException($"Shape graph '{Id.Value}' does not contain shape '{id.Value}'.");
+    }
+
+    /// <summary>
+    /// Gets a graph-qualified shape, throwing when it belongs to another graph or is absent.
+    /// </summary>
+    /// <param name="id">Graph-qualified shape identifier.</param>
+    /// <returns>The resolved shape.</returns>
+    /// <exception cref="KeyNotFoundException">This graph does not contain the qualified shape.</exception>
+    public Shape GetShape(QualifiedShapeId id)
+    {
+        if (TryGetShape(id, out var definition))
+            return definition;
+
+        throw new KeyNotFoundException($"Shape graph '{Id.Value}' does not contain qualified shape '{id}'.");
+    }
+
+    /// <summary>Qualifies a local shape identifier with this graph's stable identity.</summary>
+    /// <param name="shapeId">Local shape identifier.</param>
+    /// <returns>A graph-qualified shape identifier.</returns>
+    /// <exception cref="KeyNotFoundException">This graph does not contain <paramref name="shapeId"/>.</exception>
+    public QualifiedShapeId Qualify(ShapeId shapeId)
+    {
+        _ = GetShape(shapeId);
+        return new(Id, shapeId);
     }
 
     /// <summary>

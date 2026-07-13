@@ -4,7 +4,7 @@ using Cohesive.Model.Serialization;
 namespace Cohesive.Model;
 
 /// <summary>
-/// Stable identifier for a shape graph build.
+/// Stable identifier for an explicitly versioned shape-graph snapshot.
 /// </summary>
 [JsonConverter(typeof(SingleValueWrapperJsonConverter))]
 public readonly record struct GraphId
@@ -24,7 +24,8 @@ public readonly record struct GraphId
     public string Value { get; }
 
     /// <summary>
-    /// Creates a unique graph id.
+    /// Creates an ephemeral unique graph id for runtime-only graph construction.
+    /// Persisted semantics and deterministic identifiers should instead receive an explicit stable id.
     /// </summary>
     public static GraphId New() => new(Guid.NewGuid().ToString("N"));
 

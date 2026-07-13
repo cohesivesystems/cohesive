@@ -3,6 +3,14 @@ namespace Cohesive.Relations.Queries;
 /// <summary>
 /// Base join specification over observed records.
 /// </summary>
+/// <remarks>
+/// This is a compatibility input to the prototype query executor and describes a physical read/join
+/// step. It is not a semantic relationship declaration. New relationship semantics belong in a
+/// <see cref="Cohesive.Relations.Model.RelationshipCatalog"/> and are referenced from canonical query
+/// IR through <see cref="Cohesive.Relations.IR.TraverseRelationshipQueryNode"/>. The migration path is
+/// to lower legacy query authoring into canonical IR, then derive execution joins from that IR and its
+/// explicit catalog snapshot.
+/// </remarks>
 /// <param name="Alias">The alias used to reference the joined observation or collection.</param>
 /// <param name="Cardinality">The number of joined records produced for each input row.</param>
 /// <param name="FromAlias">The previously hydrated alias that provides the source key for nested joins, if any.</param>

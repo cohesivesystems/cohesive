@@ -15,6 +15,16 @@ public sealed record EntityDefinition
     /// <summary>
     /// Creates a semantic entity definition.
     /// </summary>
+    /// <param name="name">Stable logical entity type name.</param>
+    /// <param name="fields">Fields used when <paramref name="shape"/> is not supplied.</param>
+    /// <param name="invariants">Entity-level invariants.</param>
+    /// <param name="transitions">Transitions declared for the entity.</param>
+    /// <param name="shape">Optional explicit entity shape whose identifier and metadata are preserved.</param>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="name"/> is default, the resolved shape is not an entity shape, has no fields,
+    /// carries an entity-type annotation that contradicts <paramref name="name"/>, or contains invalid
+    /// transition definitions.
+    /// </exception>
     [JsonConstructor]
     public EntityDefinition(
         EntityTypeName name,
@@ -24,12 +34,25 @@ public sealed record EntityDefinition
         Shape? shape = null
         )
     {
+        if (string.IsNullOrWhiteSpace(name.Value))
+            throw new ArgumentException("An entity type name is required.", nameof(name));
+
         Name = name;
-        Shape = shape ?? CreateDefaultShape(name, fields.IsDefault ? [] : fields);
-        if (!Shape.HasRole(ShapeRoles.Entity))
+        var resolvedShape = shape ?? CreateDefaultShape(name, fields.IsDefault ? [] : fields);
+        if (!resolvedShape.HasRole(ShapeRoles.Entity))
             throw new ArgumentException(message: $"Entity '{name.Value}' must reference a shape with role '{ShapeRoles.Entity}'.", paramName: nameof(shape));
-        if (Shape.Fields.IsDefaultOrEmpty)
-            throw new ArgumentException(message: $"Entity '{name}' must declare at least one field.", paramName: nameof(fields));
+        if (resolvedShape.Fields.IsDefaultOrEmpty)
+            throw new ArgumentException(
+                message: $"Entity '{name}' must declare at least one field.",
+                paramName: shape is null ? nameof(fields) : nameof(shape));
+        try
+        {
+            Shape = resolvedShape.WithEntityType(name);
+        }
+        catch (ArgumentException exception)
+        {
+            throw new ArgumentException(exception.Message, nameof(shape), exception);
+        }
         Invariants = invariants.IsDefault ? [] : invariants;
         Transitions = transitions.IsDefault ? [] : [..transitions.Select(x => x.WithOwningEntity(name))];
         EnsureTransitionInvariants(Transitions, name);
@@ -38,6 +61,16 @@ public sealed record EntityDefinition
     /// <summary>
     /// Creates a semantic entity definition from an explicit shape.
     /// </summary>
+    /// <param name="name">Stable logical entity type name.</param>
+    /// <param name="shape">Explicit entity shape whose identifier and metadata are preserved.</param>
+    /// <param name="invariants">Entity-level invariants.</param>
+    /// <param name="transitions">Transitions declared for the entity.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="shape"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="name"/> is default, or <paramref name="shape"/> is not an entity shape, has no
+    /// fields, carries an entity-type annotation that contradicts <paramref name="name"/>, or contains
+    /// invalid transition definitions.
+    /// </exception>
     public EntityDefinition(
         EntityTypeName name,
         Shape shape,
@@ -46,7 +79,7 @@ public sealed record EntityDefinition
         )
         : this(
             name: name,
-            fields: shape.Fields,
+            fields: Guard.RequireNotNull(shape).Fields,
             invariants: invariants,
             transitions: transitions,
             shape: shape)

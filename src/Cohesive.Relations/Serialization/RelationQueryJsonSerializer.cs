@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using Cohesive.Model.Serialization;
 
 namespace Cohesive.Relations.Serialization;
@@ -12,18 +11,8 @@ public static class RelationQueryJsonSerializer
     /// <summary>Creates strict serializer options for canonical relation/query IR.</summary>
     /// <param name="indented">Whether serialized JSON should be indented.</param>
     /// <returns>Serializer options configured for the canonical wire contract.</returns>
-    public static JsonSerializerOptions CreateOptions(bool indented = false)
-    {
-        JsonSerializerOptions options = new(JsonSerializerDefaults.Web)
-        {
-            AllowOutOfOrderMetadataProperties = true,
-            PropertyNameCaseInsensitive = false,
-            UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
-            WriteIndented = indented
-        };
-        options.Converters.Add(new JsonStringEnumConverter(namingPolicy: null, allowIntegerValues: false));
-        return options;
-    }
+    public static JsonSerializerOptions CreateOptions(bool indented = false) =>
+        StrictDocumentJson.CreateOptions(indented);
 
     /// <summary>Serializes a portable relation/query document.</summary>
     /// <param name="document">Document to serialize.</param>
@@ -71,7 +60,7 @@ public static class RelationQueryJsonSerializer
         document = null;
         if (string.IsNullOrWhiteSpace(json))
         {
-            return Error(
+            return StrictDocumentJson.Error(
                 code: "relationQuery.json.empty",
                 message: "Relation/query document JSON cannot be empty.",
                 location: "$");
@@ -84,7 +73,7 @@ public static class RelationQueryJsonSerializer
         }
         catch (JsonException exception)
         {
-            return Error(
+            return StrictDocumentJson.Error(
                 code: "relationQuery.json.invalid",
                 message: exception.Message,
                 location: "$");
@@ -94,15 +83,18 @@ public static class RelationQueryJsonSerializer
         {
             if (parsedJson.RootElement.ValueKind != JsonValueKind.Object)
             {
-                return Error(
+                return StrictDocumentJson.Error(
                     code: "relationQuery.document.rootInvalid",
                     message: "A relation/query document must be a JSON object.",
                     location: "$");
             }
 
-            if (TryFindDuplicateProperty(parsedJson.RootElement, path: string.Empty, out var duplicateLocation))
+            if (StrictDocumentJson.TryFindDuplicateProperty(
+                    parsedJson.RootElement,
+                    path: string.Empty,
+                    out var duplicateLocation))
             {
-                return Error(
+                return StrictDocumentJson.Error(
                     code: "relationQuery.json.duplicateProperty",
                     message: "Canonical relation/query JSON cannot contain duplicate object property names.",
                     location: duplicateLocation);
@@ -110,7 +102,7 @@ public static class RelationQueryJsonSerializer
 
             if (!parsedJson.RootElement.TryGetProperty("schemaVersion", out var versionElement))
             {
-                return Error(
+                return StrictDocumentJson.Error(
                     code: "relationQuery.schemaVersion.missing",
                     message: "A relation/query document must declare schemaVersion.",
                     location: "/schemaVersion");
@@ -118,7 +110,7 @@ public static class RelationQueryJsonSerializer
 
             if (versionElement.ValueKind != JsonValueKind.String)
             {
-                return Error(
+                return StrictDocumentJson.Error(
                     code: "relationQuery.schemaVersion.invalid",
                     message: "Relation/query document schemaVersion must be a string.",
                     location: "/schemaVersion");
@@ -127,7 +119,7 @@ public static class RelationQueryJsonSerializer
             var version = versionElement.GetString();
             if (!string.Equals(version, RelationQueryDocument.CurrentSchemaVersion, StringComparison.Ordinal))
             {
-                return Error(
+                return StrictDocumentJson.Error(
                     code: "relationQuery.schemaVersion.unsupported",
                     message: $"Unsupported relation/query document schema version '{version}'.",
                     location: "/schemaVersion");
@@ -135,7 +127,7 @@ public static class RelationQueryJsonSerializer
 
             if (!parsedJson.RootElement.TryGetProperty("definition", out _))
             {
-                return Error(
+                return StrictDocumentJson.Error(
                     code: "relationQuery.definition.missing",
                     message: "A relation/query document must contain a definition.",
                     location: "/definition");
@@ -143,7 +135,7 @@ public static class RelationQueryJsonSerializer
 
             if (!parsedJson.RootElement.TryGetProperty("definitionFingerprint", out _))
             {
-                return Error(
+                return StrictDocumentJson.Error(
                     code: "relationQuery.fingerprint.missing",
                     message: "A relation/query document must contain a definition fingerprint.",
                     location: "/definitionFingerprint");
@@ -155,7 +147,7 @@ public static class RelationQueryJsonSerializer
             document = JsonSerializer.Deserialize<RelationQueryDocument>(json, CreateOptions());
             if (document is null)
             {
-                return Error(
+                return StrictDocumentJson.Error(
                     code: "relationQuery.deserialize.null",
                     message: "JSON deserialized to a null relation/query document.",
                     location: "$");
@@ -166,7 +158,7 @@ public static class RelationQueryJsonSerializer
                                           or InvalidOperationException
                                           or NotSupportedException)
         {
-            return Error(
+            return StrictDocumentJson.Error(
                 code: "relationQuery.deserialize.invalid",
                 message: exception.Message,
                 location: "$");
@@ -180,59 +172,11 @@ public static class RelationQueryJsonSerializer
                                           or InvalidOperationException
                                           or NullReferenceException)
         {
-            return Error(
+            return StrictDocumentJson.Error(
                 code: "relationQuery.semantic.invalidObject",
                 message: exception.Message,
                 location: "/definition");
         }
     }
 
-    static bool TryFindDuplicateProperty(JsonElement element, string path, out string duplicateLocation)
-    {
-        switch (element.ValueKind)
-        {
-            case JsonValueKind.Object:
-                HashSet<string> names = new(StringComparer.Ordinal);
-                foreach (var property in element.EnumerateObject())
-                {
-                    var propertyPath = $"{path}/{EscapeJsonPointerSegment(property.Name)}";
-                    if (!names.Add(property.Name))
-                    {
-                        duplicateLocation = propertyPath;
-                        return true;
-                    }
-
-                    if (TryFindDuplicateProperty(property.Value, propertyPath, out duplicateLocation))
-                        return true;
-                }
-                break;
-            case JsonValueKind.Array:
-                var index = 0;
-                foreach (var item in element.EnumerateArray())
-                {
-                    if (TryFindDuplicateProperty(item, $"{path}/{index}", out duplicateLocation))
-                        return true;
-                    index++;
-                }
-                break;
-        }
-
-        duplicateLocation = string.Empty;
-        return false;
-    }
-
-    static string EscapeJsonPointerSegment(string value) =>
-        value.Replace("~", "~0", StringComparison.Ordinal)
-            .Replace("/", "~1", StringComparison.Ordinal);
-
-    static DocumentValidationResult Error(string code, string message, string location)
-    {
-        return DocumentValidationResult.FromDiagnostics([
-            new(
-                Code: code,
-                Severity: DiagnosticSeverity.Error,
-                Message: message,
-                Location: location)
-        ]);
-    }
 }

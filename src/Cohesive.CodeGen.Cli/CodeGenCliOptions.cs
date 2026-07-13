@@ -3,6 +3,16 @@ using Cohesive.Adapters.TypeScript;
 
 namespace Cohesive.CodeGen.Cli;
 
+/// <summary>Semantic representation used when deriving generated contract shapes.</summary>
+public enum ContractShapeProjection
+{
+    /// <summary>Preserve CLR property names, wrappers, and enum values.</summary>
+    Clr = 0,
+
+    /// <summary>Project canonical JSON names, scalar wrappers, and string enum values.</summary>
+    CanonicalJson = 1
+}
+
 /// <summary>
 /// Parsed command-line options for the codegen CLI.
 /// </summary>
@@ -32,4 +42,7 @@ public sealed record CodeGenCliOptions
     /// TypeScript modules that own declarations for external shape namespaces.
     /// </summary>
     public ImmutableArray<TypeScriptExternalTypeModule> ExternalTypeScriptShapeModules { get; init; } = [];
+
+    /// <summary>Representation used to derive contract shapes.</summary>
+    public ContractShapeProjection ShapeProjection { get; init; } = ContractShapeProjection.Clr;
 }

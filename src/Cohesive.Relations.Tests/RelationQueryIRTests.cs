@@ -13,6 +13,7 @@ namespace Cohesive.Relations.Tests;
 /// </summary>
 public sealed class RelationQueryIRTests
 {
+    static readonly GraphId DomainGraphId = new("graph.domain");
     static readonly ValueBindingId LoadBinding = new("load");
     static readonly ValueBindingId CustomerBinding = new("customer");
     static readonly ValueBindingId SearchBinding = new("loadSearch");
@@ -54,6 +55,35 @@ public sealed class RelationQueryIRTests
     }
 
     [Fact]
+    public void StrictWireOptions_EmitConditionalMembersAndRawAnnotations()
+    {
+        var options = RelationQueryJsonSerializer.CreateOptions();
+        var field = new FieldExpr(FieldPath.FromField("CustomerId"), LoadBinding);
+        var opaque = new OpaqueRuntimeTypeRef(
+            "legacy-customer-key",
+            new TypeInferenceDiagnostic("legacy", "Imported runtime type."));
+        var invariant = new InvariantDefinition(
+            "customer-required",
+            Expr.Const(true),
+            entity: new EntityId("Load"));
+        var metadata = new RelationQueryDocumentMetadata(
+            annotations: AnnotationMap.Create(
+                "confidence",
+                AnnotationValue.FromNumber(0.98m)));
+
+        var fieldJson = JsonSerializer.Serialize<Expr>(field, options);
+        var opaqueJson = JsonSerializer.Serialize<TypeRef>(opaque, options);
+        var invariantJson = JsonSerializer.Serialize(invariant, options);
+        var metadataJson = JsonSerializer.Serialize(metadata, options);
+
+        Assert.Contains("\"binding\":\"load\"", fieldJson, StringComparison.Ordinal);
+        Assert.Contains("\"inferenceDiagnostic\"", opaqueJson, StringComparison.Ordinal);
+        Assert.Contains("\"message\":\"Imported runtime type.\"", opaqueJson, StringComparison.Ordinal);
+        Assert.Contains("\"entity\":\"Load\"", invariantJson, StringComparison.Ordinal);
+        Assert.Contains("\"annotations\":{\"confidence\":0.98}", metadataJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Deserialize_RejectsUnknownRootAndNestedProperties()
     {
         var json = RelationQueryJsonSerializer.Serialize(
@@ -81,13 +111,14 @@ public sealed class RelationQueryIRTests
         var options = RelationQueryJsonSerializer.CreateOptions();
         LogicalQueryNode[] nodes =
         [
-            new SourceQueryNode(sourceId, leftBinding, new ShapeId("Left")),
+            new SourceQueryNode(sourceId, leftBinding, QualifiedShape("Left")),
             new FilterQueryNode(new QueryNodeId("filter"), sourceId, Expr.Const(true)),
             new TraverseRelationshipQueryNode(
                 id: new("traverse"),
                 input: sourceId,
                 from: leftBinding,
                 relationship: new("Left.Right"),
+                direction: RelationshipTraversalDirection.Inverse,
                 result: rightBinding,
                 joinKind: JoinKind.Left,
                 requirement: QueryInputRequirement.Optional),
@@ -107,14 +138,14 @@ public sealed class RelationQueryIRTests
                 id: new("project"),
                 input: sourceId,
                 resultBinding: new ValueBindingId("projected"),
-                resultShape: new ShapeId("Projected"),
+                resultShape: QualifiedShape("Projected"),
                 assignments: [new ProjectionAssignment(new QueryAssignmentId("value"), FieldPath.FromField("Value"), Expr.Field(leftBinding, "Value"))]),
             new DistinctQueryNode(new QueryNodeId("distinct"), sourceId, [Expr.Field(leftBinding, "Id")]),
             new AggregateQueryNode(
                 new QueryNodeId("aggregate"),
                 sourceId,
                 new ValueBindingId("aggregate"),
-                new ShapeId("Aggregate"),
+                QualifiedShape("Aggregate"),
                 aggregates:
                 [
                     new QueryAggregateAssignment(
@@ -135,6 +166,8 @@ public sealed class RelationQueryIRTests
             Assert.Equal(node.GetType(), roundTripped.GetType());
             Assert.Equal(node.Id, roundTripped.Id);
             Assert.Contains(RelationQueryWireNames.NodeDiscriminator, json, StringComparison.Ordinal);
+            if (roundTripped is TraverseRelationshipQueryNode traversal)
+                Assert.Equal(RelationshipTraversalDirection.Inverse, traversal.Direction);
         }
 
         QueryPageDefinition[] pages =
@@ -176,6 +209,12 @@ public sealed class RelationQueryIRTests
             .Single(static node => node![RelationQueryWireNames.NodeDiscriminator]!.GetValue<string>() == RelationQueryWireNames.TraverseRelationshipNode)!;
         traversal["joinKind"] = (int)JoinKind.Left;
         Assert.Throws<JsonException>(() => RelationQueryJsonSerializer.Deserialize(numericEnum.ToJsonString()));
+
+        var missingDirection = JsonNode.Parse(json)!.AsObject();
+        var missingDirectionTraversal = missingDirection["definition"]!["body"]!["nodes"]!.AsArray()
+            .Single(static node => node![RelationQueryWireNames.NodeDiscriminator]!.GetValue<string>() == RelationQueryWireNames.TraverseRelationshipNode)!;
+        missingDirectionTraversal.AsObject().Remove("direction");
+        Assert.Throws<JsonException>(() => RelationQueryJsonSerializer.Deserialize(missingDirection.ToJsonString()));
 
         var numericAttributedEnum = JsonNode.Parse(RelationQueryJsonSerializer.Serialize(
             RelationQueryDocument.FromDefinition(CreateLoadSearchQuery()),
@@ -241,7 +280,8 @@ public sealed class RelationQueryIRTests
     {
         var fingerprint = RelationQueryDefinitionFingerprinter.Compute(CreateLoadSearchRelation());
 
-        Assert.Equal("6dc1f31c3accde2ce1e52a2e670ba93a6b815430e3e6b7b9044de0b235345aa6", fingerprint.Value);
+        Assert.Equal("relation-query/v1-c14n/v2", fingerprint.Canonicalization);
+        Assert.Equal("6fa55fc022091a5cc6b9252e989a4843bbaab6fdcbe09ccb7771d2146badda49", fingerprint.Value);
     }
 
     [Fact]
@@ -270,7 +310,7 @@ public sealed class RelationQueryIRTests
         var positiveFingerprint = RelationQueryDefinitionFingerprinter.Compute(positiveZero);
 
         Assert.Equal(negativeFingerprint, positiveFingerprint);
-        Assert.Equal("7c79bdc27d7ee11ca8c7efcc0b8685ed928796cc3b98fbec2a0f71e1cc539980", negativeFingerprint.Value);
+        Assert.Equal("0b5733c6329a26345dcb676a2253827df68d9c2ef1779b334a94ecd372b76981", negativeFingerprint.Value);
     }
 
     [Fact]
@@ -342,13 +382,13 @@ public sealed class RelationQueryIRTests
             name: new RelationName("LoadSearch"),
             body: new LogicalQueryDefinition(
             [
-                new SourceQueryNode(sourceId, LoadBinding, new ShapeId("Load")),
-                new SourceQueryNode(sourceId, new ValueBindingId("duplicate"), new ShapeId("Customer")),
+                new SourceQueryNode(sourceId, LoadBinding, QualifiedShape("Load")),
+                new SourceQueryNode(sourceId, new ValueBindingId("duplicate"), QualifiedShape("Customer")),
                 new ProjectQueryNode(
                     projectId,
                     sourceId,
                     SearchBinding,
-                    new ShapeId("LoadSearchDto"),
+                    QualifiedShape("LoadSearchDto"),
                     assignments:
                     [
                         new ProjectionAssignment(duplicateAssignmentId, FieldPath.FromField("Name"), Expr.Field(LoadBinding, "Name")),
@@ -358,7 +398,7 @@ public sealed class RelationQueryIRTests
             rootBinding: LoadBinding,
             output: new RelationOutputDefinition(
                 projectId,
-                new ShapeId("LoadSearchDto"),
+                QualifiedShape("LoadSearchDto"),
                 RelationOutputMode.OnePerRoot));
 
         var result = RelationQueryDefinitionValidator.Validate(definition);
@@ -377,12 +417,12 @@ public sealed class RelationQueryIRTests
             name: new RelationName("InvalidLoadSearch"),
             body: new LogicalQueryDefinition(
             [
-                new SourceQueryNode(new QueryNodeId("source"), LoadBinding, new ShapeId("Load")),
+                new SourceQueryNode(new QueryNodeId("source"), LoadBinding, QualifiedShape("Load")),
                 new ProjectQueryNode(
                     projectId,
                     new QueryNodeId("missing_input"),
                     SearchBinding,
-                    new ShapeId("LoadSearchDto"),
+                    QualifiedShape("LoadSearchDto"),
                     assignments:
                     [
                         new ProjectionAssignment(
@@ -394,7 +434,7 @@ public sealed class RelationQueryIRTests
             rootBinding: LoadBinding,
             output: new RelationOutputDefinition(
                 projectId,
-                new ShapeId("LoadSearchDto"),
+                QualifiedShape("LoadSearchDto"),
                 RelationOutputMode.OnePerRoot));
 
         var result = RelationQueryDefinitionValidator.Validate(definition);
@@ -410,7 +450,7 @@ public sealed class RelationQueryIRTests
         var relation = CreateLoadSearchRelation();
         var mismatchedRelation = relation with
         {
-            Output = relation.Output with { Shape = new ShapeId("UnexpectedSearchDto") }
+            Output = relation.Output with { Shape = QualifiedShape("UnexpectedSearchDto") }
         };
 
         var sourceId = new QueryNodeId("source");
@@ -420,7 +460,7 @@ public sealed class RelationQueryIRTests
             name: new QueryName("LoadsAfter"),
             body: new LogicalQueryDefinition(
             [
-                new SourceQueryNode(sourceId, LoadBinding, new ShapeId("Load")),
+                new SourceQueryNode(sourceId, LoadBinding, QualifiedShape("Load")),
                 new PageQueryNode(pageId, sourceId, new KeysetPageDefinition(limit: 50))
             ]),
             results: [new RowsQueryResultDefinition(new QueryResultId("rows"), pageId)]);
@@ -457,6 +497,7 @@ public sealed class RelationQueryIRTests
 
         AssertDiagnostic(result, "relationQuery.node.idMissing");
         AssertDiagnostic(result, "relationQuery.binding.idMissing");
+        AssertDiagnostic(result, "relationQuery.shape.graphIdMissing");
         AssertDiagnostic(result, "relationQuery.shape.idMissing");
         AssertDiagnostic(result, "relationQuery.project.assignmentsEmpty");
         AssertDiagnostic(result, "relationQuery.relation.rootBindingIdMissing");
@@ -539,6 +580,87 @@ public sealed class RelationQueryIRTests
     }
 
     [Fact]
+    public void DefinitionValidator_AcceptsInverseAndRejectsUnknownTraversalEnums()
+    {
+        var relation = CreateLoadSearchRelation();
+        var traversal = Assert.Single(relation.Body.Nodes.OfType<TraverseRelationshipQueryNode>());
+        var inverse = relation with
+        {
+            Body = relation.Body with
+            {
+                Nodes =
+                [
+                    .. relation.Body.Nodes.Select(node =>
+                        node is TraverseRelationshipQueryNode
+                            ? traversal with { Direction = RelationshipTraversalDirection.Inverse }
+                            : node)
+                ]
+            }
+        };
+        var invalid = relation with
+        {
+            Body = relation.Body with
+            {
+                Nodes =
+                [
+                    .. relation.Body.Nodes.Where(static node => node is not TraverseRelationshipQueryNode),
+                    traversal with
+                    {
+                        Direction = (RelationshipTraversalDirection)999,
+                        JoinKind = (JoinKind)999,
+                        Requirement = (QueryInputRequirement)999
+                    }
+                ]
+            }
+        };
+
+        Assert.True(RelationQueryDefinitionValidator.Validate(inverse).IsValid);
+        Assert.NotEqual(
+            RelationQueryDefinitionFingerprinter.Compute(relation),
+            RelationQueryDefinitionFingerprinter.Compute(inverse));
+        var result = RelationQueryDefinitionValidator.Validate(invalid);
+
+        AssertDiagnostic(result, "relationQuery.traversal.directionInvalid");
+        AssertDiagnostic(result, "relationQuery.traversal.joinKindInvalid");
+        AssertDiagnostic(result, "relationQuery.traversal.requirementInvalid");
+        var invalidDocument = RelationQueryDocument.FromDefinition(relation) with
+        {
+            Definition = invalid
+        };
+        var documentResult = RelationQueryDocumentSemanticValidator.Validate(invalidDocument);
+        AssertDiagnostic(documentResult, "relationQuery.traversal.directionInvalid");
+        AssertDiagnostic(documentResult, "relationQuery.traversal.joinKindInvalid");
+        AssertDiagnostic(documentResult, "relationQuery.traversal.requirementInvalid");
+        Assert.Throws<ArgumentOutOfRangeException>(() => new TraverseRelationshipQueryNode(
+            traversal.Id,
+            traversal.Input,
+            traversal.From,
+            traversal.Relationship,
+            (RelationshipTraversalDirection)999,
+            traversal.Result,
+            traversal.JoinKind,
+            traversal.Requirement));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new TraverseRelationshipQueryNode(
+            traversal.Id,
+            traversal.Input,
+            traversal.From,
+            traversal.Relationship,
+            traversal.Direction,
+            traversal.Result,
+            (JoinKind)999,
+            traversal.Requirement));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new TraverseRelationshipQueryNode(
+            traversal.Id,
+            traversal.Input,
+            traversal.From,
+            traversal.Relationship,
+            traversal.Direction,
+            traversal.Result,
+            traversal.JoinKind,
+            (QueryInputRequirement)999));
+    }
+
+    [Fact]
     public void DefinitionValidator_RejectsLossyValuesAndOpaqueExpressionReturnTypes()
     {
         var relation = CreateLoadSearchRelation();
@@ -593,12 +715,12 @@ public sealed class RelationQueryIRTests
             name: new QueryName("Counts"),
             body: new LogicalQueryDefinition(
             [
-                new SourceQueryNode(sourceId, LoadBinding, new ShapeId("Load")),
+                new SourceQueryNode(sourceId, LoadBinding, QualifiedShape("Load")),
                 new AggregateQueryNode(
                     aggregateId,
                     sourceId,
                     aggregateBinding,
-                    new ShapeId("LoadCount"),
+                    QualifiedShape("LoadCount"),
                     aggregates:
                     [
                         new QueryAggregateAssignment(
@@ -620,8 +742,8 @@ public sealed class RelationQueryIRTests
             name: new QueryName("JoinedRows"),
             body: new LogicalQueryDefinition(
             [
-                new SourceQueryNode(sourceId, LoadBinding, new ShapeId("Load")),
-                new SourceQueryNode(rightSourceId, CustomerBinding, new ShapeId("Customer")),
+                new SourceQueryNode(sourceId, LoadBinding, QualifiedShape("Load")),
+                new SourceQueryNode(rightSourceId, CustomerBinding, QualifiedShape("Customer")),
                 new JoinQueryNode(
                     joinId,
                     sourceId,
@@ -651,12 +773,12 @@ public sealed class RelationQueryIRTests
             name: new QueryName("EnrichedCounts"),
             body: new LogicalQueryDefinition(
             [
-                new SourceQueryNode(sourceId, LoadBinding, new ShapeId("Load")),
+                new SourceQueryNode(sourceId, LoadBinding, QualifiedShape("Load")),
                 new AggregateQueryNode(
                     aggregateId,
                     sourceId,
                     aggregateBinding,
-                    new ShapeId("LoadCount"),
+                    QualifiedShape("LoadCount"),
                     groupings:
                     [
                         new QueryGrouping(
@@ -671,7 +793,7 @@ public sealed class RelationQueryIRTests
                             FieldPath.FromField("Count"),
                             AggregateOperator.Count)
                     ]),
-                new SourceQueryNode(customerSourceId, CustomerBinding, new ShapeId("Customer")),
+                new SourceQueryNode(customerSourceId, CustomerBinding, QualifiedShape("Customer")),
                 new JoinQueryNode(
                     joinId,
                     aggregateId,
@@ -682,7 +804,7 @@ public sealed class RelationQueryIRTests
                     projectId,
                     joinId,
                     outputBinding,
-                    new ShapeId("EnrichedLoadCount"),
+                    QualifiedShape("EnrichedLoadCount"),
                     assignments:
                     [
                         new ProjectionAssignment(
@@ -705,19 +827,20 @@ public sealed class RelationQueryIRTests
         var sourceId = new QueryNodeId("loads");
         var customerId = new QueryNodeId("customers");
         var projectId = new QueryNodeId("project_load_search");
-        var outputShape = new ShapeId("LoadSearchDto");
+        var outputShape = QualifiedShape("LoadSearchDto");
 
         return new(
             id: new RelationId("load_search"),
             name: new RelationName("LoadSearch"),
             body: new LogicalQueryDefinition(
             [
-                new SourceQueryNode(sourceId, LoadBinding, new ShapeId("Load")),
+                new SourceQueryNode(sourceId, LoadBinding, QualifiedShape("Load")),
                 new TraverseRelationshipQueryNode(
                     customerId,
                     sourceId,
                     LoadBinding,
                     new RelationshipId("Load.Customer"),
+                    RelationshipTraversalDirection.Forward,
                     CustomerBinding,
                     JoinKind.Left,
                     QueryInputRequirement.Required),
@@ -763,7 +886,7 @@ public sealed class RelationQueryIRTests
             body: new LogicalQueryDefinition(
                 nodes:
                 [
-                    new SourceQueryNode(sourceId, LoadBinding, new ShapeId("Load")),
+                    new SourceQueryNode(sourceId, LoadBinding, QualifiedShape("Load")),
                     new FilterQueryNode(
                         filterId,
                         sourceId,
@@ -773,6 +896,7 @@ public sealed class RelationQueryIRTests
                         filterId,
                         LoadBinding,
                         new RelationshipId("Load.Customer"),
+                        RelationshipTraversalDirection.Forward,
                         CustomerBinding,
                         JoinKind.Left,
                         QueryInputRequirement.Optional),
@@ -780,7 +904,7 @@ public sealed class RelationQueryIRTests
                         projectId,
                         customerId,
                         rowBinding,
-                        new ShapeId("LoadSearchRow"),
+                        QualifiedShape("LoadSearchRow"),
                         assignments:
                         [
                             new ProjectionAssignment(
@@ -804,7 +928,7 @@ public sealed class RelationQueryIRTests
                         aggregateId,
                         customerId,
                         new ValueBindingId("customerAggregate"),
-                        new ShapeId("LoadByCustomerAggregation"),
+                        QualifiedShape("LoadByCustomerAggregation"),
                         groupings:
                         [
                             new QueryGrouping(
@@ -856,6 +980,9 @@ public sealed class RelationQueryIRTests
             }
         };
     }
+
+    static QualifiedShapeId QualifiedShape(string shapeId) =>
+        new(DomainGraphId, new ShapeId(shapeId));
 
     static void AssertDiagnostic(DocumentValidationResult result, string code)
     {

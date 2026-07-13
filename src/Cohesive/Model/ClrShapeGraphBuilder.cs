@@ -527,11 +527,10 @@ public sealed class ClrShapeGraphBuilder
         for (var i = 0; i < discoveredTypes.Count; i++)
         {
             var clrType = discoveredTypes[i];
-            var typeIdentity = GetClrTypeIdentity(clrType);
             var typeMetadata = GetMetadata(ClrShapeMetadataContext.ForType(clrType));
             identities[clrType] = new(
-                TypeId: typeMetadata.TypeId ?? new TypeId($"clr:type:{typeIdentity}"),
-                ShapeId: new($"clr:shape:{typeIdentity}")
+                TypeId: typeMetadata.TypeId ?? ClrShapeIdentityConvention.GetTypeId(clrType),
+                ShapeId: ClrShapeIdentityConvention.GetShapeId(clrType)
                 );
         }
 
@@ -567,32 +566,6 @@ public sealed class ClrShapeGraphBuilder
             builder.Append(GetSimpleTypeName(arguments[i]));
         }
 
-        return builder.ToString();
-    }
-
-    static string GetClrTypeIdentity(Type clrType)
-    {
-        if (!clrType.IsGenericType)
-            return clrType.FullName ?? clrType.Name;
-
-        var definition = clrType.GetGenericTypeDefinition();
-        var definitionName = definition.FullName ?? definition.Name;
-        var tickIndex = definitionName.IndexOf('`');
-        if (tickIndex >= 0)
-            definitionName = definitionName[..tickIndex];
-
-        var arguments = clrType.GetGenericArguments();
-        var builder = new System.Text.StringBuilder(definitionName);
-        builder.Append('<');
-        for (var i = 0; i < arguments.Length; i++)
-        {
-            if (i > 0)
-                builder.Append(',');
-
-            builder.Append(GetClrTypeIdentity(arguments[i]));
-        }
-
-        builder.Append('>');
         return builder.ToString();
     }
 
