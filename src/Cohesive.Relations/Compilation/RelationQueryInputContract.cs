@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Cohesive.Model.Expressions;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
 
@@ -226,6 +227,7 @@ public sealed record RelationQueryParameterInputContract
         ImmutableArray<RelationQueryRequirementUse> uses)
     {
         Input = Guard.RequireNotNull(input);
+        ValueContract = Input.Definition.EffectiveValueContract;
         Uses = RelationQueryInputContractOrdering.NormalizeUses(uses, input.Id);
         if (Uses.IsDefaultOrEmpty)
             throw new ArgumentException("A parameter input contract requires at least one use.", nameof(uses));
@@ -236,6 +238,9 @@ public sealed record RelationQueryParameterInputContract
 
     /// <summary>Canonical parameter declaration.</summary>
     public QueryParameterDefinition Definition => Input.Definition;
+
+    /// <summary>Effective expression value contract after parameter defaults are applied.</summary>
+    public ExprValueContract ValueContract { get; }
 
     /// <summary>Demanded-output uses of the parameter.</summary>
     public ImmutableArray<RelationQueryRequirementUse> Uses { get; }

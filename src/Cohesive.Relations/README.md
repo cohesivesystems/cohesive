@@ -177,7 +177,7 @@ Three kinds of incomplete information remain distinct:
   acceptance.
 - **Inference uncertainty** is producer-owned evidence such as an Ari confidence score; policy may
   turn it into a selected, ambiguous, or unresolved draft state.
-- A **runtime input hole** occurs after acceptance when required observations are unavailable, such
+- A **runtime requirement gap** occurs after acceptance when required observations are unavailable, such
   as a load whose referenced customer cannot be resolved. Runtime hydration diagnostics are a
   later interpretation and do not make an otherwise complete draft unresolved.
 
@@ -204,7 +204,7 @@ restructuring inside those values is not.
 More sophisticated producers can propose relationship traversals and cross-binding assignments
 using the same draft contract, so flattening `Customer.Name` into `LoadSearchDto.CustomerName` does
 not require a second relation model. Automatic traversal discovery, automatic nested structural
-mapping, compiled mappers, runtime hole reporting, backend lowering, and proof that a declared
+mapping, compiled mappers, runtime requirement-gap reporting, backend lowering, and proof that a declared
 relation output mode matches row-multiplying or row-dropping graph behavior remain follow-on
 interpretations or analyses.
 
@@ -365,6 +365,104 @@ Cohesive distinguishes conditions that conventional mapping systems often confla
 - A fact was not requested because the output did not require it.
 
 Diagnostics are structured product output. They should be usable by applications, tests, deployment gates, index-management tools, and developer tooling.
+
+### Runtime evidence and relation requirement gaps
+
+Runtime availability analysis consumes the static plan rather than walking the relation/query
+expressions again:
+
+```text
+Compiled input contract
++ occurrence-scoped runtime evidence
+→ causal relation requirement gaps
++ explicit missing-data policy
+→ decisions and diagnostics
+```
+
+These stages remain separate. The input contract says what the demanded semantics require.
+Evidence says what one invocation knows. A requirement gap identifies the causal boundary and retains every
+affected output, effect, and requirement trace. Policy decides whether an impact remains
+unresolved, is suppressed, receives null, or receives an explicit semantic default. Reporting
+policy independently decides whether that impact becomes a diagnostic.
+
+Evidence is scoped by both an evaluation ID and a binding-occurrence ID. An occurrence is not an
+entity ID: the same observation may participate more than once through different routes or
+bindings. This distinction lets one load have a missing customer without making the customer input
+appear globally unavailable for every load in a batch.
+
+Every evidence snapshot is also attributed to the compiler profile, definition and relationship
+catalog fingerprints, a versioned semantic fingerprint of the shape snapshots, the effective
+output-demand fingerprint, and the ordered compiled input identities. Equivalent plans rebuilt
+from rehydrated semantic documents match; document metadata and object identity do not participate.
+Evidence produced for a different semantic shape, demand, or input contract is rejected with a
+structured plan-mismatch diagnostic before requirement-gap analysis.
+
+The evidence model preserves distinctions required for useful diagnostics:
+
+- a source was not provided versus was provided successfully with zero rows;
+- a field was not loaded versus was loaded and semantically absent;
+- an explicit null versus an absent value;
+- a parameter that was not supplied versus one supplied as missing, explicit null, or a concrete value;
+- relationship resolution was inapplicable, not attempted, failed, rejected, or completed;
+- a completed result is partial versus authoritative and complete;
+- an authoritative lookup found no row versus no lookup evidence being available.
+
+For example, a caller can describe a load whose reference is available but whose customer lookup
+has not run:
+
+```csharp
+using Cohesive.Model;
+using Cohesive.Relations.Compilation;
+using Cohesive.Relations.Diagnostics;
+
+var root = plan.InputContract.Sources.Single(
+    source => source.Role == RelationQuerySourceInputRole.RelationRoot);
+var traversal = plan.InputContract.Traversals.Single();
+var loadId = root.Fields.Single(field => field.Input.Field.Path == FieldPath.FromField("Id"));
+var customerId = root.Fields.Single(
+    field => field.Input.Field.Path == traversal.Definition.SourceReference);
+var load = new RelationQueryObservationOccurrence(
+    new("load/L1"), root.Binding, root.Shape, observationIdentity: "L1");
+
+var evidence = new RelationQueryRuntimeEvidence(
+    evaluation: new("index-load/L1"),
+    plan: plan,
+    sources:
+    [
+        new(root.Input.Id, RelationQuerySourceEvidenceState.Provided, [load])
+    ],
+    fields:
+    [
+        new(loadId.Input.Id, load.Id, RelationQueryFieldEvidenceState.Value,
+            ObservationValue.FromString("L1")),
+        new(customerId.Input.Id, load.Id, RelationQueryFieldEvidenceState.Value,
+            ObservationValue.FromString("C7"))
+    ],
+    traversals:
+    [
+        new(traversal.Input.Id, load.Id, RelationQueryTraversalEvidenceState.NotAttempted)
+    ]);
+
+var analysis = RelationRequirementGapAnalyzer.Analyze(plan, evidence);
+```
+
+The result contains one causal `ResolutionNotAttempted` requirement gap anchored to the traversal. It carries
+the customer-derived output impacts and original compiler traces; it does not also emit noisy
+Customer identity and Customer.Name gaps. The conventional policy reports required impacts and
+retains optional impacts without reporting them. Suppression, null substitution, and default
+substitution are explicit alternatives, and invalid substitution is diagnosed against the output
+shape contract. A semantic default must be a concrete non-null, non-missing value; explicit null
+uses the distinct null-substitution disposition so persisted policy decisions retain their meaning.
+
+A complete evidence snapshot gives omission closed-world meaning inside its declared boundary.
+Partial evidence does not: it may establish an explicit requirement gap, but an omitted entry cannot prove
+not-loaded or not-found. If a source occurrence did not reach a traversal because of filtering or
+another logical operation, evidence marks that traversal occurrence `NotApplicable` rather than
+allowing omission to be mistaken for `NotAttempted`.
+
+`RelationRequirementGapAnalyzer` is analysis only. It does not read sources, resolve relationships, execute
+expressions, construct output rows, or apply suppression/substitution decisions. Those are later
+execution and hydration interpretations of the same compiled contract.
 
 ## One Semantic Model, Multiple Interpretations
 
@@ -594,7 +692,7 @@ Testing tools can inspect a relation's required premises to:
 - Generate the minimum facts needed to derive an output.
 - Deliberately omit required facts.
 - Exercise cardinality and missing-data cases.
-- Generate relationship holes.
+- Generate relation requirement gaps.
 - Compare backend interpreters.
 - Shrink failures to the smallest relevant fact set.
 
@@ -745,6 +843,14 @@ The format provides:
 
 Document metadata and physical plans do not participate in the semantic definition fingerprint.
 
+The current definition fingerprint profile is `relation-query/v1-c14n/v3`. Canonical query parameter
+documents explicitly emit `defaultKind` (`None` or `Value`) so an absent fallback cannot collide with
+an explicit null fallback. The v1 reader remains compatible with legacy parameters that omit the
+discriminator: a concrete `defaultValue` implies `Value`, while an omitted or JSON-null value implies
+`None`. Legacy JSON null was ambiguous and therefore cannot be recovered as an explicit null default;
+producers that intend an explicit null must emit `defaultKind: "Value"`. Documents produced with the
+prior fingerprint profile must be regenerated or migrated before validation under this profile.
+
 The existing `JoinSpec` executor inputs and `relatedField(...)` hydration expressions remain
 compatibility paths for the prototype runtime. They are physical/execution representations, not
 relationship declarations. Their migration direction is to lower legacy authoring into canonical
@@ -766,6 +872,7 @@ The current foundation includes:
 - Structural and semantic diagnostics.
 - Deterministic definition fingerprints.
 - Demand-driven static compilation into input contracts, lineage, dependency manifests, and explicit logical pruning.
+- Plan-attributed runtime evidence, causal requirement-gap analysis, and explicit missing-data policy decisions.
 - In-memory execution and mapping components.
 - Contract projection for other host languages.
 

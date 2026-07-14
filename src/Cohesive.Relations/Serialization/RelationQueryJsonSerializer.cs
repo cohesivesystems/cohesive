@@ -11,8 +11,12 @@ public static class RelationQueryJsonSerializer
     /// <summary>Creates strict serializer options for canonical relation/query IR.</summary>
     /// <param name="indented">Whether serialized JSON should be indented.</param>
     /// <returns>Serializer options configured for the canonical wire contract.</returns>
-    public static JsonSerializerOptions CreateOptions(bool indented = false) =>
-        StrictDocumentJson.CreateOptions(indented);
+    public static JsonSerializerOptions CreateOptions(bool indented = false)
+    {
+        var options = StrictDocumentJson.CreateOptions(indented);
+        options.Converters.Insert(0, new QueryParameterDefinitionJsonConverter());
+        return options;
+    }
 
     /// <summary>Serializes a portable relation/query document.</summary>
     /// <param name="document">Document to serialize.</param>

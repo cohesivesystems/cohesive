@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using Cohesive.Model.Expressions;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Model;
 
@@ -132,25 +131,48 @@ public static partial class RelationQueryDefinitionValidator
                         location: $"/definition/body/parameters/{parameter.Id.Value}/presence");
                 }
 
-                if (parameter.Presence == FieldPresence.Required && parameter.DefaultValue is not null)
+                var defaultKindIsValid = Enum.IsDefined(parameter.DefaultKind);
+                if (!defaultKindIsValid)
+                {
+                    Add(
+                        code: "relationQuery.parameter.defaultKindInvalid",
+                        message: $"Query parameter '{parameter.Id.Value}' declares unsupported default kind '{parameter.DefaultKind}'.",
+                        location: $"/definition/body/parameters/{parameter.Id.Value}/defaultKind");
+                }
+
+                if (defaultKindIsValid
+                    && parameter.Presence == FieldPresence.Required
+                    && parameter.DefaultKind == QueryParameterDefaultKind.Value)
                 {
                     Add(
                         code: "relationQuery.parameter.requiredHasDefault",
                         message: $"Required query parameter '{parameter.Id.Value}' cannot declare a default value.",
+                        location: $"/definition/body/parameters/{parameter.Id.Value}/defaultKind");
+                }
+
+                if (defaultKindIsValid
+                    && parameter.DefaultKind == QueryParameterDefaultKind.None
+                    && parameter.DefaultValue is not null)
+                {
+                    Add(
+                        code: "relationQuery.parameter.defaultUnexpected",
+                        message: $"Query parameter '{parameter.Id.Value}' contains a default value but does not declare one.",
                         location: $"/definition/body/parameters/{parameter.Id.Value}/defaultValue");
                 }
 
-                if (parameter.DefaultValue is { } defaultValue)
+                if (parameter.DefaultValue is { } persistedDefaultValue)
                 {
                     ValidatePortableObservationValue(
-                        defaultValue,
+                        persistedDefaultValue,
                         $"/definition/body/parameters/{parameter.Id.Value}/defaultValue");
+                }
+
+                if (defaultKindIsValid && parameter.DefaultKind == QueryParameterDefaultKind.Value)
+                {
+                    var effectiveDefaultValue = parameter.DefaultValue ?? ObservationValue.Null;
                     if (parameter.Type is not null
-                        && !new ExprValueContract(
-                                parameter.Type,
-                                presence: FieldPresence.Optional,
-                                nullability: FieldNullability.Nullable)
-                            .IsSatisfiedByConstant(defaultValue))
+                        && Enum.IsDefined(parameter.Presence)
+                        && !parameter.EffectiveValueContract.IsSatisfiedByConstant(effectiveDefaultValue))
                     {
                         Add(
                             code: "relationQuery.parameter.defaultTypeMismatch",

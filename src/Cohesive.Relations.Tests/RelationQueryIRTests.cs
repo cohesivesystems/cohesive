@@ -55,6 +55,196 @@ public sealed class RelationQueryIRTests
     }
 
     [Fact]
+    public void ParameterDefaults_RoundTripAndFingerprintDistinguishAbsentFromExplicitNull()
+    {
+        var query = CreateLoadSearchQuery();
+        var parameterId = new QueryParameterId("status");
+        var parameterType = new ScalarTypeRef(ScalarTypeKind.String);
+        var withoutDefault = query with
+        {
+            Body = query.Body with
+            {
+                Parameters =
+                [
+                    new QueryParameterDefinition(
+                        parameterId,
+                        parameterType,
+                        FieldPresence.Optional)
+                ]
+            }
+        };
+        var withExplicitNull = query with
+        {
+            Body = query.Body with
+            {
+                Parameters =
+                [
+                    new QueryParameterDefinition(
+                        parameterId,
+                        parameterType,
+                        FieldPresence.Optional,
+                        ObservationValue.Null)
+                ]
+            }
+        };
+
+        var withoutDefaultDocument = RelationQueryDocument.FromDefinition(withoutDefault);
+        var withExplicitNullDocument = RelationQueryDocument.FromDefinition(withExplicitNull);
+        var withoutDefaultJson = RelationQueryJsonSerializer.Serialize(withoutDefaultDocument, indented: false);
+        var withExplicitNullJson = RelationQueryJsonSerializer.Serialize(withExplicitNullDocument, indented: false);
+
+        Assert.NotEqual(
+            withoutDefaultDocument.DefinitionFingerprint,
+            withExplicitNullDocument.DefinitionFingerprint);
+        Assert.Contains("\"defaultKind\":\"None\"", withoutDefaultJson, StringComparison.Ordinal);
+        Assert.Contains("\"defaultKind\":\"Value\"", withExplicitNullJson, StringComparison.Ordinal);
+
+        var roundTrippedWithoutDefault = Assert.IsType<IRQueryDefinition>(
+            RelationQueryJsonSerializer.Deserialize(withoutDefaultJson).Definition);
+        var roundTrippedWithExplicitNull = Assert.IsType<IRQueryDefinition>(
+            RelationQueryJsonSerializer.Deserialize(withExplicitNullJson).Definition);
+        var absentParameter = Assert.Single(roundTrippedWithoutDefault.Body.Parameters);
+        var nullParameter = Assert.Single(roundTrippedWithExplicitNull.Body.Parameters);
+
+        Assert.Equal(QueryParameterDefaultKind.None, absentParameter.DefaultKind);
+        Assert.Null(absentParameter.DefaultValue);
+        Assert.Equal(FieldPresence.Optional, absentParameter.EffectiveValueContract.Presence);
+        Assert.Equal(FieldNullability.NonNullable, absentParameter.EffectiveValueContract.Nullability);
+        Assert.Equal(QueryParameterDefaultKind.Value, nullParameter.DefaultKind);
+        Assert.Equal(ObservationValueKind.Null, nullParameter.DefaultValue?.Kind);
+        Assert.Equal(FieldPresence.Required, nullParameter.EffectiveValueContract.Presence);
+        Assert.Equal(FieldNullability.Nullable, nullParameter.EffectiveValueContract.Nullability);
+    }
+
+    [Fact]
+    public void ParameterDefaultWireContract_ReadsLegacyAndRejectsContradictoryRepresentations()
+    {
+        var options = RelationQueryJsonSerializer.CreateOptions();
+        var withoutDefault = new QueryParameterDefinition(
+            new QueryParameterId("without-default"),
+            new ScalarTypeRef(ScalarTypeKind.String),
+            FieldPresence.Optional);
+        var missingKindJson = JsonNode.Parse(JsonSerializer.Serialize(withoutDefault, options))!.AsObject();
+        Assert.True(missingKindJson.Remove("defaultKind"));
+        var legacyWithoutDefault = Assert.IsType<QueryParameterDefinition>(
+            JsonSerializer.Deserialize<QueryParameterDefinition>(missingKindJson.ToJsonString(), options));
+
+        Assert.Equal(QueryParameterDefaultKind.None, legacyWithoutDefault.DefaultKind);
+        Assert.Null(legacyWithoutDefault.DefaultValue);
+
+        Assert.True(missingKindJson.Remove("defaultValue"));
+        var legacyWithoutDefaultMembers = Assert.IsType<QueryParameterDefinition>(
+            JsonSerializer.Deserialize<QueryParameterDefinition>(missingKindJson.ToJsonString(), options));
+
+        Assert.Equal(QueryParameterDefaultKind.None, legacyWithoutDefaultMembers.DefaultKind);
+        Assert.Null(legacyWithoutDefaultMembers.DefaultValue);
+
+        var parameter = new QueryParameterDefinition(
+            new QueryParameterId("status"),
+            new ScalarTypeRef(ScalarTypeKind.String),
+            FieldPresence.Optional,
+            ObservationValue.FromString("active"));
+        var legacyConcreteJson = JsonNode.Parse(JsonSerializer.Serialize(parameter, options))!.AsObject();
+        Assert.True(legacyConcreteJson.Remove("defaultKind"));
+        var legacyConcreteDefault = Assert.IsType<QueryParameterDefinition>(
+            JsonSerializer.Deserialize<QueryParameterDefinition>(legacyConcreteJson.ToJsonString(), options));
+
+        Assert.Equal(QueryParameterDefaultKind.Value, legacyConcreteDefault.DefaultKind);
+        Assert.Equal("active", legacyConcreteDefault.DefaultValue?.String);
+
+        var explicitNull = new QueryParameterDefinition(
+            new QueryParameterId("nullable-status"),
+            new ScalarTypeRef(ScalarTypeKind.String),
+            FieldPresence.Optional,
+            ObservationValue.Null);
+        var legacyNullJson = JsonNode.Parse(JsonSerializer.Serialize(explicitNull, options))!.AsObject();
+        Assert.True(legacyNullJson.Remove("defaultKind"));
+        var ambiguousLegacyNull = Assert.IsType<QueryParameterDefinition>(
+            JsonSerializer.Deserialize<QueryParameterDefinition>(legacyNullJson.ToJsonString(), options));
+
+        Assert.Equal(QueryParameterDefaultKind.None, ambiguousLegacyNull.DefaultKind);
+        Assert.Null(ambiguousLegacyNull.DefaultValue);
+
+        var contradictoryJson = JsonNode.Parse(JsonSerializer.Serialize(parameter, options))!.AsObject();
+        contradictoryJson["defaultKind"] = nameof(QueryParameterDefaultKind.None);
+
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<QueryParameterDefinition>(
+            contradictoryJson.ToJsonString(),
+            options));
+        Assert.Throws<JsonException>(() => JsonSerializer.Serialize(
+            parameter with { DefaultKind = QueryParameterDefaultKind.None },
+            options));
+        Assert.Throws<JsonException>(() => JsonSerializer.Serialize(
+            parameter with { DefaultValue = ObservationValue.Undefined },
+            options));
+        Assert.Throws<ArgumentException>(() => new QueryParameterDefinition(
+            new QueryParameterId("status"),
+            new ScalarTypeRef(ScalarTypeKind.String),
+            FieldPresence.Optional,
+            QueryParameterDefaultKind.None,
+            ObservationValue.FromString("active")));
+        Assert.Throws<ArgumentException>(() => new QueryParameterDefinition(
+            new QueryParameterId("status"),
+            new ScalarTypeRef(ScalarTypeKind.String),
+            FieldPresence.Optional,
+            QueryParameterDefaultKind.Value,
+            ObservationValue.Undefined));
+
+        var requiredDefaultException = Assert.Throws<ArgumentException>(() => new QueryParameterDefinition(
+            new QueryParameterId("status"),
+            new ScalarTypeRef(ScalarTypeKind.String),
+            FieldPresence.Required,
+            ObservationValue.Null));
+        Assert.Equal("defaultValue", requiredDefaultException.ParamName);
+
+        var malformedPresence = parameter with { Presence = (FieldPresence)999 };
+        var presenceException = Assert.Throws<ArgumentOutOfRangeException>(() =>
+        {
+            _ = malformedPresence.EffectiveValueContract;
+        });
+        Assert.Equal(nameof(QueryParameterDefinition.Presence), presenceException.ParamName);
+    }
+
+    [Fact]
+    public void RelationQueryV1Reader_AcceptsLegacyParameterWithoutDefaultKind()
+    {
+        var query = CreateLoadSearchQuery();
+        query = query with
+        {
+            Body = query.Body with
+            {
+                Parameters =
+                [
+                    new QueryParameterDefinition(
+                        new QueryParameterId("status"),
+                        new ScalarTypeRef(ScalarTypeKind.String),
+                        FieldPresence.Optional,
+                        ObservationValue.FromString("active"))
+                ]
+            }
+        };
+        var document = RelationQueryDocument.FromDefinition(query);
+        var currentJson = RelationQueryJsonSerializer.Serialize(document, indented: false);
+        var legacyDocument = JsonNode.Parse(currentJson)!.AsObject();
+        var parameters = legacyDocument["definition"]!["body"]!["parameters"]!.AsArray();
+        var parameterNode = Assert.IsType<JsonObject>(Assert.Single(parameters));
+
+        Assert.True(parameterNode.Remove("defaultKind"));
+
+        var legacyJson = legacyDocument.ToJsonString();
+
+        Assert.NotEqual(currentJson, legacyJson);
+
+        var roundTripped = RelationQueryJsonSerializer.Deserialize(legacyJson);
+        var roundTrippedQuery = Assert.IsType<IRQueryDefinition>(roundTripped.Definition);
+        var parameter = Assert.Single(roundTrippedQuery.Body.Parameters);
+
+        Assert.Equal(QueryParameterDefaultKind.Value, parameter.DefaultKind);
+        Assert.Equal("active", parameter.DefaultValue?.String);
+        Assert.Equal(document.DefinitionFingerprint, roundTripped.DefinitionFingerprint);
+    }
+
+    [Fact]
     public void StrictWireOptions_EmitConditionalMembersAndRawAnnotations()
     {
         var options = RelationQueryJsonSerializer.CreateOptions();
@@ -280,7 +470,7 @@ public sealed class RelationQueryIRTests
     {
         var fingerprint = RelationQueryDefinitionFingerprinter.Compute(CreateLoadSearchRelation());
 
-        Assert.Equal("relation-query/v1-c14n/v2", fingerprint.Canonicalization);
+        Assert.Equal("relation-query/v1-c14n/v3", fingerprint.Canonicalization);
         Assert.Equal("6fa55fc022091a5cc6b9252e989a4843bbaab6fdcbe09ccb7771d2146badda49", fingerprint.Value);
     }
 
@@ -325,6 +515,11 @@ public sealed class RelationQueryIRTests
         var tamperedResult = RelationQueryJsonSerializer.TryDeserialize(tampered.ToJsonString(), out var tamperedDocument);
         Assert.NotNull(tamperedDocument);
         AssertDiagnostic(tamperedResult, "relationQuery.fingerprint.mismatch");
+
+        var oldFingerprintProfile = JsonNode.Parse(json)!.AsObject();
+        oldFingerprintProfile["definitionFingerprint"]!["canonicalization"] = "relation-query/v1-c14n/v2";
+        var oldProfileResult = RelationQueryJsonSerializer.TryDeserialize(oldFingerprintProfile.ToJsonString(), out _);
+        AssertDiagnostic(oldProfileResult, "relationQuery.fingerprint.profileUnsupported");
 
         var missingNodeId = JsonNode.Parse(json)!.AsObject();
         missingNodeId["definition"]!["body"]!["nodes"]![0]!.AsObject().Remove("id");

@@ -1,8 +1,25 @@
 using System.Collections.Immutable;
 using System.Text.Json.Serialization;
+using Cohesive.Model.Expressions;
 using Cohesive.Relations.Model;
 
 namespace Cohesive.Relations.IR;
+
+/// <summary>
+/// Describes whether a query parameter declares a persisted fallback value.
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum QueryParameterDefaultKind
+{
+    /// <summary>No fallback is declared; an omitted optional parameter remains absent.</summary>
+    None = 0,
+
+    /// <summary>
+    /// A fallback is declared. The corresponding value may be an explicit
+    /// <see cref="ObservationValue.Null"/>.
+    /// </summary>
+    Value = 1
+}
 
 /// <summary>
 /// Declares one parameter accepted by a persisted logical query definition.
@@ -14,11 +31,15 @@ public sealed record QueryParameterDefinition
     /// <param name="id">Stable parameter identifier.</param>
     /// <param name="type">Semantic parameter type.</param>
     /// <param name="presence">Whether an invocation must provide the parameter.</param>
-    /// <param name="defaultValue">Optional value used when an optional parameter is omitted.</param>
+    /// <param name="defaultValue">
+    /// Fallback used when an optional parameter is omitted. CLR <see langword="null"/> or
+    /// <see cref="ObservationValue.Undefined"/> means no effective fallback;
+    /// <see cref="ObservationValue.Null"/> declares an explicit null fallback.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="type"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
     /// <paramref name="presence"/> is <see cref="FieldPresence.Required"/> and
-    /// <paramref name="defaultValue"/> is not <see langword="null"/>.
+    /// <paramref name="defaultValue"/> declares a non-undefined fallback.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="presence"/> is unsupported.</exception>
     public QueryParameterDefinition(
@@ -26,17 +47,79 @@ public sealed record QueryParameterDefinition
         TypeRef type,
         FieldPresence presence = FieldPresence.Required,
         ObservationValue? defaultValue = null)
+        : this(
+            id,
+            type,
+            presence,
+            defaultValue is { Kind: not ObservationValueKind.Undefined }
+                ? QueryParameterDefaultKind.Value
+                : QueryParameterDefaultKind.None,
+            defaultValue)
+    {
+    }
+
+    /// <summary>Creates a query parameter declaration from its persisted default-value representation.</summary>
+    /// <param name="id">Stable parameter identifier.</param>
+    /// <param name="type">Semantic parameter type.</param>
+    /// <param name="presence">Whether an invocation must provide the parameter.</param>
+    /// <param name="defaultKind">
+    /// Whether a fallback is declared. This discriminator distinguishes no fallback from an explicit null fallback.
+    /// </param>
+    /// <param name="defaultValue">
+    /// Persisted fallback value when <paramref name="defaultKind"/> is
+    /// <see cref="QueryParameterDefaultKind.Value"/>. CLR <see langword="null"/> is normalized to
+    /// <see cref="ObservationValue.Null"/>. When <paramref name="defaultKind"/> is
+    /// <see cref="QueryParameterDefaultKind.None"/>, CLR <see langword="null"/> or
+    /// <see cref="ObservationValue.Undefined"/> is normalized to no fallback.
+    /// </param>
+    /// <exception cref="ArgumentNullException"><paramref name="type"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="presence"/> is <see cref="FieldPresence.Required"/> and
+    /// <paramref name="defaultKind"/> is <see cref="QueryParameterDefaultKind.Value"/>;
+    /// <paramref name="defaultKind"/> is <see cref="QueryParameterDefaultKind.None"/> and
+    /// <paramref name="defaultValue"/> contains a value; or <paramref name="defaultKind"/> is
+    /// <see cref="QueryParameterDefaultKind.Value"/> and <paramref name="defaultValue"/> is
+    /// <see cref="ObservationValue.Undefined"/>.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="presence"/> or <paramref name="defaultKind"/> is unsupported.
+    /// </exception>
+    [JsonConstructor]
+    public QueryParameterDefinition(
+        QueryParameterId id,
+        TypeRef type,
+        FieldPresence presence,
+        QueryParameterDefaultKind defaultKind,
+        ObservationValue? defaultValue = null)
     {
         if (!Enum.IsDefined(presence))
             throw new ArgumentOutOfRangeException(nameof(presence), presence, "Unsupported parameter presence.");
+        if (!Enum.IsDefined(defaultKind))
+            throw new ArgumentOutOfRangeException(nameof(defaultKind), defaultKind, "Unsupported parameter default kind.");
+        if (defaultKind == QueryParameterDefaultKind.None
+            && defaultValue is { Kind: not ObservationValueKind.Undefined })
+        {
+            throw new ArgumentException(
+                "A parameter without a declared default cannot contain a default value.",
+                nameof(defaultValue));
+        }
+        if (defaultKind == QueryParameterDefaultKind.Value
+            && defaultValue is { Kind: ObservationValueKind.Undefined })
+        {
+            throw new ArgumentException(
+                "An explicit parameter default cannot be undefined.",
+                nameof(defaultValue));
+        }
+        if (presence == FieldPresence.Required && defaultKind == QueryParameterDefaultKind.Value)
+            throw new ArgumentException("A required parameter cannot declare a default value.", nameof(defaultValue));
 
         Id = id;
         Type = Guard.RequireNotNull(type);
         Presence = presence;
-        DefaultValue = defaultValue;
-
-        if (Presence == FieldPresence.Required && DefaultValue is not null)
-            throw new ArgumentException("A required parameter cannot declare a default value.", nameof(defaultValue));
+        DefaultKind = defaultKind;
+        DefaultValue = defaultKind == QueryParameterDefaultKind.Value
+            ? defaultValue ?? ObservationValue.Null
+            : null;
     }
 
     /// <summary>Stable parameter identifier referenced by <see cref="ParameterExpr"/>.</summary>
@@ -48,8 +131,52 @@ public sealed record QueryParameterDefinition
     /// <summary>Whether a runtime invocation must provide the parameter.</summary>
     public FieldPresence Presence { get; init; }
 
-    /// <summary>Optional default value for an optional parameter.</summary>
+    /// <summary>
+    /// Whether a persisted fallback is declared. Canonical writers always emit this discriminator to
+    /// preserve the distinction between no fallback and an explicit null fallback. The portable v1
+    /// reader also accepts its omission in legacy documents using the documented compatibility rule.
+    /// </summary>
+    public QueryParameterDefaultKind DefaultKind { get; init; }
+
+    /// <summary>
+    /// Invocation fallback when <see cref="DefaultKind"/> is <see cref="QueryParameterDefaultKind.Value"/>.
+    /// <see cref="ObservationValue.Null"/> represents an explicit null fallback; CLR <see langword="null"/>
+    /// represents no fallback when <see cref="DefaultKind"/> is <see cref="QueryParameterDefaultKind.None"/>.
+    /// </summary>
     public ObservationValue? DefaultValue { get; init; }
+
+    /// <summary>
+    /// Effective expression value contract after omission and default application. Any non-undefined
+    /// default makes the effective value required, and only an explicit null default makes it nullable.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <see cref="Presence"/> or <see cref="DefaultKind"/> is unsupported.
+    /// </exception>
+    [JsonIgnore]
+    public ExprValueContract EffectiveValueContract
+    {
+        get
+        {
+            if (!Enum.IsDefined(Presence))
+                throw new ArgumentOutOfRangeException(nameof(Presence), Presence, "Unsupported parameter presence.");
+
+            return new(
+                Type,
+                presence: DefaultKind switch
+                {
+                    QueryParameterDefaultKind.None => Presence,
+                    QueryParameterDefaultKind.Value => FieldPresence.Required,
+                    _ => throw new ArgumentOutOfRangeException(
+                        nameof(DefaultKind),
+                        DefaultKind,
+                        "Unsupported parameter default kind.")
+                },
+                nullability: DefaultKind == QueryParameterDefaultKind.Value
+                    && (DefaultValue ?? ObservationValue.Null).Kind == ObservationValueKind.Null
+                    ? FieldNullability.Nullable
+                    : FieldNullability.NonNullable);
+        }
+    }
 }
 
 /// <summary>
