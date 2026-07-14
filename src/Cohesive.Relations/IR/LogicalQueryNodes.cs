@@ -229,9 +229,11 @@ public sealed record TraverseRelationshipQueryNode : LogicalQueryNode
     public ValueBindingId Result { get; init; }
 
     /// <summary>Join behavior used when related values are absent.</summary>
+    [JsonRequired]
     public JoinKind JoinKind { get; init; }
 
     /// <summary>Whether related input resolution is required.</summary>
+    [JsonRequired]
     public QueryInputRequirement Requirement { get; init; }
 
     /// <inheritdoc />
@@ -250,6 +252,7 @@ public sealed record JoinQueryNode : LogicalQueryNode
     /// <param name="kind">Join semantics.</param>
     /// <param name="predicate">Predicate evaluated over both input binding environments.</param>
     /// <exception cref="ArgumentNullException"><paramref name="predicate"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="kind"/> is unsupported.</exception>
     public JoinQueryNode(QueryNodeId id, QueryNodeId left, QueryNodeId right, JoinKind kind, Expr predicate)
         : base(id)
     {
@@ -257,6 +260,9 @@ public sealed record JoinQueryNode : LogicalQueryNode
         Right = right;
         Kind = kind;
         Predicate = Guard.RequireNotNull(predicate);
+
+        if (!Enum.IsDefined(Kind))
+            throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported join kind.");
     }
 
     /// <summary>Left input rowset.</summary>
@@ -266,6 +272,7 @@ public sealed record JoinQueryNode : LogicalQueryNode
     public QueryNodeId Right { get; init; }
 
     /// <summary>Join semantics.</summary>
+    [JsonRequired]
     public JoinKind Kind { get; init; }
 
     /// <summary>Predicate evaluated over the combined binding environment.</summary>
@@ -493,6 +500,7 @@ public sealed record QueryAggregateAssignment
     public FieldPath Target { get; init; }
 
     /// <summary>Aggregate operation.</summary>
+    [JsonRequired]
     public AggregateOperator Operation { get; init; }
 
     /// <summary>Optional value expression; count may omit it.</summary>

@@ -142,6 +142,72 @@ The distinction is semantic rather than physical. Neither construct chooses a da
 
 A Cohesive relation is also not synonymous with a table in the relational-database sense. A compiler may realize a relation as a SQL expression, view, materialized view, or application-side plan, but the relation itself remains portable.
 
+## Portable Relation Drafts
+
+A relation draft is a portable, persistable relation under construction. It carries the canonical
+logical graph up to the projection boundary, stable output-assignment slots, semantic expression
+candidates for those slots, and an explicit resolution for each slot. The draft is separate from
+the accepted `RelationDefinition`: unresolved and ambiguous assignments are useful states for
+authoring, inference, review, and diagnostics, but they are not executable relation semantics.
+
+Draft producers can be simple conventions, host-language authoring tools, importers, or inference
+systems such as Ari. Producer-specific evidence remains outside the semantic draft. For example,
+Ari may associate model scores, explanations, review decisions, and run metadata with stable draft
+slot and candidate identifiers without placing those concerns in `Cohesive.Relations`.
+
+This is an integration boundary rather than a competing proposal model. Ari's
+`MappingInferenceResult` remains its inference and workflow artifact. An Ari adapter can lower its
+source/target paths into draft slots and canonical expression candidates, retain confidence,
+alternatives, features, model versions, and review state in Ari, and associate that evidence with
+the content-derived draft candidate identifiers. A draft document can point back to the Ari
+artifact through an opaque producer-artifact reference. Changing Ari evidence does not change the
+draft fingerprint; changing a slot, candidate expression, or resolution does.
+
+Acceptance is a shape-aware semantic boundary. It verifies that every output field is explicitly
+resolved or, when optional, explicitly omitted; that selected source fields exist; and that type,
+cardinality, presence, and nullability are safe. Successful acceptance appends the canonical
+projection node and produces a normal `RelationDefinition`. The draft identity remains stable
+across revisions, while its content fingerprint changes as candidates and resolutions change.
+The result retains the consumed draft fingerprint and relationship-catalog fingerprint as
+provenance, separately from the accepted relation's canonical fingerprint.
+
+Three kinds of incomplete information remain distinct:
+
+- A **definition hole** is an unresolved, ambiguous, or unsafe draft assignment and prevents
+  acceptance.
+- **Inference uncertainty** is producer-owned evidence such as an Ari confidence score; policy may
+  turn it into a selected, ambiguous, or unresolved draft state.
+- A **runtime input hole** occurs after acceptance when required observations are unavailable, such
+  as a load whose referenced customer cannot be resolved. Runtime hydration diagnostics are a
+  later interpretation and do not make an otherwise complete draft unresolved.
+
+The draft graph may already contain relationship traversals, so a flat DTO projection can select
+fields from several visible bindings:
+
+```text
+Source(Load as load)
+→ TraverseRelationship(load.CustomerId → Customer as customer)
+→ Project(
+    LoadSearchDto.Id           = load.Id,
+    LoadSearchDto.CustomerId   = load.CustomerId,
+    LoadSearchDto.CustomerName = customer.Name,
+    LoadSearchDto.CustomerType = customer.Type)
+```
+
+The built-in convention matcher intentionally handles only direct, top-level field matches in its
+first version. It applies explicit aliases first, then exact ordinal names, then a unique
+ordinal-ignore-case name. An unsafe higher-precedence match remains a diagnosed hole rather than
+falling through to a lower-precedence guess. Exact whole-value copies of arrays and inline objects
+are allowed when their portable types and field guarantees match; inferring navigation or
+restructuring inside those values is not.
+
+More sophisticated producers can propose relationship traversals and cross-binding assignments
+using the same draft contract, so flattening `Customer.Name` into `LoadSearchDto.CustomerName` does
+not require a second relation model. Automatic traversal discovery, automatic nested structural
+mapping, compiled mappers, runtime hole reporting, backend lowering, and proof that a declared
+relation output mode matches row-multiplying or row-dropping graph behavior remain follow-on
+interpretations or analyses.
+
 ## Relationship to GraphQL
 
 GraphQL and `Cohesive.Relations` both support querying heterogeneous data sources through a

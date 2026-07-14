@@ -22,8 +22,7 @@ public static partial class RelationQueryDefinitionValidator
         if (definition.Body is null)
         {
             return DocumentValidationResult.FromDiagnostics([
-                new(
-                    Code: "relationQuery.body.missing",
+                new(Code: "relationQuery.body.missing",
                     Severity: DiagnosticSeverity.Error,
                     Message: "A relation/query definition must contain a logical query body.",
                     Location: "/definition/body")
@@ -45,18 +44,15 @@ public static partial class RelationQueryDefinitionValidator
 
         public List<DocumentValidationDiagnostic> Diagnostics { get; } = [];
 
-        ImmutableArray<LogicalQueryNode> DefinitionNodes =>
-            definition.Body.Nodes.IsDefault ? [] : definition.Body.Nodes;
+        ImmutableArray<LogicalQueryNode> DefinitionNodes => definition.Body.Nodes.IsDefault ? [] : definition.Body.Nodes;
 
-        ImmutableArray<QueryParameterDefinition> DefinitionParameters =>
-            definition.Body.Parameters.IsDefault ? [] : definition.Body.Parameters;
+        ImmutableArray<QueryParameterDefinition> DefinitionParameters => definition.Body.Parameters.IsDefault ? [] : definition.Body.Parameters;
 
         public void Validate()
         {
             if (DefinitionNodes.IsDefaultOrEmpty)
             {
-                Add(
-                    code: "relationQuery.body.nodesEmpty",
+                Add(code: "relationQuery.body.nodesEmpty",
                     message: "A logical query body must contain at least one node.",
                     location: "/definition/body/nodes");
             }
@@ -125,16 +121,14 @@ public static partial class RelationQueryDefinitionValidator
                 ValidateNodeLocal(node);
                 if (!nodes.TryAdd(node.Id, node))
                 {
-                    Add(
-                        code: "relationQuery.node.duplicateId",
+                    Add(code: "relationQuery.node.duplicateId",
                         message: $"Duplicate logical query node id '{node.Id.Value}'.",
                         location: NodeLocation(node.Id));
                 }
 
                 if (node is SourceQueryNode source && !sourceBindings.Add(source.Binding))
                 {
-                    Add(
-                        code: "relationQuery.binding.duplicateSource",
+                    Add(code: "relationQuery.binding.duplicateSource",
                         message: $"Source binding '{source.Binding.Value}' is declared by more than one source node.",
                         location: NodeLocation(node.Id));
                 }
@@ -211,6 +205,12 @@ public static partial class RelationQueryDefinitionValidator
                             message: $"Relationship traversal '{traversal.Id.Value}' declares unsupported input requirement '{traversal.Requirement}'.",
                             location: $"{NodeLocation(traversal.Id)}/requirement");
                     }
+                    break;
+                case JoinQueryNode join when !Enum.IsDefined(join.Kind):
+                    Add(
+                        code: "relationQuery.join.kindInvalid",
+                        message: $"Join node '{join.Id.Value}' declares unsupported join kind '{join.Kind}'.",
+                        location: $"{NodeLocation(join.Id)}/kind");
                     break;
                 case ExpandCollectionQueryNode expansion:
                     ValidateBinding(expansion.ItemBinding, expansion.Id, "itemBinding");
@@ -312,7 +312,7 @@ public static partial class RelationQueryDefinitionValidator
                 return [];
             }
 
-            HashSet<ValueBindingId> bindings = node switch
+            var bindings = node switch
             {
                 SourceQueryNode source => [source.Binding],
                 FilterQueryNode filter => PreserveAndValidate(filter, filter.Input, filter.Predicate),
@@ -531,15 +531,13 @@ public static partial class RelationQueryDefinitionValidator
                     ValidateFieldPath(field.Path, location);
                     if (field.Binding is { } binding && !bindings.Contains(binding))
                     {
-                        Add(
-                            code: "relationQuery.expression.bindingMissing",
+                        Add(code: "relationQuery.expression.bindingMissing",
                             message: $"Expression references binding '{binding.Value}' that is not visible at this node.",
                             location: location);
                     }
                     else if (field.Binding is null && bindings.Count != 1)
                     {
-                        Add(
-                            code: "relationQuery.expression.fieldBindingAmbiguous",
+                        Add(code: "relationQuery.expression.fieldBindingAmbiguous",
                             message: "An unbound field expression is only valid when exactly one value binding is visible.",
                             location: location);
                     }
@@ -548,28 +546,24 @@ public static partial class RelationQueryDefinitionValidator
                     ValidateFieldPath(field.Path, location);
                     if (bindings.Count != 1)
                     {
-                        Add(
-                            code: "relationQuery.expression.fieldBindingAmbiguous",
+                        Add(code: "relationQuery.expression.fieldBindingAmbiguous",
                             message: "An unbound typed field expression is only valid when exactly one value binding is visible.",
                             location: location);
                     }
                     ValidatePortableType(field.Type, $"{location}/type");
                     break;
                 case CurrentItemExpr:
-                    Add(
-                        code: "relationQuery.expression.currentItemUnsupported",
+                    Add(code: "relationQuery.expression.currentItemUnsupported",
                         message: "Canonical relation/query IR requires explicit value bindings instead of current-item expressions.",
                         location: location);
                     break;
                 case ParameterExpr parameter when string.IsNullOrWhiteSpace(parameter.Parameter):
-                    Add(
-                        code: "relationQuery.expression.parameterIdMissing",
+                    Add(code: "relationQuery.expression.parameterIdMissing",
                         message: "A parameter expression must reference a non-empty parameter id.",
                         location: location);
                     break;
                 case ParameterExpr parameter when !parameters.Contains(parameter.Parameter):
-                    Add(
-                        code: "relationQuery.expression.parameterMissing",
+                    Add(code: "relationQuery.expression.parameterMissing",
                         message: $"Expression references undeclared query parameter '{parameter.Parameter}'.",
                         location: location);
                     break;
@@ -614,8 +608,7 @@ public static partial class RelationQueryDefinitionValidator
         {
             if (expression is null)
             {
-                Add(
-                    code: "relationQuery.expression.missing",
+                Add(code: "relationQuery.expression.missing",
                     message: "A required relation/query expression is missing.",
                     location: location);
                 return;
@@ -776,15 +769,13 @@ public static partial class RelationQueryDefinitionValidator
             };
             if (outputShape is null)
             {
-                Add(
-                    code: "relationQuery.relation.outputNodeNotShaped",
+                Add(code: "relationQuery.relation.outputNodeNotShaped",
                     message: $"Relation output node '{relation.Output.Node.Value}' must be a project or aggregate node.",
                     location: "/definition/output/node");
             }
             else if (outputShape.Value != relation.Output.Shape)
             {
-                Add(
-                    code: "relationQuery.relation.outputShapeMismatch",
+                Add(code: "relationQuery.relation.outputShapeMismatch",
                     message: $"Relation output shape '{relation.Output.Shape}' does not match node shape '{outputShape.Value}'.",
                     location: "/definition/output/shape");
             }
@@ -839,16 +830,14 @@ public static partial class RelationQueryDefinitionValidator
 
                 if (!ids.Add(result.Id))
                 {
-                    Add(
-                        code: "relationQuery.query.resultDuplicateId",
+                    Add(code: "relationQuery.query.resultDuplicateId",
                         message: $"Duplicate query result id '{result.Id.Value}'.",
                         location: $"/definition/results/{result.Id.Value}");
                 }
 
                 if (!nodes.TryGetValue(result.Input, out var input))
                 {
-                    Add(
-                        code: "relationQuery.query.resultNodeMissing",
+                    Add(code: "relationQuery.query.resultNodeMissing",
                         message: $"Query result '{result.Id.Value}' references unknown node '{result.Input.Value}'.",
                         location: $"/definition/results/{result.Id.Value}/input");
                     continue;
@@ -857,8 +846,7 @@ public static partial class RelationQueryDefinitionValidator
                 var resultBindings = ResolveBindings(result.Input);
                 if (resultBindings.Count != 1)
                 {
-                    Add(
-                        code: "relationQuery.query.resultBindingAmbiguous",
+                    Add(code: "relationQuery.query.resultBindingAmbiguous",
                         message: $"Query result '{result.Id.Value}' must resolve to exactly one shaped value binding.",
                         location: $"/definition/results/{result.Id.Value}/input");
                 }
@@ -866,15 +854,13 @@ public static partial class RelationQueryDefinitionValidator
                 var isAggregateResult = HasAggregateAncestry(result.Input, new HashSet<QueryNodeId>());
                 if (result is AggregationQueryResultDefinition && !isAggregateResult)
                 {
-                    Add(
-                        code: "relationQuery.query.aggregationResultNodeInvalid",
+                    Add(code: "relationQuery.query.aggregationResultNodeInvalid",
                         message: $"Aggregation result '{result.Id.Value}' must reference an aggregate-derived node.",
                         location: $"/definition/results/{result.Id.Value}/input");
                 }
                 else if (result is RowsQueryResultDefinition && isAggregateResult)
                 {
-                    Add(
-                        code: "relationQuery.query.rowsResultNodeInvalid",
+                    Add(code: "relationQuery.query.rowsResultNodeInvalid",
                         message: $"Rows result '{result.Id.Value}' cannot reference an aggregate-derived node.",
                         location: $"/definition/results/{result.Id.Value}/input");
                 }
@@ -884,7 +870,7 @@ public static partial class RelationQueryDefinitionValidator
         void ValidateReachability()
         {
             HashSet<QueryNodeId> reachable = [];
-            IEnumerable<QueryNodeId> roots = definition switch
+            var roots = definition switch
             {
                 RelationDefinition { Output: not null } relation => [relation.Output.Node],
                 QueryDefinition query => (query.Results.IsDefault ? [] : query.Results)
@@ -899,8 +885,7 @@ public static partial class RelationQueryDefinitionValidator
             {
                 if (!reachable.Contains(node.Id))
                 {
-                    Add(
-                        code: "relationQuery.node.unreachable",
+                    Add(code: "relationQuery.node.unreachable",
                         message: $"Node '{node.Id.Value}' is not reachable from a declared relation output or query result.",
                         location: NodeLocation(node.Id));
                 }
@@ -957,8 +942,7 @@ public static partial class RelationQueryDefinitionValidator
         {
             if (path.Segments.IsDefaultOrEmpty)
             {
-                Add(
-                    code: "relationQuery.fieldPath.empty",
+                Add(code: "relationQuery.fieldPath.empty",
                     message: "A relation/query field path must contain at least one segment.",
                     location: location);
             }
@@ -968,8 +952,7 @@ public static partial class RelationQueryDefinitionValidator
         {
             if (type is null)
             {
-                Add(
-                    code: "relationQuery.type.missing",
+                Add(code: "relationQuery.type.missing",
                     message: "A required semantic type reference is missing.",
                     location: location);
                 return;
@@ -978,26 +961,22 @@ public static partial class RelationQueryDefinitionValidator
             switch (type)
             {
                 case OpaqueRuntimeTypeRef:
-                    Add(
-                        code: "relationQuery.type.opaqueRuntimeUnsupported",
+                    Add(code: "relationQuery.type.opaqueRuntimeUnsupported",
                         message: "Canonical relation/query IR cannot contain a runtime-specific opaque type reference.",
                         location: location);
                     break;
                 case NamedTypeRef named when string.IsNullOrWhiteSpace(named.TypeId.Value):
-                    Add(
-                        code: "relationQuery.type.namedIdMissing",
+                    Add(code: "relationQuery.type.namedIdMissing",
                         message: "A named type reference must have a non-empty type id.",
                         location: location);
                     break;
                 case EntityReferenceTypeRef entity when string.IsNullOrWhiteSpace(entity.Entity.Value):
-                    Add(
-                        code: "relationQuery.type.entityNameMissing",
+                    Add(code: "relationQuery.type.entityNameMissing",
                         message: "An entity reference type must have a non-empty entity name.",
                         location: location);
                     break;
                 case ArrayTypeRef { ElementType: null }:
-                    Add(
-                        code: "relationQuery.type.arrayElementMissing",
+                    Add(code: "relationQuery.type.arrayElementMissing",
                         message: "An array type reference must declare an element type.",
                         location: location);
                     break;
@@ -1005,8 +984,7 @@ public static partial class RelationQueryDefinitionValidator
                     ValidatePortableType(array.ElementType, $"{location}/elementType");
                     break;
                 case ObjectTypeRef obj when obj.Fields.IsDefaultOrEmpty:
-                    Add(
-                        code: "relationQuery.type.objectFieldsEmpty",
+                    Add(code: "relationQuery.type.objectFieldsEmpty",
                         message: "An inline object type must declare at least one field.",
                         location: location);
                     break;
@@ -1015,15 +993,13 @@ public static partial class RelationQueryDefinitionValidator
                     {
                         if (string.IsNullOrWhiteSpace(field.Name))
                         {
-                            Add(
-                                code: "relationQuery.type.objectFieldNameMissing",
+                            Add(code: "relationQuery.type.objectFieldNameMissing",
                                 message: "An inline object field must have a non-empty name.",
                                 location: location);
                         }
                         else if (field.Type is null)
                         {
-                            Add(
-                                code: "relationQuery.type.objectFieldTypeMissing",
+                            Add(code: "relationQuery.type.objectFieldTypeMissing",
                                 message: $"Inline object field '{field.Name}' must declare a type.",
                                 location: $"{location}/fields/{field.Name}/type");
                         }
@@ -1046,14 +1022,12 @@ public static partial class RelationQueryDefinitionValidator
                 case ObservationValueKind.DateOnly:
                 case ObservationValueKind.TimeOnly:
                 case ObservationValueKind.TimeSpan:
-                    Add(
-                        code: "relationQuery.value.kindUnsupported",
+                    Add(code: "relationQuery.value.kindUnsupported",
                         message: $"Observation value kind '{value.Kind}' does not have a lossless canonical relation/query JSON encoding.",
                         location: location);
                     break;
                 case ObservationValueKind.Double when !double.IsFinite(value.Double):
-                    Add(
-                        code: "relationQuery.value.numberNonFinite",
+                    Add(code: "relationQuery.value.numberNonFinite",
                         message: "Canonical relation/query JSON cannot represent non-finite numeric values.",
                         location: location);
                     break;

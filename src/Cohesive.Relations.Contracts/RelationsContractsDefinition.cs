@@ -32,6 +32,12 @@ public static class RelationsContractsDefinition
             .Action("RelationshipCatalogDocument")
             .Route("GET", "/relations/contracts/relationship-catalog-document")
             .Returns<RelationshipCatalogDocument>()
+            .Build(),
+        CohesiveApi
+            .Define("RelationsContracts")
+            .Action("RelationDraftDocument")
+            .Route("GET", "/relations/contracts/relation-draft-document")
+            .Returns<RelationDraftDocument>()
             .Build()
     );
 }

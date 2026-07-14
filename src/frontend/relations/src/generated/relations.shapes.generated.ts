@@ -4,6 +4,38 @@ export type GraphId = string;
 
 export type ShapeId = string;
 
+export interface RelationDraft {
+  id: RelationDraftId;
+  relationId: RelationId;
+  name: RelationName;
+  input: LogicalQueryDefinition;
+  rootBinding: ValueBindingId;
+  projection: RelationDraftProjection;
+  outputMode: RelationOutputMode;
+  outputKey?: Expr | null;
+  invariants: InvariantDefinition[];
+}
+
+export interface RelationDraftFingerprint {
+  algorithm: string;
+  canonicalization: string;
+  value: string;
+}
+
+export interface RelationDraftDocumentMetadata {
+  origin: DocumentOrigin;
+  name?: string | null;
+  description?: string | null;
+  sourceUri?: string | null;
+  producer?: string | null;
+  producerVersion?: string | null;
+  createdAtUtc?: string | null;
+  updatedAtUtc?: string | null;
+  annotations: Record<string, AnnotationValue>;
+  producerArtifacts: RelationDraftProducerArtifactReference[];
+  conventionDecisions: RelationDraftConventionDecision[];
+}
+
 export type RelationQueryDefinition = {
   readonly $definition: 'relation';
 } & RelationDefinition | {
@@ -66,22 +98,121 @@ export interface RelationshipCatalogDocumentMetadata {
   annotations: Record<string, AnnotationValue>;
 }
 
-export interface LogicalQueryDefinition {
-  nodes: LogicalQueryNode[];
-  parameters: QueryParameterDefinition[];
-}
+export type RelationDraftId = string;
 
 export type RelationId = string;
 
 export type RelationName = string;
 
+export interface LogicalQueryDefinition {
+  nodes: LogicalQueryNode[];
+  parameters: QueryParameterDefinition[];
+}
+
 export type ValueBindingId = string;
 
-export interface RelationOutputDefinition {
-  node: QueryNodeId;
-  shape: QualifiedShapeId;
-  mode: RelationOutputMode;
-  key?: Expr | null;
+export interface RelationDraftProjection {
+  id: QueryNodeId;
+  input: QueryNodeId;
+  resultBinding: ValueBindingId;
+  resultShape: QualifiedShapeId;
+  assignments: RelationDraftAssignmentSlot[];
+}
+
+export type RelationOutputMode = 'OnePerRoot' | 'ZeroOrOnePerRoot' | 'ManyPerRoot' | 'Set';
+
+export const relationOutputModes = {
+  onePerRoot: 'OnePerRoot',
+  zeroOrOnePerRoot: 'ZeroOrOnePerRoot',
+  manyPerRoot: 'ManyPerRoot',
+  set: 'Set',
+} as const satisfies Record<string, RelationOutputMode>;
+
+export const relationOutputModeLabels: Record<RelationOutputMode, string> = {
+  OnePerRoot: 'OnePerRoot',
+  ZeroOrOnePerRoot: 'ZeroOrOnePerRoot',
+  ManyPerRoot: 'ManyPerRoot',
+  Set: 'Set',
+};
+
+export type Expr = {
+  readonly $expr: 'field';
+} & FieldExpr | {
+  readonly $expr: 'currentItem';
+} & CurrentItemExpr | {
+  readonly $expr: 'parameter';
+} & ParameterExpr | {
+  readonly $expr: 'constant';
+} & ConstantExpr | {
+  readonly $expr: 'unary';
+} & UnaryExpr | {
+  readonly $expr: 'binary';
+} & BinaryExpr | {
+  readonly $expr: 'conditional';
+} & ConditionalExpr | {
+  readonly $expr: 'function';
+} & CallExpr | {
+  readonly $expr: 'typedFieldRef';
+} & FieldRefExpr | {
+  readonly $expr: 'literal';
+} & LiteralExpr | {
+  readonly $expr: 'aggregate';
+} & AggregateExpr;
+
+export interface FieldExpr {
+  path: FieldPath;
+  binding?: ValueBindingId | null;
+}
+
+export type CurrentItemExpr = Record<never, never>;
+
+export interface ParameterExpr {
+  parameter: string;
+}
+
+export interface ConstantExpr {
+  value: unknown;
+}
+
+export interface UnaryExpr {
+  operator: UnaryOperator;
+  operand: Expr;
+}
+
+export interface BinaryExpr {
+  operator: BinaryOperator;
+  left: Expr;
+  right: Expr;
+}
+
+export interface ConditionalExpr {
+  test: Expr;
+  ifTrue: Expr;
+  ifFalse: Expr;
+  returnType: TypeRef;
+}
+
+export interface CallExpr {
+  function: string;
+  arguments: Expr[];
+  returnType: TypeRef;
+}
+
+export interface FieldRefExpr {
+  path: FieldPath;
+  type: TypeRef;
+}
+
+export interface LiteralExpr {
+  type: TypeRef;
+  value: unknown;
+}
+
+export interface AggregateExpr {
+  operator: AggregateOperator;
+  source: Expr;
+  groupBy: Expr[];
+  returnType: TypeRef;
 }
 
 export interface InvariantDefinition {
@@ -89,26 +220,6 @@ export interface InvariantDefinition {
   entity?: EntityId | null;
   expression: Expr;
   message?: string | null;
-}
-
-export type QueryId = string;
-
-export type QueryName = string;
-
-export type QueryResultDefinition = {
-  readonly $result: 'rows';
-} & RowsQueryResultDefinition | {
-  readonly $result: 'aggregation';
-} & AggregationQueryResultDefinition;
-
-export interface RowsQueryResultDefinition {
-  id: QueryResultId;
-  input: QueryNodeId;
-}
-
-export interface AggregationQueryResultDefinition {
-  id: QueryResultId;
-  input: QueryNodeId;
 }
 
 export type DocumentOrigin = 'Unknown' | 'User' | 'System' | 'Imported' | 'Generated' | 'Compiled' | 'Extracted';
@@ -136,6 +247,47 @@ export const documentOriginLabels: Record<DocumentOrigin, string> = {
 export type AnnotationKey = string;
 
 export type AnnotationValue = unknown;
+
+export interface RelationDraftProducerArtifactReference {
+  kind: string;
+  value: string;
+}
+
+export interface RelationDraftConventionDecision {
+  ruleId: string;
+  slotId: QueryAssignmentId;
+  candidateId?: RelationDraftCandidateId | null;
+  sourceBinding: ValueBindingId;
+  source?: FieldPath | null;
+  target: FieldPath;
+}
+
+export interface RelationOutputDefinition {
+  node: QueryNodeId;
+  shape: QualifiedShapeId;
+  mode: RelationOutputMode;
+  key?: Expr | null;
+}
+
+export type QueryId = string;
+
+export type QueryName = string;
+
+export type QueryResultDefinition = {
+  readonly $result: 'rows';
+} & RowsQueryResultDefinition | {
+  readonly $result: 'aggregation';
+} & AggregationQueryResultDefinition;
+
+export interface RowsQueryResultDefinition {
+  id: QueryResultId;
+  input: QueryNodeId;
+}
+
+export interface AggregationQueryResultDefinition {
+  id: QueryResultId;
+  input: QueryNodeId;
+}
 
 export interface RelationshipDefinition {
   id: RelationshipId;
@@ -251,168 +403,57 @@ export interface QueryParameterDefinition {
 
 export type QueryNodeId = string;
 
-export type RelationOutputMode = 'OnePerRoot' | 'ZeroOrOnePerRoot' | 'ManyPerRoot' | 'Set';
-
-export const relationOutputModes = {
-  onePerRoot: 'OnePerRoot',
-  zeroOrOnePerRoot: 'ZeroOrOnePerRoot',
-  manyPerRoot: 'ManyPerRoot',
-  set: 'Set',
-} as const satisfies Record<string, RelationOutputMode>;
-
-export const relationOutputModeLabels: Record<RelationOutputMode, string> = {
-  OnePerRoot: 'OnePerRoot',
-  ZeroOrOnePerRoot: 'ZeroOrOnePerRoot',
-  ManyPerRoot: 'ManyPerRoot',
-  Set: 'Set',
-};
-
-export type Expr = {
-  readonly $expr: 'field';
-} & FieldExpr | {
-  readonly $expr: 'currentItem';
-} & CurrentItemExpr | {
-  readonly $expr: 'parameter';
-} & ParameterExpr | {
-  readonly $expr: 'constant';
-} & ConstantExpr | {
-  readonly $expr: 'unary';
-} & UnaryExpr | {
-  readonly $expr: 'binary';
-} & BinaryExpr | {
-  readonly $expr: 'conditional';
-} & ConditionalExpr | {
-  readonly $expr: 'function';
-} & CallExpr | {
-  readonly $expr: 'typedFieldRef';
-} & FieldRefExpr | {
-  readonly $expr: 'literal';
-} & LiteralExpr | {
-  readonly $expr: 'aggregate';
-} & AggregateExpr;
-
-export interface FieldExpr {
-  path: FieldPath;
-  binding?: ValueBindingId | null;
+export interface RelationDraftAssignmentSlot {
+  id: QueryAssignmentId;
+  target: FieldPath;
+  candidates: RelationDraftCandidate[];
+  resolution: RelationDraftAssignmentResolution;
 }
-
-export type CurrentItemExpr = Record<never, never>;
-
-export interface ParameterExpr {
-  parameter: string;
-}
-
-export interface ConstantExpr {
-  value: unknown;
-}
-
-export interface UnaryExpr {
-  operator: UnaryOperator;
-  operand: Expr;
-}
-
-export interface BinaryExpr {
-  operator: BinaryOperator;
-  left: Expr;
-  right: Expr;
-}
-
-export interface ConditionalExpr {
-  test: Expr;
-  ifTrue: Expr;
-  ifFalse: Expr;
-  returnType: TypeRef;
-}
-
-export interface CallExpr {
-  function: string;
-  arguments: Expr[];
-  returnType: TypeRef;
-}
-
-export interface FieldRefExpr {
-  path: FieldPath;
-  type: TypeRef;
-}
-
-export interface LiteralExpr {
-  type: TypeRef;
-  value: unknown;
-}
-
-export interface AggregateExpr {
-  operator: AggregateOperator;
-  source: Expr;
-  groupBy: Expr[];
-  returnType: TypeRef;
-}
-
-export type EntityId = string;
-
-export type QueryResultId = string;
-
-export type RelationshipId = string;
 
 export interface FieldPath {
   segments: FieldPathSegment[];
 }
 
-export type RelationshipTargetKey = {
-  readonly $targetKey: 'observationIdentity';
-} & ObservationIdentityRelationshipTargetKey;
+export type UnaryOperator = 'Not';
 
-export type ObservationIdentityRelationshipTargetKey = Record<never, never>;
+export const unaryOperators = {
+  not: 'Not',
+} as const satisfies Record<string, UnaryOperator>;
 
-export type SourceReferenceUniqueness = 'NotGuaranteed' | 'GloballyUnique';
-
-export const sourceReferenceUniquenesses = {
-  notGuaranteed: 'NotGuaranteed',
-  globallyUnique: 'GloballyUnique',
-} as const satisfies Record<string, SourceReferenceUniqueness>;
-
-export const sourceReferenceUniquenessLabels: Record<SourceReferenceUniqueness, string> = {
-  NotGuaranteed: 'NotGuaranteed',
-  GloballyUnique: 'GloballyUnique',
+export const unaryOperatorLabels: Record<UnaryOperator, string> = {
+  Not: 'Not',
 };
 
-export type RelationshipTraversalDirection = 'Forward' | 'Inverse';
+export type BinaryOperator = 'Eq' | 'Ne' | 'Gt' | 'Ge' | 'Lt' | 'Le' | 'And' | 'Or' | 'Add' | 'Sub' | 'Mul' | 'Div';
 
-export const relationshipTraversalDirections = {
-  forward: 'Forward',
-  inverse: 'Inverse',
-} as const satisfies Record<string, RelationshipTraversalDirection>;
+export const binaryOperators = {
+  eq: 'Eq',
+  ne: 'Ne',
+  gt: 'Gt',
+  ge: 'Ge',
+  lt: 'Lt',
+  le: 'Le',
+  and: 'And',
+  or: 'Or',
+  add: 'Add',
+  sub: 'Sub',
+  mul: 'Mul',
+  div: 'Div',
+} as const satisfies Record<string, BinaryOperator>;
 
-export const relationshipTraversalDirectionLabels: Record<RelationshipTraversalDirection, string> = {
-  Forward: 'Forward',
-  Inverse: 'Inverse',
-};
-
-export type JoinKind = 'Inner' | 'Left' | 'Right' | 'Full';
-
-export const joinKinds = {
-  inner: 'Inner',
-  left: 'Left',
-  right: 'Right',
-  full: 'Full',
-} as const satisfies Record<string, JoinKind>;
-
-export const joinKindLabels: Record<JoinKind, string> = {
-  Inner: 'Inner',
-  Left: 'Left',
-  Right: 'Right',
-  Full: 'Full',
-};
-
-export type QueryInputRequirement = 'Optional' | 'Required';
-
-export const queryInputRequirements = {
-  optional: 'Optional',
-  required: 'Required',
-} as const satisfies Record<string, QueryInputRequirement>;
-
-export const queryInputRequirementLabels: Record<QueryInputRequirement, string> = {
-  Optional: 'Optional',
-  Required: 'Required',
+export const binaryOperatorLabels: Record<BinaryOperator, string> = {
+  Eq: 'Eq',
+  Ne: 'Ne',
+  Gt: 'Gt',
+  Ge: 'Ge',
+  Lt: 'Lt',
+  Le: 'Le',
+  And: 'And',
+  Or: 'Or',
+  Add: 'Add',
+  Sub: 'Sub',
+  Mul: 'Mul',
+  Div: 'Div',
 };
 
 export type TypeRef = {
@@ -475,6 +516,94 @@ export interface JsonTypeRef {
   kind: JsonTypeKind;
 }
 
+export type AggregateOperator = 'Count' | 'Sum' | 'Min' | 'Max' | 'Any' | 'All';
+
+export const aggregateOperators = {
+  count: 'Count',
+  sum: 'Sum',
+  min: 'Min',
+  max: 'Max',
+  any: 'Any',
+  all: 'All',
+} as const satisfies Record<string, AggregateOperator>;
+
+export const aggregateOperatorLabels: Record<AggregateOperator, string> = {
+  Count: 'Count',
+  Sum: 'Sum',
+  Min: 'Min',
+  Max: 'Max',
+  Any: 'Any',
+  All: 'All',
+};
+
+export type EntityId = string;
+
+export type QueryAssignmentId = string;
+
+export type RelationDraftCandidateId = string;
+
+export type QueryResultId = string;
+
+export type RelationshipId = string;
+
+export type RelationshipTargetKey = {
+  readonly $targetKey: 'observationIdentity';
+} & ObservationIdentityRelationshipTargetKey;
+
+export type ObservationIdentityRelationshipTargetKey = Record<never, never>;
+
+export type SourceReferenceUniqueness = 'NotGuaranteed' | 'GloballyUnique';
+
+export const sourceReferenceUniquenesses = {
+  notGuaranteed: 'NotGuaranteed',
+  globallyUnique: 'GloballyUnique',
+} as const satisfies Record<string, SourceReferenceUniqueness>;
+
+export const sourceReferenceUniquenessLabels: Record<SourceReferenceUniqueness, string> = {
+  NotGuaranteed: 'NotGuaranteed',
+  GloballyUnique: 'GloballyUnique',
+};
+
+export type RelationshipTraversalDirection = 'Forward' | 'Inverse';
+
+export const relationshipTraversalDirections = {
+  forward: 'Forward',
+  inverse: 'Inverse',
+} as const satisfies Record<string, RelationshipTraversalDirection>;
+
+export const relationshipTraversalDirectionLabels: Record<RelationshipTraversalDirection, string> = {
+  Forward: 'Forward',
+  Inverse: 'Inverse',
+};
+
+export type JoinKind = 'Inner' | 'Left' | 'Right' | 'Full';
+
+export const joinKinds = {
+  inner: 'Inner',
+  left: 'Left',
+  right: 'Right',
+  full: 'Full',
+} as const satisfies Record<string, JoinKind>;
+
+export const joinKindLabels: Record<JoinKind, string> = {
+  Inner: 'Inner',
+  Left: 'Left',
+  Right: 'Right',
+  Full: 'Full',
+};
+
+export type QueryInputRequirement = 'Optional' | 'Required';
+
+export const queryInputRequirements = {
+  optional: 'Optional',
+  required: 'Required',
+} as const satisfies Record<string, QueryInputRequirement>;
+
+export const queryInputRequirementLabels: Record<QueryInputRequirement, string> = {
+  Optional: 'Optional',
+  Required: 'Required',
+};
+
 export interface ProjectionAssignment {
   id: QueryAssignmentId;
   target: FieldPath;
@@ -531,67 +660,34 @@ export const fieldPresenceLabels: Record<FieldPresence, string> = {
   Optional: 'Optional',
 };
 
-export type UnaryOperator = 'Not';
+export interface RelationDraftCandidate {
+  id: RelationDraftCandidateId;
+  value: Expr;
+}
 
-export const unaryOperators = {
-  not: 'Not',
-} as const satisfies Record<string, UnaryOperator>;
+export type RelationDraftAssignmentResolution = {
+  readonly $resolution: 'selected';
+} & SelectedRelationDraftAssignmentResolution | {
+  readonly $resolution: 'omitted';
+} & OmittedRelationDraftAssignmentResolution | {
+  readonly $resolution: 'unresolved';
+} & UnresolvedRelationDraftAssignmentResolution | {
+  readonly $resolution: 'ambiguous';
+} & AmbiguousRelationDraftAssignmentResolution;
 
-export const unaryOperatorLabels: Record<UnaryOperator, string> = {
-  Not: 'Not',
-};
+export interface SelectedRelationDraftAssignmentResolution {
+  candidateId: RelationDraftCandidateId;
+}
 
-export type BinaryOperator = 'Eq' | 'Ne' | 'Gt' | 'Ge' | 'Lt' | 'Le' | 'And' | 'Or' | 'Add' | 'Sub' | 'Mul' | 'Div';
+export type OmittedRelationDraftAssignmentResolution = Record<never, never>;
 
-export const binaryOperators = {
-  eq: 'Eq',
-  ne: 'Ne',
-  gt: 'Gt',
-  ge: 'Ge',
-  lt: 'Lt',
-  le: 'Le',
-  and: 'And',
-  or: 'Or',
-  add: 'Add',
-  sub: 'Sub',
-  mul: 'Mul',
-  div: 'Div',
-} as const satisfies Record<string, BinaryOperator>;
+export interface UnresolvedRelationDraftAssignmentResolution {
+  reasons: RelationDraftUnresolvedReason[];
+}
 
-export const binaryOperatorLabels: Record<BinaryOperator, string> = {
-  Eq: 'Eq',
-  Ne: 'Ne',
-  Gt: 'Gt',
-  Ge: 'Ge',
-  Lt: 'Lt',
-  Le: 'Le',
-  And: 'And',
-  Or: 'Or',
-  Add: 'Add',
-  Sub: 'Sub',
-  Mul: 'Mul',
-  Div: 'Div',
-};
-
-export type AggregateOperator = 'Count' | 'Sum' | 'Min' | 'Max' | 'Any' | 'All';
-
-export const aggregateOperators = {
-  count: 'Count',
-  sum: 'Sum',
-  min: 'Min',
-  max: 'Max',
-  any: 'Any',
-  all: 'All',
-} as const satisfies Record<string, AggregateOperator>;
-
-export const aggregateOperatorLabels: Record<AggregateOperator, string> = {
-  Count: 'Count',
-  Sum: 'Sum',
-  Min: 'Min',
-  Max: 'Max',
-  Any: 'Any',
-  All: 'All',
-};
+export interface AmbiguousRelationDraftAssignmentResolution {
+  candidateIds: RelationDraftCandidateId[];
+}
 
 export interface FieldPathSegment {
   kind: SegmentKind;
@@ -690,8 +786,6 @@ export const jsonTypeKindLabels: Record<JsonTypeKind, string> = {
   Boolean: 'Boolean',
 };
 
-export type QueryAssignmentId = string;
-
 export type QuerySortDirection = 'Ascending' | 'Descending';
 
 export const querySortDirections = {
@@ -716,6 +810,32 @@ export const queryNullPlacementLabels: Record<QueryNullPlacement, string> = {
   Last: 'Last',
 };
 
+export type RelationDraftUnresolvedReason = 'NoCandidate' | 'IncompatibleType' | 'UnsafeCardinality' | 'UnsafePresence' | 'UnsafeNullability' | 'ConversionRequired' | 'UnsupportedStructure' | 'UnsupportedTransformation' | 'MultipleCandidates';
+
+export const relationDraftUnresolvedReasons = {
+  noCandidate: 'NoCandidate',
+  incompatibleType: 'IncompatibleType',
+  unsafeCardinality: 'UnsafeCardinality',
+  unsafePresence: 'UnsafePresence',
+  unsafeNullability: 'UnsafeNullability',
+  conversionRequired: 'ConversionRequired',
+  unsupportedStructure: 'UnsupportedStructure',
+  unsupportedTransformation: 'UnsupportedTransformation',
+  multipleCandidates: 'MultipleCandidates',
+} as const satisfies Record<string, RelationDraftUnresolvedReason>;
+
+export const relationDraftUnresolvedReasonLabels: Record<RelationDraftUnresolvedReason, string> = {
+  NoCandidate: 'NoCandidate',
+  IncompatibleType: 'IncompatibleType',
+  UnsafeCardinality: 'UnsafeCardinality',
+  UnsafePresence: 'UnsafePresence',
+  UnsafeNullability: 'UnsafeNullability',
+  ConversionRequired: 'ConversionRequired',
+  UnsupportedStructure: 'UnsupportedStructure',
+  UnsupportedTransformation: 'UnsupportedTransformation',
+  MultipleCandidates: 'MultipleCandidates',
+};
+
 export type SegmentKind = 'Field' | 'Element';
 
 export const segmentKinds = {
@@ -731,6 +851,13 @@ export const segmentKindLabels: Record<SegmentKind, string> = {
 export interface QualifiedShapeId {
   graphId: GraphId;
   shapeId: ShapeId;
+}
+
+export interface RelationDraftDocument {
+  schemaVersion: string;
+  draft: RelationDraft;
+  draftFingerprint: RelationDraftFingerprint;
+  metadata: RelationDraftDocumentMetadata;
 }
 
 export interface RelationQueryDocument {
