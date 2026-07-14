@@ -567,7 +567,8 @@ public static class RelationQueryExpressionAnalyzer
                 .Where(static parameter => parameter is not null
                     && !string.IsNullOrWhiteSpace(parameter.Id.Value)
                     && parameter.Type is not null
-                    && Enum.IsDefined(parameter.Presence))
+                    && Enum.IsDefined(parameter.Presence)
+                    && Enum.IsDefined(parameter.DefaultKind))
                 .GroupBy(static parameter => parameter.Id.Value, StringComparer.Ordinal)
                 .Where(static group => group.Count() == 1)
                 .Select(static group => group.Single())
@@ -576,22 +577,8 @@ public static class RelationQueryExpressionAnalyzer
         ];
     }
 
-    static ExprScopeParameter CreateParameter(QueryParameterDefinition parameter)
-    {
-        var evaluatedPresence = parameter.DefaultValue is { Kind: not ObservationValueKind.Undefined }
-            ? FieldPresence.Required
-            : parameter.Presence;
-        var nullability = parameter.DefaultValue is { Kind: ObservationValueKind.Null }
-            ? FieldNullability.Nullable
-            : FieldNullability.NonNullable;
-        return new(
-            parameter.Id.Value,
-            new ExprValueContract(
-                parameter.Type,
-                presence: evaluatedPresence,
-                nullability: nullability),
-            parameter.Presence);
-    }
+    static ExprScopeParameter CreateParameter(QueryParameterDefinition parameter) =>
+        new(parameter.Id.Value, parameter.EffectiveValueContract, parameter.Presence);
 
     static ExprExpectation GetAggregateValueExpectation(AggregateOperator operation) => operation switch
     {

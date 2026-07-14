@@ -398,6 +398,7 @@ export interface QueryParameterDefinition {
   id: QueryParameterId;
   type: TypeRef;
   presence: FieldPresence;
+  defaultKind: QueryParameterDefaultKind;
   defaultValue?: unknown | null;
 }
 
@@ -658,6 +659,18 @@ export const fieldPresences = {
 export const fieldPresenceLabels: Record<FieldPresence, string> = {
   Required: 'Required',
   Optional: 'Optional',
+};
+
+export type QueryParameterDefaultKind = 'None' | 'Value';
+
+export const queryParameterDefaultKinds = {
+  none: 'None',
+  value: 'Value',
+} as const satisfies Record<string, QueryParameterDefaultKind>;
+
+export const queryParameterDefaultKindLabels: Record<QueryParameterDefaultKind, string> = {
+  None: 'None',
+  Value: 'Value',
 };
 
 export interface RelationDraftCandidate {

@@ -437,7 +437,8 @@ public sealed class RelationQueryExpressionAnalysisTests
             new("probe"),
             new ScalarTypeRef(ScalarTypeKind.String)) with
         {
-            Presence = (FieldPresence)999
+            Presence = (FieldPresence)999,
+            DefaultValue = ObservationValue.Undefined
         };
         var malformed = query with
         {
@@ -447,6 +448,47 @@ public sealed class RelationQueryExpressionAnalysisTests
         var analysis = RelationQueryExpressionAnalyzer.Analyze(malformed);
 
         AssertDiagnostic(analysis, "relationQuery.parameter.presenceInvalid");
+    }
+
+    [Fact]
+    public void Analyze_MalformedParameterDefaultKindProducesStructuredValidation()
+    {
+        var query = CreateProjectionQuery(Expr.Const("value"));
+        var malformedParameter = new QueryParameterDefinition(
+            new("probe"),
+            new ScalarTypeRef(ScalarTypeKind.String)) with
+        {
+            DefaultKind = (QueryParameterDefaultKind)999
+        };
+        var malformed = query with
+        {
+            Body = query.Body with { Parameters = [malformedParameter] }
+        };
+
+        var analysis = RelationQueryExpressionAnalyzer.Analyze(malformed);
+
+        AssertDiagnostic(analysis, "relationQuery.parameter.defaultKindInvalid");
+    }
+
+    [Fact]
+    public void Analyze_DefaultValueWithoutDefaultKindProducesStructuredValidation()
+    {
+        var query = CreateProjectionQuery(Expr.Const("value"));
+        var malformedParameter = new QueryParameterDefinition(
+            new("probe"),
+            new ScalarTypeRef(ScalarTypeKind.String),
+            FieldPresence.Optional) with
+        {
+            DefaultValue = ObservationValue.FromString("active")
+        };
+        var malformed = query with
+        {
+            Body = query.Body with { Parameters = [malformedParameter] }
+        };
+
+        var analysis = RelationQueryExpressionAnalyzer.Analyze(malformed);
+
+        AssertDiagnostic(analysis, "relationQuery.parameter.defaultUnexpected");
     }
 
     [Fact]
@@ -898,7 +940,7 @@ public sealed class RelationQueryExpressionAnalysisTests
     }
 
     [Fact]
-    public void Analyze_MaybeAbsentUnresolvedRelationProducesRequiredTargetHole()
+    public void Analyze_MaybeAbsentUnresolvedRelationProducesRequiredTargetMismatch()
     {
         var stringType = new ScalarTypeRef(ScalarTypeKind.String);
         var dtoGraph = new ShapeGraph(
