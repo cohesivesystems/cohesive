@@ -3,6 +3,7 @@ using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.Json.Serialization;
 using Cohesive.Model;
+using Cohesive.Model.Expressions;
 using Cohesive.Prelude;
 using Cohesive.Relations.Model;
 
@@ -187,7 +188,9 @@ sealed class RelExprTranslator
             throw new RelationDslException("Enumerable.Select(...) selector must have exactly one parameter.");
 
         var source = Translate(call.Arguments[0]);
-        var selector = WithSourceBinding(lambda.Parameters[0], "item.").Translate(lambda.Body);
+        var selector = WithSourceBinding(
+            lambda.Parameters[0],
+            $"{ExprFieldRoots.CurrentItem}{FieldPath.Separator}").Translate(lambda.Body);
         relExpression = Expr.Call(ExprFunctionNames.Select, source, selector);
         return true;
     }
@@ -300,7 +303,9 @@ sealed class RelExprTranslator
         {
             if (call.Arguments.Count != 0)
                 throw new RelationDslException("Group.Count() does not accept arguments.");
-            relExpression = Expr.Call(ExprFunctionNames.Count, Expr.Field("item.Items"));
+            relExpression = Expr.Call(
+                ExprFunctionNames.Count,
+                Expr.Field($"{ExprFieldRoots.CurrentItem}{FieldPath.Separator}Items"));
             return true;
         }
 
@@ -321,8 +326,13 @@ sealed class RelExprTranslator
         var lambda = ReadLambda(call.Arguments[0]);
         if (lambda.Parameters.Count != 1)
             throw new RelationDslException($"Group.{methodName}(...) selector must have exactly one parameter.");
-        var selector = ForSource(lambda.Parameters[0], prefix: "item.").Translate(lambda.Body);
-        relExpression = Expr.Call(aggregate, Expr.Field("item.Items"), selector);
+        var selector = ForSource(
+            lambda.Parameters[0],
+            prefix: $"{ExprFieldRoots.CurrentItem}{FieldPath.Separator}").Translate(lambda.Body);
+        relExpression = Expr.Call(
+            aggregate,
+            Expr.Field($"{ExprFieldRoots.CurrentItem}{FieldPath.Separator}Items"),
+            selector);
         return true;
     }
 
@@ -366,13 +376,13 @@ sealed class RelExprTranslator
 
                 if (string.Equals(properties[0].Name, nameof(RelationGroup<int, int>.Key), StringComparison.Ordinal))
                 {
-                    relExpression = Expr.Field("item.Id");
+                    relExpression = Expr.Field($"{ExprFieldRoots.CurrentItem}{FieldPath.Separator}Id");
                     return true;
                 }
 
                 if (string.Equals(properties[0].Name, nameof(RelationGroup<int, int>.Items), StringComparison.Ordinal))
                 {
-                    relExpression = Expr.Field("item.Items");
+                    relExpression = Expr.Field($"{ExprFieldRoots.CurrentItem}{FieldPath.Separator}Items");
                     return true;
                 }
 

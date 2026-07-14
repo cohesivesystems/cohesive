@@ -44,6 +44,14 @@ public abstract partial record TypeDefinition
         /// <summary>
         /// Creates a structural type definition.
         /// </summary>
+        /// <param name="id">Stable named-type identity.</param>
+        /// <param name="fields">Canonical structural fields.</param>
+        /// <param name="constraints">Type-level semantic constraints.</param>
+        /// <param name="annotations">Optional structural-type annotations.</param>
+        /// <param name="name">Optional display name.</param>
+        /// <exception cref="ArgumentException">
+        /// <paramref name="fields"/> contains a null entry, an empty field identity, or an ambiguous field identity.
+        /// </exception>
         [JsonConstructor]
         public Structural(
             TypeId id,
@@ -324,7 +332,13 @@ public abstract partial record TypeDefinition
     {
         var identityMap = ImmutableDictionary.CreateBuilder<string, StructuralField>(StringComparer.Ordinal);
         foreach (var field in fields)
+        {
+            if (field is null)
+                throw new ArgumentException("Structural fields cannot contain null entries.", paramName);
+            if (string.IsNullOrWhiteSpace(field.Name.Value))
+                throw new ArgumentException("Structural fields must have non-empty identities.", paramName);
             RegisterIdentity(field.Name.Value, field, identityMap, paramName);
+        }
 
         return [..identityMap];
     }

@@ -687,7 +687,14 @@ public sealed class RelationQueryIRTests
                             new ProjectionAssignment(
                                 new QueryAssignmentId("call"),
                                 FieldPath.FromField("Call"),
-                                Expr.Call("normalize", Expr.Const("value")))
+                                Expr.Call("normalize", Expr.Const("value"))),
+                            new ProjectionAssignment(
+                                new QueryAssignmentId("explicit-opaque"),
+                                FieldPath.FromField("ExplicitOpaque"),
+                                new CallExpr(
+                                    "normalize",
+                                    [Expr.Const("value")],
+                                    new OpaqueRuntimeTypeRef("sample.RuntimeValue")))
                         ]
                     }
                 ]
@@ -700,6 +707,43 @@ public sealed class RelationQueryIRTests
         AssertDiagnostic(result, "relationQuery.type.opaqueRuntimeUnsupported");
         var exception = Assert.Throws<ArgumentException>(() => RelationQueryDocument.FromDefinition(invalid));
         Assert.Contains("relationQuery.value.kindUnsupported", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DefinitionValidator_AllowsUnspecifiedDerivedResultMetadata()
+    {
+        var relation = CreateLoadSearchRelation();
+        var project = Assert.Single(relation.Body.Nodes.OfType<ProjectQueryNode>());
+        var definition = relation with
+        {
+            Body = relation.Body with
+            {
+                Nodes =
+                [
+                    .. relation.Body.Nodes.Where(static node => node is not ProjectQueryNode),
+                    project with
+                    {
+                        Assignments =
+                        [
+                            new ProjectionAssignment(
+                                new QueryAssignmentId("conditional"),
+                                FieldPath.FromField("Conditional"),
+                                Expr.If(Expr.Const(true), Expr.Const("yes"), Expr.Const("no"))),
+                            new ProjectionAssignment(
+                                new QueryAssignmentId("call"),
+                                FieldPath.FromField("Call"),
+                                Expr.Call(ExprFunctionNames.Concat, Expr.Const("a"), Expr.Const("b")))
+                        ]
+                    }
+                ]
+            }
+        };
+
+        var result = RelationQueryDefinitionValidator.Validate(definition);
+
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            static diagnostic => diagnostic.Code == "relationQuery.type.opaqueRuntimeUnsupported");
     }
 
     [Fact]

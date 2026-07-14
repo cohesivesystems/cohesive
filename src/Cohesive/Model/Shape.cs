@@ -15,6 +15,14 @@ public sealed record Shape
     /// <summary>
     /// Creates a shape definition.
     /// </summary>
+    /// <param name="id">Stable local shape identity.</param>
+    /// <param name="fields">Canonical field definitions.</param>
+    /// <param name="constraints">Shape-level semantic constraints.</param>
+    /// <param name="annotations">Optional shape annotations.</param>
+    /// <param name="role">Optional standard shape role projected into annotations.</param>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="fields"/> contains a null entry, an empty field identity, or an ambiguous field identity.
+    /// </exception>
     [JsonConstructor]
     public Shape(
         ShapeId id,
@@ -201,7 +209,13 @@ public sealed record Shape
     {
         var identityMap = ImmutableDictionary.CreateBuilder<string, FieldDefinition>(StringComparer.Ordinal);
         foreach (var field in fields)
+        {
+            if (field is null)
+                throw new ArgumentException("Shape fields cannot contain null entries.", paramName);
+            if (string.IsNullOrWhiteSpace(field.Name.Value))
+                throw new ArgumentException("Shape fields must have non-empty identities.", paramName);
             RegisterIdentity(field.Name.Value, field, identityMap, paramName);
+        }
         return [..identityMap];
         
         static void RegisterIdentity(

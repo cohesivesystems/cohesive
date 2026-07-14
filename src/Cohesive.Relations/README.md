@@ -632,6 +632,31 @@ Compilers must not silently weaken semantics.
 
 Interpreters should derive and acquire only the fields required by requested outputs, predicates, joins, ordering, aggregation, invariants, and diagnostics.
 
+### Explicit expression sites
+
+Every expression in canonical relation/query IR is analyzed at its semantic site. Filters see
+their input bindings, joins see the combined left and right environments before outer-join absence
+is applied, projections and aggregates see their input environments, and relation output keys and
+invariants see the shaped output environment. Keyset continuation expressions see query
+parameters but no row bindings or row-dependent ambient capabilities.
+
+The shared `Cohesive.Model` expression analyzer derives requirements from these scopes. Relations
+adds topology-derived binding shape and availability, target-field expectations, and stable site
+identity; it does not maintain a separate expression language. This analysis is a compiler-front
+end rather than an execution plan. SQL, document, graph, search, and in-memory compilers can match
+the resulting requirements against their own capability profiles and retain diagnostics and
+provenance to the originating site.
+
+Supplied shape-graph snapshots are retained exactly for provenance. Snapshots with semantic
+errors are diagnosed and quarantined from scope and target resolution, so invalid schema data
+cannot silently influence inferred contracts.
+
+This front-end intentionally stops short of full cross-expression type inference. Exact selector-to-
+aggregate-result correlation, keyset-boundary-to-order-key correlation, graph resolution for
+nested `NamedTypeRef` source paths, and a common-domain/coercion model for mixed comparison
+operands belong to the subsequent inference layer. Current analysis reports what it can prove and
+does not silently invent conversion semantics for those cases.
+
 ### Explicit missing-data semantics
 
 Missing, null, absent, unavailable, and failed are not interchangeable states.

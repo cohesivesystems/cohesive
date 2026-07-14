@@ -221,6 +221,8 @@ public sealed class ShapeGraph
         {
             foreach (var field in shape.Fields)
             {
+                if (field is null)
+                    continue;
                 foreach (var referencedType in EnumerateNamedTypeReferences(field.Type))
                 {
                     if (namedTypeIds.Contains(referencedType))
@@ -249,6 +251,8 @@ public sealed class ShapeGraph
             case TypeDefinition.Structural structural:
                 foreach (var field in structural.Fields)
                 {
+                    if (field is null)
+                        continue;
                     foreach (var referencedType in EnumerateNamedTypeReferences(field.Type))
                     {
                         if (namedTypeIds.Contains(referencedType))
@@ -289,8 +293,11 @@ public sealed class ShapeGraph
         }
     }
 
-    static IEnumerable<TypeId> EnumerateNamedTypeReferences(TypeRef type)
+    static IEnumerable<TypeId> EnumerateNamedTypeReferences(TypeRef? type)
     {
+        if (type is null)
+            yield break;
+
         switch (type)
         {
             case NamedTypeRef named:

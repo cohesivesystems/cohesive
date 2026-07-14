@@ -67,3 +67,19 @@ public sealed class Load : Entity<Load>
 - `Cohesive.Processes` for workflows that invoke entity transitions.
 - `Cohesive.Storage` for persistence adapters.
 - `Cohesive.Analyzers` for source-generation support around authoring patterns.
+
+## Expression Sites
+
+Transition expressions use the shared, non-generic `Cohesive.Model.Expr` IR and expression
+requirements analyzer. The transition model supplies a different scope for each semantic site:
+
+- Preconditions see entity state and declared transition inputs and must produce a Boolean.
+- Field updates see entity state and transition inputs and must satisfy the target field contract.
+- Computed fields see entity state without transition inputs and must satisfy their field contract.
+- Entity invariants see resulting entity state without transition inputs and must produce a
+  Boolean.
+
+These scopes are compiler-front-end descriptions, not serialized CLR evaluation contexts. The
+transition runtime keeps its own state and input objects, while analysis exposes portable field,
+parameter, function, operator, and ambient-capability requirements for validation, dependency
+analysis, documentation, and future interpreters.

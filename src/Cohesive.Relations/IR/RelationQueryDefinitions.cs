@@ -20,12 +20,16 @@ public sealed record QueryParameterDefinition
     /// <paramref name="presence"/> is <see cref="FieldPresence.Required"/> and
     /// <paramref name="defaultValue"/> is not <see langword="null"/>.
     /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="presence"/> is unsupported.</exception>
     public QueryParameterDefinition(
         QueryParameterId id,
         TypeRef type,
         FieldPresence presence = FieldPresence.Required,
         ObservationValue? defaultValue = null)
     {
+        if (!Enum.IsDefined(presence))
+            throw new ArgumentOutOfRangeException(nameof(presence), presence, "Unsupported parameter presence.");
+
         Id = id;
         Type = Guard.RequireNotNull(type);
         Presence = presence;
@@ -160,12 +164,16 @@ public sealed record RelationOutputDefinition
     /// <param name="shape">Semantic shape of every output row.</param>
     /// <param name="mode">Output cardinality relative to relation roots.</param>
     /// <param name="key">Optional expression defining stable output identity.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="mode"/> is unsupported.</exception>
     public RelationOutputDefinition(
         QueryNodeId node,
         QualifiedShapeId shape,
         RelationOutputMode mode,
         Expr? key = null)
     {
+        if (!Enum.IsDefined(mode))
+            throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unsupported relation output mode.");
+
         Node = node;
         Shape = shape;
         Mode = mode;

@@ -3,6 +3,7 @@ using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Linq.Expressions;
 using System.Reflection;
+using Cohesive.Model.Expressions;
 using Cohesive.Relations.Model;
 using ConditionalExpr = Cohesive.Model.ConditionalExpr;
 using LinqExpression = System.Linq.Expressions.Expression;
@@ -24,7 +25,7 @@ sealed class RelExpressionEvaluator
     static readonly ConcurrentDictionary<Expr, Func<RelationEvaluationContext, RelationEvaluationResult>> Compiled = [];
 
     static readonly FieldPath[] EmptySourcePaths = [];
-    static readonly FieldPath[] CurrentObservationSourcePaths = [FieldPath.Parse("item")];
+    static readonly FieldPath[] CurrentObservationSourcePaths = [FieldPath.FromField(ExprFieldRoots.CurrentItem)];
 
     static readonly MethodInfo CreateConstantResultMethod = GetMethod(nameof(CreateConstantResult));
     static readonly MethodInfo EvaluateFieldPathResultMethod = GetMethod(nameof(EvaluateFieldPathResult));
@@ -276,24 +277,13 @@ sealed class RelExpressionEvaluator
                 ? sourceValue
                 : ObservationValue.Null;
 
-        if (string.Equals(rootToken, "current", StringComparison.Ordinal))
-        {
-            if (context.CurrentObservation is not null && TryReadFromObservation(context.CurrentObservation, segments, startIndex: 1, out var currentValue))
-                return currentValue;
-
-            return ObservationValue.Null;
-        }
-
-        if (string.Equals(rootToken, "item", StringComparison.Ordinal))
+        if (string.Equals(rootToken, ExprFieldRoots.CurrentItem, StringComparison.Ordinal))
         {
             if (context.CurrentObservation is not null && TryReadFromObservation(context.CurrentObservation, segments, startIndex: 1, out var itemValue))
                 return itemValue;
 
             return ObservationValue.Null;
         }
-
-        if (context.CurrentObservation is not null && TryReadFromObservation(context.CurrentObservation, segments, startIndex: 0, out var currentDefaultValue))
-            return currentDefaultValue;
 
         if (TryReadFromObservation(context.Root.Observation, segments, startIndex: 0, out var rootValue))
             return rootValue;
