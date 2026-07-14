@@ -374,7 +374,9 @@ public sealed record ProjectQueryNode : LogicalQueryNode
     /// <param name="resultBinding">Binding introduced for each projected value.</param>
     /// <param name="resultShape">Semantic shape produced by the projection.</param>
     /// <param name="assignments">Field assignments forming the projected shape.</param>
-    /// <exception cref="ArgumentException"><paramref name="assignments"/> is default or empty.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="assignments"/> is default or empty, or contains a <see langword="null"/> entry.
+    /// </exception>
     public ProjectQueryNode(
         QueryNodeId id,
         QueryNodeId input,
@@ -390,6 +392,8 @@ public sealed record ProjectQueryNode : LogicalQueryNode
 
         if (Assignments.IsDefaultOrEmpty)
             throw new ArgumentException("Projection requires at least one assignment.", nameof(assignments));
+        if (Assignments.Any(static assignment => assignment is null))
+            throw new ArgumentException("Projection assignments cannot contain null entries.", nameof(assignments));
     }
 
     /// <summary>Input rowset.</summary>
@@ -476,6 +480,7 @@ public sealed record QueryAggregateAssignment
     /// <paramref name="value"/> is <see langword="null"/> for an <paramref name="operation"/> other than
     /// <see cref="AggregateOperator.Count"/>.
     /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="operation"/> is unsupported.</exception>
     public QueryAggregateAssignment(
         QueryAssignmentId id,
         FieldPath target,
@@ -489,6 +494,8 @@ public sealed record QueryAggregateAssignment
         Value = value;
         Filter = filter;
 
+        if (!Enum.IsDefined(Operation))
+            throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unsupported aggregate operation.");
         if (Operation != AggregateOperator.Count && Value is null)
             throw new ArgumentException($"Aggregate operation '{Operation}' requires a value expression.", nameof(value));
     }
@@ -522,7 +529,10 @@ public sealed record AggregateQueryNode : LogicalQueryNode
     /// <param name="resultShape">Semantic shape produced by aggregation.</param>
     /// <param name="groupings">Grouping fields in the aggregate output.</param>
     /// <param name="aggregates">Aggregate fields in the aggregate output.</param>
-    /// <exception cref="ArgumentException"><paramref name="aggregates"/> is default or empty.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="aggregates"/> is default or empty, or <paramref name="groupings"/> or
+    /// <paramref name="aggregates"/> contains a <see langword="null"/> entry.
+    /// </exception>
     public AggregateQueryNode(
         QueryNodeId id,
         QueryNodeId input,
@@ -540,6 +550,10 @@ public sealed record AggregateQueryNode : LogicalQueryNode
 
         if (Aggregates.IsDefaultOrEmpty)
             throw new ArgumentException("Aggregate node requires at least one aggregate assignment.", nameof(aggregates));
+        if (Groupings.Any(static grouping => grouping is null))
+            throw new ArgumentException("Aggregate groupings cannot contain null entries.", nameof(groupings));
+        if (Aggregates.Any(static aggregate => aggregate is null))
+            throw new ArgumentException("Aggregate assignments cannot contain null entries.", nameof(aggregates));
     }
 
     /// <summary>Input rowset.</summary>
@@ -571,6 +585,9 @@ public sealed record QueryOrdering
     /// <param name="direction">Sort direction.</param>
     /// <param name="nullPlacement">Placement of null and missing values.</param>
     /// <exception cref="ArgumentNullException"><paramref name="key"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="direction"/> or <paramref name="nullPlacement"/> is unsupported.
+    /// </exception>
     public QueryOrdering(
         Expr key,
         QuerySortDirection direction = QuerySortDirection.Ascending,
@@ -579,6 +596,11 @@ public sealed record QueryOrdering
         Key = Guard.RequireNotNull(key);
         Direction = direction;
         NullPlacement = nullPlacement;
+
+        if (!Enum.IsDefined(Direction))
+            throw new ArgumentOutOfRangeException(nameof(direction), direction, "Unsupported query sort direction.");
+        if (!Enum.IsDefined(NullPlacement))
+            throw new ArgumentOutOfRangeException(nameof(nullPlacement), nullPlacement, "Unsupported query null placement.");
     }
 
     /// <summary>Ordering key expression.</summary>
@@ -600,7 +622,9 @@ public sealed record OrderQueryNode : LogicalQueryNode
     /// <param name="id">Stable node identifier.</param>
     /// <param name="input">Input rowset.</param>
     /// <param name="orderings">Ordered keys, from primary to final tie-breaker.</param>
-    /// <exception cref="ArgumentException"><paramref name="orderings"/> is default or empty.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="orderings"/> is default or empty, or contains a <see langword="null"/> entry.
+    /// </exception>
     public OrderQueryNode(QueryNodeId id, QueryNodeId input, ImmutableArray<QueryOrdering> orderings)
         : base(id)
     {
@@ -609,6 +633,8 @@ public sealed record OrderQueryNode : LogicalQueryNode
 
         if (Orderings.IsDefaultOrEmpty)
             throw new ArgumentException("Order node requires at least one ordering.", nameof(orderings));
+        if (Orderings.Any(static ordering => ordering is null))
+            throw new ArgumentException("Orderings cannot contain null entries.", nameof(orderings));
     }
 
     /// <summary>Input rowset.</summary>

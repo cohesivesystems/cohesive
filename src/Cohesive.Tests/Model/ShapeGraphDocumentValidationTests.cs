@@ -32,6 +32,64 @@ public sealed class ShapeGraphDocumentValidationTests
     }
 
     [Fact]
+    public void ShapeGraphDocumentSemanticValidator_RejectsDefaultGraphIdentity()
+    {
+        var document = ShapeGraphDocument.FromGraph(new ShapeGraph(
+            id: default,
+            shapes: [new Shape(new("shape"), [])]));
+
+        var result = ShapeGraphDocumentSemanticValidator.Validate(document);
+
+        Assert.Contains(result.Diagnostics, static diagnostic => diagnostic.Code == "shapeGraph.id.missing");
+    }
+
+    [Fact]
+    public void Shape_RejectsBypassedEmptyFieldIdentityAtConstructionBoundary()
+    {
+        var malformed = new FieldDefinition(
+            new("value"),
+            new ScalarTypeRef(ScalarTypeKind.String)) with
+        {
+            Name = default
+        };
+
+        var exception = Assert.Throws<ArgumentException>(() => new Shape(
+            new("shape.invalid-field-name"),
+            [malformed]));
+
+        Assert.Equal("fields", exception.ParamName);
+    }
+
+    [Fact]
+    public void ShapeGraphDocumentSemanticValidator_RejectsInvalidFieldValueMetadata()
+    {
+        var field = new FieldDefinition(
+            new("value"),
+            new ScalarTypeRef(ScalarTypeKind.String)) with
+        {
+            Type = null!,
+            Cardinality = (FieldCardinality)997,
+            Presence = (FieldPresence)998,
+            Nullability = (FieldNullability)999
+        };
+        var graph = new ShapeGraph(
+            new("graph.invalid-fields"),
+            [new Shape(new("shape.invalid-fields"), [field])]);
+
+        var result = ShapeGraphDocumentSemanticValidator.Validate(
+            ShapeGraphDocument.FromGraph(graph));
+
+        Assert.Contains(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == "shapeGraph.field.type.missing");
+        Assert.Contains(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == "shapeGraph.field.cardinality.invalid");
+        Assert.Contains(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == "shapeGraph.field.presence.invalid");
+        Assert.Contains(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == "shapeGraph.field.nullability.invalid");
+    }
+
+    [Fact]
     public void ShapeGraphDocumentValidator_RejectsMissingNamedTypeReference()
     {
         var graph = new ShapeGraph(

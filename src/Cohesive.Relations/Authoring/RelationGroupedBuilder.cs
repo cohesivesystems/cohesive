@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using Cohesive.Model;
+using Cohesive.Model.Expressions;
 using Cohesive.Relations.Model;
 
 namespace Cohesive.Relations.Authoring;
@@ -27,13 +28,15 @@ public sealed class RelationGroupedBuilder<TSource, TKey, TTarget>
     {
         ArgumentNullException.ThrowIfNull(selector);
 
-        var keyTranslator = RelExprTranslator.ForSource(keySelector.Parameters[0], prefix: "item.");
+        var keyTranslator = RelExprTranslator.ForSource(
+            keySelector.Parameters[0],
+            prefix: $"{ExprFieldRoots.CurrentItem}{FieldPath.Separator}");
         var keyExpression = keyTranslator.Translate(keySelector.Body);
         var forEach = Expr.Call(ExprFunctionNames.GroupByRows, Expr.Call(ExprFunctionNames.SourceRows), keyExpression);
 
         var projectionTranslator = RelExprTranslator.ForGroup(selector.Parameters[0]);
         var assignments = RelationDslCompiler.BuildAssignments<TTarget>(selector.Body, projectionTranslator);
-        var groupKey = Expr.Field("item.Id");
+        var groupKey = Expr.Field($"{ExprFieldRoots.CurrentItem}{FieldPath.Separator}Id");
 
         return RelationDslCompiler.BuildRelation(
             from: from,

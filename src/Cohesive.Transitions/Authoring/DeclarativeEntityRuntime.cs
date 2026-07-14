@@ -12,6 +12,19 @@ public sealed class DeclarativeEntityRuntime
 {
     static readonly ConditionalWeakTable<EntityDefinition, CompiledEntityPlan> PlanByEntityDefinition = [];
 
+    internal static IReadOnlySet<string> SupportedExpressionFunctions { get; } =
+        new HashSet<string>(StringComparer.Ordinal)
+        {
+            ExprFunctionNames.EntityId,
+            ExprFunctionNames.Count,
+            ExprFunctionNames.Object,
+            ExprFunctionNames.InsertAt,
+            ExprFunctionNames.InsertRangeAt,
+            ExprFunctionNames.Append,
+            ExprFunctionNames.AppendRange,
+            ExprFunctionNames.Concat
+        };
+
     readonly EntityDefinition entityDefinition;
     readonly Dictionary<string, FieldDefinition> fieldByIdentity;
     readonly IReadOnlyList<FieldDefinition> fieldsByOrdinal;

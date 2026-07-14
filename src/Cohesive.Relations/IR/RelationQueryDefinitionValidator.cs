@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Cohesive.Model.Expressions;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Model;
 
@@ -20,36 +21,69 @@ public static partial class RelationQueryDefinitionValidator
         ArgumentNullException.ThrowIfNull(definition);
 
         if (definition.Body is null)
-        {
-            return DocumentValidationResult.FromDiagnostics([
-                new(Code: "relationQuery.body.missing",
-                    Severity: DiagnosticSeverity.Error,
-                    Message: "A relation/query definition must contain a logical query body.",
-                    Location: "/definition/body")
-            ]);
-        }
+            return MissingBodyValidation();
 
-        ValidationContext context = new(definition);
+        var bindingFlow = RelationQueryBindingFlowAnalyzer.Analyze(definition);
+        return RelationQueryExpressionAnalyzer.AnalyzeWithBindingFlow(definition, bindingFlow).Validation;
+    }
+
+    /// <summary>
+    /// Validates a definition using a previously computed canonical binding-flow analysis.
+    /// </summary>
+    /// <param name="definition">Canonical relation or query definition to validate.</param>
+    /// <param name="bindingFlow">Binding flow computed for <paramref name="definition"/>.</param>
+    /// <returns>Structured semantic validation diagnostics.</returns>
+    internal static DocumentValidationResult ValidateStructureWithBindingFlow(
+        RelationQueryDefinition definition,
+        RelationQueryBindingFlowAnalysis bindingFlow)
+    {
+        if (definition.Body is null)
+            return MissingBodyValidation();
+
+        ValidationContext context = new(definition, bindingFlow);
         context.Validate();
         return DocumentValidationResult.FromDiagnostics(context.Diagnostics);
     }
 
-    sealed class ValidationContext(RelationQueryDefinition definition)
+    static DocumentValidationResult MissingBodyValidation() =>
+        DocumentValidationResult.FromDiagnostics([
+            new(Code: "relationQuery.body.missing",
+                Severity: DiagnosticSeverity.Error,
+                Message: "A relation/query definition must contain a logical query body.",
+                Location: "/definition/body")
+        ]);
+
+    sealed class ValidationContext(
+        RelationQueryDefinition definition,
+        RelationQueryBindingFlowAnalysis bindingFlow)
     {
         readonly Dictionary<QueryNodeId, LogicalQueryNode> nodes = [];
-        readonly Dictionary<QueryNodeId, HashSet<ValueBindingId>> bindingsByNode = [];
-        readonly HashSet<QueryNodeId> visiting = [];
-        readonly HashSet<QueryNodeId> cycleReported = [];
-        readonly HashSet<string> parameters = new(StringComparer.Ordinal);
-
         public List<DocumentValidationDiagnostic> Diagnostics { get; } = [];
 
-        ImmutableArray<LogicalQueryNode> DefinitionNodes => definition.Body.Nodes.IsDefault ? [] : definition.Body.Nodes;
+        ImmutableArray<LogicalQueryNode> RawDefinitionNodes =>
+            definition.Body.Nodes.IsDefault ? [] : definition.Body.Nodes;
 
-        ImmutableArray<QueryParameterDefinition> DefinitionParameters => definition.Body.Parameters.IsDefault ? [] : definition.Body.Parameters;
+        ImmutableArray<LogicalQueryNode> DefinitionNodes =>
+            [.. RawDefinitionNodes.Where(static node => node is not null)];
+
+        ImmutableArray<QueryParameterDefinition> RawDefinitionParameters =>
+            definition.Body.Parameters.IsDefault ? [] : definition.Body.Parameters;
+
+        ImmutableArray<QueryParameterDefinition> DefinitionParameters =>
+            [.. RawDefinitionParameters.Where(static parameter => parameter is not null)];
 
         public void Validate()
         {
+            ReportNullEntries(
+                RawDefinitionNodes,
+                "relationQuery.node.entryMissing",
+                "A logical query node entry cannot be null.",
+                "/definition/body/nodes");
+            ReportNullEntries(
+                RawDefinitionParameters,
+                "relationQuery.parameter.entryMissing",
+                "A query parameter entry cannot be null.",
+                "/definition/body/parameters");
             if (DefinitionNodes.IsDefaultOrEmpty)
             {
                 Add(code: "relationQuery.body.nodesEmpty",
@@ -60,6 +94,8 @@ public static partial class RelationQueryDefinitionValidator
             IndexParameters();
             IndexNodes();
             ValidateNodeReferences();
+            Diagnostics.AddRange(bindingFlow.StructuralDiagnostics);
+            ValidateNodeExpressions();
             ValidateDefinitionRoots();
             ValidateReachability();
         }
@@ -73,14 +109,6 @@ public static partial class RelationQueryDefinitionValidator
                     code: "relationQuery.parameter.idMissing",
                     message: "A query parameter must have a non-empty id.",
                     location: "/definition/body/parameters");
-
-                if (!parameters.Add(parameter.Id.Value))
-                {
-                    Add(
-                        code: "relationQuery.parameter.duplicateId",
-                        message: $"Duplicate query parameter id '{parameter.Id.Value}'.",
-                        location: $"/definition/body/parameters/{parameter.Id.Value}");
-                }
 
                 if (parameter.Type is null)
                 {
@@ -96,6 +124,14 @@ public static partial class RelationQueryDefinitionValidator
                         $"/definition/body/parameters/{parameter.Id.Value}/type");
                 }
 
+                if (!Enum.IsDefined(parameter.Presence))
+                {
+                    Add(
+                        code: "relationQuery.parameter.presenceInvalid",
+                        message: $"Query parameter '{parameter.Id.Value}' declares unsupported presence '{parameter.Presence}'.",
+                        location: $"/definition/body/parameters/{parameter.Id.Value}/presence");
+                }
+
                 if (parameter.Presence == FieldPresence.Required && parameter.DefaultValue is not null)
                 {
                     Add(
@@ -109,29 +145,68 @@ public static partial class RelationQueryDefinitionValidator
                     ValidatePortableObservationValue(
                         defaultValue,
                         $"/definition/body/parameters/{parameter.Id.Value}/defaultValue");
+                    if (parameter.Type is not null
+                        && !new ExprValueContract(
+                                parameter.Type,
+                                presence: FieldPresence.Optional,
+                                nullability: FieldNullability.Nullable)
+                            .IsSatisfiedByConstant(defaultValue))
+                    {
+                        Add(
+                            code: "relationQuery.parameter.defaultTypeMismatch",
+                            message: $"Query parameter '{parameter.Id.Value}' has a default value that does not satisfy its declared type.",
+                            location: $"/definition/body/parameters/{parameter.Id.Value}/defaultValue");
+                    }
                 }
+            }
+
+            foreach (var duplicate in DefinitionParameters
+                         .GroupBy(static parameter => parameter.Id.Value, StringComparer.Ordinal)
+                         .Where(static group => group.Count() > 1)
+                         .OrderBy(static group => group.Key, StringComparer.Ordinal))
+            {
+                Add(
+                    code: "relationQuery.parameter.duplicateId",
+                    message: $"Duplicate query parameter id '{duplicate.Key}'.",
+                    location: $"/definition/body/parameters/{duplicate.Key}");
             }
         }
 
         void IndexNodes()
         {
-            HashSet<ValueBindingId> sourceBindings = [];
             foreach (var node in DefinitionNodes)
-            {
                 ValidateNodeLocal(node);
-                if (!nodes.TryAdd(node.Id, node))
+
+            foreach (var group in DefinitionNodes
+                         .GroupBy(static node => node.Id)
+                         .OrderBy(static group => group.Key.Value, StringComparer.Ordinal))
+            {
+                var candidates = group.Take(2).ToArray();
+                if (candidates.Length > 1)
                 {
                     Add(code: "relationQuery.node.duplicateId",
-                        message: $"Duplicate logical query node id '{node.Id.Value}'.",
-                        location: NodeLocation(node.Id));
+                        message: $"Duplicate logical query node id '{group.Key.Value}'.",
+                        location: NodeLocation(group.Key));
+                    continue;
                 }
 
-                if (node is SourceQueryNode source && !sourceBindings.Add(source.Binding))
-                {
-                    Add(code: "relationQuery.binding.duplicateSource",
-                        message: $"Source binding '{source.Binding.Value}' is declared by more than one source node.",
-                        location: NodeLocation(node.Id));
-                }
+                nodes.Add(group.Key, candidates[0]);
+            }
+
+            foreach (var duplicate in nodes.Values
+                         .OfType<SourceQueryNode>()
+                         .GroupBy(static source => source.Binding)
+                         .Where(static group => group.Count() > 1)
+                         .OrderBy(static group => group.Key.Value, StringComparer.Ordinal))
+            {
+                var location = duplicate
+                    .Select(static source => source.Id)
+                    .OrderBy(static id => id.Value, StringComparer.Ordinal)
+                    .First();
+                Add(
+                    code: "relationQuery.binding.duplicateSource",
+                    message: $"Source binding '{duplicate.Key.Value}' is declared by more than one source node.",
+                    location: NodeLocation(location));
             }
         }
 
@@ -156,9 +231,6 @@ public static partial class RelationQueryDefinitionValidator
                     }
                 }
             }
-
-            foreach (var node in DefinitionNodes)
-                _ = ResolveBindings(node.Id);
         }
 
         void ValidateNodeLocal(LogicalQueryNode node)
@@ -236,6 +308,13 @@ public static partial class RelationQueryDefinitionValidator
                             message: $"Projection node '{project.Id.Value}' must contain at least one assignment.",
                             location: $"{NodeLocation(project.Id)}/assignments");
                     }
+                    else if (project.Assignments.Any(static assignment => assignment is null))
+                    {
+                        Add(
+                            code: "relationQuery.project.assignmentMissing",
+                            message: $"Projection node '{project.Id.Value}' contains a missing assignment entry.",
+                            location: $"{NodeLocation(project.Id)}/assignments");
+                    }
                     break;
                 case AggregateQueryNode aggregate:
                     ValidateBinding(aggregate.ResultBinding, aggregate.Id, "resultBinding");
@@ -247,11 +326,33 @@ public static partial class RelationQueryDefinitionValidator
                             message: $"Aggregate node '{aggregate.Id.Value}' must contain at least one aggregate assignment.",
                             location: $"{NodeLocation(aggregate.Id)}/aggregates");
                     }
+                    else if (aggregate.Aggregates.Any(static assignment => assignment is null))
+                    {
+                        Add(
+                            code: "relationQuery.aggregate.assignmentMissing",
+                            message: $"Aggregate node '{aggregate.Id.Value}' contains a missing aggregate assignment entry.",
+                            location: $"{NodeLocation(aggregate.Id)}/aggregates");
+                    }
+                    if (!aggregate.Groupings.IsDefault
+                        && aggregate.Groupings.Any(static grouping => grouping is null))
+                    {
+                        Add(
+                            code: "relationQuery.aggregate.groupingMissing",
+                            message: $"Aggregate node '{aggregate.Id.Value}' contains a missing grouping entry.",
+                            location: $"{NodeLocation(aggregate.Id)}/groupings");
+                    }
 
                     foreach (var assignment in aggregate.Aggregates.IsDefault
                                  ? []
-                                 : aggregate.Aggregates)
+                                 : aggregate.Aggregates.Where(static assignment => assignment is not null))
                     {
+                        if (!Enum.IsDefined(assignment.Operation))
+                        {
+                            Add(
+                                code: "relationQuery.aggregate.operationInvalid",
+                                message: $"Aggregate assignment '{assignment.Id.Value}' declares an unsupported operation value.",
+                                location: $"{NodeLocation(aggregate.Id)}/aggregates/{assignment.Id.Value}/operation");
+                        }
                         if (assignment.Operation != AggregateOperator.Count && assignment.Value is null)
                         {
                             Add(
@@ -266,6 +367,32 @@ public static partial class RelationQueryDefinitionValidator
                         code: "relationQuery.order.orderingsEmpty",
                         message: $"Order node '{order.Id.Value}' must contain at least one ordering.",
                         location: $"{NodeLocation(order.Id)}/orderings");
+                    break;
+                case OrderQueryNode order when order.Orderings.Any(static ordering => ordering is null):
+                    Add(
+                        code: "relationQuery.order.orderingMissing",
+                        message: $"Order node '{order.Id.Value}' contains a missing ordering entry.",
+                        location: $"{NodeLocation(order.Id)}/orderings");
+                    break;
+                case OrderQueryNode order:
+                    for (var index = 0; index < order.Orderings.Length; index++)
+                    {
+                        var ordering = order.Orderings[index];
+                        if (!Enum.IsDefined(ordering.Direction))
+                        {
+                            Add(
+                                code: "relationQuery.order.directionInvalid",
+                                message: $"Order node '{order.Id.Value}' contains an unsupported sort direction.",
+                                location: $"{NodeLocation(order.Id)}/orderings/{index}/direction");
+                        }
+                        if (!Enum.IsDefined(ordering.NullPlacement))
+                        {
+                            Add(
+                                code: "relationQuery.order.nullPlacementInvalid",
+                                message: $"Order node '{order.Id.Value}' contains an unsupported null placement.",
+                                location: $"{NodeLocation(order.Id)}/orderings/{index}/nullPlacement");
+                        }
+                    }
                     break;
                 case PageQueryNode { Page: null } page:
                     Add(
@@ -292,186 +419,129 @@ public static partial class RelationQueryDefinitionValidator
             }
         }
 
-        HashSet<ValueBindingId> ResolveBindings(QueryNodeId nodeId)
+        HashSet<ValueBindingId> ResolveBindings(QueryNodeId nodeId) =>
+            [.. bindingFlow.GetOutput(nodeId).Bindings.Keys];
+
+        void ValidateNodeExpressions()
         {
-            if (bindingsByNode.TryGetValue(nodeId, out var cached))
-                return cached;
-
-            if (!nodes.TryGetValue(nodeId, out var node))
-                return [];
-
-            if (!visiting.Add(nodeId))
+            foreach (var node in DefinitionNodes.OrderBy(static node => node.Id.Value, StringComparer.Ordinal))
             {
-                if (cycleReported.Add(nodeId))
+                switch (node)
                 {
-                    Add(
-                        code: "relationQuery.node.cycle",
-                        message: $"Logical query graph contains a cycle involving node '{nodeId.Value}'.",
-                        location: NodeLocation(nodeId));
+                    case FilterQueryNode filter:
+                        ValidateExpressionPortability(filter.Predicate, $"{NodeLocation(filter.Id)}/predicate");
+                        break;
+                    case JoinQueryNode join:
+                        ValidateExpressionPortability(join.Predicate, $"{NodeLocation(join.Id)}/predicate");
+                        break;
+                    case ExpandCollectionQueryNode expansion:
+                        ValidateExpressionPortability(expansion.Collection, $"{NodeLocation(expansion.Id)}/collection");
+                        break;
+                    case ProjectQueryNode project:
+                        ValidateAssignments(
+                            (project.Assignments.IsDefault ? [] : project.Assignments)
+                            .Where(static assignment => assignment is not null)
+                            .Select(static assignment => (assignment.Id, assignment.Target, assignment.Value)),
+                            project.Id);
+                        break;
+                    case DistinctQueryNode distinct:
+                        var distinctKeys = distinct.Keys.IsDefault ? [] : distinct.Keys;
+                        for (var index = 0; index < distinctKeys.Length; index++)
+                        {
+                            ValidateExpressionPortability(
+                                distinctKeys[index],
+                                $"{NodeLocation(distinct.Id)}/keys/{index}");
+                        }
+                        break;
+                    case AggregateQueryNode aggregate:
+                        ValidateAggregateExpressions(aggregate);
+                        break;
+                    case OrderQueryNode order:
+                        var orderings = order.Orderings.IsDefault ? [] : order.Orderings;
+                        for (var index = 0; index < orderings.Length; index++)
+                        {
+                            if (orderings[index] is not { } ordering)
+                                continue;
+                            ValidateExpressionPortability(
+                                ordering.Key,
+                                $"{NodeLocation(order.Id)}/orderings/{index}/key");
+                        }
+                        break;
+                    case PageQueryNode page:
+                        ValidatePageExpressions(page);
+                        break;
                 }
-                return [];
             }
-
-            var bindings = node switch
-            {
-                SourceQueryNode source => [source.Binding],
-                FilterQueryNode filter => PreserveAndValidate(filter, filter.Input, filter.Predicate),
-                TraverseRelationshipQueryNode traversal => ValidateTraversal(traversal),
-                JoinQueryNode join => ValidateJoin(join),
-                ExpandCollectionQueryNode expansion => ValidateExpandCollection(expansion),
-                ProjectQueryNode project => ValidateProject(project),
-                DistinctQueryNode distinct => ValidateDistinct(distinct),
-                AggregateQueryNode aggregate => ValidateAggregate(aggregate),
-                OrderQueryNode order => ValidateOrder(order),
-                PageQueryNode page => ValidatePage(page),
-                _ => []
-            };
-
-            visiting.Remove(nodeId);
-            bindingsByNode[nodeId] = bindings;
-            return bindings;
         }
 
-        HashSet<ValueBindingId> PreserveAndValidate(LogicalQueryNode node, QueryNodeId input, Expr expression)
+        void ValidateAggregateExpressions(AggregateQueryNode aggregate)
         {
-            var bindings = CopyBindings(input);
-            ValidateExpression(expression, bindings, NodeLocation(node.Id));
-            return bindings;
-        }
-
-        HashSet<ValueBindingId> ValidateTraversal(TraverseRelationshipQueryNode traversal)
-        {
-            var bindings = CopyBindings(traversal.Input);
-            if (!bindings.Contains(traversal.From))
-            {
-                Add(
-                    code: "relationQuery.traversal.sourceBindingMissing",
-                    message: $"Relationship traversal '{traversal.Id.Value}' references binding '{traversal.From.Value}' that is not visible from its input.",
-                    location: NodeLocation(traversal.Id));
-            }
-
-            if (!bindings.Add(traversal.Result))
-            {
-                Add(
-                    code: "relationQuery.traversal.resultBindingDuplicate",
-                    message: $"Relationship traversal '{traversal.Id.Value}' redeclares visible binding '{traversal.Result.Value}'.",
-                    location: NodeLocation(traversal.Id));
-            }
-            return bindings;
-        }
-
-        HashSet<ValueBindingId> ValidateJoin(JoinQueryNode join)
-        {
-            var left = CopyBindings(join.Left);
-            var right = CopyBindings(join.Right);
-            foreach (var duplicate in left.Intersect(right))
-            {
-                Add(
-                    code: "relationQuery.join.bindingCollision",
-                    message: $"Join '{join.Id.Value}' receives binding '{duplicate.Value}' from both inputs.",
-                    location: NodeLocation(join.Id));
-            }
-
-            left.UnionWith(right);
-            ValidateExpression(join.Predicate, left, NodeLocation(join.Id));
-            return left;
-        }
-
-        HashSet<ValueBindingId> ValidateExpandCollection(ExpandCollectionQueryNode expansion)
-        {
-            var bindings = CopyBindings(expansion.Input);
-            ValidateExpression(expansion.Collection, bindings, NodeLocation(expansion.Id));
-            if (!bindings.Add(expansion.ItemBinding))
-            {
-                Add(
-                    code: "relationQuery.expandCollection.itemBindingDuplicate",
-                    message: $"Collection-expansion node '{expansion.Id.Value}' redeclares visible binding '{expansion.ItemBinding.Value}'.",
-                    location: NodeLocation(expansion.Id));
-            }
-            return bindings;
-        }
-
-        HashSet<ValueBindingId> ValidateProject(ProjectQueryNode project)
-        {
-            var inputs = CopyBindings(project.Input);
-            ValidateAssignments(
-                (project.Assignments.IsDefault ? [] : project.Assignments)
-                .Select(static assignment => (assignment.Id, assignment.Target, assignment.Value)),
-                inputs,
-                project.Id);
-            return [project.ResultBinding];
-        }
-
-        HashSet<ValueBindingId> ValidateDistinct(DistinctQueryNode distinct)
-        {
-            var bindings = CopyBindings(distinct.Input);
-            foreach (var key in distinct.Keys)
-                ValidateExpression(key, bindings, NodeLocation(distinct.Id));
-            return bindings;
-        }
-
-        HashSet<ValueBindingId> ValidateAggregate(AggregateQueryNode aggregate)
-        {
-            var inputs = CopyBindings(aggregate.Input);
             HashSet<QueryAssignmentId> ids = [];
             HashSet<FieldPath> targets = [];
 
-            foreach (var grouping in aggregate.Groupings.IsDefault ? [] : aggregate.Groupings)
+            foreach (var grouping in (aggregate.Groupings.IsDefault ? [] : aggregate.Groupings)
+                         .Where(static grouping => grouping is not null)
+                         .OrderBy(static grouping => grouping.Id.Value, StringComparer.Ordinal))
             {
                 ValidateAssignmentIdentity(grouping.Id, grouping.Target, ids, targets, aggregate.Id);
-                ValidateExpression(grouping.Key, inputs, NodeLocation(aggregate.Id));
+                ValidateExpressionPortability(
+                    grouping.Key,
+                    $"{NodeLocation(aggregate.Id)}/groupings/{grouping.Id.Value}/key");
             }
 
-            foreach (var assignment in aggregate.Aggregates.IsDefault ? [] : aggregate.Aggregates)
+            foreach (var assignment in (aggregate.Aggregates.IsDefault ? [] : aggregate.Aggregates)
+                         .Where(static assignment => assignment is not null)
+                         .OrderBy(static assignment => assignment.Id.Value, StringComparer.Ordinal))
             {
                 ValidateAssignmentIdentity(assignment.Id, assignment.Target, ids, targets, aggregate.Id);
                 if (assignment.Value is not null)
-                    ValidateExpression(assignment.Value, inputs, NodeLocation(aggregate.Id));
+                {
+                    ValidateExpressionPortability(
+                        assignment.Value,
+                        $"{NodeLocation(aggregate.Id)}/aggregates/{assignment.Id.Value}/value");
+                }
                 if (assignment.Filter is not null)
-                    ValidateExpression(assignment.Filter, inputs, NodeLocation(aggregate.Id));
+                {
+                    ValidateExpressionPortability(
+                        assignment.Filter,
+                        $"{NodeLocation(aggregate.Id)}/aggregates/{assignment.Id.Value}/filter");
+                }
             }
-            return [aggregate.ResultBinding];
         }
 
-        HashSet<ValueBindingId> ValidateOrder(OrderQueryNode order)
+        void ValidatePageExpressions(PageQueryNode page)
         {
-            var bindings = CopyBindings(order.Input);
-            foreach (var ordering in order.Orderings.IsDefault ? [] : order.Orderings)
-                ValidateExpression(ordering.Key, bindings, NodeLocation(order.Id));
-            return bindings;
-        }
+            if (page.Page is not KeysetPageDefinition keyset)
+                return;
 
-        HashSet<ValueBindingId> ValidatePage(PageQueryNode page)
-        {
-            var bindings = CopyBindings(page.Input);
-            if (page.Page is KeysetPageDefinition keyset)
+            var after = keyset.After.IsDefault ? [] : keyset.After;
+            for (var index = 0; index < after.Length; index++)
             {
-                foreach (var expression in keyset.After)
-                    ValidateBoundaryExpression(expression, NodeLocation(page.Id));
-
-                if (nodes.TryGetValue(page.Input, out var input) && input is not OrderQueryNode)
-                {
-                    Add(
-                        code: "relationQuery.page.keysetRequiresOrder",
-                        message: $"Keyset page node '{page.Id.Value}' must consume an order node.",
-                        location: NodeLocation(page.Id));
-                }
-                else if (input is OrderQueryNode order
-                         && !keyset.After.IsDefaultOrEmpty
-                         && keyset.After.Length != order.Orderings.Length)
-                {
-                    Add(
-                        code: "relationQuery.page.keysetValueCountMismatch",
-                        message: $"Keyset page node '{page.Id.Value}' supplies {keyset.After.Length} continuation values for {order.Orderings.Length} ordering expressions.",
-                        location: NodeLocation(page.Id));
-                }
+                ValidateExpressionPortability(
+                    after[index],
+                    $"{NodeLocation(page.Id)}/page/after/{index}");
             }
-            return bindings;
+
+            if (nodes.TryGetValue(page.Input, out var input) && input is not OrderQueryNode)
+            {
+                Add(
+                    code: "relationQuery.page.keysetRequiresOrder",
+                    message: $"Keyset page node '{page.Id.Value}' must consume an order node.",
+                    location: NodeLocation(page.Id));
+            }
+            else if (input is OrderQueryNode order
+                     && !keyset.After.IsDefaultOrEmpty
+                     && keyset.After.Length != order.Orderings.Length)
+            {
+                Add(
+                    code: "relationQuery.page.keysetValueCountMismatch",
+                    message: $"Keyset page node '{page.Id.Value}' supplies {keyset.After.Length} continuation values for {order.Orderings.Length} ordering expressions.",
+                    location: NodeLocation(page.Id));
+            }
         }
 
         void ValidateAssignments(
             IEnumerable<(QueryAssignmentId Id, FieldPath Target, Expr Expression)> assignments,
-            IReadOnlySet<ValueBindingId> bindings,
             QueryNodeId nodeId)
         {
             HashSet<QueryAssignmentId> ids = [];
@@ -479,7 +549,9 @@ public static partial class RelationQueryDefinitionValidator
             foreach (var assignment in assignments)
             {
                 ValidateAssignmentIdentity(assignment.Id, assignment.Target, ids, targets, nodeId);
-                ValidateExpression(assignment.Expression, bindings, NodeLocation(nodeId));
+                ValidateExpressionPortability(
+                    assignment.Expression,
+                    $"{NodeLocation(nodeId)}/assignments/{assignment.Id.Value}/value");
             }
         }
 
@@ -495,7 +567,7 @@ public static partial class RelationQueryDefinitionValidator
                 code: "relationQuery.assignment.idMissing",
                 message: $"Node '{nodeId.Value}' contains an assignment with an empty id.",
                 location: NodeLocation(nodeId));
-            ValidateFieldPath(target, NodeLocation(nodeId));
+            var targetIsValid = ValidateFieldPath(target, NodeLocation(nodeId));
 
             if (!ids.Add(id))
             {
@@ -505,16 +577,16 @@ public static partial class RelationQueryDefinitionValidator
                     location: NodeLocation(nodeId));
             }
 
-            if (!targets.Add(target))
+            if (targetIsValid && !targets.Add(target))
             {
                 Add(
                     code: "relationQuery.assignment.duplicateTarget",
-                    message: $"Node '{nodeId.Value}' assigns target '{target}' more than once.",
+                    message: $"Node '{nodeId.Value}' assigns target '{SafePath(target)}' more than once.",
                     location: NodeLocation(nodeId));
             }
         }
 
-        void ValidateExpression(Expr expression, IReadOnlySet<ValueBindingId> bindings, string location)
+        void ValidateExpressionPortability(Expr expression, string location)
         {
             if (expression is null)
             {
@@ -529,43 +601,13 @@ public static partial class RelationQueryDefinitionValidator
             {
                 case FieldExpr field:
                     ValidateFieldPath(field.Path, location);
-                    if (field.Binding is { } binding && !bindings.Contains(binding))
-                    {
-                        Add(code: "relationQuery.expression.bindingMissing",
-                            message: $"Expression references binding '{binding.Value}' that is not visible at this node.",
-                            location: location);
-                    }
-                    else if (field.Binding is null && bindings.Count != 1)
-                    {
-                        Add(code: "relationQuery.expression.fieldBindingAmbiguous",
-                            message: "An unbound field expression is only valid when exactly one value binding is visible.",
-                            location: location);
-                    }
                     break;
                 case FieldRefExpr field:
                     ValidateFieldPath(field.Path, location);
-                    if (bindings.Count != 1)
-                    {
-                        Add(code: "relationQuery.expression.fieldBindingAmbiguous",
-                            message: "An unbound typed field expression is only valid when exactly one value binding is visible.",
-                            location: location);
-                    }
                     ValidatePortableType(field.Type, $"{location}/type");
                     break;
                 case CurrentItemExpr:
-                    Add(code: "relationQuery.expression.currentItemUnsupported",
-                        message: "Canonical relation/query IR requires explicit value bindings instead of current-item expressions.",
-                        location: location);
-                    break;
-                case ParameterExpr parameter when string.IsNullOrWhiteSpace(parameter.Parameter):
-                    Add(code: "relationQuery.expression.parameterIdMissing",
-                        message: "A parameter expression must reference a non-empty parameter id.",
-                        location: location);
-                    break;
-                case ParameterExpr parameter when !parameters.Contains(parameter.Parameter):
-                    Add(code: "relationQuery.expression.parameterMissing",
-                        message: $"Expression references undeclared query parameter '{parameter.Parameter}'.",
-                        location: location);
+                case ParameterExpr:
                     break;
                 case LiteralExpr literal:
                     ValidatePortableType(literal.Type, $"{location}/type");
@@ -575,92 +617,38 @@ public static partial class RelationQueryDefinitionValidator
                     ValidatePortableObservationValue(constant.Value, $"{location}/value");
                     break;
                 case UnaryExpr unary:
-                    ValidateExpression(unary.Operand, bindings, location);
+                    ValidateExpressionPortability(unary.Operand, $"{location}/operand");
                     break;
                 case BinaryExpr binary:
-                    ValidateExpression(binary.Left, bindings, location);
-                    ValidateExpression(binary.Right, bindings, location);
+                    ValidateExpressionPortability(binary.Left, $"{location}/left");
+                    ValidateExpressionPortability(binary.Right, $"{location}/right");
                     break;
                 case ConditionalExpr conditional:
-                    ValidatePortableType(conditional.ReturnType, $"{location}/returnType");
-                    ValidateExpression(conditional.Test, bindings, location);
-                    ValidateExpression(conditional.IfTrue, bindings, location);
-                    ValidateExpression(conditional.IfFalse, bindings, location);
+                    if (!IsUnspecifiedResultType(conditional.ReturnType))
+                        ValidatePortableType(conditional.ReturnType, $"{location}/returnType");
+                    ValidateExpressionPortability(conditional.Test, $"{location}/test");
+                    ValidateExpressionPortability(conditional.IfTrue, $"{location}/ifTrue");
+                    ValidateExpressionPortability(conditional.IfFalse, $"{location}/ifFalse");
                     break;
                 case CallExpr call:
-                    ValidatePortableType(call.ReturnType, $"{location}/returnType");
-                    foreach (var argument in call.Arguments)
-                        ValidateExpression(argument, bindings, location);
+                    if (!IsUnspecifiedResultType(call.ReturnType))
+                        ValidatePortableType(call.ReturnType, $"{location}/returnType");
+                    var arguments = call.Arguments.IsDefault ? [] : call.Arguments;
+                    for (var index = 0; index < arguments.Length; index++)
+                        ValidateExpressionPortability(arguments[index], $"{location}/arguments/{index}");
                     break;
                 case AggregateExpr aggregate:
-                    Add(
-                        code: "relationQuery.expression.aggregateUnsupported",
-                        message: "Canonical relation/query IR represents cardinality-changing aggregation with aggregate query nodes.",
-                        location: location);
-                    ValidateExpression(aggregate.Source, bindings, location);
-                    foreach (var group in aggregate.GroupBy)
-                        ValidateExpression(group, bindings, location);
+                    ValidatePortableType(aggregate.ReturnType, $"{location}/returnType");
+                    ValidateExpressionPortability(aggregate.Source, $"{location}/source");
+                    var groupings = aggregate.GroupBy.IsDefault ? [] : aggregate.GroupBy;
+                    for (var index = 0; index < groupings.Length; index++)
+                        ValidateExpressionPortability(groupings[index], $"{location}/groupBy/{index}");
                     break;
             }
         }
 
-        void ValidateBoundaryExpression(Expr expression, string location)
-        {
-            if (expression is null)
-            {
-                Add(code: "relationQuery.expression.missing",
-                    message: "A required relation/query expression is missing.",
-                    location: location);
-                return;
-            }
-
-            switch (expression)
-            {
-                case FieldExpr or FieldRefExpr or CurrentItemExpr or AggregateExpr:
-                    Add(
-                        code: "relationQuery.page.keysetBoundaryRowDependent",
-                        message: "Keyset continuation values must be independent of the row being paged.",
-                        location: location);
-                    break;
-                case ParameterExpr parameter when string.IsNullOrWhiteSpace(parameter.Parameter):
-                    Add(
-                        code: "relationQuery.expression.parameterIdMissing",
-                        message: "A parameter expression must reference a non-empty parameter id.",
-                        location: location);
-                    break;
-                case ParameterExpr parameter when !parameters.Contains(parameter.Parameter):
-                    Add(
-                        code: "relationQuery.expression.parameterMissing",
-                        message: $"Expression references undeclared query parameter '{parameter.Parameter}'.",
-                        location: location);
-                    break;
-                case LiteralExpr literal:
-                    ValidatePortableType(literal.Type, $"{location}/type");
-                    ValidatePortableObservationValue(literal.Value, $"{location}/value");
-                    break;
-                case ConstantExpr constant:
-                    ValidatePortableObservationValue(constant.Value, $"{location}/value");
-                    break;
-                case UnaryExpr unary:
-                    ValidateBoundaryExpression(unary.Operand, location);
-                    break;
-                case BinaryExpr binary:
-                    ValidateBoundaryExpression(binary.Left, location);
-                    ValidateBoundaryExpression(binary.Right, location);
-                    break;
-                case ConditionalExpr conditional:
-                    ValidatePortableType(conditional.ReturnType, $"{location}/returnType");
-                    ValidateBoundaryExpression(conditional.Test, location);
-                    ValidateBoundaryExpression(conditional.IfTrue, location);
-                    ValidateBoundaryExpression(conditional.IfFalse, location);
-                    break;
-                case CallExpr call:
-                    ValidatePortableType(call.ReturnType, $"{location}/returnType");
-                    foreach (var argument in call.Arguments)
-                        ValidateBoundaryExpression(argument, location);
-                    break;
-            }
-        }
+        static bool IsUnspecifiedResultType(TypeRef? type) =>
+            type is OpaqueRuntimeTypeRef { RuntimeType: "unknown" };
 
         void ValidateDefinitionRoots()
         {
@@ -751,6 +739,13 @@ public static partial class RelationQueryDefinitionValidator
                 relation.Output.Shape,
                 context: "A relation output",
                 location: "/definition/output/shape");
+            if (!Enum.IsDefined(relation.Output.Mode))
+            {
+                Add(
+                    code: "relationQuery.relation.outputModeInvalid",
+                    message: $"Relation output declares unsupported cardinality mode '{relation.Output.Mode}'.",
+                    location: "/definition/output/mode");
+            }
 
             if (!nodes.TryGetValue(relation.Output.Node, out var outputNode))
             {
@@ -780,15 +775,16 @@ public static partial class RelationQueryDefinitionValidator
                     location: "/definition/output/shape");
             }
 
-            var outputBindings = ResolveBindings(relation.Output.Node);
             if (relation.Output.Key is not null)
-                ValidateExpression(relation.Output.Key, outputBindings, "/definition/output/key");
+                ValidateExpressionPortability(relation.Output.Key, "/definition/output/key");
 
             for (var index = 0; index < invariants.Length; index++)
             {
                 var invariant = invariants[index];
                 if (invariant is not null)
-                    ValidateExpression(invariant.Expression, outputBindings, $"/definition/invariants/{index}/expression");
+                    ValidateExpressionPortability(
+                        invariant.Expression,
+                        $"/definition/invariants/{index}/expression");
             }
         }
 
@@ -815,8 +811,18 @@ public static partial class RelationQueryDefinitionValidator
             }
 
             HashSet<QueryResultId> ids = [];
-            foreach (var result in results)
+            for (var index = 0; index < results.Length; index++)
             {
+                var result = results[index];
+                if (result is null)
+                {
+                    Add(
+                        code: "relationQuery.query.resultMissing",
+                        message: "A query result entry cannot be null.",
+                        location: $"/definition/results/{index}");
+                    continue;
+                }
+
                 ValidateIdentifier(
                     result.Id.Value,
                     code: "relationQuery.query.resultIdMissing",
@@ -874,6 +880,7 @@ public static partial class RelationQueryDefinitionValidator
             {
                 RelationDefinition { Output: not null } relation => [relation.Output.Node],
                 QueryDefinition query => (query.Results.IsDefault ? [] : query.Results)
+                    .Where(static result => result is not null)
                     .Select(static result => result.Input),
                 _ => []
             };
@@ -909,6 +916,20 @@ public static partial class RelationQueryDefinitionValidator
                    || node.Inputs.Any(input => HasAggregateAncestry(input, visited));
         }
 
+        void ReportNullEntries<T>(
+            ImmutableArray<T> values,
+            string code,
+            string message,
+            string location)
+            where T : class
+        {
+            for (var index = 0; index < values.Length; index++)
+            {
+                if (values[index] is null)
+                    Add(code, message, $"{location}/{index}");
+            }
+        }
+
         void ValidateBinding(ValueBindingId binding, QueryNodeId nodeId, string property)
         {
             ValidateIdentifier(
@@ -938,15 +959,38 @@ public static partial class RelationQueryDefinitionValidator
                 location: $"{location}/shapeId");
         }
 
-        void ValidateFieldPath(FieldPath path, string location)
+        bool ValidateFieldPath(FieldPath path, string location)
         {
             if (path.Segments.IsDefaultOrEmpty)
             {
                 Add(code: "relationQuery.fieldPath.empty",
                     message: "A relation/query field path must contain at least one segment.",
                     location: location);
+                return false;
             }
+
+            if (path.Segments.Any(static segment => segment.Kind switch
+                {
+                    SegmentKind.Field => string.IsNullOrWhiteSpace(segment.Segment),
+                    SegmentKind.Element => segment.Segment is not null,
+                    _ => true
+                }))
+            {
+                Add(
+                    code: "relationQuery.fieldPath.segmentInvalid",
+                    message: "A relation/query field path contains an invalid segment.",
+                    location: location);
+                return false;
+            }
+
+            return true;
         }
+
+        static string SafePath(FieldPath path) => path.Segments.IsDefaultOrEmpty
+            ? "<invalid>"
+            : string.Join("/", path.Segments.Select(static segment => segment.Kind == SegmentKind.Element
+                ? "[]"
+                : segment.Segment ?? "<field>"));
 
         void ValidatePortableType(TypeRef type, string location)
         {
@@ -1047,8 +1091,6 @@ public static partial class RelationQueryDefinitionValidator
             if (string.IsNullOrWhiteSpace(value))
                 Add(code, message, location);
         }
-
-        HashSet<ValueBindingId> CopyBindings(QueryNodeId input) => [.. ResolveBindings(input)];
 
         void Add(string code, string message, string? location = null)
         {
