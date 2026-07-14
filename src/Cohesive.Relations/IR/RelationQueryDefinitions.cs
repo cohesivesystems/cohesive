@@ -56,11 +56,19 @@ public sealed record LogicalQueryDefinition
     /// <summary>Creates a logical query definition.</summary>
     /// <param name="nodes">Logical query nodes indexed by stable identity.</param>
     /// <param name="parameters">Parameters referenced by semantic expressions.</param>
-    /// <exception cref="ArgumentException"><paramref name="nodes"/> is default or empty.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="nodes"/> is default or empty, or <paramref name="nodes"/> or
+    /// <paramref name="parameters"/> contains a <see langword="null"/> entry.
+    /// </exception>
     public LogicalQueryDefinition(
         ImmutableArray<LogicalQueryNode> nodes,
         ImmutableArray<QueryParameterDefinition> parameters = default)
     {
+        if (!nodes.IsDefault && nodes.Any(static node => node is null))
+            throw new ArgumentException("Logical query nodes cannot contain null entries.", nameof(nodes));
+        if (!parameters.IsDefault && parameters.Any(static parameter => parameter is null))
+            throw new ArgumentException("Logical query parameters cannot contain null entries.", nameof(parameters));
+
         Nodes = nodes.IsDefault
             ? []
             : [.. nodes.OrderBy(static node => node.Id.Value, StringComparer.Ordinal)];
@@ -171,6 +179,7 @@ public sealed record RelationOutputDefinition
     public QualifiedShapeId Shape { get; init; }
 
     /// <summary>Output cardinality relative to relation roots.</summary>
+    [JsonRequired]
     public RelationOutputMode Mode { get; init; }
 
     /// <summary>Optional expression defining stable output identity.</summary>

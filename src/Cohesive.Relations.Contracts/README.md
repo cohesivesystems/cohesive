@@ -10,7 +10,7 @@ dotnet add package Cohesive.Relations.Contracts
 
 ## Use When
 
-- You need a contract assembly that exposes canonical relationship-catalog and relation/query shapes for code generation.
+- You need a contract assembly that exposes canonical relationship-catalog, relation-draft, and relation/query shapes for code generation.
 - You want relation contract definitions to be packaged separately from the relation runtime.
 - You are building generated frontend or API artifacts from Cohesive relation metadata.
 

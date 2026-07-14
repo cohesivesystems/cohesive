@@ -76,7 +76,7 @@ public static partial class RelationQueryDefinitionValidator
         RelationshipCatalog relationshipCatalog)
     {
         readonly Dictionary<QueryNodeId, LogicalQueryNode> nodes = [];
-        readonly Dictionary<QueryNodeId, Dictionary<ValueBindingId, QualifiedShapeId?>> shapesByNode = [];
+        readonly Dictionary<QueryNodeId, Dictionary<ValueBindingId, BindingAnalysis>> bindingsByNode = [];
         readonly HashSet<QueryNodeId> visiting = [];
 
         public List<DocumentValidationDiagnostic> Diagnostics { get; } = [];
@@ -87,66 +87,86 @@ public static partial class RelationQueryDefinitionValidator
                 nodes.TryAdd(node.Id, node);
 
             foreach (var node in definition.Body.Nodes.IsDefault ? [] : definition.Body.Nodes)
-                _ = ResolveShapes(node.Id);
+                _ = ResolveBindings(node.Id);
         }
 
         public ImmutableArray<RelationQueryBindingShape> GetBindingShapes() =>
         [
-            .. shapesByNode
+            .. bindingsByNode
                 .OrderBy(static entry => entry.Key.Value, StringComparer.Ordinal)
                 .SelectMany(static entry => entry.Value
                     .OrderBy(static binding => binding.Key.Value, StringComparer.Ordinal)
                     .Select(binding => new RelationQueryBindingShape(
                         entry.Key,
                         binding.Key,
-                        binding.Value)))
+                        binding.Value.Shape,
+                        binding.Value.Availability)))
         ];
 
-        Dictionary<ValueBindingId, QualifiedShapeId?> ResolveShapes(QueryNodeId nodeId)
+        Dictionary<ValueBindingId, BindingAnalysis> ResolveBindings(QueryNodeId nodeId)
         {
-            if (shapesByNode.TryGetValue(nodeId, out var cached))
+            if (bindingsByNode.TryGetValue(nodeId, out var cached))
                 return cached;
             if (!nodes.TryGetValue(nodeId, out var node) || !visiting.Add(nodeId))
                 return [];
 
-            Dictionary<ValueBindingId, QualifiedShapeId?> shapes = node switch
+            Dictionary<ValueBindingId, BindingAnalysis> bindings = node switch
             {
-                SourceQueryNode source => new() { [source.Binding] = source.Shape },
+                SourceQueryNode source => new()
+                {
+                    [source.Binding] = new(
+                        source.Shape,
+                        RelationQueryBindingAvailability.AlwaysPresent)
+                },
                 FilterQueryNode filter => Copy(filter.Input),
                 TraverseRelationshipQueryNode traversal => ResolveTraversal(traversal),
-                JoinQueryNode join => Merge(join.Left, join.Right),
+                JoinQueryNode join => ResolveJoin(join),
                 ExpandCollectionQueryNode expansion => ResolveExpansion(expansion),
-                ProjectQueryNode project => new() { [project.ResultBinding] = project.ResultShape },
+                ProjectQueryNode project => new()
+                {
+                    [project.ResultBinding] = new(
+                        project.ResultShape,
+                        RelationQueryBindingAvailability.AlwaysPresent)
+                },
                 DistinctQueryNode distinct => Copy(distinct.Input),
-                AggregateQueryNode aggregate => new() { [aggregate.ResultBinding] = aggregate.ResultShape },
+                AggregateQueryNode aggregate => new()
+                {
+                    [aggregate.ResultBinding] = new(
+                        aggregate.ResultShape,
+                        RelationQueryBindingAvailability.AlwaysPresent)
+                },
                 OrderQueryNode order => Copy(order.Input),
                 PageQueryNode page => Copy(page.Input),
                 _ => []
             };
 
             visiting.Remove(nodeId);
-            shapesByNode[nodeId] = shapes;
-            return shapes;
+            bindingsByNode[nodeId] = bindings;
+            return bindings;
         }
 
-        Dictionary<ValueBindingId, QualifiedShapeId?> ResolveTraversal(
+        Dictionary<ValueBindingId, BindingAnalysis> ResolveTraversal(
             TraverseRelationshipQueryNode traversal)
         {
-            var shapes = Copy(traversal.Input);
+            var bindings = Copy(traversal.Input);
+            var availability = traversal.JoinKind == JoinKind.Left
+                               && traversal.Requirement == QueryInputRequirement.Optional
+                ? RelationQueryBindingAvailability.MayBeAbsent
+                : RelationQueryBindingAvailability.AlwaysPresent;
             if (!relationshipCatalog.TryGetRelationship(traversal.Relationship, out var relationship))
             {
                 Add(
                     "relationQuery.traversal.relationshipUnknown",
                     $"Relationship traversal '{traversal.Id.Value}' references unknown relationship '{traversal.Relationship.Value}'.",
                     $"{NodeLocation(traversal.Id)}/relationship");
-                shapes.TryAdd(traversal.Result, null);
-                return shapes;
+                bindings.TryAdd(traversal.Result, new(null, availability));
+                return bindings;
             }
 
             if (!Enum.IsDefined(traversal.Direction))
             {
-                shapes.TryAdd(traversal.Result, null);
-                return shapes;
+                bindings.TryAdd(traversal.Result, new(null, availability));
+                return bindings;
             }
 
             var expectedSource = traversal.Direction == RelationshipTraversalDirection.Forward
@@ -156,26 +176,26 @@ public static partial class RelationQueryDefinitionValidator
                 ? relationship.TargetShape
                 : relationship.SourceShape;
 
-            if (shapes.TryGetValue(traversal.From, out var actualSource))
+            if (bindings.TryGetValue(traversal.From, out var actualSource))
             {
-                if (actualSource is null)
+                if (actualSource.Shape is null)
                 {
                     Add(
                         "relationQuery.traversal.sourceShapeUnknown",
                         $"Relationship traversal '{traversal.Id.Value}' starts from binding '{traversal.From.Value}' whose shape is not known.",
                         $"{NodeLocation(traversal.Id)}/from");
                 }
-                else if (actualSource.Value != expectedSource)
+                else if (actualSource.Shape.Value != expectedSource)
                 {
                     Add(
                         "relationQuery.traversal.sourceShapeMismatch",
-                        $"Relationship traversal '{traversal.Id.Value}' starts from shape '{actualSource.Value}', but {traversal.Direction} traversal of '{relationship.Id.Value}' requires '{expectedSource}'.",
+                        $"Relationship traversal '{traversal.Id.Value}' starts from shape '{actualSource.Shape.Value}', but {traversal.Direction} traversal of '{relationship.Id.Value}' requires '{expectedSource}'.",
                         $"{NodeLocation(traversal.Id)}/from");
                 }
             }
 
-            if (shapes.TryGetValue(traversal.Result, out var existingResult)
-                && existingResult is { } existingShape
+            if (bindings.TryGetValue(traversal.Result, out var existingResult)
+                && existingResult.Shape is { } existingShape
                 && existingShape != expectedResult)
             {
                 Add(
@@ -185,29 +205,46 @@ public static partial class RelationQueryDefinitionValidator
             }
             else
             {
-                shapes[traversal.Result] = expectedResult;
+                bindings[traversal.Result] = new(expectedResult, availability);
             }
 
-            return shapes;
+            return bindings;
         }
 
-        Dictionary<ValueBindingId, QualifiedShapeId?> ResolveExpansion(
+        Dictionary<ValueBindingId, BindingAnalysis> ResolveJoin(JoinQueryNode join)
+        {
+            var left = Copy(join.Left);
+            var right = Copy(join.Right);
+            if (join.Kind is JoinKind.Right or JoinKind.Full)
+                MarkMayBeAbsent(left);
+            if (join.Kind is JoinKind.Left or JoinKind.Full)
+                MarkMayBeAbsent(right);
+
+            foreach (var (binding, analysis) in right)
+                left.TryAdd(binding, analysis);
+            return left;
+        }
+
+        Dictionary<ValueBindingId, BindingAnalysis> ResolveExpansion(
             ExpandCollectionQueryNode expansion)
         {
-            var shapes = Copy(expansion.Input);
-            shapes.TryAdd(expansion.ItemBinding, null);
-            return shapes;
+            var bindings = Copy(expansion.Input);
+            bindings.TryAdd(
+                expansion.ItemBinding,
+                new(null, RelationQueryBindingAvailability.AlwaysPresent));
+            return bindings;
         }
 
-        Dictionary<ValueBindingId, QualifiedShapeId?> Copy(QueryNodeId input) =>
-            new(ResolveShapes(input));
+        Dictionary<ValueBindingId, BindingAnalysis> Copy(QueryNodeId input) =>
+            new(ResolveBindings(input));
 
-        Dictionary<ValueBindingId, QualifiedShapeId?> Merge(QueryNodeId left, QueryNodeId right)
+        static void MarkMayBeAbsent(Dictionary<ValueBindingId, BindingAnalysis> bindings)
         {
-            var merged = Copy(left);
-            foreach (var (binding, shape) in ResolveShapes(right))
-                merged.TryAdd(binding, shape);
-            return merged;
+            foreach (var (binding, analysis) in bindings.ToArray())
+                bindings[binding] = analysis with
+                {
+                    Availability = RelationQueryBindingAvailability.MayBeAbsent
+                };
         }
 
         void Add(string code, string message, string location) => Diagnostics.Add(new(
@@ -217,7 +254,23 @@ public static partial class RelationQueryDefinitionValidator
             Location: location));
 
         static string NodeLocation(QueryNodeId nodeId) => $"/definition/body/nodes/{nodeId.Value}";
+
+        readonly record struct BindingAnalysis(
+            QualifiedShapeId? Shape,
+            RelationQueryBindingAvailability Availability);
     }
+}
+
+/// <summary>
+/// Whether a visible binding is guaranteed to have a value for every row emitted by a logical node.
+/// </summary>
+public enum RelationQueryBindingAvailability
+{
+    /// <summary>Every emitted row contains the binding.</summary>
+    AlwaysPresent = 0,
+
+    /// <summary>An emitted row may preserve the binding in an absent state.</summary>
+    MayBeAbsent = 1
 }
 
 /// <summary>
@@ -229,10 +282,12 @@ public static partial class RelationQueryDefinitionValidator
 /// Graph-qualified semantic shape, or <see langword="null"/> when the binding is visible but its
 /// shape cannot be established statically.
 /// </param>
+/// <param name="Availability">Whether the binding may be absent on an emitted row.</param>
 public readonly record struct RelationQueryBindingShape(
     QueryNodeId Node,
     ValueBindingId Binding,
-    QualifiedShapeId? Shape);
+    QualifiedShapeId? Shape,
+    RelationQueryBindingAvailability Availability);
 
 /// <summary>
 /// Catalog-aware relation/query validation result retaining the exact catalog snapshot consumed.

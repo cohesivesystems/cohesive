@@ -3,6 +3,7 @@ using Cohesive.CodeGen;
 using Cohesive.CodeGen.Cli;
 using Cohesive.Model;
 using Cohesive.Relations.Contracts;
+using Cohesive.Relations.Drafts;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.Serialization;
@@ -20,11 +21,17 @@ public sealed class RelationsContractProjectionTests
             shape.Id.Value.EndsWith(nameof(RelationQueryDocument), StringComparison.Ordinal));
         Assert.Contains(graph.Shapes, shape =>
             shape.Id.Value.EndsWith(nameof(RelationshipCatalogDocument), StringComparison.Ordinal));
+        Assert.Contains(graph.Shapes, shape =>
+            shape.Id.Value.EndsWith(nameof(RelationDraftDocument), StringComparison.Ordinal));
         AssertUnion(graph, nameof(RelationQueryDefinition), RelationQueryWireNames.DefinitionDiscriminator);
         AssertUnion(graph, nameof(LogicalQueryNode), RelationQueryWireNames.NodeDiscriminator);
         AssertUnion(graph, nameof(QueryResultDefinition), RelationQueryWireNames.ResultDiscriminator);
         AssertUnion(graph, nameof(QueryPageDefinition), RelationQueryWireNames.PageDiscriminator);
         AssertUnion(graph, nameof(RelationshipTargetKey), RelationshipWireNames.TargetKeyDiscriminator);
+        AssertUnion(
+            graph,
+            nameof(RelationDraftAssignmentResolution),
+            RelationDraftWireNames.ResolutionDiscriminator);
 
         var emission = new TypeScriptShapeEmitter(new TypeScriptEmitterOptions
         {
@@ -42,6 +49,12 @@ public sealed class RelationsContractProjectionTests
         Assert.Contains("readonly $node: 'project';", text, StringComparison.Ordinal);
         Assert.Contains("readonly $node: 'aggregate';", text, StringComparison.Ordinal);
         Assert.Contains("export interface RelationshipCatalogDocument", text, StringComparison.Ordinal);
+        Assert.Contains("export interface RelationDraftDocument", text, StringComparison.Ordinal);
+        Assert.Contains("export type RelationDraftAssignmentResolution =", text, StringComparison.Ordinal);
+        Assert.Contains("readonly $resolution: 'selected';", text, StringComparison.Ordinal);
+        Assert.Contains("readonly $resolution: 'omitted';", text, StringComparison.Ordinal);
+        Assert.Contains("readonly $resolution: 'unresolved';", text, StringComparison.Ordinal);
+        Assert.Contains("readonly $resolution: 'ambiguous';", text, StringComparison.Ordinal);
         Assert.Contains("export type RelationshipTargetKey =", text, StringComparison.Ordinal);
         Assert.Contains("readonly $targetKey: 'observationIdentity';", text, StringComparison.Ordinal);
         Assert.Contains("export type SourceReferenceUniqueness =", text, StringComparison.Ordinal);

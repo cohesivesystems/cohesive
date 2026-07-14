@@ -17,11 +17,16 @@ static class CanonicalJsonWriter
     /// Resolves the object property used to order a set-like array property, or <see langword="null"/>
     /// when array order is semantically significant.
     /// </param>
+    /// <param name="isStringSetArray">
+    /// Determines whether an array property is a set-like collection of JSON strings that should
+    /// be ordered using ordinal string comparison.
+    /// </param>
     /// <returns>Canonical UTF-8 JSON bytes.</returns>
     public static byte[] GetCanonicalBytes(
         JsonNode node,
         JsonSerializerOptions options,
-        Func<string, string?> getArraySortProperty)
+        Func<string, string?> getArraySortProperty,
+        Func<string, bool>? isStringSetArray = null)
     {
         ArgumentNullException.ThrowIfNull(node);
         ArgumentNullException.ThrowIfNull(options);
@@ -34,7 +39,7 @@ static class CanonicalJsonWriter
                    Indented = false
                }))
         {
-            WriteCanonical(writer, node, options, getArraySortProperty);
+            WriteCanonical(writer, node, options, getArraySortProperty, isStringSetArray);
         }
 
         return buffer.WrittenSpan.ToArray();
@@ -44,7 +49,8 @@ static class CanonicalJsonWriter
         Utf8JsonWriter writer,
         JsonNode? node,
         JsonSerializerOptions options,
-        Func<string, string?> getArraySortProperty)
+        Func<string, string?> getArraySortProperty,
+        Func<string, bool>? isStringSetArray)
     {
         switch (node)
         {
@@ -61,14 +67,15 @@ static class CanonicalJsonWriter
                         property.Key,
                         property.Value,
                         options,
-                        getArraySortProperty);
+                        getArraySortProperty,
+                        isStringSetArray);
                 }
                 writer.WriteEndObject();
                 return;
             case JsonArray array:
                 writer.WriteStartArray();
                 foreach (var item in array)
-                    WriteCanonical(writer, item, options, getArraySortProperty);
+                    WriteCanonical(writer, item, options, getArraySortProperty, isStringSetArray);
                 writer.WriteEndArray();
                 return;
             case JsonValue value:
@@ -104,26 +111,36 @@ static class CanonicalJsonWriter
         string propertyName,
         JsonNode? value,
         JsonSerializerOptions options,
-        Func<string, string?> getArraySortProperty)
+        Func<string, string?> getArraySortProperty,
+        Func<string, bool>? isStringSetArray)
     {
         var sortProperty = getArraySortProperty(propertyName);
-        if (sortProperty is null || value is not JsonArray array)
+        if (value is not JsonArray array)
         {
-            WriteCanonical(writer, value, options, getArraySortProperty);
+            WriteCanonical(writer, value, options, getArraySortProperty, isStringSetArray);
+            return;
+        }
+
+        if (sortProperty is null && isStringSetArray?.Invoke(propertyName) != true)
+        {
+            WriteCanonical(writer, value, options, getArraySortProperty, isStringSetArray);
             return;
         }
 
         writer.WriteStartArray();
-        foreach (var item in array.OrderBy(
-                     item => GetCanonicalSortValue(item, sortProperty),
-                     StringComparer.Ordinal))
+        var ordered = sortProperty is not null
+            ? array.OrderBy(
+                item => GetCanonicalObjectSortValue(item, sortProperty),
+                StringComparer.Ordinal)
+            : array.OrderBy(GetCanonicalStringSortValue, StringComparer.Ordinal);
+        foreach (var item in ordered)
         {
-            WriteCanonical(writer, item, options, getArraySortProperty);
+            WriteCanonical(writer, item, options, getArraySortProperty, isStringSetArray);
         }
         writer.WriteEndArray();
     }
 
-    static string GetCanonicalSortValue(JsonNode? item, string propertyName)
+    static string GetCanonicalObjectSortValue(JsonNode? item, string propertyName)
     {
         if (item is not JsonObject obj
             || obj[propertyName] is not JsonValue value
@@ -133,6 +150,15 @@ static class CanonicalJsonWriter
         }
 
         return text;
+    }
+
+    static string GetCanonicalStringSortValue(JsonNode? item)
+    {
+        if (item is JsonValue value && value.TryGetValue<string>(out var text))
+            return text;
+
+        throw new InvalidOperationException(
+            "A canonical string-set array can contain only JSON string values.");
     }
 
     static void WriteCanonicalObservationValue(Utf8JsonWriter writer, ObservationValue value)

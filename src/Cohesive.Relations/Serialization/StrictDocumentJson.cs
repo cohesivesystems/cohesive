@@ -21,6 +21,7 @@ static class StrictDocumentJson
             UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
             WriteIndented = indented
         };
+        options.Converters.Add(new StrictFieldPathSegmentJsonConverter());
         options.Converters.Add(SingleValueWrapperJsonConverter.ScalarOnly);
         options.Converters.Add(new StrictStringEnumJsonConverterFactory());
         return options;
@@ -85,6 +86,103 @@ static class StrictDocumentJson
     static string EscapeJsonPointerSegment(string value) =>
         value.Replace("~", "~0", StringComparison.Ordinal)
             .Replace("/", "~1", StringComparison.Ordinal);
+}
+
+/// <summary>
+/// Strict converter for getter-only field-path segments whose kind must remain explicit on input.
+/// </summary>
+sealed class StrictFieldPathSegmentJsonConverter : JsonConverter<FieldPathSegment>
+{
+    /// <inheritdoc />
+    public override FieldPathSegment Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options)
+    {
+        if (reader.TokenType != JsonTokenType.StartObject)
+            throw new JsonException("A field-path segment must be a JSON object.");
+
+        SegmentKind kind = default;
+        string? segment = null;
+        var hasKind = false;
+        var hasSegment = false;
+        var ended = false;
+        while (reader.Read())
+        {
+            if (reader.TokenType == JsonTokenType.EndObject)
+            {
+                ended = true;
+                break;
+            }
+            if (reader.TokenType != JsonTokenType.PropertyName)
+                throw new JsonException("A field-path segment contains an invalid JSON token.");
+
+            var property = reader.GetString();
+            if (!reader.Read())
+                throw new JsonException("A field-path segment ended before its property value.");
+
+            switch (property)
+            {
+                case "kind" when hasKind:
+                case "segment" when hasSegment:
+                    throw new JsonException($"A field-path segment contains duplicate property '{property}'.");
+                case "kind":
+                {
+                    hasKind = true;
+                    if (reader.TokenType != JsonTokenType.String)
+                        throw new JsonException("Field-path segment kind must be encoded as a string.");
+                    var text = reader.GetString();
+                    if (text is null
+                        || !Enum.TryParse(text, ignoreCase: false, out kind)
+                        || !Enum.IsDefined(kind)
+                        || !string.Equals(kind.ToString(), text, StringComparison.Ordinal))
+                    {
+                        throw new JsonException($"'{text}' is not a canonical field-path segment kind.");
+                    }
+                    break;
+                }
+                case "segment":
+                    hasSegment = true;
+                    segment = reader.TokenType switch
+                    {
+                        JsonTokenType.Null => null,
+                        JsonTokenType.String => reader.GetString(),
+                        _ => throw new JsonException("Field-path segment text must be a string or null.")
+                    };
+                    break;
+                default:
+                    throw new JsonException($"Unknown field-path segment property '{property}'.");
+            }
+        }
+
+        if (!ended)
+            throw new JsonException("A field-path segment JSON object was not terminated.");
+        if (!hasKind)
+            throw new JsonException("A field-path segment must declare kind.");
+
+        return new(kind, segment);
+    }
+
+    /// <inheritdoc />
+    public override void Write(
+        Utf8JsonWriter writer,
+        FieldPathSegment value,
+        JsonSerializerOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        if (!Enum.IsDefined(value.Kind))
+        {
+            throw new JsonException(
+                $"Value '{value.Kind}' is not a declared field-path segment kind.");
+        }
+        writer.WriteStartObject();
+        writer.WriteString("kind", value.Kind.ToString());
+        if (value.Segment is null)
+            writer.WriteNull("segment");
+        else
+            writer.WriteString("segment", value.Segment);
+        writer.WriteEndObject();
+    }
 }
 
 /// <summary>Case-sensitive canonical string encoding for enum values.</summary>
