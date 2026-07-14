@@ -7,7 +7,7 @@ namespace Cohesive.Relations.IR;
 /// <summary>
 /// Computes the canonical value-binding flow shared by relation/query validation and expression analysis.
 /// </summary>
-internal static class RelationQueryBindingFlowAnalyzer
+static class RelationQueryBindingFlowAnalyzer
 {
     /// <summary>
     /// Analyzes binding visibility, semantic shape, value type, and availability throughout a logical query graph.
@@ -21,7 +21,8 @@ internal static class RelationQueryBindingFlowAnalyzer
     /// <exception cref="ArgumentNullException"><paramref name="definition"/> is <see langword="null"/>.</exception>
     public static RelationQueryBindingFlowAnalysis Analyze(
         RelationQueryDefinition definition,
-        RelationshipCatalog? relationshipCatalog = null)
+        RelationshipCatalog? relationshipCatalog = null
+        )
     {
         ArgumentNullException.ThrowIfNull(definition);
 
@@ -394,15 +395,14 @@ internal sealed class RelationQueryBindingFlowAnalysis
 /// <summary>
 /// Immutable binding environment used while analyzing relation/query expressions.
 /// </summary>
-internal sealed class RelationQueryBindingEnvironment
+sealed class RelationQueryBindingEnvironment
 {
     /// <summary>An empty binding environment.</summary>
     public static RelationQueryBindingEnvironment Empty { get; } = new([]);
 
     /// <summary>Creates a binding environment.</summary>
     /// <param name="bindings">Bindings visible in the environment.</param>
-    public RelationQueryBindingEnvironment(
-        ImmutableDictionary<ValueBindingId, RelationQueryBindingAnalysis> bindings)
+    public RelationQueryBindingEnvironment(ImmutableDictionary<ValueBindingId, RelationQueryBindingAnalysis> bindings)
     {
         Bindings = bindings;
     }
@@ -445,17 +445,16 @@ internal sealed class RelationQueryBindingEnvironment
 /// <param name="Shape">Graph-qualified shape, when the binding represents a shaped value.</param>
 /// <param name="Type">Semantic value type, including expanded collection item types.</param>
 /// <param name="Availability">Whether a row may preserve the binding in an absent state.</param>
-internal readonly record struct RelationQueryBindingAnalysis(
+readonly record struct RelationQueryBindingAnalysis(
     QualifiedShapeId? Shape,
     TypeRef? Type,
     RelationQueryBindingAvailability Availability);
 
-internal static class RelationQueryBindingEnvironmentBuilderExtensions
+static class RelationQueryBindingEnvironmentBuilderExtensions
 {
     /// <summary>Materializes a mutable binding map as an immutable environment.</summary>
     /// <param name="bindings">Mutable binding map.</param>
     /// <returns>An immutable binding environment.</returns>
-    public static RelationQueryBindingEnvironment ToEnvironment(
-        this Dictionary<ValueBindingId, RelationQueryBindingAnalysis> bindings) =>
-        new(bindings.ToImmutableDictionary());
+    public static RelationQueryBindingEnvironment ToEnvironment(this Dictionary<ValueBindingId, RelationQueryBindingAnalysis> bindings) =>
+        new([..bindings]);
 }

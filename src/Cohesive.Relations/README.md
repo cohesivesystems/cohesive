@@ -657,6 +657,62 @@ nested `NamedTypeRef` source paths, and a common-domain/coercion model for mixed
 operands belong to the subsequent inference layer. Current analysis reports what it can prove and
 does not silently invent conversion semantics for those cases.
 
+### Demand-driven static compilation
+
+`RelationQueryStaticCompiler` turns a persisted relation or query into a deterministic,
+target-independent plan. A compilation request supplies the exact `relation-query/v1` document,
+the shape-graph snapshots used to interpret its fields, an optional relationship-catalog snapshot,
+and an output demand. Omitting the demand applies the all-declared-output convention: required
+declared fields must have producers, while optional unassigned fields are treated as intentionally
+absent. The plan records whether this demand was convention-derived or explicit. Callers can
+instead make a strict request for selected relation fields or selected fields of named query results:
+
+```csharp
+using Cohesive.Model;
+using Cohesive.Relations.Compilation;
+
+var demand = RelationQueryCompilationDemand.ForRelationFields(
+[
+    new(outputShape, FieldPath.FromField("CustomerName"))
+]);
+
+var result = RelationQueryStaticCompiler.Compile(
+    new(
+        relationDocument,
+        [loadShapes, customerShapes, searchDtoShapes],
+        relationshipCatalogDocument,
+        demand));
+
+if (!result.IsSuccessful)
+    throw new InvalidOperationException(string.Join(Environment.NewLine, result.Diagnostics));
+
+var plan = result.Plan!;
+```
+
+The plan exposes several immutable views of one canonical requirement graph:
+
+- `InputContract` describes the source sets, selected fields, observation identities,
+  relationship traversals, invocation parameters, and expression capabilities that must be
+  supplied.
+- `Lineage` has one entry per demanded output and contains only value-, identity-, and
+  aggregate-producing contributions. Constant-derived outputs have an explicit empty entry;
+  operational requirements such as a filter predicate do not become false value lineage.
+- `DependencyManifest` includes every semantic influence, including membership, correlation,
+  acquisition, cardinality, ordering, grouping, aggregation, pagination, validation, and
+  evaluation capabilities. It is the appropriate view for impact analysis and index synchronization.
+- `LogicalPlan` retains the demanded canonical nodes and their dependency-first evaluation order.
+  A safely pruned optional, at-most-one left traversal is represented by typed bypass evidence;
+  pruning is never an invisible graph rewrite.
+- `Provenance` retains the exact definition, shape, and catalog documents, their available
+  fingerprints, and the static compiler profile that produced the plan.
+
+Every requirement edge carries one or more ordered traces from the demanded output through the
+typed expression sites, aggregate operations, and logical nodes that caused the requirement.
+Backend compilers should consume this plan as the semantic input to physical planning, match its
+requirements against their declared capabilities, and preserve those traces in target artifacts
+and diagnostics. Static compilation does not select a database, source placement, batching policy,
+join algorithm, or runtime missing-data behavior.
+
 ### Explicit missing-data semantics
 
 Missing, null, absent, unavailable, and failed are not interchangeable states.
@@ -709,6 +765,7 @@ The current foundation includes:
 - Versioned persisted relationship-catalog and relation/query documents.
 - Structural and semantic diagnostics.
 - Deterministic definition fingerprints.
+- Demand-driven static compilation into input contracts, lineage, dependency manifests, and explicit logical pruning.
 - In-memory execution and mapping components.
 - Contract projection for other host languages.
 

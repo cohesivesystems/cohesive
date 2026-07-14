@@ -53,6 +53,67 @@ public sealed class RelationQueryExpressionAnalysisTests
     }
 
     [Fact]
+    public void Analyze_ExposesTypedOriginsForEveryQueryExpressionSite()
+    {
+        var analysis = RelationQueryExpressionAnalyzer.Analyze(CreateRepresentativeQuery());
+
+        Assert.Equal(
+        [
+            new(
+                "query/search/node/aggregate/aggregate/assignment/total/filter",
+                RelationQueryExpressionSiteKind.AggregateAssignmentFilter,
+                Node: "aggregate",
+                Assignment: "total"),
+            new(
+                "query/search/node/aggregate/aggregate/assignment/total/value",
+                RelationQueryExpressionSiteKind.AggregateAssignmentValue,
+                Node: "aggregate",
+                Assignment: "total"),
+            new(
+                "query/search/node/aggregate/aggregate/grouping/customer_id/key",
+                RelationQueryExpressionSiteKind.AggregateGroupingKey,
+                Node: "aggregate",
+                Assignment: "customer_id"),
+            new(
+                "query/search/node/distinct/distinct/key/0",
+                RelationQueryExpressionSiteKind.DistinctKey,
+                Node: "distinct",
+                Ordinal: 0),
+            new(
+                "query/search/node/expand/expand/collection",
+                RelationQueryExpressionSiteKind.ExpandCollection,
+                Node: "expand"),
+            new(
+                "query/search/node/filter/filter/predicate",
+                RelationQueryExpressionSiteKind.FilterPredicate,
+                Node: "filter"),
+            new(
+                "query/search/node/join/join/predicate",
+                RelationQueryExpressionSiteKind.JoinPredicate,
+                Node: "join"),
+            new(
+                "query/search/node/order/order/key/0",
+                RelationQueryExpressionSiteKind.OrderKey,
+                Node: "order",
+                Ordinal: 0),
+            new(
+                "query/search/node/page/page/keyset/after/0",
+                RelationQueryExpressionSiteKind.KeysetBoundary,
+                Node: "page",
+                Ordinal: 0),
+            new(
+                "query/search/node/project/project/assignment/load_id/value",
+                RelationQueryExpressionSiteKind.ProjectionAssignmentValue,
+                Node: "project",
+                Assignment: "load_id")
+        ],
+            analysis.SiteAnalyses.Select(ToExpectedOrigin));
+        Assert.Equal(analysis.Sites.Length, analysis.SiteAnalyses.Length);
+        for (var index = 0; index < analysis.Sites.Length; index++)
+            Assert.Same(analysis.Sites[index], analysis.SiteAnalyses[index].Analysis);
+    }
+
+    [Fact]
     public void Analyze_UsesRelationOutputScopeForKeysAndInvariants()
     {
         var project = new QueryNodeId("project");
@@ -96,6 +157,26 @@ public sealed class RelationQueryExpressionAnalysisTests
         var scopedBinding = Assert.Single(outputKey.Site.Scope.Bindings);
         Assert.Equal(output, scopedBinding.Id);
         Assert.Equal(SearchShape, scopedBinding.Value.Shape);
+        Assert.Equal(
+        [
+            new(
+                "relation/load-search/invariant/has-id",
+                RelationQueryExpressionSiteKind.RelationInvariant,
+                InvariantName: "has-id"),
+            new(
+                "relation/load-search/invariant/is-valid",
+                RelationQueryExpressionSiteKind.RelationInvariant,
+                InvariantName: "is-valid"),
+            new(
+                "relation/load-search/node/project/project/assignment/load_id/value",
+                RelationQueryExpressionSiteKind.ProjectionAssignmentValue,
+                Node: "project",
+                Assignment: "load_id"),
+            new(
+                "relation/load-search/output/key",
+                RelationQueryExpressionSiteKind.RelationOutputKey)
+        ],
+            analysis.SiteAnalyses.Select(ToExpectedOrigin));
     }
 
     [Fact]
@@ -300,6 +381,9 @@ public sealed class RelationQueryExpressionAnalysisTests
         Assert.Equal(
             first.Sites.Select(static site => site.Site.Id),
             second.Sites.Select(static site => site.Site.Id));
+        Assert.Equal(
+            first.SiteAnalyses.Select(ToExpectedOrigin),
+            second.SiteAnalyses.Select(ToExpectedOrigin));
         Assert.Equal(first.Requirements.Fields.ToArray(), second.Requirements.Fields.ToArray());
         Assert.Equal(first.Requirements.Bindings.ToArray(), second.Requirements.Bindings.ToArray());
         Assert.Equal(first.Requirements.Capabilities.ToArray(), second.Requirements.Capabilities.ToArray());
@@ -1207,5 +1291,21 @@ public sealed class RelationQueryExpressionAnalysisTests
         Assert.Contains(analysis.Diagnostics, diagnostic =>
             string.Equals(diagnostic.Code, code, StringComparison.Ordinal));
 
+    static ExpectedSiteOrigin ToExpectedOrigin(RelationQueryExpressionSiteAnalysis site) => new(
+        site.Analysis.Site.Id.Value,
+        site.Kind,
+        site.Node?.Value,
+        site.Assignment?.Value,
+        site.Ordinal,
+        site.InvariantName);
+
     static QualifiedShapeId Shape(GraphId graph, string shape) => new(graph, new(shape));
+
+    readonly record struct ExpectedSiteOrigin(
+        string Id,
+        RelationQueryExpressionSiteKind Kind,
+        string? Node = null,
+        string? Assignment = null,
+        int? Ordinal = null,
+        string? InvariantName = null);
 }

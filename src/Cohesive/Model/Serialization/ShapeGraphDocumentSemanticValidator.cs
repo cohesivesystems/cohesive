@@ -30,6 +30,16 @@ public static class ShapeGraphDocumentSemanticValidator
             );
         }
 
+        if (document.Graph is null)
+        {
+            diagnostics.Add(new(
+                "shapeGraph.graph.missing",
+                DiagnosticSeverity.Error,
+                "A shape graph document must contain a graph.",
+                "/graph"));
+            return DocumentValidationResult.FromDiagnostics(diagnostics);
+        }
+
         if (string.IsNullOrWhiteSpace(document.Graph.Id.Value))
         {
             diagnostics.Add(new(

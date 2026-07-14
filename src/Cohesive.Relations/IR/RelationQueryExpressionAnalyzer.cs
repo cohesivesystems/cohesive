@@ -157,8 +157,10 @@ public static class RelationQueryExpressionAnalyzer
             bindingFlow);
         var parameters = CreateParameters(definition);
         List<DocumentValidationDiagnostic> siteDiagnostics = [];
-        var sites = AnalyzeSites(definition, bindingFlow, parameters, shapeResolver, siteDiagnostics);
-        var projectedDiagnostics = sites.SelectMany(ProjectDiagnostics).Concat(siteDiagnostics);
+        var siteAnalyses = AnalyzeSites(definition, bindingFlow, parameters, shapeResolver, siteDiagnostics);
+        var projectedDiagnostics = siteAnalyses
+            .SelectMany(static site => ProjectDiagnostics(site.Analysis))
+            .Concat(siteDiagnostics);
         var expressionValidation = DocumentValidationResult.FromDiagnostics(projectedDiagnostics);
         var combinedValidation = additionalValidation is null
             ? DocumentValidationResult.Combine(
@@ -177,13 +179,13 @@ public static class RelationQueryExpressionAnalyzer
         return new(
             catalogDocument,
             snapshots,
-            sites,
+            siteAnalyses,
             bindingFlow.BindingShapes,
-            ExprRequirements.Combine(sites.Select(static site => site.Requirements)),
+            ExprRequirements.Combine(siteAnalyses.Select(static site => site.Analysis.Requirements)),
             validation);
     }
 
-    static ImmutableArray<ExprAnalysisResult> AnalyzeSites(
+    static ImmutableArray<RelationQueryExpressionSiteAnalysis> AnalyzeSites(
         RelationQueryDefinition definition,
         RelationQueryBindingFlowAnalysis bindingFlow,
         ImmutableArray<ExprScopeParameter> parameters,
@@ -193,7 +195,7 @@ public static class RelationQueryExpressionAnalyzer
         if (definition.Body is null)
             return [];
 
-        List<ExprSite> sites = [];
+        List<PendingExpressionSite> sites = [];
         var prefix = DefinitionSitePrefix(definition);
         var ambientCapabilities = definition is RelationDefinition
             ? RelationAmbientCapabilities
@@ -220,7 +222,9 @@ public static class RelationQueryExpressionAnalyzer
                         filter.Predicate,
                         inputScope,
                         ExprExpectation.Boolean,
-                        $"{nodeLocation}/predicate"));
+                        $"{nodeLocation}/predicate",
+                        RelationQueryExpressionSiteKind.FilterPredicate,
+                        node: filter.Id));
                     break;
 
                 case JoinQueryNode join when join.Predicate is not null:
@@ -229,7 +233,9 @@ public static class RelationQueryExpressionAnalyzer
                         join.Predicate,
                         inputScope,
                         ExprExpectation.Boolean,
-                        $"{nodeLocation}/predicate"));
+                        $"{nodeLocation}/predicate",
+                        RelationQueryExpressionSiteKind.JoinPredicate,
+                        node: join.Id));
                     break;
 
                 case ExpandCollectionQueryNode expansion when expansion.Collection is not null:
@@ -238,7 +244,9 @@ public static class RelationQueryExpressionAnalyzer
                         expansion.Collection,
                         inputScope,
                         new(ExprResultCategory.Collection),
-                        $"{nodeLocation}/collection"));
+                        $"{nodeLocation}/collection",
+                        RelationQueryExpressionSiteKind.ExpandCollection,
+                        node: expansion.Id));
                     break;
 
                 case ProjectQueryNode project:
@@ -259,7 +267,10 @@ public static class RelationQueryExpressionAnalyzer
                                 assignment.Target,
                                 $"{assignmentLocation}/target",
                                 diagnostics),
-                            $"{assignmentLocation}/value"));
+                            $"{assignmentLocation}/value",
+                            RelationQueryExpressionSiteKind.ProjectionAssignmentValue,
+                            node: project.Id,
+                            assignment: assignment.Id));
                     }
                     break;
 
@@ -274,7 +285,10 @@ public static class RelationQueryExpressionAnalyzer
                             key,
                             inputScope,
                             ExprExpectation.Any,
-                            $"{nodeLocation}/keys/{index}"));
+                            $"{nodeLocation}/keys/{index}",
+                            RelationQueryExpressionSiteKind.DistinctKey,
+                            node: distinct.Id,
+                            ordinal: index));
                     }
                     break;
 
@@ -300,7 +314,10 @@ public static class RelationQueryExpressionAnalyzer
                             key,
                             inputScope,
                             new(ExprResultCategory.Comparable),
-                            $"{nodeLocation}/orderings/{index}/key"));
+                            $"{nodeLocation}/orderings/{index}/key",
+                            RelationQueryExpressionSiteKind.OrderKey,
+                            node: order.Id,
+                            ordinal: index));
                     }
                     break;
 
@@ -322,7 +339,10 @@ public static class RelationQueryExpressionAnalyzer
                             new(
                                 ExprResultCategory.Comparable,
                                 allowedDependencies: ExprDependencyKind.Parameter),
-                            $"{nodeLocation}/page/after/{index}"));
+                            $"{nodeLocation}/page/after/{index}",
+                            RelationQueryExpressionSiteKind.KeysetBoundary,
+                            node: page.Id,
+                            ordinal: index));
                     }
                     break;
             }
@@ -342,15 +362,16 @@ public static class RelationQueryExpressionAnalyzer
                     outputKey,
                     outputScope,
                     ExprExpectation.Any,
-                    "/definition/output/key"));
+                    "/definition/output/key",
+                    RelationQueryExpressionSiteKind.RelationOutputKey));
             }
 
             AddInvariantSites(sites, relation, outputScope, prefix);
         }
 
-        List<ExprAnalysisResult> analyses = [];
+        List<RelationQueryExpressionSiteAnalysis> analyses = [];
         foreach (var group in sites
-                     .GroupBy(static site => site.Id)
+                     .GroupBy(static site => site.Site.Id)
                      .OrderBy(static group => group.Key.Value, StringComparer.Ordinal))
         {
             var candidates = group.ToArray();
@@ -361,20 +382,27 @@ public static class RelationQueryExpressionAnalyzer
                     Severity: DiagnosticSeverity.Error,
                     Message: $"Relation/query expression site identity '{group.Key.Value}' is declared more than once.",
                     Location: candidates
-                        .Select(static site => site.DiagnosticLocation)
+                        .Select(static site => site.Site.DiagnosticLocation)
                         .Order(StringComparer.Ordinal)
                         .First()));
                 continue;
             }
 
-            analyses.Add(ExprAnalyzer.Analyze(candidates[0], ExprSemanticsCatalog.Default));
+            var candidate = candidates[0];
+            analyses.Add(new(
+                candidate.Kind,
+                ExprAnalyzer.Analyze(candidate.Site, ExprSemanticsCatalog.Default),
+                candidate.Node,
+                candidate.Assignment,
+                candidate.Ordinal,
+                candidate.InvariantName));
         }
 
         return [.. analyses];
     }
 
     static void AddAggregateSites(
-        ICollection<ExprSite> sites,
+        ICollection<PendingExpressionSite> sites,
         AggregateQueryNode aggregate,
         ExprScope scope,
         string nodePrefix,
@@ -398,7 +426,10 @@ public static class RelationQueryExpressionAnalyzer
                     grouping.Target,
                     $"{nodeLocation}/groupings/{grouping.Id.Value}/target",
                     diagnostics),
-                $"{nodeLocation}/groupings/{grouping.Id.Value}/key"));
+                $"{nodeLocation}/groupings/{grouping.Id.Value}/key",
+                RelationQueryExpressionSiteKind.AggregateGroupingKey,
+                node: aggregate.Id,
+                assignment: grouping.Id));
         }
 
         foreach (var assignment in (aggregate.Aggregates.IsDefault ? [] : aggregate.Aggregates)
@@ -426,7 +457,10 @@ public static class RelationQueryExpressionAnalyzer
                     value,
                     scope,
                     expectation,
-                    $"{assignmentLocation}/value"));
+                    $"{assignmentLocation}/value",
+                    RelationQueryExpressionSiteKind.AggregateAssignmentValue,
+                    node: aggregate.Id,
+                    assignment: assignment.Id));
             }
 
             if (assignment.Filter is { } filter)
@@ -436,13 +470,16 @@ public static class RelationQueryExpressionAnalyzer
                     filter,
                     scope,
                     ExprExpectation.Boolean,
-                    $"{assignmentLocation}/filter"));
+                    $"{assignmentLocation}/filter",
+                    RelationQueryExpressionSiteKind.AggregateAssignmentFilter,
+                    node: aggregate.Id,
+                    assignment: assignment.Id));
             }
         }
     }
 
     static void AddInvariantSites(
-        ICollection<ExprSite> sites,
+        ICollection<PendingExpressionSite> sites,
         RelationDefinition relation,
         ExprScope outputScope,
         string prefix)
@@ -464,23 +501,36 @@ public static class RelationQueryExpressionAnalyzer
                 invariant.Expression,
                 outputScope,
                 ExprExpectation.Boolean,
-                $"/definition/invariants/{index}/expression"));
+                $"/definition/invariants/{index}/expression",
+                RelationQueryExpressionSiteKind.RelationInvariant,
+                invariantName: invariant.Name));
         }
     }
 
-    static ExprSite CreateSite(
+    static PendingExpressionSite CreateSite(
         string id,
         Expr expression,
         ExprScope scope,
         ExprExpectation expectation,
-        string location) =>
+        string location,
+        RelationQueryExpressionSiteKind kind,
+        QueryNodeId? node = null,
+        QueryAssignmentId? assignment = null,
+        int? ordinal = null,
+        string? invariantName = null) =>
         new(
-            new(id),
-            expression,
-            scope,
-            expectation,
-            RelationLanguageProfile,
-            diagnosticLocation: location);
+            new(
+                new(id),
+                expression,
+                scope,
+                expectation,
+                RelationLanguageProfile,
+                diagnosticLocation: location),
+            kind,
+            node,
+            assignment,
+            ordinal,
+            invariantName);
 
     static ExprScope CreateScope(
         RelationQueryBindingEnvironment environment,
@@ -783,12 +833,20 @@ public static class RelationQueryExpressionAnalyzer
         Uri.EscapeDataString(string.IsNullOrWhiteSpace(value) ? "missing" : value);
 
     static string NodeLocation(QueryNodeId nodeId) => $"/definition/body/nodes/{nodeId.Value}";
+
+    sealed record PendingExpressionSite(
+        ExprSite Site,
+        RelationQueryExpressionSiteKind Kind,
+        QueryNodeId? Node,
+        QueryAssignmentId? Assignment,
+        int? Ordinal,
+        string? InvariantName);
 }
 
 /// <summary>
 /// Resolves expression value and assignment-target contracts from exact shape-graph snapshots.
 /// </summary>
-internal sealed class RelationQueryShapeResolver
+sealed class RelationQueryShapeResolver
 {
     readonly ImmutableDictionary<GraphId, ShapeGraph> graphs;
 
@@ -807,13 +865,12 @@ internal sealed class RelationQueryShapeResolver
         var bindingShape = binding.Shape is { } shapeIdentity && IsUsableShapeIdentity(shapeIdentity)
             ? binding.Shape
             : null;
+        
         if (binding.Type is not null)
             return new(type: binding.Type, shape: bindingShape);
-        if (bindingShape is { } qualifiedShape
-            && TryGetShape(qualifiedShape, out var shape))
-        {
+        
+        if (bindingShape is { } qualifiedShape && TryGetShape(qualifiedShape, out var shape))
             return ExprValueContract.FromShape(shape, qualifiedShape);
-        }
 
         return new(shape: bindingShape);
     }
@@ -1000,28 +1057,37 @@ public sealed class RelationQueryExpressionAnalysisResult
     /// <param name="shapeGraphs">
     /// Exact supplied shape-graph snapshots retained for provenance, including invalid snapshots quarantined from resolution.
     /// </param>
-    /// <param name="sites">Per-site shared expression-analysis results.</param>
+    /// <param name="siteAnalyses">Per-site expression analyses with typed canonical origins.</param>
     /// <param name="bindingShapes">Shape and availability analysis for every node output binding.</param>
     /// <param name="requirements">Combined expression requirements.</param>
     /// <param name="validation">Combined structure, catalog, portability, and expression validation.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="requirements"/> or <paramref name="validation"/> is <see langword="null"/>.
     /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="siteAnalyses"/> contains a <see langword="null"/> entry.</exception>
     internal RelationQueryExpressionAnalysisResult(
         RelationshipCatalogDocument? catalogDocument,
         ImmutableArray<ShapeGraph> shapeGraphs,
-        ImmutableArray<ExprAnalysisResult> sites,
+        ImmutableArray<RelationQueryExpressionSiteAnalysis> siteAnalyses,
         ImmutableArray<RelationQueryBindingShape> bindingShapes,
         ExprRequirements requirements,
         DocumentValidationResult validation)
     {
+        var normalizedSiteAnalyses = siteAnalyses.IsDefault ? [] : siteAnalyses;
+        if (normalizedSiteAnalyses.Any(static site => site is null))
+            throw new ArgumentException("Expression-site analyses cannot contain null entries.", nameof(siteAnalyses));
+
         CatalogDocument = catalogDocument;
         ShapeGraphs = shapeGraphs.IsDefault
             ? []
             : [.. shapeGraphs.OrderBy(static graph => graph.Id.Value, StringComparer.Ordinal)];
-        Sites = sites.IsDefault
-            ? []
-            : [.. sites.OrderBy(static site => site.Site.Id.Value, StringComparer.Ordinal)];
+        SiteAnalyses =
+        [
+            .. normalizedSiteAnalyses.OrderBy(
+                static site => site.Analysis.Site.Id.Value,
+                StringComparer.Ordinal)
+        ];
+        Sites = [.. SiteAnalyses.Select(static site => site.Analysis)];
         BindingShapes = bindingShapes.IsDefault
             ? []
             :
@@ -1046,7 +1112,16 @@ public sealed class RelationQueryExpressionAnalysisResult
     /// </summary>
     public ImmutableArray<ShapeGraph> ShapeGraphs { get; }
 
-    /// <summary>Per-site expression analyses sorted by stable site identity.</summary>
+    /// <summary>Per-site expression analyses with typed origins, sorted by stable site identity.</summary>
+    public ImmutableArray<RelationQueryExpressionSiteAnalysis> SiteAnalyses { get; }
+
+    /// <summary>
+    /// Shared per-site expression analyses sorted by stable site identity.
+    /// </summary>
+    /// <remarks>
+    /// This compatibility view contains the same analysis instances exposed through
+    /// <see cref="SiteAnalyses"/> without their typed relation/query origins.
+    /// </remarks>
     public ImmutableArray<ExprAnalysisResult> Sites { get; }
 
     /// <summary>Shape and availability analysis for bindings visible at every logical node output.</summary>
