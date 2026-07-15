@@ -12,6 +12,17 @@ namespace Cohesive.Relations.IR;
 public static class RelationQueryExpressionAnalyzer
 {
     static readonly ExprCapabilityProfile RelationLanguageProfile = CreateRelationLanguageProfile();
+    static readonly ExprExpectation NullableComparableExpectation = new(
+        ExprResultCategory.Comparable,
+        new ExprValueContract(
+            presence: FieldPresence.Optional,
+            nullability: FieldNullability.Nullable));
+    static readonly ExprExpectation NullableComparableParameterExpectation = new(
+        ExprResultCategory.Comparable,
+        new ExprValueContract(
+            presence: FieldPresence.Optional,
+            nullability: FieldNullability.Nullable),
+        ExprDependencyKind.Parameter);
     static readonly ImmutableArray<ExprCapabilityId> RelationAmbientCapabilities =
     [
         ExprCapabilities.EntityIdentity,
@@ -313,7 +324,7 @@ public static class RelationQueryExpressionAnalyzer
                             $"{nodePrefix}/order/key/{index}",
                             key,
                             inputScope,
-                            new(ExprResultCategory.Comparable),
+                            NullableComparableExpectation,
                             $"{nodeLocation}/orderings/{index}/key",
                             RelationQueryExpressionSiteKind.OrderKey,
                             node: order.Id,
@@ -336,9 +347,7 @@ public static class RelationQueryExpressionAnalyzer
                             $"{nodePrefix}/page/keyset/after/{index}",
                             boundary,
                             boundaryScope,
-                            new(
-                                ExprResultCategory.Comparable,
-                                allowedDependencies: ExprDependencyKind.Parameter),
+                            NullableComparableParameterExpectation,
                             $"{nodeLocation}/page/after/{index}",
                             RelationQueryExpressionSiteKind.KeysetBoundary,
                             node: page.Id,
@@ -888,7 +897,7 @@ sealed class RelationQueryShapeResolver
         FieldPath target,
         out ExprExpectation expectation)
     {
-        if (TryResolveField(shape, target, out var contract))
+        if (TryGetFieldContract(shape, target, out var contract))
         {
             expectation = new(GetResultCategory(shape.GraphId, contract), contract);
             return true;
@@ -930,7 +939,12 @@ sealed class RelationQueryShapeResolver
         return false;
     }
 
-    bool TryResolveField(
+    /// <summary>Tries to resolve the effective value contract at one shape-relative field path.</summary>
+    /// <param name="shapeId">Graph-qualified shape containing the path.</param>
+    /// <param name="path">Field path to resolve.</param>
+    /// <param name="contract">Effective field contract when resolution succeeds.</param>
+    /// <returns><see langword="true"/> when the field contract resolves; otherwise <see langword="false"/>.</returns>
+    public bool TryGetFieldContract(
         QualifiedShapeId shapeId,
         FieldPath path,
         out ExprValueContract contract)

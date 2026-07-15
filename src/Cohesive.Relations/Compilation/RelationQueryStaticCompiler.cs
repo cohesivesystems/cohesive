@@ -138,6 +138,9 @@ public static class RelationQueryStaticCompiler
             request.DemandOrigin,
             logicalPlan,
             build.Graph,
+            expressionAnalysis,
+            build.DemandedExpressionSites,
+            build.DemandedAggregateAssignments,
             provenance);
         return new(plan, expressionAnalysis, validation);
     }

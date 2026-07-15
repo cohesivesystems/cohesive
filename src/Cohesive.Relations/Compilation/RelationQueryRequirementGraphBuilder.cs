@@ -13,6 +13,8 @@ sealed record RelationQueryRequirementGraphBuildResult(
     RelationQueryRequirementGraph? Graph,
     ImmutableArray<QueryNodeId> RetainedNodes,
     ImmutableArray<RelationQueryLogicalBypass> Bypasses,
+    ImmutableArray<RelationQueryExpressionSiteAnalysis> DemandedExpressionSites,
+    ImmutableArray<RelationQueryAggregateAssignmentReference> DemandedAggregateAssignments,
     DocumentValidationResult Validation);
 
 /// <summary>
@@ -30,6 +32,8 @@ sealed class RelationQueryRequirementGraphBuilder
     readonly RelationQueryShapeResolver shapeResolver;
     readonly RelationQueryBindingFlowAnalysis bindingFlow;
     readonly Dictionary<SiteKey, RelationQueryExpressionSiteAnalysis> sites;
+    readonly Dictionary<ExprSiteId, RelationQueryExpressionSiteAnalysis> demandedSites = [];
+    readonly HashSet<RelationQueryAggregateAssignmentReference> demandedAggregateAssignments = [];
     readonly RequirementAccumulator requirements = new();
     readonly HashSet<QueryNodeId> retainedNodes = [];
     readonly Dictionary<QueryNodeId, TraversalResolution> bypassedTraversals = [];
@@ -110,6 +114,12 @@ sealed class RelationQueryRequirementGraphBuilder
                         item.Traversal.From,
                         item.Traversal.Result))
             ],
+            [.. demandedSites.Values.OrderBy(static site => site.Analysis.Site.Id.Value, StringComparer.Ordinal)],
+            [
+                .. demandedAggregateAssignments
+                    .OrderBy(static assignment => assignment.Node.Value, StringComparer.Ordinal)
+                    .ThenBy(static assignment => assignment.Assignment.Value, StringComparer.Ordinal)
+            ],
             validation);
     }
 
@@ -147,6 +157,7 @@ sealed class RelationQueryRequirementGraphBuilder
         };
 
         var rowOutput = CreateRelationOutput(relation, field: null);
+        requirements.AddOutput(rowOutput);
         WalkRow(
             relation.Output.Node,
             RelationQueryRequirementEffect.Membership,
@@ -157,7 +168,7 @@ sealed class RelationQueryRequirementGraphBuilder
         foreach (var field in selectedFields)
         {
             var output = CreateRelationOutput(relation, field);
-            WalkField(
+            var resolved = WalkField(
                 relation.Output.Node,
                 outputBinding,
                 field.Path,
@@ -166,6 +177,8 @@ sealed class RelationQueryRequirementGraphBuilder
                 QueryInputRequirement.Required,
                 [],
                 strictAssignments);
+            if (resolved)
+                requirements.AddOutput(output);
         }
 
         if (relation.Output.Key is not null
@@ -269,6 +282,7 @@ sealed class RelationQueryRequirementGraphBuilder
                     RelationQueryCompilationDiagnosticCodes.QueryFieldInvalid,
                     $"/demand/queryResults/{Encode(selected.Result.Id.Value)}/fields");
             var rowOutput = CreateQueryOutput(query, selected.Result, resultShape, field: null);
+            requirements.AddOutput(rowOutput);
             WalkRow(
                 selected.Result.Input,
                 RelationQueryRequirementEffect.Membership,
@@ -279,7 +293,7 @@ sealed class RelationQueryRequirementGraphBuilder
             foreach (var field in selectedFields)
             {
                 var output = CreateQueryOutput(query, selected.Result, resultShape, field);
-                WalkField(
+                var resolved = WalkField(
                     selected.Result.Input,
                     outputBinding,
                     field.Path,
@@ -288,6 +302,8 @@ sealed class RelationQueryRequirementGraphBuilder
                     QueryInputRequirement.Required,
                     [],
                     selected.Strict);
+                if (resolved)
+                    requirements.AddOutput(output);
             }
         }
     }
@@ -1669,6 +1685,7 @@ sealed class RelationQueryRequirementGraphBuilder
         RelationQueryOutputReference output,
         ImmutableArray<RelationQueryRequirementTraceStep> trace)
     {
+        demandedAggregateAssignments.Add(new(aggregateNode, assignment));
         var capability = new ExprCapabilityRequirement(
             ExprCapabilities.ForAggregate(operation),
             ExprCapabilityRequirementKind.Operation);
@@ -1831,7 +1848,10 @@ sealed class RelationQueryRequirementGraphBuilder
         string? invariantName = null)
     {
         if (sites.TryGetValue(new(kind, node, assignment, ordinal, invariantName), out site!))
+        {
+            demandedSites[site.Analysis.Site.Id] = site;
             return true;
+        }
 
         var location = node is { } owner
             ? NodeLocation(owner)
@@ -2329,6 +2349,17 @@ sealed class RelationQueryRequirementGraphBuilder
 
         public bool HasEdges => edges.Count != 0;
 
+        public void AddOutput(RelationQueryOutputReference output)
+        {
+            Guard.RequireNotNull(output);
+            if (outputs.TryGetValue(output.Id, out var existingOutput) && existingOutput != output)
+            {
+                throw new InvalidOperationException(
+                    $"Requirement output id '{output.Id.Value}' has conflicting compiler definitions.");
+            }
+            outputs[output.Id] = output;
+        }
+
         public void Add(
             RelationQueryRequirementInput input,
             RelationQueryOutputReference output,
@@ -2341,14 +2372,8 @@ sealed class RelationQueryRequirementGraphBuilder
                 throw new InvalidOperationException(
                     $"Requirement input id '{input.Id.Value}' has conflicting compiler definitions.");
             }
-            if (outputs.TryGetValue(output.Id, out var existingOutput) && existingOutput != output)
-            {
-                throw new InvalidOperationException(
-                    $"Requirement output id '{output.Id.Value}' has conflicting compiler definitions.");
-            }
-
             inputs[input.Id] = input;
-            outputs[output.Id] = output;
+            AddOutput(output);
             edges.Add(new(input, output, effect, requirement, [trace]));
         }
 

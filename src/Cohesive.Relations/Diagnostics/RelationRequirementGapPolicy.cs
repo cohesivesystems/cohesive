@@ -300,16 +300,27 @@ public sealed record RelationRequirementGapDecision
 public sealed class RelationRequirementGapAnalysisResult
 {
     internal RelationRequirementGapAnalysisResult(
+        bool isEvidenceValid,
         bool isConclusive,
         ImmutableArray<RelationRequirementGap> gaps,
         ImmutableArray<RelationRequirementGapDecision> decisions,
         ImmutableArray<RelationRuntimeDiagnostic> diagnostics)
     {
+        IsEvidenceValid = isEvidenceValid;
         IsConclusive = isConclusive;
         Gaps = gaps;
         Decisions = decisions;
         Diagnostics = diagnostics;
     }
+
+    /// <summary>
+    /// Whether the evidence is consistently attributed to the compiled input contract and can be interpreted.
+    /// </summary>
+    /// <remarks>
+    /// Valid partial evidence may still have <see cref="IsConclusive"/> set to <see langword="false"/>.
+    /// Invalid evidence must not be executed because its input identities or occurrence topology are untrustworthy.
+    /// </remarks>
+    public bool IsEvidenceValid { get; }
 
     /// <summary>
     /// Whether the evidence snapshot was complete and valid enough for absence to be interpreted conclusively.

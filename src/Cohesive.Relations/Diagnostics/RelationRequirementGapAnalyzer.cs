@@ -125,7 +125,12 @@ public static class RelationRequirementGapAnalyzer
             ValidateForwardTraversalCorrelations();
             if (HasEvidenceErrors())
             {
-                return new(false, [], [], NormalizeDiagnostics(diagnostics));
+                return new(
+                    isEvidenceValid: false,
+                    isConclusive: false,
+                    [],
+                    [],
+                    NormalizeDiagnostics(diagnostics));
             }
 
             AnalyzeConversionFailures();
@@ -148,6 +153,7 @@ public static class RelationRequirementGapAnalyzer
                     traversal.State != RelationQueryTraversalEvidenceState.Completed
                     || traversal.Completeness == RelationQueryEvidenceCompleteness.Complete);
             return new(
+                isEvidenceValid: true,
                 isConclusive,
                 normalizedGaps,
                 decisions,

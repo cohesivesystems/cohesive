@@ -361,6 +361,9 @@ public sealed class CompiledRelationQueryPlan
         RelationQueryCompilationDemandOrigin demandOrigin,
         RelationQueryLogicalPlan logicalPlan,
         RelationQueryRequirementGraph requirementGraph,
+        RelationQueryExpressionAnalysisResult expressionAnalysis,
+        ImmutableArray<RelationQueryExpressionSiteAnalysis> demandedExpressionSites,
+        ImmutableArray<RelationQueryAggregateAssignmentReference> demandedAggregateAssignments,
         RelationQueryCompilationProvenance provenance)
     {
         Demand = Guard.RequireNotNull(demand);
@@ -373,6 +376,13 @@ public sealed class CompiledRelationQueryPlan
         ValidateLogicalPlan(Definition, logicalPlan, provenance);
         ValidateRetainedNodeReferences(logicalPlan, requirementGraph);
         ValidateDemand(Definition, demand, requirementGraph);
+        ExecutionSlice = new(
+            Definition,
+            logicalPlan,
+            requirementGraph,
+            Guard.RequireNotNull(expressionAnalysis),
+            demandedExpressionSites,
+            demandedAggregateAssignments);
         InputContract = new(requirementGraph);
         Lineage = new(requirementGraph);
         DependencyManifest = new(requirementGraph);
@@ -392,6 +402,11 @@ public sealed class CompiledRelationQueryPlan
 
     /// <summary>Canonical input-to-output requirement graph.</summary>
     public RelationQueryRequirementGraph RequirementGraph { get; }
+
+    /// <summary>
+    /// Explicit demand-scoped nodes, assignments, expression sites, binding metadata, and result terminals.
+    /// </summary>
+    public RelationQueryExecutionSlice ExecutionSlice { get; }
 
     /// <summary>Acquisition contract projected from <see cref="RequirementGraph"/>.</summary>
     public RelationQueryInputContract InputContract { get; }

@@ -285,10 +285,33 @@ public sealed record RelationRequirementGap
     public RelationQueryCompilationDemand Demand { get; }
 }
 
-/// <summary>Structured runtime diagnostic projected from invalid evidence, policy, or an unresolved requirement gap.</summary>
+/// <summary>
+/// Structured runtime diagnostic projected from invalid evidence, policy, an unresolved requirement gap,
+/// or interpreter execution.
+/// </summary>
 public sealed record RelationRuntimeDiagnostic
 {
-    internal RelationRuntimeDiagnostic(
+    /// <summary>Creates an attributable runtime diagnostic.</summary>
+    /// <param name="code">Stable machine-readable diagnostic code.</param>
+    /// <param name="severity">Diagnostic severity.</param>
+    /// <param name="message">Human-readable message without sensitive evidence payloads.</param>
+    /// <param name="evaluation">Evaluation to which the diagnostic belongs.</param>
+    /// <param name="input">Affected compiled input identity, or <see langword="null"/>.</param>
+    /// <param name="occurrence">Affected occurrence identity, or <see langword="null"/>.</param>
+    /// <param name="gap">Causal requirement gap identity, or <see langword="null"/>.</param>
+    /// <param name="output">Affected demanded output, or <see langword="null"/>.</param>
+    /// <param name="evidenceReference">Opaque evidence or failure reference, or <see langword="null"/>.</param>
+    /// <param name="node">Logical node at which execution failed, or <see langword="null"/>.</param>
+    /// <param name="semanticSite">Stable expression-site or invariant identity, or <see langword="null"/>.</param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="code"/> or <paramref name="message"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// A required identity, <paramref name="code"/>, <paramref name="message"/>,
+    /// <paramref name="evidenceReference"/>, or <paramref name="semanticSite"/> is empty or white space.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="severity"/> is unsupported.</exception>
+    public RelationRuntimeDiagnostic(
         string code,
         DiagnosticSeverity severity,
         string message,
@@ -297,23 +320,43 @@ public sealed record RelationRuntimeDiagnostic
         RelationQueryOccurrenceId? occurrence = null,
         RelationRequirementGapId? gap = null,
         RelationQueryOutputReference? output = null,
-        string? evidenceReference = null)
+        string? evidenceReference = null,
+        QueryNodeId? node = null,
+        string? semanticSite = null)
     {
         Code = Guard.RequireNotNullOrWhiteSpace(code);
+        if (!Enum.IsDefined(severity))
+            throw new ArgumentOutOfRangeException(nameof(severity), severity, "Unsupported diagnostic severity.");
         Severity = severity;
         Message = Guard.RequireNotNullOrWhiteSpace(message);
+        if (string.IsNullOrWhiteSpace(evaluation.Value))
+            throw new ArgumentException("A runtime diagnostic requires an evaluation identity.", nameof(evaluation));
+        if (input is { } inputId && string.IsNullOrWhiteSpace(inputId.Value))
+            throw new ArgumentException("A diagnostic input identity cannot be empty.", nameof(input));
+        if (occurrence is { } occurrenceId && string.IsNullOrWhiteSpace(occurrenceId.Value))
+            throw new ArgumentException("A diagnostic occurrence identity cannot be empty.", nameof(occurrence));
+        if (gap is { } gapId && string.IsNullOrWhiteSpace(gapId.Value))
+            throw new ArgumentException("A diagnostic gap identity cannot be empty.", nameof(gap));
+        if (evidenceReference is not null)
+            ArgumentException.ThrowIfNullOrWhiteSpace(evidenceReference);
+        if (node is { } nodeId && string.IsNullOrWhiteSpace(nodeId.Value))
+            throw new ArgumentException("A diagnostic node identity cannot be empty.", nameof(node));
+        if (semanticSite is not null)
+            ArgumentException.ThrowIfNullOrWhiteSpace(semanticSite);
         Evaluation = evaluation;
         Input = input;
         Occurrence = occurrence;
         Gap = gap;
         Output = output;
         EvidenceReference = evidenceReference;
+        Node = node;
+        SemanticSite = semanticSite;
     }
 
     /// <summary>Stable machine-readable diagnostic code.</summary>
     public string Code { get; }
 
-    /// <summary>Diagnostic severity selected by validation or reporting policy.</summary>
+    /// <summary>Diagnostic severity selected by validation, reporting policy, or execution.</summary>
     public DiagnosticSeverity Severity { get; }
 
     /// <summary>
@@ -331,7 +374,7 @@ public sealed record RelationRuntimeDiagnostic
     /// <summary>Affected binding occurrence, or <see langword="null"/>.</summary>
     public RelationQueryOccurrenceId? Occurrence { get; }
 
-    /// <summary>Source requirement gap, or <see langword="null"/> for evidence or policy validation.</summary>
+    /// <summary>Source requirement gap, or <see langword="null"/> for evidence, policy, or execution diagnostics.</summary>
     public RelationRequirementGapId? Gap { get; }
 
     /// <summary>Affected demanded output, or <see langword="null"/>.</summary>
@@ -339,9 +382,18 @@ public sealed record RelationRuntimeDiagnostic
 
     /// <summary>Opaque evidence or failure reference, or <see langword="null"/>.</summary>
     public string? EvidenceReference { get; }
+
+    /// <summary>Logical node at which the runtime diagnostic arose, or <see langword="null"/>.</summary>
+    public QueryNodeId? Node { get; }
+
+    /// <summary>
+    /// Stable semantic expression site or invariant identity, or <see langword="null"/> when the diagnostic
+    /// applies to an input or output as a whole.
+    /// </summary>
+    public string? SemanticSite { get; }
 }
 
-/// <summary>Stable codes emitted by relation runtime evidence and requirement-gap analysis.</summary>
+/// <summary>Stable codes emitted by runtime evidence validation, requirement-gap analysis, and execution.</summary>
 public static class RelationRuntimeDiagnosticCodes
 {
     /// <summary>Evidence was produced for a different compiled input contract.</summary>
@@ -415,4 +467,31 @@ public static class RelationRuntimeDiagnosticCodes
 
     /// <summary>A conversion failure was reported.</summary>
     public const string RequirementGapConversionFailure = "REL3116";
+
+    /// <summary>A retained canonical expression could not be evaluated by the reference interpreter.</summary>
+    public const string ExecutionExpressionFailure = "REL3201";
+
+    /// <summary>A produced value did not have the shaped object form required by its declared output.</summary>
+    public const string ExecutionOutputShapeInvalid = "REL3202";
+
+    /// <summary>A relation output key was missing, null, non-scalar, or duplicated.</summary>
+    public const string ExecutionOutputIdentityInvalid = "REL3203";
+
+    /// <summary>Emitted relation rows violated the declared per-root output cardinality.</summary>
+    public const string ExecutionOutputCardinalityViolation = "REL3204";
+
+    /// <summary>A declared relation invariant evaluated to false or produced a non-Boolean value.</summary>
+    public const string ExecutionInvariantViolation = "REL3205";
+
+    /// <summary>Requirement-gap decisions selected conflicting execution effects for one output value.</summary>
+    public const string ExecutionPolicyConflict = "REL3206";
+
+    /// <summary>A selected substitution could not be realized because a structural input produced no output row.</summary>
+    public const string ExecutionPolicyDispositionUnrealizable = "REL3207";
+
+    /// <summary>Partial evidence or an unevaluable site prevented a conclusive execution result.</summary>
+    public const string ExecutionEvidenceInconclusive = "REL3208";
+
+    /// <summary>The selected interpreter cannot realize a demanded canonical capability or field path.</summary>
+    public const string ExecutionTargetCapabilityUnsupported = "REL3209";
 }

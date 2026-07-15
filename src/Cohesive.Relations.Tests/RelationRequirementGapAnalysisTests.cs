@@ -33,6 +33,7 @@ public sealed class RelationRequirementGapAnalysisTests
                 ],
                 traversals: [CompletedTraversal(inputs, load, [customer])]));
 
+        Assert.True(result.IsEvidenceValid);
         Assert.True(result.IsConclusive);
         Assert.False(result.HasErrors);
         Assert.Empty(result.Gaps);
@@ -275,6 +276,7 @@ public sealed class RelationRequirementGapAnalysisTests
                 ],
                 traversals: [CompletedTraversal(inputs, load, [unexpectedCustomer])]));
 
+        Assert.False(result.IsEvidenceValid);
         Assert.False(result.IsConclusive);
         Assert.Empty(result.Gaps);
         Assert.Contains(
@@ -364,6 +366,7 @@ public sealed class RelationRequirementGapAnalysisTests
                 ],
                 traversals: [CompletedTraversal(inputs, load, [unidentifiedCustomer])]));
 
+        Assert.False(result.IsEvidenceValid);
         Assert.False(result.IsConclusive);
         Assert.Empty(result.Gaps);
         Assert.Contains(
@@ -498,6 +501,7 @@ public sealed class RelationRequirementGapAnalysisTests
                         RelationQueryEvidenceCompleteness.Partial)
                 ]));
 
+        Assert.True(result.IsEvidenceValid);
         Assert.False(result.IsConclusive);
         Assert.DoesNotContain(
             result.Gaps,
@@ -1426,6 +1430,7 @@ public sealed class RelationRequirementGapAnalysisTests
 
         var result = RelationRequirementGapAnalyzer.Analyze(narrowedPlan, evidence);
 
+        Assert.False(result.IsEvidenceValid);
         Assert.False(result.IsConclusive);
         Assert.Empty(result.Gaps);
         var mismatch = Assert.Single(
