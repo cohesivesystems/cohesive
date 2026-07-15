@@ -121,6 +121,7 @@ Relations and queries use the same logical operators because both describe relat
 - Filters
 - Relationship traversal
 - Explicit joins
+- Valid-time joins
 - Unnesting
 - Projection
 - Distinctness
@@ -141,6 +142,80 @@ They differ in their semantic contract:
 The distinction is semantic rather than physical. Neither construct chooses a database, join algorithm, batching strategy, or execution runtime.
 
 A Cohesive relation is also not synonymous with a table in the relational-database sense. A compiler may realize a relation as a SQL expression, view, materialized view, or application-side plan, but the relation itself remains portable.
+
+## Valid-Time Joins
+
+A `TemporalJoinQueryNode` correlates two independently produced rowsets using both an ordinary
+Boolean key predicate and an explicit valid-time condition. It models when row-valued facts were
+valid; it does not select a database snapshot, read system-versioned history, or consult an ambient
+clock.
+
+For example, an event can be enriched with the customer version that was valid when the event
+occurred:
+
+```csharp
+var temporalJoin = new TemporalJoinQueryNode(
+    id: new("event-customer-version"),
+    left: eventSource,
+    right: customerVersionSource,
+    kind: JoinKind.Left,
+    correlation: Expr.Eq(
+        Expr.Field(eventBinding, FieldPath.FromField("CustomerId")),
+        Expr.Field(versionBinding, FieldPath.FromField("CustomerId"))),
+    match: new TemporalPointInIntervalMatch(
+        Expr.Field(eventBinding, FieldPath.FromField("OccurredAt")),
+        TemporalInterval.HalfOpen(
+            Expr.Field(versionBinding, FieldPath.FromField("ValidFrom")),
+            Expr.Field(versionBinding, FieldPath.FromField("ValidTo")),
+            upperNullBehavior: TemporalNullBoundBehavior.Unbounded)));
+```
+
+Point containment reads its point from the left rowset and its interval from the right. Interval
+overlap reads its first interval from the left and its second from the right. Only the ordinary
+correlation expression sees the combined pre-null-extension binding scope. Swapping the inputs
+expresses the inverse point/interval orientation.
+
+The persisted interval records every finite endpoint as inclusive or exclusive. `HalfOpen`
+conventionally produces `[lower, upper)`, but canonical semantics never depend on that convention.
+Endpoint states remain distinct:
+
+| Endpoint or interval state | Meaning |
+|---|---|
+| `UnboundedTemporalIntervalBound` | Structural negative or positive infinity |
+| Expression evaluates to null with `Invalid` | Invalid operand and incomplete result |
+| Expression evaluates to null with `Unbounded` | Explicit source convention for an open end |
+| Expression is missing or unavailable | Indeterminate evidence, never an unbounded endpoint |
+| Lower follows upper | Invalid interval with an attributable diagnostic |
+| Equal inclusive endpoints | A valid singleton interval |
+| Equal endpoints with either endpoint exclusive | A valid empty interval |
+
+`Date`, `DateTime`, and `Instant` are exact, non-coercing domains. `DateTime` uses civil or
+wall-clock ordering; `Instant` uses absolute ordering, so equivalent instants with different
+offsets compare equally. Interval emptiness and overlap use the domain's representable precision:
+civil days for `Date`, civil ticks for `DateTime`, and UTC ticks for `Instant`. Every pair satisfying
+both correlation and temporal membership is emitted. Overlapping versions therefore produce
+multiple rows; the operator never chooses a "latest" winner.
+
+Missing fields, partial source results, and partial traversals make affected candidates
+indeterminate. An outer join emits an unmatched row only when the opposite candidate set is
+complete and every applicable candidate is a conclusive non-match. Matched rows may still be
+returned from incomplete evidence, but the result remains explicitly incomplete.
+
+Backend interpreters may preserve these semantics with SQL range predicates, native range types,
+interval indexes, or batched acquisition followed by in-memory evaluation. The temporal execution
+capability profile declares which match, boundary, domain, join, and inconclusive-evidence semantics
+a target preserves. The compiled input contract lists the exact demand-scoped temporal capabilities
+with stable requirement IDs and node/site provenance. A target missing one must reject the plan with
+an attributable diagnostic rather than weakening it. System-time acquisition, nearest-predecessor
+`ASOF` joins, temporal relationship traversal, and physical interval-index planning are separate
+future semantics.
+
+Temporal operands are retained as correlation, membership, cardinality, and validation influences
+in the requirement graph, output-oriented lineage, and dependency manifest. Lineage keeps these in
+its `Influences` channel while `Contributions` remains intentionally narrow to value, identity, and
+aggregation provenance. Consumers performing invalidation or materialization analysis can therefore
+walk output-oriented influences or the inverse input-oriented dependency manifest without treating
+a membership predicate as a projected value.
 
 ## Portable Relation Drafts
 
@@ -472,8 +547,8 @@ expression sites by scanning the persisted definition, acquire external data, or
 or batching strategy.
 
 The reference interpreter currently executes every canonical logical node: source, filter, relationship
-traversal, explicit join, collection expansion, projection, distinct, aggregation, ordering, and offset or
-keyset paging. Relation terminals enforce per-root cardinality, keys, and invariants. Query terminals retain
+traversal, explicit join, valid-time join, collection expansion, projection, distinct, aggregation, ordering,
+and offset or keyset paging. Relation terminals enforce per-root cardinality, keys, and invariants. Query terminals retain
 their named row or aggregation branches. Results carry exact root attribution, contributing occurrence
 provenance, requirement gaps, policy effects, and deterministic diagnostics. Partial evidence remains
 explicitly incomplete; it is never converted into semantic null or absence. Expression input availability
@@ -486,9 +561,18 @@ operators plus the pure collection, object, string, and aggregate functions cove
 Ambient functions (`entityId`, `key`, `sourceRows`, and `relatedField`) and the pure `groupBy`, `groupByRows`,
 and expression-level `join` functions are not yet interpreted. Collection-element field evidence also cannot
 yet be reconstructed losslessly from one occurrence-scoped scalar evidence record. The interpreter publishes
-this narrower target surface through `RelationQueryInMemoryInterpreter.ExpressionCapabilities` and rejects
+this narrower expression surface through `RelationQueryInMemoryInterpreter.ExpressionCapabilities`, publishes
+valid-time semantics through `DefaultTemporalCapabilities`, and rejects
 unsupported demanded semantics during preflight with an attributable `REL3209` diagnostic rather than falling
 back to a different or weakened meaning.
+
+Valid-time join support is declared independently through
+`RelationQueryInMemoryInterpreter.DefaultTemporalCapabilities`. The conventional interpreter supports the
+complete canonical temporal surface, including both match forms, explicit boundary and null policies, exact
+temporal domains, outer-join absence semantics, all-match multiplicity, interval validation, and inconclusive
+evidence propagation. An interpreter instance may instead receive a narrower
+`RelationQueryTemporalExecutionCapabilityProfile`; preflight rejects each unsupported demanded temporal semantic
+with `REL3209` attributed to the temporal node and exact expression or structural match site.
 
 Runtime value semantics are likewise explicit. Equality is structural and ordinal, distinguishes null from
 undefined, and compares integers with floating-point values only when they represent the same exact integer.
@@ -822,11 +906,11 @@ var plan = result.Plan!;
 The plan exposes several immutable views of one canonical requirement graph:
 
 - `InputContract` describes the source sets, selected fields, observation identities,
-  relationship traversals, invocation parameters, and expression capabilities that must be
-  supplied.
-- `Lineage` has one entry per demanded output and contains only value-, identity-, and
-  aggregate-producing contributions. Constant-derived outputs have an explicit empty entry;
-  operational requirements such as a filter predicate do not become false value lineage.
+  relationship traversals, invocation parameters, expression capabilities that must be supplied,
+  and target temporal capabilities that must be preserved.
+- `Lineage` has one entry per demanded output. Its `Contributions` contain only value-, identity-,
+  and aggregate-producing provenance, while `Influences` retain non-value effects such as
+  membership, cardinality, ordering, and validation without misclassifying them as output values.
 - `DependencyManifest` includes every semantic influence, including membership, correlation,
   acquisition, cardinality, ordering, grouping, aggregation, pagination, validation, and
   evaluation capabilities. It is the appropriate view for impact analysis and index synchronization.

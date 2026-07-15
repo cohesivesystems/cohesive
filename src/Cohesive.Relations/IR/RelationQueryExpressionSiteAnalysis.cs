@@ -41,7 +41,19 @@ public enum RelationQueryExpressionSiteKind
     RelationOutputKey = 10,
 
     /// <summary>An expression that validates one named relation invariant.</summary>
-    RelationInvariant = 11
+    RelationInvariant = 11,
+
+    /// <summary>A Boolean predicate that correlates the inputs of a temporal join.</summary>
+    TemporalJoinCorrelation = 12,
+
+    /// <summary>The temporal point tested by a point-in-interval temporal join.</summary>
+    TemporalJoinPoint = 13,
+
+    /// <summary>An indexed lower-bound expression used by a temporal join interval.</summary>
+    TemporalJoinIntervalLowerBound = 14,
+
+    /// <summary>An indexed upper-bound expression used by a temporal join interval.</summary>
+    TemporalJoinIntervalUpperBound = 15
 }
 
 /// <summary>
@@ -86,15 +98,16 @@ public sealed class RelationQueryExpressionSiteAnalysis
         Analysis = Guard.RequireNotNull(analysis);
         Kind = kind;
 
-        var requiresNode = kind is not RelationQueryExpressionSiteKind.RelationOutputKey
-            and not RelationQueryExpressionSiteKind.RelationInvariant;
+        var requiresNode = kind is not RelationQueryExpressionSiteKind.RelationOutputKey and not RelationQueryExpressionSiteKind.RelationInvariant;
         var requiresAssignment = kind is RelationQueryExpressionSiteKind.ProjectionAssignmentValue
             or RelationQueryExpressionSiteKind.AggregateGroupingKey
             or RelationQueryExpressionSiteKind.AggregateAssignmentValue
             or RelationQueryExpressionSiteKind.AggregateAssignmentFilter;
         var requiresOrdinal = kind is RelationQueryExpressionSiteKind.DistinctKey
             or RelationQueryExpressionSiteKind.OrderKey
-            or RelationQueryExpressionSiteKind.KeysetBoundary;
+            or RelationQueryExpressionSiteKind.KeysetBoundary
+            or RelationQueryExpressionSiteKind.TemporalJoinIntervalLowerBound
+            or RelationQueryExpressionSiteKind.TemporalJoinIntervalUpperBound;
         var requiresInvariantName = kind == RelationQueryExpressionSiteKind.RelationInvariant;
 
         ValidateOptionalIdentifier(node?.Value, node is not null, requiresNode, nameof(node), "node");

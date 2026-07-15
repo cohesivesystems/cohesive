@@ -494,4 +494,10 @@ public static class RelationRuntimeDiagnosticCodes
 
     /// <summary>The selected interpreter cannot realize a demanded canonical capability or field path.</summary>
     public const string ExecutionTargetCapabilityUnsupported = "REL3209";
+
+    /// <summary>A temporal join operand was null, missing, malformed, or outside its declared temporal domain.</summary>
+    public const string ExecutionTemporalOperandInvalid = "REL3210";
+
+    /// <summary>A temporal interval had a lower endpoint after its upper endpoint.</summary>
+    public const string ExecutionTemporalIntervalInvalid = "REL3211";
 }

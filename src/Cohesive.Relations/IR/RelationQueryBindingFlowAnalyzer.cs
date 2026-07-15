@@ -93,6 +93,7 @@ static class RelationQueryBindingFlowAnalyzer
                 FilterQueryNode filter => ResolvePreservingNode(filter.Id, filter.Input),
                 TraverseRelationshipQueryNode traversal => ResolveTraversal(traversal),
                 JoinQueryNode join => ResolveJoin(join),
+                TemporalJoinQueryNode temporalJoin => ResolveTemporalJoin(temporalJoin),
                 ExpandCollectionQueryNode expansion => ResolveExpansion(expansion),
                 ProjectQueryNode project => ResolveProject(project),
                 DistinctQueryNode distinct => ResolvePreservingNode(distinct.Id, distinct.Input),
@@ -216,31 +217,55 @@ static class RelationQueryBindingFlowAnalyzer
             return output.ToEnvironment();
         }
 
-        RelationQueryBindingEnvironment ResolveJoin(JoinQueryNode join)
+        RelationQueryBindingEnvironment ResolveJoin(JoinQueryNode join) =>
+            ResolveJoin(
+                join.Id,
+                join.Left,
+                join.Right,
+                join.Kind,
+                diagnosticPrefix: "relationQuery.join",
+                displayName: "Join");
+
+        RelationQueryBindingEnvironment ResolveTemporalJoin(TemporalJoinQueryNode join) =>
+            ResolveJoin(
+                join.Id,
+                join.Left,
+                join.Right,
+                join.Kind,
+                diagnosticPrefix: "relationQuery.temporalJoin",
+                displayName: "Temporal join");
+
+        RelationQueryBindingEnvironment ResolveJoin(
+            QueryNodeId id,
+            QueryNodeId leftInput,
+            QueryNodeId rightInput,
+            JoinKind kind,
+            string diagnosticPrefix,
+            string displayName)
         {
-            var left = ResolveOutput(join.Left);
-            var right = ResolveOutput(join.Right);
+            var left = ResolveOutput(leftInput);
+            var right = ResolveOutput(rightInput);
             var predicateInput = left.ToBuilder();
             foreach (var (binding, analysis) in right.Bindings)
             {
                 if (!predicateInput.TryAdd(binding, analysis))
                 {
                     AddStructural(
-                        code: "relationQuery.join.bindingCollision",
-                        message: $"Join '{join.Id.Value}' receives binding '{binding.Value}' from both inputs.",
-                        location: NodeLocation(join.Id));
+                        code: $"{diagnosticPrefix}.bindingCollision",
+                        message: $"{displayName} '{id.Value}' receives binding '{binding.Value}' from both inputs.",
+                        location: NodeLocation(id));
                 }
             }
 
             // Join predicates are evaluated before outer-join null extension. Downstream expressions
             // consume the separately derived output environment below.
-            inputsByNode[join.Id] = predicateInput.ToEnvironment();
+            inputsByNode[id] = predicateInput.ToEnvironment();
 
             var output = left.ToBuilder();
             var nullableRight = right.ToBuilder();
-            if (join.Kind is JoinKind.Right or JoinKind.Full)
+            if (kind is JoinKind.Right or JoinKind.Full)
                 MarkMayBeAbsent(output, left.Bindings.Keys);
-            if (join.Kind is JoinKind.Left or JoinKind.Full)
+            if (kind is JoinKind.Left or JoinKind.Full)
                 MarkMayBeAbsent(nullableRight, right.Bindings.Keys);
 
             foreach (var (binding, analysis) in nullableRight)

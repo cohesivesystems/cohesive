@@ -22,6 +22,8 @@ public static class RelationQueryWireNames
     public const string TraverseRelationshipNode = "traverseRelationship";
     /// <summary>Explicit join node discriminator value.</summary>
     public const string JoinNode = "join";
+    /// <summary>Temporal join node discriminator value.</summary>
+    public const string TemporalJoinNode = "temporalJoin";
     /// <summary>Collection-expansion node discriminator value.</summary>
     public const string ExpandCollectionNode = "expandCollection";
     /// <summary>Projection node discriminator value.</summary>
@@ -34,6 +36,20 @@ public static class RelationQueryWireNames
     public const string OrderNode = "order";
     /// <summary>Page node discriminator value.</summary>
     public const string PageNode = "page";
+
+    /// <summary>Temporal-join match discriminator property.</summary>
+    public const string TemporalMatchDiscriminator = "$temporalMatch";
+    /// <summary>Point-in-interval temporal match discriminator value.</summary>
+    public const string TemporalPointInIntervalMatch = "pointInInterval";
+    /// <summary>Interval-overlap temporal match discriminator value.</summary>
+    public const string TemporalIntervalOverlapMatch = "intervalOverlap";
+
+    /// <summary>Temporal-interval bound discriminator property.</summary>
+    public const string TemporalBoundDiscriminator = "$temporalBound";
+    /// <summary>Unbounded temporal-interval bound discriminator value.</summary>
+    public const string UnboundedTemporalBound = "unbounded";
+    /// <summary>Expression temporal-interval bound discriminator value.</summary>
+    public const string ExpressionTemporalBound = "expression";
 
     /// <summary>Page-definition discriminator property.</summary>
     public const string PageDiscriminator = "$page";

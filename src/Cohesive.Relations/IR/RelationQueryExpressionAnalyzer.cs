@@ -23,6 +23,10 @@ public static class RelationQueryExpressionAnalyzer
             presence: FieldPresence.Optional,
             nullability: FieldNullability.Nullable),
         ExprDependencyKind.Parameter);
+    static readonly ExprExpectation TemporalExpectation = new(ExprResultCategory.Temporal);
+    static readonly ExprExpectation NullableTemporalExpectation = new(
+        ExprResultCategory.Temporal,
+        new ExprValueContract(nullability: FieldNullability.Nullable));
     static readonly ImmutableArray<ExprCapabilityId> RelationAmbientCapabilities =
     [
         ExprCapabilities.EntityIdentity,
@@ -66,7 +70,11 @@ public static class RelationQueryExpressionAnalyzer
         ArgumentNullException.ThrowIfNull(definition);
         var snapshots = NormalizeShapeGraphs(shapeGraphs);
         var bindingFlow = RelationQueryBindingFlowAnalyzer.Analyze(definition);
-        return AnalyzeWithBindingFlow(definition, bindingFlow, shapeGraphs: snapshots);
+        return AnalyzeWithBindingFlow(
+            definition,
+            bindingFlow,
+            shapeGraphs: snapshots,
+            requireResolvedTemporalDomains: true);
     }
 
     /// <summary>
@@ -90,7 +98,11 @@ public static class RelationQueryExpressionAnalyzer
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(catalogDocument);
-        return AnalyzeWithCatalogCore(definition, catalogDocument, []);
+        return AnalyzeWithCatalogCore(
+            definition,
+            catalogDocument,
+            [],
+            requireResolvedTemporalDomains: false);
     }
 
     /// <summary>
@@ -123,13 +135,18 @@ public static class RelationQueryExpressionAnalyzer
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(catalogDocument);
-        return AnalyzeWithCatalogCore(definition, catalogDocument, NormalizeShapeGraphs(shapeGraphs));
+        return AnalyzeWithCatalogCore(
+            definition,
+            catalogDocument,
+            NormalizeShapeGraphs(shapeGraphs),
+            requireResolvedTemporalDomains: true);
     }
 
     static RelationQueryExpressionAnalysisResult AnalyzeWithCatalogCore(
         RelationQueryDefinition definition,
         RelationshipCatalogDocument catalogDocument,
-        ImmutableArray<ShapeGraph> shapeGraphs)
+        ImmutableArray<ShapeGraph> shapeGraphs,
+        bool requireResolvedTemporalDomains)
     {
         var catalogValidation = RelationshipCatalogDocumentSemanticValidator.Validate(catalogDocument);
         var bindingFlow = RelationQueryBindingFlowAnalyzer.Analyze(definition, catalogDocument.Catalog);
@@ -140,7 +157,8 @@ public static class RelationQueryExpressionAnalyzer
             DocumentValidationResult.Combine(
                 catalogValidation,
                 DocumentValidationResult.FromDiagnostics(bindingFlow.CatalogDiagnostics)),
-            shapeGraphs);
+            shapeGraphs,
+            requireResolvedTemporalDomains);
     }
 
     /// <summary>Analyzes sites using an existing canonical binding-flow result.</summary>
@@ -149,13 +167,17 @@ public static class RelationQueryExpressionAnalyzer
     /// <param name="catalogDocument">Optional exact catalog snapshot consumed by the flow.</param>
     /// <param name="additionalValidation">Optional validation to combine with structure and expression diagnostics.</param>
     /// <param name="shapeGraphs">Exact shape snapshots used to resolve shapes and target fields.</param>
+    /// <param name="requireResolvedTemporalDomains">
+    /// Whether every temporal-join operand must resolve to one exact portable temporal domain.
+    /// </param>
     /// <returns>The complete expression analysis result.</returns>
     internal static RelationQueryExpressionAnalysisResult AnalyzeWithBindingFlow(
         RelationQueryDefinition definition,
         RelationQueryBindingFlowAnalysis bindingFlow,
         RelationshipCatalogDocument? catalogDocument = null,
         DocumentValidationResult? additionalValidation = null,
-        ImmutableArray<ShapeGraph> shapeGraphs = default)
+        ImmutableArray<ShapeGraph> shapeGraphs = default,
+        bool requireResolvedTemporalDomains = false)
     {
         var snapshots = shapeGraphs.IsDefault ? ImmutableArray<ShapeGraph>.Empty : shapeGraphs;
         var (usableSnapshots, shapeValidation) = ValidateShapeSnapshots(snapshots);
@@ -169,6 +191,10 @@ public static class RelationQueryExpressionAnalyzer
         var parameters = CreateParameters(definition);
         List<DocumentValidationDiagnostic> siteDiagnostics = [];
         var siteAnalyses = AnalyzeSites(definition, bindingFlow, parameters, shapeResolver, siteDiagnostics);
+        siteDiagnostics.AddRange(ValidateTemporalJoinDomains(
+            siteAnalyses,
+            requireKnownDomains: requireResolvedTemporalDomains));
+        siteDiagnostics.AddRange(ValidateStaticTemporalIntervals(definition, siteAnalyses));
         var projectedDiagnostics = siteAnalyses
             .SelectMany(static site => ProjectDiagnostics(site.Analysis))
             .Concat(siteDiagnostics);
@@ -247,6 +273,33 @@ public static class RelationQueryExpressionAnalyzer
                         $"{nodeLocation}/predicate",
                         RelationQueryExpressionSiteKind.JoinPredicate,
                         node: join.Id));
+                    break;
+
+                case TemporalJoinQueryNode temporalJoin
+                    when temporalJoin.Correlation is not null && temporalJoin.Match is not null:
+                    sites.Add(CreateSite(
+                        $"{nodePrefix}/temporalJoin/correlation",
+                        temporalJoin.Correlation,
+                        inputScope,
+                        ExprExpectation.Boolean,
+                        $"{nodeLocation}/correlation",
+                        RelationQueryExpressionSiteKind.TemporalJoinCorrelation,
+                        node: temporalJoin.Id));
+                    AddTemporalJoinSites(
+                        sites,
+                        temporalJoin,
+                        CreateScope(
+                            bindingFlow.GetOutput(temporalJoin.Left),
+                            parameters,
+                            shapeResolver,
+                            ambientCapabilities),
+                        CreateScope(
+                            bindingFlow.GetOutput(temporalJoin.Right),
+                            parameters,
+                            shapeResolver,
+                            ambientCapabilities),
+                        nodePrefix,
+                        nodeLocation);
                     break;
 
                 case ExpandCollectionQueryNode expansion when expansion.Collection is not null:
@@ -410,6 +463,142 @@ public static class RelationQueryExpressionAnalyzer
         return [.. analyses];
     }
 
+    static IEnumerable<DocumentValidationDiagnostic> ValidateTemporalJoinDomains(
+        ImmutableArray<RelationQueryExpressionSiteAnalysis> sites,
+        bool requireKnownDomains)
+    {
+        foreach (var group in sites
+                     .Where(static site => site.Kind is
+                         RelationQueryExpressionSiteKind.TemporalJoinPoint
+                         or RelationQueryExpressionSiteKind.TemporalJoinIntervalLowerBound
+                         or RelationQueryExpressionSiteKind.TemporalJoinIntervalUpperBound)
+                     .GroupBy(static site => site.Node!.Value)
+                     .OrderBy(static group => group.Key.Value, StringComparer.Ordinal))
+        {
+            List<(RelationQueryExpressionSiteAnalysis Site, ScalarTypeKind Kind)> known = [];
+            foreach (var site in group.OrderBy(static item => item.Analysis.Site.Id.Value, StringComparer.Ordinal))
+            {
+                if (site.Analysis.KnownResult?.GetEffectiveType() is ScalarTypeRef
+                    {
+                        Kind: ScalarTypeKind.Date or ScalarTypeKind.DateTime or ScalarTypeKind.Instant
+                    } temporal)
+                {
+                    known.Add((site, temporal.Kind));
+                    continue;
+                }
+
+                if (requireKnownDomains
+                    && site.Analysis.IsValid
+                    && site.Analysis.ResultCategory is ExprResultCategory.Any or ExprResultCategory.Temporal)
+                {
+                    yield return new(
+                        Code: "relationQuery.temporalJoin.domainUnknown",
+                        Severity: DiagnosticSeverity.Error,
+                        Message: "A temporal join operand must resolve to Date, DateTime, or Instant during static compilation.",
+                        Location: site.Analysis.Site.DiagnosticLocation);
+                }
+            }
+
+            var domains = known
+                .Select(static item => item.Kind)
+                .Distinct()
+                .Order()
+                .ToArray();
+            if (domains.Length <= 1)
+                continue;
+
+            yield return new(
+                Code: "relationQuery.temporalJoin.domainMismatch",
+                Severity: DiagnosticSeverity.Error,
+                Message: $"Temporal join operands must use one exact temporal domain, but found {string.Join(", ", domains)}.",
+                Location: $"{NodeLocation(group.Key)}/match");
+        }
+    }
+
+    static IEnumerable<DocumentValidationDiagnostic> ValidateStaticTemporalIntervals(
+        RelationQueryDefinition definition,
+        ImmutableArray<RelationQueryExpressionSiteAnalysis> sites)
+    {
+        if (definition.Body is null)
+            yield break;
+
+        var domains = sites
+            .Where(static site => site.Node is not null
+                && site.Kind is RelationQueryExpressionSiteKind.TemporalJoinPoint
+                    or RelationQueryExpressionSiteKind.TemporalJoinIntervalLowerBound
+                    or RelationQueryExpressionSiteKind.TemporalJoinIntervalUpperBound)
+            .Where(static site => site.Analysis.KnownResult?.GetEffectiveType() is ScalarTypeRef
+            {
+                Kind: ScalarTypeKind.Date or ScalarTypeKind.DateTime or ScalarTypeKind.Instant
+            })
+            .GroupBy(static site => site.Node!.Value)
+            .ToDictionary(
+                static group => group.Key,
+                static group => group
+                    .Select(static site => ((ScalarTypeRef)site.Analysis.KnownResult!.GetEffectiveType()!).Kind)
+                    .Distinct()
+                    .ToArray());
+
+        foreach (var join in (definition.Body.Nodes.IsDefault ? [] : definition.Body.Nodes)
+                     .OfType<TemporalJoinQueryNode>()
+                     .OrderBy(static node => node.Id.Value, StringComparer.Ordinal))
+        {
+            if (!domains.TryGetValue(join.Id, out var nodeDomains) || nodeDomains.Length != 1)
+                continue;
+
+            var domain = nodeDomains[0];
+            IEnumerable<(TemporalInterval Interval, string Location)> intervals = join.Match switch
+            {
+                TemporalPointInIntervalMatch point =>
+                [
+                    (point.Interval, $"{NodeLocation(join.Id)}/match/interval")
+                ],
+                TemporalIntervalOverlapMatch overlap =>
+                [
+                    (overlap.Left, $"{NodeLocation(join.Id)}/match/left"),
+                    (overlap.Right, $"{NodeLocation(join.Id)}/match/right")
+                ],
+                _ => []
+            };
+            foreach (var (interval, location) in intervals)
+            {
+                if (!TryGetStaticBoundValue(interval.Lower, out var lower)
+                    || !TryGetStaticBoundValue(interval.Upper, out var upper)
+                    || !RelationQueryTemporalValueSemantics.TryCompare(domain, lower, upper, out var comparison)
+                    || comparison <= 0)
+                {
+                    continue;
+                }
+
+                yield return new(
+                    Code: "relationQuery.temporalJoin.intervalInvalid",
+                    Severity: DiagnosticSeverity.Error,
+                    Message: "A temporal interval lower bound cannot follow its upper bound.",
+                    Location: location);
+            }
+        }
+    }
+
+    static bool TryGetStaticBoundValue(
+        TemporalIntervalBound bound,
+        out ObservationValue value)
+    {
+        if (bound is ExpressionTemporalIntervalBound expression)
+        {
+            value = expression.Value switch
+            {
+                ConstantExpr constant => constant.Value,
+                LiteralExpr literal => literal.Value,
+                _ => ObservationValue.Undefined
+            };
+            return value.Kind is not ObservationValueKind.Undefined
+                and not ObservationValueKind.Null;
+        }
+
+        value = ObservationValue.Undefined;
+        return false;
+    }
+
     static void AddAggregateSites(
         ICollection<PendingExpressionSite> sites,
         AggregateQueryNode aggregate,
@@ -485,6 +674,117 @@ public static class RelationQueryExpressionAnalyzer
                     assignment: assignment.Id));
             }
         }
+    }
+
+    static void AddTemporalJoinSites(
+        ICollection<PendingExpressionSite> sites,
+        TemporalJoinQueryNode temporalJoin,
+        ExprScope leftScope,
+        ExprScope rightScope,
+        string nodePrefix,
+        string nodeLocation)
+    {
+        switch (temporalJoin.Match)
+        {
+            case TemporalPointInIntervalMatch pointInInterval:
+                if (pointInInterval.Point is not null)
+                {
+                    sites.Add(CreateSite(
+                        $"{nodePrefix}/temporalJoin/pointInInterval/point",
+                        pointInInterval.Point,
+                        leftScope,
+                        TemporalExpectation,
+                        $"{nodeLocation}/match/point",
+                        RelationQueryExpressionSiteKind.TemporalJoinPoint,
+                        node: temporalJoin.Id));
+                }
+                AddTemporalIntervalSites(
+                    sites,
+                    temporalJoin.Id,
+                    pointInInterval.Interval,
+                    intervalOrdinal: 0,
+                    rightScope,
+                    $"{nodePrefix}/temporalJoin/pointInInterval/interval/0",
+                    $"{nodeLocation}/match/interval");
+                break;
+
+            case TemporalIntervalOverlapMatch overlap:
+                AddTemporalIntervalSites(
+                    sites,
+                    temporalJoin.Id,
+                    overlap.Left,
+                    intervalOrdinal: 0,
+                    leftScope,
+                    $"{nodePrefix}/temporalJoin/intervalOverlap/interval/0",
+                    $"{nodeLocation}/match/left");
+                AddTemporalIntervalSites(
+                    sites,
+                    temporalJoin.Id,
+                    overlap.Right,
+                    intervalOrdinal: 1,
+                    rightScope,
+                    $"{nodePrefix}/temporalJoin/intervalOverlap/interval/1",
+                    $"{nodeLocation}/match/right");
+                break;
+        }
+    }
+
+    static void AddTemporalIntervalSites(
+        ICollection<PendingExpressionSite> sites,
+        QueryNodeId node,
+        TemporalInterval? interval,
+        int intervalOrdinal,
+        ExprScope scope,
+        string sitePrefix,
+        string location)
+    {
+        if (interval is null)
+            return;
+
+        AddTemporalBoundSite(
+            sites,
+            node,
+            interval.Lower,
+            intervalOrdinal,
+            RelationQueryExpressionSiteKind.TemporalJoinIntervalLowerBound,
+            scope,
+            $"{sitePrefix}/lower",
+            $"{location}/lower");
+        AddTemporalBoundSite(
+            sites,
+            node,
+            interval.Upper,
+            intervalOrdinal,
+            RelationQueryExpressionSiteKind.TemporalJoinIntervalUpperBound,
+            scope,
+            $"{sitePrefix}/upper",
+            $"{location}/upper");
+    }
+
+    static void AddTemporalBoundSite(
+        ICollection<PendingExpressionSite> sites,
+        QueryNodeId node,
+        TemporalIntervalBound? bound,
+        int intervalOrdinal,
+        RelationQueryExpressionSiteKind kind,
+        ExprScope scope,
+        string siteId,
+        string location)
+    {
+        if (bound is not ExpressionTemporalIntervalBound { Value: not null } expressionBound)
+            return;
+
+        sites.Add(CreateSite(
+            siteId,
+            expressionBound.Value,
+            scope,
+            expressionBound.NullBehavior == TemporalNullBoundBehavior.Unbounded
+                ? NullableTemporalExpectation
+                : TemporalExpectation,
+            $"{location}/value",
+            kind,
+            node,
+            ordinal: intervalOrdinal));
     }
 
     static void AddInvariantSites(

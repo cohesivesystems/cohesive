@@ -27,6 +27,8 @@ public sealed class RelationsContractProjectionTests
         AssertUnion(graph, nameof(LogicalQueryNode), RelationQueryWireNames.NodeDiscriminator);
         AssertUnion(graph, nameof(QueryResultDefinition), RelationQueryWireNames.ResultDiscriminator);
         AssertUnion(graph, nameof(QueryPageDefinition), RelationQueryWireNames.PageDiscriminator);
+        AssertUnion(graph, nameof(TemporalJoinMatch), RelationQueryWireNames.TemporalMatchDiscriminator);
+        AssertUnion(graph, nameof(TemporalIntervalBound), RelationQueryWireNames.TemporalBoundDiscriminator);
         AssertUnion(graph, nameof(RelationshipTargetKey), RelationshipWireNames.TargetKeyDiscriminator);
         AssertUnion(
             graph,
@@ -48,6 +50,13 @@ public sealed class RelationsContractProjectionTests
         Assert.Contains("readonly $node: 'expandCollection';", text, StringComparison.Ordinal);
         Assert.Contains("readonly $node: 'project';", text, StringComparison.Ordinal);
         Assert.Contains("readonly $node: 'aggregate';", text, StringComparison.Ordinal);
+        Assert.Contains("readonly $node: 'temporalJoin';", text, StringComparison.Ordinal);
+        Assert.Contains("export type TemporalJoinMatch =", text, StringComparison.Ordinal);
+        Assert.Contains("readonly $temporalMatch: 'pointInInterval';", text, StringComparison.Ordinal);
+        Assert.Contains("readonly $temporalMatch: 'intervalOverlap';", text, StringComparison.Ordinal);
+        Assert.Contains("export type TemporalIntervalBound =", text, StringComparison.Ordinal);
+        Assert.Contains("readonly $temporalBound: 'unbounded';", text, StringComparison.Ordinal);
+        Assert.Contains("readonly $temporalBound: 'expression';", text, StringComparison.Ordinal);
         Assert.Contains("export interface RelationshipCatalogDocument", text, StringComparison.Ordinal);
         Assert.Contains("export interface RelationDraftDocument", text, StringComparison.Ordinal);
         Assert.Contains("export type RelationDraftAssignmentResolution =", text, StringComparison.Ordinal);

@@ -269,13 +269,17 @@ public sealed record RelationQueryCapabilityInputContract
 }
 
 /// <summary>
-/// Immutable acquisition contract projected exclusively from a canonical requirement graph.
+/// Immutable acquisition and target-capability contract projected from a canonical requirement
+/// graph and its demand-scoped execution slice.
 /// </summary>
 public sealed class RelationQueryInputContract
 {
-    internal RelationQueryInputContract(RelationQueryRequirementGraph requirements)
+    internal RelationQueryInputContract(
+        RelationQueryRequirementGraph requirements,
+        RelationQueryExecutionSlice executionSlice)
     {
         Requirements = Guard.RequireNotNull(requirements);
+        ArgumentNullException.ThrowIfNull(executionSlice);
         var uses = requirements.Edges
             .GroupBy(static edge => edge.Input.Id)
             .ToDictionary(
@@ -347,6 +351,7 @@ public sealed class RelationQueryInputContract
                 .OrderBy(static capability => (int)capability.Input.Capability.Kind)
                 .ThenBy(static capability => capability.Input.Capability.Capability.Value, StringComparer.Ordinal)
         ];
+        TemporalCapabilities = RelationQueryTemporalCapabilityProjector.Project(executionSlice);
     }
 
     /// <summary>Canonical requirement graph from which this acquisition contract was projected.</summary>
@@ -366,6 +371,13 @@ public sealed class RelationQueryInputContract
 
     /// <summary>Required expression capabilities sorted by kind and capability identity.</summary>
     public ImmutableArray<RelationQueryCapabilityInputContract> Capabilities { get; }
+
+    /// <summary>
+    /// Demand-scoped temporal target capabilities sorted by stable requirement identity. These
+    /// requirements describe interpreter/backend semantics and are distinct from expression
+    /// capabilities supplied as runtime evidence.
+    /// </summary>
+    public ImmutableArray<RelationQueryTemporalCapabilityInputContract> TemporalCapabilities { get; }
 
     static ImmutableArray<RelationQueryFieldInputContract> CreateFields(
         ImmutableArray<RelationQueryFieldInput> fields,
