@@ -70,6 +70,47 @@ public sealed class RelationRequirementGapAnalysisTests
     }
 
     [Fact]
+    public void SourceEvidence_ConventionalConstructorPreservesExistingCompletenessDefaults()
+    {
+        var provided = new RelationQuerySourceEvidence(
+            new("source/input"),
+            RelationQuerySourceEvidenceState.Provided);
+        var notProvided = new RelationQuerySourceEvidence(
+            new("source/input"),
+            RelationQuerySourceEvidenceState.NotProvided);
+        var failed = new RelationQuerySourceEvidence(
+            new("source/input"),
+            RelationQuerySourceEvidenceState.Failed);
+        var inconclusive = new RelationQuerySourceEvidence(
+            new("source/input"),
+            RelationQuerySourceEvidenceState.Inconclusive);
+
+        Assert.Equal(RelationQueryEvidenceCompleteness.Complete, provided.Completeness);
+        Assert.Equal(RelationQueryEvidenceCompleteness.Partial, notProvided.Completeness);
+        Assert.Equal(RelationQueryEvidenceCompleteness.Partial, failed.Completeness);
+        Assert.Equal(RelationQueryEvidenceCompleteness.Partial, inconclusive.Completeness);
+    }
+
+    [Fact]
+    public void SourceEvidence_ExplicitCompletenessRoundTripsAndRejectsCompleteNonResults()
+    {
+        var partial = new RelationQuerySourceEvidence(
+            new("source/input"),
+            RelationQuerySourceEvidenceState.Provided,
+            RelationQueryEvidenceCompleteness.Partial,
+            evidenceReference: "tests/partial-source");
+
+        var json = JsonSerializer.Serialize(partial);
+        var roundTripped = JsonSerializer.Deserialize<RelationQuerySourceEvidence>(json);
+
+        Assert.Equal(partial, roundTripped);
+        Assert.Throws<ArgumentException>(() => new RelationQuerySourceEvidence(
+            new("source/input"),
+            RelationQuerySourceEvidenceState.Inconclusive,
+            RelationQueryEvidenceCompleteness.Complete));
+    }
+
+    [Fact]
     public void Analyze_ExplicitlyUnattemptedTraversalProducesOneCausalGapWithoutDownstreamCascade()
     {
         var plan = Compile();
@@ -146,7 +187,10 @@ public sealed class RelationRequirementGapAnalysisTests
     [Theory]
     [InlineData(RelationQueryTraversalEvidenceState.Failed, RelationRequirementGapCause.ResolutionFailed)]
     [InlineData(RelationQueryTraversalEvidenceState.Rejected, RelationRequirementGapCause.RelatedObservationRejected)]
-    public void Analyze_TraversalFailureAndRejectionRemainDistinctCausalGaps(
+    [InlineData(
+        RelationQueryTraversalEvidenceState.Inconclusive,
+        RelationRequirementGapCause.InputAcquisitionInconclusive)]
+    public void Analyze_TraversalFailureRejectionAndInconclusiveRemainDistinctCausalGaps(
         RelationQueryTraversalEvidenceState state,
         RelationRequirementGapCause expectedCause)
     {
@@ -176,6 +220,7 @@ public sealed class RelationRequirementGapAnalysisTests
         var gap = Assert.Single(result.Gaps);
         Assert.Equal(expectedCause, gap.Cause);
         Assert.Equal("tests/traversal-result", gap.EvidenceReference);
+        Assert.Equal(state != RelationQueryTraversalEvidenceState.Inconclusive, result.IsConclusive);
         Assert.DoesNotContain(
             result.Gaps,
             candidate => candidate.Cause is RelationRequirementGapCause.RequiredFieldNotLoaded
@@ -192,6 +237,9 @@ public sealed class RelationRequirementGapAnalysisTests
     [InlineData(
         RelationQueryFieldEvidenceState.Missing,
         RelationRequirementGapCause.ReferenceValueMissing)]
+    [InlineData(
+        RelationQueryFieldEvidenceState.Inconclusive,
+        RelationRequirementGapCause.InputAcquisitionInconclusive)]
     public void Analyze_UnavailableReferenceStopsAtTheReferenceBoundary(
         RelationQueryFieldEvidenceState state,
         RelationRequirementGapCause expectedCause)
@@ -225,6 +273,7 @@ public sealed class RelationRequirementGapAnalysisTests
         Assert.Equal(RelationQueryTraversalEvidenceState.NotAttempted, gap.RelationshipContext?.ObservedState);
         Assert.Contains(inputs.Traversal, gap.BlockedInputs);
         Assert.Contains(inputs.CustomerName, gap.BlockedInputs);
+        Assert.Equal(state != RelationQueryFieldEvidenceState.Inconclusive, result.IsConclusive);
     }
 
     [Fact]
@@ -475,6 +524,79 @@ public sealed class RelationRequirementGapAnalysisTests
     }
 
     [Fact]
+    public void Analyze_InconclusiveSourceProducesDistinctNonconclusiveAcquisitionGap()
+    {
+        var plan = Compile();
+        var inputs = Inputs.For(plan);
+
+        var result = RelationRequirementGapAnalyzer.Analyze(
+            plan,
+            Evidence(
+                plan,
+                sources:
+                [
+                    new(
+                        inputs.Source,
+                        RelationQuerySourceEvidenceState.Inconclusive,
+                        evidenceReference: "tests/source-inconclusive")
+                ]));
+
+        var gap = Assert.Single(result.Gaps);
+        Assert.True(result.IsEvidenceValid);
+        Assert.False(result.IsConclusive);
+        Assert.Equal(RelationRequirementGapCause.InputAcquisitionInconclusive, gap.Cause);
+        Assert.Equal(inputs.Source, gap.Input.Id);
+        Assert.Null(gap.Occurrence);
+        Assert.Equal("tests/source-inconclusive", gap.EvidenceReference);
+        Assert.Contains(RelationRequirementGapResolutionKind.RetryAcquisition, gap.SuggestedResolutions);
+        Assert.Contains(inputs.Traversal, gap.BlockedInputs);
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.Code
+                    == RelationRuntimeDiagnosticCodes.RequirementGapInputAcquisitionInconclusive
+                && diagnostic.Gap == gap.Id);
+    }
+
+    [Fact]
+    public void Analyze_PartialProvidedSourceRetainsRowsWithoutClaimingCompleteSourceSet()
+    {
+        var plan = Compile();
+        var inputs = Inputs.For(plan);
+        var load = LoadOccurrence("load-1");
+        var customer = CustomerOccurrence("customer-1");
+
+        var result = RelationRequirementGapAnalyzer.Analyze(
+            plan,
+            Evidence(
+                plan,
+                sources:
+                [
+                    new(
+                        inputs.Source,
+                        RelationQuerySourceEvidenceState.Provided,
+                        RelationQueryEvidenceCompleteness.Partial,
+                        [load],
+                        "tests/source-partial")
+                ],
+                fields:
+                [
+                    ValueField(inputs.LoadId, load, "load-1"),
+                    ValueField(inputs.CustomerReference, load, "customer-1"),
+                    ValueField(inputs.CustomerName, customer, "Acme")
+                ],
+                traversals: [CompletedTraversal(inputs, load, [customer])]));
+
+        Assert.True(result.IsEvidenceValid);
+        Assert.False(result.IsConclusive);
+        Assert.Empty(result.Gaps);
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.Code == RelationRuntimeDiagnosticCodes.ExecutionEvidenceInconclusive
+                && diagnostic.Input == inputs.Source
+                && diagnostic.EvidenceReference == "tests/source-partial");
+    }
+
+    [Fact]
     public void Analyze_PartialCompletedTraversalIsNotConclusiveAndDoesNotClaimNotFound()
     {
         var plan = Compile();
@@ -519,6 +641,9 @@ public sealed class RelationRequirementGapAnalysisTests
     [InlineData(
         RelationQueryFieldEvidenceState.Missing,
         RelationRequirementGapCause.RequiredValueMissing)]
+    [InlineData(
+        RelationQueryFieldEvidenceState.Inconclusive,
+        RelationRequirementGapCause.InputAcquisitionInconclusive)]
     public void Analyze_UnavailableRelatedFieldIsDiagnosedOnItsCustomerOccurrence(
         RelationQueryFieldEvidenceState state,
         RelationRequirementGapCause expectedCause)
@@ -547,6 +672,7 @@ public sealed class RelationRequirementGapAnalysisTests
         Assert.Equal(customer.Id, gap.Occurrence?.Id);
         Assert.Equal(state, gap.ValueContext?.ObservedState);
         Assert.Empty(gap.BlockedInputs);
+        Assert.Equal(state != RelationQueryFieldEvidenceState.Inconclusive, result.IsConclusive);
     }
 
     [Fact]

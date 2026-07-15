@@ -11,7 +11,7 @@ dotnet add package Cohesive.Relations.Contracts
 ## Use When
 
 - You need a contract assembly that exposes canonical relationship-catalog, relation-draft, and relation/query shapes for code generation.
-- You need portable target-capability profiles or derived realization reports for explain tooling, deployment gates, or frontend visualization.
+- You need portable target-capability profiles, realization reports, source placements, or physical plans for explain tooling, deployment gates, or frontend visualization.
 - You want relation contract definitions to be packaged separately from the relation runtime.
 - You are building generated frontend or API artifacts from Cohesive relation metadata.
 
@@ -45,6 +45,11 @@ negative zero, whitespace, and out-of-range values so fingerprint-significant in
 representation across runtimes. TypeScript consumers should retain the generated `string` value when
 transporting or fingerprinting it and parse a validated value with `BigInt` when integer arithmetic is needed;
 converting these values to `number` can lose precision.
+
+Source-placement limits and physical-planning limits use the same canonical string-encoded `Int64`
+wire representation. Physical plans are derived artifacts: consumers should retain their semantic-plan,
+realization-report, placement, policy, stage-provenance, and fingerprint attribution together rather than
+treating stage identifiers as an independent source of truth.
 
 ## Related Packages
 

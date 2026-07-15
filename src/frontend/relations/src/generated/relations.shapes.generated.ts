@@ -14,6 +14,82 @@ export interface RelationQueryCompiledPlanReference {
   inputs: RelationQueryInputId[];
 }
 
+export interface RelationQueryRealizationFingerprint {
+  algorithm: string;
+  canonicalization: string;
+  value: string;
+}
+
+export interface RelationQueryPhysicalPlanningPolicy {
+  id: RelationQueryPhysicalPlanningPolicyId;
+  conventionSetVersion: string;
+  maximumBatchSize: string;
+  maximumBufferedRows: string;
+  maximumLocalRows: string;
+  maximumFanOut: string;
+  maximumReferenceKeysPerObservation: string;
+  maximumConcurrency: string;
+  loweringSelections: RelationQueryPhysicalLoweringSelection[];
+}
+
+export interface RelationQueryPhysicalStage {
+  id: RelationQueryPhysicalStageId;
+  kind: RelationQueryPhysicalStageKind;
+  dependencies: RelationQueryPhysicalStageId[];
+  placementBinding?: RelationQuerySourcePlacementBindingId | null;
+  semanticInputs: RelationQueryInputId[];
+  requestedFields: RelationQueryInputId[];
+  batchSize?: string | null;
+  provenance: RelationQueryPhysicalStageProvenance;
+}
+
+export type RelationQueryPhysicalStageId = string;
+
+export interface RelationQueryPhysicalPlanningDiagnostic {
+  code: string;
+  severity: DiagnosticSeverity;
+  message: string;
+  input?: RelationQueryInputId | null;
+  stage?: RelationQueryPhysicalStageId | null;
+  placementBinding?: RelationQuerySourcePlacementBindingId | null;
+  requirement?: RelationQueryRealizationRequirementId | null;
+}
+
+export interface RelationQueryPhysicalPlanFingerprint {
+  algorithm: string;
+  canonicalization: string;
+  value: string;
+}
+
+export interface RelationQuerySourceInstance {
+  id: RelationQuerySourceInstanceId;
+  executionDomain: RelationQueryExecutionDomainId;
+  targetProfile: RelationQueryTargetCapabilityProfile;
+  limits: RelationQuerySourcePlacementLimits;
+}
+
+export interface RelationQuerySourcePlacementBinding {
+  id: RelationQuerySourcePlacementBindingId;
+  input: RelationQueryInputId;
+  node: QueryNodeId;
+  binding: ValueBindingId;
+  shape: QualifiedShapeId;
+  source: RelationQuerySourceInstanceId;
+  kind: RelationQuerySourcePlacementBindingKind;
+  acquisition: RelationQuerySourceAcquisitionKind;
+  origin: RelationQuerySourcePlacementOrigin;
+  identity?: RelationQuerySourceIdentityBinding | null;
+  fields: RelationQuerySourceFieldBinding[];
+  relationshipKeys: RelationQueryRelationshipKeyBinding[];
+  partition?: RelationQueryPartitionBinding | null;
+}
+
+export interface RelationQuerySourcePlacementFingerprint {
+  algorithm: string;
+  canonicalization: string;
+  value: string;
+}
+
 export interface RelationQueryRealizationPolicy {
   id: RelationQueryRealizationPolicyId;
   conventionSetVersion: string;
@@ -107,12 +183,6 @@ export const relationQueryRealizationStatusLabels: Record<RelationQueryRealizati
   NotRealizable: 'NotRealizable',
   Invalid: 'Invalid',
 };
-
-export interface RelationQueryRealizationFingerprint {
-  algorithm: string;
-  canonicalization: string;
-  value: string;
-}
 
 export type RelationQueryTargetId = string;
 
@@ -234,6 +304,145 @@ export interface RelationQueryPlanComponentFingerprint {
 
 export type RelationQueryInputId = string;
 
+export type RelationQueryPhysicalPlanningPolicyId = string;
+
+export interface RelationQueryPhysicalLoweringSelection {
+  compositionRule: RelationQueryCompositionRuleId;
+  physicalLowering: RelationQueryPhysicalLoweringRuleId;
+}
+
+export type RelationQueryPhysicalStageKind = 'SuppliedInput' | 'SourceRead' | 'ExactFieldProjection' | 'RelationshipKeyExtraction' | 'KeyDeduplication' | 'BatchedIdentityLookup' | 'BatchedPredicateLookup' | 'LocalCorrelation' | 'RuntimeEvidenceAssembly' | 'ReferenceInterpreterTerminal';
+
+export const relationQueryPhysicalStageKinds = {
+  suppliedInput: 'SuppliedInput',
+  sourceRead: 'SourceRead',
+  exactFieldProjection: 'ExactFieldProjection',
+  relationshipKeyExtraction: 'RelationshipKeyExtraction',
+  keyDeduplication: 'KeyDeduplication',
+  batchedIdentityLookup: 'BatchedIdentityLookup',
+  batchedPredicateLookup: 'BatchedPredicateLookup',
+  localCorrelation: 'LocalCorrelation',
+  runtimeEvidenceAssembly: 'RuntimeEvidenceAssembly',
+  referenceInterpreterTerminal: 'ReferenceInterpreterTerminal',
+} as const satisfies Record<string, RelationQueryPhysicalStageKind>;
+
+export const relationQueryPhysicalStageKindLabels: Record<RelationQueryPhysicalStageKind, string> = {
+  SuppliedInput: 'SuppliedInput',
+  SourceRead: 'SourceRead',
+  ExactFieldProjection: 'ExactFieldProjection',
+  RelationshipKeyExtraction: 'RelationshipKeyExtraction',
+  KeyDeduplication: 'KeyDeduplication',
+  BatchedIdentityLookup: 'BatchedIdentityLookup',
+  BatchedPredicateLookup: 'BatchedPredicateLookup',
+  LocalCorrelation: 'LocalCorrelation',
+  RuntimeEvidenceAssembly: 'RuntimeEvidenceAssembly',
+  ReferenceInterpreterTerminal: 'ReferenceInterpreterTerminal',
+};
+
+export type RelationQuerySourcePlacementBindingId = string;
+
+export interface RelationQueryPhysicalStageProvenance {
+  nodes: QueryNodeId[];
+  inputs: RelationQueryInputId[];
+  requirements: RelationQueryRealizationRequirementId[];
+  capabilityEvidence: RelationQueryPhysicalCapabilityEvidenceReference[];
+  compositionRules: RelationQueryCompositionRuleId[];
+  operatingBoundaries: RelationQueryOperatingBoundaryId[];
+  placementBindings: RelationQuerySourcePlacementBindingId[];
+  loweringRule?: RelationQueryPhysicalLoweringRuleId | null;
+  policyDecisions: RelationQueryPhysicalPlanningDecisionId[];
+}
+
+export type DiagnosticSeverity = 'Info' | 'Warning' | 'Error';
+
+export const diagnosticSeverities = {
+  info: 'Info',
+  warning: 'Warning',
+  error: 'Error',
+} as const satisfies Record<string, DiagnosticSeverity>;
+
+export const diagnosticSeverityLabels: Record<DiagnosticSeverity, string> = {
+  Info: 'Info',
+  Warning: 'Warning',
+  Error: 'Error',
+};
+
+export type RelationQueryRealizationRequirementId = string;
+
+export type RelationQuerySourceInstanceId = string;
+
+export type RelationQueryExecutionDomainId = string;
+
+export interface RelationQuerySourcePlacementLimits {
+  maximumBatchSize: string;
+  maximumBufferedRows: string;
+  maximumFanOut: string;
+  maximumConcurrency: string;
+}
+
+export type QueryNodeId = string;
+
+export type ValueBindingId = string;
+
+export type RelationQuerySourcePlacementBindingKind = 'SourceSet' | 'RelationshipTraversal';
+
+export const relationQuerySourcePlacementBindingKinds = {
+  sourceSet: 'SourceSet',
+  relationshipTraversal: 'RelationshipTraversal',
+} as const satisfies Record<string, RelationQuerySourcePlacementBindingKind>;
+
+export const relationQuerySourcePlacementBindingKindLabels: Record<RelationQuerySourcePlacementBindingKind, string> = {
+  SourceSet: 'SourceSet',
+  RelationshipTraversal: 'RelationshipTraversal',
+};
+
+export type RelationQuerySourceAcquisitionKind = 'Supplied' | 'BoundedEnumeration' | 'BoundedLookup';
+
+export const relationQuerySourceAcquisitionKinds = {
+  supplied: 'Supplied',
+  boundedEnumeration: 'BoundedEnumeration',
+  boundedLookup: 'BoundedLookup',
+} as const satisfies Record<string, RelationQuerySourceAcquisitionKind>;
+
+export const relationQuerySourceAcquisitionKindLabels: Record<RelationQuerySourceAcquisitionKind, string> = {
+  Supplied: 'Supplied',
+  BoundedEnumeration: 'BoundedEnumeration',
+  BoundedLookup: 'BoundedLookup',
+};
+
+export type RelationQuerySourcePlacementOrigin = 'Explicit' | 'Convention';
+
+export const relationQuerySourcePlacementOrigins = {
+  explicit: 'Explicit',
+  convention: 'Convention',
+} as const satisfies Record<string, RelationQuerySourcePlacementOrigin>;
+
+export const relationQuerySourcePlacementOriginLabels: Record<RelationQuerySourcePlacementOrigin, string> = {
+  Explicit: 'Explicit',
+  Convention: 'Convention',
+};
+
+export interface RelationQuerySourceIdentityBinding {
+  shape: QualifiedShapeId;
+  sourceSelector: string;
+}
+
+export interface RelationQuerySourceFieldBinding {
+  input: RelationQueryInputId;
+  semanticPath: FieldPath;
+  sourceSelector: string;
+}
+
+export interface RelationQueryRelationshipKeyBinding {
+  input: RelationQueryInputId;
+  semanticPath: FieldPath;
+  sourceSelector: string;
+}
+
+export interface RelationQueryPartitionBinding {
+  sourceSelector: string;
+}
+
 export type RelationQueryRealizationPolicyId = string;
 
 export type RelationQueryRealizationPreference = 'PreferNative' | 'PreferComposed';
@@ -288,8 +497,6 @@ export interface RelationQueryRealizationDiagnosticSeverityOverride {
   code: string;
   severity: DiagnosticSeverity;
 }
-
-export type RelationQueryRealizationRequirementId = string;
 
 export type RelationQueryCapability = {
   readonly $capability: 'logical';
@@ -451,23 +658,7 @@ export const relationQueryUnavailableReasonLabels: Record<RelationQueryUnavailab
   PolicyRejected: 'PolicyRejected',
 };
 
-export type DiagnosticSeverity = 'Info' | 'Warning' | 'Error';
-
-export const diagnosticSeverities = {
-  info: 'Info',
-  warning: 'Warning',
-  error: 'Error',
-} as const satisfies Record<string, DiagnosticSeverity>;
-
-export const diagnosticSeverityLabels: Record<DiagnosticSeverity, string> = {
-  Info: 'Info',
-  Warning: 'Warning',
-  Error: 'Error',
-};
-
 export type RelationQueryOperatingBoundaryId = string;
-
-export type QueryNodeId = string;
 
 export type RelationQueryOperatingBoundaryKind = 'MaximumInputRows' | 'MaximumOutputRows' | 'MaximumFanOut' | 'MaximumPageSize' | 'MaximumFieldPathDepth' | 'MaximumExpressionDepth' | 'MaximumBatchSize' | 'SingleSource' | 'SinglePartition' | 'MaterializedInputs' | 'CompleteInputEvidence' | 'NonNullOperands' | 'ScalarOperands' | 'HomogeneousTemporalDomain' | 'FiniteTemporalBounds' | 'StableUniqueOrdering' | 'DeterministicProvider';
 
@@ -521,8 +712,6 @@ export interface LogicalQueryDefinition {
   nodes: LogicalQueryNode[];
   parameters: QueryParameterDefinition[];
 }
-
-export type ValueBindingId = string;
 
 export interface RelationDraftProjection {
   id: QueryNodeId;
@@ -709,6 +898,21 @@ export interface RelationshipDefinition {
   targetShape: QualifiedShapeId;
   targetKey: RelationshipTargetKey;
   sourceReferenceUniqueness: SourceReferenceUniqueness;
+}
+
+export type RelationQueryPhysicalLoweringRuleId = string;
+
+export interface RelationQueryPhysicalCapabilityEvidenceReference {
+  source: RelationQuerySourceInstanceId;
+  target: RelationQueryTargetId;
+  profile: RelationQueryTargetProfileId;
+  evidence: RelationQueryTargetCapabilityEvidenceId;
+}
+
+export type RelationQueryPhysicalPlanningDecisionId = string;
+
+export interface FieldPath {
+  segments: FieldPathSegment[];
 }
 
 export type RelationQueryLogicalCapabilityKind = 'Source' | 'Filter' | 'RelationshipTraversal' | 'ForwardRelationshipTraversal' | 'InverseRelationshipTraversal' | 'AtMostOneRelationshipTraversal' | 'ManyRelationshipTraversal' | 'RequiredRelationshipTraversal' | 'OptionalRelationshipTraversal' | 'Join' | 'InnerJoin' | 'LeftOuterJoin' | 'RightOuterJoin' | 'FullOuterJoin' | 'TemporalJoin' | 'ExpandCollection' | 'Projection' | 'ProjectionAssignment' | 'DistinctRows' | 'DistinctKeys' | 'Aggregation' | 'AggregateGrouping' | 'AggregateFilter' | 'CountAggregate' | 'SumAggregate' | 'MinimumAggregate' | 'MaximumAggregate' | 'AnyAggregate' | 'AllAggregate' | 'Ordering' | 'AscendingOrdering' | 'DescendingOrdering' | 'NullsFirst' | 'NullsLast' | 'StableTieOrdering' | 'OffsetPaging' | 'KeysetPaging' | 'OnePerRootRelationOutput' | 'ZeroOrOnePerRootRelationOutput' | 'ManyPerRootRelationOutput' | 'SetRelationOutput' | 'RelationOutputIdentity' | 'RelationInvariant' | 'QueryRowsResult' | 'QueryAggregationResult' | 'AlwaysPresentBinding' | 'MayBeAbsentBinding';
@@ -911,7 +1115,7 @@ export const relationQueryStructuralPathKindLabels: Record<RelationQueryStructur
   NestedCollectionElement: 'NestedCollectionElement',
 };
 
-export type RelationQueryPrimitiveCapabilityKind = 'KeyExtraction' | 'BatchedKeyLookup' | 'PredicateRead' | 'CompleteSetEnumeration' | 'LocalCorrelation' | 'HashJoin' | 'StableSort' | 'LocalAggregation' | 'FieldProjection' | 'NullAwareComparison' | 'TemporalComparison' | 'IntervalPredicate' | 'ObservationIdentityRead' | 'RelationshipReferenceRead' | 'ParameterBinding' | 'AmbientCapabilityBinding' | 'OutputObjectConstruction' | 'ProvenanceTracking' | 'InvariantEvaluation' | 'OffsetPaging' | 'KeysetSeek';
+export type RelationQueryPrimitiveCapabilityKind = 'KeyExtraction' | 'BatchedKeyLookup' | 'PredicateRead' | 'CompleteSetEnumeration' | 'LocalCorrelation' | 'HashJoin' | 'StableSort' | 'LocalAggregation' | 'FieldProjection' | 'NullAwareComparison' | 'TemporalComparison' | 'IntervalPredicate' | 'ObservationIdentityRead' | 'RelationshipReferenceRead' | 'ParameterBinding' | 'AmbientCapabilityBinding' | 'OutputObjectConstruction' | 'ProvenanceTracking' | 'BatchedPredicateLookup' | 'InvariantEvaluation' | 'OffsetPaging' | 'KeysetSeek';
 
 export const relationQueryPrimitiveCapabilityKinds = {
   keyExtraction: 'KeyExtraction',
@@ -932,6 +1136,7 @@ export const relationQueryPrimitiveCapabilityKinds = {
   ambientCapabilityBinding: 'AmbientCapabilityBinding',
   outputObjectConstruction: 'OutputObjectConstruction',
   provenanceTracking: 'ProvenanceTracking',
+  batchedPredicateLookup: 'BatchedPredicateLookup',
   invariantEvaluation: 'InvariantEvaluation',
   offsetPaging: 'OffsetPaging',
   keysetSeek: 'KeysetSeek',
@@ -956,14 +1161,11 @@ export const relationQueryPrimitiveCapabilityKindLabels: Record<RelationQueryPri
   AmbientCapabilityBinding: 'AmbientCapabilityBinding',
   OutputObjectConstruction: 'OutputObjectConstruction',
   ProvenanceTracking: 'ProvenanceTracking',
+  BatchedPredicateLookup: 'BatchedPredicateLookup',
   InvariantEvaluation: 'InvariantEvaluation',
   OffsetPaging: 'OffsetPaging',
   KeysetSeek: 'KeysetSeek',
 };
-
-export interface FieldPath {
-  segments: FieldPathSegment[];
-}
 
 export interface RelationQueryRealizationOutputReference {
   id: RelationQueryOutputId;
@@ -1756,6 +1958,28 @@ export const temporalNullBoundBehaviorLabels: Record<TemporalNullBoundBehavior, 
 export interface QualifiedShapeId {
   graphId: GraphId;
   shapeId: ShapeId;
+}
+
+export interface CompiledRelationQueryPhysicalPlan {
+  schemaVersion: string;
+  plan: RelationQueryCompiledPlanReference;
+  realization: RelationQueryRealizationFingerprint;
+  placement: RelationQuerySourcePlacement;
+  policy: RelationQueryPhysicalPlanningPolicy;
+  stages: RelationQueryPhysicalStage[];
+  evaluationOrder: RelationQueryPhysicalStageId[];
+  terminal: RelationQueryPhysicalStageId;
+  diagnostics: RelationQueryPhysicalPlanningDiagnostic[];
+  fingerprint: RelationQueryPhysicalPlanFingerprint;
+}
+
+export interface RelationQuerySourcePlacement {
+  schemaVersion: string;
+  plan: RelationQueryCompiledPlanReference;
+  conventionSetVersion: string;
+  sourceInstances: RelationQuerySourceInstance[];
+  bindings: RelationQuerySourcePlacementBinding[];
+  fingerprint: RelationQuerySourcePlacementFingerprint;
 }
 
 export interface RelationQueryRealizationReport {

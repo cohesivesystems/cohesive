@@ -1630,6 +1630,12 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
             if (request.Evidence.Completeness == RelationQueryEvidenceCompleteness.Partial)
                 return false;
 
+            var partialSourceInputs = request.Evidence.Sources
+                .Where(static source =>
+                    source.State == RelationQuerySourceEvidenceState.Provided
+                    && source.Completeness == RelationQueryEvidenceCompleteness.Partial)
+                .Select(static source => source.Input)
+                .ToHashSet();
             var partialTraversalInputs = request.Evidence.Traversals
                 .Where(static traversal =>
                     traversal.State == RelationQueryTraversalEvidenceState.Completed
@@ -1637,7 +1643,8 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
                 .Select(static traversal => traversal.Input)
                 .ToHashSet();
             return !request.Plan.RequirementGraph.Edges.Any(edge =>
-                partialTraversalInputs.Contains(edge.Input.Id)
+                (partialSourceInputs.Contains(edge.Input.Id)
+                    || partialTraversalInputs.Contains(edge.Input.Id))
                 && outputs.Contains(edge.Output.Id));
         }
 

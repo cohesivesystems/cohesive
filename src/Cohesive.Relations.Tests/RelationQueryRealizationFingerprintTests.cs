@@ -328,6 +328,21 @@ public sealed class RelationQueryRealizationFingerprintTests
             roundTrip.CompositionRuleSelections.Select(static selection => selection.Rule));
     }
 
+    [Fact]
+    public void PrimitiveCapability_BatchedPredicateLookupPreservesWireIdentityAndRoundTrips()
+    {
+        RelationQueryCapability capability = new PrimitiveRelationQueryCapability(
+            RelationQueryPrimitiveCapabilityKind.BatchedPredicateLookup);
+        var options = RelationQueryJsonSerializer.CreateOptions();
+
+        var json = JsonSerializer.Serialize(capability, options);
+        var roundTrip = JsonSerializer.Deserialize<RelationQueryCapability>(json, options);
+
+        Assert.Equal(18, (int)RelationQueryPrimitiveCapabilityKind.BatchedPredicateLookup);
+        Assert.Contains("\"kind\":\"BatchedPredicateLookup\"", json, StringComparison.Ordinal);
+        Assert.Equal(capability, roundTrip);
+    }
+
     static readonly RelationQueryRealizationRequirementId LogicalRequirementId =
         new("requirement/logical/filter");
     static readonly RelationQueryRealizationRequirementId GuaranteeRequirementId =

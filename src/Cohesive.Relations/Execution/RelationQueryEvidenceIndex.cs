@@ -31,7 +31,10 @@ enum RelationQueryMaterializedValueState
     Failed = 6,
 
     /// <summary>The canonical parameter declaration supplied its persisted default value.</summary>
-    Defaulted = 7
+    Defaulted = 7,
+
+    /// <summary>Acquisition could not establish a semantic value, absence, or definitive failure.</summary>
+    Inconclusive = 8
 }
 
 /// <summary>
@@ -111,6 +114,7 @@ readonly record struct RelationQueryMaterializedValue
             case RelationQueryMaterializedValueState.NotLoaded:
             case RelationQueryMaterializedValueState.NotProvided:
             case RelationQueryMaterializedValueState.Failed:
+            case RelationQueryMaterializedValueState.Inconclusive:
             case RelationQueryMaterializedValueState.Omitted:
                 value = default;
                 return false;
@@ -141,6 +145,10 @@ readonly record struct RelationQueryMaterializedValue
                 evidence.EvidenceReference),
             RelationQueryFieldEvidenceState.Failed => new(
                 RelationQueryMaterializedValueState.Failed,
+                value: null,
+                evidence.EvidenceReference),
+            RelationQueryFieldEvidenceState.Inconclusive => new(
+                RelationQueryMaterializedValueState.Inconclusive,
                 value: null,
                 evidence.EvidenceReference),
             _ => throw new ArgumentOutOfRangeException(

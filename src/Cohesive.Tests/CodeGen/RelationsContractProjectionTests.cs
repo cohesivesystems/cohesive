@@ -5,6 +5,7 @@ using Cohesive.Relations.Contracts;
 using Cohesive.Relations.Drafts;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
+using Cohesive.Relations.Physical;
 using Cohesive.Relations.Realization;
 
 namespace Cohesive.Tests.CodeGen;
@@ -26,6 +27,10 @@ public sealed class RelationsContractProjectionTests
             shape.Id.Value.EndsWith(nameof(RelationQueryTargetCapabilityProfile), StringComparison.Ordinal));
         Assert.Contains(graph.Shapes, shape =>
             shape.Id.Value.EndsWith(nameof(RelationQueryRealizationReport), StringComparison.Ordinal));
+        Assert.Contains(graph.Shapes, shape =>
+            shape.Id.Value.EndsWith(nameof(RelationQuerySourcePlacement), StringComparison.Ordinal));
+        Assert.Contains(graph.Shapes, shape =>
+            shape.Id.Value.EndsWith(nameof(CompiledRelationQueryPhysicalPlan), StringComparison.Ordinal));
         AssertUnion(graph, nameof(RelationQueryDefinition), RelationQueryWireNames.DefinitionDiscriminator);
         AssertUnion(graph, nameof(LogicalQueryNode), RelationQueryWireNames.NodeDiscriminator);
         AssertUnion(graph, nameof(QueryResultDefinition), RelationQueryWireNames.ResultDiscriminator);
@@ -72,6 +77,12 @@ public sealed class RelationsContractProjectionTests
         Assert.Contains("export interface RelationDraftDocument", text, StringComparison.Ordinal);
         Assert.Contains("export interface RelationQueryTargetCapabilityProfile", text, StringComparison.Ordinal);
         Assert.Contains("export interface RelationQueryRealizationReport", text, StringComparison.Ordinal);
+        Assert.Contains("export interface RelationQuerySourcePlacement", text, StringComparison.Ordinal);
+        Assert.Contains("export interface CompiledRelationQueryPhysicalPlan", text, StringComparison.Ordinal);
+        Assert.Contains("export type RelationQueryPhysicalStageKind", text, StringComparison.Ordinal);
+        Assert.Contains("maximumBatchSize: string;", text, StringComparison.Ordinal);
+        Assert.Contains("maximumReferenceKeysPerObservation: string;", text, StringComparison.Ordinal);
+        Assert.Contains("fingerprint: RelationQueryPhysicalPlanFingerprint;", text, StringComparison.Ordinal);
         Assert.Contains("export type RelationQueryCapability =", text, StringComparison.Ordinal);
         Assert.Contains("readonly $capability: 'logical';", text, StringComparison.Ordinal);
         Assert.Contains("readonly $capability: 'expression';", text, StringComparison.Ordinal);
@@ -89,6 +100,7 @@ public sealed class RelationsContractProjectionTests
             "kind: RelationQueryOperatingBoundaryKind | number;",
             text,
             StringComparison.Ordinal);
+        Assert.Contains("'BatchedPredicateLookup'", text, StringComparison.Ordinal);
         Assert.Contains("export type RelationQueryRealizationDecision =", text, StringComparison.Ordinal);
         Assert.Contains("readonly $decision: 'native';", text, StringComparison.Ordinal);
         Assert.Contains("readonly $decision: 'composed';", text, StringComparison.Ordinal);
