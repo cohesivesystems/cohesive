@@ -464,6 +464,38 @@ allowing omission to be mistaken for `NotAttempted`.
 expressions, construct output rows, or apply suppression/substitution decisions. Those are later
 execution and hydration interpretations of the same compiled contract.
 
+### Canonical in-memory reference execution
+
+`RelationQueryInMemoryInterpreter` executes a successful static plan over materialized runtime evidence.
+It consumes the plan's explicit demand-scoped `ExecutionSlice`; it does not rediscover assignments or
+expression sites by scanning the persisted definition, acquire external data, or choose a physical join
+or batching strategy.
+
+The reference interpreter currently executes every canonical logical node: source, filter, relationship
+traversal, explicit join, collection expansion, projection, distinct, aggregation, ordering, and offset or
+keyset paging. Relation terminals enforce per-root cardinality, keys, and invariants. Query terminals retain
+their named row or aggregation branches. Results carry exact root attribution, contributing occurrence
+provenance, requirement gaps, policy effects, and deterministic diagnostics. Partial evidence remains
+explicitly incomplete; it is never converted into semantic null or absence. Expression input availability
+is checked when a field, parameter, or capability is actually read, preserving short-circuit and conditional
+evaluation semantics. Causal structural gaps are enforced through their compiled `BlockedInputs`, so nominal
+source or traversal evidence is never consumed after an upstream conversion or relationship boundary failed.
+
+The evaluator intentionally has a bounded first-version surface. It supports canonical unary and binary
+operators plus the pure collection, object, string, and aggregate functions covered by the reference tests.
+Ambient functions (`entityId`, `key`, `sourceRows`, and `relatedField`) and the pure `groupBy`, `groupByRows`,
+and expression-level `join` functions are not yet interpreted. Collection-element field evidence also cannot
+yet be reconstructed losslessly from one occurrence-scoped scalar evidence record. The interpreter publishes
+this narrower target surface through `RelationQueryInMemoryInterpreter.ExpressionCapabilities` and rejects
+unsupported demanded semantics during preflight with an attributable `REL3209` diagnostic rather than falling
+back to a different or weakened meaning.
+
+Runtime value semantics are likewise explicit. Equality is structural and ordinal, distinguishes null from
+undefined, and compares integers with floating-point values only when they represent the same exact integer.
+Ordering accepts only a shared comparable domain and applies the query's declared null placement; arithmetic
+uses finite values in a checked decimal execution domain and reports divide-by-zero, overflow, and unsupported
+numeric representations as structured expression failures.
+
 ## One Semantic Model, Multiple Interpretations
 
 ```mermaid
@@ -872,8 +904,10 @@ The current foundation includes:
 - Structural and semantic diagnostics.
 - Deterministic definition fingerprints.
 - Demand-driven static compilation into input contracts, lineage, dependency manifests, and explicit logical pruning.
+- Explicit demand-scoped execution slices containing canonical nodes, bindings, assignments, expression sites, and terminals.
 - Plan-attributed runtime evidence, causal requirement-gap analysis, and explicit missing-data policy decisions.
-- In-memory execution and mapping components.
+- A canonical in-memory relation/query reference interpreter over materialized evidence.
+- In-memory mapping and legacy compatibility components.
 - Contract projection for other host languages.
 
 Active areas of development include:
@@ -884,7 +918,7 @@ Active areas of development include:
 - PostgreSQL, Cosmos SQL, Gremlin, and search-backend compilers.
 - Cross-source batching and in-memory joins.
 - Incremental dependency and index-maintenance planning.
-- Reference interpreters and backend differential testing.
+- Backend differential and reference-interpreter conformance testing.
 - JSON Schema generation and compatibility tooling.
 
 ## Installation

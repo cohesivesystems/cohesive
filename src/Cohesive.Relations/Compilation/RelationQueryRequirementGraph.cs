@@ -722,11 +722,8 @@ public sealed class RelationQueryRequirementGraph
         ];
 
         var referencedInputs = Edges.Select(static edge => edge.Input.Id).ToHashSet();
-        var referencedOutputs = Edges.Select(static edge => edge.Output.Id).ToHashSet();
         if (Inputs.Any(input => !referencedInputs.Contains(input.Id)))
             throw new ArgumentException("A requirement graph cannot contain orphan inputs.", nameof(inputs));
-        if (Outputs.Any(output => !referencedOutputs.Contains(output.Id)))
-            throw new ArgumentException("A requirement graph cannot contain orphan outputs.", nameof(outputs));
 
         foreach (var input in Inputs)
         {
@@ -754,7 +751,10 @@ public sealed class RelationQueryRequirementGraph
     /// <summary>Semantic inputs sorted by stable input identity.</summary>
     public ImmutableArray<RelationQueryRequirementInput> Inputs { get; }
 
-    /// <summary>Demanded outputs sorted by stable output identity.</summary>
+    /// <summary>
+    /// Demanded outputs sorted by stable output identity. A constant-derived output may have no incoming edge
+    /// because producing its value requires no semantic runtime input.
+    /// </summary>
     public ImmutableArray<RelationQueryOutputReference> Outputs { get; }
 
     /// <summary>Requirement edges sorted by input, output, effect, and requiredness.</summary>

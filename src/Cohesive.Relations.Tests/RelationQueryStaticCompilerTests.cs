@@ -291,6 +291,172 @@ public sealed class RelationQueryStaticCompilerTests
     }
 
     [Fact]
+    public void Compile_ExecutionSliceRetainsDemandedProjectionAndExactRelationTerminal()
+    {
+        var plan = SuccessfulPlan(Compile(
+            LoadCustomerRelationFixture.OptionalTraversalRelationDocument,
+            RelationFields(LoadCustomerRelationFixture.SearchIdPath)));
+        var relation = Assert.IsType<Cohesive.Relations.IR.RelationDefinition>(plan.Definition);
+        var slice = plan.ExecutionSlice;
+
+        Assert.Same(plan.LogicalPlan, slice.LogicalPlan);
+        Assert.Same(plan.RequirementGraph, slice.Requirements);
+        Assert.Equal(
+            [
+                LoadCustomerRelationFixture.LoadSourceNodeId,
+                LoadCustomerRelationFixture.ProjectionNodeId
+            ],
+            slice.Nodes.Select(static node => node.Id));
+
+        var source = Assert.Single(
+            slice.Nodes,
+            node => node.Id == LoadCustomerRelationFixture.LoadSourceNodeId);
+        Assert.Same(
+            relation.Body.Nodes.Single(node => node.Id == source.Id),
+            source.CanonicalNode);
+        var sourceBinding = Assert.Single(source.OutputBindings);
+        Assert.Equal(LoadCustomerRelationFixture.LoadBinding, sourceBinding.Binding);
+        Assert.Equal(LoadCustomerRelationFixture.LoadShapeId, sourceBinding.Shape);
+        Assert.Equal(RelationQueryBindingAvailability.AlwaysPresent, sourceBinding.Availability);
+
+        var project = Assert.Single(
+            slice.Nodes,
+            node => node.Id == LoadCustomerRelationFixture.ProjectionNodeId);
+        var assignment = Assert.Single(project.ProjectionAssignments);
+        Assert.Equal(LoadCustomerRelationFixture.SearchIdAssignmentId, assignment.Definition.Id);
+        Assert.Equal(
+            RelationQueryExpressionSiteKind.ProjectionAssignmentValue,
+            assignment.ValueSite.Kind);
+        Assert.Equal(
+            "relation/load-search/node/project-load-search/project/assignment/assign-id/value",
+            assignment.ValueSite.Analysis.Site.Id.Value);
+        Assert.DoesNotContain(
+            project.ProjectionAssignments,
+            retained => retained.Definition.Id == LoadCustomerRelationFixture.SearchCustomerNameAssignmentId);
+        var projectBinding = Assert.Single(project.OutputBindings);
+        Assert.Equal(LoadCustomerRelationFixture.SearchBinding, projectBinding.Binding);
+        Assert.Equal(LoadCustomerRelationFixture.LoadSearchShapeId, projectBinding.Shape);
+
+        var output = Assert.IsType<RelationQueryRelationExecutionOutput>(slice.RelationOutput);
+        Assert.Same(relation.Output, output.Definition);
+        Assert.Equal(relation.Id, output.Relation);
+        Assert.Equal(relation.RootBinding, output.RootBinding);
+        Assert.Equal(LoadCustomerRelationFixture.SearchBinding, output.Binding);
+        Assert.Equal(
+            [LoadCustomerRelationFixture.SearchIdPath],
+            output.Fields.Select(static field => field.Path));
+        Assert.Equal(
+            plan.RequirementGraph.Outputs.Select(static item => item.Id),
+            output.Outputs.Select(static item => item.Id));
+        Assert.Equal(
+            "relation/load-search/output/key",
+            Assert.IsType<RelationQueryExpressionSiteAnalysis>(output.KeySite).Analysis.Site.Id.Value);
+        Assert.Empty(output.Invariants);
+        Assert.Empty(slice.QueryResults);
+    }
+
+    [Fact]
+    public void Compile_QueryExecutionSliceExposesDemandedBranchAndIndexedSites()
+    {
+        var plan = SuccessfulPlan(Compile(
+            LoadCustomerRelationFixture.RepresentativeQueryDocument,
+            QueryFields(
+                LoadCustomerRelationFixture.RowsResultId,
+                LoadCustomerRelationFixture.LoadSearchShapeId,
+                LoadCustomerRelationFixture.SearchIdPath)));
+        var query = Assert.IsType<Cohesive.Relations.IR.QueryDefinition>(plan.Definition);
+        var slice = plan.ExecutionSlice;
+
+        Assert.Null(slice.RelationOutput);
+        var result = Assert.Single(slice.QueryResults);
+        Assert.Same(
+            query.Results.Single(candidate => candidate.Id == LoadCustomerRelationFixture.RowsResultId),
+            result.Definition);
+        Assert.IsType<RowsQueryResultDefinition>(result.Definition);
+        Assert.Equal(LoadCustomerRelationFixture.SearchBinding, result.Binding);
+        Assert.Equal(LoadCustomerRelationFixture.LoadSearchShapeId, result.Shape);
+        Assert.Equal(
+            [LoadCustomerRelationFixture.SearchIdPath],
+            result.Fields.Select(static field => field.Path));
+        Assert.Equal(
+            plan.RequirementGraph.Outputs.Select(static output => output.Id),
+            result.Outputs.Select(static output => output.Id));
+
+        Assert.DoesNotContain(
+            slice.Nodes,
+            node => node.Id == LoadCustomerRelationFixture.AggregateNodeId);
+        var filter = Assert.Single(
+            slice.Nodes,
+            node => node.Id == LoadCustomerRelationFixture.StatusFilterNodeId);
+        Assert.Equal(
+            [RelationQueryExpressionSiteKind.FilterPredicate],
+            filter.ExpressionSites.Select(static site => site.Kind));
+
+        var order = Assert.Single(
+            slice.Nodes,
+            node => node.Id == LoadCustomerRelationFixture.OrderNodeId);
+        var orderKey = Assert.Single(order.OrderKeys);
+        Assert.Equal(0, orderKey.Ordinal);
+        Assert.Equal(RelationQueryExpressionSiteKind.OrderKey, orderKey.Kind);
+
+        var page = Assert.Single(
+            slice.Nodes,
+            node => node.Id == LoadCustomerRelationFixture.PageNodeId);
+        var boundary = Assert.Single(page.KeysetBoundaries);
+        Assert.Equal(0, boundary.Ordinal);
+        Assert.Equal(RelationQueryExpressionSiteKind.KeysetBoundary, boundary.Kind);
+
+        var project = Assert.Single(
+            slice.Nodes,
+            node => node.Id == LoadCustomerRelationFixture.ProjectionNodeId);
+        Assert.Equal(
+            [LoadCustomerRelationFixture.SearchIdAssignmentId],
+            project.ProjectionAssignments.Select(static assignment => assignment.Definition.Id));
+    }
+
+    [Fact]
+    public void Compile_AggregateExecutionSliceRetainsGroupingAndValueLessCountOnly()
+    {
+        var plan = SuccessfulPlan(Compile(
+            LoadCustomerRelationFixture.RepresentativeQueryDocument,
+            QueryFields(
+                LoadCustomerRelationFixture.AggregationResultId,
+                LoadCustomerRelationFixture.LoadAggregateShapeId,
+                LoadCustomerRelationFixture.AggregateLoadCountPath)));
+        var slice = plan.ExecutionSlice;
+
+        var result = Assert.Single(slice.QueryResults);
+        Assert.Equal(LoadCustomerRelationFixture.AggregationResultId, result.Id);
+        Assert.IsType<AggregationQueryResultDefinition>(result.Definition);
+        Assert.Equal(LoadCustomerRelationFixture.AggregateBinding, result.Binding);
+        Assert.Equal(LoadCustomerRelationFixture.LoadAggregateShapeId, result.Shape);
+        Assert.Equal(
+            [LoadCustomerRelationFixture.AggregateLoadCountPath],
+            result.Fields.Select(static field => field.Path));
+
+        var aggregate = Assert.Single(
+            slice.Nodes,
+            node => node.Id == LoadCustomerRelationFixture.AggregateNodeId);
+        var grouping = Assert.Single(aggregate.AggregateGroupings);
+        Assert.Equal(
+            LoadCustomerRelationFixture.AggregateCustomerNameGroupingId,
+            grouping.Definition.Id);
+        Assert.Equal(RelationQueryExpressionSiteKind.AggregateGroupingKey, grouping.KeySite.Kind);
+
+        var assignment = Assert.Single(aggregate.AggregateAssignments);
+        Assert.Equal(
+            LoadCustomerRelationFixture.AggregateLoadCountAssignmentId,
+            assignment.Definition.Id);
+        Assert.Equal(AggregateOperator.Count, assignment.Definition.Operation);
+        Assert.Null(assignment.ValueSite);
+        Assert.Null(assignment.FilterSite);
+        Assert.DoesNotContain(
+            aggregate.AggregateAssignments,
+            retained => retained.Definition.Id
+                == LoadCustomerRelationFixture.AggregateTotalAmountAssignmentId);
+    }
+
+    [Fact]
     public void Compile_FilterOrderAndPageDependenciesDoNotBecomeValueLineage()
     {
         var plan = SuccessfulPlan(Compile(
@@ -1278,6 +1444,12 @@ public sealed class RelationQueryStaticCompilerTests
             edge => edge.Output.Id == output.Id
                 && edge.Input is RelationQueryCapabilityInput
                 && edge.Effect == RelationQueryRequirementEffect.Evaluation);
+        var project = Assert.Single(
+            plan.ExecutionSlice.Nodes,
+            node => node.Id == projectNode);
+        var assignment = Assert.Single(project.ProjectionAssignments);
+        Assert.Equal(new QueryAssignmentId("constant-id"), assignment.Definition.Id);
+        Assert.Same(assignment.Definition.Value, assignment.ValueSite.Analysis.Site.Expression);
     }
 
     [Fact]
@@ -1351,6 +1523,13 @@ public sealed class RelationQueryStaticCompilerTests
         Assert.DoesNotContain(
             plan.Lineage.Entries.SelectMany(static entry => entry.Contributions),
             contribution => contribution.Input.Id == amount.Id);
+        var invariant = Assert.Single(
+            Assert.IsType<RelationQueryRelationExecutionOutput>(plan.ExecutionSlice.RelationOutput)
+                .Invariants);
+        Assert.Equal("positive-total", invariant.Definition.Name);
+        Assert.Equal(RelationQueryExpressionSiteKind.RelationInvariant, invariant.PredicateSite.Kind);
+        Assert.Equal("positive-total", invariant.PredicateSite.InvariantName);
+        Assert.Same(invariant.Definition.Expression, invariant.PredicateSite.Analysis.Site.Expression);
     }
 
     static RelationQueryCompilationResult Compile(
