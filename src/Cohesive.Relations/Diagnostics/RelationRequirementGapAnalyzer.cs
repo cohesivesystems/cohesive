@@ -149,9 +149,16 @@ public static class RelationRequirementGapAnalyzer
                 .ToImmutableArray();
             var decisions = ProjectPolicy(normalizedGaps);
             var isConclusive = evidence.Completeness == RelationQueryEvidenceCompleteness.Complete
-                && evidence.Traversals.All(static traversal =>
-                    traversal.State != RelationQueryTraversalEvidenceState.Completed
-                    || traversal.Completeness == RelationQueryEvidenceCompleteness.Complete);
+                && sources.Values.All(static source =>
+                    source.State != RelationQuerySourceEvidenceState.Inconclusive
+                    && (source.State != RelationQuerySourceEvidenceState.Provided
+                        || source.Completeness == RelationQueryEvidenceCompleteness.Complete))
+                && fields.Values.All(static field =>
+                    field.State != RelationQueryFieldEvidenceState.Inconclusive)
+                && traversals.Values.All(static traversal =>
+                    traversal.State != RelationQueryTraversalEvidenceState.Inconclusive
+                    && (traversal.State != RelationQueryTraversalEvidenceState.Completed
+                        || traversal.Completeness == RelationQueryEvidenceCompleteness.Complete));
             return new(
                 isEvidenceValid: true,
                 isConclusive,
@@ -636,11 +643,28 @@ public static class RelationRequirementGapAnalyzer
                     continue;
                 }
 
+                if (observed is
+                    {
+                        State: RelationQuerySourceEvidenceState.Provided,
+                        Completeness: RelationQueryEvidenceCompleteness.Partial
+                    })
+                {
+                    AddDiagnostic(
+                        RelationRuntimeDiagnosticCodes.ExecutionEvidenceInconclusive,
+                        $"Source input '{contract.Input.Id.Value}' has partial results and cannot establish authoritative source-set completeness.",
+                        contract.Input.Id,
+                        evidenceReference: observed.EvidenceReference,
+                        severity: DiagnosticSeverity.Warning);
+                    continue;
+                }
+
                 var cause = observed?.State switch
                 {
                     null => RelationRequirementGapCause.InputNotProvided,
                     RelationQuerySourceEvidenceState.NotProvided => RelationRequirementGapCause.InputNotProvided,
                     RelationQuerySourceEvidenceState.Failed => RelationRequirementGapCause.InputAcquisitionFailed,
+                    RelationQuerySourceEvidenceState.Inconclusive =>
+                        RelationRequirementGapCause.InputAcquisitionInconclusive,
                     RelationQuerySourceEvidenceState.Provided => (RelationRequirementGapCause?)null,
                     _ => throw new ArgumentOutOfRangeException()
                 };
@@ -812,6 +836,14 @@ public static class RelationRequirementGapAnalyzer
                                 observedTraversal,
                                 referenceValue);
                             break;
+                        case RelationQueryTraversalEvidenceState.Inconclusive:
+                            AddTraversalGap(
+                                contract,
+                                owner,
+                                RelationRequirementGapCause.InputAcquisitionInconclusive,
+                                observedTraversal,
+                                referenceValue);
+                            break;
                         case RelationQueryTraversalEvidenceState.Completed
                             when contract.Cardinality == RelationshipTraversalCardinality.AtMostOne
                                  && observedTraversal.Results.Length > 1:
@@ -882,6 +914,8 @@ public static class RelationRequirementGapAnalyzer
                         RelationQueryFieldEvidenceState.Missing => null,
                         RelationQueryFieldEvidenceState.NotLoaded => RelationRequirementGapCause.RequiredFieldNotLoaded,
                         RelationQueryFieldEvidenceState.Failed => RelationRequirementGapCause.InputAcquisitionFailed,
+                        RelationQueryFieldEvidenceState.Inconclusive =>
+                            RelationRequirementGapCause.InputAcquisitionInconclusive,
                         _ => throw new ArgumentOutOfRangeException()
                     };
                     if (cause is null)
@@ -1195,6 +1229,8 @@ public static class RelationRequirementGapAnalyzer
                 RelationQueryFieldEvidenceState.Missing => RelationRequirementGapCause.ReferenceValueMissing,
                 RelationQueryFieldEvidenceState.Null => RelationRequirementGapCause.ReferenceValueNull,
                 RelationQueryFieldEvidenceState.Failed => RelationRequirementGapCause.InputAcquisitionFailed,
+                RelationQueryFieldEvidenceState.Inconclusive =>
+                    RelationRequirementGapCause.InputAcquisitionInconclusive,
                 RelationQueryFieldEvidenceState.Value => default,
                 _ => throw new ArgumentOutOfRangeException()
             };
@@ -1374,6 +1410,8 @@ public static class RelationRequirementGapAnalyzer
             {
                 RelationRequirementGapCause.InputNotProvided => [RelationRequirementGapResolutionKind.ProvideInput],
                 RelationRequirementGapCause.InputAcquisitionFailed => [RelationRequirementGapResolutionKind.RetryAcquisition],
+                RelationRequirementGapCause.InputAcquisitionInconclusive =>
+                    [RelationRequirementGapResolutionKind.RetryAcquisition],
                 RelationRequirementGapCause.ObservationIdentityMissing => [RelationRequirementGapResolutionKind.ProvideValue],
                 RelationRequirementGapCause.ReferenceFieldNotLoaded => [RelationRequirementGapResolutionKind.LoadField],
                 RelationRequirementGapCause.ReferenceValueMissing or RelationRequirementGapCause.ReferenceValueNull =>
@@ -1398,6 +1436,8 @@ public static class RelationRequirementGapAnalyzer
         {
             RelationRequirementGapCause.InputNotProvided => RelationRuntimeDiagnosticCodes.RequirementGapInputNotProvided,
             RelationRequirementGapCause.InputAcquisitionFailed => RelationRuntimeDiagnosticCodes.RequirementGapInputAcquisitionFailed,
+            RelationRequirementGapCause.InputAcquisitionInconclusive =>
+                RelationRuntimeDiagnosticCodes.RequirementGapInputAcquisitionInconclusive,
             RelationRequirementGapCause.ObservationIdentityMissing => RelationRuntimeDiagnosticCodes.RequirementGapObservationIdentityMissing,
             RelationRequirementGapCause.ReferenceFieldNotLoaded => RelationRuntimeDiagnosticCodes.RequirementGapReferenceFieldNotLoaded,
             RelationRequirementGapCause.ReferenceValueMissing => RelationRuntimeDiagnosticCodes.RequirementGapReferenceValueMissing,

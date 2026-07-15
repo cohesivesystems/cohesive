@@ -475,10 +475,11 @@ structured plan-mismatch diagnostic before requirement-gap analysis.
 The evidence model preserves distinctions required for useful diagnostics:
 
 - a source was not provided versus was provided successfully with zero rows;
+- a source result was complete versus partial, failed, or explicitly inconclusive;
 - a field was not loaded versus was loaded and semantically absent;
 - an explicit null versus an absent value;
 - a parameter that was not supplied versus one supplied as missing, explicit null, or a concrete value;
-- relationship resolution was inapplicable, not attempted, failed, rejected, or completed;
+- relationship resolution was inapplicable, not attempted, failed, rejected, inconclusive, or completed;
 - a completed result is partial versus authoritative and complete;
 - an authoritative lookup found no row versus no lookup evidence being available.
 
@@ -1003,9 +1004,73 @@ missing, unavailable, failed, or inconclusive. The in-memory reference interpret
 runtime gap analysis first, then consumes this same shared realization contract before execution.
 
 Compiled DTO mappers, composed acquisition runtimes, SQL/document/graph/search adapters, explain
-tools, and deployment gates can consume the same report contract. Later physical planners may turn
-a composed proof into batching, lookup, correlation, or native backend stages without creating a
-second semantic support model.
+tools, and deployment gates can consume the same report contract.
+
+### Deterministic federated physical planning
+
+`RelationQueryPhysicalPlanner` turns one exact `CompiledRelationQueryPlan`, its canonical reference-interpreter
+realization report, plan-scoped `RelationQuerySourcePlacement`, and bounded `RelationQueryPhysicalPlanningPolicy`
+into `relation-query-physical-plan/v1`. Placement remains outside canonical relation/query IR: it binds
+each compiled source or traversal input to a source instance, execution domain, capability-profile
+snapshot, semantic-to-source selectors, and explicit limits. Explicit and convention-derived placement
+remain distinguishable and fingerprint-significant.
+
+Policy limits independently bound lookup batches, cumulative retained rows, plan-wide local rows,
+per-owner result fan-out, relationship-reference keys extracted from one observation, and concurrency.
+Source capability evidence is usable only when every condition attached to that evidence is enforced by
+these physical bounds or by attributable target-enforcement evidence; the selected evidence and boundary
+identities remain in stage provenance.
+
+The v1 physical stage graph makes acquisition mechanics inspectable:
+
+```text
+supplied input or bounded source read
+→ exact field projection
+→ relationship key extraction
+→ key deduplication
+→ bounded identity or predicate batches
+→ local occurrence correlation
+→ runtime evidence assembly
+→ canonical reference interpretation
+```
+
+Forward at-most-one observation-identity relationships lower to batched identity reads. Forward-many
+acquisition remains unavailable in v1 until mixed successful and failed batch outcomes can be represented
+without discarding attributable rows. Inverse relationships
+lower to batched predicates over the canonical source-reference field. Both paths retain the exact
+compiled input IDs and realization, placement, capability, boundary, lowering, and policy provenance
+that authorized each stage. An optional traversal removed by demand pruning never reappears in the
+physical plan. A statically proven field-equality join can use bounded local correlation over placed
+source sets when at least one string identity field is tied to the reader's unique observation identity.
+Multiple left, at-most-one sibling enrichments from the same owner binding are sequenced in semantic order;
+each downstream read is restricted to owner occurrences that conclusively reached it, and non-reaching owners
+receive `NotApplicable` evidence without I/O. Other traversals separated from their owner producer by a filter,
+a different binding, or a cardinality-changing operator remain unavailable until reachability can be staged
+without over-fetching or false requirement gaps. Predeclared conversion failures that can alter a supported
+sibling reachability chain also fail preflight rather than guessing. Arbitrary predicates, unbounded collection
+expansion, and temporal cross-source acquisition fail with structured `REL21xx` diagnostics rather than falling
+back to unbounded enumeration or weakened semantics.
+
+`IRelationQuerySourceReader` is the narrow provider port. Every request carries an exact physical-plan
+and stage identity, source placement, graph-qualified shape, identity selector, selected semantic fields,
+physical-only correlation fields where required, and one closed bounded constraint: enumeration,
+identity batch, or relationship-key batch. Results distinguish complete, partial, authoritative
+not-found, failed, and inconclusive acquisition, including per-field null, missing, failure, and
+inconclusive states. An inconclusive request carries no rows because the runtime evidence contract
+cannot attribute provisional rows without overstating their meaning; a provider that has attributable
+rows but cannot prove the result set complete returns `Partial`. Providers return expected failures as
+evidence; cancellation propagates.
+
+The composed physical executor validates the semantic plan, realization, physical fingerprint, source
+instance, execution domain, and capability profile before I/O. It deduplicates keys, chunks them to the
+smaller of placement and policy bounds, restores a distinct occurrence for every semantic participation,
+assembles `RelationQueryRuntimeEvidence`, and then delegates filters, joins, projections, aggregations,
+ordering, paging, gap policy, and output shaping to the canonical
+`RelationQueryInMemoryInterpreter.Default`. Acquisition therefore does not become a second semantic evaluator,
+and the physical proof target cannot drift from the interpreter that executes the terminal stage. The v1
+reference executor uses a deterministic serial stage schedule, which obeys every positive source and policy
+concurrency limit; target runtimes may introduce bounded parallel scheduling without changing stage or evidence
+semantics.
 
 ### Explicit missing-data semantics
 

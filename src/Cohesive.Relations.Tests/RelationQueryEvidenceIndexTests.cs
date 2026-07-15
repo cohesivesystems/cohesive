@@ -114,6 +114,7 @@ public sealed class RelationQueryEvidenceIndexTests
     [InlineData(RelationQueryFieldEvidenceState.Missing, (int)RelationQueryMaterializedValueState.Missing, true, ObservationValueKind.Undefined)]
     [InlineData(RelationQueryFieldEvidenceState.NotLoaded, (int)RelationQueryMaterializedValueState.NotLoaded, false, ObservationValueKind.Undefined)]
     [InlineData(RelationQueryFieldEvidenceState.Failed, (int)RelationQueryMaterializedValueState.Failed, false, ObservationValueKind.Undefined)]
+    [InlineData(RelationQueryFieldEvidenceState.Inconclusive, (int)RelationQueryMaterializedValueState.Inconclusive, false, ObservationValueKind.Undefined)]
     public void MaterializedFieldValue_PreservesAvailabilityState(
         RelationQueryFieldEvidenceState evidenceState,
         int expectedState,

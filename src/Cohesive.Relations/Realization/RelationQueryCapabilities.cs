@@ -332,6 +332,9 @@ public enum RelationQueryPrimitiveCapabilityKind
     /// <summary>Tracks source occurrence and realization provenance.</summary>
     ProvenanceTracking = 17,
 
+    /// <summary>Reads observations matching multiple predicate values in one bounded operation.</summary>
+    BatchedPredicateLookup = 18,
+
     /// <summary>Evaluates a declared semantic invariant.</summary>
     InvariantEvaluation = 19,
 

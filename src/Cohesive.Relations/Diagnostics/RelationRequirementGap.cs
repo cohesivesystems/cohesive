@@ -72,7 +72,12 @@ public enum RelationRequirementGapCause
     CardinalityViolation = 14,
 
     /// <summary>A later adapter or evaluator reported conversion failure.</summary>
-    ConversionFailure = 15
+    ConversionFailure = 15,
+
+    /// <summary>
+    /// Acquisition could not establish an input value, semantic absence, or a definitive failure.
+    /// </summary>
+    InputAcquisitionInconclusive = 16
 }
 
 /// <summary>Portable action that may resolve or deliberately disposition a relation requirement gap.</summary>
@@ -467,6 +472,9 @@ public static class RelationRuntimeDiagnosticCodes
 
     /// <summary>A conversion failure was reported.</summary>
     public const string RequirementGapConversionFailure = "REL3116";
+
+    /// <summary>An inconclusive input acquisition was reported.</summary>
+    public const string RequirementGapInputAcquisitionInconclusive = "REL3117";
 
     /// <summary>A retained canonical expression could not be evaluated by the reference interpreter.</summary>
     public const string ExecutionExpressionFailure = "REL3201";

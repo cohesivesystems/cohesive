@@ -123,7 +123,12 @@ public enum RelationQuerySourceEvidenceState
     Provided = 1,
 
     /// <summary>Acquiring the source failed.</summary>
-    Failed = 2
+    Failed = 2,
+
+    /// <summary>
+    /// Acquisition could not establish either a successful source result or a definitive failure.
+    /// </summary>
+    Inconclusive = 3
 }
 
 /// <summary>Runtime evidence for one compiled source-set input.</summary>
@@ -145,11 +150,53 @@ public sealed record RelationQuerySourceEvidence
         RelationQuerySourceEvidenceState state,
         ImmutableArray<RelationQueryObservationOccurrence> occurrences = default,
         string? evidenceReference = null)
+        : this(
+            input,
+            state,
+            state == RelationQuerySourceEvidenceState.Provided
+                ? RelationQueryEvidenceCompleteness.Complete
+                : RelationQueryEvidenceCompleteness.Partial,
+            occurrences,
+            evidenceReference)
+    {
+    }
+
+    /// <summary>Creates source evidence with explicit successful-result completeness.</summary>
+    /// <param name="input">Compiled source-set input identity.</param>
+    /// <param name="state">Observed source state.</param>
+    /// <param name="completeness">
+    /// Whether a provided result set is authoritative and complete. States other than
+    /// <see cref="RelationQuerySourceEvidenceState.Provided"/> require
+    /// <see cref="RelationQueryEvidenceCompleteness.Partial"/>.
+    /// </param>
+    /// <param name="occurrences">Occurrences supplied by a successful source acquisition.</param>
+    /// <param name="evidenceReference">Optional opaque reference to acquisition evidence or failure details.</param>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="input"/> is default; <paramref name="occurrences"/> contains a null, duplicate, or invalid
+    /// occurrence; occurrences are supplied for a state other than <see cref="RelationQuerySourceEvidenceState.Provided"/>;
+    /// a state other than <see cref="RelationQuerySourceEvidenceState.Provided"/> declares complete results; or
+    /// <paramref name="evidenceReference"/> is empty or white space.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="state"/> or <paramref name="completeness"/> is unsupported.
+    /// </exception>
+    [System.Text.Json.Serialization.JsonConstructor]
+    public RelationQuerySourceEvidence(
+        RelationQueryInputId input,
+        RelationQuerySourceEvidenceState state,
+        RelationQueryEvidenceCompleteness completeness,
+        ImmutableArray<RelationQueryObservationOccurrence> occurrences = default,
+        string? evidenceReference = null)
     {
         RequireInput(input, nameof(input));
         if (!Enum.IsDefined(state))
         {
             throw new ArgumentOutOfRangeException(nameof(state), state, "Unsupported source evidence state.");
+        }
+
+        if (!Enum.IsDefined(completeness))
+        {
+            throw new ArgumentOutOfRangeException(nameof(completeness), completeness, "Unsupported evidence completeness.");
         }
 
         var normalized = NormalizeOccurrences(occurrences, nameof(occurrences));
@@ -158,10 +205,17 @@ public sealed record RelationQuerySourceEvidence
             throw new ArgumentException("Only provided source evidence can contain occurrences.", nameof(occurrences));
         }
 
+        if (state != RelationQuerySourceEvidenceState.Provided
+            && completeness == RelationQueryEvidenceCompleteness.Complete)
+        {
+            throw new ArgumentException("Only provided source evidence can declare complete results.", nameof(completeness));
+        }
+
         RequireOptionalReference(evidenceReference, nameof(evidenceReference));
 
         Input = input;
         State = state;
+        Completeness = completeness;
         Occurrences = normalized;
         EvidenceReference = evidenceReference;
     }
@@ -171,6 +225,9 @@ public sealed record RelationQuerySourceEvidence
 
     /// <summary>Observed source state.</summary>
     public RelationQuerySourceEvidenceState State { get; }
+
+    /// <summary>Whether a provided source result set is authoritative and complete.</summary>
+    public RelationQueryEvidenceCompleteness Completeness { get; }
 
     /// <summary>Supplied occurrences, or an empty array for another state or an empty successful source.</summary>
     public ImmutableArray<RelationQueryObservationOccurrence> Occurrences { get; }
@@ -229,7 +286,12 @@ public enum RelationQueryFieldEvidenceState
     NotLoaded = 3,
 
     /// <summary>Acquiring the field failed.</summary>
-    Failed = 4
+    Failed = 4,
+
+    /// <summary>
+    /// Acquisition could not establish the field value, semantic absence, or a definitive failure.
+    /// </summary>
+    Inconclusive = 5
 }
 
 /// <summary>Runtime evidence for one compiled field input and owner occurrence.</summary>
@@ -317,7 +379,12 @@ public enum RelationQueryTraversalEvidenceState
     Failed = 3,
 
     /// <summary>Candidate related observations were rejected by an explicit resolver or policy.</summary>
-    Rejected = 4
+    Rejected = 4,
+
+    /// <summary>
+    /// Resolution could not establish completed results, non-applicability, rejection, or a definitive failure.
+    /// </summary>
+    Inconclusive = 5
 }
 
 /// <summary>Runtime evidence for one traversal input and source occurrence.</summary>
