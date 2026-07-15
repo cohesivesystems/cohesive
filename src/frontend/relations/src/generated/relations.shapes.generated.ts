@@ -307,6 +307,8 @@ export type LogicalQueryNode = {
 } & TraverseRelationshipQueryNode | {
   readonly $node: 'join';
 } & JoinQueryNode | {
+  readonly $node: 'temporalJoin';
+} & TemporalJoinQueryNode | {
   readonly $node: 'expandCollection';
 } & ExpandCollectionQueryNode | {
   readonly $node: 'project';
@@ -349,6 +351,15 @@ export interface JoinQueryNode {
   right: QueryNodeId;
   kind: JoinKind;
   predicate: Expr;
+}
+
+export interface TemporalJoinQueryNode {
+  id: QueryNodeId;
+  left: QueryNodeId;
+  right: QueryNodeId;
+  kind: JoinKind;
+  correlation: Expr;
+  match: TemporalJoinMatch;
 }
 
 export interface ExpandCollectionQueryNode {
@@ -605,6 +616,22 @@ export const queryInputRequirementLabels: Record<QueryInputRequirement, string> 
   Required: 'Required',
 };
 
+export type TemporalJoinMatch = {
+  readonly $temporalMatch: 'pointInInterval';
+} & TemporalPointInIntervalMatch | {
+  readonly $temporalMatch: 'intervalOverlap';
+} & TemporalIntervalOverlapMatch;
+
+export interface TemporalPointInIntervalMatch {
+  point: Expr;
+  interval: TemporalInterval;
+}
+
+export interface TemporalIntervalOverlapMatch {
+  left: TemporalInterval;
+  right: TemporalInterval;
+}
+
 export interface ProjectionAssignment {
   id: QueryAssignmentId;
   target: FieldPath;
@@ -799,6 +826,11 @@ export const jsonTypeKindLabels: Record<JsonTypeKind, string> = {
   Boolean: 'Boolean',
 };
 
+export interface TemporalInterval {
+  lower: TemporalIntervalBound;
+  upper: TemporalIntervalBound;
+}
+
 export type QuerySortDirection = 'Ascending' | 'Descending';
 
 export const querySortDirections = {
@@ -859,6 +891,44 @@ export const segmentKinds = {
 export const segmentKindLabels: Record<SegmentKind, string> = {
   Field: 'Field',
   Element: 'Element',
+};
+
+export type TemporalIntervalBound = {
+  readonly $temporalBound: 'unbounded';
+} & UnboundedTemporalIntervalBound | {
+  readonly $temporalBound: 'expression';
+} & ExpressionTemporalIntervalBound;
+
+export type UnboundedTemporalIntervalBound = Record<never, never>;
+
+export interface ExpressionTemporalIntervalBound {
+  value: Expr;
+  inclusion: TemporalBoundaryInclusion;
+  nullBehavior: TemporalNullBoundBehavior;
+}
+
+export type TemporalBoundaryInclusion = 'Inclusive' | 'Exclusive';
+
+export const temporalBoundaryInclusions = {
+  inclusive: 'Inclusive',
+  exclusive: 'Exclusive',
+} as const satisfies Record<string, TemporalBoundaryInclusion>;
+
+export const temporalBoundaryInclusionLabels: Record<TemporalBoundaryInclusion, string> = {
+  Inclusive: 'Inclusive',
+  Exclusive: 'Exclusive',
+};
+
+export type TemporalNullBoundBehavior = 'Invalid' | 'Unbounded';
+
+export const temporalNullBoundBehaviors = {
+  invalid: 'Invalid',
+  unbounded: 'Unbounded',
+} as const satisfies Record<string, TemporalNullBoundBehavior>;
+
+export const temporalNullBoundBehaviorLabels: Record<TemporalNullBoundBehavior, string> = {
+  Invalid: 'Invalid',
+  Unbounded: 'Unbounded',
 };
 
 export interface QualifiedShapeId {

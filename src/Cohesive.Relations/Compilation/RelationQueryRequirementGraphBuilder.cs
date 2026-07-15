@@ -448,6 +448,15 @@ sealed class RelationQueryRequirementGraphBuilder
                     requirement,
                     trace,
                     strictAssignment),
+                TemporalJoinQueryNode temporalJoin => WalkTemporalJoinField(
+                    temporalJoin,
+                    binding,
+                    path,
+                    effect,
+                    output,
+                    requirement,
+                    trace,
+                    strictAssignment),
                 ExpandCollectionQueryNode expansion => WalkExpansionField(
                     expansion,
                     binding,
@@ -638,24 +647,68 @@ sealed class RelationQueryRequirementGraphBuilder
         QueryInputRequirement requirement,
         ImmutableArray<RelationQueryRequirementTraceStep> trace,
         bool strictAssignment)
-    {
-        Retain(join.Id);
-        var leftContains = bindingFlow.GetOutput(join.Left).Contains(binding);
-        var rightContains = bindingFlow.GetOutput(join.Right).Contains(binding);
-        if (leftContains == rightContains)
-        {
-            AddBindingRouteError(join.Id, binding, path);
-            return false;
-        }
-
-        return WalkField(
-            leftContains ? join.Left : join.Right,
+        => WalkBinaryJoinField(
+            join.Id,
+            join.Left,
+            join.Right,
             binding,
             path,
             effect,
             output,
             requirement,
-            AppendStructural(trace, join.Id),
+            trace,
+            strictAssignment);
+
+    bool WalkTemporalJoinField(
+        TemporalJoinQueryNode join,
+        ValueBindingId binding,
+        FieldPath path,
+        RelationQueryRequirementEffect effect,
+        RelationQueryOutputReference output,
+        QueryInputRequirement requirement,
+        ImmutableArray<RelationQueryRequirementTraceStep> trace,
+        bool strictAssignment)
+        => WalkBinaryJoinField(
+            join.Id,
+            join.Left,
+            join.Right,
+            binding,
+            path,
+            effect,
+            output,
+            requirement,
+            trace,
+            strictAssignment);
+
+    bool WalkBinaryJoinField(
+        QueryNodeId join,
+        QueryNodeId left,
+        QueryNodeId right,
+        ValueBindingId binding,
+        FieldPath path,
+        RelationQueryRequirementEffect effect,
+        RelationQueryOutputReference output,
+        QueryInputRequirement requirement,
+        ImmutableArray<RelationQueryRequirementTraceStep> trace,
+        bool strictAssignment)
+    {
+        Retain(join);
+        var leftContains = bindingFlow.GetOutput(left).Contains(binding);
+        var rightContains = bindingFlow.GetOutput(right).Contains(binding);
+        if (leftContains == rightContains)
+        {
+            AddBindingRouteError(join, binding, path);
+            return false;
+        }
+
+        return WalkField(
+            leftContains ? left : right,
+            binding,
+            path,
+            effect,
+            output,
+            requirement,
+            AppendStructural(trace, join),
             strictAssignment);
     }
 
@@ -1123,6 +1176,9 @@ sealed class RelationQueryRequirementGraphBuilder
                 case JoinQueryNode join:
                     WalkJoinRow(join, effect, output, requirement, trace);
                     break;
+                case TemporalJoinQueryNode temporalJoin:
+                    WalkTemporalJoinRow(temporalJoin, effect, output, requirement, trace);
+                    break;
                 case ExpandCollectionQueryNode expansion:
                     Retain(expansion.Id);
                     if (TryGetSite(
@@ -1405,6 +1461,88 @@ sealed class RelationQueryRequirementGraphBuilder
         var joinTrace = AppendStructural(trace, join.Id);
         WalkJoinInputRow(join.Left, effect, output, requirement, joinTrace);
         WalkJoinInputRow(join.Right, effect, output, requirement, joinTrace);
+    }
+
+    void WalkTemporalJoinRow(
+        TemporalJoinQueryNode join,
+        RelationQueryRequirementEffect effect,
+        RelationQueryOutputReference output,
+        QueryInputRequirement requirement,
+        ImmutableArray<RelationQueryRequirementTraceStep> trace)
+    {
+        Retain(join.Id);
+        if (TryGetSite(
+                RelationQueryExpressionSiteKind.TemporalJoinCorrelation,
+                out var correlationSite,
+                node: join.Id))
+        {
+            WalkTemporalSiteEffects(join.Id, correlationSite, includeValidation: false);
+        }
+
+        foreach (var site in GetTemporalMatchSites(join.Id))
+        {
+            var routeFrom = site.Kind == RelationQueryExpressionSiteKind.TemporalJoinPoint
+                || (site.Ordinal == 0 && join.Match is TemporalIntervalOverlapMatch)
+                ? join.Left
+                : join.Right;
+            WalkTemporalSiteEffects(routeFrom, site, includeValidation: true);
+        }
+
+        var joinTrace = AppendStructural(trace, join.Id);
+        WalkJoinInputRow(join.Left, effect, output, requirement, joinTrace);
+        WalkJoinInputRow(join.Right, effect, output, requirement, joinTrace);
+
+        void WalkTemporalSiteEffects(
+            QueryNodeId routeFrom,
+            RelationQueryExpressionSiteAnalysis site,
+            bool includeValidation)
+        {
+            WalkSiteRequirements(
+                routeFrom,
+                site,
+                RelationQueryRequirementEffect.Correlation,
+                output,
+                QueryInputRequirement.Required,
+                trace);
+            WalkSiteRequirements(
+                routeFrom,
+                site,
+                RelationQueryRequirementEffect.Membership,
+                output,
+                QueryInputRequirement.Required,
+                trace);
+            WalkSiteRequirements(
+                routeFrom,
+                site,
+                RelationQueryRequirementEffect.Cardinality,
+                output,
+                QueryInputRequirement.Required,
+                trace);
+            if (includeValidation)
+            {
+                WalkSiteRequirements(
+                    routeFrom,
+                    site,
+                    RelationQueryRequirementEffect.Validation,
+                    output,
+                    QueryInputRequirement.Required,
+                    trace);
+            }
+        }
+    }
+
+    IEnumerable<RelationQueryExpressionSiteAnalysis> GetTemporalMatchSites(QueryNodeId node)
+    {
+        var matching = sites.Values
+            .Where(site => site.Node == node
+                && site.Kind is RelationQueryExpressionSiteKind.TemporalJoinPoint
+                    or RelationQueryExpressionSiteKind.TemporalJoinIntervalLowerBound
+                    or RelationQueryExpressionSiteKind.TemporalJoinIntervalUpperBound)
+            .OrderBy(static site => site.Analysis.Site.Id.Value, StringComparer.Ordinal)
+            .ToArray();
+        foreach (var site in matching)
+            demandedSites[site.Analysis.Site.Id] = site;
+        return matching;
     }
 
     void WalkJoinInputRow(
@@ -2054,6 +2192,7 @@ sealed class RelationQueryRequirementGraphBuilder
                 AggregateQueryNode aggregate when aggregate.ResultBinding == binding => aggregate.Id,
                 AggregateQueryNode => null,
                 JoinQueryNode join => FindJoin(join),
+                TemporalJoinQueryNode join => FindBinaryJoin(join.Left, join.Right),
                 FilterQueryNode filter => Find(filter.Input),
                 DistinctQueryNode distinct => Find(distinct.Input),
                 OrderQueryNode order => Find(order.Input),
@@ -2063,12 +2202,15 @@ sealed class RelationQueryRequirementGraphBuilder
         }
 
         QueryNodeId? FindJoin(JoinQueryNode join)
+            => FindBinaryJoin(join.Left, join.Right);
+
+        QueryNodeId? FindBinaryJoin(QueryNodeId left, QueryNodeId right)
         {
-            var leftContains = bindingFlow.GetOutput(join.Left).Contains(binding);
-            var rightContains = bindingFlow.GetOutput(join.Right).Contains(binding);
+            var leftContains = bindingFlow.GetOutput(left).Contains(binding);
+            var rightContains = bindingFlow.GetOutput(right).Contains(binding);
             return leftContains == rightContains
                 ? null
-                : Find(leftContains ? join.Left : join.Right);
+                : Find(leftContains ? left : right);
         }
     }
 

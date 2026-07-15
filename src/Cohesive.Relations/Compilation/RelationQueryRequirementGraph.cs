@@ -556,7 +556,9 @@ public readonly record struct RelationQueryRequirementTraceStep
                 or RelationQueryExpressionSiteKind.AggregateAssignmentFilter;
             var indexedSite = siteKind is RelationQueryExpressionSiteKind.DistinctKey
                 or RelationQueryExpressionSiteKind.OrderKey
-                or RelationQueryExpressionSiteKind.KeysetBoundary;
+                or RelationQueryExpressionSiteKind.KeysetBoundary
+                or RelationQueryExpressionSiteKind.TemporalJoinIntervalLowerBound
+                or RelationQueryExpressionSiteKind.TemporalJoinIntervalUpperBound;
             var invariantSite = siteKind == RelationQueryExpressionSiteKind.RelationInvariant;
 
             if (assignmentSite != (assignment is not null))

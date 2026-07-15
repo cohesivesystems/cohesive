@@ -10,15 +10,30 @@ static class RelationQueryInMemorySupportAnalyzer
 {
     public static ImmutableArray<RelationRuntimeDiagnostic> Analyze(
         CompiledRelationQueryPlan plan,
-        RelationQueryEvaluationId evaluation)
+        RelationQueryEvaluationId evaluation,
+        RelationQueryTemporalExecutionCapabilityProfile temporalCapabilities)
     {
         ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(temporalCapabilities);
 
         List<RelationRuntimeDiagnostic> diagnostics = [];
         HashSet<SupportIssueKey> issues = [];
         var capabilityInputs = plan.RequirementGraph.Inputs
             .OfType<RelationQueryCapabilityInput>()
             .ToDictionary(static input => input.Capability);
+
+        foreach (var requirement in plan.InputContract.TemporalCapabilities)
+        {
+            if (temporalCapabilities.Supports(requirement.Capability))
+                continue;
+
+            Add(
+                requirement.Id,
+                requirement.Node,
+                requirement.SemanticSite,
+                $"Canonical in-memory interpretation does not support temporal execution capability "
+                + $"'{requirement.Capability}' required by temporal join node '{requirement.Node.Value}'.");
+        }
 
         foreach (var site in plan.ExecutionSlice.ExpressionSites)
         {

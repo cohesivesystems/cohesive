@@ -306,6 +306,23 @@ public static partial class RelationQueryDefinitionValidator
                         message: $"Join node '{join.Id.Value}' declares unsupported join kind '{join.Kind}'.",
                         location: $"{NodeLocation(join.Id)}/kind");
                     break;
+                case TemporalJoinQueryNode temporalJoin:
+                    if (!Enum.IsDefined(temporalJoin.Kind))
+                    {
+                        Add(
+                            code: "relationQuery.temporalJoin.kindInvalid",
+                            message: $"Temporal join node '{temporalJoin.Id.Value}' declares unsupported join kind '{temporalJoin.Kind}'.",
+                            location: $"{NodeLocation(temporalJoin.Id)}/kind");
+                    }
+                    if (temporalJoin.Correlation is null)
+                    {
+                        Add(
+                            code: "relationQuery.temporalJoin.correlationMissing",
+                            message: $"Temporal join node '{temporalJoin.Id.Value}' must declare a correlation predicate.",
+                            location: $"{NodeLocation(temporalJoin.Id)}/correlation");
+                    }
+                    ValidateTemporalMatch(temporalJoin);
+                    break;
                 case ExpandCollectionQueryNode expansion:
                     ValidateBinding(expansion.ItemBinding, expansion.Id, "itemBinding");
                     if (expansion.ItemType is null)
@@ -456,6 +473,15 @@ public static partial class RelationQueryDefinitionValidator
                     case JoinQueryNode join:
                         ValidateExpressionPortability(join.Predicate, $"{NodeLocation(join.Id)}/predicate");
                         break;
+                    case TemporalJoinQueryNode temporalJoin:
+                        if (temporalJoin.Correlation is not null)
+                        {
+                            ValidateExpressionPortability(
+                                temporalJoin.Correlation,
+                                $"{NodeLocation(temporalJoin.Id)}/correlation");
+                        }
+                        ValidateTemporalMatchExpressions(temporalJoin);
+                        break;
                     case ExpandCollectionQueryNode expansion:
                         ValidateExpressionPortability(expansion.Collection, $"{NodeLocation(expansion.Id)}/collection");
                         break;
@@ -494,6 +520,137 @@ public static partial class RelationQueryDefinitionValidator
                         break;
                 }
             }
+        }
+
+        void ValidateTemporalMatch(TemporalJoinQueryNode temporalJoin)
+        {
+            var location = $"{NodeLocation(temporalJoin.Id)}/match";
+            switch (temporalJoin.Match)
+            {
+                case null:
+                    Add(
+                        code: "relationQuery.temporalJoin.matchMissing",
+                        message: $"Temporal join node '{temporalJoin.Id.Value}' must declare a temporal match.",
+                        location: location);
+                    break;
+                case TemporalPointInIntervalMatch pointInInterval:
+                    if (pointInInterval.Point is null)
+                    {
+                        Add(
+                            code: "relationQuery.temporalJoin.pointMissing",
+                            message: $"Temporal join node '{temporalJoin.Id.Value}' must declare a point expression.",
+                            location: $"{location}/point");
+                    }
+                    ValidateTemporalInterval(
+                        temporalJoin,
+                        pointInInterval.Interval,
+                        $"{location}/interval");
+                    break;
+                case TemporalIntervalOverlapMatch overlap:
+                    ValidateTemporalInterval(temporalJoin, overlap.Left, $"{location}/left");
+                    ValidateTemporalInterval(temporalJoin, overlap.Right, $"{location}/right");
+                    break;
+                default:
+                    Add(
+                        code: "relationQuery.temporalJoin.matchInvalid",
+                        message: $"Temporal join node '{temporalJoin.Id.Value}' declares unsupported temporal match type '{temporalJoin.Match.GetType().Name}'.",
+                        location: location);
+                    break;
+            }
+        }
+
+        void ValidateTemporalInterval(
+            TemporalJoinQueryNode temporalJoin,
+            TemporalInterval? interval,
+            string location)
+        {
+            if (interval is null)
+            {
+                Add(
+                    code: "relationQuery.temporalJoin.intervalMissing",
+                    message: $"Temporal join node '{temporalJoin.Id.Value}' must declare every temporal interval.",
+                    location: location);
+                return;
+            }
+
+            ValidateTemporalBound(temporalJoin, interval.Lower, $"{location}/lower");
+            ValidateTemporalBound(temporalJoin, interval.Upper, $"{location}/upper");
+        }
+
+        void ValidateTemporalBound(
+            TemporalJoinQueryNode temporalJoin,
+            TemporalIntervalBound? bound,
+            string location)
+        {
+            switch (bound)
+            {
+                case null:
+                    Add(
+                        code: "relationQuery.temporalJoin.boundMissing",
+                        message: $"Temporal join node '{temporalJoin.Id.Value}' must declare every temporal interval bound.",
+                        location: location);
+                    break;
+                case UnboundedTemporalIntervalBound:
+                    break;
+                case ExpressionTemporalIntervalBound expressionBound:
+                    if (expressionBound.Value is null)
+                    {
+                        Add(
+                            code: "relationQuery.temporalJoin.boundExpressionMissing",
+                            message: $"Temporal join node '{temporalJoin.Id.Value}' contains a finite bound without an expression.",
+                            location: $"{location}/value");
+                    }
+                    if (!Enum.IsDefined(expressionBound.Inclusion))
+                    {
+                        Add(
+                            code: "relationQuery.temporalJoin.boundInclusionInvalid",
+                            message: $"Temporal join node '{temporalJoin.Id.Value}' contains an unsupported boundary inclusion.",
+                            location: $"{location}/inclusion");
+                    }
+                    if (!Enum.IsDefined(expressionBound.NullBehavior))
+                    {
+                        Add(
+                            code: "relationQuery.temporalJoin.nullBoundBehaviorInvalid",
+                            message: $"Temporal join node '{temporalJoin.Id.Value}' contains an unsupported null-bound behavior.",
+                            location: $"{location}/nullBehavior");
+                    }
+                    break;
+                default:
+                    Add(
+                        code: "relationQuery.temporalJoin.boundInvalid",
+                        message: $"Temporal join node '{temporalJoin.Id.Value}' contains unsupported bound type '{bound.GetType().Name}'.",
+                        location: location);
+                    break;
+            }
+        }
+
+        void ValidateTemporalMatchExpressions(TemporalJoinQueryNode temporalJoin)
+        {
+            var location = $"{NodeLocation(temporalJoin.Id)}/match";
+            switch (temporalJoin.Match)
+            {
+                case TemporalPointInIntervalMatch pointInInterval:
+                    if (pointInInterval.Point is not null)
+                    {
+                        ValidateExpressionPortability(
+                            pointInInterval.Point,
+                            $"{location}/point");
+                    }
+                    ValidateTemporalIntervalExpressions(pointInInterval.Interval, $"{location}/interval");
+                    break;
+                case TemporalIntervalOverlapMatch overlap:
+                    ValidateTemporalIntervalExpressions(overlap.Left, $"{location}/left");
+                    ValidateTemporalIntervalExpressions(overlap.Right, $"{location}/right");
+                    break;
+            }
+        }
+
+        void ValidateTemporalIntervalExpressions(TemporalInterval? interval, string location)
+        {
+            if (interval?.Lower is ExpressionTemporalIntervalBound { Value: not null } lower)
+                ValidateExpressionPortability(lower.Value, $"{location}/lower/value");
+            if (interval?.Upper is ExpressionTemporalIntervalBound { Value: not null } upper)
+                ValidateExpressionPortability(upper.Value, $"{location}/upper/value");
         }
 
         void ValidateAggregateExpressions(AggregateQueryNode aggregate)

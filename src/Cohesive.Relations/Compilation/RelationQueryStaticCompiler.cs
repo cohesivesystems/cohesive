@@ -10,8 +10,8 @@ namespace Cohesive.Relations.Compilation;
 /// Compiles canonical relation/query IR into a deterministic, target-independent requirement plan.
 /// </summary>
 /// <remarks>
-/// Static compilation determines the exact semantic inputs, retained logical nodes, value lineage,
-/// inverse dependencies, and provenance required by an output demand. It does not choose a backend,
+/// Static compilation determines the exact semantic inputs, retained logical nodes, contribution and
+/// influence lineage, inverse dependencies, and provenance required by an output demand. It does not choose a backend,
 /// physical placement, join algorithm, batching strategy, or runtime representation. Backend
 /// compilers consume the resulting plan and either realize its semantics or emit capability
 /// diagnostics.

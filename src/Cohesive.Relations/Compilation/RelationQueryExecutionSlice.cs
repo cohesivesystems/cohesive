@@ -139,6 +139,233 @@ public sealed record RelationQueryInvariantExecution
 }
 
 /// <summary>
+/// One prepared temporal interval bound and its demanded expression site when finite.
+/// </summary>
+public sealed record RelationQueryTemporalBoundExecution
+{
+    internal RelationQueryTemporalBoundExecution(
+        TemporalIntervalBound definition,
+        int intervalOrdinal,
+        RelationQueryExpressionSiteKind siteKind,
+        RelationQueryExpressionSiteAnalysis? valueSite)
+    {
+        Definition = Guard.RequireNotNull(definition);
+        if (intervalOrdinal < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(intervalOrdinal),
+                intervalOrdinal,
+                "A temporal interval ordinal cannot be negative.");
+        }
+        if (siteKind is not RelationQueryExpressionSiteKind.TemporalJoinIntervalLowerBound
+            and not RelationQueryExpressionSiteKind.TemporalJoinIntervalUpperBound)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(siteKind),
+                siteKind,
+                "A temporal bound requires a lower- or upper-bound expression-site kind.");
+        }
+
+        var requiresSite = definition is ExpressionTemporalIntervalBound;
+        if (requiresSite != (valueSite is not null))
+        {
+            throw new ArgumentException(
+                "Expression-backed temporal bounds require one demanded value site; unbounded bounds require none.",
+                nameof(valueSite));
+        }
+        if (valueSite is not null
+            && (valueSite.Kind != siteKind || valueSite.Ordinal != intervalOrdinal))
+        {
+            throw new ArgumentException(
+                "A temporal bound value site must match its canonical endpoint kind and interval ordinal.",
+                nameof(valueSite));
+        }
+
+        IntervalOrdinal = intervalOrdinal;
+        ValueSite = valueSite;
+    }
+
+    /// <summary>Exact canonical temporal bound.</summary>
+    public TemporalIntervalBound Definition { get; }
+
+    /// <summary>Zero-based interval position within the temporal match.</summary>
+    public int IntervalOrdinal { get; }
+
+    /// <summary>
+    /// Analyzed endpoint expression site, or <see langword="null"/> when the bound is structurally unbounded.
+    /// </summary>
+    public RelationQueryExpressionSiteAnalysis? ValueSite { get; }
+
+    /// <summary>Whether this endpoint is structurally unbounded.</summary>
+    public bool IsStructurallyUnbounded => Definition is UnboundedTemporalIntervalBound;
+}
+
+/// <summary>
+/// One prepared temporal interval with lower and upper endpoint execution metadata.
+/// </summary>
+public sealed record RelationQueryTemporalIntervalExecution
+{
+    internal RelationQueryTemporalIntervalExecution(
+        TemporalInterval definition,
+        int ordinal,
+        RelationQueryTemporalBoundExecution lower,
+        RelationQueryTemporalBoundExecution upper)
+    {
+        Definition = Guard.RequireNotNull(definition);
+        if (ordinal < 0)
+            throw new ArgumentOutOfRangeException(nameof(ordinal), ordinal, "A temporal interval ordinal cannot be negative.");
+        Lower = Guard.RequireNotNull(lower);
+        Upper = Guard.RequireNotNull(upper);
+        if (lower.IntervalOrdinal != ordinal || upper.IntervalOrdinal != ordinal)
+            throw new ArgumentException("Prepared temporal bounds must belong to their interval ordinal.", nameof(ordinal));
+
+        Ordinal = ordinal;
+    }
+
+    /// <summary>Exact canonical temporal interval.</summary>
+    public TemporalInterval Definition { get; }
+
+    /// <summary>Zero-based interval position within the temporal match.</summary>
+    public int Ordinal { get; }
+
+    /// <summary>Prepared lower endpoint.</summary>
+    public RelationQueryTemporalBoundExecution Lower { get; }
+
+    /// <summary>Prepared upper endpoint.</summary>
+    public RelationQueryTemporalBoundExecution Upper { get; }
+}
+
+/// <summary>
+/// Demand-scoped temporal join semantics prepared for interpretation without re-scanning canonical IR.
+/// </summary>
+public sealed record RelationQueryTemporalJoinExecution
+{
+    internal RelationQueryTemporalJoinExecution(
+        TemporalJoinQueryNode definition,
+        ImmutableArray<RelationQueryExpressionSiteAnalysis> sites)
+    {
+        Definition = Guard.RequireNotNull(definition);
+        var normalized = sites.IsDefault ? [] : sites;
+        CorrelationSite = normalized.Single(static site =>
+            site.Kind == RelationQueryExpressionSiteKind.TemporalJoinCorrelation);
+
+        switch (definition.Match)
+        {
+            case TemporalPointInIntervalMatch pointInInterval:
+                PointSite = normalized.Single(static site =>
+                    site.Kind == RelationQueryExpressionSiteKind.TemporalJoinPoint);
+                Intervals =
+                [
+                    CreateInterval(pointInInterval.Interval, ordinal: 0, normalized)
+                ];
+                break;
+            case TemporalIntervalOverlapMatch overlap:
+                if (normalized.Any(static site =>
+                        site.Kind == RelationQueryExpressionSiteKind.TemporalJoinPoint))
+                {
+                    throw new ArgumentException(
+                        "An interval-overlap execution cannot contain a point-expression site.",
+                        nameof(sites));
+                }
+                PointSite = null;
+                Intervals =
+                [
+                    CreateInterval(overlap.Left, ordinal: 0, normalized),
+                    CreateInterval(overlap.Right, ordinal: 1, normalized)
+                ];
+                break;
+            default:
+                throw new ArgumentException("Unsupported temporal join match type.", nameof(definition));
+        }
+
+        var temporalSites = normalized.Where(static site => site.Kind is
+            RelationQueryExpressionSiteKind.TemporalJoinPoint
+            or RelationQueryExpressionSiteKind.TemporalJoinIntervalLowerBound
+            or RelationQueryExpressionSiteKind.TemporalJoinIntervalUpperBound);
+        var domains = temporalSites
+            .Select(static site => site.Analysis.KnownResult?.GetEffectiveType())
+            .Select(static type => type is ScalarTypeRef
+                {
+                    Kind: ScalarTypeKind.Date or ScalarTypeKind.DateTime or ScalarTypeKind.Instant
+                } temporal
+                    ? temporal.Kind
+                    : (ScalarTypeKind?)null)
+            .ToArray();
+        if (domains.Any(static domain => domain is null))
+        {
+            throw new ArgumentException(
+                "Every demanded temporal join operand must have one exact temporal scalar domain.",
+                nameof(sites));
+        }
+
+        var distinctDomains = domains
+            .Select(static domain => domain!.Value)
+            .Distinct()
+            .ToArray();
+        if (distinctDomains.Length > 1)
+        {
+            throw new ArgumentException(
+                "Temporal join operands cannot mix temporal scalar domains.",
+                nameof(sites));
+        }
+        Domain = distinctDomains.Length == 0 ? null : distinctDomains[0];
+    }
+
+    /// <summary>Exact canonical temporal join node.</summary>
+    public TemporalJoinQueryNode Definition { get; }
+
+    /// <summary>Analyzed Boolean correlation-expression site.</summary>
+    public RelationQueryExpressionSiteAnalysis CorrelationSite { get; }
+
+    /// <summary>
+    /// Analyzed left-input point-expression site for point containment, or <see langword="null"/> for overlap.
+    /// </summary>
+    public RelationQueryExpressionSiteAnalysis? PointSite { get; }
+
+    /// <summary>
+    /// Prepared intervals in semantic operand order: one right interval for point containment, or left then right for overlap.
+    /// </summary>
+    public ImmutableArray<RelationQueryTemporalIntervalExecution> Intervals { get; }
+
+    /// <summary>
+    /// Exact temporal scalar domain shared by expression-backed operands, or <see langword="null"/>
+    /// only for interval overlap when both intervals are entirely structurally unbounded.
+    /// </summary>
+    public ScalarTypeKind? Domain { get; }
+
+    static RelationQueryTemporalIntervalExecution CreateInterval(
+        TemporalInterval definition,
+        int ordinal,
+        ImmutableArray<RelationQueryExpressionSiteAnalysis> sites) =>
+        new(
+            definition,
+            ordinal,
+            CreateBound(
+                definition.Lower,
+                ordinal,
+                RelationQueryExpressionSiteKind.TemporalJoinIntervalLowerBound,
+                sites),
+            CreateBound(
+                definition.Upper,
+                ordinal,
+                RelationQueryExpressionSiteKind.TemporalJoinIntervalUpperBound,
+                sites));
+
+    static RelationQueryTemporalBoundExecution CreateBound(
+        TemporalIntervalBound definition,
+        int ordinal,
+        RelationQueryExpressionSiteKind siteKind,
+        ImmutableArray<RelationQueryExpressionSiteAnalysis> sites) =>
+        new(
+            definition,
+            ordinal,
+            siteKind,
+            definition is ExpressionTemporalIntervalBound
+                ? sites.Single(site => site.Kind == siteKind && site.Ordinal == ordinal)
+                : null);
+}
+
+/// <summary>
 /// One retained logical node together with the demand-scoped semantic material needed to execute it.
 /// </summary>
 public sealed record RelationQueryExecutionNode
@@ -162,6 +389,9 @@ public sealed record RelationQueryExecutionNode
         ProjectionAssignments = NormalizeProjectionAssignments(projectionAssignments);
         AggregateGroupings = NormalizeAggregateGroupings(aggregateGroupings);
         AggregateAssignments = NormalizeAggregateAssignments(aggregateAssignments);
+        TemporalJoin = canonicalNode is TemporalJoinQueryNode temporalJoin
+            ? new(temporalJoin, ExpressionSites)
+            : null;
         DistinctKeys = SelectIndexedSites(RelationQueryExpressionSiteKind.DistinctKey);
         OrderKeys = SelectIndexedSites(RelationQueryExpressionSiteKind.OrderKey);
         KeysetBoundaries = SelectIndexedSites(RelationQueryExpressionSiteKind.KeysetBoundary);
@@ -192,6 +422,9 @@ public sealed record RelationQueryExecutionNode
 
     /// <summary>Demanded aggregate assignments sorted by stable assignment identity.</summary>
     public ImmutableArray<RelationQueryAggregateAssignmentExecution> AggregateAssignments { get; }
+
+    /// <summary>Prepared temporal semantics when this is a temporal join node; otherwise <see langword="null"/>.</summary>
+    public RelationQueryTemporalJoinExecution? TemporalJoin { get; }
 
     /// <summary>Demanded distinct-key sites sorted by their canonical ordinal.</summary>
     public ImmutableArray<RelationQueryExpressionSiteAnalysis> DistinctKeys { get; }

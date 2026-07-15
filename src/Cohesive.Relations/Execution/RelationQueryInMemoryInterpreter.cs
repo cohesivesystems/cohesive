@@ -18,7 +18,9 @@ namespace Cohesive.Relations.Execution;
 /// </remarks>
 public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
 {
-    /// <summary>Shared stateless interpreter instance.</summary>
+    /// <summary>
+    /// Shared stateless interpreter configured with <see cref="DefaultTemporalCapabilities"/>.
+    /// </summary>
     public static RelationQueryInMemoryInterpreter Default { get; } = new();
 
     /// <summary>
@@ -32,10 +34,25 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
     public static ExprCapabilityProfile ExpressionCapabilities =>
         RelationQueryExpressionEvaluator.SupportedCapabilities;
 
+    /// <summary>
+    /// Temporal-join semantics supported by the conventional canonical in-memory interpreter.
+    /// </summary>
+    public static RelationQueryTemporalExecutionCapabilityProfile DefaultTemporalCapabilities =>
+        RelationQueryTemporalExecutionCapabilityProfile.All;
+
     /// <summary>Creates a stateless canonical in-memory interpreter.</summary>
-    public RelationQueryInMemoryInterpreter()
+    /// <param name="temporalCapabilities">
+    /// Temporal-join semantics available to this interpreter instance, or <see langword="null"/> to use
+    /// <see cref="DefaultTemporalCapabilities"/>.
+    /// </param>
+    public RelationQueryInMemoryInterpreter(
+        RelationQueryTemporalExecutionCapabilityProfile? temporalCapabilities = null)
     {
+        TemporalCapabilities = temporalCapabilities ?? DefaultTemporalCapabilities;
     }
+
+    /// <summary>Temporal-join semantics available to this interpreter instance.</summary>
+    public RelationQueryTemporalExecutionCapabilityProfile TemporalCapabilities { get; }
 
     /// <inheritdoc />
     public RelationQueryExecutionResult Execute(RelationQueryExecutionRequest request, CancellationToken cancellationToken = default)
@@ -60,7 +77,8 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
 
         var unsupportedDiagnostics = RelationQueryInMemorySupportAnalyzer.Analyze(
             request.Plan,
-            request.Evidence.Evaluation);
+            request.Evidence.Evaluation,
+            TemporalCapabilities);
         if (!unsupportedDiagnostics.IsDefaultOrEmpty)
         {
             return new(
@@ -94,6 +112,9 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
         readonly IReadOnlyDictionary<RelationQueryOccurrenceId, ImmutableArray<RelationQueryOccurrenceId>> occurrenceParents;
         readonly Dictionary<QueryNodeId, RelationQueryExecutionNode> nodes;
         readonly Dictionary<QueryNodeId, ImmutableArray<RelationQueryRuntimeRow>> results = [];
+        readonly HashSet<QueryNodeId> incompleteNodes = [];
+        readonly HashSet<QueryNodeId> globallyIncompleteNodes = [];
+        readonly Dictionary<QueryNodeId, HashSet<RelationQueryOccurrenceId>> incompleteRootsByNode = [];
         readonly List<RelationRuntimeDiagnostic> executionDiagnostics = [];
         readonly HashSet<string> inconclusiveExpressionSites = new(StringComparer.Ordinal);
         readonly HashSet<RelationQueryOutputId> inconclusiveOutputs = [];
@@ -170,6 +191,7 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     results.Add(node.Id, ExecuteNode(node));
+                    PropagateIncompleteInputs(node.Id, node.LogicalPlan.EffectiveInputs);
                 }
 
                 RelationQueryRelationResult? relation = null;
@@ -265,6 +287,7 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
             FilterQueryNode node => ExecuteFilter(execution, node),
             TraverseRelationshipQueryNode node => ExecuteTraversal(execution, node),
             JoinQueryNode node => ExecuteJoin(execution, node),
+            TemporalJoinQueryNode node => ExecuteTemporalJoin(execution, node),
             ExpandCollectionQueryNode node => ExecuteExpand(execution, node),
             ProjectQueryNode node => ExecuteProject(execution, node),
             DistinctQueryNode node => ExecuteDistinct(execution, node),
@@ -289,13 +312,18 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
             var directGaps = DirectGaps(input.Id, row: null);
             if (!directGaps.IsDefaultOrEmpty)
             {
+                MarkNodeIncomplete(node.Id);
                 RecordUnrealizableStructuralSubstitutions(input.Id, directGaps);
                 return [];
             }
             if (!evidence.TryCreateSourceRows(input, out var rows))
             {
+                MarkNodeIncomplete(node.Id);
                 return [];
             }
+
+            if (evidence.Completeness == RelationQueryEvidenceCompleteness.Partial)
+                MarkNodeIncomplete(node.Id);
 
             return rootPartitioned || input.Role != RelationQuerySourceInputRole.RelationRoot
                 ? rows
@@ -358,6 +386,7 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
                 var causalBlockers = BlockingGaps(input.Id, row);
                 if (!causalBlockers.IsDefaultOrEmpty)
                 {
+                    MarkNodeIncomplete(node.Id, row);
                     RecordUnrealizableStructuralSubstitutions(input.Id, causalBlockers);
                     continue;
                 }
@@ -370,12 +399,14 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
                     .ToImmutableArray();
                 if (!blockingDirectGaps.IsDefaultOrEmpty)
                 {
+                    MarkNodeIncomplete(node.Id, row);
                     RecordUnrealizableStructuralSubstitutions(input.Id, blockingDirectGaps);
                     continue;
                 }
 
                 if (!evidence.TryGetTraversal(input, occurrence, out var traversal))
                 {
+                    MarkNodeIncomplete(node.Id, row);
                     RecordUnrealizableStructuralSubstitutions(input.Id, directGaps);
                     continue;
                 }
@@ -391,6 +422,9 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
                 }
                 else if (traversal.State == RelationQueryTraversalEvidenceState.Completed)
                 {
+                    if (traversal.Completeness == RelationQueryEvidenceCompleteness.Partial)
+                        MarkNodeIncomplete(node.Id, row);
+
                     foreach (var related in traversal.Results)
                     {
                         traversed.Add(row.WithBinding(
@@ -413,6 +447,7 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
                 }
                 else
                 {
+                    MarkNodeIncomplete(node.Id, row);
                     RecordUnrealizableStructuralSubstitutions(input.Id, directGaps);
                 }
             }
@@ -472,6 +507,348 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
             }
 
             return joined.ToImmutable();
+        }
+
+        ImmutableArray<RelationQueryRuntimeRow> ExecuteTemporalJoin(
+            RelationQueryExecutionNode execution,
+            TemporalJoinQueryNode node)
+        {
+            var temporal = execution.TemporalJoin
+                ?? throw Failure(
+                    RelationRuntimeDiagnosticCodes.ExecutionExpressionFailure,
+                    $"Temporal join node '{node.Id.Value}' has no prepared temporal execution semantics.",
+                    node.Id);
+            var leftInput = execution.LogicalPlan.EffectiveInputs[0];
+            var rightInput = execution.LogicalPlan.EffectiveInputs[1];
+            var left = InputRows(execution, inputIndex: 0);
+            var right = InputRows(execution, inputIndex: 1);
+            var matchedRight = new bool[right.Length];
+            var indeterminateRight = new bool[right.Length];
+            var joined = ImmutableArray.CreateBuilder<RelationQueryRuntimeRow>();
+
+            foreach (var leftRow in left)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var matched = false;
+                var indeterminate = false;
+                for (var rightIndex = 0; rightIndex < right.Length; rightIndex++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!CanJoinRows(leftRow, right[rightIndex]))
+                        continue;
+
+                    var candidate = leftRow.Merge(right[rightIndex]);
+                    if (!TryEvaluate(temporal.CorrelationSite, candidate, out var correlation))
+                    {
+                        indeterminate = true;
+                        indeterminateRight[rightIndex] = true;
+                        continue;
+                    }
+                    if (!RequireBoolean(correlation, temporal.CorrelationSite, candidate))
+                        continue;
+
+                    if (!TryEvaluateTemporalMatch(temporal, candidate, out var temporalResult)
+                        || temporalResult is RelationQueryTemporalEvaluationKind.InvalidOperand
+                            or RelationQueryTemporalEvaluationKind.InvalidInterval)
+                    {
+                        indeterminate = true;
+                        indeterminateRight[rightIndex] = true;
+                        MarkNodeIncomplete(node.Id, candidate);
+                        continue;
+                    }
+                    if (temporalResult == RelationQueryTemporalEvaluationKind.NoMatch)
+                        continue;
+
+                    matched = true;
+                    matchedRight[rightIndex] = true;
+                    joined.Add(candidate);
+                }
+
+                if (!matched
+                    && !indeterminate
+                    && IsNodeCompleteForPartition(rightInput, leftRow.Root?.Id)
+                    && node.Kind is JoinKind.Left or JoinKind.Full)
+                {
+                    joined.Add(leftRow.Merge(CreateAbsentSide(rightInput)));
+                }
+            }
+
+            if (node.Kind is JoinKind.Right or JoinKind.Full)
+            {
+                var absentLeft = CreateAbsentSide(leftInput);
+                for (var index = 0; index < right.Length; index++)
+                {
+                    if (!matchedRight[index]
+                        && !indeterminateRight[index]
+                        && IsNodeCompleteForPartition(leftInput, right[index].Root?.Id))
+                    {
+                        joined.Add(absentLeft.Merge(right[index]));
+                    }
+                }
+            }
+
+            return joined.ToImmutable();
+        }
+
+        bool TryEvaluateTemporalMatch(
+            RelationQueryTemporalJoinExecution temporal,
+            RelationQueryRuntimeRow row,
+            out RelationQueryTemporalEvaluationKind result)
+        {
+            // A fully structurally unbounded overlap has no finite operand from which to infer a domain.
+            // Its result is domain-independent, so any supported temporal domain can drive the pure helper.
+            var domain = temporal.Domain ?? ScalarTypeKind.Instant;
+            var allAvailable = true;
+            var hasInvalidOperand = false;
+            var hasInvalidInterval = false;
+            var point = ObservationValue.Undefined;
+            if (temporal.PointSite is { } pointSite)
+            {
+                if (!TryEvaluate(pointSite, row, out point))
+                {
+                    allAvailable = false;
+                }
+                else if (!RelationQueryTemporalSemantics.TryCompare(domain, point, point, out _))
+                {
+                    hasInvalidOperand = true;
+                    RecordInvalidTemporalOperand(pointSite, row, domain);
+                }
+            }
+
+            var intervals = ImmutableArray.CreateBuilder<RelationQueryTemporalIntervalValue>(
+                temporal.Intervals.Length);
+            foreach (var interval in temporal.Intervals)
+            {
+                var lowerAvailable = TryEvaluateTemporalBound(
+                    interval.Lower,
+                    row,
+                    domain,
+                    out var lower,
+                    ref hasInvalidOperand);
+                var upperAvailable = TryEvaluateTemporalBound(
+                    interval.Upper,
+                    row,
+                    domain,
+                    out var upper,
+                    ref hasInvalidOperand);
+                allAvailable &= lowerAvailable && upperAvailable;
+
+                var value = new RelationQueryTemporalIntervalValue(lower, upper);
+                intervals.Add(value);
+                if (!lowerAvailable || !upperAvailable)
+                    continue;
+
+                switch (RelationQueryTemporalSemantics.ClassifyInterval(domain, value))
+                {
+                    case RelationQueryTemporalIntervalKind.InvalidOperand:
+                        hasInvalidOperand = true;
+                        break;
+                    case RelationQueryTemporalIntervalKind.InvalidInterval:
+                        hasInvalidInterval = true;
+                        RecordInvalidTemporalInterval(temporal, interval, row);
+                        break;
+                }
+            }
+
+            if (!allAvailable)
+            {
+                result = RelationQueryTemporalEvaluationKind.InvalidOperand;
+                return false;
+            }
+            if (hasInvalidOperand)
+            {
+                result = RelationQueryTemporalEvaluationKind.InvalidOperand;
+                return true;
+            }
+            if (hasInvalidInterval)
+            {
+                result = RelationQueryTemporalEvaluationKind.InvalidInterval;
+                return true;
+            }
+
+            result = temporal.Definition.Match switch
+            {
+                TemporalPointInIntervalMatch => RelationQueryTemporalSemantics.PointInInterval(
+                    domain,
+                    point,
+                    intervals[0]),
+                TemporalIntervalOverlapMatch => RelationQueryTemporalSemantics.IntervalsOverlap(
+                    domain,
+                    intervals[0],
+                    intervals[1]),
+                _ => RelationQueryTemporalEvaluationKind.InvalidOperand
+            };
+            return true;
+        }
+
+        bool TryEvaluateTemporalBound(
+            RelationQueryTemporalBoundExecution bound,
+            RelationQueryRuntimeRow row,
+            ScalarTypeKind domain,
+            out RelationQueryTemporalBoundValue value,
+            ref bool hasInvalidOperand)
+        {
+            ObservationValue? evaluated = null;
+            if (bound.ValueSite is { } site)
+            {
+                if (!TryEvaluate(site, row, out var result))
+                {
+                    value = RelationQueryTemporalBoundValue.Invalid();
+                    return false;
+                }
+                evaluated = result;
+            }
+
+            value = RelationQueryTemporalSemantics.ResolveBound(bound.Definition, evaluated);
+            if (value.Kind == RelationQueryTemporalBoundValueKind.Invalid
+                || value.Kind == RelationQueryTemporalBoundValueKind.Finite
+                && !RelationQueryTemporalSemantics.TryCompare(domain, value.Value, value.Value, out _))
+            {
+                hasInvalidOperand = true;
+                if (bound.ValueSite is { } invalidSite)
+                    RecordInvalidTemporalOperand(invalidSite, row, domain);
+            }
+            return true;
+        }
+
+        void RecordInvalidTemporalOperand(
+            RelationQueryExpressionSiteAnalysis site,
+            RelationQueryRuntimeRow row,
+            ScalarTypeKind domain)
+        {
+            if (site.Node is { } node)
+                MarkNodeIncomplete(node, row);
+            executionDiagnostics.Add(new(
+                RelationRuntimeDiagnosticCodes.ExecutionTemporalOperandInvalid,
+                DiagnosticSeverity.Warning,
+                $"Temporal join operand at site '{site.Analysis.Site.Id.Value}' is null, missing, malformed, or outside the declared '{domain}' domain.",
+                request.Evidence.Evaluation,
+                occurrence: ResolveSiteOccurrence(site, row),
+                node: site.Node,
+                semanticSite: site.Analysis.Site.Id.Value));
+        }
+
+        void RecordInvalidTemporalInterval(
+            RelationQueryTemporalJoinExecution temporal,
+            RelationQueryTemporalIntervalExecution interval,
+            RelationQueryRuntimeRow row)
+        {
+            MarkNodeIncomplete(temporal.Definition.Id, row);
+            var site = interval.Lower.ValueSite ?? interval.Upper.ValueSite;
+            var semanticSite = site is null
+                ? $"{temporal.Definition.Id.Value}/temporalJoin/interval/{interval.Ordinal}"
+                : site.Analysis.Site.Id.Value[..site.Analysis.Site.Id.Value.LastIndexOf('/')];
+            executionDiagnostics.Add(new(
+                RelationRuntimeDiagnosticCodes.ExecutionTemporalIntervalInvalid,
+                DiagnosticSeverity.Warning,
+                $"Temporal join interval at site '{semanticSite}' has a lower endpoint after its upper endpoint.",
+                request.Evidence.Evaluation,
+                occurrence: ResolveIntervalOccurrence(interval, row),
+                node: temporal.Definition.Id,
+                semanticSite: semanticSite));
+        }
+
+        static RelationQueryOccurrenceId? ResolveIntervalOccurrence(
+            RelationQueryTemporalIntervalExecution interval,
+            RelationQueryRuntimeRow row)
+        {
+            var occurrences = new[] { interval.Lower.ValueSite, interval.Upper.ValueSite }
+                .Where(static site => site is not null)
+                .Select(site => TryResolveSiteOccurrence(site!, row, out var occurrence)
+                    ? occurrence
+                    : (RelationQueryOccurrenceId?)null)
+                .Where(static occurrence => occurrence is not null)
+                .Select(static occurrence => occurrence!.Value)
+                .Distinct()
+                .ToArray();
+            return occurrences.Length == 1 ? occurrences[0] : row.Root?.Id;
+        }
+
+        static RelationQueryOccurrenceId? ResolveSiteOccurrence(
+            RelationQueryExpressionSiteAnalysis site,
+            RelationQueryRuntimeRow row) =>
+            TryResolveSiteOccurrence(site, row, out var occurrence)
+                ? occurrence
+                : row.Root?.Id;
+
+        static bool TryResolveSiteOccurrence(
+            RelationQueryExpressionSiteAnalysis site,
+            RelationQueryRuntimeRow row,
+            out RelationQueryOccurrenceId occurrence)
+        {
+            var bindings = site.Analysis.Requirements.Fields
+                .Where(static field => field.Root == ExprFieldRootKind.Binding)
+                .Select(static field => field.Binding)
+                .Where(static binding => binding is not null)
+                .Select(static binding => binding!.Value)
+                .Distinct()
+                .ToArray();
+            if (bindings.Length == 1
+                && row.TryGetBinding(bindings[0], out var binding)
+                && binding.Occurrence is { } observed)
+            {
+                occurrence = observed.Id;
+                return true;
+            }
+
+            occurrence = default;
+            return false;
+        }
+
+        void MarkNodeIncomplete(QueryNodeId node)
+        {
+            incompleteNodes.Add(node);
+            globallyIncompleteNodes.Add(node);
+        }
+
+        void MarkNodeIncomplete(QueryNodeId node, RelationQueryRuntimeRow row)
+        {
+            if (!rootPartitioned || row.Root is not { } root)
+            {
+                MarkNodeIncomplete(node);
+                return;
+            }
+
+            MarkNodeIncompleteForRoot(node, root.Id);
+        }
+
+        void MarkNodeIncompleteForRoot(QueryNodeId node, RelationQueryOccurrenceId root)
+        {
+            incompleteNodes.Add(node);
+            if (!incompleteRootsByNode.TryGetValue(node, out var roots))
+            {
+                roots = [];
+                incompleteRootsByNode.Add(node, roots);
+            }
+            roots.Add(root);
+        }
+
+        void PropagateIncompleteInputs(
+            QueryNodeId node,
+            ImmutableArray<QueryNodeId> inputs)
+        {
+            foreach (var input in inputs)
+            {
+                if (globallyIncompleteNodes.Contains(input))
+                    MarkNodeIncomplete(node);
+                if (!incompleteRootsByNode.TryGetValue(input, out var roots))
+                    continue;
+                foreach (var root in roots)
+                    MarkNodeIncompleteForRoot(node, root);
+            }
+        }
+
+        bool IsNodeCompleteForPartition(
+            QueryNodeId node,
+            RelationQueryOccurrenceId? root)
+        {
+            if (globallyIncompleteNodes.Contains(node))
+                return false;
+            if (!incompleteRootsByNode.TryGetValue(node, out var roots))
+                return true;
+            return root is { } partition
+                ? !roots.Contains(partition)
+                : roots.Count == 0;
         }
 
         bool CanJoinRows(
@@ -1178,6 +1555,7 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
                     && outputIds.Contains(decision.Impact.Output.Id))
                 .ToArray();
             if (!IsTerminalEvidenceConclusive(outputIds)
+                || outputs.Any(output => incompleteNodes.Contains(output.Node))
                 || HasInconclusiveSiteForOutputs(outputIds)
                 || outputIds.Overlaps(inconclusiveOutputs)
                 || relevant.Any(static decision =>
@@ -1415,6 +1793,7 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
                 if (!exceedsUpperBound
                     && (!missesRequiredOutput
                         || !gapAnalysis.IsConclusive
+                        || !IsNodeCompleteForPartition(terminal.Definition.Node, root.Id)
                         || HasGapForRoot(root, terminal.Outputs)
                         || HasRowSuppressionForRoot(root, terminal.Outputs)))
                 {
@@ -1468,6 +1847,8 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
                     || !CanDispositionWithoutEvaluation(site, unavailableGaps))
                 {
                     inconclusiveExpressionSites.Add(site.Analysis.Site.Id.Value);
+                    if (site.Node is { } node)
+                        MarkNodeIncomplete(node, row);
                 }
                 value = default;
                 return false;

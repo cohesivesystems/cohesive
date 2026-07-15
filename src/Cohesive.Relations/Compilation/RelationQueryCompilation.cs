@@ -383,7 +383,7 @@ public sealed class CompiledRelationQueryPlan
             Guard.RequireNotNull(expressionAnalysis),
             demandedExpressionSites,
             demandedAggregateAssignments);
-        InputContract = new(requirementGraph);
+        InputContract = new(requirementGraph, ExecutionSlice);
         Lineage = new(requirementGraph);
         DependencyManifest = new(requirementGraph);
     }
@@ -408,7 +408,7 @@ public sealed class CompiledRelationQueryPlan
     /// </summary>
     public RelationQueryExecutionSlice ExecutionSlice { get; }
 
-    /// <summary>Acquisition contract projected from <see cref="RequirementGraph"/>.</summary>
+    /// <summary>Acquisition and target-capability contract projected from the compiled demand.</summary>
     public RelationQueryInputContract InputContract { get; }
 
     /// <summary>Output-oriented static lineage projected from <see cref="RequirementGraph"/>.</summary>

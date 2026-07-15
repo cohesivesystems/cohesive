@@ -60,6 +60,7 @@ public enum QueryNullPlacement
 [JsonDerivedType(typeof(FilterQueryNode), RelationQueryWireNames.FilterNode)]
 [JsonDerivedType(typeof(TraverseRelationshipQueryNode), RelationQueryWireNames.TraverseRelationshipNode)]
 [JsonDerivedType(typeof(JoinQueryNode), RelationQueryWireNames.JoinNode)]
+[JsonDerivedType(typeof(TemporalJoinQueryNode), RelationQueryWireNames.TemporalJoinNode)]
 [JsonDerivedType(typeof(ExpandCollectionQueryNode), RelationQueryWireNames.ExpandCollectionNode)]
 [JsonDerivedType(typeof(ProjectQueryNode), RelationQueryWireNames.ProjectNode)]
 [JsonDerivedType(typeof(DistinctQueryNode), RelationQueryWireNames.DistinctNode)]
