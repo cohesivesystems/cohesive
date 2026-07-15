@@ -1,10 +1,12 @@
 using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using Cohesive.Model.Expressions;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
+using Cohesive.Relations.Realization;
 
 namespace Cohesive.Relations.Execution;
 
@@ -18,6 +20,8 @@ namespace Cohesive.Relations.Execution;
 /// </remarks>
 public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
 {
+    readonly ConditionalWeakTable<CompiledRelationQueryPlan, Lazy<RelationQueryRealizationReport>> realizations = new();
+
     /// <summary>
     /// Shared stateless interpreter configured with <see cref="DefaultTemporalCapabilities"/>.
     /// </summary>
@@ -40,6 +44,16 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
     public static RelationQueryTemporalExecutionCapabilityProfile DefaultTemporalCapabilities =>
         RelationQueryTemporalExecutionCapabilityProfile.All;
 
+    /// <summary>
+    /// Complete shared target profile for the conventional canonical in-memory interpreter.
+    /// </summary>
+    public static RelationQueryTargetCapabilityProfile DefaultTargetProfile =>
+        RelationQueryInMemoryTargetProfile.Default;
+
+    /// <summary>Conventional realization compiler policy used by the canonical in-memory interpreter.</summary>
+    public static RelationQueryRealizationPolicy DefaultRealizationPolicy =>
+        RelationQueryInMemoryTargetProfile.Policy;
+
     /// <summary>Creates a stateless canonical in-memory interpreter.</summary>
     /// <param name="temporalCapabilities">
     /// Temporal-join semantics available to this interpreter instance, or <see langword="null"/> to use
@@ -49,10 +63,49 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
         RelationQueryTemporalExecutionCapabilityProfile? temporalCapabilities = null)
     {
         TemporalCapabilities = temporalCapabilities ?? DefaultTemporalCapabilities;
+        TargetProfile = RelationQueryInMemoryTargetProfile.Create(TemporalCapabilities);
     }
 
     /// <summary>Temporal-join semantics available to this interpreter instance.</summary>
     public RelationQueryTemporalExecutionCapabilityProfile TemporalCapabilities { get; }
+
+    /// <summary>
+    /// Shared target capability profile used to realize plans for this interpreter instance.
+    /// </summary>
+    public RelationQueryTargetCapabilityProfile TargetProfile { get; }
+
+    /// <summary>
+    /// Produces an evaluation-independent report for this interpreter's target profile and policy.
+    /// </summary>
+    /// <remarks>
+    /// Reports are computed once per plan and interpreter instance, then weakly cached so execution reuse does not
+    /// repeat requirement projection, matching, or fingerprinting and does not extend the plan's lifetime.
+    /// </remarks>
+    /// <param name="plan">Successful demand-scoped compiled relation/query plan.</param>
+    /// <returns>Deterministic realization decisions and diagnostics for <paramref name="plan"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="plan"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The compiled plan contains inconsistent demand-scoped realization provenance, or a shape snapshot cannot be
+    /// represented by compiled-plan canonicalization.
+    /// </exception>
+    /// <exception cref="System.Text.Json.JsonException">
+    /// A shape snapshot cannot be serialized as canonical JSON.
+    /// </exception>
+    /// <exception cref="NotSupportedException">
+    /// A shape snapshot contains a runtime type unsupported by its JSON serializer.
+    /// </exception>
+    public RelationQueryRealizationReport Realize(CompiledRelationQueryPlan plan)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        return realizations.GetValue(
+            plan,
+            candidate => new(
+                () => RelationQueryRealizationCompiler.Compile(
+                    candidate,
+                    TargetProfile,
+                    DefaultRealizationPolicy),
+                LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+    }
 
     /// <inheritdoc />
     public RelationQueryExecutionResult Execute(RelationQueryExecutionRequest request, CancellationToken cancellationToken = default)
@@ -75,10 +128,10 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
                 analysis.Diagnostics);
         }
 
+        var realization = Realize(request.Plan);
         var unsupportedDiagnostics = RelationQueryInMemorySupportAnalyzer.Analyze(
-            request.Plan,
-            request.Evidence.Evaluation,
-            TemporalCapabilities);
+            realization,
+            request.Evidence.Evaluation);
         if (!unsupportedDiagnostics.IsDefaultOrEmpty)
         {
             return new(
@@ -342,7 +395,7 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
                 if (RequireBoolean(value, site, row))
                     filtered.Add(row);
             }
-            return [..filtered];
+            return [.. filtered];
         }
 
         ImmutableArray<RelationQueryRuntimeRow> ExecuteTraversal(

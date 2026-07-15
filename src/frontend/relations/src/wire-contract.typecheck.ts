@@ -1,5 +1,7 @@
 import type {
   RelationDraftDocument,
+  RelationQueryRealizationReport,
+  RelationQueryTargetCapabilityProfile,
   RelationshipCatalogDocument,
 } from './generated/relations.shapes.generated'
 
@@ -117,6 +119,116 @@ export type _RelationDraftWireContractCheck = AssertAssignable<
         },
       ]
       conventionDecisions: []
+    }
+  }
+>
+
+export type _RelationQueryTargetCapabilityProfileWireContractCheck = AssertAssignable<
+  RelationQueryTargetCapabilityProfile,
+  {
+    target: 'cohesive.relations.in-memory'
+    id: 'cohesive.relations.in-memory/realization-v1'
+    supportedDefinitionSchemaVersions: ['relation-query/v1']
+    supportedCompilerProfiles: ['relation-query-static-compiler/v1']
+    capabilities: [
+      {
+        id: 'in-memory/filter'
+        capability: {
+          $capability: 'logical'
+          kind: 'Filter'
+        }
+        operatingBoundaries: ['boundary/max-input-rows']
+      },
+    ]
+    operatingBoundaries: [
+      {
+        id: 'boundary/max-input-rows'
+        kind: 'MaximumInputRows'
+        limit: '9007199254740993'
+      },
+    ]
+  }
+>
+
+export type _RelationQueryStaticFactWideIntegerWireContractCheck = AssertAssignable<
+  RelationQueryRealizationReport['requirements'][number]['staticFacts'][number],
+  {
+    kind: 'PageSize'
+    value: '9007199254740993'
+  }
+>
+
+export type _RelationQueryBoundaryValidationWideIntegerWireContractCheck = AssertAssignable<
+  Extract<
+    RelationQueryRealizationReport['decisions'][number],
+    { readonly $decision: 'constrained' }
+  >['boundaryValidations'][number],
+  {
+    boundary: 'boundary/max-page-size'
+    kind: 'StaticPlanFact'
+    measuredValue: '9007199254740993'
+  }
+>
+
+export type _RelationQueryInvalidProfileUnknownEnumWireContractCheck = AssertAssignable<
+  RelationQueryTargetCapabilityProfile,
+  {
+    target: 'target/test'
+    id: 'target/test/v1'
+    supportedDefinitionSchemaVersions: ['relation-query/v1']
+    supportedCompilerProfiles: ['relation-query-static-compiler/v1']
+    capabilities: [
+      {
+        id: 'evidence/unknown-logical'
+        capability: {
+          $capability: 'logical'
+          kind: 2147483647
+        }
+        operatingBoundaries: []
+      },
+      {
+        id: 'evidence/unknown-expression-requirement-kind'
+        capability: {
+          $capability: 'expression'
+          capability: { value: 'expression/unknown-requirement-kind' }
+          requirementKind: 2147483647
+        }
+        operatingBoundaries: []
+      },
+    ]
+    operatingBoundaries: [
+      {
+        id: 'boundary/unknown-kind'
+        kind: 2147483647
+      },
+    ]
+  }
+>
+
+export type _RelationQueryUnavailableDecisionWireContractCheck = AssertAssignable<
+  RelationQueryRealizationReport['decisions'][number],
+  {
+    $decision: 'unavailable'
+    requirement: 'requirement/temporal/interval-overlap'
+    reason: 'CapabilityNotAdvertised'
+    missingCapabilities: [
+      {
+        $capability: 'temporal'
+        capability: 'IntervalOverlap'
+      },
+    ]
+  }
+>
+
+export type _RelationQueryRequirementOriginWireContractCheck = AssertAssignable<
+  NonNullable<RelationQueryRealizationReport['requirements'][number]['origin']>,
+  {
+    node: 'temporal-join'
+    binding: 'customer-version'
+    semanticSite: 'temporal-join/correlation'
+    expressionPath: '$.left'
+    fieldPath: {
+      segments: [{ kind: 'Field'; segment: 'CustomerId' }]
     }
   }
 >

@@ -1,5 +1,6 @@
 using Cohesive.Api;
 using Cohesive.Model;
+using Cohesive.Relations.Realization;
 using Cohesive.Relations.Serialization;
 using CohesiveApi = Cohesive.Api.Api;
 
@@ -38,6 +39,18 @@ public static class RelationsContractsDefinition
             .Action("RelationDraftDocument")
             .Route("GET", "/relations/contracts/relation-draft-document")
             .Returns<RelationDraftDocument>()
+            .Build(),
+        CohesiveApi
+            .Define("RelationsContracts")
+            .Action("RelationQueryTargetCapabilityProfile")
+            .Route("GET", "/relations/contracts/relation-query-target-capability-profile")
+            .Returns<RelationQueryTargetCapabilityProfile>()
+            .Build(),
+        CohesiveApi
+            .Define("RelationsContracts")
+            .Action("RelationQueryRealizationReport")
+            .Route("GET", "/relations/contracts/relation-query-realization-report")
+            .Returns<RelationQueryRealizationReport>()
             .Build()
     );
 }
