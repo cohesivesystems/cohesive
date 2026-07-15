@@ -32,7 +32,7 @@ public static class RelationRequirementGapAnalyzer
     /// </exception>
     /// <exception cref="InvalidOperationException">
     /// <paramref name="policy"/> returns no choice for an impact, or a candidate plan's shape snapshot
-    /// cannot be represented by the runtime-attribution canonicalization profile.
+    /// cannot be represented by the compiled-plan canonicalization profile.
     /// </exception>
     /// <exception cref="System.Text.Json.JsonException">
     /// A candidate plan's shape snapshot cannot be serialized as canonical JSON.

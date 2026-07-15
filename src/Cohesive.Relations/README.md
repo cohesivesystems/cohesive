@@ -838,7 +838,7 @@ A logical source does not require a database scan. Values may be supplied direct
 
 ### Capability-driven compilation
 
-Adapters describe what their targets can do. Compilers compare semantic requirements with those capabilities and produce native, composed, overridden, or unsupported realizations.
+Adapters describe what their targets can do. Compilers compare semantic requirements with those capabilities and produce native, composed, constrained, overridden, or unavailable realizations.
 
 Compilers must not silently weaken semantics.
 
@@ -926,6 +926,86 @@ Backend compilers should consume this plan as the semantic input to physical pla
 requirements against their declared capabilities, and preserve those traces in target artifacts
 and diagnostics. Static compilation does not select a database, source placement, batching policy,
 join algorithm, or runtime missing-data behavior.
+
+### Capability-driven realization reports
+
+`RelationQueryRealizationCompiler` projects the exact demanded semantics from the compiled
+execution slice and input contract. It does not rescan the complete definition, so pruned nodes,
+assignments, sites, and terminals cannot reappear. Each projected requirement identifies its
+logical, expression, temporal, structural, or guarantee capability together with its originating
+input, binding, node, semantic site, field or expression path, and demanded-output traces.
+
+A target supplies a versioned `RelationQueryTargetCapabilityProfile`; compiler configuration
+supplies an explicit `RelationQueryRealizationPolicy`:
+
+```csharp
+var report = RelationQueryRealizationCompiler.Compile(plan, targetProfile, policy);
+
+if (!report.IsRealizable)
+{
+    foreach (var diagnostic in report.Diagnostics)
+        Console.Error.WriteLine($"{diagnostic.Code}: {diagnostic.Message}");
+}
+```
+
+The matcher produces exactly one final decision per demanded requirement:
+
+- **Native** uses direct target capability evidence.
+- **Composed** proves exact support through versioned composition rules and names every primitive
+  capability assertion in the proof closure. The root rule must explicitly preserve every guarantee
+  attached to the demanded operation; an unrelated target-wide guarantee cannot repair a lossy composition.
+- **Constrained** is exact only inside declared operating boundaries. A boundary narrows where a
+  realization is valid; it does not permit weaker semantics inside that boundary. Every boundary is
+  accompanied either by an immutable measured plan fact (such as page size, expression depth, or field-path
+  depth) or by target evidence that enforces that exact boundary at execution.
+- **Override** uses an explicit local implementation with attributable evidence, boundaries,
+  preserved guarantees, and justification.
+- **Unavailable** prevents target execution and identifies the missing capabilities and exact
+  semantic site.
+
+The six plan-wide fidelity guarantees—missing/null distinction, availability-state distinction,
+determinism, occurrence provenance, evidence completeness, and inconclusive-evidence propagation—are
+also attached to every non-guarantee requirement. Native proofs must carry evidence for them, and a
+composed rule must explicitly preserve them; a separate global assertion cannot mask a locally lossy
+operator.
+
+Target profiles are compiler inputs. Their constructors validate basic object shape while retaining
+semantically malformed declarations such as unknown numeric capability kinds, invalid limits, repeated
+boundary references, and conflicting evidence identities. The matcher diagnoses these with stable
+`REL2003`, `REL2004`, or `REL2008` codes and fails closed: every requirement becomes unavailable and the
+report status is `Invalid`. Numeric boundary limits must be positive `Int64` values; static facts and measured
+values may also be zero. The portable JSON contract encodes these fields as canonical base-10 strings, which
+preserves the full non-negative `Int64` range and gives fingerprint-significant values one exact representation
+through JavaScript and other runtimes whose JSON number type cannot represent every 64-bit integer. Generated
+TypeScript contracts therefore expose these fields as `string`. Consumers should retain that form for transport
+and fingerprinting and parse a validated value with `BigInt` when arithmetic is required; converting it to
+`number` can lose precision.
+
+Known realization declaration enums retain their canonical string encoding. Undefined 32-bit values retained
+for diagnostics use JSON numbers; generated TypeScript widens only those declaration fields to the known enum
+union plus `number`, so an invalid report remains a truthful portable artifact.
+
+The report is a portable derived artifact, not canonical relation/query IR. Its fingerprint covers
+the compiled-plan reference, relevant target evidence, policy and convention decisions, explicit
+overrides, requirements, decisions, and diagnostics. Human descriptions do not affect identity,
+and target configuration never changes the canonical definition fingerprint.
+
+The projected static facts live on the requirement itself, so the derived report contains all measurements
+used to justify constrained decisions. The public v1 compiler accepts the complete compiled plan and owns
+requirement projection, preventing callers from presenting a stale or incomplete synthetic requirement set.
+Boundary validation in the resulting portable report is therefore inspectable without access to runtime-only
+compiler objects.
+
+Target realization and runtime evidence completeness answer different questions. An unavailable
+decision means the target cannot preserve demanded semantics even with complete data. A relation
+requirement gap means the target can interpret the plan but an input needed for one evaluation is
+missing, unavailable, failed, or inconclusive. The in-memory reference interpreter performs the
+runtime gap analysis first, then consumes this same shared realization contract before execution.
+
+Compiled DTO mappers, composed acquisition runtimes, SQL/document/graph/search adapters, explain
+tools, and deployment gates can consume the same report contract. Later physical planners may turn
+a composed proof into batching, lookup, correlation, or native backend stages without creating a
+second semantic support model.
 
 ### Explicit missing-data semantics
 

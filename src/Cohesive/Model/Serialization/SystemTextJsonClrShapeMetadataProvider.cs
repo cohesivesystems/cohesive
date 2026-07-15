@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
 
 namespace Cohesive.Model.Serialization;
@@ -19,6 +20,11 @@ public static class SystemTextJsonShapeAnnotations
 
     /// <summary>Annotation mapping CLR enum member names to their serialized JSON string values.</summary>
     public const string EnumValues = "serialization.systemTextJson.enumValues";
+
+    /// <summary>
+    /// Annotation marking an enum field that retains undefined underlying values as JSON numbers.
+    /// </summary>
+    public const string UndefinedNumericEnumValues = "serialization.systemTextJson.undefinedNumericEnumValues";
 
     /// <summary>JSON string representation.</summary>
     public const string String = "string";
@@ -71,6 +77,20 @@ public sealed class SystemTextJsonClrShapeMetadataProvider : IClrShapeMetadataPr
         var annotations = IsDictionary(property.PropertyType)
             ? AnnotationMap.Create(SystemTextJsonShapeAnnotations.Dictionary, true)
             : ImmutableDictionary<AnnotationKey, AnnotationValue>.Empty;
+        var converterType = property.GetCustomAttribute<JsonConverterAttribute>(inherit: true)?.ConverterType;
+        if (converterType == typeof(StringEncodedInt64JsonConverter))
+        {
+            annotations = annotations.Add(
+                new(SystemTextJsonShapeAnnotations.Representation),
+                AnnotationValue.FromString(SystemTextJsonShapeAnnotations.String));
+        }
+        if (converterType is not null
+            && typeof(IJsonUndefinedNumericEnumValueConverter).IsAssignableFrom(converterType))
+        {
+            annotations = annotations.Add(
+                new(SystemTextJsonShapeAnnotations.UndefinedNumericEnumValues),
+                AnnotationValue.FromBool(true));
+        }
 
         return new()
         {
@@ -118,7 +138,7 @@ public sealed class SystemTextJsonClrShapeMetadataProvider : IClrShapeMetadataPr
             }
         }
 
-        return property.GetCustomAttribute<System.Text.Json.Serialization.JsonPropertyNameAttribute>(inherit: true)?.Name
+        return property.GetCustomAttribute<JsonPropertyNameAttribute>(inherit: true)?.Name
                ?? options.PropertyNamingPolicy?.ConvertName(property.Name)
                ?? property.Name;
     }

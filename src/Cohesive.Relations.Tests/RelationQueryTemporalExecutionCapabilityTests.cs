@@ -1,9 +1,8 @@
 using Cohesive.Model.Expressions;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
-using Cohesive.Relations.Execution;
 using Cohesive.Relations.IR;
-using Cohesive.Relations.Model;
+using Cohesive.Relations.Realization;
 using static Cohesive.Relations.Tests.TemporalRelationQueryFixture;
 
 namespace Cohesive.Relations.Tests;
@@ -112,6 +111,14 @@ public sealed class RelationQueryTemporalExecutionCapabilityTests
                 requirement.Capability.ToString(),
                 diagnostic.Message,
                 StringComparison.Ordinal);
+            Assert.Contains(
+                RelationQueryRealizationDiagnosticCodes.RequirementUnavailable,
+                diagnostic.Message,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                nameof(RelationQueryUnavailableReason.CapabilityNotAdvertised),
+                diagnostic.Message,
+                StringComparison.Ordinal);
         });
         Assert.Contains(
             diagnostics,
@@ -154,11 +161,26 @@ public sealed class RelationQueryTemporalExecutionCapabilityTests
         var pointSite = temporal.PointSite!.Analysis.Site.Id.Value;
         var expectedMatchSite = pointSite[..^"/point".Length];
 
+        var realization = interpreter.Realize(plan);
         var result = interpreter.Execute(new(plan, evidence));
 
+        Assert.False(realization.IsRealizable);
+        var unavailable = Assert.Single(
+            realization.Decisions.OfType<UnavailableRelationQueryRealizationDecision>(),
+            decision => realization.Requirements.Single(requirement => requirement.Id == decision.Requirement)
+                .Capability is TemporalRelationQueryCapability
+            {
+                Capability: RelationQueryTemporalExecutionCapability.PointInInterval
+            });
+        var realizationRequirement = Assert.Single(
+            realization.Requirements,
+            requirement => requirement.Id == unavailable.Requirement);
+        Assert.Equal(TemporalJoin, realizationRequirement.Origin?.Node);
+        Assert.Equal(expectedMatchSite, realizationRequirement.Origin?.SemanticSite);
         Assert.Equal(RelationQueryExecutionStatus.Failed, result.Status);
         Assert.Null(result.Relation);
         Assert.Empty(result.QueryResults);
+        Assert.Empty(result.RequirementGapAnalysis.Gaps);
         var diagnostic = Assert.Single(
             result.Diagnostics,
             static diagnostic => diagnostic.Code

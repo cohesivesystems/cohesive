@@ -35,6 +35,7 @@ public readonly record struct ExprCapabilityId
     /// <param name="value">Stable, non-empty identifier.</param>
     /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException"><paramref name="value"/> is empty or white space.</exception>
+    [JsonConstructor]
     public ExprCapabilityId(string value)
     {
         Value = Guard.RequireNotNullOrWhiteSpace(value);

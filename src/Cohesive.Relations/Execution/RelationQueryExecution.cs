@@ -414,7 +414,7 @@ public sealed class RelationQueryExecutionResult
     public RelationQueryEvaluationId Evaluation => Evidence.Evaluation;
 
     /// <summary>Exact compiled input-contract attribution carried by <see cref="Evidence"/>.</summary>
-    public RelationQueryRuntimePlanReference PlanReference => Evidence.PlanReference;
+    public RelationQueryCompiledPlanReference PlanReference => Evidence.PlanReference;
 
     /// <summary>Exact plan-attributed materialized evidence supplied to this execution.</summary>
     public RelationQueryRuntimeEvidence Evidence { get; }
@@ -460,7 +460,7 @@ public interface IRelationQueryInterpreter
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> is canceled.</exception>
     /// <exception cref="InvalidOperationException">
     /// The configured requirement-gap policy returns no choice for an impact, or a plan shape snapshot cannot
-    /// be represented by the runtime-attribution canonicalization profile.
+    /// be represented by the compiled-plan canonicalization profile.
     /// </exception>
     /// <exception cref="System.Text.Json.JsonException">
     /// A plan shape snapshot cannot be serialized as canonical JSON.

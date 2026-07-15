@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cohesive.Model.Serialization;
@@ -127,20 +128,20 @@ sealed class StrictFieldPathSegmentJsonConverter : JsonConverter<FieldPathSegmen
                 case "segment" when hasSegment:
                     throw new JsonException($"A field-path segment contains duplicate property '{property}'.");
                 case "kind":
-                {
-                    hasKind = true;
-                    if (reader.TokenType != JsonTokenType.String)
-                        throw new JsonException("Field-path segment kind must be encoded as a string.");
-                    var text = reader.GetString();
-                    if (text is null
-                        || !Enum.TryParse(text, ignoreCase: false, out kind)
-                        || !Enum.IsDefined(kind)
-                        || !string.Equals(kind.ToString(), text, StringComparison.Ordinal))
                     {
-                        throw new JsonException($"'{text}' is not a canonical field-path segment kind.");
+                        hasKind = true;
+                        if (reader.TokenType != JsonTokenType.String)
+                            throw new JsonException("Field-path segment kind must be encoded as a string.");
+                        var text = reader.GetString();
+                        if (text is null
+                            || !Enum.TryParse(text, ignoreCase: false, out kind)
+                            || !Enum.IsDefined(kind)
+                            || !string.Equals(kind.ToString(), text, StringComparison.Ordinal))
+                        {
+                            throw new JsonException($"'{text}' is not a canonical field-path segment kind.");
+                        }
+                        break;
                     }
-                    break;
-                }
                 case "segment":
                     hasSegment = true;
                     segment = reader.TokenType switch
@@ -245,5 +246,69 @@ sealed class StrictStringEnumJsonConverterFactory : JsonConverterFactory
 
         static bool IsNumeric(string value) =>
             value.Length > 0 && (char.IsDigit(value[0]) || value[0] is '-' or '+');
+    }
+}
+
+/// <summary>
+/// Preserves an unsupported numeric enum declaration so semantic validation can diagnose it after JSON import.
+/// </summary>
+/// <typeparam name="TEnum">Enum whose declaration boundary intentionally retains unsupported numeric values.</typeparam>
+/// <remarks>
+/// Declared values retain the strict canonical string representation. Only undefined numeric values use a JSON
+/// number, which keeps malformed declarations inspectable without permitting numeric aliases for known values.
+/// </remarks>
+sealed class DiagnosticPreservingStringEnumJsonConverter<TEnum>
+    : JsonConverter<TEnum>, IJsonUndefinedNumericEnumValueConverter
+    where TEnum : struct, Enum
+{
+    /// <inheritdoc />
+    public override TEnum Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.String)
+        {
+            var text = reader.GetString();
+            if (text is not null
+                && Enum.TryParse<TEnum>(text, ignoreCase: false, out var value)
+                && Enum.IsDefined(value)
+                && string.Equals(value.ToString(), text, StringComparison.Ordinal))
+            {
+                return value;
+            }
+
+            throw new JsonException(
+                $"'{text}' is not a canonical case-sensitive value of enum '{typeToConvert.Name}'.");
+        }
+
+        if (reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out var numericValue))
+        {
+            var value = (TEnum)Enum.ToObject(typeof(TEnum), numericValue);
+            if (!Enum.IsDefined(value))
+                return value;
+
+            throw new JsonException(
+                $"Declared value '{value}' of enum '{typeToConvert.Name}' must be encoded as a string.");
+        }
+
+        throw new JsonException(
+            $"Enum '{typeToConvert.Name}' must be encoded as a canonical string or an undefined 32-bit integer.");
+    }
+
+    /// <inheritdoc />
+    public override void Write(
+        Utf8JsonWriter writer,
+        TEnum value,
+        JsonSerializerOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        if (Enum.IsDefined(value))
+        {
+            writer.WriteStringValue(value.ToString());
+            return;
+        }
+
+        writer.WriteNumberValue(Convert.ToInt32(value, CultureInfo.InvariantCulture));
     }
 }

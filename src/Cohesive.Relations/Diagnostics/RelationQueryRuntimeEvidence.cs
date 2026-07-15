@@ -1,9 +1,4 @@
-using System.Buffers;
-using System.Buffers.Binary;
 using System.Collections.Immutable;
-using System.Runtime.CompilerServices;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Compilation;
@@ -580,258 +575,6 @@ public sealed record RelationQueryConversionFailureEvidence
     public string EvidenceReference { get; }
 }
 
-/// <summary>Versioned cryptographic fingerprint of one runtime input-contract component.</summary>
-public sealed record RelationQueryRuntimeContractFingerprint
-{
-    /// <summary>Creates a runtime input-contract fingerprint.</summary>
-    /// <param name="algorithm">Hash algorithm identifier.</param>
-    /// <param name="canonicalization">Canonicalization profile applied before hashing.</param>
-    /// <param name="value">Lowercase hexadecimal hash value.</param>
-    /// <exception cref="ArgumentNullException">
-    /// <paramref name="algorithm"/>, <paramref name="canonicalization"/>, or <paramref name="value"/>
-    /// is <see langword="null"/>.
-    /// </exception>
-    /// <exception cref="ArgumentException">
-    /// <paramref name="algorithm"/>, <paramref name="canonicalization"/>, or <paramref name="value"/>
-    /// is empty or white space.
-    /// </exception>
-    public RelationQueryRuntimeContractFingerprint(string algorithm, string canonicalization, string value)
-    {
-        Algorithm = Guard.RequireNotNullOrWhiteSpace(algorithm);
-        Canonicalization = Guard.RequireNotNullOrWhiteSpace(canonicalization);
-        Value = Guard.RequireNotNullOrWhiteSpace(value);
-    }
-
-    /// <summary>Hash algorithm identifier.</summary>
-    public string Algorithm { get; init; }
-
-    /// <summary>Canonicalization profile applied before hashing.</summary>
-    public string Canonicalization { get; init; }
-
-    /// <summary>Lowercase hexadecimal hash value.</summary>
-    public string Value { get; init; }
-}
-
-/// <summary>Immutable attribution binding runtime evidence to one exact compiled input contract.</summary>
-/// <remarks>
-/// Attribution is computed at most once per compiled plan and weakly cached, so repeated evidence
-/// snapshots do not serialize or hash the plan's shape graphs and do not extend the plan's lifetime.
-/// </remarks>
-public sealed class RelationQueryRuntimePlanReference
-{
-    const string CompilerProfileComponent = "compiler profile";
-    const string DefinitionComponent = "definition";
-    const string ShapesComponent = "shapes";
-    const string CatalogComponent = "catalog";
-    const string DemandComponent = "demand";
-    const string InputsComponent = "inputs";
-    static readonly ConditionalWeakTable<CompiledRelationQueryPlan, Lazy<RelationQueryRuntimePlanReference>> References = new();
-
-    RelationQueryRuntimePlanReference(
-        string compilerProfile,
-        RelationQueryDefinitionFingerprint definitionFingerprint,
-        RelationQueryRuntimeContractFingerprint shapeSnapshotsFingerprint,
-        RelationshipCatalogFingerprint? relationshipCatalogFingerprint,
-        RelationQueryRuntimeContractFingerprint demandFingerprint,
-        ImmutableArray<RelationQueryInputId> inputs)
-    {
-        CompilerProfile = compilerProfile;
-        DefinitionFingerprint = definitionFingerprint;
-        ShapeSnapshotsFingerprint = shapeSnapshotsFingerprint;
-        RelationshipCatalogFingerprint = relationshipCatalogFingerprint;
-        DemandFingerprint = demandFingerprint;
-        Inputs = inputs;
-    }
-
-    /// <summary>Compiler profile that produced the input contract.</summary>
-    public string CompilerProfile { get; }
-
-    /// <summary>Fingerprint of the canonical relation/query definition.</summary>
-    public RelationQueryDefinitionFingerprint DefinitionFingerprint { get; }
-
-    /// <summary>Semantic fingerprint of the ordered shape-graph snapshots consumed by compilation.</summary>
-    public RelationQueryRuntimeContractFingerprint ShapeSnapshotsFingerprint { get; }
-
-    /// <summary>Relationship-catalog fingerprint, or <see langword="null"/> when no catalog was supplied.</summary>
-    public RelationshipCatalogFingerprint? RelationshipCatalogFingerprint { get; }
-
-    /// <summary>Semantic fingerprint of the effective output demand.</summary>
-    public RelationQueryRuntimeContractFingerprint DemandFingerprint { get; }
-
-    /// <summary>Canonical semantic input identities in deterministic contract order.</summary>
-    public ImmutableArray<RelationQueryInputId> Inputs { get; }
-
-    /// <summary>Creates exact runtime attribution from a compiled plan.</summary>
-    /// <param name="plan">Compiled plan whose input contract will receive runtime evidence.</param>
-    /// <returns>An immutable reference to the compiler profile, semantic snapshots, demand, and input identities.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="plan"/> is <see langword="null"/>.</exception>
-    /// <exception cref="InvalidOperationException">
-    /// A shape snapshot cannot be represented by the runtime-attribution canonicalization profile.
-    /// </exception>
-    /// <exception cref="JsonException">A shape snapshot cannot be serialized as canonical JSON.</exception>
-    /// <exception cref="NotSupportedException">
-    /// A shape snapshot contains a runtime type unsupported by its JSON serializer.
-    /// </exception>
-    public static RelationQueryRuntimePlanReference From(CompiledRelationQueryPlan plan)
-    {
-        ArgumentNullException.ThrowIfNull(plan);
-        return References.GetValue(
-            plan,
-            static candidate => new(
-                () => Create(candidate),
-                LazyThreadSafetyMode.ExecutionAndPublication)).Value;
-    }
-
-    static RelationQueryRuntimePlanReference Create(CompiledRelationQueryPlan plan) =>
-        new(
-            plan.Provenance.CompilerProfile,
-            plan.Provenance.DefinitionFingerprint,
-            RelationQueryRuntimePlanFingerprinter.ComputeShapeSnapshots(plan.Provenance.ShapeDocuments),
-            plan.Provenance.RelationshipCatalogFingerprint,
-            RelationQueryRuntimePlanFingerprinter.ComputeDemand(plan.Demand),
-            [.. plan.RequirementGraph.Inputs.Select(static input => input.Id)]);
-
-    internal ImmutableArray<string> GetMismatchedComponents(CompiledRelationQueryPlan plan)
-    {
-        var candidate = From(plan);
-        ImmutableArray<string>.Builder mismatches = ImmutableArray.CreateBuilder<string>();
-        if (!string.Equals(CompilerProfile, candidate.CompilerProfile, StringComparison.Ordinal))
-            mismatches.Add(CompilerProfileComponent);
-        if (!Equals(DefinitionFingerprint, candidate.DefinitionFingerprint))
-            mismatches.Add(DefinitionComponent);
-        if (!Equals(ShapeSnapshotsFingerprint, candidate.ShapeSnapshotsFingerprint))
-            mismatches.Add(ShapesComponent);
-        if (!Equals(RelationshipCatalogFingerprint, candidate.RelationshipCatalogFingerprint))
-            mismatches.Add(CatalogComponent);
-        if (!Equals(DemandFingerprint, candidate.DemandFingerprint))
-            mismatches.Add(DemandComponent);
-        if (!Inputs.SequenceEqual(candidate.Inputs))
-            mismatches.Add(InputsComponent);
-        return mismatches.ToImmutable();
-    }
-}
-
-static class RelationQueryRuntimePlanFingerprinter
-{
-    const string Algorithm = "sha256";
-    const string ShapeSnapshotsCanonicalization = "relation-query-runtime-shapes/v1-c14n/v1";
-    const string DemandCanonicalization = "relation-query-runtime-demand/v1-c14n/v1";
-
-    public static RelationQueryRuntimeContractFingerprint ComputeShapeSnapshots(
-        ImmutableArray<ShapeGraphDocument> documents)
-    {
-        ArrayBufferWriter<byte> canonical = new();
-        Append(canonical, ShapeSnapshotsCanonicalization);
-        var ordered = documents.IsDefault
-            ? []
-            : documents
-                .OrderBy(static document => document.Graph.Id.Value, StringComparer.Ordinal)
-                .ThenBy(static document => document.SchemaVersion, StringComparer.Ordinal)
-                .ToImmutableArray();
-        Append(canonical, ordered.Length);
-        foreach (var document in ordered)
-        {
-            Append(canonical, document.SchemaVersion);
-            var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
-            var node = JsonSerializer.SerializeToNode(document.Graph, options)
-                       ?? throw new InvalidOperationException(
-                           "Failed to materialize a shape graph for runtime-attribution canonicalization.");
-            if (node is System.Text.Json.Nodes.JsonObject graph)
-            {
-                // Diagnostics describe graph construction; they are not semantic compiler inputs.
-                graph.Remove("diagnostics");
-                graph.Remove("hasErrors");
-            }
-
-            var graphBytes = CanonicalJsonWriter.GetCanonicalBytes(
-                node,
-                options,
-                static propertyName => propertyName is "shapes" or "namedTypes" ? "id" : null);
-            Append(canonical, graphBytes);
-        }
-
-        return Hash(ShapeSnapshotsCanonicalization, canonical.WrittenSpan);
-    }
-
-    public static RelationQueryRuntimeContractFingerprint ComputeDemand(RelationQueryCompilationDemand demand)
-    {
-        ArrayBufferWriter<byte> canonical = new();
-        Append(canonical, DemandCanonicalization);
-        Append(canonical, (int)demand.Kind);
-        Append(canonical, demand.RelationFields.Length);
-        foreach (var field in demand.RelationFields)
-        {
-            Append(canonical, field);
-        }
-
-        Append(canonical, demand.QueryResults.Length);
-        foreach (var result in demand.QueryResults)
-        {
-            Append(canonical, result.Result.Value);
-            Append(canonical, (int)result.Selection);
-            Append(canonical, result.Fields.Length);
-            foreach (var field in result.Fields)
-            {
-                Append(canonical, field);
-            }
-        }
-
-        return Hash(DemandCanonicalization, canonical.WrittenSpan);
-    }
-
-    static RelationQueryRuntimeContractFingerprint Hash(string canonicalization, ReadOnlySpan<byte> canonical)
-    {
-        var hash = SHA256.HashData(canonical);
-        return new(Algorithm, canonicalization, Convert.ToHexString(hash).ToLowerInvariant());
-    }
-
-    static void Append(ArrayBufferWriter<byte> buffer, RelationQueryFieldReference field)
-    {
-        Append(buffer, field.Shape.GraphId.Value);
-        Append(buffer, field.Shape.ShapeId.Value);
-        Append(buffer, field.Path.Segments.Length);
-        foreach (var segment in field.Path.Segments)
-        {
-            Append(buffer, (int)segment.Kind);
-            AppendNullable(buffer, segment.Segment);
-        }
-    }
-
-    static void Append(ArrayBufferWriter<byte> buffer, string value)
-    {
-        var length = Encoding.UTF8.GetByteCount(value);
-        Append(buffer, length);
-        var destination = buffer.GetSpan(length);
-        Encoding.UTF8.GetBytes(value.AsSpan(), destination);
-        buffer.Advance(length);
-    }
-
-    static void AppendNullable(ArrayBufferWriter<byte> buffer, string? value)
-    {
-        if (value is null)
-        {
-            Append(buffer, -1);
-            return;
-        }
-
-        Append(buffer, value);
-    }
-
-    static void Append(ArrayBufferWriter<byte> buffer, ReadOnlySpan<byte> value)
-    {
-        Append(buffer, value.Length);
-        value.CopyTo(buffer.GetSpan(value.Length));
-        buffer.Advance(value.Length);
-    }
-
-    static void Append(ArrayBufferWriter<byte> buffer, int value)
-    {
-        var destination = buffer.GetSpan(sizeof(int));
-        BinaryPrimitives.WriteInt32BigEndian(destination, value);
-        buffer.Advance(sizeof(int));
-    }
-}
-
 /// <summary>
 /// Immutable runtime evidence snapshot for one evaluation of a compiled relation or query.
 /// </summary>
@@ -854,7 +597,7 @@ public sealed class RelationQueryRuntimeEvidence
     /// <exception cref="ArgumentNullException"><paramref name="plan"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="completeness"/> is unsupported.</exception>
     /// <exception cref="InvalidOperationException">
-    /// A shape snapshot cannot be represented by the runtime-attribution canonicalization profile.
+    /// A shape snapshot cannot be represented by the compiled-plan canonicalization profile.
     /// </exception>
     /// <exception cref="JsonException">A shape snapshot cannot be serialized as canonical JSON.</exception>
     /// <exception cref="NotSupportedException">
@@ -884,7 +627,7 @@ public sealed class RelationQueryRuntimeEvidence
         }
 
         Evaluation = evaluation;
-        PlanReference = RelationQueryRuntimePlanReference.From(plan);
+        PlanReference = RelationQueryCompiledPlanReference.From(plan);
         Completeness = completeness;
         Sources = Normalize(sources, static evidence => evidence.Input.Value, nameof(sources));
         Fields = Normalize(
@@ -912,7 +655,7 @@ public sealed class RelationQueryRuntimeEvidence
     public RelationQueryEvaluationId Evaluation { get; }
 
     /// <summary>Exact compiled input-contract attribution for this evidence.</summary>
-    public RelationQueryRuntimePlanReference PlanReference { get; }
+    public RelationQueryCompiledPlanReference PlanReference { get; }
 
     /// <summary>Definition fingerprint to which evidence input identities belong.</summary>
     public RelationQueryDefinitionFingerprint DefinitionFingerprint => PlanReference.DefinitionFingerprint;

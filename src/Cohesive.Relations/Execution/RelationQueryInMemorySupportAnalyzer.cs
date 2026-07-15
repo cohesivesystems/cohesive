@@ -3,6 +3,7 @@ using Cohesive.Model.Expressions;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.IR;
+using Cohesive.Relations.Realization;
 
 namespace Cohesive.Relations.Execution;
 
@@ -15,131 +16,72 @@ static class RelationQueryInMemorySupportAnalyzer
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(temporalCapabilities);
+        var report = RelationQueryRealizationCompiler.Compile(
+            plan,
+            RelationQueryInMemoryTargetProfile.Create(temporalCapabilities),
+            RelationQueryInMemoryTargetProfile.Policy);
+        return Analyze(report, evaluation);
+    }
+
+    public static ImmutableArray<RelationRuntimeDiagnostic> Analyze(
+        RelationQueryRealizationReport report,
+        RelationQueryEvaluationId evaluation)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        if (report.IsRealizable)
+            return [];
+
+        var requirements = report.Requirements.ToDictionary(static requirement => requirement.Id);
+        var allUnavailable = report.Decisions
+            .OfType<UnavailableRelationQueryRealizationDecision>()
+            .Select(decision => new UnsupportedRequirement(decision, requirements[decision.Requirement]))
+            .ToImmutableArray();
+        var unavailableRequirementIds = allUnavailable
+            .Select(static item => item.Requirement.Id)
+            .ToHashSet();
+        var planningCauses = report.Diagnostics
+            .Where(static diagnostic => diagnostic.Requirement is not null)
+            .GroupBy(static diagnostic => diagnostic.Requirement!.Value)
+            .ToDictionary(
+                static group => group.Key,
+                static group => group
+                    .OrderBy(static diagnostic => diagnostic.Code, StringComparer.Ordinal)
+                    .ThenBy(static diagnostic => diagnostic.Message, StringComparer.Ordinal)
+                    .ToImmutableArray());
+        var unavailable = SuppressAmbientDuplicates(allUnavailable);
+        unavailable = SuppressOccurrenceReconstructionDuplicates(unavailable);
 
         List<RelationRuntimeDiagnostic> diagnostics = [];
         HashSet<SupportIssueKey> issues = [];
-        var capabilityInputs = plan.RequirementGraph.Inputs
-            .OfType<RelationQueryCapabilityInput>()
-            .ToDictionary(static input => input.Capability);
-
-        foreach (var requirement in plan.InputContract.TemporalCapabilities)
+        foreach (var item in unavailable)
         {
-            if (temporalCapabilities.Supports(requirement.Capability))
-                continue;
-
+            var origin = RuntimeOrigin(item.Requirement);
             Add(
-                requirement.Id,
-                requirement.Node,
-                requirement.SemanticSite,
-                $"Canonical in-memory interpretation does not support temporal execution capability "
-                + $"'{requirement.Capability}' required by temporal join node '{requirement.Node.Value}'.");
+                item.Requirement.Origin?.Input,
+                origin.Node,
+                origin.SemanticSite,
+                Describe(
+                    item,
+                    planningCauses.GetValueOrDefault(item.Requirement.Id, [])));
         }
 
-        foreach (var site in plan.ExecutionSlice.ExpressionSites)
+        foreach (var diagnostic in report.Diagnostics.Where(diagnostic =>
+                     diagnostic.Severity == DiagnosticSeverity.Error
+                     && (diagnostic.Requirement is null
+                         || !unavailableRequirementIds.Contains(diagnostic.Requirement.Value))))
         {
-            var unsupportedUses = site.Analysis.CapabilityUses
-                .Where(use => !RelationQueryExpressionEvaluator.SupportedCapabilities.Supports(
-                    use.Requirement.Capability))
-                .GroupBy(static use => use.ExpressionPath, StringComparer.Ordinal)
-                .SelectMany(static group =>
-                {
-                    var operationUses = group
-                        .Where(static use =>
-                            use.Requirement.Kind == ExprCapabilityRequirementKind.Operation)
-                        .ToArray();
-                    return operationUses.Length == 0
-                        ? group.AsEnumerable()
-                        : operationUses.AsEnumerable();
-                })
-                .GroupBy(static use => use.Requirement)
-                .Select(static group => group.First())
-                .OrderBy(static use => (int)use.Requirement.Kind)
-                .ThenBy(static use => use.Requirement.Capability.Value, StringComparer.Ordinal);
-            foreach (var use in unsupportedUses)
-            {
-                capabilityInputs.TryGetValue(use.Requirement, out var input);
-                Add(
-                    input?.Id,
-                    site.Node,
-                    site.Analysis.Site.Id.Value,
-                    $"Canonical in-memory interpretation does not support expression capability "
-                    + $"'{use.Requirement.Capability.Value}'.");
-            }
-
-            foreach (var field in site.Analysis.Requirements.Fields.Where(field =>
-                         field.Root == ExprFieldRootKind.CurrentItem
-                         && !RelationQueryExpressionEvaluator.SupportsFieldPath(field.Path)))
-            {
-                Add(
-                    input: null,
-                    site.Node,
-                    site.Analysis.Site.Id.Value,
-                    $"Canonical in-memory interpretation does not support collection-element field path "
-                    + $"'{field.Path}' at expression site '{site.Analysis.Site.Id.Value}'.");
-            }
-        }
-
-        foreach (var input in plan.RequirementGraph.Inputs
-                     .OfType<RelationQueryFieldInput>()
-                     .Where(static input =>
-                         !RelationQueryExpressionEvaluator.SupportsFieldPath(input.Field.Path)))
-        {
-            var edges = plan.RequirementGraph.Edges
-                .Where(edge => edge.Input.Id == input.Id)
-                .ToArray();
-            var step = edges
-                .SelectMany(static edge => edge.Traces)
-                .SelectMany(static trace => trace.Steps)
-                .Where(static candidate => candidate.ExpressionSite is not null)
-                .OrderBy(static candidate => candidate.ExpressionSite!.Value.Value, StringComparer.Ordinal)
-                .FirstOrDefault();
-            var node = step.ExpressionSite is null
-                ? edges.Select(static edge => edge.Output.Node).FirstOrDefault()
-                : step.Node;
-            var semanticSite = step.ExpressionSite?.Value ?? input.Field.Path.ToString();
+            requirements.TryGetValue(
+                diagnostic.Requirement ?? default,
+                out var requirement);
+            var origin = requirement is null
+                ? new RuntimeRequirementOrigin(diagnostic.Node, diagnostic.SemanticSite)
+                : RuntimeOrigin(requirement);
             Add(
-                input.Id,
-                node,
-                semanticSite,
-                $"Canonical in-memory interpretation cannot reconstruct collection-element field input "
-                + $"'{input.Id.Value}' at path '{input.Field.Path}' from occurrence-scoped evidence.");
-        }
-
-        foreach (var node in plan.ExecutionSlice.Nodes)
-        {
-            foreach (var assignment in node.ProjectionAssignments.Where(static assignment =>
-                         !RelationQueryExpressionEvaluator.SupportsFieldPath(assignment.Definition.Target)))
-            {
-                Add(
-                    input: null,
-                    node.Id,
-                    assignment.ValueSite.Analysis.Site.Id.Value,
-                    $"Canonical in-memory interpretation does not support collection-element projection target "
-                    + $"'{assignment.Definition.Target}'.");
-            }
-
-            foreach (var grouping in node.AggregateGroupings.Where(static grouping =>
-                         !RelationQueryExpressionEvaluator.SupportsFieldPath(grouping.Definition.Target)))
-            {
-                Add(
-                    input: null,
-                    node.Id,
-                    grouping.KeySite.Analysis.Site.Id.Value,
-                    $"Canonical in-memory interpretation does not support collection-element grouping target "
-                    + $"'{grouping.Definition.Target}'.");
-            }
-
-            foreach (var assignment in node.AggregateAssignments.Where(static assignment =>
-                         !RelationQueryExpressionEvaluator.SupportsFieldPath(assignment.Definition.Target)))
-            {
-                Add(
-                    input: null,
-                    node.Id,
-                    assignment.ValueSite?.Analysis.Site.Id.Value
-                        ?? $"{node.Id.Value}/aggregate/{assignment.Definition.Id.Value}/operation",
-                    $"Canonical in-memory interpretation does not support collection-element aggregate target "
-                    + $"'{assignment.Definition.Target}'.");
-            }
+                requirement?.Origin?.Input,
+                diagnostic.Node ?? origin.Node,
+                diagnostic.SemanticSite ?? origin.SemanticSite,
+                $"Canonical in-memory realization failed because of planning diagnostic "
+                + $"'{diagnostic.Code}': {diagnostic.Message}");
         }
 
         return
@@ -154,7 +96,7 @@ static class RelationQueryInMemorySupportAnalyzer
         void Add(
             RelationQueryInputId? input,
             QueryNodeId? node,
-            string semanticSite,
+            string? semanticSite,
             string message)
         {
             SupportIssueKey key = new(input?.Value, node?.Value, semanticSite, message);
@@ -172,9 +114,140 @@ static class RelationQueryInMemorySupportAnalyzer
         }
     }
 
+    static ImmutableArray<UnsupportedRequirement> SuppressAmbientDuplicates(
+        ImmutableArray<UnsupportedRequirement> unavailable)
+    {
+        var operationSites = unavailable
+            .Where(static item => item.Requirement.Capability is ExpressionRelationQueryCapability
+            {
+                RequirementKind: ExprCapabilityRequirementKind.Operation
+            })
+            .Select(static item => ExpressionSiteKey(item.Requirement))
+            .ToHashSet();
+        return
+        [
+            .. unavailable.Where(item =>
+                item.Requirement.Capability is not ExpressionRelationQueryCapability
+                {
+                    RequirementKind: ExprCapabilityRequirementKind.Ambient
+                }
+                || !operationSites.Contains(ExpressionSiteKey(item.Requirement)))
+        ];
+    }
+
+    static ImmutableArray<UnsupportedRequirement> SuppressOccurrenceReconstructionDuplicates(
+        ImmutableArray<UnsupportedRequirement> unavailable)
+    {
+        return
+        [
+            .. unavailable.Where(item =>
+            {
+                if (item.Requirement.Capability is not StructuralRelationQueryCapability
+                    {
+                        Role: RelationQueryStructuralCapabilityRole.OccurrenceEvidenceReconstruction
+                    }
+                    || item.Requirement.Origin is not { Input: { } input, FieldPath: { } path })
+                {
+                    return true;
+                }
+
+                return !unavailable.Any(other =>
+                    other.Requirement.Id != item.Requirement.Id
+                    && other.Requirement.Capability is StructuralRelationQueryCapability
+                    {
+                        Role: not RelationQueryStructuralCapabilityRole.OccurrenceEvidenceReconstruction
+                    }
+                    && other.Requirement.Origin?.Input == input
+                    && other.Requirement.Origin?.FieldPath == path);
+            })
+        ];
+    }
+
+    static (string Node, string Site, string Path) ExpressionSiteKey(
+        RelationQueryRealizationRequirement requirement) =>
+        (
+            requirement.Origin?.Node?.Value ?? string.Empty,
+            requirement.Origin?.SemanticSite ?? string.Empty,
+            requirement.Origin?.ExpressionPath ?? string.Empty
+        );
+
+    static RuntimeRequirementOrigin RuntimeOrigin(RelationQueryRealizationRequirement requirement)
+    {
+        if (requirement.Capability is StructuralRelationQueryCapability
+            {
+                Role: RelationQueryStructuralCapabilityRole.OccurrenceEvidenceReconstruction
+            })
+        {
+            var expressionStep = requirement.Uses
+                .SelectMany(static use => use.Traces)
+                .SelectMany(static trace => trace.Steps)
+                .Where(static step => step.Kind == RelationQueryRealizationTraceStepKind.ExpressionSite)
+                .OrderBy(static step => step.ExpressionSite?.Value ?? string.Empty, StringComparer.Ordinal)
+                .FirstOrDefault();
+            if (expressionStep is not null)
+                return new(expressionStep.Node, expressionStep.ExpressionSite?.Value);
+        }
+
+        return new(requirement.Origin?.Node, requirement.Origin?.SemanticSite);
+    }
+
+    static string Describe(
+        UnsupportedRequirement item,
+        ImmutableArray<RelationQueryRealizationDiagnostic> planningCauses)
+    {
+        var requirement = item.Requirement;
+        var message = requirement.Capability switch
+        {
+            TemporalRelationQueryCapability temporal =>
+                "Canonical in-memory interpretation does not support temporal execution capability "
+                + $"'{temporal.Capability}' required by temporal join node "
+                + $"'{requirement.Origin?.Node?.Value ?? "unknown"}'.",
+            ExpressionRelationQueryCapability expression =>
+                "Canonical in-memory interpretation does not support expression capability "
+                + $"'{expression.Capability.Value}'.",
+            StructuralRelationQueryCapability structural =>
+                "Canonical in-memory interpretation does not support "
+                + (structural.PathKind is RelationQueryStructuralPathKind.CollectionElement
+                    or RelationQueryStructuralPathKind.NestedCollectionElement
+                    ? "collection-element "
+                    : string.Empty)
+                + $"structural capability '{structural.Role}/{structural.PathKind}'"
+                + (requirement.Origin?.FieldPath is { } path ? $" for path '{path}'." : "."),
+            LogicalRelationQueryCapability logical =>
+                $"Canonical in-memory interpretation does not support logical capability '{logical.Kind}'.",
+            GuaranteeRelationQueryCapability guarantee =>
+                $"Canonical in-memory interpretation does not preserve required guarantee '{guarantee.Kind}'.",
+            PrimitiveRelationQueryCapability primitive =>
+                $"Canonical in-memory interpretation does not provide primitive capability '{primitive.Kind}'.",
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(requirement),
+                requirement.Capability,
+                "Unsupported realization capability variant.")
+        };
+        var codes = planningCauses
+            .Select(static diagnostic => diagnostic.Code)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (codes.Length == 0)
+            return $"{message} Realization reason: {item.Decision.Reason}.";
+
+        var label = codes.Length == 1 ? "cause" : "causes";
+        return $"{message} Planning {label}: {string.Join(", ", codes)}; "
+            + $"realization reason: {item.Decision.Reason}.";
+    }
+
     readonly record struct SupportIssueKey(
         string? Input,
         string? Node,
-        string SemanticSite,
+        string? SemanticSite,
         string Message);
+
+    readonly record struct UnsupportedRequirement(
+        UnavailableRelationQueryRealizationDecision Decision,
+        RelationQueryRealizationRequirement Requirement);
+
+    readonly record struct RuntimeRequirementOrigin(
+        QueryNodeId? Node,
+        string? SemanticSite);
 }

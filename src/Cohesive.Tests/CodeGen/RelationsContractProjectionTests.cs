@@ -1,12 +1,11 @@
 using Cohesive.Adapters.TypeScript;
 using Cohesive.CodeGen;
 using Cohesive.CodeGen.Cli;
-using Cohesive.Model;
 using Cohesive.Relations.Contracts;
 using Cohesive.Relations.Drafts;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
-using Cohesive.Relations.Serialization;
+using Cohesive.Relations.Realization;
 
 namespace Cohesive.Tests.CodeGen;
 
@@ -23,6 +22,10 @@ public sealed class RelationsContractProjectionTests
             shape.Id.Value.EndsWith(nameof(RelationshipCatalogDocument), StringComparison.Ordinal));
         Assert.Contains(graph.Shapes, shape =>
             shape.Id.Value.EndsWith(nameof(RelationDraftDocument), StringComparison.Ordinal));
+        Assert.Contains(graph.Shapes, shape =>
+            shape.Id.Value.EndsWith(nameof(RelationQueryTargetCapabilityProfile), StringComparison.Ordinal));
+        Assert.Contains(graph.Shapes, shape =>
+            shape.Id.Value.EndsWith(nameof(RelationQueryRealizationReport), StringComparison.Ordinal));
         AssertUnion(graph, nameof(RelationQueryDefinition), RelationQueryWireNames.DefinitionDiscriminator);
         AssertUnion(graph, nameof(LogicalQueryNode), RelationQueryWireNames.NodeDiscriminator);
         AssertUnion(graph, nameof(QueryResultDefinition), RelationQueryWireNames.ResultDiscriminator);
@@ -34,6 +37,14 @@ public sealed class RelationsContractProjectionTests
             graph,
             nameof(RelationDraftAssignmentResolution),
             RelationDraftWireNames.ResolutionDiscriminator);
+        AssertUnion(
+            graph,
+            nameof(RelationQueryCapability),
+            RelationQueryRealizationWireNames.CapabilityDiscriminator);
+        AssertUnion(
+            graph,
+            nameof(RelationQueryRealizationDecision),
+            RelationQueryRealizationWireNames.DecisionDiscriminator);
 
         var emission = new TypeScriptShapeEmitter(new TypeScriptEmitterOptions
         {
@@ -59,6 +70,38 @@ public sealed class RelationsContractProjectionTests
         Assert.Contains("readonly $temporalBound: 'expression';", text, StringComparison.Ordinal);
         Assert.Contains("export interface RelationshipCatalogDocument", text, StringComparison.Ordinal);
         Assert.Contains("export interface RelationDraftDocument", text, StringComparison.Ordinal);
+        Assert.Contains("export interface RelationQueryTargetCapabilityProfile", text, StringComparison.Ordinal);
+        Assert.Contains("export interface RelationQueryRealizationReport", text, StringComparison.Ordinal);
+        Assert.Contains("export type RelationQueryCapability =", text, StringComparison.Ordinal);
+        Assert.Contains("readonly $capability: 'logical';", text, StringComparison.Ordinal);
+        Assert.Contains("readonly $capability: 'expression';", text, StringComparison.Ordinal);
+        Assert.Contains("readonly $capability: 'temporal';", text, StringComparison.Ordinal);
+        Assert.Contains("readonly $capability: 'operatingBoundaryValidation';", text, StringComparison.Ordinal);
+        Assert.Contains(
+            "kind: RelationQueryLogicalCapabilityKind | number;",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "requirementKind: ExprCapabilityRequirementKind | number;",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "kind: RelationQueryOperatingBoundaryKind | number;",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains("export type RelationQueryRealizationDecision =", text, StringComparison.Ordinal);
+        Assert.Contains("readonly $decision: 'native';", text, StringComparison.Ordinal);
+        Assert.Contains("readonly $decision: 'composed';", text, StringComparison.Ordinal);
+        Assert.Contains("readonly $decision: 'constrained';", text, StringComparison.Ordinal);
+        Assert.Contains("readonly $decision: 'override';", text, StringComparison.Ordinal);
+        Assert.Contains("readonly $decision: 'unavailable';", text, StringComparison.Ordinal);
+        Assert.Contains("requiredGuarantees: RelationQueryGuaranteeCapabilityKind[];", text, StringComparison.Ordinal);
+        Assert.Contains("staticFacts: RelationQueryRealizationStaticFact[];", text, StringComparison.Ordinal);
+        Assert.Contains("boundaryValidations: RelationQueryOperatingBoundaryValidation[];", text, StringComparison.Ordinal);
+        Assert.Contains("limit?: string | null;", text, StringComparison.Ordinal);
+        Assert.Contains("value: string;", text, StringComparison.Ordinal);
+        Assert.Contains("measuredValue?: string | null;", text, StringComparison.Ordinal);
+        Assert.Contains("'AlwaysPresentBinding' | 'MayBeAbsentBinding'", text, StringComparison.Ordinal);
         Assert.Contains("export type RelationDraftAssignmentResolution =", text, StringComparison.Ordinal);
         Assert.Contains("readonly $resolution: 'selected';", text, StringComparison.Ordinal);
         Assert.Contains("readonly $resolution: 'omitted';", text, StringComparison.Ordinal);
@@ -86,9 +129,11 @@ public sealed class RelationsContractProjectionTests
             text,
             StringComparison.Ordinal);
         Assert.Contains("message?: string | null;", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("SchemaVersion:", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("\n  SchemaVersion:", text, StringComparison.Ordinal);
         Assert.DoesNotContain("export interface RelationshipId", text, StringComparison.Ordinal);
         Assert.DoesNotContain("Annotations: ({", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("kind: RelationQueryRealizationDecisionKind;", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("isRealizable: boolean;", text, StringComparison.Ordinal);
     }
 
     [Fact]

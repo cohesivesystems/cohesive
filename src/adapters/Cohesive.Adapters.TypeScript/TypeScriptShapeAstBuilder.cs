@@ -212,6 +212,21 @@ public sealed class TypeScriptShapeAstBuilder
         FieldNullability nullability,
         IReadOnlyDictionary<AnnotationKey, AnnotationValue> annotations)
     {
+        if (TryTranslateJsonRepresentation(annotations, out var representation))
+            return ApplyFieldModifiers(representation, cardinality, nullability);
+
+        if (HasBooleanAnnotation(annotations, SystemTextJsonShapeAnnotations.UndefinedNumericEnumValues))
+        {
+            return ApplyFieldModifiers(
+                new TsUnionType(
+                [
+                    TranslateType(type),
+                    new TsKeywordType(TsKeyword.Number)
+                ]),
+                cardinality,
+                nullability);
+        }
+
         if (!HasBooleanAnnotation(annotations, SystemTextJsonShapeAnnotations.Dictionary))
             return TranslateFieldType(type, cardinality, nullability);
 
@@ -236,7 +251,15 @@ public sealed class TypeScriptShapeAstBuilder
 
     TsTypeNode TranslateFieldType(TypeRef type, FieldCardinality cardinality, FieldNullability nullability)
     {
-        TsTypeNode result = TranslateType(type);
+        return ApplyFieldModifiers(TranslateType(type), cardinality, nullability);
+    }
+
+    TsTypeNode ApplyFieldModifiers(
+        TsTypeNode type,
+        FieldCardinality cardinality,
+        FieldNullability nullability)
+    {
+        TsTypeNode result = type;
         if (cardinality == FieldCardinality.Many)
             result = new TsArrayType(ParenthesizeIfNeeded(result));
 
