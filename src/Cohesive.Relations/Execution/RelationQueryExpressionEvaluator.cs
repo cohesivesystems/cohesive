@@ -7,6 +7,7 @@ using Cohesive.Model.Expressions;
 using Cohesive.Relations.Diagnostics;
 
 [assembly: InternalsVisibleTo("Cohesive.Relations.Tests")]
+[assembly: InternalsVisibleTo("Cohesive.Relations.Benchmarks")]
 
 namespace Cohesive.Relations.Execution;
 

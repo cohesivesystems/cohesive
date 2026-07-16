@@ -1072,6 +1072,47 @@ reference executor uses a deterministic serial stage schedule, which obeys every
 concurrency limit; target runtimes may introduce bounded parallel scheduling without changing stage or evidence
 semantics.
 
+### Runtime-compiled DTO materialization
+
+Canonical relation output rows can be specialized into CLR DTO construction kernels without introducing a
+second relation/query evaluator. A DTO mapper compiles against one exact `CompiledRelationQueryPlan`, relation
+terminal, output shape, CLR target contract, mapper profile, and compilation-options identity. It consumes the
+object-shaped `RelationQueryOutputRow.Value` instances produced by canonical interpretation; traversal, join,
+filter, projection, temporal, invariant, and requirement-gap semantics remain the responsibility of the
+interpreter.
+
+The conventional v1 mapper supports top-level scalar relation fields, immutable constructor or record targets,
+and writable or init-only properties. Explicit member bindings take precedence over approved serialized-name
+metadata and exact CLR member names. Unsupported structures, ambiguous construction, incompatible conversions,
+and stale execution results fail closed with structured `REL33xx` diagnostics. There is no reflection, member-name
+discovery, legacy-mapper fallback, or per-field JSON conversion after a kernel has compiled.
+
+Mapping results retain the exact canonical execution and source row objects. Execution status, terminal state,
+runtime evidence, requirement-gap analysis, output identity, root and contributing occurrences, and unresolved
+row gaps therefore remain inspectable without copying or weakening their meaning. Strict, diagnostic-collection,
+and skip-invalid-row policies govern only CLR conversion failures; they do not change canonical row membership or
+missing-input policy.
+
+Compiled kernels are derived, process-local artifacts. Cache identity includes the exact plan reference, output
+type, mapper profile, and compilation options, while weak plan ownership prevents the cache from extending plan
+lifetime. Runtime delegates, reflection metadata, and CLR types are never persisted as canonical IR.
+
+```csharp
+var compilation = RelationDtoMapperCompiler.Default.Compile<LoadSearchDto>(plan);
+if (!compilation.IsSuccessful)
+    return compilation.Diagnostics;
+
+var mapped = compilation.Mapper!.Map(
+    canonicalExecution,
+    RelationDtoMappingFailurePolicy.Strict);
+var dtos = mapped.Rows.Select(static row => row.Value);
+```
+
+Use `CollectDiagnostics` when valid rows and every failed source row should be retained for inspection, or
+`SkipInvalidRows` when explicitly dropping invalid rows is acceptable. In every mode, inspect `Execution`,
+`FailedRows`, and `Diagnostics` rather than treating DTO construction as a replacement for canonical status and
+requirement-gap analysis.
+
 ### Explicit missing-data semantics
 
 Missing, null, absent, unavailable, and failed are not interchangeable states.

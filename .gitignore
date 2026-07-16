@@ -39,6 +39,7 @@ Icon?
 **/obj/
 **/out/
 **/artifacts/
+**/BenchmarkDotNet.Artifacts/
 
 ############################################
 # NuGet
