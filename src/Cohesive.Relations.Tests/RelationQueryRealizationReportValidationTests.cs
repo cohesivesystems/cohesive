@@ -254,6 +254,7 @@ public sealed class RelationQueryRealizationReportValidationTests
             plan,
             profile,
             Policy(),
+            RelationQueryResultObservability.ExactContributors,
             requirements,
             decisions,
             diagnostics,
@@ -299,6 +300,41 @@ public sealed class RelationQueryRealizationReportValidationTests
         Assert.Equal("fingerprint", exception.ParamName);
     }
 
+    [Fact]
+    public void Constructor_RejectsAFingerprintProducedForAnotherObservabilityContract()
+    {
+        var plan = Plan();
+        var requirement = Requirement(Join);
+        var evidence = Evidence("evidence/join", Join);
+        var profile = Profile(plan, [evidence]);
+        var policy = Policy();
+        var decision = new NativeRelationQueryRealizationDecision(requirement.Id, [evidence.Id]);
+        ImmutableArray<RelationQueryRealizationRequirement> requirements = [requirement];
+        ImmutableArray<RelationQueryRealizationDecision> decisions = [decision];
+        var strictFingerprint = RelationQueryRealizationFingerprinter.Compute(
+            plan,
+            profile,
+            policy,
+            RelationQueryResultObservability.ExactContributors,
+            requirements,
+            decisions,
+            [],
+            RelationQueryRealizationStatus.Realizable);
+
+        var exception = Assert.Throws<ArgumentException>(() => new RelationQueryRealizationReport(
+            plan,
+            profile,
+            policy,
+            requirements,
+            decisions,
+            [],
+            RelationQueryRealizationStatus.Realizable,
+            strictFingerprint,
+            RelationQueryResultObservability.NotRequested));
+
+        Assert.Equal("fingerprint", exception.ParamName);
+    }
+
     static RelationQueryRealizationReport Report(
         RelationQueryCompiledPlanReference plan,
         RelationQueryTargetCapabilityProfile profile,
@@ -312,6 +348,7 @@ public sealed class RelationQueryRealizationReportValidationTests
             plan,
             profile,
             policy,
+            RelationQueryResultObservability.ExactContributors,
             requirements,
             decisions,
             [],

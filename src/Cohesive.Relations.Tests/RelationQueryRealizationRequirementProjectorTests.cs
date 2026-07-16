@@ -104,6 +104,83 @@ public sealed class RelationQueryRealizationRequirementProjectorTests
     }
 
     [Fact]
+    public void Project_NotRequestedOmitsRuntimeOccurrenceProvenanceWithoutWaivingSemanticFidelity()
+    {
+        var plan = Compile(LoadCustomerRelationFixture.RepresentativeQueryDocument);
+
+        var requirements = RelationQueryRealizationRequirementProjector.Project(
+            plan,
+            RelationQueryResultObservability.NotRequested);
+
+        Assert.DoesNotContain(
+            requirements,
+            static requirement => requirement.Capability is GuaranteeRelationQueryCapability
+            {
+                Kind: RelationQueryGuaranteeCapabilityKind.OccurrenceProvenance
+            });
+        Assert.All(
+            requirements,
+            static requirement => Assert.DoesNotContain(
+                RelationQueryGuaranteeCapabilityKind.OccurrenceProvenance,
+                requirement.RequiredGuarantees));
+        Assert.DoesNotContain(
+            requirements,
+            static requirement => requirement.Capability is StructuralRelationQueryCapability
+            {
+                Role: RelationQueryStructuralCapabilityRole.OccurrenceEvidenceReconstruction
+            });
+        Assert.Contains(
+            requirements,
+            static requirement => requirement.Origin?.Input is not null
+                && requirement.Capability is StructuralRelationQueryCapability
+                {
+                    Role: RelationQueryStructuralCapabilityRole.BindingRead
+                });
+
+        RelationQueryGuaranteeCapabilityKind[] semanticFidelity =
+        [
+            RelationQueryGuaranteeCapabilityKind.MissingNullDistinction,
+            RelationQueryGuaranteeCapabilityKind.AbsenceAvailabilityFailureDistinction,
+            RelationQueryGuaranteeCapabilityKind.DeterministicResult,
+            RelationQueryGuaranteeCapabilityKind.EvidenceCompleteness,
+            RelationQueryGuaranteeCapabilityKind.InconclusiveEvidence
+        ];
+        Assert.All(
+            requirements.Where(static requirement => requirement.Capability is not GuaranteeRelationQueryCapability),
+            requirement => Assert.True(
+                semanticFidelity.All(requirement.RequiredGuarantees.Contains),
+                $"Requirement '{requirement.Id.Value}' waived a semantic fidelity guarantee."));
+    }
+
+    [Fact]
+    public void Project_NotRequestedRetainsRootProvenanceRequiredByRootedRelations()
+    {
+        var plan = Compile(LoadCustomerRelationFixture.BaselineRelationDocument);
+
+        var requirements = RelationQueryRealizationRequirementProjector.Project(
+            plan,
+            RelationQueryResultObservability.NotRequested);
+
+        Assert.Contains(
+            requirements,
+            static requirement => requirement.Capability is GuaranteeRelationQueryCapability
+            {
+                Kind: RelationQueryGuaranteeCapabilityKind.OccurrenceProvenance
+            });
+        Assert.Contains(
+            requirements,
+            static requirement => requirement.Capability is StructuralRelationQueryCapability
+            {
+                Role: RelationQueryStructuralCapabilityRole.OccurrenceEvidenceReconstruction
+            });
+        Assert.All(
+            requirements.Where(static requirement => requirement.Capability is not GuaranteeRelationQueryCapability),
+            static requirement => Assert.Contains(
+                RelationQueryGuaranteeCapabilityKind.OccurrenceProvenance,
+                requirement.RequiredGuarantees));
+    }
+
+    [Fact]
     public void Project_ExplicitJoinAndRepresentativeQueryPreserveEveryLogicalVariant()
     {
         var explicitJoin = Compile(LoadCustomerRelationFixture.ExplicitJoinQueryDocument);
