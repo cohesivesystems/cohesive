@@ -29,17 +29,57 @@ public static class RelationQueryRealizationCompiler
     /// <exception cref="NotSupportedException">
     /// A shape snapshot contains a runtime type unsupported by its JSON serializer.
     /// </exception>
+    /// <remarks>
+    /// This compatibility overload requires <see cref="RelationQueryResultObservability.ExactContributors"/>.
+    /// </remarks>
     public static RelationQueryRealizationReport Compile(
         CompiledRelationQueryPlan plan,
         RelationQueryTargetCapabilityProfile targetProfile,
         RelationQueryRealizationPolicy policy)
+        => Compile(
+            plan,
+            targetProfile,
+            policy,
+            RelationQueryResultObservability.ExactContributors);
+
+    /// <summary>
+    /// Projects and matches one compiled relation/query plan to a target capability profile under an explicit
+    /// result-observability contract.
+    /// </summary>
+    /// <param name="plan">Demand-scoped compiled semantic plan to realize.</param>
+    /// <param name="targetProfile">Typed capabilities, guarantees, and boundaries advertised by the target.</param>
+    /// <param name="policy">Explicit compiler policy, composition rules, and local overrides.</param>
+    /// <param name="observability">Runtime result observability required from the interpretation.</param>
+    /// <returns>
+    /// A deterministic derived report containing exactly one final decision for every demanded requirement.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="plan"/>, <paramref name="targetProfile"/>, or <paramref name="policy"/> is
+    /// <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// The compiled execution slice and input contract contain inconsistent provenance, or a shape snapshot cannot
+    /// be represented by compiled-plan canonicalization.
+    /// </exception>
+    /// <exception cref="System.Text.Json.JsonException">
+    /// A shape snapshot cannot be serialized as canonical JSON.
+    /// </exception>
+    /// <exception cref="NotSupportedException">
+    /// A shape snapshot contains a runtime type unsupported by its JSON serializer.
+    /// </exception>
+    public static RelationQueryRealizationReport Compile(
+        CompiledRelationQueryPlan plan,
+        RelationQueryTargetCapabilityProfile targetProfile,
+        RelationQueryRealizationPolicy policy,
+        RelationQueryResultObservability observability)
     {
         ArgumentNullException.ThrowIfNull(plan);
         return MatchCore(
             RelationQueryCompiledPlanReference.From(plan),
-            RelationQueryRealizationRequirementProjector.Project(plan),
+            RelationQueryRealizationRequirementProjector.Project(plan, observability),
             targetProfile,
-            policy);
+            policy,
+            observability);
     }
 
     /// <summary>Matches an already projected requirement set to one target capability profile.</summary>
@@ -63,21 +103,37 @@ public static class RelationQueryRealizationCompiler
         RelationQueryTargetCapabilityProfile targetProfile,
         RelationQueryRealizationPolicy policy)
     {
-        return MatchCore(plan, requirements, targetProfile, policy);
+        return MatchCore(
+            plan,
+            requirements,
+            targetProfile,
+            policy,
+            RelationQueryResultObservability.ExactContributors);
+    }
+
+    internal static RelationQueryRealizationReport Match(
+        RelationQueryCompiledPlanReference plan,
+        ImmutableArray<RelationQueryRealizationRequirement> requirements,
+        RelationQueryTargetCapabilityProfile targetProfile,
+        RelationQueryRealizationPolicy policy,
+        RelationQueryResultObservability observability)
+    {
+        return MatchCore(plan, requirements, targetProfile, policy, observability);
     }
 
     static RelationQueryRealizationReport MatchCore(
         RelationQueryCompiledPlanReference plan,
         ImmutableArray<RelationQueryRealizationRequirement> requirements,
         RelationQueryTargetCapabilityProfile targetProfile,
-        RelationQueryRealizationPolicy policy)
+        RelationQueryRealizationPolicy policy,
+        RelationQueryResultObservability observability)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(targetProfile);
         ArgumentNullException.ThrowIfNull(policy);
 
         var normalizedRequirements = NormalizeRequirements(requirements);
-        Matcher matcher = new(plan, normalizedRequirements, targetProfile, policy);
+        Matcher matcher = new(plan, normalizedRequirements, targetProfile, policy, observability);
         return matcher.Match();
     }
 
@@ -100,6 +156,7 @@ public static class RelationQueryRealizationCompiler
         readonly ImmutableArray<RelationQueryRealizationRequirement> requirements;
         readonly RelationQueryTargetCapabilityProfile profile;
         readonly RelationQueryRealizationPolicy policy;
+        readonly RelationQueryResultObservability observability;
         readonly RelationQueryTargetCapabilityProfileAnalysis profileAnalysis;
         readonly ImmutableArray<RelationQueryTargetCapabilityEvidence> capabilityEvidence;
         readonly Dictionary<RelationQueryCapability, ImmutableArray<Proof>> proofs = [];
@@ -120,12 +177,14 @@ public static class RelationQueryRealizationCompiler
             RelationQueryCompiledPlanReference plan,
             ImmutableArray<RelationQueryRealizationRequirement> requirements,
             RelationQueryTargetCapabilityProfile profile,
-            RelationQueryRealizationPolicy policy)
+            RelationQueryRealizationPolicy policy,
+            RelationQueryResultObservability observability)
         {
             this.plan = plan;
             this.requirements = requirements;
             this.profile = profile;
             this.policy = policy;
+            this.observability = observability;
             profileAnalysis = RelationQueryTargetCapabilityProfileAnalysis.Analyze(profile);
             capabilityEvidence =
             [
@@ -207,6 +266,7 @@ public static class RelationQueryRealizationCompiler
                 plan,
                 profile,
                 policy,
+                observability,
                 requirements,
                 decisions,
                 normalizedDiagnostics,
@@ -219,7 +279,8 @@ public static class RelationQueryRealizationCompiler
                 decisions,
                 normalizedDiagnostics,
                 status,
-                fingerprint);
+                fingerprint,
+                observability);
         }
 
         void ValidateInputDeclarations()

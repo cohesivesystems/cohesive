@@ -101,6 +101,10 @@ export interface RelationQueryRealizationPolicy {
   diagnosticSeverityOverrides: RelationQueryRealizationDiagnosticSeverityOverride[];
 }
 
+export interface RelationQueryResultObservability {
+  occurrenceProvenance: RelationQueryOccurrenceProvenanceMode;
+}
+
 export interface RelationQueryRealizationRequirement {
   id: RelationQueryRealizationRequirementId;
   capability: RelationQueryCapability;
@@ -497,6 +501,18 @@ export interface RelationQueryRealizationDiagnosticSeverityOverride {
   code: string;
   severity: DiagnosticSeverity;
 }
+
+export type RelationQueryOccurrenceProvenanceMode = 'ExactContributors' | 'NotRequested';
+
+export const relationQueryOccurrenceProvenanceModes = {
+  exactContributors: 'ExactContributors',
+  notRequested: 'NotRequested',
+} as const satisfies Record<string, RelationQueryOccurrenceProvenanceMode>;
+
+export const relationQueryOccurrenceProvenanceModeLabels: Record<RelationQueryOccurrenceProvenanceMode, string> = {
+  ExactContributors: 'ExactContributors',
+  NotRequested: 'NotRequested',
+};
 
 export type RelationQueryCapability = {
   readonly $capability: 'logical';
@@ -1986,6 +2002,7 @@ export interface RelationQueryRealizationReport {
   plan: RelationQueryCompiledPlanReference;
   targetProfile: RelationQueryTargetCapabilityProfile;
   policy: RelationQueryRealizationPolicy;
+  observability: RelationQueryResultObservability;
   requirements: RelationQueryRealizationRequirement[];
   decisions: RelationQueryRealizationDecision[];
   diagnostics: RelationQueryRealizationDiagnostic[];

@@ -116,7 +116,7 @@ public sealed class RelationQueryRealizationFingerprintTests
         Assert.Equal(RelationQueryRealizationFingerprinter.Algorithm, report.Fingerprint.Algorithm);
         Assert.Equal(RelationQueryRealizationFingerprinter.Canonicalization, report.Fingerprint.Canonicalization);
         Assert.Equal(
-            "982bcb6a935fd4317a1ee6d68f61163fceab1c548d3d79a753a8acb7991a77cb",
+            "acc742e1d795a8dfc31c28eb968b289c4945fe5eb166042e2f0b48c766968305",
             report.Fingerprint.Value);
     }
 
@@ -177,6 +177,20 @@ public sealed class RelationQueryRealizationFingerprintTests
         Assert.NotEqual(
             baseline,
             BuildReport(baselineInputs with { Decisions = changedDecisions }).Fingerprint);
+    }
+
+    [Fact]
+    public void Compute_ChangesForResultObservabilityContract()
+    {
+        var inputs = CreateInputs(metadata: "observability");
+
+        var exact = BuildReport(inputs, RelationQueryResultObservability.ExactContributors);
+        var valuesOnly = BuildReport(inputs, RelationQueryResultObservability.NotRequested);
+
+        Assert.NotEqual(exact.Fingerprint, valuesOnly.Fingerprint);
+        Assert.Equal(RelationQueryOccurrenceProvenanceMode.ExactContributors, exact.Observability.OccurrenceProvenance);
+        Assert.Equal(RelationQueryOccurrenceProvenanceMode.NotRequested, valuesOnly.Observability.OccurrenceProvenance);
+        Assert.Equal(valuesOnly.Fingerprint, RelationQueryRealizationFingerprinter.Compute(valuesOnly));
     }
 
     [Fact]
@@ -614,12 +628,16 @@ public sealed class RelationQueryRealizationFingerprintTests
             RelationQueryRealizationStatus.Realizable);
     }
 
-    static RelationQueryRealizationReport BuildReport(ReportInputs inputs)
+    static RelationQueryRealizationReport BuildReport(
+        ReportInputs inputs,
+        RelationQueryResultObservability? observability = null)
     {
+        var effectiveObservability = observability ?? RelationQueryResultObservability.ExactContributors;
         var fingerprint = RelationQueryRealizationFingerprinter.Compute(
             inputs.Plan,
             inputs.TargetProfile,
             inputs.Policy,
+            effectiveObservability,
             inputs.Requirements,
             inputs.Decisions,
             inputs.Diagnostics,
@@ -632,7 +650,8 @@ public sealed class RelationQueryRealizationFingerprintTests
             inputs.Decisions,
             inputs.Diagnostics,
             inputs.Status,
-            fingerprint);
+            fingerprint,
+            effectiveObservability);
     }
 
     static RelationQueryTargetCapabilityProfile CopyProfile(

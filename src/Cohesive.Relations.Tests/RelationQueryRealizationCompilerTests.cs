@@ -67,6 +67,52 @@ public sealed class RelationQueryRealizationCompilerTests
     }
 
     [Fact]
+    public void Compile_NotRequestedCanRealizeAggregateValuesWithoutOccurrenceCapabilities()
+    {
+        var compilation = RelationQueryStaticCompiler.Compile(new(
+            LoadCustomerRelationFixture.RepresentativeQueryDocument,
+            LoadCustomerRelationFixture.ShapeGraphDocuments,
+            LoadCustomerRelationFixture.RelationshipCatalogDocument));
+        Assert.True(compilation.IsSuccessful);
+        var plan = Assert.IsType<CompiledRelationQueryPlan>(compilation.Plan);
+        var planReference = RelationQueryCompiledPlanReference.From(plan);
+        var valueRequirements = RelationQueryRealizationRequirementProjector.Project(
+            plan,
+            RelationQueryResultObservability.NotRequested);
+        var evidence = valueRequirements
+            .Select(static requirement => requirement.Capability)
+            .Distinct()
+            .OrderBy(RelationQueryRealizationOrdering.CapabilityKey, StringComparer.Ordinal)
+            .Select((capability, index) => Evidence($"evidence/{index:D4}", capability))
+            .ToImmutableArray();
+        var profile = Profile(planReference, evidence);
+
+        var strict = RelationQueryRealizationCompiler.Compile(plan, profile, Policy());
+        var valuesOnly = RelationQueryRealizationCompiler.Compile(
+            plan,
+            profile,
+            Policy(),
+            RelationQueryResultObservability.NotRequested);
+
+        Assert.Equal(RelationQueryRealizationStatus.NotRealizable, strict.Status);
+        Assert.Contains(
+            strict.Decisions.OfType<UnavailableRelationQueryRealizationDecision>()
+                .SelectMany(static decision => decision.MissingCapabilities),
+            static capability => capability is GuaranteeRelationQueryCapability
+            {
+                Kind: RelationQueryGuaranteeCapabilityKind.OccurrenceProvenance
+            });
+        Assert.True(valuesOnly.IsRealizable);
+        Assert.Equal(RelationQueryOccurrenceProvenanceMode.NotRequested, valuesOnly.Observability.OccurrenceProvenance);
+        Assert.DoesNotContain(
+            valuesOnly.Requirements,
+            static requirement => requirement.Capability is GuaranteeRelationQueryCapability
+            {
+                Kind: RelationQueryGuaranteeCapabilityKind.OccurrenceProvenance
+            });
+    }
+
+    [Fact]
     public void Match_RejectsAnEmptySyntheticRequirementSet()
     {
         var plan = PlanReference();
@@ -885,6 +931,29 @@ public sealed class RelationQueryRealizationCompilerTests
         Assert.Equal(roundTrip.Fingerprint, RelationQueryRealizationFingerprinter.Compute(roundTrip));
         Assert.IsType<NativeRelationQueryRealizationDecision>(Assert.Single(roundTrip.Decisions));
         Assert.IsType<LogicalRelationQueryCapability>(Assert.Single(roundTrip.Requirements).Capability);
+    }
+
+    [Fact]
+    public void Report_NotRequestedObservabilityRoundTripsThroughThePortableRelationsJsonProfile()
+    {
+        var plan = PlanReference();
+        var report = RelationQueryRealizationCompiler.Match(
+            plan,
+            [Requirement("requirement/join", Join)],
+            Profile(plan, [Evidence("evidence/join", Join)]),
+            Policy(),
+            RelationQueryResultObservability.NotRequested);
+        var options = RelationQueryJsonSerializer.CreateOptions();
+
+        var json = JsonSerializer.Serialize(report, options);
+        var roundTrip = JsonSerializer.Deserialize<RelationQueryRealizationReport>(json, options);
+
+        Assert.NotNull(roundTrip);
+        Assert.Equal(
+            RelationQueryOccurrenceProvenanceMode.NotRequested,
+            roundTrip.Observability.OccurrenceProvenance);
+        Assert.Equal(report.Fingerprint, roundTrip.Fingerprint);
+        Assert.Equal(roundTrip.Fingerprint, RelationQueryRealizationFingerprinter.Compute(roundTrip));
     }
 
     [Fact]

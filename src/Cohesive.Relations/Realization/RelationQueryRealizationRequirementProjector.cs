@@ -17,14 +17,19 @@ namespace Cohesive.Relations.Realization;
 /// </remarks>
 public static class RelationQueryRealizationRequirementProjector
 {
-    static readonly ImmutableArray<RelationQueryGuaranteeCapabilityKind> BaselineGuarantees =
+    static readonly ImmutableArray<RelationQueryGuaranteeCapabilityKind> SemanticBaselineGuarantees =
     [
         RelationQueryGuaranteeCapabilityKind.MissingNullDistinction,
         RelationQueryGuaranteeCapabilityKind.AbsenceAvailabilityFailureDistinction,
         RelationQueryGuaranteeCapabilityKind.DeterministicResult,
-        RelationQueryGuaranteeCapabilityKind.OccurrenceProvenance,
         RelationQueryGuaranteeCapabilityKind.EvidenceCompleteness,
         RelationQueryGuaranteeCapabilityKind.InconclusiveEvidence
+    ];
+
+    static readonly ImmutableArray<RelationQueryGuaranteeCapabilityKind> StrictBaselineGuarantees =
+    [
+        .. SemanticBaselineGuarantees,
+        RelationQueryGuaranteeCapabilityKind.OccurrenceProvenance
     ];
 
     /// <summary>Projects deterministic, demand-scoped realization requirements from a compiled plan.</summary>
@@ -35,17 +40,38 @@ public static class RelationQueryRealizationRequirementProjector
     /// The compiled execution slice and input contract contain inconsistent provenance or duplicate
     /// requirement identities with conflicting definitions.
     /// </exception>
+    /// <remarks>
+    /// This compatibility overload requires <see cref="RelationQueryResultObservability.ExactContributors"/>.
+    /// </remarks>
     public static ImmutableArray<RelationQueryRealizationRequirement> Project(
         CompiledRelationQueryPlan plan)
+        => Project(plan, RelationQueryResultObservability.ExactContributors);
+
+    /// <summary>
+    /// Projects deterministic, demand-scoped realization requirements from a compiled plan under an explicit
+    /// result-observability contract.
+    /// </summary>
+    /// <param name="plan">Successful target-independent relation/query plan.</param>
+    /// <param name="observability">Runtime result observability required from the interpretation.</param>
+    /// <returns>Requirements sorted by stable requirement identity.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="plan"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The compiled execution slice and input contract contain inconsistent provenance or duplicate
+    /// requirement identities with conflicting definitions.
+    /// </exception>
+    public static ImmutableArray<RelationQueryRealizationRequirement> Project(
+        CompiledRelationQueryPlan plan,
+        RelationQueryResultObservability observability)
     {
         ArgumentNullException.ThrowIfNull(plan);
-        return new Projector(plan.ExecutionSlice, plan.InputContract).Project();
+        return new Projector(plan.ExecutionSlice, plan.InputContract, observability).Project();
     }
 
     sealed class Projector
     {
         readonly RelationQueryExecutionSlice slice;
         readonly RelationQueryInputContract inputContract;
+        readonly RelationQueryResultObservability observability;
         readonly ImmutableArray<InputUse> inputUses;
         readonly ImmutableArray<RelationQueryFieldInputContract> fieldInputs;
         readonly IReadOnlyDictionary<ExprCapabilityRequirement, RelationQueryCapabilityInputContract> capabilityInputs;
@@ -57,10 +83,12 @@ public static class RelationQueryRealizationRequirementProjector
 
         public Projector(
             RelationQueryExecutionSlice slice,
-            RelationQueryInputContract inputContract)
+            RelationQueryInputContract inputContract,
+            RelationQueryResultObservability observability)
         {
             this.slice = Guard.RequireNotNull(slice);
             this.inputContract = Guard.RequireNotNull(inputContract);
+            this.observability = observability;
             if (!ReferenceEquals(slice.Requirements, inputContract.Requirements))
             {
                 throw new InvalidOperationException(
@@ -154,11 +182,7 @@ public static class RelationQueryRealizationRequirementProjector
                         execution,
                         RelationQueryLogicalCapabilityKind.ExpandCollection,
                         RelationQueryRequirementEffect.Cardinality,
-                        requiredGuarantees:
-                        [
-                            RelationQueryGuaranteeCapabilityKind.Cardinality,
-                            RelationQueryGuaranteeCapabilityKind.OccurrenceProvenance
-                        ]);
+                        requiredGuarantees: [RelationQueryGuaranteeCapabilityKind.Cardinality]);
                     AddGuarantee(RelationQueryGuaranteeCapabilityKind.Cardinality);
                     break;
                 case ProjectQueryNode:
@@ -576,6 +600,16 @@ public static class RelationQueryRealizationRequirementProjector
             foreach (var field in fieldInputs)
             {
                 AddStructural(
+                    RelationQueryStructuralCapabilityRole.BindingRead,
+                    field.Input.Field.Path,
+                    field.Input.Id,
+                    field.Input.Producer,
+                    field.Input.Id.Value,
+                    ConvertUses(field.Uses),
+                    binding: field.Input.Binding);
+                if (!RequiresOccurrenceProvenance())
+                    continue;
+                AddStructural(
                     RelationQueryStructuralCapabilityRole.OccurrenceEvidenceReconstruction,
                     field.Input.Field.Path,
                     field.Input.Id,
@@ -865,7 +899,7 @@ public static class RelationQueryRealizationRequirementProjector
                     requirement.Capability,
                     requirement.Origin,
                     requirement.Uses,
-                    [.. BaselineGuarantees, .. requirement.RequiredGuarantees],
+                    [.. RequiredBaselineGuarantees(), .. requirement.RequiredGuarantees],
                     requirement.StaticFacts);
             }
             if (requirements.TryGetValue(requirement.Id, out var existing))
@@ -980,9 +1014,18 @@ public static class RelationQueryRealizationRequirementProjector
 
         void AddBaselineGuarantees()
         {
-            foreach (var guarantee in BaselineGuarantees)
+            foreach (var guarantee in RequiredBaselineGuarantees())
                 AddGuarantee(guarantee);
         }
+
+        ImmutableArray<RelationQueryGuaranteeCapabilityKind> RequiredBaselineGuarantees() =>
+            RequiresOccurrenceProvenance()
+                ? StrictBaselineGuarantees
+                : SemanticBaselineGuarantees;
+
+        bool RequiresOccurrenceProvenance() =>
+            observability.OccurrenceProvenance == RelationQueryOccurrenceProvenanceMode.ExactContributors
+            || slice.RelationOutput is { Definition.Mode: not RelationOutputMode.Set };
 
         void AddGuarantee(RelationQueryGuaranteeCapabilityKind guarantee) => guarantees.Add(guarantee);
 

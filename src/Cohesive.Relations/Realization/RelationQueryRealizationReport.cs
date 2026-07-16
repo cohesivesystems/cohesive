@@ -166,6 +166,10 @@ public sealed class RelationQueryRealizationReport
     /// <param name="diagnostics">Structured realization diagnostics.</param>
     /// <param name="status">Overall realization outcome.</param>
     /// <param name="fingerprint">Deterministic identity of the derived report.</param>
+    /// <param name="observability">
+    /// Explicit runtime result observability contract. The default value requires strict exact contributor
+    /// provenance for compatibility with callers that predate explicit observability.
+    /// </param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="plan"/>, <paramref name="targetProfile"/>, <paramref name="policy"/>, or
     /// <paramref name="fingerprint"/> is <see langword="null"/>.
@@ -186,11 +190,13 @@ public sealed class RelationQueryRealizationReport
         ImmutableArray<RelationQueryRealizationDecision> decisions,
         ImmutableArray<RelationQueryRealizationDiagnostic> diagnostics,
         RelationQueryRealizationStatus status,
-        RelationQueryRealizationFingerprint fingerprint)
+        RelationQueryRealizationFingerprint fingerprint,
+        RelationQueryResultObservability observability = default)
     {
         Plan = Guard.RequireNotNull(plan);
         TargetProfile = Guard.RequireNotNull(targetProfile);
         Policy = Guard.RequireNotNull(policy);
+        Observability = observability;
         Requirements = NormalizeRequirements(requirements);
         Decisions = NormalizeDecisions(decisions, Requirements);
         Diagnostics = NormalizeDiagnostics(diagnostics);
@@ -206,6 +212,7 @@ public sealed class RelationQueryRealizationReport
             Plan,
             TargetProfile,
             Policy,
+            Observability,
             Requirements,
             Decisions,
             Diagnostics,
@@ -229,6 +236,9 @@ public sealed class RelationQueryRealizationReport
 
     /// <summary>Exact compiler policy, conventions, rules, and overrides consumed by matching.</summary>
     public RelationQueryRealizationPolicy Policy { get; }
+
+    /// <summary>Runtime result observability contract realized by this report.</summary>
+    public RelationQueryResultObservability Observability { get; }
 
     /// <summary>Complete demand-scoped semantic requirements in deterministic identity order.</summary>
     public ImmutableArray<RelationQueryRealizationRequirement> Requirements { get; }

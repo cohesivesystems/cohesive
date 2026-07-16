@@ -964,11 +964,30 @@ The matcher produces exactly one final decision per demanded requirement:
 - **Unavailable** prevents target execution and identifies the missing capabilities and exact
   semantic site.
 
-The six plan-wide fidelity guarantees—missing/null distinction, availability-state distinction,
-determinism, occurrence provenance, evidence completeness, and inconclusive-evidence propagation—are
-also attached to every non-guarantee requirement. Native proofs must carry evidence for them, and a
-composed rule must explicitly preserve them; a separate global assertion cannot mask a locally lossy
-operator.
+Five plan-wide fidelity guarantees are unconditional: missing/null distinction, availability-state
+distinction, determinism, evidence completeness, and inconclusive-evidence propagation. They are attached
+to every non-guarantee requirement. Native proofs must carry evidence for them, and a composed rule must
+explicitly preserve them; a separate global assertion cannot mask a locally lossy operator.
+
+Contributing-occurrence lineage is an explicit result-observability requirement rather than an unconditional
+value-semantics guarantee. The compatibility overload uses
+`RelationQueryResultObservability.ExactContributors`, which requires every result row to retain its complete
+contributor set and relation root. A value-oriented target can instead compile with
+`RelationQueryResultObservability.NotRequested`:
+
+```csharp
+var report = RelationQueryRealizationCompiler.Compile(
+    plan,
+    targetProfile,
+    policy,
+    RelationQueryResultObservability.NotRequested);
+```
+
+This suppresses independent contributor-occurrence requirements for query row and aggregation results; it
+does not relax their value, membership, cardinality, ordering, grouping, or evidence semantics. A rooted
+relation still requires root-occurrence correlation because the root is part of that relation's semantic
+output contract. Result observability is also distinct from compiler provenance: every derived artifact must
+retain attribution to its plan and lowering decisions even when runtime contributor lineage is not requested.
 
 Target profiles are compiler inputs. Their constructors validate basic object shape while retaining
 semantically malformed declarations such as unknown numeric capability kinds, invalid limits, repeated
@@ -1005,6 +1024,28 @@ runtime gap analysis first, then consumes this same shared realization contract 
 
 Compiled DTO mappers, composed acquisition runtimes, SQL/document/graph/search adapters, explain
 tools, and deployment gates can consume the same report contract.
+
+### Target-native compilation boundary
+
+`RelationQueryNativeCompilationRequest` is the target-neutral handoff from semantic planning to a backend
+compiler. It carries one exact `CompiledRelationQueryPlan`, its realization report, its plan-scoped source
+placement, and a deterministic selection of demanded terminal branches. `ValidateInputs()` rejects stale plan
+references and a realization that does not prove every demanded requirement before an adapter interprets
+storage-specific facts.
+
+Each selected branch identifies whether it produces relation rows, named query rows, or named query
+aggregation rows, together with its retained logical node, result binding and shape, demanded outputs, and
+selected fields. Adapters remain responsible for declaring a truthful target capability profile, binding
+semantic inputs to physical selectors, validating target-specific operating boundaries, and failing closed
+when exact lowering is unavailable.
+
+A successful backend artifact carries `RelationQueryNativeCompilationProvenance`: the exact compiled-plan,
+realization, placement, target-profile, compiler-profile, and convention identities; covered nodes and
+assignments; physical input fields; and the final realization decisions, capability evidence, and validated
+boundaries that authorized lowering. This is derived interpretation metadata, not canonical relation/query IR.
+It lets execution, diagnostics, explain tooling, and artifact fingerprints attribute target SQL or another
+native representation to the semantic requirements that produced it without rescanning or redefining those
+semantics.
 
 ### Deterministic federated physical planning
 
@@ -1175,6 +1216,7 @@ The current foundation includes:
 - Deterministic definition fingerprints.
 - Demand-driven static compilation into input contracts, lineage, dependency manifests, and explicit logical pruning.
 - Explicit demand-scoped execution slices containing canonical nodes, bindings, assignments, expression sites, and terminals.
+- Capability-driven realization with explicit result observability and a target-neutral native-compilation handoff.
 - Plan-attributed runtime evidence, causal requirement-gap analysis, and explicit missing-data policy decisions.
 - A canonical in-memory relation/query reference interpreter over materialized evidence.
 - In-memory mapping and legacy compatibility components.
@@ -1185,7 +1227,7 @@ Active areas of development include:
 - Lowering existing authoring APIs into the canonical IR.
 - Relationship execution and hydration from canonical catalog traversal.
 - Capability-driven physical planning.
-- PostgreSQL, Cosmos SQL, Gremlin, and search-backend compilers.
+- PostgreSQL, broader Cosmos SQL, Gremlin, and search-backend compiler coverage.
 - Cross-source batching and in-memory joins.
 - Incremental dependency and index-maintenance planning.
 - Backend differential and reference-interpreter conformance testing.

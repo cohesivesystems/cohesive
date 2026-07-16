@@ -9,7 +9,7 @@ namespace Cohesive.Relations.Realization;
 
 /// <summary>Computes deterministic content fingerprints for derived relation/query realization reports.</summary>
 /// <remarks>
-/// The v1 profile uses length-prefixed, big-endian binary canonicalization. It includes semantic plan,
+/// The current profile uses length-prefixed, big-endian binary canonicalization. It includes semantic plan,
 /// requirement, target, policy, decision, and diagnostic attribution while excluding human-facing messages,
 /// descriptions, justifications, and other metadata that cannot change realization.
 /// </remarks>
@@ -19,7 +19,7 @@ public static class RelationQueryRealizationFingerprinter
     public const string Algorithm = "sha256";
 
     /// <summary>Canonicalization profile identifier.</summary>
-    public const string Canonicalization = "relation-query-realization/v1-c14n/v1";
+    public const string Canonicalization = "relation-query-realization/v1-c14n/v2";
 
     /// <summary>Computes the deterministic derived-artifact fingerprint of a realization report.</summary>
     /// <param name="report">Normalized realization report to fingerprint.</param>
@@ -32,6 +32,7 @@ public static class RelationQueryRealizationFingerprinter
             report.Plan,
             report.TargetProfile,
             report.Policy,
+            report.Observability,
             report.Requirements,
             report.Decisions,
             report.Diagnostics,
@@ -42,6 +43,7 @@ public static class RelationQueryRealizationFingerprinter
         RelationQueryCompiledPlanReference plan,
         RelationQueryTargetCapabilityProfile targetProfile,
         RelationQueryRealizationPolicy policy,
+        RelationQueryResultObservability observability,
         ImmutableArray<RelationQueryRealizationRequirement> requirements,
         ImmutableArray<RelationQueryRealizationDecision> decisions,
         ImmutableArray<RelationQueryRealizationDiagnostic> diagnostics,
@@ -72,6 +74,7 @@ public static class RelationQueryRealizationFingerprinter
         ArrayBufferWriter<byte> canonical = new();
         Append(canonical, Canonicalization);
         AppendPlan(canonical, plan);
+        Append(canonical, (int)observability.OccurrenceProvenance);
         AppendRequirements(canonical, normalizedRequirements);
         AppendTarget(canonical, targetProfile, relevant);
         AppendPolicy(canonical, policy, relevant, normalizedDiagnostics);
