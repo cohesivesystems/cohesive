@@ -6,7 +6,7 @@ Portable relational programming for .NET and heterogeneous data systems.
 
 SQL makes it possible to describe facts, relationships, projections, filters, and aggregations without prescribing an execution algorithm. Its usual limitation is that the program is scoped to a particular database catalog, server, dialect, and execution boundary.
 
-Cohesive separates those relational semantics from their physical realization. Facts may come from PostgreSQL, Cosmos DB, a search index, an API, supplied CLR objects, observations, caches, or several sources together. The same semantic definition may be interpreted as SQL, a compiled mapper, a batch hydration plan, an in-memory computation, an index-maintenance plan, a lineage report, or a diagnostic explanation.
+Cohesive separates those relational semantics from their physical realization. Facts may come from PostgreSQL, Cosmos DB, a search index, an API, supplied CLR objects, observations, caches, or several sources together. The same semantic definition may be interpreted as a native query, a compiled DTO mapper, an in-memory computation, a dependency manifest, a lineage report, or a diagnostic explanation.
 
 The canonical relationship catalog and relation/query IR are the sources of semantic truth. Authoring DSLs, importers, and inference systems such as Ari produce these IRs; compilers and interpreters decide how to realize them.
 
@@ -38,7 +38,7 @@ For example:
 Load.CustomerId → Customer observation identity
 ```
 
-A relationship may be traversed during querying, DTO enrichment, hydration, dependency analysis, or incremental materialization. Its physical realization might be a SQL join, a Cosmos point read, a batched lookup, a cache lookup, or an in-memory hash join.
+A relationship may be traversed during querying, DTO enrichment, compilation, or dependency analysis. Its physical realization might be a SQL join, a bounded lookup, or an in-memory hash join, provided the selected target can preserve the declared semantics.
 
 The canonical `RelationshipDefinition` is an oriented edge from the graph-qualified shape that
 holds a reference to the graph-qualified shape it addresses. It stores the source field path,
@@ -95,7 +95,7 @@ A relation declares:
 - Required and optional related inputs.
 - Semantic invariants.
 
-Relations are useful for DTO mapping, enrichment, hydration, denormalization, lineage analysis, and incremental dependency tracking.
+Relations are useful for DTO mapping, enrichment, lineage analysis, and dependency tracking.
 
 ### Queries
 
@@ -136,12 +136,12 @@ They differ in their semantic contract:
 | Describes a reusable correspondence or derivation | Describes an invoked request for results |
 | Rooted in an input value | Rooted in one or more named result branches |
 | Declares output cardinality per root | Declares rows, aggregations, ordering, and paging |
-| Supports hydration and dependency analysis | Supports retrieval and reporting |
-| Can be evaluated incrementally as facts change | Is normally evaluated in response to an invocation |
+| Supports rooted derivation and dependency analysis | Supports retrieval and reporting |
+| Can identify inputs that influence rooted outputs | Is normally evaluated in response to an invocation |
 
 The distinction is semantic rather than physical. Neither construct chooses a database, join algorithm, batching strategy, or execution runtime.
 
-A Cohesive relation is also not synonymous with a table in the relational-database sense. A compiler may realize a relation as a SQL expression, view, materialized view, or application-side plan, but the relation itself remains portable.
+A Cohesive relation is also not synonymous with a table in the relational-database sense. A compiler may realize a relation as a SQL expression, compiled mapper, or application-side plan, but the relation itself remains portable.
 
 ## Valid-Time Joins
 
@@ -213,7 +213,7 @@ future semantics.
 Temporal operands are retained as correlation, membership, cardinality, and validation influences
 in the requirement graph, output-oriented lineage, and dependency manifest. Lineage keeps these in
 its `Influences` channel while `Contributions` remains intentionally narrow to value, identity, and
-aggregation provenance. Consumers performing invalidation or materialization analysis can therefore
+aggregation provenance. Consumers performing invalidation or dependency-impact analysis can therefore
 walk output-oriented influences or the inverse input-oriented dependency manifest without treating
 a membership predicate as a projected value.
 
@@ -253,15 +253,15 @@ Three kinds of incomplete information remain distinct:
 - **Inference uncertainty** is producer-owned evidence such as an Ari confidence score; policy may
   turn it into a selected, ambiguous, or unresolved draft state.
 - A **runtime requirement gap** occurs after acceptance when required observations are unavailable, such
-  as a load whose referenced customer cannot be resolved. Runtime hydration diagnostics are a
-  later interpretation and do not make an otherwise complete draft unresolved.
+  as a load whose referenced customer cannot be resolved. Runtime availability is evaluated against
+  the compiled input contract and does not make an otherwise complete draft unresolved.
 
 The draft graph may already contain relationship traversals, so a flat DTO projection can select
 fields from several visible bindings:
 
 ```text
 Source(Load as load)
-→ TraverseRelationship(load.CustomerId → Customer as customer)
+→ TraverseRelationship(load.CustomerId → Customer as customer, join: Left)
 → Project(
     LoadSearchDto.Id           = load.Id,
     LoadSearchDto.CustomerId   = load.CustomerId,
@@ -279,7 +279,7 @@ restructuring inside those values is not.
 More sophisticated producers can propose relationship traversals and cross-binding assignments
 using the same draft contract, so flattening `Customer.Name` into `LoadSearchDto.CustomerName` does
 not require a second relation model. Automatic traversal discovery, automatic nested structural
-mapping, compiled mappers, runtime requirement-gap reporting, backend lowering, and proof that a declared
+mapping, broader structural mappers, backend lowering, and proof that a declared
 relation output mode matches row-multiplying or row-dropping graph behavior remain follow-on
 interpretations or analyses.
 
@@ -299,32 +299,32 @@ The Relations IR is independent of the remote API used to expose it, but it is i
 between authoring tools, compilers, planners, repositories, and interpreters. It may also be
 persisted, transferred between nodes, and projected into other host languages.
 
-### Resolvers and read repositories
+### Resolvers and canonical source acquisition
 
-A GraphQL implementation binds field resolvers to fields in its remote API schema. The current
-Relations query runtime similarly resolves `QuerySource` values through `IReadRepository`
-implementations registered with an `IReadRepositoryRegistry`. Either mechanism can acquire data
-from heterogeneous backends.
+A GraphQL implementation binds field resolvers to fields in its remote API schema. Canonical
+Relations execution instead derives source requirements from a compiled definition and binds them
+through explicit source placement. The physical executor issues bounded requests through
+`IRelationQuerySourceReader`; target-native compilers can replace compatible work with a native
+backend query.
 
 The contracts are different. A GraphQL resolver satisfies a field in a particular client-facing
-schema. A Relations read repository supplies semantic data independently of whether or how that
-data is exposed remotely. Relations definitions also preserve enough meaning for an interpreter
-to analyze and optimize the complete query, potentially replacing a sequence of individual reads
-with a native backend query, batched lookup, or in-memory join.
+schema. A Relations source reader supplies evidence for an exact placed semantic input,
+independently of whether or how that data is exposed remotely. The compiled plan retains enough
+meaning to validate batching, local joins, native pushdown, completeness, and failure behavior.
 
 ### Remote API exposure
 
 `Cohesive.Relations` does not itself establish a remote client/server interface or define a remote
 invocation protocol. `Cohesive.Api` can expose Relations semantics through GraphQL, REST, gRPC, or
 another remote API technology. A GraphQL interpretation could lower a client selection set into
-relation/query IR, execute it through the selected repositories and adapters, and project the
+relation/query IR, execute it through selected readers and adapters, and project the
 result into the GraphQL response shape.
 
 ```text
 Remote client
 → Cohesive.Api GraphQL operation
 → Cohesive.Relations query
-→ read repositories and backend adapters
+→ source placement, readers, and backend adapters
 → heterogeneous data sources
 ```
 
@@ -350,30 +350,28 @@ Remote client
 
 Consider a search document containing data from a load and its customer:
 
-```csharp
-using Cohesive.Relations.Authoring;
-
-var relation = Relation<LoadSearchDto>
-    .From<Load>()
-    .Join<Customer>(
-        static (load, customer) => load.CustomerId == customer.Id)
-    .Select(static (load, customer) => new LoadSearchDto
-    {
-        LoadId = load.Id,
-        Status = load.Status,
-        CustomerName = customer.Name
-    });
+```text
+Source(Load as load)
+→ TraverseRelationship(load.CustomerId → Customer as customer)
+→ Project(
+    LoadSearchDto.LoadId       = load.Id,
+    LoadSearchDto.Status       = load.Status,
+    LoadSearchDto.CustomerName = customer.Name)
 ```
 
-This declaration can support several interpretations.
+This graph is persisted as canonical relation/query IR. C# relation/query builders and expression-based
+authoring are planned convenience producers; they must lower into this IR rather than introduce another
+runtime relation model.
 
 ### Compiled mapper
 
-When all inputs are already available, Cohesive can compile the relation into a fast delegate that constructs `LoadSearchDto` values.
+For a successful static relation plan, `RelationDtoMapperCompiler` compiles its supported canonical output
+terminal into a fast CLR materialization kernel. Mapping consumes canonical execution rows and retains their
+status, diagnostics, gaps, and provenance; it does not acquire related data or execute a second relation model.
 
-### PostgreSQL projection
+### Planned PostgreSQL projection
 
-When both facts live in PostgreSQL, the relation may lower to:
+When both facts live in PostgreSQL, the planned PostgreSQL adapter could lower the same graph to a native query such as:
 
 ```sql
 SELECT
@@ -385,9 +383,13 @@ LEFT JOIN customers AS c
     ON c.id = l.customer_id;
 ```
 
-### Non-relational hydration plan
+PostgreSQL compilation is an adapter interpretation and must retain capability evidence and provenance. It is
+not part of the core IR contract.
 
-When loads and customers live in a document store, a planner may:
+### Federated acquisition
+
+When loads and customers do not share a native query boundary, the canonical physical planner can select a
+bounded acquisition strategy within its supported closure:
 
 ```text
 Read loads
@@ -397,9 +399,12 @@ Read loads
 → project LoadSearchDto
 ```
 
-### Index maintenance
+This is physical planning and source acquisition, not the removed prototype hydration API. Source readers
+return explicit completeness and field evidence; the canonical interpreter determines the semantic result.
 
-When the relation defines a search document, it also describes dependencies:
+### Dependency analysis, not materialization
+
+Static compilation can describe which inputs influence a derived search document:
 
 ```text
 LoadSearchDto
@@ -407,7 +412,11 @@ LoadSearchDto
 └── depends on Customer through Load.CustomerId
 ```
 
-A load change directly identifies an affected search document. A customer change can be propagated through the reverse relationship to determine which root loads must be re-indexed.
+`Cohesive.Relations` produces the semantic relation, lineage, requirements, and dependency manifest. It does
+not own index rebuilds, real-time synchronization, checkpoints, target writes, or operational scheduling.
+Those responsibilities belong to the separate Storage/materialization workstream. Industrial batching,
+parallelism, throttling, and retry policy belong to the planned `Cohesive.Control` workstream. Those systems
+may consume Relations artifacts without moving their operational semantics into the relation IR.
 
 ## Diagnostics and Derivability
 
@@ -538,7 +547,7 @@ allowing omission to be mistaken for `NotAttempted`.
 
 `RelationRequirementGapAnalyzer` is analysis only. It does not read sources, resolve relationships, execute
 expressions, construct output rows, or apply suppression/substitution decisions. Those are later
-execution and hydration interpretations of the same compiled contract.
+execution or acquisition consumers of the same compiled contract.
 
 ### Canonical in-memory reference execution
 
@@ -559,7 +568,7 @@ source or traversal evidence is never consumed after an upstream conversion or r
 
 The evaluator intentionally has a bounded first-version surface. It supports canonical unary and binary
 operators plus the pure collection, object, string, and aggregate functions covered by the reference tests.
-Ambient functions (`entityId`, `key`, `sourceRows`, and `relatedField`) and the pure `groupBy`, `groupByRows`,
+Ambient functions (`entityId`, `key`, and `sourceRows`) and the pure `groupBy`, `groupByRows`,
 and expression-level `join` functions are not yet interpreted. Collection-element field evidence also cannot
 yet be reconstructed losslessly from one occurrence-scoped scalar evidence record. The interpreter publishes
 this narrower expression surface through `RelationQueryInMemoryInterpreter.ExpressionCapabilities`, publishes
@@ -585,7 +594,7 @@ numeric representations as structured expression failures.
 
 ```mermaid
 flowchart LR
-    DSL["C# DSL"]
+    DSL["C# authoring producers"]
     ARI["Ari inference"]
     IMPORT["Importers and tooling"]
     IR["Canonical relation/query IR"]
@@ -598,7 +607,7 @@ flowchart LR
     IR --> SQL["SQL compiler"]
     IR --> DOCUMENT["Document-store planner"]
     IR --> MEMORY["In-memory evaluator"]
-    IR --> INDEX["Index synchronization"]
+    IR --> DEPENDENCY["Dependency manifests"]
     IR --> DIAGNOSTICS["Diagnostics and lineage"]
     IR --> DOCS["Visualization and documentation"]
 ```
@@ -607,19 +616,29 @@ An interpretation does not have to execute the definition. Validation, optimizat
 
 Derived artifacts should retain provenance to the IR nodes and compiler decisions that produced them.
 
+Operational consumers may use those artifacts to maintain indexes, caches, or read models, but their
+lifecycle and control policies remain outside `Cohesive.Relations`.
+
 ## Use Cases
 
 ### Simple and enriched DTO mapping
 
-Map domain values to DTOs using direct assignments, conversions, nested projections, conventions, and related facts. An enriched DTO can combine a root value with customer, equipment, or other referenced information without requiring all inputs to share one storage engine.
+Map canonical relation output rows to DTOs using direct assignments, supported conversions, conventions,
+and related facts. An enriched DTO can combine a root value with customer, equipment, or other referenced
+information without requiring all inputs to share one storage engine. Richer nested structural output and
+its typed C# authoring surface remain planned capabilities.
 
-### Relationship hydration
+### Relationship traversal and acquisition
 
-Start with a root entity and resolve required or optional related facts similarly to an ORM query. The same relation can operate over supplied objects, observations, database reads, caches, or composed acquisition plans.
+Start with a root observation and traverse required or optional related facts. Canonical execution can use
+supplied evidence or a validated physical plan with bounded source readers. This is not a general ORM
+hydration facade: unsupported placement, completeness, or traversal guarantees fail with structured diagnostics.
 
 ### Portable and federated querying
 
-Declare filters, joins, selected fields, ordering, paging, row results, and aggregations once, then compile them to PostgreSQL, Cosmos SQL, Gremlin, in-memory evaluation, or a composed cross-source plan.
+Declare filters, joins, selected fields, ordering, paging, row results, and aggregations once, then interpret
+them in memory or compile supported subsets through target adapters. Cosmos SQL and Elasticsearch adapters
+exist today; PostgreSQL is planned next, while Gremlin remains deferred.
 
 For example:
 
@@ -630,24 +649,27 @@ Loads from Cosmos
 → delayed premium-customer loads
 ```
 
-A planner can push compatible work into each source, batch intermediate keys, join locally, and diagnose semantics that cannot be preserved.
+The current v1 physical planner supports bounded enumeration and lookup requests plus eligible local
+relationship correlation. It emits diagnostics when a definition exceeds that closure. Broader predicate
+pushdown, source partitioning, and cross-source optimization remain planned capabilities.
 
-### Search-index synchronization
+### Search-index dependency analysis
 
-Use a relation to define a denormalized index document, rebuild the complete index, process real-time changes, and determine which root documents are affected when related entities change.
-
-Full rebuild and incremental maintenance are interpretations of the same derivation and should converge on equivalent indexed values.
+Use a relation to define a denormalized index document and compile the inputs that influence it. A
+Storage/materialization service can consume that manifest to plan rebuilds and real-time updates. Relations
+does not implement rebuild orchestration, change-stream consumption, index writes, or convergence control.
 
 ### Application read models
 
-CQRS-style read models are materialized relations:
+CQRS-style read models can derive their semantic shape from relations:
 
 ```text
 Order + Customer + Shipments + Payments
     → OrderDetailsView
 ```
 
-The definition can support synchronous reads, projection rebuilding, incremental event handling, cache population, and dependency analysis.
+The definition supports query, projection, and dependency analysis. Persisting, rebuilding, and incrementally
+maintaining the read model belong to the Storage/materialization workstream.
 
 ### API composition
 
@@ -669,7 +691,11 @@ EDI 204 document + partner configuration
     → LoadTender
 ```
 
-This includes structural matching, nested collection mapping, code translation, conditional derivation, conversions, and required-input diagnostics. Ari can propose relations while Cohesive validates, persists, analyzes, and evaluates them.
+This use case ultimately requires structural matching, nested collection mapping, code translation,
+conditional derivation, conversions, and required-input diagnostics. Cohesive currently provides canonical
+drafts, direct-field conventions, relationship traversals, validation, persistence, and static analysis;
+richer nested structural mapping and evaluation remain planned. Ari can retain its inference evidence while
+proposing portable Cohesive relation drafts.
 
 ### Event enrichment
 
@@ -680,7 +706,8 @@ LoadChanged + Load + Customer
     → EnrichedLoadChanged
 ```
 
-The relation identifies the additional facts required and allows the runtime to select cached, batched, local, or remote acquisition strategies.
+The relation identifies the additional facts required. A physical execution integration may select supported
+local, batched, or remote acquisition strategies.
 
 ### Data migration and backfills
 
@@ -705,20 +732,21 @@ OperationalLoad
 
 An interpreter can identify missing records, stale projections, conflicting fields, duplicate identities, and cardinality violations. The same analysis can drive targeted repair.
 
-### Cache population and invalidation
+### Cache dependency analysis
 
-A cached value is often a materialized derived relation:
+A cached value is often derived from several facts:
 
 ```text
 Customer + ActiveLoads + AccountBalance
     → CustomerDashboardCacheEntry
 ```
 
-Dependency analysis determines which entries are affected when an input fact changes. Initial population, targeted invalidation, and recomputation share one semantic definition.
+Relations dependency analysis can identify which inputs influence an entry. Initial population, targeted
+invalidation, recomputation, and their control policies are responsibilities of the consuming storage/runtime layer.
 
 ### Reactive and incremental computation
 
-Relations can be interpreted as continuously maintained views:
+Relations can provide dependency semantics to a continuously maintained view:
 
 ```text
 LoadStatusChanged
@@ -726,7 +754,8 @@ LoadStatusChanged
     → affected RegionalDashboard
 ```
 
-This supports subscriptions, live dashboards, reactive UI data, and incremental aggregates without requiring every change to trigger complete recomputation.
+A separate runtime may use those semantics for subscriptions, live dashboards, reactive UI data, or
+incremental aggregates. Continuous execution is not provided by the Relations core library.
 
 ### Authorization-aware projection
 
@@ -914,7 +943,7 @@ The plan exposes several immutable views of one canonical requirement graph:
   membership, cardinality, ordering, and validation without misclassifying them as output values.
 - `DependencyManifest` includes every semantic influence, including membership, correlation,
   acquisition, cardinality, ordering, grouping, aggregation, pagination, validation, and
-  evaluation capabilities. It is the appropriate view for impact analysis and index synchronization.
+  evaluation capabilities. It is the appropriate input to downstream impact analysis and index-synchronization planning.
 - `LogicalPlan` retains the demanded canonical nodes and their dependency-first evaluation order.
   A safely pruned optional, at-most-one left traversal is represented by typed bypass evidence;
   pruning is never an invisible graph rewrite.
@@ -1164,7 +1193,7 @@ Conventions may simplify common mappings and planning decisions, but convention-
 
 ### First-class provenance
 
-Execution plans, generated queries, compiled mappers, diagnostics, and materialized outputs should retain links to their originating semantic definitions.
+Execution plans, generated queries, compiled mappers, diagnostics, and downstream derived outputs should retain links to their originating semantic definitions.
 
 ## Portable Documents
 
@@ -1194,11 +1223,42 @@ discriminator: a concrete `defaultValue` implies `Value`, while an omitted or JS
 producers that intend an explicit null must emit `defaultKind: "Value"`. Documents produced with the
 prior fingerprint profile must be regenerated or migrated before validation under this profile.
 
-The existing `JoinSpec` executor inputs and `relatedField(...)` hydration expressions remain
-compatibility paths for the prototype runtime. They are physical/execution representations, not
-relationship declarations. Their migration direction is to lower legacy authoring into canonical
-relation/query IR and then derive joins and hydration work from that IR plus an explicit relationship
-catalog snapshot.
+The prototype ambient `relatedField(...)` expression has been removed. Related values must be introduced
+through an explicit canonical relationship traversal that references the persisted relationship catalog;
+expressions then read fields from the traversal's visible binding.
+
+## Legacy Query API Migration Boundary
+
+The `Cohesive.Relations.Queries` namespace remains temporarily because `Cohesive.Storage`,
+`Cohesive.Processes`, ASP.NET integrations, Identity, Presentation, and the Cosmos entity repository
+still consume types such as `EntityQuery`, `EntityPredicate`, `QueryBuilder`, `IExecutableQuery`, and
+`IReadRepository`. These types predate the canonical relation/query IR and are not a second source of
+semantic truth. New query semantics must be added to canonical IR, capability profiles, and adapters,
+not to this compatibility surface.
+
+The migration sequence is:
+
+1. Introduce structural and expression-based C# authoring that emits canonical IR.
+2. Introduce typed placement and adapter-binding authoring over canonical physical contracts.
+3. Move Processes and API invocation onto canonical definition, parameter, plan, and result contracts.
+4. Retarget Storage query integrations and Cosmos execution to canonical compilation or explicit
+   source-reader contracts.
+5. Delete `Cohesive.Relations.Queries` and its legacy target compilers once no consumers remain.
+
+The standalone Cosmos SQL construction layer is an adapter utility and is not part of that legacy query
+model. A migration must also preserve semantic distinctions rather than mechanically translate names: for
+example, legacy string `ContainsValuePredicate` and canonical collection membership are different operations.
+
+## Adjacent Execution Workstreams
+
+Relations owns portable relational meaning, static requirements, lineage, dependency manifests,
+realization decisions, physical-plan contracts, reference interpretation, and target compilation.
+
+The Storage/materialization workstream will own durable projections and indexes: rebuild lifecycle, change
+capture, affected-root resolution, checkpoints, target generations, writes, and convergence between rebuild
+and real-time updates. The planned `Cohesive.Control` workstream will own reusable industrial execution policy such as
+batching, parallelism, throttling, backpressure, retry, and cancellation. These workstreams consume attributable
+Relations artifacts; their operational state and policies do not belong in canonical relation/query IR.
 
 ## Current Status
 
@@ -1206,7 +1266,6 @@ catalog snapshot.
 
 The current foundation includes:
 
-- Relation, mapping, hydration, query, and aggregation APIs.
 - A shared canonical relation/query IR.
 - Explicit value bindings and directional relationship traversal.
 - Canonical relationship catalogs and deterministic relationship IDs.
@@ -1218,18 +1277,19 @@ The current foundation includes:
 - Explicit demand-scoped execution slices containing canonical nodes, bindings, assignments, expression sites, and terminals.
 - Capability-driven realization with explicit result observability and a target-neutral native-compilation handoff.
 - Plan-attributed runtime evidence, causal requirement-gap analysis, and explicit missing-data policy decisions.
-- A canonical in-memory relation/query reference interpreter over materialized evidence.
-- In-memory mapping and legacy compatibility components.
+- A deterministic physical planner, bounded source-reader contracts, and canonical physical executor.
+- A canonical in-memory relation/query reference interpreter over supplied evidence.
+- Object/observation mapping and runtime-compiled DTO kernels for supported canonical relation terminals.
+- An explicitly temporary `Cohesive.Relations.Queries` compatibility boundary.
 - Contract projection for other host languages.
 
 Active areas of development include:
 
-- Lowering existing authoring APIs into the canonical IR.
-- Relationship execution and hydration from canonical catalog traversal.
-- Capability-driven physical planning.
-- PostgreSQL, broader Cosmos SQL, Gremlin, and search-backend compiler coverage.
+- Structural, expression-based, CLR-shape, placement, and adapter-binding C# authoring over canonical IR.
+- Migration and removal of `Cohesive.Relations.Queries`.
+- PostgreSQL and broader Cosmos SQL and Elasticsearch compiler coverage; Gremlin is deferred.
+- Nested collection-query semantics and target lowering.
 - Cross-source batching and in-memory joins.
-- Incremental dependency and index-maintenance planning.
 - Backend differential and reference-interpreter conformance testing.
 - JSON Schema generation and compatibility tooling.
 
@@ -1254,4 +1314,6 @@ dotnet add package Cohesive.Relations
 
 The long-term goal is for relational definitions to be authored once and interpreted across storage engines, application memory, APIs, search systems, frontend runtimes, and operational tooling without losing their semantic meaning.
 
-A fast DTO mapper, a SQL query, a non-relational batch plan, an index synchronizer, and a missing-input explanation should be understood as different interpretations of the same relational program.
+A fast DTO mapper, a SQL query, a non-relational batch plan, a dependency manifest consumed by an
+index synchronizer, and a missing-input explanation should be understood as interpretations or downstream
+uses of the same relational program.

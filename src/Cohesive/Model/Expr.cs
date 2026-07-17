@@ -190,10 +190,6 @@ public abstract record Expr
     /// <summary>Creates an aggregate expression.</summary>
     public static Expr Aggregate(string aggregate, Expr source, params Expr[] args) =>
         Call(function: aggregate, [source, .. args]);
-
-    /// <summary>Creates a related-field expression.</summary>
-    public static Expr RelatedField(Expr schema, Expr entityOrKey, Expr fieldName) =>
-        Call(function: ExprFunctionNames.RelatedField, schema, entityOrKey, fieldName);
 }
 
 /// <summary>
