@@ -104,11 +104,6 @@ public static class ExprFunctionNames
     public const string Object = "object";
 
     /// <summary>
-    /// Function name for resolving a field value from a related observation.
-    /// </summary>
-    public const string RelatedField = "relatedField";
-
-    /// <summary>
     /// Function name for projecting each item of a source sequence (first parameter) through a selector expression (second parameter).
     /// </summary>
     public const string Select = "select";

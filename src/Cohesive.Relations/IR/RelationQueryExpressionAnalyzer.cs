@@ -30,7 +30,6 @@ public static class RelationQueryExpressionAnalyzer
     static readonly ImmutableArray<ExprCapabilityId> RelationAmbientCapabilities =
     [
         ExprCapabilities.EntityIdentity,
-        ExprCapabilities.RelatedValues,
         ExprCapabilities.RootKey,
         ExprCapabilities.SourceSet
     ];

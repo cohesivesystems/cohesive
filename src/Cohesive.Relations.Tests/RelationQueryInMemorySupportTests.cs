@@ -190,7 +190,6 @@ public sealed class RelationQueryInMemorySupportTests
             ExprFunctionNames.GroupByRows,
             ExprFunctionNames.Join,
             ExprFunctionNames.Key,
-            ExprFunctionNames.RelatedField,
             ExprFunctionNames.SourceRows
         ];
 

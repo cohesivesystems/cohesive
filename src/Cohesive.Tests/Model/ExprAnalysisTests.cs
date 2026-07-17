@@ -407,18 +407,19 @@ public sealed class ExprAnalysisTests
     [Fact]
     public void Analyze_DeclaredCallTypeDoesNotInventPresenceOrNullabilityGuarantees()
     {
+        var rowsType = new ArrayTypeRef(StringType);
         var expression = new CallExpr(
-            ExprFunctionNames.RelatedField,
-            [Expr.Const("schema"), Expr.Const("entity"), Expr.Const("field")],
-            StringType);
-        var scope = Scope(ambient: [ExprCapabilities.RelatedValues]);
+            ExprFunctionNames.SourceRows,
+            [],
+            rowsType);
+        var scope = Scope(ambient: [ExprCapabilities.SourceSet]);
 
-        var unconstrained = Analyze(expression, scope, "related-field");
+        var unconstrained = Analyze(expression, scope, "source-rows");
         var required = Analyze(
             expression,
             scope,
-            "required-related-field",
-            new(value: new(StringType)));
+            "required-source-rows",
+            new(value: new(rowsType)));
 
         Assert.True(unconstrained.IsValid);
         Assert.Equal(FieldPresence.Optional, unconstrained.KnownResult?.Presence);

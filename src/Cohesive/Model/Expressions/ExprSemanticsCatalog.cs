@@ -623,7 +623,6 @@ public sealed class ExprSemanticsCatalog
                 Function(ExprFunctionNames.Max, 1, 2, [ExprResultCategory.Collection, ExprResultCategory.Comparable], ExprResultCategory.Any, ExprResultCategory.Scalar, scoped: [new(1, 0)]),
                 Function(ExprFunctionNames.Min, 1, 2, [ExprResultCategory.Collection, ExprResultCategory.Comparable], ExprResultCategory.Any, ExprResultCategory.Scalar, scoped: [new(1, 0)]),
                 Function(ExprFunctionNames.Object, 0, null, argumentCategories: [], variadicCategory: ExprResultCategory.Any, resultCategory: ExprResultCategory.Object, multiple: 2, repeating: [ExprResultCategory.Text, ExprResultCategory.Any]),
-                Function(ExprFunctionNames.RelatedField, 3, 3, [ExprResultCategory.Text, ExprResultCategory.Text, ExprResultCategory.Text], ambient: [ExprCapabilities.RelatedValues]),
                 Function(ExprFunctionNames.Select, 2, 2, [ExprResultCategory.Collection, ExprResultCategory.Any], resultCategory: ExprResultCategory.Collection, resultRule: ExprFunctionResultRule.CollectionOfSelector, scoped: [new(1, 0)]),
                 Function(ExprFunctionNames.SourceRows, 0, 0, resultCategory: ExprResultCategory.Collection, ambient: [ExprCapabilities.SourceSet]),
                 Function(ExprFunctionNames.Sum, 1, 2, [ExprResultCategory.Collection, ExprResultCategory.Numeric], ExprResultCategory.Any, ExprResultCategory.Numeric, scoped: [new(1, 0)])
@@ -749,9 +748,6 @@ public static class ExprCapabilities
 
     /// <summary>Ambient access to the current source row set.</summary>
     public static ExprCapabilityId SourceSet { get; } = new("expr.ambient.sourceSet");
-
-    /// <summary>Ambient access to related values outside explicit bindings.</summary>
-    public static ExprCapabilityId RelatedValues { get; } = new("expr.ambient.relatedValues");
 
     /// <summary>Creates the operation capability for a function call.</summary>
     /// <param name="function">Stable function name.</param>
