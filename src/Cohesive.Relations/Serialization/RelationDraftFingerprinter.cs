@@ -11,11 +11,12 @@ namespace Cohesive.Relations.Serialization;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The v1 canonicalization profile writes UTF-8 JSON with ordinal object-key ordering,
+/// The v2 canonicalization profile writes UTF-8 JSON with ordinal object-key ordering,
 /// stable-id ordering for set-like draft and logical-query collections, preserved order for
 /// semantic sequences, ordinal ordering for ambiguous candidate-id and unresolved-reason sets,
-/// unescaped Unicode scalar text, and shortest round-trip JSON numbers. Numerically equivalent
-/// positive and negative zero values are normalized to zero.
+/// unescaped Unicode scalar text, and canonical round-trip JSON numbers. Exact decimal values
+/// and double values that round-trip through <see cref="decimal"/> share one normalized decimal
+/// spelling. Numerically equivalent positive and negative zero values are normalized to zero.
 /// </para>
 /// <para>
 /// A draft's lifecycle identifier and document metadata are not semantic inputs and are excluded.
@@ -29,7 +30,7 @@ public static class RelationDraftFingerprinter
     public const string Algorithm = "sha256";
 
     /// <summary>Canonicalization profile identifier.</summary>
-    public const string Canonicalization = "relation-draft/v1-c14n/v1";
+    public const string Canonicalization = "relation-draft/v1-c14n/v2";
 
     /// <summary>Computes a semantic content fingerprint for a portable relation draft.</summary>
     /// <param name="draft">Portable relation draft to fingerprint.</param>

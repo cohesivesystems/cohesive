@@ -19,14 +19,17 @@ namespace Cohesive.Relations.Drafts;
 /// </remarks>
 public static class RelationDraftIdentityConvention
 {
-    /// <summary>Canonical identity convention version.</summary>
+    /// <summary>Canonical assignment-slot identity convention version.</summary>
     public const string Version = "relation-draft-identity/v1";
+
+    /// <summary>Canonical candidate identity convention version.</summary>
+    public const string CandidateVersion = "relation-draft-candidate-identity/v2";
 
     /// <summary>Prefix reserved for convention-derived projection-slot identifiers.</summary>
     public const string AssignmentSlotPrefix = "relation-draft-slot:v1:sha256:";
 
     /// <summary>Prefix reserved for convention-derived candidate identifiers.</summary>
-    public const string CandidatePrefix = "relation-draft-candidate:v1:sha256:";
+    public const string CandidatePrefix = "relation-draft-candidate:v2:sha256:";
 
     /// <summary>Derives a stable projection-slot identifier from its target field.</summary>
     /// <param name="targetShape">Graph-qualified shape projected by the draft.</param>
@@ -85,7 +88,7 @@ public static class RelationDraftIdentityConvention
             static _ => null);
 
         ArrayBufferWriter<byte> canonical = new();
-        Append(canonical, Version);
+        Append(canonical, CandidateVersion);
         Append(canonical, "candidate");
         Append(canonical, slotId.Value);
         Append(canonical, expression);

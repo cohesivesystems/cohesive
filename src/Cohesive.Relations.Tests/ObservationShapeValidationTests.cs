@@ -230,6 +230,102 @@ public sealed class ObservationShapeValidationTests
         Assert.Contains("no shape graph was provided", error, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ObservationShapeValidator_AcceptsExactDecimalAsJsonNumber()
+    {
+        var shape = new Shape(
+            id: new ShapeId("shape.measurement"),
+            role: ShapeRoles.Entity,
+            fields:
+            [
+                new FieldDefinition(
+                    name: new FieldName("amount"),
+                    type: new JsonTypeRef(JsonTypeKind.Number))
+            ]);
+        var observation = new Observation(
+            shapeId: shape.Id,
+            id: "measurement-1",
+            fields: new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+            {
+                ["amount"] = ObservationValue.FromDecimal(12345678901234567890.123456789m)
+            });
+
+        var valid = ObservationShapeValidator.TryValidateAgainstShape(
+            observation,
+            shape,
+            out var error);
+
+        Assert.True(valid);
+        Assert.Null(error);
+    }
+
+    [Theory]
+    [InlineData("2026-07-17T12:34:56Z", true)]
+    [InlineData("2026-07-17T12:34:56+02:30", true)]
+    [InlineData("2026-07-17T12:34:56", false)]
+    public void ObservationShapeValidator_RequiresExplicitOffsetForInstantStrings(
+        string text,
+        bool expected)
+    {
+        var shape = TemporalShape(ScalarTypeKind.Instant);
+        var observation = new Observation(
+            shapeId: shape.Id,
+            id: "event-1",
+            fields: new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+            {
+                ["occurredAt"] = ObservationValue.FromString(text)
+            });
+
+        var valid = ObservationShapeValidator.TryValidateAgainstShape(
+            observation,
+            shape,
+            out var error);
+
+        Assert.Equal(expected, valid);
+        Assert.Equal(expected, error is null);
+    }
+
+    [Fact]
+    public void ObservationShapeValidator_AcceptsDedicatedInstantAndRetainsCivilDateTimeBehavior()
+    {
+        var instantShape = TemporalShape(ScalarTypeKind.Instant);
+        var dedicatedInstant = new Observation(
+            shapeId: instantShape.Id,
+            id: "event-1",
+            fields: new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+            {
+                ["occurredAt"] = ObservationValue.FromDateTimeOffset(
+                    new(2026, 7, 17, 12, 34, 56, TimeSpan.FromHours(-7)))
+            });
+        var civilShape = TemporalShape(ScalarTypeKind.DateTime);
+        var offsetlessCivilDateTime = new Observation(
+            shapeId: civilShape.Id,
+            id: "event-2",
+            fields: new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+            {
+                ["occurredAt"] = ObservationValue.FromString("2026-07-17T12:34:56")
+            });
+
+        Assert.True(ObservationShapeValidator.TryValidateAgainstShape(
+            dedicatedInstant,
+            instantShape,
+            out var instantError), instantError);
+        Assert.True(ObservationShapeValidator.TryValidateAgainstShape(
+            offsetlessCivilDateTime,
+            civilShape,
+            out var civilError), civilError);
+    }
+
+    static Shape TemporalShape(ScalarTypeKind kind) => new(
+        id: new ShapeId($"shape.temporal.{kind}"),
+        role: ShapeRoles.Entity,
+        fields:
+        [
+            new FieldDefinition(
+                name: new FieldName("occurredAt"),
+                type: new ScalarTypeRef(kind))
+        ]);
+
     static IReadOnlyDictionary<string, ObservationValue> Fields(object expression)
         => ObservationValue.ToFieldDictionary(expression);
 }

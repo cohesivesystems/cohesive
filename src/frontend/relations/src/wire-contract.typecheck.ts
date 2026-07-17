@@ -40,7 +40,7 @@ export type _RelationshipCatalogWireContractCheck = AssertAssignable<
     }
     catalogFingerprint: {
       algorithm: 'sha256'
-      canonicalization: 'relationship-catalog/v1-c14n/v1'
+      canonicalization: 'relationship-catalog/v1-c14n/v2'
       value: 'example'
     }
     metadata: {
@@ -105,7 +105,7 @@ export type _RelationDraftWireContractCheck = AssertAssignable<
     }
     draftFingerprint: {
       algorithm: 'sha256'
-      canonicalization: 'relation-draft/v1-c14n/v1'
+      canonicalization: 'relation-draft/v1-c14n/v2'
       value: 'example'
     }
     metadata: {

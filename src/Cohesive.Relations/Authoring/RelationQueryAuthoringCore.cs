@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using Cohesive.Model.Serialization;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
 using IRQueryDefinition = Cohesive.Relations.IR.QueryDefinition;
@@ -674,10 +673,11 @@ public sealed class RelationQueryAuthoringCore
         if (results.Select(static result => result.Id).Distinct().Count() != results.Length)
             throw new ArgumentException("Query result handles cannot repeat an identity.", nameof(results));
 
+        var selectedBody = CreateBody(results.Select(static result => result.Input));
         IRQueryDefinition definition = new(
             id,
             name,
-            CreateBody(),
+            selectedBody.Body,
             [.. results.Select(static result => result.Definition)]);
         var validation = RelationQueryDefinitionValidator.Validate(definition);
         HashSet<string> includedResults = results
@@ -688,6 +688,7 @@ public sealed class RelationQueryAuthoringCore
             validation,
             CreateManifest(
                 includedResults,
+                selectedBody.ProvenanceTargets,
                 TerminalSource(RelationQueryWireNames.QueryDefinition, id.Value, source)));
     }
 
@@ -703,13 +704,18 @@ public sealed class RelationQueryAuthoringCore
     /// <param name="invariants">Optional relation-output invariants.</param>
     /// <param name="source">Optional producer-source attribution for the relation terminal.</param>
     /// <param name="keySource">Optional producer-source attribution specific to the output-key expression.</param>
+    /// <param name="invariantSources">
+    /// Optional producer-source attribution for each invariant expression, positionally aligned with
+    /// <paramref name="invariants"/>. A null entry falls back to <paramref name="source"/>.
+    /// </param>
     /// <returns>The canonical relation definition, validation, and non-semantic authoring provenance.</returns>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="id"/> or <paramref name="name"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
     /// <paramref name="root"/> or <paramref name="output"/> belongs to another core, or
-    /// <paramref name="invariants"/> contains a <see langword="null"/> entry.
+    /// <paramref name="invariants"/> contains a <see langword="null"/> entry, or
+    /// <paramref name="invariantSources"/> does not contain one entry per invariant.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="mode"/> is unsupported.</exception>
     public RelationQueryAuthoringResult<IRRelationDefinition> BuildRelation<TOutput>(
@@ -722,16 +728,29 @@ public sealed class RelationQueryAuthoringCore
         Expr? key = null,
         ImmutableArray<InvariantDefinition> invariants = default,
         RelationQueryAuthoringSource? source = null,
-        RelationQueryAuthoringSource? keySource = null)
+        RelationQueryAuthoringSource? keySource = null,
+        ImmutableArray<RelationQueryAuthoringSource?> invariantSources = default)
         where TOutput : LogicalQueryNode
     {
         RequireBinding(root, nameof(root));
         RequireNode(output, nameof(output));
         invariants = NormalizeEntries(invariants, nameof(invariants), "Relation invariants");
+        if (!invariantSources.IsDefault && invariantSources.Length != invariants.Length)
+        {
+            throw new ArgumentException(
+                "Invariant source attribution must contain one entry per relation invariant.",
+                nameof(invariantSources));
+        }
+        var terminalExpressions = ImmutableArray.CreateBuilder<Expr>(invariants.Length + (key is null ? 0 : 1));
+        if (key is not null)
+            terminalExpressions.Add(key);
+        foreach (var invariant in invariants)
+            terminalExpressions.Add(invariant.Expression);
+        var selectedBody = CreateBody([output.Id], terminalExpressions.ToImmutable());
         IRRelationDefinition definition = new(
             id,
             name,
-            CreateBody(),
+            selectedBody.Body,
             root.Id,
             new RelationOutputDefinition(output.Id, outputShape, mode, key),
             invariants);
@@ -750,12 +769,15 @@ public sealed class RelationQueryAuthoringCore
         }
         for (var index = 0; index < invariants.Length; index++)
         {
-            if (source is not null)
+            var invariantSource = invariantSources.IsDefault
+                ? source
+                : invariantSources[index] ?? source;
+            if (invariantSource is not null)
             {
                 terminalSources.Add(new(
                     RelationQueryAuthoringDecisionKind.Expression,
                     id.Value,
-                    source,
+                    invariantSource,
                     $"invariants/{index}/expression"));
             }
         }
@@ -763,24 +785,278 @@ public sealed class RelationQueryAuthoringCore
         return new(
             definition,
             validation,
-            CreateManifest(new HashSet<string>(StringComparer.Ordinal), [.. terminalSources]));
+            CreateManifest(
+                new HashSet<string>(StringComparer.Ordinal),
+                selectedBody.ProvenanceTargets,
+                [.. terminalSources]));
     }
 
-    LogicalQueryDefinition CreateBody() => new([.. nodes], [.. parameters]);
+    BodySelection CreateBody(
+        IEnumerable<QueryNodeId> roots,
+        ImmutableArray<Expr> terminalExpressions = default)
+    {
+        HashSet<QueryNodeId> includedNodeIds = [];
+        Stack<QueryNodeId> pending = new(roots);
+        while (pending.TryPop(out var id))
+        {
+            if (!includedNodeIds.Add(id))
+                continue;
+            if (!nodesById.TryGetValue(id, out var node))
+                throw new InvalidOperationException($"Logical node '{id.Value}' is not owned by this authoring core.");
+            foreach (var input in node.Inputs)
+                pending.Push(input);
+        }
+
+        var selectedNodes = nodes.Where(node => includedNodeIds.Contains(node.Id)).ToImmutableArray();
+        HashSet<string> selectedParameterIds = new(StringComparer.Ordinal);
+        foreach (var node in selectedNodes)
+        {
+            foreach (var expression in GetExpressions(node))
+                CollectParameters(expression, selectedParameterIds);
+        }
+        if (!terminalExpressions.IsDefaultOrEmpty)
+        {
+            foreach (var expression in terminalExpressions)
+                CollectParameters(expression, selectedParameterIds);
+        }
+
+        var selectedParameters = parameters
+            .Where(parameter => selectedParameterIds.Contains(parameter.Id.Value))
+            .ToImmutableArray();
+        HashSet<string> targets = selectedParameters
+            .Select(static parameter => parameter.Id.Value)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var node in selectedNodes)
+        {
+            targets.Add(node.Id.Value);
+            switch (node)
+            {
+                case SourceQueryNode source:
+                    targets.Add(source.Binding.Value);
+                    break;
+                case TraverseRelationshipQueryNode traversal:
+                    targets.Add(traversal.Result.Value);
+                    break;
+                case ExpandCollectionQueryNode expansion:
+                    targets.Add(expansion.ItemBinding.Value);
+                    break;
+                case ProjectQueryNode projection:
+                    targets.Add(projection.ResultBinding.Value);
+                    foreach (var assignment in projection.Assignments)
+                        targets.Add(assignment.Id.Value);
+                    break;
+                case AggregateQueryNode aggregation:
+                    targets.Add(aggregation.ResultBinding.Value);
+                    foreach (var grouping in aggregation.Groupings)
+                        targets.Add(grouping.Id.Value);
+                    foreach (var aggregate in aggregation.Aggregates)
+                        targets.Add(aggregate.Id.Value);
+                    break;
+            }
+        }
+
+        return new(new LogicalQueryDefinition(selectedNodes, selectedParameters), targets);
+    }
+
+    static IEnumerable<Expr> GetExpressions(LogicalQueryNode node)
+    {
+        switch (node)
+        {
+            case SourceQueryNode:
+            case TraverseRelationshipQueryNode:
+                yield break;
+            case FilterQueryNode filter:
+                yield return filter.Predicate;
+                yield break;
+            case JoinQueryNode join:
+                yield return join.Predicate;
+                yield break;
+            case TemporalJoinQueryNode temporal:
+                yield return temporal.Correlation;
+                foreach (var expression in GetExpressions(temporal.Match))
+                    yield return expression;
+                yield break;
+            case ExpandCollectionQueryNode expansion:
+                yield return expansion.Collection;
+                yield break;
+            case ProjectQueryNode projection:
+                foreach (var assignment in projection.Assignments)
+                    yield return assignment.Value;
+                yield break;
+            case DistinctQueryNode distinct:
+                foreach (var key in distinct.Keys)
+                    yield return key;
+                yield break;
+            case AggregateQueryNode aggregation:
+                foreach (var grouping in aggregation.Groupings)
+                    yield return grouping.Key;
+                foreach (var aggregate in aggregation.Aggregates)
+                {
+                    if (aggregate.Value is not null)
+                        yield return aggregate.Value;
+                    if (aggregate.Filter is not null)
+                        yield return aggregate.Filter;
+                }
+                yield break;
+            case OrderQueryNode order:
+                foreach (var ordering in order.Orderings)
+                    yield return ordering.Key;
+                yield break;
+            case PageQueryNode { Page: KeysetPageDefinition keyset }:
+                foreach (var expression in keyset.After)
+                    yield return expression;
+                yield break;
+            case PageQueryNode:
+                yield break;
+            default:
+                throw new InvalidOperationException(
+                    $"Logical node type '{node.GetType().Name}' has no parameter-reachability traversal.");
+        }
+    }
+
+    static IEnumerable<Expr> GetExpressions(TemporalJoinMatch match)
+    {
+        switch (match)
+        {
+            case TemporalPointInIntervalMatch point:
+                yield return point.Point;
+                foreach (var expression in GetExpressions(point.Interval))
+                    yield return expression;
+                yield break;
+            case TemporalIntervalOverlapMatch overlap:
+                foreach (var expression in GetExpressions(overlap.Left))
+                    yield return expression;
+                foreach (var expression in GetExpressions(overlap.Right))
+                    yield return expression;
+                yield break;
+            default:
+                throw new InvalidOperationException(
+                    $"Temporal match type '{match.GetType().Name}' has no parameter-reachability traversal.");
+        }
+    }
+
+    static IEnumerable<Expr> GetExpressions(TemporalInterval interval)
+    {
+        if (interval.Lower is ExpressionTemporalIntervalBound lower)
+            yield return lower.Value;
+        if (interval.Upper is ExpressionTemporalIntervalBound upper)
+            yield return upper.Value;
+    }
+
+    static void CollectParameters(Expr expression, ISet<string> parameters)
+    {
+        switch (expression)
+        {
+            case ParameterExpr parameter:
+                parameters.Add(parameter.Parameter);
+                return;
+            case UnaryExpr unary:
+                CollectParameters(unary.Operand, parameters);
+                return;
+            case BinaryExpr binary:
+                CollectParameters(binary.Left, parameters);
+                CollectParameters(binary.Right, parameters);
+                return;
+            case ConditionalExpr conditional:
+                CollectParameters(conditional.Test, parameters);
+                CollectParameters(conditional.IfTrue, parameters);
+                CollectParameters(conditional.IfFalse, parameters);
+                return;
+            case CallExpr call:
+                foreach (var argument in call.Arguments)
+                    CollectParameters(argument, parameters);
+                return;
+            case AggregateExpr aggregate:
+                CollectParameters(aggregate.Source, parameters);
+                foreach (var groupBy in aggregate.GroupBy)
+                    CollectParameters(groupBy, parameters);
+                return;
+            case FieldExpr:
+            case CurrentItemExpr:
+            case ConstantExpr:
+            case FieldRefExpr:
+            case LiteralExpr:
+                return;
+            default:
+                throw new InvalidOperationException(
+                    $"Expression type '{expression.GetType().Name}' has no parameter-reachability traversal.");
+        }
+    }
+
+    internal bool IsBindingVisible<TNode>(
+        RelationQueryNodeHandle<TNode> node,
+        RelationQueryBindingHandle binding)
+        where TNode : LogicalQueryNode
+    {
+        RequireNode(node, nameof(node));
+        RequireBinding(binding, nameof(binding));
+        Dictionary<QueryNodeId, HashSet<ValueBindingId>> cache = [];
+        return ResolveVisibleBindings(node.Id, cache, new HashSet<QueryNodeId>()).Contains(binding.Id);
+    }
+
+    internal int GetVisibleBindingCount<TNode>(RelationQueryNodeHandle<TNode> node)
+        where TNode : LogicalQueryNode
+    {
+        RequireNode(node, nameof(node));
+        Dictionary<QueryNodeId, HashSet<ValueBindingId>> cache = [];
+        return ResolveVisibleBindings(node.Id, cache, new HashSet<QueryNodeId>()).Count;
+    }
+
+    HashSet<ValueBindingId> ResolveVisibleBindings(
+        QueryNodeId nodeId,
+        IDictionary<QueryNodeId, HashSet<ValueBindingId>> cache,
+        ISet<QueryNodeId> visiting)
+    {
+        if (cache.TryGetValue(nodeId, out var cached))
+            return cached;
+        if (!visiting.Add(nodeId))
+            throw new InvalidOperationException($"Logical node graph contains a cycle at '{nodeId.Value}'.");
+        if (!nodesById.TryGetValue(nodeId, out var node))
+            throw new InvalidOperationException($"Logical node '{nodeId.Value}' is not owned by this authoring core.");
+
+        HashSet<ValueBindingId> visible = node switch
+        {
+            SourceQueryNode source => [source.Binding],
+            TraverseRelationshipQueryNode traversal =>
+                [.. ResolveVisibleBindings(traversal.Input, cache, visiting), traversal.Result],
+            JoinQueryNode join =>
+                [.. ResolveVisibleBindings(join.Left, cache, visiting), .. ResolveVisibleBindings(join.Right, cache, visiting)],
+            TemporalJoinQueryNode join =>
+                [.. ResolveVisibleBindings(join.Left, cache, visiting), .. ResolveVisibleBindings(join.Right, cache, visiting)],
+            ExpandCollectionQueryNode expansion =>
+                [.. ResolveVisibleBindings(expansion.Input, cache, visiting), expansion.ItemBinding],
+            ProjectQueryNode projection => [projection.ResultBinding],
+            AggregateQueryNode aggregation => [aggregation.ResultBinding],
+            FilterQueryNode filter => [.. ResolveVisibleBindings(filter.Input, cache, visiting)],
+            DistinctQueryNode distinct => [.. ResolveVisibleBindings(distinct.Input, cache, visiting)],
+            OrderQueryNode order => [.. ResolveVisibleBindings(order.Input, cache, visiting)],
+            PageQueryNode page => [.. ResolveVisibleBindings(page.Input, cache, visiting)],
+            _ => throw new InvalidOperationException(
+                $"Logical node type '{node.GetType().Name}' has no binding-visibility traversal.")
+        };
+        visiting.Remove(nodeId);
+        cache.Add(nodeId, visible);
+        return visible;
+    }
 
     RelationQueryAuthoringManifest CreateManifest(
         IReadOnlySet<string> includedResults,
+        IReadOnlySet<string> includedBodyTargets,
         params RelationQueryAuthoringSourceDecision?[] additionalSources) =>
         new(
             [
-                .. identities.Where(decision =>
-                    decision.Kind != RelationQueryAuthoringIdentityKind.Result
-                    || includedResults.Contains(decision.Value))
+                .. identities.Where(decision => decision.Kind switch
+                {
+                    RelationQueryAuthoringIdentityKind.Result => includedResults.Contains(decision.Value),
+                    _ => includedBodyTargets.Contains(decision.Value)
+                })
             ],
             [
-                .. sources.Where(decision =>
-                    decision.Kind != RelationQueryAuthoringDecisionKind.Result
-                    || includedResults.Contains(decision.Target)),
+                .. sources.Where(decision => decision.Kind switch
+                {
+                    RelationQueryAuthoringDecisionKind.Result => includedResults.Contains(decision.Target),
+                    _ => includedBodyTargets.Contains(decision.Target)
+                }),
                 .. additionalSources.Where(static decision => decision is not null)!
             ]);
 
@@ -1103,4 +1379,8 @@ public sealed class RelationQueryAuthoringCore
         RelationQueryAuthoringSource? AssignmentSource,
         RelationQueryAuthoringSource? ValueSource,
         RelationQueryAuthoringSource? FilterSource);
+
+    sealed record BodySelection(
+        LogicalQueryDefinition Body,
+        IReadOnlySet<string> ProvenanceTargets);
 }

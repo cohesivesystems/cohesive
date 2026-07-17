@@ -1,4 +1,5 @@
 using System.Diagnostics.Contracts;
+using System.Globalization;
 
 namespace Cohesive.Prelude;
 
@@ -35,6 +36,32 @@ public static class MathExtensions
 
             result = candidate;
             return true;
+        }
+
+        /// <summary>
+        /// Tries to recover the canonical round-trip base-10 representation of a floating-point value.
+        /// </summary>
+        /// <param name="value">The floating-point value to convert.</param>
+        /// <param name="result">The canonical decimal representation when conversion succeeds; otherwise zero.</param>
+        /// <returns>
+        /// <see langword="true"/> when the finite value's round-trip text is representable by <see cref="decimal"/>
+        /// and converts back to the same floating-point value; otherwise <see langword="false"/>.
+        /// </returns>
+        public static bool TryGetCanonicalDecimalFromDouble(double value, out decimal result)
+        {
+            if (double.IsFinite(value)
+                && decimal.TryParse(
+                    value.ToString("R", CultureInfo.InvariantCulture),
+                    NumberStyles.Float,
+                    CultureInfo.InvariantCulture,
+                    out result)
+                && (double)result == value)
+            {
+                return true;
+            }
+
+            result = default;
+            return false;
         }
         
         /// <summary>

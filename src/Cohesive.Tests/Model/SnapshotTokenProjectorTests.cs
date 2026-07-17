@@ -1,3 +1,6 @@
+using System.Text.Json;
+using System.Globalization;
+
 namespace Cohesive.Tests.Model;
 
 public sealed class SnapshotTokenProjectorTests
@@ -80,6 +83,42 @@ public sealed class SnapshotTokenProjectorTests
     }
 
     [Fact]
+    public void Compute_Int64_PreservesLegacyTokenEncoding()
+    {
+        var state = new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+        {
+            ["v"] = ObservationValue.FromInt64(42)
+        };
+
+        Assert.Equal(
+            "5E343C53B62ADCF0F61D92D9DB5C0D1FB6F1B641DCDDA03B928C50862587CCD4",
+            SnapshotTokenProjector.Compute(state, ["v"]));
+    }
+
+    [Theory]
+    [InlineData(1.5d, "9584A22FCA24C3243C9F88B2E5317BCCAF6203AF254C3D5F4EBFC166BAAA6CB9")]
+    [InlineData(0.1d, "6836E58E5812C6EA5F4496C3E987A33379E730C3EDD0AD9BB542F8BDD620B0FF")]
+    public void Compute_RepresentableFraction_PreservesLegacyDoubleTokenEncoding(
+        double value,
+        string expected)
+    {
+        using var document = JsonDocument.Parse(value.ToString("R", CultureInfo.InvariantCulture));
+        var parsed = ObservationValue.FromJsonElement(document.RootElement);
+        var parsedState = new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+        {
+            ["v"] = parsed
+        };
+        var legacyState = new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+        {
+            ["v"] = ObservationValue.FromDouble(value)
+        };
+
+        Assert.Equal(ObservationValueKind.Decimal, parsed.Kind);
+        Assert.Equal(expected, SnapshotTokenProjector.Compute(parsedState, ["v"]));
+        Assert.Equal(expected, SnapshotTokenProjector.Compute(legacyState, ["v"]));
+    }
+
+    [Fact]
     public void Compute_BytesValue_ProducesDigest()
     {
         var state = new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
@@ -95,5 +134,99 @@ public sealed class SnapshotTokenProjectorTests
             var isHex = (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F');
             Assert.True(isHex);
         });
+    }
+
+    [Fact]
+    public void Compute_HighPrecisionDecimal_DistinguishesExactPayload()
+    {
+        var first = new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+        {
+            ["amount"] = ObservationValue.FromDecimal(12345678901234567890.123456789m)
+        };
+        var second = new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+        {
+            ["amount"] = ObservationValue.FromDecimal(12345678901234567890.123456788m)
+        };
+
+        Assert.NotEqual(
+            SnapshotTokenProjector.Compute(first, ["amount"]),
+            SnapshotTokenProjector.Compute(second, ["amount"]));
+    }
+
+    [Fact]
+    public void Compute_CanonicalDecimalAndDoubleRepresentations_ProduceSameToken()
+    {
+        var exact = new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+        {
+            ["amount"] = ObservationValue.FromDecimal(0.1m)
+        };
+        var floatingPoint = new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+        {
+            ["amount"] = ObservationValue.FromDouble(0.1d)
+        };
+
+        Assert.Equal(
+            SnapshotTokenProjector.Compute(exact, ["amount"]),
+            SnapshotTokenProjector.Compute(floatingPoint, ["amount"]));
+    }
+
+    [Fact]
+    public void Compute_CanonicalIntegerDecimalAndDoubleRepresentations_ProduceSameToken()
+    {
+        var integer = new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+        {
+            ["amount"] = ObservationValue.FromInt64(42)
+        };
+        var exact = new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+        {
+            ["amount"] = new ObservationValue(ObservationValueKind.Decimal, dec: 42m)
+        };
+        var floatingPoint = new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+        {
+            ["amount"] = ObservationValue.FromDouble(42d)
+        };
+
+        var integerToken = SnapshotTokenProjector.Compute(integer, ["amount"]);
+
+        Assert.Equal(integerToken, SnapshotTokenProjector.Compute(exact, ["amount"]));
+        Assert.Equal(integerToken, SnapshotTokenProjector.Compute(floatingPoint, ["amount"]));
+    }
+
+    [Fact]
+    public void Compute_CanonicalIntegralDoubleAndParsedInt64Spelling_ProduceSameToken()
+    {
+        var floatingPoint = ObservationValue.FromDouble(Math.BitIncrement(1e18));
+        using var document = JsonDocument.Parse(floatingPoint.GetRawText());
+        var parsed = ObservationValue.FromJsonElement(document.RootElement);
+        var floatingPointState = new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+        {
+            ["amount"] = floatingPoint
+        };
+        var parsedState = new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+        {
+            ["amount"] = parsed
+        };
+
+        Assert.Equal(ObservationValueKind.Int64, parsed.Kind);
+        Assert.Equal(
+            SnapshotTokenProjector.Compute(floatingPointState, ["amount"]),
+            SnapshotTokenProjector.Compute(parsedState, ["amount"]));
+    }
+
+    [Fact]
+    public void Compute_DoublesOutsideCanonicalDecimalDomain_PreserveBitwiseIdentity()
+    {
+        var first = new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+        {
+            ["amount"] = ObservationValue.FromDouble(1e-29)
+        };
+        var second = new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+        {
+            ["amount"] = ObservationValue.FromDouble(Math.BitIncrement(1e-29))
+        };
+
+        Assert.NotEqual(
+            SnapshotTokenProjector.Compute(first, ["amount"]),
+            SnapshotTokenProjector.Compute(second, ["amount"]));
     }
 }

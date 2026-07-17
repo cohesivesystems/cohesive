@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using System.Collections;
 
 namespace Cohesive.Tests.Model;
 
@@ -70,6 +71,23 @@ public sealed class ClrShapeGraphBuilderMetadataTests
     }
 
     [Fact]
+    public void Build_DistinguishesCivilDateTimeFromAbsoluteInstant()
+    {
+        var graph = new ClrShapeGraphBuilder()
+            .AddShape<TemporalEnvelope>()
+            .Build(new("graph.temporal.test"));
+
+        var shape = Assert.Single(graph.Shapes);
+
+        Assert.Equal(
+            ScalarTypeKind.DateTime,
+            Assert.IsType<ScalarTypeRef>(shape.GetField(nameof(TemporalEnvelope.Civil)).Type).Kind);
+        Assert.Equal(
+            ScalarTypeKind.Instant,
+            Assert.IsType<ScalarTypeRef>(shape.GetField(nameof(TemporalEnvelope.Instant)).Type).Kind);
+    }
+
+    [Fact]
     public void Build_MapsJsonRuntimePropertiesToJsonTypeRefs()
     {
         var graph = new ClrShapeGraphBuilder()
@@ -107,6 +125,16 @@ public sealed class ClrShapeGraphBuilderMetadataTests
         Assert.True(shape.TryGetField(nameof(JsonIgnoreEnvelope.Conditional), out _));
         Assert.True(shape.TryGetField(nameof(JsonIgnoreEnvelope.Visible), out _));
         Assert.False(shape.TryGetField(nameof(JsonIgnoreEnvelope.AlwaysIgnored), out _));
+    }
+
+    [Fact]
+    public void Build_RejectsMultipleDistinctEnumerableElementContracts()
+    {
+        var exception = Assert.Throws<InvalidOperationException>(() => new ClrShapeGraphBuilder()
+            .AddShape<AmbiguousEnumerableEnvelope>()
+            .Build(new("graph.ambiguous-enumerable.test")));
+
+        Assert.Contains("multiple distinct element types", exception.Message, StringComparison.Ordinal);
     }
 
     static string? GetAnnotation(
@@ -152,10 +180,25 @@ public sealed class ClrShapeGraphBuilderMetadataTests
 
     sealed record TimeEnvelope(TimeOnly Time);
 
+    sealed record TemporalEnvelope(DateTime Civil, DateTimeOffset Instant);
+
     sealed record JsonEnvelope(JsonElement Element, JsonNode? Node, JsonObject Object, JsonArray Array);
 
     sealed record JsonIgnoreEnvelope(
         [property: JsonIgnore] string AlwaysIgnored,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Conditional,
         string Visible);
+
+    sealed record AmbiguousEnumerableEnvelope(AmbiguousEnumerable Items);
+
+    sealed class AmbiguousEnumerable : IEnumerable<int>, IEnumerable<string>
+    {
+        public string Description => "ambiguous";
+
+        IEnumerator<int> IEnumerable<int>.GetEnumerator() => Enumerable.Empty<int>().GetEnumerator();
+
+        IEnumerator<string> IEnumerable<string>.GetEnumerator() => Enumerable.Empty<string>().GetEnumerator();
+
+        IEnumerator IEnumerable.GetEnumerator() => Enumerable.Empty<int>().GetEnumerator();
+    }
 }

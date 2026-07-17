@@ -229,6 +229,66 @@ public sealed class RelationQueryExpressionEvaluatorTests
     }
 
     [Fact]
+    public void Evaluate_DecimalArithmeticAndEquality_RemainExact()
+    {
+        const decimal highPrecision = 12345678901234567890.123456789m;
+        var context = new RelationQueryExpressionContext();
+
+        var sum = evaluator.Evaluate(
+            Expr.Add(Expr.Const(highPrecision), Expr.Const(0.000000001m)),
+            context);
+
+        Assert.Equal(ObservationValueKind.Decimal, sum.Kind);
+        Assert.Equal(12345678901234567890.123456790m, sum.Decimal);
+        Assert.True(evaluator.Evaluate(
+            Expr.Eq(Expr.Const(0.125m), Expr.Const(0.125d)),
+            context).Bool);
+        Assert.True(evaluator.Evaluate(
+            Expr.Eq(Expr.Const(0.1m), Expr.Const(0.1d)),
+            context).Bool);
+        Assert.Equal(0, RelationQueryValueSemantics.Compare(
+            ObservationValue.FromDecimal(0.1m),
+            ObservationValue.FromDouble(0.1d)));
+        Assert.Equal(
+            RelationQueryValueSemantics.GetHashCode(ObservationValue.FromDecimal(0.125m)),
+            RelationQueryValueSemantics.GetHashCode(ObservationValue.FromDouble(0.125d)));
+    }
+
+    [Fact]
+    public void Evaluate_LargeIntegralDouble_UsesPersistedCanonicalNumericSemantics()
+    {
+        const long CanonicalInteger = 1_000_000_000_000_000_100L;
+        var floatingPoint = ObservationValue.FromDouble(Math.BitIncrement(1e18));
+        var integer = ObservationValue.FromInt64(CanonicalInteger);
+        var context = new RelationQueryExpressionContext();
+
+        Assert.Equal(CanonicalInteger, floatingPoint.GetDecimal());
+        Assert.True(evaluator.Evaluate(
+            Expr.Eq(Expr.Const(floatingPoint), Expr.Const(integer)),
+            context).Bool);
+        Assert.True(evaluator.Evaluate(
+            Expr.Call(
+                ExprFunctionNames.Contains,
+                Expr.Const(ObservationValue.FromArray([floatingPoint])),
+                Expr.Const(integer)),
+            context).Bool);
+        Assert.Equal(0, RelationQueryValueSemantics.CompareForOrdering(
+            floatingPoint,
+            integer,
+            QuerySortDirection.Ascending,
+            QueryNullPlacement.Last));
+        Assert.Equal(
+            RelationQueryValueSemantics.GetHashCode(floatingPoint),
+            RelationQueryValueSemantics.GetHashCode(integer));
+
+        var sum = evaluator.Evaluate(
+            Expr.Add(Expr.Const(floatingPoint), Expr.Const(0m)),
+            context);
+        Assert.Equal(ObservationValueKind.Int64, sum.Kind);
+        Assert.Equal(CanonicalInteger, sum.Int64);
+    }
+
+    [Fact]
     public void Evaluate_CollectionAndObjectFunctionsAreStrictAndImmutable()
     {
         var context = new RelationQueryExpressionContext();
@@ -368,6 +428,29 @@ public sealed class RelationQueryExpressionEvaluatorTests
             Expr.Call(ExprFunctionNames.Avg, empty), context).Kind);
         Assert.False(evaluator.Evaluate(Expr.Call(ExprFunctionNames.Any, empty), context).Bool);
         Assert.True(evaluator.Evaluate(Expr.Call(ExprFunctionNames.All, empty), context).Bool);
+    }
+
+    [Fact]
+    public void Evaluate_AnyAndAllShortCircuitBeforeInvalidLaterSelectors()
+    {
+        var context = new RelationQueryExpressionContext();
+        var anySource = Expr.Const(ObservationValue.FromArray(
+        [
+            Object(("Match", ObservationValue.FromBool(true))),
+            Object(("Match", ObservationValue.FromString("not-a-boolean")))
+        ]));
+        var allSource = Expr.Const(ObservationValue.FromArray(
+        [
+            Object(("Match", ObservationValue.FromBool(false))),
+            Object(("Match", ObservationValue.FromString("not-a-boolean")))
+        ]));
+
+        Assert.True(evaluator.Evaluate(
+            Expr.Call(ExprFunctionNames.Any, anySource, Expr.Field("item.Match")),
+            context).Bool);
+        Assert.False(evaluator.Evaluate(
+            Expr.Call(ExprFunctionNames.All, allSource, Expr.Field("item.Match")),
+            context).Bool);
     }
 
     [Fact]

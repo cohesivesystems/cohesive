@@ -601,6 +601,7 @@ public sealed class QueryExecutionEngine(IReadRepositoryRegistry repositoryRegis
         ObservationValueKind.DateTimeOffset => new DateValuePredicate(value.GetDateTimeOffset()),
         ObservationValueKind.Int64 => new LongValuePredicate(value.Int64),
         ObservationValueKind.Double => new DoubleValuePredicate(value.Double),
+        ObservationValueKind.Decimal => new DecimalValuePredicate(value.Decimal),
         ObservationValueKind.Bool => new BoolValuePredicate(value.Bool),
         _ => throw new NotSupportedException($"Join pushdown does not support key values of kind '{value.Kind}'.")
     };

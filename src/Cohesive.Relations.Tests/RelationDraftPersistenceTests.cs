@@ -224,6 +224,7 @@ public sealed class RelationDraftPersistenceTests
             RelationDraftJsonSerializer.Serialize(first, indented: false),
             RelationDraftJsonSerializer.Serialize(second, indented: false));
         Assert.Equal(first.DraftFingerprint, second.DraftFingerprint);
+        Assert.Equal("relation-draft/v1-c14n/v2", first.DraftFingerprint.Canonicalization);
         Assert.NotEqual(
             first.DraftFingerprint,
             RelationDraftFingerprinter.Compute(semanticChange));
@@ -383,6 +384,23 @@ public sealed class RelationDraftPersistenceTests
         AssertDiagnostic(
             RelationDraftValidator.Validate(stale),
             "relationDraft.candidate.idMismatch");
+    }
+
+    [Fact]
+    public void CandidateIdentityV2_PreservesTheAssignmentSlotV1Vector()
+    {
+        var slot = RelationDraftIdentityConvention.CreateAssignmentSlotId(
+            new QualifiedShapeId(new GraphId("test"), new ShapeId("Load")),
+            FieldPath.FromField("Id"));
+        var candidate = RelationDraftIdentityConvention.CreateCandidateId(
+            slot,
+            Expr.Const(1.0000000000000001e18));
+
+        Assert.Equal(
+            "relation-draft-slot:v1:sha256:0a5c1330246e8a41ceab8007ca8eda903a37e9af26f25647fb0739e4cd9cfdc4",
+            slot.Value);
+        Assert.StartsWith("relation-draft-candidate:v2:sha256:", candidate.Value, StringComparison.Ordinal);
+        Assert.Equal("relation-draft-candidate-identity/v2", RelationDraftIdentityConvention.CandidateVersion);
     }
 
     [Fact]

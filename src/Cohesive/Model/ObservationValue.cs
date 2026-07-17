@@ -2,6 +2,7 @@ using System.Collections;
 using System.Collections.ObjectModel;
 using System.Buffers;
 using System.Globalization;
+using System.Numerics;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
@@ -14,6 +15,15 @@ namespace Cohesive.Model;
 /// <summary>
 /// Compact scalar/object/array JSON-like value container used by observation and entity-state snapshots.
 /// </summary>
+/// <param name="kind">The logical value kind that selects the active payload.</param>
+/// <param name="int64">The Int64 payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Int64"/>.</param>
+/// <param name="d">The binary floating-point payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Double"/>.</param>
+/// <param name="b">The Boolean payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Bool"/>.</param>
+/// <param name="s">The string or temporal text payload for string-backed kinds.</param>
+/// <param name="fields">The object properties when <paramref name="kind"/> is <see cref="ObservationValueKind.Object"/>.</param>
+/// <param name="array">The array items when <paramref name="kind"/> is <see cref="ObservationValueKind.Array"/>.</param>
+/// <param name="bytes">The binary payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Bytes"/>.</param>
+/// <param name="dec">The exact base-10 payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Decimal"/>.</param>
 [JsonConverter(typeof(ObservationValueJsonConverter))]
 public readonly struct ObservationValue(
     ObservationValueKind kind,
@@ -23,7 +33,8 @@ public readonly struct ObservationValue(
     string? s = null,
     IReadOnlyDictionary<string, ObservationValue>? fields = null,
     ObservationValue[]? array = null,
-    ReadOnlyMemory<byte> bytes = default
+    ReadOnlyMemory<byte> bytes = default,
+    decimal dec = 0m
     ) : IEquatable<ObservationValue>
 {
     /// <summary>
@@ -40,6 +51,11 @@ public readonly struct ObservationValue(
     /// Floating-point payload when <see cref="Kind"/> is <see cref="ObservationValueKind.Double"/>.
     /// </summary>
     public double Double { get; } = d;
+
+    /// <summary>
+    /// Base-10 numeric payload when <see cref="Kind"/> is <see cref="ObservationValueKind.Decimal"/>.
+    /// </summary>
+    public decimal Decimal { get; } = dec;
 
     /// <summary>
     /// Boolean payload when <see cref="Kind"/> is <see cref="ObservationValueKind.Bool"/>.
@@ -184,8 +200,8 @@ public readonly struct ObservationValue(
         JsonValueKind.False => FromBool(false),
         JsonValueKind.String => FromString(element.GetString()),
         JsonValueKind.Number when element.TryGetInt64(out var int64) => FromInt64(int64),
+        JsonValueKind.Number when TryParseExactJsonDecimal(element.GetRawText(), out var dec) => FromDecimal(dec),
         JsonValueKind.Number when element.TryGetDouble(out var dbl) => FromDouble(dbl),
-        JsonValueKind.Number when element.TryGetDecimal(out var dec) => FromDecimal(dec),
         JsonValueKind.Number => FromDouble(double.Parse(element.GetRawText(), NumberStyles.Float, CultureInfo.InvariantCulture)),
         JsonValueKind.Object => FromObject(ReadObject(element)),
         JsonValueKind.Array => FromArray(ReadArray(element)),
@@ -205,17 +221,20 @@ public readonly struct ObservationValue(
 
         if (node is JsonValue value)
         {
+            if (value.TryGetValue<JsonElement>(out var element))
+                return FromJsonElement(element);
+
             if (value.TryGetValue<bool>(out var boolean))
                 return FromBool(boolean);
 
             if (value.TryGetValue<long>(out var int64))
                 return FromInt64(int64);
 
-            if (value.TryGetValue<double>(out var dbl))
-                return FromDouble(dbl);
-
             if (value.TryGetValue<decimal>(out var dec))
                 return FromDecimal(dec);
+
+            if (value.TryGetValue<double>(out var dbl))
+                return FromDouble(dbl);
 
             if (value.TryGetValue<string>(out var text))
                 return FromString(text);
@@ -626,12 +645,25 @@ public readonly struct ObservationValue(
             case ObservationValueKind.Int64:
                 value = Int64;
                 return true;
-            case ObservationValueKind.Double when Double >= long.MinValue && Double <= long.MaxValue:
+            case ObservationValueKind.Decimal when Decimal is >= long.MinValue and <= long.MaxValue:
             {
-                var rounded = Math.Truncate(Double);
-                if (Math.Abs(rounded - Double) < double.Epsilon)
+                var truncated = decimal.Truncate(Decimal);
+                if (truncated == Decimal)
                 {
-                    value = (long)rounded;
+                    value = (long)truncated;
+                    return true;
+                }
+
+                break;
+            }
+            case ObservationValueKind.Double
+                when Math.TryGetCanonicalDecimalFromDouble(Double, out var canonical)
+                     && canonical is >= long.MinValue and <= long.MaxValue:
+            {
+                var truncated = decimal.Truncate(canonical);
+                if (truncated == canonical)
+                {
+                    value = (long)truncated;
                     return true;
                 }
 
@@ -696,6 +728,9 @@ public readonly struct ObservationValue(
             case ObservationValueKind.Double:
                 value = Double;
                 return true;
+            case ObservationValueKind.Decimal:
+                value = (double)Decimal;
+                return true;
             case ObservationValueKind.String when double.TryParse(String, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed):
                 value = parsed;
                 return true;
@@ -717,30 +752,57 @@ public readonly struct ObservationValue(
     }
 
     /// <summary>
-    /// Attempts to read the value as <see cref="decimal"/>.
+    /// Attempts to recover the canonical base-10 value used to compare and persist numeric values.
     /// </summary>
-    public bool TryGetDecimal(out decimal value)
+    /// <param name="value">
+    /// The exact canonical decimal when this value is an Int64, Decimal, or a Double whose shortest
+    /// round-trip JSON representation is exactly representable by <see cref="decimal"/>; otherwise zero.
+    /// </param>
+    /// <returns>
+    /// <see langword="true"/> when this numeric value has an exact canonical decimal representation;
+    /// otherwise <see langword="false"/>.
+    /// </returns>
+    public bool TryGetCanonicalNumericDecimal(out decimal value)
     {
         switch (Kind)
         {
             case ObservationValueKind.Int64:
                 value = Int64;
                 return true;
-            case ObservationValueKind.Double:
-            {
-                try
-                {
-                    value = Convert.ToDecimal(Double, CultureInfo.InvariantCulture);
-                    return true;
-                }
-                catch (OverflowException)
-                {
-                    break;
-                }
-            }
-            case ObservationValueKind.String when decimal.TryParse(String, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed):
-                value = parsed;
+            case ObservationValueKind.Decimal:
+                value = Decimal;
                 return true;
+            case ObservationValueKind.Double:
+                return Math.TryGetCanonicalDecimalFromDouble(Double, out value);
+            default:
+                value = default;
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Attempts to read the value as <see cref="decimal"/>.
+    /// </summary>
+    /// <param name="value">
+    /// The exact canonical numeric value, or an invariant-culture decimal parsed from a string value.
+    /// </param>
+    /// <returns>
+    /// <see langword="true"/> when the value has an exact decimal representation or contains a valid
+    /// invariant-culture decimal string; otherwise <see langword="false"/>.
+    /// </returns>
+    public bool TryGetDecimal(out decimal value)
+    {
+        if (TryGetCanonicalNumericDecimal(out value))
+            return true;
+
+        if (Kind == ObservationValueKind.String
+            && decimal.TryParse(
+                String,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out value))
+        {
+            return true;
         }
 
         value = 0m;
@@ -828,6 +890,31 @@ public readonly struct ObservationValue(
         }
 
         if (Kind == ObservationValueKind.String
+            && TryParseDateTimeOffset(String, exact: false, out value))
+        {
+            return true;
+        }
+
+        value = default;
+        return false;
+    }
+
+    /// <summary>
+    /// Attempts to read the value as an absolute instant.
+    /// </summary>
+    /// <param name="value">The parsed instant, including its declared offset, when conversion succeeds; otherwise default.</param>
+    /// <returns>
+    /// <see langword="true"/> for a valid dedicated <see cref="ObservationValueKind.DateTimeOffset"/> value,
+    /// or for a parseable string whose time is followed by an explicit <c>Z</c>, <c>z</c>, or numeric offset;
+    /// otherwise <see langword="false"/>. In particular, offset-less civil date-time strings are not instants.
+    /// </returns>
+    public bool TryGetInstant(out DateTimeOffset value)
+    {
+        if (Kind == ObservationValueKind.DateTimeOffset)
+            return TryParseDateTimeOffset(String, exact: true, out value);
+
+        if (Kind == ObservationValueKind.String
+            && HasExplicitDateTimeOffset(String)
             && TryParseDateTimeOffset(String, exact: false, out value))
         {
             return true;
@@ -965,6 +1052,7 @@ public readonly struct ObservationValue(
             ObservationValueKind.TimeSpan => String,
             ObservationValueKind.Int64 => Int64.ToString(formatProvider),
             ObservationValueKind.Double => Double.ToString(formatProvider),
+            ObservationValueKind.Decimal => Decimal.ToString(formatProvider),
             ObservationValueKind.Bool => Bool ? "true" : "false",
             ObservationValueKind.Bytes => bytesEncoding switch
             {
@@ -1098,6 +1186,10 @@ public readonly struct ObservationValue(
                     writer.WriteNumberValue(value.Double);
                     return;
 
+                case ObservationValueKind.Decimal:
+                    writer.WriteNumberValue(value.Decimal);
+                    return;
+
                 case ObservationValueKind.Bool:
                     writer.WriteBooleanValue(value.Bool);
                     return;
@@ -1176,14 +1268,24 @@ public readonly struct ObservationValue(
     /// </summary>
     public static bool DeepEquals(ObservationValue left, ObservationValue right)
     {
+        if (IsNumericKind(left.Kind) && IsNumericKind(right.Kind))
+        {
+            var leftIsDecimal = left.TryGetCanonicalNumericDecimal(out var leftDecimal);
+            var rightIsDecimal = right.TryGetCanonicalNumericDecimal(out var rightDecimal);
+            if (leftIsDecimal || rightIsDecimal)
+                return leftIsDecimal && rightIsDecimal && leftDecimal == rightDecimal;
+
+            return left.Kind == ObservationValueKind.Double
+                   && right.Kind == ObservationValueKind.Double
+                   && left.Double.Equals(right.Double);
+        }
+
         if (left.Kind == right.Kind)
         {
             return left.Kind switch
             {
                 ObservationValueKind.Undefined => true,
                 ObservationValueKind.Null => true,
-                ObservationValueKind.Int64 => left.Int64 == right.Int64,
-                ObservationValueKind.Double => left.Double.Equals(right.Double),
                 ObservationValueKind.Bool => left.Bool == right.Bool,
                 ObservationValueKind.String => string.Equals(left.String, right.String, StringComparison.Ordinal),
                 ObservationValueKind.DateTimeOffset => string.Equals(left.String, right.String, StringComparison.Ordinal),
@@ -1197,15 +1299,7 @@ public readonly struct ObservationValue(
             };
         }
 
-        if (left.Kind == ObservationValueKind.Int64 && right.Kind == ObservationValueKind.Double)
-            return IsExactIntegerDoubleMatch(left.Int64, right.Double);
-        if (left.Kind == ObservationValueKind.Double && right.Kind == ObservationValueKind.Int64)
-            return IsExactIntegerDoubleMatch(right.Int64, left.Double);
-
         return false;
-        
-        static bool IsExactIntegerDoubleMatch(long integer, double floatingPoint)
-            => TryGetExactInt64FromDouble(floatingPoint, out var parsed) && parsed == integer;
 
         static bool AreObjectsEqual(IReadOnlyDictionary<string, ObservationValue>? left, IReadOnlyDictionary<string, ObservationValue>? right)
         {
@@ -1262,15 +1356,117 @@ public readonly struct ObservationValue(
         return [.. values];
     }
 
+    static bool TryParseExactJsonDecimal(ReadOnlySpan<char> text, out decimal result)
+    {
+        var index = 0;
+        var negative = false;
+        if (index < text.Length && text[index] == '-')
+        {
+            negative = true;
+            index++;
+        }
+
+        BigInteger coefficient = BigInteger.Zero;
+        var fractionalDigits = 0;
+        var inFraction = false;
+        while (index < text.Length)
+        {
+            var character = text[index];
+            if (character is >= '0' and <= '9')
+            {
+                coefficient = coefficient * 10 + (character - '0');
+                if (inFraction)
+                    fractionalDigits++;
+                index++;
+                continue;
+            }
+
+            if (character == '.' && !inFraction)
+            {
+                inFraction = true;
+                index++;
+                continue;
+            }
+
+            break;
+        }
+
+        var exponent = 0;
+        if (index < text.Length && text[index] is 'e' or 'E')
+        {
+            index++;
+            if (!int.TryParse(
+                    text[index..],
+                    NumberStyles.AllowLeadingSign,
+                    CultureInfo.InvariantCulture,
+                    out exponent))
+            {
+                result = default;
+                return false;
+            }
+            index = text.Length;
+        }
+
+        if (index != text.Length)
+        {
+            result = default;
+            return false;
+        }
+
+        if (coefficient.IsZero)
+        {
+            result = decimal.Zero;
+            return true;
+        }
+
+        var scale = (long)fractionalDigits - exponent;
+        while (scale > 0 && coefficient % 10 == 0)
+        {
+            coefficient /= 10;
+            scale--;
+        }
+
+        if (scale < 0)
+        {
+            var expansion = -scale;
+            if (expansion > 28)
+            {
+                result = default;
+                return false;
+            }
+
+            coefficient *= BigInteger.Pow(10, (int)expansion);
+            scale = 0;
+        }
+
+        var maximumCoefficient = (BigInteger.One << 96) - BigInteger.One;
+        if (scale > 28 || coefficient > maximumCoefficient)
+        {
+            result = default;
+            return false;
+        }
+
+        const ulong WordMask = uint.MaxValue;
+        var low = unchecked((int)(uint)(coefficient & WordMask));
+        var mid = unchecked((int)(uint)((coefficient >> 32) & WordMask));
+        var high = unchecked((int)(uint)((coefficient >> 64) & WordMask));
+        result = new decimal(low, mid, high, negative, (byte)scale);
+        return true;
+    }
+
     /// <summary>
     /// Creates a numeric value from <see cref="decimal"/>, preserving integer shape when possible.
     /// </summary>
+    /// <param name="value">The base-10 value to preserve.</param>
+    /// <returns>
+    /// An Int64 value for integral inputs in the Int64 range; otherwise an exact Decimal value.
+    /// </returns>
     public static ObservationValue FromDecimal(decimal value)
     {
         if (value == Math.Truncate(value) && value is >= long.MinValue and <= long.MaxValue)
             return FromInt64((long)value);
 
-        return FromDouble((double)value);
+        return new(ObservationValueKind.Decimal, dec: value);
     }
 
     /// <summary>
@@ -1292,8 +1488,9 @@ public readonly struct ObservationValue(
         {
             ObservationValueKind.Undefined => UndefinedHash,
             ObservationValueKind.Null => NullHash,
-            ObservationValueKind.Int64 => HashNumericInt64(Int64),
+            ObservationValueKind.Int64 => HashNumericDecimal(Int64),
             ObservationValueKind.Double => HashNumericDouble(Double),
+            ObservationValueKind.Decimal => HashNumericDecimal(Decimal),
             ObservationValueKind.Bool => Bool ? TrueHash : FalseHash,
             ObservationValueKind.String => CombineHash(StringHashMarker, StringComparer.Ordinal.GetHashCode(String ?? string.Empty)),
             ObservationValueKind.DateTimeOffset => CombineHash(DateTimeOffsetHashMarker, StringComparer.Ordinal.GetHashCode(String ?? string.Empty)),
@@ -1306,15 +1503,15 @@ public readonly struct ObservationValue(
             _ => 0
         };
 
-        static int HashNumericInt64(long value)
-            => CombineHash(NumericHashMarker, value.GetHashCode());
-
         static int HashNumericDouble(double value)
         {
-            if (TryGetExactInt64FromDouble(value, out var int64))
-                return HashNumericInt64(int64);
+            if (Math.TryGetCanonicalDecimalFromDouble(value, out var exact))
+                return HashNumericDecimal(exact);
             return CombineHash(NumericHashMarker, value.GetHashCode());
         }
+
+        static int HashNumericDecimal(decimal value)
+            => CombineHash(NumericHashMarker, value.GetHashCode());
 
         static int HashBytes(ReadOnlySpan<byte> bytes)
         {
@@ -1408,6 +1605,25 @@ public readonly struct ObservationValue(
             : DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out value);
     }
 
+    static bool HasExplicitDateTimeOffset(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        var span = text.AsSpan().Trim();
+        var timeBoundary = span.IndexOfAny('T', 't');
+        if (timeBoundary < 0)
+            timeBoundary = span.IndexOf(':');
+        if (timeBoundary < 0)
+            return false;
+
+        if (span[^1] is 'Z' or 'z')
+            return true;
+
+        return span.LastIndexOf('+') > timeBoundary
+            || span.LastIndexOf('-') > timeBoundary;
+    }
+
     static bool TryParseDateOnly(string? text, bool exact, out DateOnly value)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -1447,8 +1663,10 @@ public readonly struct ObservationValue(
             : TimeSpan.TryParse(text, CultureInfo.InvariantCulture, out value);
     }
 
-    static bool TryGetExactInt64FromDouble(double value, out long integer) => 
-        Math.TryGetExactInt64FromDouble(value, out integer);
+    static bool IsNumericKind(ObservationValueKind kind)
+        => kind is ObservationValueKind.Int64
+            or ObservationValueKind.Double
+            or ObservationValueKind.Decimal;
 
     /// <summary>
     /// Equality operator based on deep semantic equality.
@@ -1491,7 +1709,9 @@ public enum ObservationValueKind
     /// <summary>Represents the time only option.</summary>
     TimeOnly = 11,
     /// <summary>Represents the time span option.</summary>
-    TimeSpan = 12
+    TimeSpan = 12,
+    /// <summary>Represents the exact base-10 decimal option.</summary>
+    Decimal = 13
 }
 
 /// <summary>

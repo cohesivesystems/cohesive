@@ -127,32 +127,32 @@ export type RelationQueryRealizationDecision = {
 } & UnavailableRelationQueryRealizationDecision;
 
 export interface NativeRelationQueryRealizationDecision {
-  requirement: RelationQueryRealizationRequirementId;
   capabilityEvidence: RelationQueryTargetCapabilityEvidenceId[];
   preservedGuarantees: RelationQueryGuaranteeCapabilityKind[];
+  requirement: RelationQueryRealizationRequirementId;
 }
 
 export interface ComposedRelationQueryRealizationDecision {
-  requirement: RelationQueryRealizationRequirementId;
   compositionRules: RelationQueryCompositionRuleId[];
   capabilityEvidence: RelationQueryTargetCapabilityEvidenceId[];
   preservedGuarantees: RelationQueryGuaranteeCapabilityKind[];
+  requirement: RelationQueryRealizationRequirementId;
 }
 
 export interface ConstrainedRelationQueryRealizationDecision {
-  requirement: RelationQueryRealizationRequirementId;
   capabilityEvidence: RelationQueryTargetCapabilityEvidenceId[];
   boundaryValidations: RelationQueryOperatingBoundaryValidation[];
   compositionRules: RelationQueryCompositionRuleId[];
   preservedGuarantees: RelationQueryGuaranteeCapabilityKind[];
+  requirement: RelationQueryRealizationRequirementId;
 }
 
 export interface OverrideRelationQueryRealizationDecision {
-  requirement: RelationQueryRealizationRequirementId;
   override: RelationQueryRealizationOverrideId;
   capabilityEvidence: RelationQueryTargetCapabilityEvidenceId[];
   boundaryValidations: RelationQueryOperatingBoundaryValidation[];
   preservedGuarantees: RelationQueryGuaranteeCapabilityKind[];
+  requirement: RelationQueryRealizationRequirementId;
 }
 
 export interface UnavailableRelationQueryRealizationDecision {
@@ -245,19 +245,19 @@ export type RelationQueryDefinition = {
 } & QueryDefinition;
 
 export interface RelationDefinition {
-  body: LogicalQueryDefinition;
   id: RelationId;
   name: RelationName;
   rootBinding: ValueBindingId;
   output: RelationOutputDefinition;
   invariants: InvariantDefinition[];
+  body: LogicalQueryDefinition;
 }
 
 export interface QueryDefinition {
-  body: LogicalQueryDefinition;
   id: QueryId;
   name: QueryName;
   results: QueryResultDefinition[];
+  body: LogicalQueryDefinition;
 }
 
 export interface RelationQueryDefinitionFingerprint {
@@ -1300,9 +1300,9 @@ export interface SourceQueryNode {
 }
 
 export interface FilterQueryNode {
-  id: QueryNodeId;
   input: QueryNodeId;
   predicate: Expr;
+  id: QueryNodeId;
 }
 
 export interface TraverseRelationshipQueryNode {
@@ -1317,11 +1317,11 @@ export interface TraverseRelationshipQueryNode {
 }
 
 export interface JoinQueryNode {
-  id: QueryNodeId;
   left: QueryNodeId;
   right: QueryNodeId;
   kind: JoinKind;
   predicate: Expr;
+  id: QueryNodeId;
 }
 
 export interface TemporalJoinQueryNode {
@@ -1334,11 +1334,11 @@ export interface TemporalJoinQueryNode {
 }
 
 export interface ExpandCollectionQueryNode {
-  id: QueryNodeId;
   input: QueryNodeId;
   collection: Expr;
   itemBinding: ValueBindingId;
   itemType: TypeRef;
+  id: QueryNodeId;
 }
 
 export interface ProjectQueryNode {
@@ -1350,18 +1350,18 @@ export interface ProjectQueryNode {
 }
 
 export interface DistinctQueryNode {
-  id: QueryNodeId;
   input: QueryNodeId;
   keys: Expr[];
+  id: QueryNodeId;
 }
 
 export interface AggregateQueryNode {
-  id: QueryNodeId;
   input: QueryNodeId;
   resultBinding: ValueBindingId;
   resultShape: QualifiedShapeId;
   groupings: QueryGrouping[];
   aggregates: QueryAggregateAssignment[];
+  id: QueryNodeId;
 }
 
 export interface OrderQueryNode {
@@ -1652,13 +1652,13 @@ export type QueryPageDefinition = {
 } & KeysetPageDefinition;
 
 export interface OffsetPageDefinition {
-  limit: number;
   offset: number;
+  limit: number;
 }
 
 export interface KeysetPageDefinition {
-  limit: number;
   after: Expr[];
+  limit: number;
 }
 
 export type QueryParameterId = string;

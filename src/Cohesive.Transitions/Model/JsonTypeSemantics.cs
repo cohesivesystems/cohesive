@@ -296,7 +296,9 @@ static class JsonTypeSemantics
             JsonTypeKind.Object => value.Kind == ObservationValueKind.Object,
             JsonTypeKind.Array => value.Kind == ObservationValueKind.Array,
             JsonTypeKind.String => value.Kind == ObservationValueKind.String,
-            JsonTypeKind.Number => value.Kind is ObservationValueKind.Int64 or ObservationValueKind.Double,
+            JsonTypeKind.Number => value.Kind is ObservationValueKind.Int64
+                or ObservationValueKind.Double
+                or ObservationValueKind.Decimal,
             JsonTypeKind.Boolean => value.Kind == ObservationValueKind.Bool,
             _ => false
         };

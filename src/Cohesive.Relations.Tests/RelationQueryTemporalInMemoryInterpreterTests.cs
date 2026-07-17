@@ -267,10 +267,10 @@ public sealed class RelationQueryTemporalInMemoryInterpreterTests
     }
 
     [Fact]
-    public void Execute_FalseCorrelationShortCircuitsMalformedTemporalOperands()
+    public void Execute_FalseCorrelationWithInconclusiveTemporalEvidence_RemainsIncomplete()
     {
         var plan = Compile(CreateExecutionDocument(CreatePointMatch(), JoinKind.Full));
-        var malformed = FieldValue.From(AmbiguousInstant());
+        var malformed = FieldValue.Inconclusive;
         var evidence = CreateEvidence(
             plan,
             events: [PointEvent("event", "a", day: 15)],
@@ -278,7 +278,7 @@ public sealed class RelationQueryTemporalInMemoryInterpreterTests
 
         var result = Execute(plan, evidence);
 
-        AssertStatus(result, RelationQueryExecutionStatus.Succeeded);
+        AssertStatus(result, RelationQueryExecutionStatus.Incomplete);
         Assert.DoesNotContain(
             result.Diagnostics,
             static diagnostic => diagnostic.Code is
@@ -322,7 +322,7 @@ public sealed class RelationQueryTemporalInMemoryInterpreterTests
     public void Execute_IndeterminateCandidatesSuppressFalseOuterRowsWithoutDiscardingValidMatch()
     {
         var plan = Compile(CreateExecutionDocument(CreatePointMatch(), JoinKind.Full));
-        var malformed = FieldValue.From(AmbiguousInstant());
+        var malformed = FieldValue.Inconclusive;
         var evidence = CreateEvidence(
             plan,
             events:
@@ -347,14 +347,14 @@ public sealed class RelationQueryTemporalInMemoryInterpreterTests
         Assert.Contains(
             result.Diagnostics,
             static diagnostic => diagnostic.Code
-                == RelationRuntimeDiagnosticCodes.ExecutionTemporalOperandInvalid);
+                == RelationRuntimeDiagnosticCodes.RequirementGapInputAcquisitionInconclusive);
     }
 
     [Fact]
     public void Execute_IndeterminateOnePerRootRelationRemainsIncompleteWithoutCardinalityFailure()
     {
         var plan = Compile(CreateExecutionRelationDocument(CreatePointMatch(), JoinKind.Left));
-        var malformed = FieldValue.From(AmbiguousInstant());
+        var malformed = FieldValue.Inconclusive;
         var evidence = CreateEvidence(
             plan,
             events:
@@ -378,8 +378,7 @@ public sealed class RelationQueryTemporalInMemoryInterpreterTests
         Assert.Contains(
             result.Diagnostics,
             static diagnostic => diagnostic.Code
-                == RelationRuntimeDiagnosticCodes.ExecutionTemporalOperandInvalid
-                && diagnostic.Node == TemporalJoin
+                == RelationRuntimeDiagnosticCodes.RequirementGapInputAcquisitionInconclusive
                 && diagnostic.Occurrence == new RelationQueryOccurrenceId("version/invalid"));
     }
 
@@ -766,14 +765,13 @@ public sealed class RelationQueryTemporalInMemoryInterpreterTests
     static ObservationValue Instant(int day) =>
         ObservationValue.FromDateTimeOffset(new(2026, 1, day, 0, 0, 0, TimeSpan.Zero));
 
-    static ObservationValue AmbiguousInstant() =>
-        ObservationValue.FromString("2026-01-10T00:00:00");
-
     sealed record FieldValue(
         RelationQueryFieldEvidenceState State,
         ObservationValue? Observation = null)
     {
         public static FieldValue Null { get; } = new(RelationQueryFieldEvidenceState.Null);
+
+        public static FieldValue Inconclusive { get; } = new(RelationQueryFieldEvidenceState.Inconclusive);
 
         public static FieldValue From(ObservationValue value) =>
             new(RelationQueryFieldEvidenceState.Value, value);

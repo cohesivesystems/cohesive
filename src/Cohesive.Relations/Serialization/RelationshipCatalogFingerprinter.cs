@@ -9,10 +9,12 @@ namespace Cohesive.Relations.Serialization;
 /// Computes stable semantic content fingerprints for canonical relationship catalogs.
 /// </summary>
 /// <remarks>
-/// The v1 canonicalization profile writes UTF-8 JSON with ordinal object-key ordering,
+/// The v2 canonicalization profile writes UTF-8 JSON with ordinal object-key ordering,
 /// ordinal relationship-id ordering for the set-like relationship collection, preserved
 /// order for semantic sequences such as field-path segments, unescaped Unicode scalar text,
-/// and shortest round-trip JSON numbers. Document metadata is not part of the input.
+/// and canonical round-trip JSON numbers. Exact decimal values and double values that round-trip
+/// through <see cref="decimal"/> share one normalized decimal spelling. Document metadata is not
+/// part of the input.
 /// </remarks>
 public static class RelationshipCatalogFingerprinter
 {
@@ -20,7 +22,7 @@ public static class RelationshipCatalogFingerprinter
     public const string Algorithm = "sha256";
 
     /// <summary>Canonicalization profile identifier.</summary>
-    public const string Canonicalization = "relationship-catalog/v1-c14n/v1";
+    public const string Canonicalization = "relationship-catalog/v1-c14n/v2";
 
     /// <summary>Computes a semantic content fingerprint for a relationship catalog.</summary>
     /// <param name="catalog">Canonical semantic relationship catalog to fingerprint.</param>

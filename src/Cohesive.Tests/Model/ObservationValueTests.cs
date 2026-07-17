@@ -3,6 +3,7 @@ using System.Collections;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 namespace Cohesive.Tests.Model;
@@ -111,6 +112,131 @@ public sealed class ObservationValueTests
     }
 
     [Fact]
+    public void FromDecimal_HighPrecisionValue_RoundTripsWithoutDoubleConversion()
+    {
+        const decimal expected = 12345678901234567890.123456789m;
+
+        var observed = ObservationValue.FromDecimal(expected);
+        var json = JsonSerializer.Serialize(observed);
+        var roundTripped = JsonSerializer.Deserialize<ObservationValue>(json);
+
+        Assert.Equal(ObservationValueKind.Decimal, observed.Kind);
+        Assert.Equal(expected, observed.Decimal);
+        Assert.Equal(expected, observed.GetDecimal());
+        Assert.Equal("12345678901234567890.123456789", json);
+        Assert.Equal(observed, roundTripped);
+        Assert.Equal(expected, roundTripped.Decimal);
+    }
+
+    [Fact]
+    public void FromDecimal_IntegralInt64Value_PreservesIntegerNormalization()
+    {
+        var observed = ObservationValue.FromDecimal(42.000m);
+
+        Assert.Equal(ObservationValueKind.Int64, observed.Kind);
+        Assert.Equal(42L, observed.Int64);
+        Assert.Equal("42", observed.GetRawText());
+    }
+
+    [Fact]
+    public void FromJsonElement_HighPrecisionNumber_UsesDecimalCarrier()
+    {
+        const decimal expected = 12345678901234567890.123456789m;
+        using var document = JsonDocument.Parse("12345678901234567890.123456789");
+
+        var observed = ObservationValue.FromJsonElement(document.RootElement);
+
+        Assert.Equal(ObservationValueKind.Decimal, observed.Kind);
+        Assert.Equal(expected, observed.Decimal);
+        Assert.Equal(document.RootElement.GetRawText(), observed.GetRawText());
+    }
+
+    [Fact]
+    public void FromJsonElement_NumberOutsideDecimalScale_FallsBackToDouble()
+    {
+        using var document = JsonDocument.Parse("1e-29");
+
+        var observed = ObservationValue.FromJsonElement(document.RootElement);
+
+        Assert.Equal(ObservationValueKind.Double, observed.Kind);
+        Assert.Equal(1e-29d, observed.Double);
+    }
+
+    [Fact]
+    public void FromJsonNode_PreservesTypedDoubleAndDecimalCarriers()
+    {
+        var floatingPoint = ObservationValue.FromJsonNode(JsonValue.Create(0.1d));
+        var exact = ObservationValue.FromJsonNode(JsonValue.Create(0.1m));
+
+        Assert.Equal(ObservationValueKind.Double, floatingPoint.Kind);
+        Assert.Equal(0.1d, floatingPoint.Double);
+        Assert.Equal(ObservationValueKind.Decimal, exact.Kind);
+        Assert.Equal(0.1m, exact.Decimal);
+    }
+
+    [Fact]
+    public void JsonRoundTrip_UntaggedDoubleNumber_PreservesSemanticEquality()
+    {
+        var original = ObservationValue.FromDouble(0.10000000000000002d);
+
+        var json = JsonSerializer.Serialize(original);
+        var roundTripped = JsonSerializer.Deserialize<ObservationValue>(json);
+
+        Assert.Equal(ObservationValueKind.Decimal, roundTripped.Kind);
+        Assert.Equal(original, roundTripped);
+        Assert.Equal(original.GetHashCode(), roundTripped.GetHashCode());
+        Assert.Equal(json, JsonSerializer.Serialize(roundTripped));
+    }
+
+    [Fact]
+    public void JsonRoundTrip_LargeIntegralDouble_UsesOneCanonicalNumericValue()
+    {
+        var original = ObservationValue.FromDouble(Math.BitIncrement(1e18));
+
+        var json = JsonSerializer.Serialize(original);
+        var roundTripped = JsonSerializer.Deserialize<ObservationValue>(json);
+
+        Assert.Equal("1E+18", 1e18.ToString("R", CultureInfo.InvariantCulture));
+        Assert.Equal("1.0000000000000001E+18", json);
+        Assert.Equal(original, roundTripped);
+        Assert.Equal(original.GetHashCode(), roundTripped.GetHashCode());
+        Assert.True(original.TryGetInt64(out var originalInteger));
+        Assert.True(roundTripped.TryGetInt64(out var roundTrippedInteger));
+        Assert.Equal(roundTrippedInteger, originalInteger);
+    }
+
+    [Fact]
+    public void DecimalEquality_IsExactAndProducesCompatibleHashes()
+    {
+        var left = ObservationValue.FromDecimal(12345678901234567890.123456789m);
+        var equal = ObservationValue.FromDecimal(12345678901234567890.123456789m);
+        var different = ObservationValue.FromDecimal(12345678901234567890.123456788m);
+        var exactDouble = ObservationValue.FromDouble(0.125d);
+        var exactDecimal = ObservationValue.FromDecimal(0.125m);
+
+        Assert.Equal(left, equal);
+        Assert.Equal(left.GetHashCode(), equal.GetHashCode());
+        Assert.NotEqual(left, different);
+        Assert.Equal(exactDecimal, exactDouble);
+        Assert.Equal(exactDecimal.GetHashCode(), exactDouble.GetHashCode());
+        var canonicalDecimal = ObservationValue.FromDecimal(0.1m);
+        var canonicalDouble = ObservationValue.FromDouble(0.1d);
+        Assert.Equal(canonicalDecimal, canonicalDouble);
+        Assert.Equal(canonicalDecimal.GetHashCode(), canonicalDouble.GetHashCode());
+    }
+
+    [Fact]
+    public void ExprDecimalConstant_PreservesExactCarrier()
+    {
+        const decimal expected = 12345678901234567890.123456789m;
+
+        var constant = Assert.IsType<ConstantExpr>(Expr.Const(expected));
+
+        Assert.Equal(ObservationValueKind.Decimal, constant.Value.Kind);
+        Assert.Equal(expected, constant.Value.Decimal);
+    }
+
+    [Fact]
     public void TryGetBoolean_FromString_ParsesTrueFalse()
     {
         var observed = ObservationValue.FromString("true");
@@ -192,6 +318,41 @@ public sealed class ObservationValueTests
         Assert.True(ObservationValue.FromString(dateOnlyText).TryGetDateOnly(out _));
         Assert.True(ObservationValue.FromString(timeOnlyText).TryGetTimeOnly(out _));
         Assert.True(ObservationValue.FromString(timeSpanText).TryGetTimeSpan(out _));
+    }
+
+    [Theory]
+    [InlineData("2026-07-17T12:34:56Z", true)]
+    [InlineData("2026-07-17T12:34:56z", true)]
+    [InlineData("2026-07-17T12:34:56+02:30", true)]
+    [InlineData("2026-07-17T12:34:56-07:00", true)]
+    [InlineData("2026-07-17T12:34:56", false)]
+    [InlineData("2026-07-17 12:34:56", false)]
+    public void TryGetInstant_RequiresAnExplicitOffsetForStringValues(string text, bool expected)
+    {
+        var observed = ObservationValue.FromString(text);
+
+        Assert.Equal(expected, observed.TryGetInstant(out _));
+    }
+
+    [Fact]
+    public void TryGetInstant_AcceptsValidDedicatedDateTimeOffsetAndRejectsMalformedPayload()
+    {
+        var instant = new DateTimeOffset(2026, 7, 17, 12, 34, 56, TimeSpan.FromHours(-7));
+
+        Assert.True(ObservationValue.FromDateTimeOffset(instant).TryGetInstant(out var parsed));
+        Assert.Equal(instant, parsed);
+        Assert.False(new ObservationValue(
+            ObservationValueKind.DateTimeOffset,
+            s: "not-an-instant").TryGetInstant(out _));
+    }
+
+    [Fact]
+    public void DateTimeOffsetReader_RetainsCivilOffsetlessStringBehavior()
+    {
+        var observed = ObservationValue.FromString("2026-07-17T12:34:56");
+
+        Assert.True(observed.TryGetDateTimeOffset(out _));
+        Assert.False(observed.TryGetInstant(out _));
     }
 
     [Fact]
