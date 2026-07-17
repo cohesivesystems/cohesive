@@ -573,6 +573,7 @@ public static class RelationQueryRealizationRequirementProjector
                 var node = ResolveSiteNode(site);
                 foreach (var use in site.Analysis.CapabilityUses)
                 {
+                    var isScopedCollectionExpression = IsScopedCollectionExpressionUse(site, use);
                     capabilityInputs.TryGetValue(use.Requirement, out var input);
                     var origin = new RelationQueryRealizationRequirementOrigin(
                         input?.Input.Id,
@@ -589,8 +590,15 @@ public static class RelationQueryRealizationRequirementProjector
                         requiredGuarantees:
                         [
                             RelationQueryGuaranteeCapabilityKind.MissingNullDistinction,
-                            RelationQueryGuaranteeCapabilityKind.AbsenceAvailabilityFailureDistinction
+                            RelationQueryGuaranteeCapabilityKind.AbsenceAvailabilityFailureDistinction,
+                            .. isScopedCollectionExpression
+                                ? [RelationQueryGuaranteeCapabilityKind.CollectionElementCorrelation]
+                                : ImmutableArray<RelationQueryGuaranteeCapabilityKind>.Empty
                         ]));
+                    if (isScopedCollectionExpression)
+                    {
+                        AddGuarantee(RelationQueryGuaranteeCapabilityKind.CollectionElementCorrelation);
+                    }
                 }
             }
         }
@@ -650,7 +658,12 @@ public static class RelationQueryRealizationRequirementProjector
                                 node,
                                 site.Analysis.Site.Id.Value,
                                 UsesForSite(site, EffectForSite(site.Kind)),
-                                classifyCurrentItemPath: true);
+                                classifyCurrentItemPath: true,
+                                additionalRequiredGuarantees:
+                                [
+                                    RelationQueryGuaranteeCapabilityKind.CollectionElementCorrelation
+                                ]);
+                            AddGuarantee(RelationQueryGuaranteeCapabilityKind.CollectionElementCorrelation);
                             break;
                         case ExprFieldRootKind.Unresolved:
                             throw new InvalidOperationException(
@@ -868,9 +881,13 @@ public static class RelationQueryRealizationRequirementProjector
             ImmutableArray<RelationQueryRealizationRequirementUse> uses,
             bool classifyCurrentItemPath = false,
             string? qualifier = null,
-            ValueBindingId? binding = null)
+            ValueBindingId? binding = null,
+            ImmutableArray<RelationQueryGuaranteeCapabilityKind> additionalRequiredGuarantees = default)
         {
             var pathKind = ClassifyPath(path, classifyCurrentItemPath);
+            var additionalGuarantees = additionalRequiredGuarantees.IsDefault
+                ? []
+                : additionalRequiredGuarantees;
             Add(new(
                 StructuralId(role, pathKind, input, binding, node, semanticSite, path, qualifier),
                 new StructuralRelationQueryCapability(role, pathKind),
@@ -879,7 +896,8 @@ public static class RelationQueryRealizationRequirementProjector
                 requiredGuarantees:
                 [
                     RelationQueryGuaranteeCapabilityKind.MissingNullDistinction,
-                    RelationQueryGuaranteeCapabilityKind.AbsenceAvailabilityFailureDistinction
+                    RelationQueryGuaranteeCapabilityKind.AbsenceAvailabilityFailureDistinction,
+                    .. additionalGuarantees
                 ],
                 staticFacts:
                 [
@@ -1565,6 +1583,11 @@ public static class RelationQueryRealizationRequirementProjector
                 && segments[0] is { Kind: SegmentKind.Field, Segment: ExprFieldRoots.CurrentItem })
             {
                 segments = [.. segments.Skip(1)];
+                var hasNestedCollection = segments.Any(static segment => segment.Kind == SegmentKind.Element);
+                var relativeFieldCount = segments.Count(static segment => segment.Kind == SegmentKind.Field);
+                return hasNestedCollection || relativeFieldCount > 1
+                    ? RelationQueryStructuralPathKind.NestedCollectionElement
+                    : RelationQueryStructuralPathKind.CollectionElement;
             }
             if (segments.IsDefaultOrEmpty)
                 return RelationQueryStructuralPathKind.RootValue;
@@ -1580,6 +1603,107 @@ public static class RelationQueryRealizationRequirementProjector
             return fieldCount <= 1
                 ? RelationQueryStructuralPathKind.TopLevelField
                 : RelationQueryStructuralPathKind.NestedField;
+        }
+
+        static bool IsScopedCollectionExpressionUse(
+            RelationQueryExpressionSiteAnalysis site,
+            ExprCapabilityUse use)
+        {
+            if (use.Requirement.Kind != ExprCapabilityRequirementKind.Operation)
+            {
+                return false;
+            }
+
+            if (FindExpression(site.Analysis.Site.Expression, use.ExpressionPath) is not CallExpr call
+                || use.Requirement.Capability != ExprCapabilities.ForFunction(call.Function)
+                || !ExprSemanticsCatalog.Default.TryGetFunction(call.Function, out var definition))
+            {
+                return false;
+            }
+
+            return definition.ScopedArguments.Any(scoped =>
+                scoped.ArgumentIndex < call.Arguments.Length);
+        }
+
+        static Expr? FindExpression(Expr root, string expressionPath)
+        {
+            if (string.Equals(expressionPath, "/", StringComparison.Ordinal))
+                return root;
+            if (string.IsNullOrWhiteSpace(expressionPath)
+                || expressionPath[0] != '/')
+            {
+                return null;
+            }
+
+            var segments = expressionPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            Expr current = root;
+            for (var index = 0; index < segments.Length;)
+            {
+                switch (current)
+                {
+                    case UnaryExpr unary when segments[index] == "operand":
+                        current = unary.Operand;
+                        index++;
+                        break;
+                    case BinaryExpr binary when segments[index] == "left":
+                        current = binary.Left;
+                        index++;
+                        break;
+                    case BinaryExpr binary when segments[index] == "right":
+                        current = binary.Right;
+                        index++;
+                        break;
+                    case ConditionalExpr conditional when segments[index] == "test":
+                        current = conditional.Test;
+                        index++;
+                        break;
+                    case ConditionalExpr conditional when segments[index] == "ifTrue":
+                        current = conditional.IfTrue;
+                        index++;
+                        break;
+                    case ConditionalExpr conditional when segments[index] == "ifFalse":
+                        current = conditional.IfFalse;
+                        index++;
+                        break;
+                    case CallExpr call
+                        when segments[index] == "arguments"
+                             && TryReadIndex(segments, index + 1, call.Arguments.Length, out var argumentIndex):
+                        current = call.Arguments[argumentIndex];
+                        index += 2;
+                        break;
+                    case AggregateExpr aggregate when segments[index] == "source":
+                        current = aggregate.Source;
+                        index++;
+                        break;
+                    case AggregateExpr aggregate
+                        when segments[index] == "groupBy"
+                             && TryReadIndex(segments, index + 1, aggregate.GroupBy.Length, out var groupIndex):
+                        current = aggregate.GroupBy[groupIndex];
+                        index += 2;
+                        break;
+                    default:
+                        return null;
+                }
+            }
+
+            return current;
+        }
+
+        static bool TryReadIndex(
+            IReadOnlyList<string> segments,
+            int segmentIndex,
+            int count,
+            out int value)
+        {
+            value = -1;
+            return segmentIndex < segments.Count
+                && int.TryParse(
+                    segments[segmentIndex],
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out value)
+                && value >= 0
+                && value < count;
         }
 
         static ImmutableArray<InputUse> CreateInputUses(RelationQueryInputContract contract)

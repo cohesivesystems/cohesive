@@ -39,7 +39,10 @@ public enum ElasticQueryTemplateKind
     /// Combines filter-context clauses with query-context disjunction and negation clauses; enclosing placement
     /// determines whether the complete Boolean clause contributes to scoring.
     /// </summary>
-    Boolean = 6
+    Boolean = 6,
+
+    /// <summary>Evaluates one child query against each document in a mapped nested-object collection.</summary>
+    Nested = 7
 }
 
 /// <summary>Source of a reusable Elasticsearch query-template value.</summary>
@@ -75,15 +78,29 @@ public sealed class ElasticQueryValueTemplate
         ElasticQueryValueTransform transform)
     {
         if (!Enum.IsDefined(sourceKind))
+        {
             throw new ArgumentOutOfRangeException(nameof(sourceKind), sourceKind, "Unsupported Elasticsearch value source.");
+        }
+
         if (!Enum.IsDefined(transform))
+        {
             throw new ArgumentOutOfRangeException(nameof(transform), transform, "Unsupported Elasticsearch value transform.");
+        }
+
         if (sourceKind == ElasticQueryValueSourceKind.Constant != (parameter is null))
+        {
             throw new ArgumentException("Only a parameter value template can retain a parameter identity.", nameof(parameter));
+        }
+
         if (parameter is { } parameterId && string.IsNullOrWhiteSpace(parameterId.Value))
+        {
             throw new ArgumentException("An Elasticsearch value-template parameter cannot be empty.", nameof(parameter));
+        }
+
         if (sourceKind == ElasticQueryValueSourceKind.Constant && !IsSupportedScalar(constant))
+        {
             throw new ArgumentException("An Elasticsearch query-template constant must be a supported scalar value.", nameof(constant));
+        }
 
         SourceKind = sourceKind;
         Constant = constant;
@@ -146,7 +163,9 @@ public sealed class ElasticQueryValueTemplate
             _ => throw new ArgumentOutOfRangeException(nameof(SourceKind), SourceKind, "Unsupported Elasticsearch value source.")
         };
         if (!IsSupportedScalar(value))
+        {
             throw new ArgumentException("An Elasticsearch query-template value must be a supported scalar.", nameof(parameters));
+        }
 
         return Transform switch
         {
@@ -202,7 +221,10 @@ public sealed class ElasticQueryValueTemplate
     static string RequireText(ObservationValue value, ElasticQueryValueTransform transform)
     {
         if (value.Kind != ObservationValueKind.String)
+        {
             throw new ArgumentException($"Elasticsearch transform '{transform}' requires a canonical text value.", nameof(value));
+        }
+
         return value.String ?? string.Empty;
     }
 
@@ -217,7 +239,10 @@ public sealed class ElasticQueryValueTemplate
         while (!remaining.IsEmpty)
         {
             if (Rune.DecodeFromUtf16(remaining, out _, out var consumed) != OperationStatus.Done)
+            {
                 return false;
+            }
+
             remaining = remaining[consumed..];
         }
         return true;
@@ -231,14 +256,20 @@ public sealed class ElasticQueryValueTemplate
         {
             var status = Rune.DecodeFromUtf16(remaining, out var rune, out var consumed);
             if (status != OperationStatus.Done)
+            {
                 throw new ArgumentException("A reversed Elasticsearch suffix value must contain well-formed Unicode scalars.", nameof(value));
+            }
+
             runes.Add(rune);
             remaining = remaining[consumed..];
         }
 
         StringBuilder result = new(value.Length);
         for (var index = runes.Count - 1; index >= 0; index--)
+        {
             result.Append(runes[index]);
+        }
+
         return result.ToString();
     }
 }
@@ -265,7 +296,10 @@ public sealed record ElasticRangeBound
     {
         Value = Guard.RequireNotNull(value);
         if (!Enum.IsDefined(kind))
+        {
             throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported Elasticsearch range-bound kind.");
+        }
+
         Kind = kind;
     }
 
@@ -287,10 +321,14 @@ public sealed class ElasticQueryTemplate
         ElasticRangeBound? upper = null,
         ImmutableArray<ElasticQueryTemplate> filter = default,
         ImmutableArray<ElasticQueryTemplate> should = default,
-        ImmutableArray<ElasticQueryTemplate> mustNot = default)
+        ImmutableArray<ElasticQueryTemplate> mustNot = default,
+        ElasticQueryTemplate? innerQuery = null)
     {
         if (!Enum.IsDefined(kind))
+        {
             throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported Elasticsearch query-template kind.");
+        }
+
         Kind = kind;
         Field = field is null ? null : RequireField(field, nameof(field));
         Value = value;
@@ -299,6 +337,7 @@ public sealed class ElasticQueryTemplate
         Filter = Normalize(filter, nameof(filter));
         Should = Normalize(should, nameof(should));
         MustNot = Normalize(mustNot, nameof(mustNot));
+        InnerQuery = innerQuery;
 
         switch (kind)
         {
@@ -313,6 +352,8 @@ public sealed class ElasticQueryTemplate
                 break;
             case ElasticQueryTemplateKind.Boolean when Field is null && value is null
                                                        && (!Filter.IsDefaultOrEmpty || !Should.IsDefaultOrEmpty || !MustNot.IsDefaultOrEmpty):
+                break;
+            case ElasticQueryTemplateKind.Nested when Field is not null && value is null && innerQuery is not null:
                 break;
             default:
                 throw new ArgumentException("Elasticsearch query-template members conflict with the selected clause kind.", nameof(kind));
@@ -342,6 +383,9 @@ public sealed class ElasticQueryTemplate
 
     /// <summary>Clauses that must not match.</summary>
     public ImmutableArray<ElasticQueryTemplate> MustNot { get; }
+
+    /// <summary>Query evaluated in the nested-document scope, or <see langword="null"/> for other clause kinds.</summary>
+    public ElasticQueryTemplate? InnerQuery { get; }
 
     /// <summary>Creates a match-all query clause.</summary>
     /// <returns>An immutable match-all clause.</returns>
@@ -409,6 +453,15 @@ public sealed class ElasticQueryTemplate
         ImmutableArray<ElasticQueryTemplate> mustNot = default) =>
         new(ElasticQueryTemplateKind.Boolean, filter: filter, should: should, mustNot: mustNot);
 
+    /// <summary>Creates a nested-document query clause.</summary>
+    /// <param name="path">Physical path mapped by Elasticsearch as <c>nested</c>.</param>
+    /// <param name="query">Child query evaluated against one nested document at a time.</param>
+    /// <returns>An immutable nested-document clause.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="path"/> or <paramref name="query"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="path"/> is empty or contains a control character.</exception>
+    public static ElasticQueryTemplate Nested(string path, ElasticQueryTemplate query) =>
+        new(ElasticQueryTemplateKind.Nested, path, innerQuery: Guard.RequireNotNull(query));
+
     internal ElasticQuery Bind(IReadOnlyDictionary<QueryParameterId, ObservationValue> parameters) => Kind switch
     {
         ElasticQueryTemplateKind.MatchAll => new MatchAllQuery(),
@@ -431,6 +484,13 @@ public sealed class ElasticQueryTemplate
             MinimumShouldMatch = Should.IsDefaultOrEmpty ? null : 1,
             MustNot = BindClauses(MustNot, parameters)
         },
+        ElasticQueryTemplateKind.Nested => new NestedQuery
+        {
+            Path = new Field(Field!),
+            Query = InnerQuery!.Bind(parameters),
+            ScoreMode = ChildScoreMode.None,
+            IgnoreUnmapped = false
+        },
         _ => throw new ArgumentOutOfRangeException(
             nameof(Kind),
             Kind,
@@ -447,6 +507,8 @@ public sealed class ElasticQueryTemplate
         AppendClauses(builder, Filter);
         AppendClauses(builder, Should);
         AppendClauses(builder, MustNot);
+        ElasticCanonicalText.Append(builder, InnerQuery is null ? 0 : 1);
+        InnerQuery?.AppendCanonical(builder);
     }
 
     internal ImmutableHashSet<QueryParameterId> ReferencedParameters()
@@ -469,23 +531,46 @@ public sealed class ElasticQueryTemplate
         AddParameter(Lower?.Value, parameters);
         AddParameter(Upper?.Value, parameters);
         foreach (var clause in Filter)
+        {
             clause.CollectParameters(parameters);
+        }
+
         foreach (var clause in Should)
+        {
             clause.CollectParameters(parameters);
+        }
+
         foreach (var clause in MustNot)
+        {
             clause.CollectParameters(parameters);
+        }
+
+        InnerQuery?.CollectParameters(parameters);
     }
 
     void CollectFields(ImmutableHashSet<string>.Builder fields)
     {
         if (Field is not null)
+        {
             fields.Add(Field);
+        }
+
         foreach (var clause in Filter)
+        {
             clause.CollectFields(fields);
+        }
+
         foreach (var clause in Should)
+        {
             clause.CollectFields(fields);
+        }
+
         foreach (var clause in MustNot)
+        {
             clause.CollectFields(fields);
+        }
+
+        InnerQuery?.CollectFields(fields);
     }
 
     static void AddParameter(
@@ -493,7 +578,9 @@ public sealed class ElasticQueryTemplate
         ImmutableHashSet<QueryParameterId>.Builder parameters)
     {
         if (value?.Parameter is { } parameter)
+        {
             parameters.Add(parameter);
+        }
     }
 
     ElasticQuery BindRange(IReadOnlyDictionary<QueryParameterId, ObservationValue> parameters)
@@ -527,16 +614,24 @@ public sealed class ElasticQueryTemplate
         if (Lower is { } lower && lowerValue is { } lowerBound)
         {
             if (lower.Kind == ElasticRangeBoundKind.Inclusive)
+            {
                 range.Gte = ToNumber(lowerBound);
+            }
             else
+            {
                 range.Gt = ToNumber(lowerBound);
+            }
         }
         if (Upper is { } upper && upperValue is { } upperBound)
         {
             if (upper.Kind == ElasticRangeBoundKind.Inclusive)
+            {
                 range.Lte = ToNumber(upperBound);
+            }
             else
+            {
                 range.Lt = ToNumber(upperBound);
+            }
         }
         return range;
     }
@@ -547,16 +642,24 @@ public sealed class ElasticQueryTemplate
         if (Lower is { } lower && lowerValue is { } lowerBound)
         {
             if (lower.Kind == ElasticRangeBoundKind.Inclusive)
+            {
                 range.Gte = ToText(lowerBound);
+            }
             else
+            {
                 range.Gt = ToText(lowerBound);
+            }
         }
         if (Upper is { } upper && upperValue is { } upperBound)
         {
             if (upper.Kind == ElasticRangeBoundKind.Inclusive)
+            {
                 range.Lte = ToText(upperBound);
+            }
             else
+            {
                 range.Lt = ToText(upperBound);
+            }
         }
         return range;
     }
@@ -627,7 +730,10 @@ public sealed class ElasticQueryTemplate
     {
         var normalized = clauses.IsDefault ? [] : clauses;
         if (normalized.Any(static clause => clause is null))
+        {
             throw new ArgumentException("Elasticsearch Boolean clauses cannot contain null entries.", parameterName);
+        }
+
         return normalized;
     }
 
@@ -635,7 +741,10 @@ public sealed class ElasticQueryTemplate
     {
         var normalized = Guard.RequireNotNullOrWhiteSpace(field);
         if (normalized.Any(char.IsControl))
+        {
             throw new ArgumentException("An Elasticsearch field name cannot contain control characters.", parameterName);
+        }
+
         return normalized;
     }
 
@@ -649,7 +758,9 @@ public sealed class ElasticQueryTemplate
     {
         ElasticCanonicalText.Append(builder, clauses.Length);
         foreach (var clause in clauses)
+        {
             clause.AppendCanonical(builder);
+        }
     }
 }
 
@@ -672,11 +783,20 @@ public sealed record ElasticSearchSort
     {
         Field = Guard.RequireNotNullOrWhiteSpace(field);
         if (Field.Any(char.IsControl))
+        {
             throw new ArgumentException("An Elasticsearch sort field cannot contain control characters.", nameof(field));
+        }
+
         if (!Enum.IsDefined(direction))
+        {
             throw new ArgumentOutOfRangeException(nameof(direction), direction, "Unsupported query sort direction.");
+        }
+
         if (!Enum.IsDefined(nullPlacement))
+        {
             throw new ArgumentOutOfRangeException(nameof(nullPlacement), nullPlacement, "Unsupported query null placement.");
+        }
+
         Direction = direction;
         NullPlacement = nullPlacement;
     }
@@ -734,18 +854,35 @@ public sealed class ElasticSearchPageTemplate
         ImmutableArray<ElasticQueryValueTemplate> after)
     {
         if (!Enum.IsDefined(kind))
+        {
             throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported Elasticsearch page kind.");
+        }
+
         if (offset < 0)
+        {
             throw new ArgumentOutOfRangeException(nameof(offset), offset, "An Elasticsearch page offset cannot be negative.");
+        }
+
         if (kind != ElasticSearchPageKind.None && limit <= 0)
+        {
             throw new ArgumentOutOfRangeException(nameof(limit), limit, "A paged Elasticsearch request requires a positive limit.");
+        }
+
         var normalizedAfter = after.IsDefault ? [] : after;
         if (normalizedAfter.Any(static value => value is null))
+        {
             throw new ArgumentException("Elasticsearch search-after values cannot contain null templates.", nameof(after));
+        }
+
         if (kind != ElasticSearchPageKind.SearchAfter && !normalizedAfter.IsDefaultOrEmpty)
+        {
             throw new ArgumentException("Only search-after paging can retain continuation values.", nameof(after));
+        }
+
         if (kind != ElasticSearchPageKind.Offset && offset != 0)
+        {
             throw new ArgumentException("Only offset paging can retain a non-zero offset.", nameof(offset));
+        }
 
         Kind = kind;
         Offset = offset;
@@ -800,7 +937,9 @@ public sealed class ElasticSearchPageTemplate
         ElasticCanonicalText.Append(builder, Limit);
         ElasticCanonicalText.Append(builder, After.Length);
         foreach (var value in After)
+        {
             value.AppendCanonical(builder);
+        }
     }
 }
 
@@ -835,9 +974,15 @@ public sealed record ElasticCompositeAggregationSource
         Name = Guard.RequireNotNullOrWhiteSpace(name);
         Field = Guard.RequireNotNullOrWhiteSpace(field);
         if (Name.Any(char.IsControl) || Field.Any(char.IsControl))
+        {
             throw new ArgumentException("Composite aggregation names and fields cannot contain control characters.");
+        }
+
         if (!Enum.IsDefined(direction))
+        {
             throw new ArgumentOutOfRangeException(nameof(direction), direction, "Unsupported grouping direction.");
+        }
+
         Direction = direction;
     }
 
@@ -862,18 +1007,29 @@ public sealed class ElasticAggregationTemplate
         ImmutableArray<ElasticQueryValueTemplate> after = default)
     {
         if (!Enum.IsDefined(kind))
+        {
             throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported Elasticsearch aggregation-template kind.");
+        }
+
         Kind = kind;
         Name = name;
         Size = size;
         Sources = sources.IsDefault ? [] : sources;
         After = after.IsDefault ? [] : after;
         if (kind == ElasticAggregationTemplateKind.CompositeCount && size <= 0)
+        {
             throw new ArgumentOutOfRangeException(nameof(size), size, "A composite aggregation requires a positive page size.");
+        }
+
         if (Sources.Any(static source => source is null) || After.Any(static value => value is null))
+        {
             throw new ArgumentException("Elasticsearch aggregation templates cannot contain null entries.");
+        }
+
         if (Sources.GroupBy(static source => source.Name, StringComparer.Ordinal).Any(static group => group.Count() > 1))
+        {
             throw new ArgumentException("Composite aggregation source names cannot be repeated.", nameof(sources));
+        }
 
         switch (kind)
         {
@@ -989,7 +1145,9 @@ public sealed class ElasticAggregationTemplate
         }
         ElasticCanonicalText.Append(builder, After.Length);
         foreach (var value in After)
+        {
             value.AppendCanonical(builder);
+        }
     }
 }
 
@@ -1024,20 +1182,32 @@ public sealed class ElasticSearchRequestTemplate
     {
         Index = Guard.RequireNotNullOrWhiteSpace(index);
         if (Index.Any(char.IsControl))
+        {
             throw new ArgumentException("An Elasticsearch index identity cannot contain control characters.", nameof(index));
+        }
+
         Query = Guard.RequireNotNull(query);
         var normalizedSources = sourceIncludes.IsDefault ? [] : sourceIncludes;
         if (normalizedSources.Any(string.IsNullOrWhiteSpace) || normalizedSources.Any(static source => source.Any(char.IsControl)))
+        {
             throw new ArgumentException("Elasticsearch source selectors must be non-empty and contain no control characters.", nameof(sourceIncludes));
+        }
+
         SourceIncludes = [.. normalizedSources.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
         var normalizedSorts = sorts.IsDefault ? [] : sorts;
         if (normalizedSorts.Any(static sort => sort is null))
+        {
             throw new ArgumentException("Elasticsearch sorts cannot contain null entries.", nameof(sorts));
+        }
+
         Sorts = normalizedSorts;
         Page = Guard.RequireNotNull(page);
         Aggregation = Guard.RequireNotNull(aggregation);
         if (Page.Kind == ElasticSearchPageKind.SearchAfter && Sorts.IsDefaultOrEmpty)
+        {
             throw new ArgumentException("Search-after pagination requires at least one physical sort key.", nameof(sorts));
+        }
+
         if (Page.Kind == ElasticSearchPageKind.SearchAfter
             && !Page.After.IsDefaultOrEmpty
             && Page.After.Length != Sorts.Length)
@@ -1045,11 +1215,19 @@ public sealed class ElasticSearchRequestTemplate
             throw new ArgumentException("Search-after continuation values must align with every physical sort key.", nameof(page));
         }
         if (Aggregation.Kind != ElasticAggregationTemplateKind.None && Page.Kind != ElasticSearchPageKind.None)
+        {
             throw new ArgumentException("Hit pagination cannot be combined with an aggregation template.", nameof(page));
+        }
+
         if (Aggregation.Kind != ElasticAggregationTemplateKind.None && !Sorts.IsDefaultOrEmpty)
+        {
             throw new ArgumentException("Hit sorting cannot be combined with an aggregation template.", nameof(sorts));
+        }
+
         if (Aggregation.Kind != ElasticAggregationTemplateKind.None && !SourceIncludes.IsDefaultOrEmpty)
+        {
             throw new ArgumentException("Source selection cannot be combined with an aggregation template.", nameof(sourceIncludes));
+        }
     }
 
     /// <summary>Physical index or alias identity.</summary>
@@ -1146,10 +1324,16 @@ public sealed class ElasticSearchRequestTemplate
         Query.AppendCanonical(builder);
         ElasticCanonicalText.Append(builder, SourceIncludes.Length);
         foreach (var source in SourceIncludes)
+        {
             ElasticCanonicalText.Append(builder, source);
+        }
+
         ElasticCanonicalText.Append(builder, Sorts.Length);
         foreach (var sort in Sorts)
+        {
             sort.AppendCanonical(builder);
+        }
+
         Page.AppendCanonical(builder);
         Aggregation.AppendCanonical(builder);
         return builder.ToString();

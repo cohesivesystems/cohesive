@@ -1143,7 +1143,10 @@ public static class RelationQueryExpressionAnalyzer
 /// </summary>
 sealed class RelationQueryShapeResolver
 {
+    const int MaximumStructuralExpansionDepth = 64;
     readonly ImmutableDictionary<GraphId, ShapeGraph> graphs;
+    // Resolver instances are scoped to one analysis, so this cache shares immutable transient expansions across sites.
+    readonly Dictionary<QualifiedShapeId, Shape> expandedShapes = [];
 
     /// <summary>Creates a resolver over deterministic shape snapshots.</summary>
     /// <param name="shapeGraphs">Exact shape-graph snapshots keyed by unique graph identity.</param>
@@ -1161,13 +1164,117 @@ sealed class RelationQueryShapeResolver
             ? binding.Shape
             : null;
         
+        if (bindingShape is { } qualifiedShape
+            && graphs.TryGetValue(qualifiedShape.GraphId, out var graph)
+            && graph.TryGetShape(qualifiedShape.ShapeId, out var shape))
+        {
+            if (!expandedShapes.TryGetValue(qualifiedShape, out var expandedShape))
+            {
+                expandedShape = ExpandNamedStructuralFields(graph, shape);
+                expandedShapes.Add(qualifiedShape, expandedShape);
+            }
+            if (binding.Type is not null)
+            {
+                return new(
+                    type: binding.Type,
+                    shape: qualifiedShape,
+                    shapeDefinition: expandedShape);
+            }
+
+            return ExprValueContract.FromShape(expandedShape, qualifiedShape);
+        }
+
         if (binding.Type is not null)
             return new(type: binding.Type, shape: bindingShape);
-        
-        if (bindingShape is { } qualifiedShape && TryGetShape(qualifiedShape, out var shape))
-            return ExprValueContract.FromShape(shape, qualifiedShape);
 
         return new(shape: bindingShape);
+    }
+
+    static Shape ExpandNamedStructuralFields(ShapeGraph graph, Shape shape) => new(
+        shape.Id,
+        [
+            .. shape.Fields.Select(field => field with
+            {
+                Type = field.Cardinality == FieldCardinality.Many
+                    || field.Type is ArrayTypeRef
+                    ? ExpandNamedStructuralType(
+                        graph,
+                        field.Type,
+                        activeTypes: [],
+                        depth: 0)
+                    : field.Type
+            })
+        ],
+        shape.Constraints,
+        shape.Annotations);
+
+    static TypeRef ExpandNamedStructuralType(
+        ShapeGraph graph,
+        TypeRef type,
+        HashSet<TypeId> activeTypes,
+        int depth)
+    {
+        if (depth >= MaximumStructuralExpansionDepth)
+            return type;
+
+        return type switch
+        {
+            ArrayTypeRef array => new ArrayTypeRef(
+                ExpandNamedStructuralType(graph, array.ElementType, activeTypes, depth + 1)),
+            ObjectTypeRef objectType => new ObjectTypeRef(
+            [
+                .. objectType.Fields.Select(field => field with
+                {
+                    Type = ExpandNamedStructuralType(
+                        graph,
+                        field.Type,
+                        activeTypes,
+                        depth + 1)
+                })
+            ]),
+            NamedTypeRef named => ExpandNamedStructuralType(graph, named, activeTypes, depth),
+            _ => type
+        };
+    }
+
+    static TypeRef ExpandNamedStructuralType(
+        ShapeGraph graph,
+        NamedTypeRef named,
+        HashSet<TypeId> activeTypes,
+        int depth)
+    {
+        if (activeTypes.Contains(named.TypeId)
+            || !graph.TryGetType(named.TypeId, out var definition)
+            || definition is not TypeDefinition.Structural { Fields.IsDefaultOrEmpty: false } structural)
+        {
+            return named;
+        }
+
+        activeTypes.Add(named.TypeId);
+        try
+        {
+            return new ObjectTypeRef(
+            [
+                .. structural.Fields.Select(field => new ObjectFieldTypeDef(
+                    field.Name.Value,
+                    field.Cardinality == FieldCardinality.Many
+                        ? new ArrayTypeRef(ExpandNamedStructuralType(
+                            graph,
+                            field.Type,
+                            activeTypes,
+                            depth + 1))
+                        : ExpandNamedStructuralType(
+                            graph,
+                            field.Type,
+                            activeTypes,
+                            depth + 1),
+                    field.Presence))
+            ]);
+        }
+        finally
+        {
+            activeTypes.Remove(named.TypeId);
+        }
     }
 
     static bool IsUsableShapeIdentity(QualifiedShapeId shape) =>

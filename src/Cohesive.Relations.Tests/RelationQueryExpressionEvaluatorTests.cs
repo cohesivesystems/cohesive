@@ -371,6 +371,68 @@ public sealed class RelationQueryExpressionEvaluatorTests
     }
 
     [Fact]
+    public void Evaluate_StructuredAnyRequiresOneElementToSatisfyTheCompletePredicate()
+    {
+        var expression = Expr.Any(
+            Expr.Field(LoadBinding, "Stops"),
+            Expr.And(
+                Expr.Eq(Expr.Field("item.Location"), Expr.Const("Seattle")),
+                Expr.Eq(Expr.Field("item.Type"), Expr.Const("Pickup"))));
+        var splitMatch = StructuredStopsContext(
+            Object(
+                ("Location", ObservationValue.FromString("Seattle")),
+                ("Type", ObservationValue.FromString("Delivery"))),
+            Object(
+                ("Location", ObservationValue.FromString("Portland")),
+                ("Type", ObservationValue.FromString("Pickup"))));
+        var sameElementMatch = StructuredStopsContext(
+            Object(
+                ("Location", ObservationValue.FromString("Seattle")),
+                ("Type", ObservationValue.FromString("Pickup"))),
+            Object(
+                ("Location", ObservationValue.FromString("Portland")),
+                ("Type", ObservationValue.FromString("Delivery"))));
+
+        Assert.False(evaluator.Evaluate(expression, splitMatch).Bool);
+        Assert.True(evaluator.Evaluate(expression, sameElementMatch).Bool);
+    }
+
+    [Fact]
+    public void Evaluate_StructuredAnyDefinesEmptyNullMissingAndInvalidOperandSemantics()
+    {
+        var predicate = Expr.Const(true);
+
+        Assert.False(evaluator.Evaluate(
+            Expr.Any(
+                Expr.Field(LoadBinding, "Stops"),
+                predicate),
+            StructuredStopsContext()).Bool);
+
+        ObservationValue[] invalidCollections =
+        [
+            ObservationValue.Null,
+            ObservationValue.Undefined,
+            ObservationValue.FromString("not-a-collection")
+        ];
+        Assert.All(invalidCollections, collection =>
+        {
+            var exception = Assert.Throws<RelationQueryExpressionEvaluationException>(() =>
+                evaluator.Evaluate(
+                    Expr.Any(Expr.Const(collection), predicate),
+                    new RelationQueryExpressionContext()));
+            Assert.Equal(RelationQueryExpressionEvaluationError.InvalidOperand, exception.Error);
+        });
+
+        var nonBooleanPredicate = Assert.Throws<RelationQueryExpressionEvaluationException>(() =>
+            evaluator.Evaluate(
+                Expr.Any(
+                    Expr.Const(ObservationValue.FromArray([ObservationValue.FromInt64(1)])),
+                    Expr.CurrentItem()),
+                new RelationQueryExpressionContext()));
+        Assert.Equal(RelationQueryExpressionEvaluationError.InvalidOperand, nonBooleanPredicate.Error);
+    }
+
+    [Fact]
     public void Aggregate_SupportsUngroupedAggregateExprAndLogicalAggregateValues()
     {
         var expression = new AggregateExpr(
@@ -421,6 +483,13 @@ public sealed class RelationQueryExpressionEvaluatorTests
             currentItem: null,
             rootIdentity,
             sourceRows);
+
+    static RelationQueryExpressionContext StructuredStopsContext(params ObservationValue[] stops) =>
+        Context(
+            bindings: new Dictionary<ValueBindingId, RelationQueryExpressionBinding>
+            {
+                [LoadBinding] = new(Object(("Stops", ObservationValue.FromArray(stops))))
+            });
 
     static ObservationValue Object(params (string Name, ObservationValue Value)[] fields) =>
         ObservationValue.FromObject(

@@ -168,6 +168,293 @@ public enum ElasticRelationQueryFieldDocumentScope
     NestedDocument = 2
 }
 
+/// <summary>Physical guarantee that preserves predicates over one structured collection element.</summary>
+public enum ElasticRelationQueryNestedCorrelationGuarantee
+{
+    /// <summary>No same-element correlation guarantee is asserted.</summary>
+    Unproven = 0,
+
+    /// <summary>Every child predicate is evaluated against fields from the same Elasticsearch nested document.</summary>
+    SameNestedDocument = 1
+}
+
+/// <summary>Physical treatment of absent or explicit-null data within one structured nested collection.</summary>
+public enum ElasticRelationQueryNestedAbsenceBehavior
+{
+    /// <summary>The binding does not prove how the absent value is handled.</summary>
+    Unproven = 0,
+
+    /// <summary>Ingestion rejects the absent value, so every indexed document satisfies the canonical contract.</summary>
+    ProhibitedByIngestion = 1,
+
+    /// <summary>The absent value has no indexed term or nested document and therefore cannot satisfy a query.</summary>
+    NotIndexed = 2
+}
+
+/// <summary>Physical representation of an empty structured collection.</summary>
+public enum ElasticRelationQueryEmptyCollectionBehavior
+{
+    /// <summary>The binding does not prove how an empty collection is represented.</summary>
+    Unproven = 0,
+
+    /// <summary>An empty collection contributes no nested documents and therefore cannot satisfy a nested query.</summary>
+    NoNestedDocuments = 1
+}
+
+/// <summary>Exact physical mapping of one canonical field relative to a structured collection element.</summary>
+public sealed record ElasticRelationQueryNestedChildFieldBinding
+{
+    /// <summary>Creates one nested child-field mapping.</summary>
+    /// <param name="elementPath">Canonical field path relative to one collection element.</param>
+    /// <param name="queryField">Complete physical indexed field path.</param>
+    /// <param name="mappingKind">Physical scalar mapping family.</param>
+    /// <param name="semanticCapabilities">Exact scalar query facilities attested by this mapping.</param>
+    /// <param name="semanticProfile">Stable mapping and normalization profile supporting the asserted capabilities.</param>
+    /// <param name="missingValueBehavior">Physical handling of a missing child field.</param>
+    /// <param name="nullValueBehavior">Physical handling of an explicit-null child field.</param>
+    /// <exception cref="ArgumentException">A path, mapping, capability, profile, or absence combination is inconsistent.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">An enum value or capability flag is unsupported.</exception>
+    public ElasticRelationQueryNestedChildFieldBinding(
+        FieldPath elementPath,
+        FieldPath queryField,
+        ElasticRelationQueryFieldMappingKind mappingKind,
+        ElasticRelationQueryFieldSemanticCapabilities semanticCapabilities,
+        string? semanticProfile,
+        ElasticRelationQueryNestedAbsenceBehavior missingValueBehavior,
+        ElasticRelationQueryNestedAbsenceBehavior nullValueBehavior)
+    {
+        if (!Enum.IsDefined(mappingKind))
+        {
+            throw new ArgumentOutOfRangeException(nameof(mappingKind), mappingKind, "Unsupported nested child mapping kind.");
+        }
+
+        if (!Enum.IsDefined(missingValueBehavior))
+        {
+            throw new ArgumentOutOfRangeException(nameof(missingValueBehavior), missingValueBehavior, "Unsupported missing-child behavior.");
+        }
+
+        if (!Enum.IsDefined(nullValueBehavior))
+        {
+            throw new ArgumentOutOfRangeException(nameof(nullValueBehavior), nullValueBehavior, "Unsupported null-child behavior.");
+        }
+
+        if ((semanticCapabilities & ~ElasticRelationQueryFieldSemanticCapabilities.ExactTerm) != 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(semanticCapabilities),
+                semanticCapabilities,
+                "Nested child fields currently support only exact scalar-term evidence.");
+        }
+        if (mappingKind is not (
+            ElasticRelationQueryFieldMappingKind.Keyword
+            or ElasticRelationQueryFieldMappingKind.Wildcard
+            or ElasticRelationQueryFieldMappingKind.Boolean
+            or ElasticRelationQueryFieldMappingKind.Integer
+            or ElasticRelationQueryFieldMappingKind.Long))
+        {
+            throw new ArgumentException("A nested child field requires one supported exact scalar mapping family.", nameof(mappingKind));
+        }
+        if (semanticCapabilities != ElasticRelationQueryFieldSemanticCapabilities.None
+            && string.IsNullOrWhiteSpace(semanticProfile))
+        {
+            throw new ArgumentException("Exact nested child capabilities require an attributable semantic profile.", nameof(semanticProfile));
+        }
+        if (semanticProfile is not null && string.IsNullOrWhiteSpace(semanticProfile))
+        {
+            throw new ArgumentException("A nested child semantic profile cannot be empty.", nameof(semanticProfile));
+        }
+
+        var normalizedElementPath = ElasticRelationQueryStorageBinding.RequirePhysicalFieldPath(
+            elementPath,
+            nameof(elementPath));
+        if (normalizedElementPath.Segments.Length != 1)
+        {
+            throw new ArgumentException(
+                "The Elasticsearch v2 nested child closure requires one direct element field segment.",
+                nameof(elementPath));
+        }
+        ElementPath = normalizedElementPath;
+        QueryField = ElasticRelationQueryStorageBinding.RequirePhysicalFieldPath(queryField, nameof(queryField));
+        MappingKind = mappingKind;
+        SemanticCapabilities = semanticCapabilities;
+        SemanticProfile = semanticProfile;
+        MissingValueBehavior = missingValueBehavior;
+        NullValueBehavior = nullValueBehavior;
+    }
+
+    /// <summary>Canonical field path relative to one collection element.</summary>
+    public FieldPath ElementPath { get; }
+
+    /// <summary>Complete physical indexed field path.</summary>
+    public FieldPath QueryField { get; }
+
+    /// <summary>Physical scalar mapping family.</summary>
+    public ElasticRelationQueryFieldMappingKind MappingKind { get; }
+
+    /// <summary>Exact scalar query facilities attested by this mapping.</summary>
+    public ElasticRelationQueryFieldSemanticCapabilities SemanticCapabilities { get; }
+
+    /// <summary>Stable mapping and normalization profile supporting the asserted capabilities.</summary>
+    public string? SemanticProfile { get; }
+
+    /// <summary>Physical handling of a missing child field.</summary>
+    public ElasticRelationQueryNestedAbsenceBehavior MissingValueBehavior { get; }
+
+    /// <summary>Physical handling of an explicit-null child field.</summary>
+    public ElasticRelationQueryNestedAbsenceBehavior NullValueBehavior { get; }
+}
+
+/// <summary>
+/// Explicit physical evidence tying one canonical structured collection input to an Elasticsearch nested scope.
+/// </summary>
+public sealed record ElasticRelationQueryNestedScopeEvidence
+{
+    /// <summary>Creates nested-scope evidence owned by one structured collection field binding.</summary>
+    /// <param name="nestedPath">Physical Elasticsearch path mapped as <c>nested</c>.</param>
+    /// <param name="correlationGuarantee">Same-element correlation guarantee supplied by the physical mapping.</param>
+    /// <param name="nullElementBehavior">Physical treatment of an explicit-null collection element.</param>
+    /// <param name="emptyCollectionBehavior">Physical treatment of an empty canonical collection.</param>
+    /// <param name="childFields">Terminal child mappings keyed by canonical element-relative paths.</param>
+    /// <exception cref="ArgumentException">A path, child collection, or child mapping is invalid or ambiguous.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">An enum value is unsupported.</exception>
+    public ElasticRelationQueryNestedScopeEvidence(
+        FieldPath nestedPath,
+        ElasticRelationQueryNestedCorrelationGuarantee correlationGuarantee,
+        ElasticRelationQueryNestedAbsenceBehavior nullElementBehavior,
+        ElasticRelationQueryEmptyCollectionBehavior emptyCollectionBehavior,
+        ImmutableArray<ElasticRelationQueryNestedChildFieldBinding> childFields)
+    {
+        if (!Enum.IsDefined(correlationGuarantee))
+        {
+            throw new ArgumentOutOfRangeException(nameof(correlationGuarantee), correlationGuarantee, "Unsupported nested correlation guarantee.");
+        }
+
+        if (!Enum.IsDefined(nullElementBehavior))
+        {
+            throw new ArgumentOutOfRangeException(nameof(nullElementBehavior), nullElementBehavior, "Unsupported null-element behavior.");
+        }
+
+        if (!Enum.IsDefined(emptyCollectionBehavior))
+        {
+            throw new ArgumentOutOfRangeException(nameof(emptyCollectionBehavior), emptyCollectionBehavior, "Unsupported empty-collection behavior.");
+        }
+
+        NestedPath = ElasticRelationQueryStorageBinding.RequirePhysicalFieldPath(nestedPath, nameof(nestedPath));
+        var normalizedChildren = childFields.IsDefault ? [] : childFields;
+        if (normalizedChildren.IsDefaultOrEmpty || normalizedChildren.Any(static child => child is null))
+        {
+            throw new ArgumentException("Nested-scope evidence requires at least one non-null child-field mapping.", nameof(childFields));
+        }
+
+        if (normalizedChildren.GroupBy(static child => child.ElementPath).Any(static group => group.Count() > 1))
+        {
+            throw new ArgumentException("Nested-scope evidence cannot repeat a canonical element-relative path.", nameof(childFields));
+        }
+
+        if (normalizedChildren.Any(child => !IsStrictPhysicalPrefix(NestedPath, child.QueryField)))
+        {
+            throw new ArgumentException("Every nested child query field must be a strict descendant of the nested path.", nameof(childFields));
+        }
+
+        CorrelationGuarantee = correlationGuarantee;
+        NullElementBehavior = nullElementBehavior;
+        EmptyCollectionBehavior = emptyCollectionBehavior;
+        ChildFields =
+        [
+            .. normalizedChildren.OrderBy(
+                static child => ElasticRelationQueryStorageBinding.FieldPathKey(child.ElementPath),
+                StringComparer.Ordinal)
+        ];
+    }
+
+    /// <summary>Physical Elasticsearch path mapped as <c>nested</c>.</summary>
+    public FieldPath NestedPath { get; }
+
+    /// <summary>Same-element correlation guarantee supplied by the physical mapping.</summary>
+    public ElasticRelationQueryNestedCorrelationGuarantee CorrelationGuarantee { get; }
+
+    /// <summary>Physical treatment of an explicit-null collection element.</summary>
+    public ElasticRelationQueryNestedAbsenceBehavior NullElementBehavior { get; }
+
+    /// <summary>Physical treatment of an empty canonical collection.</summary>
+    public ElasticRelationQueryEmptyCollectionBehavior EmptyCollectionBehavior { get; }
+
+    /// <summary>Terminal child mappings in deterministic canonical element-path order.</summary>
+    public ImmutableArray<ElasticRelationQueryNestedChildFieldBinding> ChildFields { get; }
+
+    /// <summary>Resolves one terminal child mapping by canonical element-relative path.</summary>
+    /// <param name="elementPath">Canonical path relative to the current collection element.</param>
+    /// <returns>The exact nested child-field mapping.</returns>
+    /// <exception cref="KeyNotFoundException"><paramref name="elementPath"/> is not bound.</exception>
+    public ElasticRelationQueryNestedChildFieldBinding ResolveChild(FieldPath elementPath)
+    {
+        foreach (var child in ChildFields)
+        {
+            if (child.ElementPath == elementPath)
+            {
+                return child;
+            }
+        }
+        throw new KeyNotFoundException($"Nested element field '{elementPath}' has no Elasticsearch child binding.");
+    }
+
+    /// <summary>Compares normalized nested-scope evidence using value semantics for child mappings.</summary>
+    /// <param name="other">Other evidence to compare.</param>
+    /// <returns><see langword="true"/> when every normalized evidence fact is equal.</returns>
+    public bool Equals(ElasticRelationQueryNestedScopeEvidence? other)
+    {
+        if (ReferenceEquals(this, other))
+        {
+            return true;
+        }
+
+        if (other is null)
+        {
+            return false;
+        }
+
+        return NestedPath == other.NestedPath
+               && CorrelationGuarantee == other.CorrelationGuarantee
+               && NullElementBehavior == other.NullElementBehavior
+               && EmptyCollectionBehavior == other.EmptyCollectionBehavior
+               && ChildFields.SequenceEqual(other.ChildFields);
+    }
+
+    /// <summary>Computes a value-semantic hash code for the normalized evidence.</summary>
+    /// <returns>A hash code aligned with <see cref="Equals(ElasticRelationQueryNestedScopeEvidence?)"/>.</returns>
+    public override int GetHashCode()
+    {
+        HashCode hash = new();
+        hash.Add(NestedPath);
+        hash.Add((int)CorrelationGuarantee);
+        hash.Add((int)NullElementBehavior);
+        hash.Add((int)EmptyCollectionBehavior);
+        foreach (var child in ChildFields)
+        {
+            hash.Add(child);
+        }
+
+        return hash.ToHashCode();
+    }
+
+    static bool IsStrictPhysicalPrefix(FieldPath prefix, FieldPath path)
+    {
+        if (prefix.Segments.Length >= path.Segments.Length)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < prefix.Segments.Length; index++)
+        {
+            if (prefix.Segments[index] != path.Segments[index])
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+}
+
 /// <summary>Index-consistency evidence available to multi-request Elasticsearch pagination.</summary>
 public enum ElasticRelationQueryPaginationConsistency
 {
@@ -189,7 +476,10 @@ public enum ElasticRelationQueryMissingValueBehavior
     NotIndexed = 0,
 
     /// <summary>Ingestion writes an explicit reserved scalar term for the missing value.</summary>
-    IndexedSentinel = 1
+    IndexedSentinel = 1,
+
+    /// <summary>Ingestion rejects documents for which the semantic field is missing.</summary>
+    ProhibitedByIngestion = 2
 }
 
 /// <summary>Physical handling of an explicit semantic null.</summary>
@@ -199,7 +489,10 @@ public enum ElasticRelationQueryNullValueBehavior
     JsonNullNotIndexed = 0,
 
     /// <summary>The mapping indexes an explicit reserved scalar through its <c>null_value</c> behavior.</summary>
-    IndexedSentinel = 1
+    IndexedSentinel = 1,
+
+    /// <summary>Ingestion rejects documents for which the semantic field is explicitly null.</summary>
+    ProhibitedByIngestion = 2
 }
 
 /// <summary>Exact semantic facilities asserted for one Elasticsearch field mapping.</summary>
@@ -277,6 +570,9 @@ public sealed record ElasticRelationQueryFieldBinding
     /// <param name="missingValueSentinel">Reserved indexed scalar used for missing, when one is declared.</param>
     /// <param name="nullValueBehavior">Physical handling of explicit null.</param>
     /// <param name="nullValueSentinel">Reserved indexed scalar used for null, when one is declared.</param>
+    /// <param name="nestedScope">
+    /// Explicit nested-collection scope evidence owned by this structured collection field, or <see langword="null"/>.
+    /// </param>
     /// <exception cref="ArgumentException">
     /// An identity, path, profile, sentinel, mapping, retrieval, or capability combination is inconsistent.
     /// </exception>
@@ -295,24 +591,48 @@ public sealed record ElasticRelationQueryFieldBinding
         ElasticRelationQueryMissingValueBehavior missingValueBehavior = ElasticRelationQueryMissingValueBehavior.NotIndexed,
         ObservationValue? missingValueSentinel = null,
         ElasticRelationQueryNullValueBehavior nullValueBehavior = ElasticRelationQueryNullValueBehavior.JsonNullNotIndexed,
-        ObservationValue? nullValueSentinel = null)
+        ObservationValue? nullValueSentinel = null,
+        ElasticRelationQueryNestedScopeEvidence? nestedScope = null)
     {
         if (string.IsNullOrWhiteSpace(input.Value))
+        {
             throw new ArgumentException("An Elasticsearch field binding requires a compiled input identity.", nameof(input));
+        }
+
         if (!Enum.IsDefined(mappingKind))
+        {
             throw new ArgumentOutOfRangeException(nameof(mappingKind), mappingKind, "Unsupported Elasticsearch mapping kind.");
+        }
+
         if (!Enum.IsDefined(retrievalKind))
+        {
             throw new ArgumentOutOfRangeException(nameof(retrievalKind), retrievalKind, "Unsupported Elasticsearch retrieval kind.");
+        }
+
         if (retrievalEncoding is { } encoding && !Enum.IsDefined(encoding))
+        {
             throw new ArgumentOutOfRangeException(nameof(retrievalEncoding), encoding, "Unsupported Elasticsearch retrieval encoding.");
+        }
+
         if (!Enum.IsDefined(documentScope))
+        {
             throw new ArgumentOutOfRangeException(nameof(documentScope), documentScope, "Unsupported Elasticsearch document scope.");
+        }
+
         if (!Enum.IsDefined(missingValueBehavior))
+        {
             throw new ArgumentOutOfRangeException(nameof(missingValueBehavior), missingValueBehavior, "Unsupported Elasticsearch missing-value behavior.");
+        }
+
         if (!Enum.IsDefined(nullValueBehavior))
+        {
             throw new ArgumentOutOfRangeException(nameof(nullValueBehavior), nullValueBehavior, "Unsupported Elasticsearch null-value behavior.");
+        }
+
         if ((semanticCapabilities & ~AllSemanticCapabilities) != 0)
+        {
             throw new ArgumentOutOfRangeException(nameof(semanticCapabilities), semanticCapabilities, "Unsupported Elasticsearch field capability flag.");
+        }
 
         FieldPath? normalizedSourceField = sourceField is { } source
             ? ElasticRelationQueryStorageBinding.RequirePhysicalFieldPath(source, nameof(sourceField))
@@ -325,13 +645,25 @@ public sealed record ElasticRelationQueryFieldBinding
             : null;
 
         if (normalizedSourceField is null && normalizedQueryField is null)
+        {
             throw new ArgumentException("An Elasticsearch field binding requires a source or indexed field path.", nameof(sourceField));
+        }
+
         if (mappingKind == ElasticRelationQueryFieldMappingKind.Unindexed && normalizedQueryField is not null)
+        {
             throw new ArgumentException("An unindexed Elasticsearch field cannot declare an indexed query path.", nameof(queryField));
+        }
+
         if (mappingKind != ElasticRelationQueryFieldMappingKind.Unindexed && normalizedQueryField is null)
+        {
             throw new ArgumentException("An indexed Elasticsearch mapping requires its physical query field.", nameof(queryField));
+        }
+
         if (retrievalKind == ElasticRelationQueryFieldRetrievalKind.Source && normalizedSourceField is null)
+        {
             throw new ArgumentException("Source retrieval requires a physical _source field.", nameof(sourceField));
+        }
+
         if (retrievalKind is ElasticRelationQueryFieldRetrievalKind.DocValues or ElasticRelationQueryFieldRetrievalKind.StoredField
             && normalizedQueryField is null)
         {
@@ -361,7 +693,10 @@ public sealed record ElasticRelationQueryFieldBinding
             throw new ArgumentException("Exact query capabilities require an attributable semantic profile.", nameof(semanticProfile));
         }
         if (semanticProfile is not null && string.IsNullOrWhiteSpace(semanticProfile))
+        {
             throw new ArgumentException("An Elasticsearch semantic profile cannot be empty.", nameof(semanticProfile));
+        }
+
         if (semanticCapabilities.HasFlag(ElasticRelationQueryFieldSemanticCapabilities.StableUniqueOrdering)
             && !semanticCapabilities.HasFlag(ElasticRelationQueryFieldSemanticCapabilities.ExactOrdering))
         {
@@ -400,9 +735,24 @@ public sealed record ElasticRelationQueryFieldBinding
         {
             throw new ArgumentException("Object and nested mappings cannot assert scalar query capabilities.", nameof(semanticCapabilities));
         }
+        if (nestedScope is not null
+            && (mappingKind != ElasticRelationQueryFieldMappingKind.Nested
+                || documentScope != ElasticRelationQueryFieldDocumentScope.NestedDocument
+                || normalizedQueryField != nestedScope.NestedPath
+                || semanticCapabilities != ElasticRelationQueryFieldSemanticCapabilities.None
+                || retrievalKind != ElasticRelationQueryFieldRetrievalKind.Unavailable
+                || retrievalEncoding is not null))
+        {
+            throw new ArgumentException(
+                "Nested-scope evidence requires a query-only nested collection mapping whose query field equals the nested path and carries no scalar capability.",
+                nameof(nestedScope));
+        }
 
         if (IsMetadataId(normalizedSourceField))
+        {
             throw new ArgumentException("Elasticsearch _id metadata is not retrievable through _source.", nameof(sourceField));
+        }
+
         var metadataIdUnsupportedCapabilities = ElasticRelationQueryFieldSemanticCapabilities.ExactRange
                                                 | ElasticRelationQueryFieldSemanticCapabilities.ExactOrdering
                                                 | ElasticRelationQueryFieldSemanticCapabilities.StableUniqueOrdering
@@ -443,6 +793,7 @@ public sealed record ElasticRelationQueryFieldBinding
         MissingValueSentinel = missingValueSentinel;
         NullValueBehavior = nullValueBehavior;
         NullValueSentinel = nullValueSentinel;
+        NestedScope = nestedScope;
     }
 
     /// <summary>Exact compiled field-input identity.</summary>
@@ -487,6 +838,9 @@ public sealed record ElasticRelationQueryFieldBinding
     /// <summary>Reserved indexed null-value scalar, or <see langword="null"/>.</summary>
     public ObservationValue? NullValueSentinel { get; }
 
+    /// <summary>Explicit nested-scope evidence owned by this structured collection field, or <see langword="null"/>.</summary>
+    public ElasticRelationQueryNestedScopeEvidence? NestedScope { get; }
+
     static bool IsMetadataId(FieldPath? path) => path is { } value
         && value.Segments.Length == 1
         && value.Segments[0] is { Kind: SegmentKind.Field, Segment: "_id" };
@@ -494,9 +848,15 @@ public sealed record ElasticRelationQueryFieldBinding
     static void ValidateSentinel(bool required, ObservationValue? sentinel, string parameterName)
     {
         if (required != (sentinel is not null))
+        {
             throw new ArgumentException("An indexed sentinel behavior and its sentinel value must be declared together.", parameterName);
+        }
+
         if (sentinel is not { } value)
+        {
             return;
+        }
+
         if (value.Kind is ObservationValueKind.Undefined
             or ObservationValueKind.Null
             or ObservationValueKind.Bytes
@@ -514,16 +874,16 @@ public sealed record ElasticRelationQueryFieldBinding
 /// </summary>
 public sealed class ElasticRelationQueryStorageBinding
 {
-    /// <summary>Portable binding schema understood by the canonical Elasticsearch v1 compiler.</summary>
-    public const string CurrentSchemaVersion = "cohesive.relations.elastic-binding/v1";
+    /// <summary>Portable binding schema understood by the canonical Elasticsearch v2 compiler.</summary>
+    public const string CurrentSchemaVersion = "cohesive.relations.elastic-binding/v2";
 
     /// <summary>Default deterministic convention set for semantic-path Elasticsearch bindings.</summary>
-    public const string SemanticPathConventionSet = "cohesive.relations.elastic/semantic-path-conventions/v1";
+    public const string SemanticPathConventionSet = "cohesive.relations.elastic/semantic-path-conventions/v2";
 
     /// <summary>Default Elasticsearch <c>index.max_result_window</c> represented by convention.</summary>
     public const int DefaultMaximumResultWindow = 10_000;
 
-    /// <summary>Default semantic page-size boundary represented by the canonical v1 adapter.</summary>
+    /// <summary>Default semantic page-size boundary represented by the canonical v2 adapter.</summary>
     public const int DefaultMaximumPageSize = 1_000;
 
     /// <summary>Creates an explicit Elasticsearch storage binding.</summary>
@@ -569,9 +929,15 @@ public sealed class ElasticRelationQueryStorageBinding
             throw new ArgumentException("An Elasticsearch storage binding requires non-default identities.", nameof(id));
         }
         if (!Enum.IsDefined(sourceMode))
+        {
             throw new ArgumentOutOfRangeException(nameof(sourceMode), sourceMode, "Unsupported Elasticsearch source mode.");
+        }
+
         if (!Enum.IsDefined(origin))
+        {
             throw new ArgumentOutOfRangeException(nameof(origin), origin, "Unsupported Elasticsearch binding origin.");
+        }
+
         if (!Enum.IsDefined(paginationConsistency))
         {
             throw new ArgumentOutOfRangeException(
@@ -580,7 +946,10 @@ public sealed class ElasticRelationQueryStorageBinding
                 "Unsupported Elasticsearch pagination consistency.");
         }
         if (maximumResultWindow <= 0)
+        {
             throw new ArgumentOutOfRangeException(nameof(maximumResultWindow), maximumResultWindow, "The maximum result window must be positive.");
+        }
+
         if (maximumPageSize <= 0 || maximumPageSize > maximumResultWindow)
         {
             throw new ArgumentOutOfRangeException(
@@ -595,19 +964,26 @@ public sealed class ElasticRelationQueryStorageBinding
                 nameof(conventionSetVersion));
         }
         if (conventionSetVersion is not null && string.IsNullOrWhiteSpace(conventionSetVersion))
+        {
             throw new ArgumentException("An Elasticsearch convention-set identity cannot be empty.", nameof(conventionSetVersion));
+        }
 
         var normalizedFields = fields.IsDefault ? [] : fields;
         if (normalizedFields.Any(static field => field is null))
+        {
             throw new ArgumentException("An Elasticsearch storage binding cannot contain a null field binding.", nameof(fields));
+        }
+
         if (normalizedFields.GroupBy(static field => field.Input).Any(static group => group.Count() > 1))
+        {
             throw new ArgumentException("An Elasticsearch storage binding cannot repeat a compiled field input.", nameof(fields));
+        }
+
         if (sourceMode == ElasticRelationQuerySourceMode.Disabled
             && normalizedFields.Any(static field => field.RetrievalKind == ElasticRelationQueryFieldRetrievalKind.Source))
         {
             throw new ArgumentException("Source retrieval cannot be used when Elasticsearch _source is disabled.", nameof(sourceMode));
         }
-
         Id = id;
         Source = source;
         PlacementBinding = placementBinding;
@@ -751,7 +1127,9 @@ public sealed class ElasticRelationQueryStorageBinding
         foreach (var field in Fields)
         {
             if (field.Input == input)
+            {
                 return field;
+            }
         }
         throw new KeyNotFoundException($"Compiled input '{input.Value}' has no Elasticsearch field binding.");
     }
@@ -799,7 +1177,7 @@ public sealed class ElasticRelationQueryStorageBinding
 static class ElasticRelationQueryBindingFingerprinter
 {
     const string Algorithm = "sha256";
-    const string Canonicalization = "cohesive.relations.elastic-binding/v1-c14n/v1";
+    const string Canonicalization = "cohesive.relations.elastic-binding/v2-c14n/v1";
 
     public static ElasticRelationQueryBindingFingerprint Compute(ElasticRelationQueryStorageBinding binding)
     {
@@ -835,6 +1213,25 @@ static class ElasticRelationQueryBindingFingerprinter
             Append(canonical, field.MissingValueSentinel);
             Append(canonical, (int)field.NullValueBehavior);
             Append(canonical, field.NullValueSentinel);
+            Append(canonical, field.NestedScope is not null ? 1 : 0);
+            if (field.NestedScope is { } nested)
+            {
+                Append(canonical, nested.NestedPath);
+                Append(canonical, (int)nested.CorrelationGuarantee);
+                Append(canonical, (int)nested.NullElementBehavior);
+                Append(canonical, (int)nested.EmptyCollectionBehavior);
+                Append(canonical, nested.ChildFields.Length);
+                foreach (var child in nested.ChildFields)
+                {
+                    Append(canonical, child.ElementPath);
+                    Append(canonical, child.QueryField);
+                    Append(canonical, (int)child.MappingKind);
+                    Append(canonical, (int)child.SemanticCapabilities);
+                    Append(canonical, child.SemanticProfile);
+                    Append(canonical, (int)child.MissingValueBehavior);
+                    Append(canonical, (int)child.NullValueBehavior);
+                }
+            }
         }
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString()));
         return new(Algorithm, Canonicalization, Convert.ToHexStringLower(bytes));

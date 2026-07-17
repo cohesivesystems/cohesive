@@ -1,6 +1,5 @@
 using System.Collections.Immutable;
 using Cohesive.Adapters.Elastic;
-using Cohesive.Model;
 using Cohesive.Relations.IR;
 using global::Elastic.Clients.Elasticsearch;
 using global::Elastic.Clients.Elasticsearch.Aggregations;
@@ -10,6 +9,64 @@ namespace Cohesive.Tests.Elastic;
 
 public sealed class ElasticRelationQueryRequestConstructionTests
 {
+    [Fact]
+    public void Bind_NestedTemplate_ProducesSdkNestedQueryWithFreshCorrelatedChildren()
+    {
+        var location = new QueryParameterId("location");
+        var template = Request(
+            query: ElasticQueryTemplate.Nested(
+                "stops",
+                ElasticQueryTemplate.Boolean(filter:
+                [
+                    ElasticQueryTemplate.Term(
+                        "stops.location.keyword",
+                        ElasticQueryValueTemplate.FromParameter(location)),
+                    ElasticQueryTemplate.Term(
+                        "stops.kind.keyword",
+                        ElasticQueryValueTemplate.FromConstant(ObservationValue.FromString("pickup")))
+                ])));
+        var parameters = new Dictionary<QueryParameterId, ObservationValue>
+        {
+            [location] = ObservationValue.FromString("SEA")
+        };
+
+        var first = template.Bind(parameters);
+        var second = template.Bind(parameters);
+
+        var firstNested = Assert.IsType<NestedQuery>(first.Query!.Nested);
+        var secondNested = Assert.IsType<NestedQuery>(second.Query!.Nested);
+        Assert.Equal("stops", firstNested.Path.ToString());
+        Assert.Equal(ChildScoreMode.None, firstNested.ScoreMode);
+        Assert.False(firstNested.IgnoreUnmapped);
+        Assert.IsType<BoolQuery>(firstNested.Query.Bool);
+        Assert.NotSame(firstNested, secondNested);
+        Assert.NotSame(firstNested.Query, secondNested.Query);
+        Assert.Equal(
+            ElasticSdkRequestTestSupport.SerializeToString(first),
+            ElasticSdkRequestTestSupport.SerializeToString(second));
+
+        using var document = ElasticSdkRequestTestSupport.Serialize(first);
+        var nested = document.RootElement.GetProperty("query").GetProperty("nested");
+        Assert.Equal("stops", nested.GetProperty("path").GetString());
+        Assert.Equal("none", nested.GetProperty("score_mode").GetString());
+        Assert.False(nested.GetProperty("ignore_unmapped").GetBoolean());
+        var filters = nested.GetProperty("query").GetProperty("bool").GetProperty("filter");
+        Assert.Equal(
+            "SEA",
+            filters[0]
+                .GetProperty("term")
+                .GetProperty("stops.location.keyword")
+                .GetProperty("value")
+                .GetString());
+        Assert.Equal(
+            "pickup",
+            filters[1]
+                .GetProperty("term")
+                .GetProperty("stops.kind.keyword")
+                .GetProperty("value")
+                .GetString());
+    }
+
     [Fact]
     public void Bind_EmitsDeterministicExactRowRequest()
     {

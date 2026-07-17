@@ -412,7 +412,7 @@ public sealed class RelationQueryRealizationRequirementProjectorTests
     }
 
     [Fact]
-    public void Project_StructuralRequirementsDistinguishElementAndOutputRoles()
+    public void Project_StructuralRequirementsDistinguishElementAndOutputRolesAndPreserveScopedCorrelation()
     {
         var itemPath = new FieldPath(
         [
@@ -429,12 +429,28 @@ public sealed class RelationQueryRealizationRequirementProjectorTests
                 && requirement.Capability is StructuralRelationQueryCapability
                 {
                     Role: RelationQueryStructuralCapabilityRole.CurrentItemRead,
-                    PathKind: RelationQueryStructuralPathKind.CollectionElement
+                    PathKind: RelationQueryStructuralPathKind.NestedCollectionElement
                 });
         Assert.NotEmpty(currentItem.Uses);
         Assert.Equal(
             1,
             StaticFact(currentItem, RelationQueryRealizationStaticFactKind.FieldPathDepth));
+        var select = Assert.Single(
+            requirements,
+            static requirement => requirement.Capability is ExpressionRelationQueryCapability
+            {
+                Capability.Value: "expr.function.select",
+                RequirementKind: ExprCapabilityRequirementKind.Operation
+            });
+        Assert.Contains(
+            RelationQueryGuaranteeCapabilityKind.CollectionElementCorrelation,
+            select.RequiredGuarantees);
+        Assert.Contains(
+            requirements,
+            static requirement => requirement.Capability is GuaranteeRelationQueryCapability
+            {
+                Kind: RelationQueryGuaranteeCapabilityKind.CollectionElementCorrelation
+            });
 
         var relationRequirements = RelationQueryRealizationRequirementProjector.Project(
             Compile(LoadCustomerRelationFixture.BaselineRelationDocument));
@@ -452,6 +468,59 @@ public sealed class RelationQueryRealizationRequirementProjectorTests
                 requirement => requirement.Capability is StructuralRelationQueryCapability structural
                     && structural.Role == role);
         }
+    }
+
+    [Fact]
+    public void Project_StructuredAnyRequiresSameElementCorrelationWithExactProvenance()
+    {
+        var plan = Compile(CreateStructuredAnyQueryDocument());
+
+        var requirements = RelationQueryRealizationRequirementProjector.Project(plan);
+
+        var existential = Assert.Single(
+            requirements,
+            static requirement => requirement.Capability is ExpressionRelationQueryCapability
+            {
+                Capability.Value: "expr.function.any",
+                RequirementKind: ExprCapabilityRequirementKind.Operation
+            });
+        Assert.Equal("/right", existential.Origin?.ExpressionPath);
+        Assert.Contains(
+            RelationQueryGuaranteeCapabilityKind.CollectionElementCorrelation,
+            existential.RequiredGuarantees);
+
+        var elementReads = requirements
+            .Where(static requirement => requirement.Capability is StructuralRelationQueryCapability
+            {
+                Role: RelationQueryStructuralCapabilityRole.CurrentItemRead
+            })
+            .ToArray();
+        Assert.Equal(2, elementReads.Length);
+        Assert.Contains(
+            elementReads,
+            static requirement => requirement.Origin?.FieldPath?.ToString() == "item.Location"
+                && requirement.Capability is StructuralRelationQueryCapability
+                {
+                    PathKind: RelationQueryStructuralPathKind.CollectionElement
+                });
+        Assert.Contains(
+            elementReads,
+            static requirement => requirement.Origin?.FieldPath?.ToString() == "item.Address.City"
+                && requirement.Capability is StructuralRelationQueryCapability
+                {
+                    PathKind: RelationQueryStructuralPathKind.NestedCollectionElement
+                });
+        Assert.All(
+            elementReads,
+            static requirement => Assert.Contains(
+                RelationQueryGuaranteeCapabilityKind.CollectionElementCorrelation,
+                requirement.RequiredGuarantees));
+        Assert.Contains(
+            requirements,
+            static requirement => requirement.Capability is GuaranteeRelationQueryCapability
+            {
+                Kind: RelationQueryGuaranteeCapabilityKind.CollectionElementCorrelation
+            });
     }
 
     [Fact]
@@ -866,6 +935,61 @@ public sealed class RelationQueryRealizationRequirementProjectorTests
                         items,
                         new ArrayTypeRef(
                             new ArrayTypeRef(new ScalarTypeRef(ScalarTypeKind.String))))
+                ]),
+            [new RowsQueryResultDefinition(LoadCustomerRelationFixture.RowsResultId, project)]);
+        return RelationQueryDocument.FromDefinition(definition);
+    }
+
+    static RelationQueryDocument CreateStructuredAnyQueryDocument()
+    {
+        var stringType = new ScalarTypeRef(ScalarTypeKind.String);
+        var stops = new QueryParameterId("structured-stops");
+        var source = new QueryNodeId("structured-any-source");
+        var filter = new QueryNodeId("structured-any-filter");
+        var project = new QueryNodeId("structured-any-project");
+        var addressType = new ObjectTypeRef([new("City", stringType)]);
+        var stopType = new ObjectTypeRef(
+        [
+            new("Location", stringType),
+            new("Address", addressType)
+        ]);
+        var definition = new QueryDefinition(
+            new("structured-any-requirements"),
+            new("StructuredAnyRequirements"),
+            new LogicalQueryDefinition(
+                nodes:
+                [
+                    new SourceQueryNode(
+                        source,
+                        LoadCustomerRelationFixture.LoadBinding,
+                        LoadCustomerRelationFixture.LoadShapeId),
+                    new FilterQueryNode(
+                        filter,
+                        source,
+                        Expr.And(
+                            Expr.Const(true),
+                            Expr.Any(
+                                Expr.Param(stops.Value),
+                                Expr.And(
+                                    Expr.Eq(Expr.Field("item.Location"), Expr.Const("SEA")),
+                                    Expr.Eq(Expr.Field("item.Address.City"), Expr.Const("Seattle")))))),
+                    new ProjectQueryNode(
+                        project,
+                        filter,
+                        LoadCustomerRelationFixture.SearchBinding,
+                        LoadCustomerRelationFixture.LoadSearchShapeId,
+                        [
+                            new(
+                                new("structured-any-id"),
+                                LoadCustomerRelationFixture.SearchIdPath,
+                                Expr.Field(
+                                    LoadCustomerRelationFixture.LoadBinding,
+                                    LoadCustomerRelationFixture.LoadIdPath))
+                        ])
+                ],
+                parameters:
+                [
+                    new(stops, new ArrayTypeRef(stopType))
                 ]),
             [new RowsQueryResultDefinition(LoadCustomerRelationFixture.RowsResultId, project)]);
         return RelationQueryDocument.FromDefinition(definition);

@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using Cohesive.Model.Expressions;
+using Cohesive.Model.Serialization;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.IR;
@@ -186,6 +187,96 @@ public sealed class RelationQueryInMemoryInterpreterTests
         Assert.Equal(
             [scenario.Customers["c"].Id, scenario.Loads["c"].Id],
             row.InputOccurrences.Select(static occurrence => occurrence.Id));
+    }
+
+    [Fact]
+    public void Execute_StructuredAnyFiltersUsingSameElementCorrelation()
+    {
+        var stopsPath = FieldPath.FromField("Stops");
+        var plan = CompileWithShapes(
+            CreateStructuredStopsAnyQueryDocument(stopsPath),
+            CreateStructuredStopsShapeDocuments(),
+            QueryFields(
+                LoadCustomerRelationFixture.LoadSearchShapeId,
+                LoadCustomerRelationFixture.SearchIdPath));
+        var matching = new RelationQueryObservationOccurrence(
+            new("load/structured-any/matching"),
+            LoadCustomerRelationFixture.LoadBinding,
+            LoadCustomerRelationFixture.LoadShapeId,
+            "load-matching");
+        var split = new RelationQueryObservationOccurrence(
+            new("load/structured-any/split"),
+            LoadCustomerRelationFixture.LoadBinding,
+            LoadCustomerRelationFixture.LoadShapeId,
+            "load-split");
+        var empty = new RelationQueryObservationOccurrence(
+            new("load/structured-any/empty"),
+            LoadCustomerRelationFixture.LoadBinding,
+            LoadCustomerRelationFixture.LoadShapeId,
+            "load-empty");
+        var source = Assert.Single(
+            plan.RequirementGraph.Inputs.OfType<RelationQuerySourceSetInput>());
+        var stopValues = new Dictionary<RelationQueryOccurrenceId, ObservationValue>
+        {
+            [matching.Id] = ObservationValue.FromArray(
+            [
+                StructuredStop("Seattle", "Pickup"),
+                StructuredStop("Portland", "Delivery")
+            ]),
+            [split.Id] = ObservationValue.FromArray(
+            [
+                StructuredStop("Seattle", "Delivery"),
+                StructuredStop("Portland", "Pickup")
+            ]),
+            [empty.Id] = ObservationValue.FromArray([])
+        };
+        var identities = new Dictionary<RelationQueryOccurrenceId, string>
+        {
+            [matching.Id] = "load-matching",
+            [split.Id] = "load-split",
+            [empty.Id] = "load-empty"
+        };
+        ImmutableArray<RelationQueryFieldEvidence>.Builder fields =
+            ImmutableArray.CreateBuilder<RelationQueryFieldEvidence>();
+        foreach (var input in plan.RequirementGraph.Inputs.OfType<RelationQueryFieldInput>())
+        {
+            foreach (var occurrence in new[] { matching, split, empty })
+            {
+                var value = input.Field.Path == LoadCustomerRelationFixture.LoadIdPath
+                    ? ObservationValue.FromString(identities[occurrence.Id])
+                    : input.Field.Path == stopsPath
+                        ? stopValues[occurrence.Id]
+                        : throw new InvalidOperationException(
+                            $"Unexpected structured-any field input '{input.Field.Path}'.");
+                fields.Add(new(
+                    input.Id,
+                    occurrence.Id,
+                    RelationQueryFieldEvidenceState.Value,
+                    value));
+            }
+        }
+        var evidence = new RelationQueryRuntimeEvidence(
+            new("tests/structured-any-evaluation"),
+            plan,
+            sources:
+            [
+                new(
+                    source.Id,
+                    RelationQuerySourceEvidenceState.Provided,
+                    [matching, split, empty])
+            ],
+            fields: fields.ToImmutable(),
+            capabilities: AvailableCapabilities(plan));
+
+        var result = Execute(plan, evidence);
+
+        Assert.Equal(RelationQueryExecutionStatus.Succeeded, result.Status);
+        Assert.Empty(result.Diagnostics);
+        var row = Assert.Single(Assert.Single(result.QueryResults).Rows);
+        AssertObject(
+            row.Value,
+            (LoadCustomerRelationFixture.SearchIdFieldName, ObservationValue.FromString("load-matching")));
+        Assert.Equal([matching.Id], row.InputOccurrences.Select(static occurrence => occurrence.Id));
     }
 
     [Fact]
@@ -1310,6 +1401,68 @@ public sealed class RelationQueryInMemoryInterpreterTests
         return RelationQueryDocument.FromDefinition(definition);
     }
 
+    static RelationQueryDocument CreateStructuredStopsAnyQueryDocument(FieldPath stopsPath)
+    {
+        var source = new QueryNodeId("structured-any-source");
+        var filter = new QueryNodeId("structured-any-filter");
+        var project = new QueryNodeId("structured-any-project");
+        IRQueryDefinition definition = new(
+            new("structured-stops-any-query"),
+            new("StructuredStopsAnyQuery"),
+            new LogicalQueryDefinition(
+            [
+                new SourceQueryNode(
+                    source,
+                    LoadCustomerRelationFixture.LoadBinding,
+                    LoadCustomerRelationFixture.LoadShapeId),
+                new FilterQueryNode(
+                    filter,
+                    source,
+                    Expr.Any(
+                        Expr.Field(LoadCustomerRelationFixture.LoadBinding, stopsPath),
+                        Expr.And(
+                            Expr.Eq(Expr.Field("item.Location"), Expr.Const("Seattle")),
+                            Expr.Eq(Expr.Field("item.Type"), Expr.Const("Pickup"))))),
+                CreateLoadIdProjection(project, filter, "assign-structured-any-id")
+            ]),
+            [new RowsQueryResultDefinition(LoadCustomerRelationFixture.RowsResultId, project)]);
+        return RelationQueryDocument.FromDefinition(definition);
+    }
+
+    static ImmutableArray<ShapeGraphDocument> CreateStructuredStopsShapeDocuments()
+    {
+        var domain = LoadCustomerRelationFixture.DomainShapeGraphDocument.Graph;
+        var stopType = new ObjectTypeRef(
+        [
+            new("Location", new ScalarTypeRef(ScalarTypeKind.String)),
+            new("Type", new ScalarTypeRef(ScalarTypeKind.String))
+        ]);
+        var shapes = domain.Shapes.Select(shape =>
+            shape.Id != LoadCustomerRelationFixture.LoadShapeLocalId
+                ? shape
+                : new Shape(
+                    shape.Id,
+                    [
+                        .. shape.Fields,
+                        new(
+                            new("Stops"),
+                            stopType,
+                            cardinality: FieldCardinality.Many)
+                    ],
+                    constraints: shape.Constraints,
+                    annotations: shape.Annotations));
+        var extendedDomain = new ShapeGraph(
+            domain.Id,
+            [.. shapes],
+            domain.NamedTypes,
+            annotations: domain.Annotations);
+        return
+        [
+            ShapeGraphDocument.FromGraph(extendedDomain),
+            LoadCustomerRelationFixture.DtoShapeGraphDocument
+        ];
+    }
+
     static RelationQueryDocument CreateRootPartitionedJoinRelationDocument()
     {
         var source = new QueryNodeId("root-join-source");
@@ -2106,6 +2259,23 @@ public sealed class RelationQueryInMemoryInterpreterTests
         return Assert.IsType<CompiledRelationQueryPlan>(result.Plan);
     }
 
+    static CompiledRelationQueryPlan CompileWithShapes(
+        RelationQueryDocument document,
+        ImmutableArray<ShapeGraphDocument> shapeDocuments,
+        RelationQueryCompilationDemand demand)
+    {
+        var result = RelationQueryStaticCompiler.Compile(new(
+            document,
+            shapeDocuments,
+            LoadCustomerRelationFixture.RelationshipCatalogDocument,
+            demand));
+        Assert.True(
+            result.IsSuccessful,
+            string.Join(Environment.NewLine, result.Diagnostics.Select(static diagnostic =>
+                $"{diagnostic.Code} {diagnostic.Location}: {diagnostic.Message}")));
+        return Assert.IsType<CompiledRelationQueryPlan>(result.Plan);
+    }
+
     static LoadCustomerEvidence CreateEvidence(
         CompiledRelationQueryPlan plan,
         ImmutableArray<LoadCustomerSpec> specs,
@@ -2312,6 +2482,13 @@ public sealed class RelationQueryInMemoryInterpreterTests
             Assert.Equal(expectedValue, actual);
         }
     }
+
+    static ObservationValue StructuredStop(string location, string type) =>
+        ObservationValue.FromObject(new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+        {
+            ["Location"] = ObservationValue.FromString(location),
+            ["Type"] = ObservationValue.FromString(type)
+        });
 
     sealed record LoadCustomerSpec(
         string Key,

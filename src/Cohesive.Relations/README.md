@@ -643,13 +643,14 @@ source or traversal evidence is never consumed after an upstream conversion or r
 
 The evaluator intentionally has a bounded first-version surface. It supports canonical unary and binary
 operators plus the pure collection, object, string, and aggregate functions covered by the reference tests.
-Ambient functions (`entityId`, `key`, and `sourceRows`) and the pure `groupBy`, `groupByRows`,
-and expression-level `join` functions are not yet interpreted. Collection-element field evidence also cannot
-yet be reconstructed losslessly from one occurrence-scoped scalar evidence record. The interpreter publishes
-this narrower expression surface through `RelationQueryInMemoryInterpreter.ExpressionCapabilities`, publishes
-valid-time semantics through `DefaultTemporalCapabilities`, and rejects
-unsupported demanded semantics during preflight with an attributable `REL3209` diagnostic rather than falling
-back to a different or weakened meaning.
+This includes direct current-element field reads inside scoped collection functions such as two-argument `Any`
+when the structured collection is present in runtime evidence. Ambient functions (`entityId`, `key`, and
+`sourceRows`) and the pure `groupBy`, `groupByRows`, and expression-level `join` functions are not yet interpreted.
+Explicit element-path evidence records and deeper nested collection-element paths also remain outside this
+closure. The interpreter publishes this narrower expression surface through
+`RelationQueryInMemoryInterpreter.ExpressionCapabilities`, publishes valid-time semantics through
+`DefaultTemporalCapabilities`, and rejects unsupported demanded semantics during preflight with an attributable
+`REL3209` diagnostic rather than falling back to a different or weakened meaning.
 
 Valid-time join support is declared independently through
 `RelationQueryInMemoryInterpreter.DefaultTemporalCapabilities`. The conventional interpreter supports the
@@ -966,15 +967,39 @@ end rather than an execution plan. SQL, document, graph, search, and in-memory c
 the resulting requirements against their own capability profiles and retain diagnostics and
 provenance to the originating site.
 
+Two-argument `Any` gives structured collections portable existential semantics. Its predicate is
+evaluated once per element with `item` as the current-element field root, and every field read in one
+evaluation refers to that same element:
+
+```csharp
+Expr pickupInSeattle = Expr.Any(
+    Expr.Field(load, FieldPath.FromField("Stops")),
+    Expr.And(
+        Expr.Eq(Expr.Field("item.Location"), Expr.Param(location.Value)),
+        Expr.Eq(Expr.Field("item.Type"), Expr.Const("Pickup"))));
+```
+
+The expression is true when at least one element satisfies the complete predicate. It is false for an
+empty collection. A missing, null, or non-collection operand and a non-Boolean predicate result are invalid
+operands rather than alternate meanings for false. This differs from `Contains`, which tests membership in
+a scalar collection and has no structured-element correlation requirement.
+
+Static analysis resolves direct current-element fields from inline structural types and named structural
+collection element types. It projects the outer collection input, current-item reads, and the portable
+`CollectionElementCorrelation` guarantee with provenance to the originating expression site. The reference
+interpreter realizes this direct-field closure over structured runtime values. Elasticsearch realizes it only
+when binding evidence proves a `nested` mapping and same-document correlation; a flattened object array is not
+semantically equivalent. Deeper current-element paths and nested collection scopes remain deferred.
+
 Supplied shape-graph snapshots are retained exactly for provenance. Snapshots with semantic
 errors are diagnosed and quarantined from scope and target resolution, so invalid schema data
 cannot silently influence inferred contracts.
 
 This front-end intentionally stops short of full cross-expression type inference. Exact selector-to-
-aggregate-result correlation, keyset-boundary-to-order-key correlation, graph resolution for
-nested `NamedTypeRef` source paths, and a common-domain/coercion model for mixed comparison
-operands belong to the subsequent inference layer. Current analysis reports what it can prove and
-does not silently invent conversion semantics for those cases.
+aggregate-result correlation, keyset-boundary-to-order-key correlation, arbitrary deep graph resolution for
+named structural source paths, and a common-domain/coercion model for mixed comparison operands belong to the
+subsequent inference layer. Current analysis reports what it can prove and does not silently invent conversion
+semantics for those cases.
 
 ### Demand-driven static compilation
 
@@ -1354,6 +1379,8 @@ The current foundation includes:
 - Plan-attributed runtime evidence, causal requirement-gap analysis, and explicit missing-data policy decisions.
 - A deterministic physical planner, bounded source-reader contracts, and canonical physical executor.
 - A canonical in-memory relation/query reference interpreter over supplied evidence.
+- Same-element structured collection existentials with direct-field reference execution and exact Elasticsearch
+  nested-query lowering when physical correlation evidence is available.
 - Object/observation mapping and runtime-compiled DTO kernels for supported canonical relation terminals.
 - An explicitly temporary `Cohesive.Relations.Queries` compatibility boundary.
 - Contract projection for other host languages.
@@ -1363,7 +1390,7 @@ Active areas of development include:
 - Structural, expression-based, CLR-shape, placement, and adapter-binding C# authoring over canonical IR.
 - Migration and removal of `Cohesive.Relations.Queries`.
 - PostgreSQL and broader Cosmos SQL and Elasticsearch compiler coverage; Gremlin is deferred.
-- Nested collection-query semantics and target lowering.
+- Broader nested collection traversal, additional scoped collection operators, and target lowering.
 - Cross-source batching and in-memory joins.
 - Backend differential and reference-interpreter conformance testing.
 - JSON Schema generation and compatibility tooling.

@@ -28,6 +28,7 @@ First declare the shapes and canonical query, then run
 using System.Text.Json;
 using Cohesive.Adapters.Elastic;
 using Cohesive.Model;
+using Cohesive.Model.Expressions;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.IR;
@@ -192,7 +193,7 @@ RelationQueryInputId Input(FieldPath path) => sourceContract.Fields
     .Input.Id;
 
 var storageBinding = new ElasticRelationQueryStorageBinding(
-    new("example/loads-read/v1"),
+    new("example/loads-read/v2"),
     sourceId,
     placementBinding.Id,
     ElasticRelationQueryTargetProfile.Target,
@@ -299,10 +300,81 @@ rowsRequest.Timeout = "5s";
 That mutation is outside the compiler's exactness and provenance guarantees; those describe the request initially
 materialized by `Bind`.
 
-This narrow membership capability applies to a denormalized root scalar array. A structured predicate such as
-`Stops.Any(stop => stop.Location == location)` requires collection-element scope and exact nested-document
-correlation. That is a separate follow-up capability; the compiler does not silently treat flattened object arrays
-as equivalent.
+The scalar membership capability above remains the simplest choice when each location is independently searchable.
+When predicates must correlate fields from the same structured element, use canonical `Any`. The following is an
+alternative version of the complete example: include `stopsField` in `LoadSearchDocument`, replace the filter's
+`Contains` expression with `pickupInLocation`, and then run static compilation. It means “there is one pickup stop in
+the requested location,” not “one stop has the location and some other stop is a pickup”:
+
+```csharp
+var stopsPath = FieldPath.FromField("Stops");
+var locationPath = FieldPath.FromField("Location");
+var typePath = FieldPath.FromField("Type");
+var stopType = new ObjectTypeRef(
+[
+    new("Location", text),
+    new("Type", text)
+]);
+var stopsField = new FieldDefinition(
+    new("Stops"),
+    stopType,
+    cardinality: FieldCardinality.Many);
+
+Expr pickupInLocation = Expr.Any(
+    Expr.Field(load, stopsPath),
+    Expr.And(
+        Expr.Eq(
+            Expr.Field($"{ExprFieldRoots.CurrentItem}.Location"),
+            Expr.Param(location.Value)),
+        Expr.Eq(
+            Expr.Field($"{ExprFieldRoots.CurrentItem}.Type"),
+            Expr.Const("Pickup"))));
+```
+
+The resulting plan has one outer `Stops` input. That input owns all Elasticsearch-specific nested evidence; no
+synthetic child input is added to the canonical plan:
+
+```csharp
+new ElasticRelationQueryFieldBinding(
+    Input(stopsPath),
+    sourceField: null,
+    queryField: FieldPath.Parse("stops"),
+    mappingKind: ElasticRelationQueryFieldMappingKind.Nested,
+    retrievalKind: ElasticRelationQueryFieldRetrievalKind.Unavailable,
+    retrievalEncoding: null,
+    documentScope: ElasticRelationQueryFieldDocumentScope.NestedDocument,
+    missingValueBehavior: ElasticRelationQueryMissingValueBehavior.ProhibitedByIngestion,
+    nullValueBehavior: ElasticRelationQueryNullValueBehavior.ProhibitedByIngestion,
+    nestedScope: new ElasticRelationQueryNestedScopeEvidence(
+        nestedPath: FieldPath.Parse("stops"),
+        correlationGuarantee: ElasticRelationQueryNestedCorrelationGuarantee.SameNestedDocument,
+        nullElementBehavior: ElasticRelationQueryNestedAbsenceBehavior.ProhibitedByIngestion,
+        emptyCollectionBehavior: ElasticRelationQueryEmptyCollectionBehavior.NoNestedDocuments,
+        childFields:
+        [
+            new(
+                locationPath,
+                FieldPath.Parse("stops.location.keyword"),
+                ElasticRelationQueryFieldMappingKind.Keyword,
+                ElasticRelationQueryFieldSemanticCapabilities.ExactTerm,
+                "example/ordinal-keyword-v1",
+                ElasticRelationQueryNestedAbsenceBehavior.ProhibitedByIngestion,
+                ElasticRelationQueryNestedAbsenceBehavior.ProhibitedByIngestion),
+            new(
+                typePath,
+                FieldPath.Parse("stops.type.keyword"),
+                ElasticRelationQueryFieldMappingKind.Keyword,
+                ElasticRelationQueryFieldSemanticCapabilities.ExactTerm,
+                "example/ordinal-keyword-v1",
+                ElasticRelationQueryNestedAbsenceBehavior.ProhibitedByIngestion,
+                ElasticRelationQueryNestedAbsenceBehavior.ProhibitedByIngestion)
+        ]));
+```
+
+The resulting SDK request contains one `NestedQuery` at `stops`, with both term clauses inside the same child Boolean
+query. A flattened `object` mapping, missing same-element evidence, dropped null elements, or weak missing/null
+behavior fails closed with `REL2244`; the diagnostic recommends a denormalized scalar collection plus `Contains`
+when correlation is not needed.
 
 ## Request Construction and Lowering Extensions
 
@@ -319,8 +391,8 @@ request.Timeout = "5s"; // Optional explicit caller override.
 SearchResponse<JsonElement> response = await client.SearchAsync<JsonElement>(request, cancellationToken);
 ```
 
-The immutable physical query IR supports exact term, range, existence, wildcard, prefix, and Boolean clauses with
-explicit `filter`, `should`, and `must_not` placement; offset and `search_after` hit pagination; exact total-hit
+The immutable physical query IR supports exact term, range, existence, wildcard, prefix, Boolean, and nested clauses
+with explicit `filter`, `should`, and `must_not` placement; offset and `search_after` hit pagination; exact total-hit
 counts; and paged composite grouped counts. Fingerprinting uses this closed template rather than the mutable SDK
 request.
 
@@ -339,7 +411,7 @@ the target may refuse.
 
 ## Exact Compiler Closure
 
-The canonical v1 target profile advertises operation families. A successful artifact still depends on the concrete
+The canonical v2 target profile advertises operation families. A successful artifact still depends on the concrete
 storage binding and compiler proving the narrower structural closure for that branch. Row artifacts currently accept
 one linear, single-index pipeline; direct field or scalar-constant projections; required non-null scalar predicates;
 direct membership tests over supported required root scalar arrays; deterministic field ordering; and a bounded page. Grouped
@@ -347,14 +419,16 @@ counts accept required non-null text, GUID, or integer keys through a paged comp
 fail with structured diagnostics instead of weakening the canonical semantics.
 
 Field bindings separately attest their mapping, root-versus-nested document scope, retrieval channel, physical JSON
-encoding, and exact query facilities. Canonical v1 reads scalar row values only from root-document `_source` fields.
-Scalar arrays may be query-only membership inputs but cannot yet be projected as result fields. Nested querying and
-nested-source extraction are deferred. Temporal values may be projected when their canonical string encoding is
-attested, but temporal filtering, ordering, and grouping are deferred because Elasticsearch date normalization and
-precision do not yet preserve Cohesive's complete representation and comparison semantics.
+encoding, and exact query facilities. Canonical v2 reads scalar row values only from root-document `_source` fields.
+Scalar arrays may be query-only membership inputs but cannot yet be projected as result fields. Structured collection
+existentials support direct required child comparisons only when the binding proves an Elasticsearch `nested` mapping
+and same-element correlation; deeper nested traversal and nested-source extraction are deferred. Temporal values may
+be projected when their canonical string encoding is attested, but temporal filtering, ordering, and grouping are
+deferred because Elasticsearch date normalization and precision do not yet preserve Cohesive's complete
+representation and comparison semantics.
 
 Offset artifacts describe one bounded request against that invocation's current view and make no cross-request
-continuation claim. `search_after` hit pages and composite after-key pages span a logical sequence, so canonical v1
+continuation claim. `search_after` hit pages and composite after-key pages span a logical sequence, so canonical v2
 requires `ElasticRelationQueryPaginationConsistency.StableSearchView`: refreshes are complete and the visible
 document set, ordering, and concrete target remain unchanged for the sequence.
 Point-in-time-backed pagination over mutable indexes is intentionally deferred until PIT lifecycle and continuation
