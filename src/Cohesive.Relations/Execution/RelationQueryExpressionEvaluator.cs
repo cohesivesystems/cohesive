@@ -172,6 +172,7 @@ sealed class RelationQueryExpressionEvaluator
             StringComparer.Ordinal,
             ExprFunctionNames.Contains,
             ExprFunctionNames.Count,
+            ExprFunctionNames.EndsWith,
             ExprFunctionNames.Object,
             ExprFunctionNames.Select,
             ExprFunctionNames.Append,
@@ -423,6 +424,7 @@ sealed class RelationQueryExpressionEvaluator
         {
             ExprFunctionNames.Contains => EvaluateContains(call, context),
             ExprFunctionNames.Count => EvaluateCount(call, context),
+            ExprFunctionNames.EndsWith => EvaluateEndsWith(call, context),
             ExprFunctionNames.Object => EvaluateObject(call, context),
             ExprFunctionNames.Select => EvaluateSelect(call, context),
             ExprFunctionNames.Append => EvaluateAppend(call, context),
@@ -474,6 +476,13 @@ sealed class RelationQueryExpressionEvaluator
             _ => throw InvalidOperand(
                 $"Expression function '{call.Function}' requires an array or object, but received '{value.Kind}'.")
         };
+    }
+
+    ObservationValue EvaluateEndsWith(CallExpr call, RelationQueryExpressionContext context)
+    {
+        var value = RequireString(Evaluate(call.Arguments[0], context), call.Function);
+        var suffix = RequireString(Evaluate(call.Arguments[1], context), call.Function);
+        return ObservationValue.FromBool(value.EndsWith(suffix, StringComparison.Ordinal));
     }
 
     ObservationValue EvaluateObject(CallExpr call, RelationQueryExpressionContext context)
@@ -694,6 +703,13 @@ sealed class RelationQueryExpressionEvaluator
         if (value.Kind != ObservationValueKind.Bool)
             throw InvalidOperand($"Operation '{operation}' requires a Boolean, but received '{value.Kind}'.");
         return value.Bool;
+    }
+
+    static string RequireString(ObservationValue value, string operation)
+    {
+        if (value.Kind != ObservationValueKind.String || value.String is null)
+            throw InvalidOperand($"Operation '{operation}' requires text, but received '{value.Kind}'.");
+        return value.String;
     }
 
     static ObservationValue RequireCurrentItem(RelationQueryExpressionContext context) =>

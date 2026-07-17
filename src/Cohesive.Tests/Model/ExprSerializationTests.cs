@@ -24,4 +24,19 @@ public sealed class ExprSerializationTests
         var parameter = Assert.IsType<ParameterExpr>(expr);
         Assert.Equal("carrierId", parameter.Parameter);
     }
+
+    [Fact]
+    public void RoundTrip_EndsWithRemainsAGenericFunctionCall()
+    {
+        var expression = Expr.EndsWith(
+            Expr.Const("load-🚚*?\\"),
+            Expr.Const("🚚*?\\"));
+
+        var json = JsonSerializer.Serialize<Expr>(expression, JsonOptions);
+        var roundTripped = JsonSerializer.Deserialize<Expr>(json, JsonOptions);
+
+        Assert.Equal(expression, roundTripped);
+        Assert.Contains("\"$expr\":\"function\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"function\":\"endsWith\"", json, StringComparison.Ordinal);
+    }
 }

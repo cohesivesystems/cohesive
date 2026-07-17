@@ -287,6 +287,52 @@ public sealed class RelationQueryExpressionEvaluatorTests
         Assert.Equal(RelationQueryExpressionEvaluationError.InvalidOperand, duplicateKey.Error);
     }
 
+    [Theory]
+    [InlineData("Load-ABC", "ABC", true)]
+    [InlineData("Load-ABC", "abc", false)]
+    [InlineData("Load-ABC", "", true)]
+    [InlineData("", "", true)]
+    [InlineData("a", "longer", false)]
+    [InlineData("caf\u00E9", "\u00E9", true)]
+    [InlineData("caf\u00E9", "e\u0301", false)]
+    [InlineData("cafe\u0301", "e\u0301", true)]
+    [InlineData("load\U0001F69A", "\U0001F69A", true)]
+    [InlineData("id*?\\", "*?\\", true)]
+    public void Evaluate_EndsWithUsesOrdinalCaseSensitiveTextSemantics(
+        string value,
+        string suffix,
+        bool expected)
+    {
+        var context = new RelationQueryExpressionContext();
+
+        var result = evaluator.Evaluate(
+            Expr.EndsWith(Expr.Const(value), Expr.Const(suffix)),
+            context);
+
+        Assert.Equal(expected, result.Bool);
+    }
+
+    [Fact]
+    public void Evaluate_EndsWithRejectsNullUndefinedAndNonTextOperands()
+    {
+        var context = new RelationQueryExpressionContext();
+        Expr[] invalid =
+        [
+            Expr.EndsWith(Expr.Null(), Expr.Const("suffix")),
+            Expr.EndsWith(Expr.Const(ObservationValue.Undefined), Expr.Const("suffix")),
+            Expr.EndsWith(Expr.Const(1), Expr.Const("1")),
+            Expr.EndsWith(Expr.Const("value"), Expr.Null()),
+            Expr.EndsWith(Expr.Const("value"), Expr.Const(false))
+        ];
+
+        Assert.All(invalid, expression =>
+        {
+            var exception = Assert.Throws<RelationQueryExpressionEvaluationException>(() =>
+                evaluator.Evaluate(expression, context));
+            Assert.Equal(RelationQueryExpressionEvaluationError.InvalidOperand, exception.Error);
+        });
+    }
+
     [Fact]
     public void Evaluate_SequenceAggregatesUseScopedSelectorsAndDefinedEmptyIdentities()
     {

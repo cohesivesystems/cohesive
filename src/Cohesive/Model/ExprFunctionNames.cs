@@ -54,6 +54,11 @@ public static class ExprFunctionNames
     public const string EntityId = "entityId";
 
     /// <summary>
+    /// Function name for testing whether one text value ends with another using ordinal, case-sensitive semantics.
+    /// </summary>
+    public const string EndsWith = "endsWith";
+
+    /// <summary>
     /// Function name for grouping source items into an object keyed by a selector expression.
     /// </summary>
     public const string GroupBy = "groupBy";

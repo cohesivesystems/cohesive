@@ -619,3 +619,190 @@ public sealed record RelationQueryNativeCompilationProvenance
         return [.. normalized.OrderBy(static decision => decision.Requirement.Value, StringComparer.Ordinal)];
     }
 }
+
+/// <summary>Creates target-neutral provenance from one validated native-compilation request branch.</summary>
+public static class RelationQueryNativeCompilationProvenanceFactory
+{
+    /// <summary>
+    /// Creates exact provenance for one selected branch and retains only realization decisions that contribute to
+    /// that branch's demanded outputs.
+    /// </summary>
+    /// <param name="request">Validated native-compilation request supplying the exact plan and proof artifacts.</param>
+    /// <param name="branch">Selected result-branch identity from <paramref name="request"/>.</param>
+    /// <param name="compilerProfile">Target compiler implementation/profile identity.</param>
+    /// <param name="conventionSetVersion">Convention set applied during target lowering.</param>
+    /// <param name="coveredNodes">One or more logical nodes covered by the native artifact.</param>
+    /// <param name="coveredAssignments">Projection, grouping, and aggregate assignments covered by the artifact.</param>
+    /// <param name="inputFields">Exact compiled field inputs read by the artifact.</param>
+    /// <returns>
+    /// Target-neutral native-compilation provenance normalized by the
+    /// <see cref="RelationQueryNativeCompilationProvenance"/> contract.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="request"/>, <paramref name="compilerProfile"/>, or
+    /// <paramref name="conventionSetVersion"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="branch"/> is default or is not selected by <paramref name="request"/>; a compiler or
+    /// convention identity is empty; a provenance collection contains an invalid or repeated identity;
+    /// <paramref name="coveredNodes"/> is empty or contains a node outside the selected branch; a covered assignment
+    /// does not belong to a covered branch node; or <paramref name="inputFields"/> contains an input not read by the
+    /// selected branch.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// The request has stale or unrealizable inputs, or a branch-relevant realization decision is unavailable.
+    /// </exception>
+    public static RelationQueryNativeCompilationProvenance Create(
+        RelationQueryNativeCompilationRequest request,
+        RelationQueryNativeResultBranchId branch,
+        string compilerProfile,
+        string conventionSetVersion,
+        ImmutableArray<QueryNodeId> coveredNodes,
+        ImmutableArray<QueryAssignmentId> coveredAssignments,
+        ImmutableArray<RelationQueryInputId> inputFields)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (string.IsNullOrWhiteSpace(branch.Value))
+            throw new ArgumentException("Native compilation provenance requires a branch identity.", nameof(branch));
+
+        var selectedBranch = request.Branches.SingleOrDefault(candidate => candidate.Id == branch)
+            ?? throw new ArgumentException(
+                "Native compilation provenance requires a branch selected by the request.",
+                nameof(branch));
+        var inputDiagnostics = request.ValidateInputs();
+        if (!inputDiagnostics.IsDefaultOrEmpty)
+        {
+            throw new InvalidOperationException(
+                $"Native compilation provenance requires valid and realizable inputs: {string.Join(
+                    "; ",
+                    inputDiagnostics.Select(static diagnostic => $"{diagnostic.Code}: {diagnostic.Message}"))}");
+        }
+
+        var nodesById = request.Plan.ExecutionSlice.LogicalPlan.Nodes
+            .ToDictionary(static node => node.Node);
+        HashSet<QueryNodeId> reachableNodes = [];
+        Stack<QueryNodeId> pendingNodes = new([selectedBranch.Node]);
+        while (pendingNodes.TryPop(out var node))
+        {
+            if (!reachableNodes.Add(node))
+                continue;
+            if (!nodesById.TryGetValue(node, out var logicalNode))
+            {
+                throw new InvalidOperationException(
+                    $"Selected native branch '{selectedBranch.Id.Value}' references a node absent from its compiled logical plan.");
+            }
+            foreach (var input in logicalNode.EffectiveInputs)
+                pendingNodes.Push(input);
+        }
+
+        var normalizedCoveredNodes = coveredNodes.IsDefault ? [] : coveredNodes;
+        if (normalizedCoveredNodes.Any(node => !reachableNodes.Contains(node)))
+        {
+            throw new ArgumentException(
+                "Native compilation provenance can cover only nodes reachable by the selected branch.",
+                nameof(coveredNodes));
+        }
+        var coveredNodeSet = normalizedCoveredNodes.ToHashSet();
+        var coveredAssignmentCandidates = request.Plan.ExecutionSlice.Nodes
+            .Where(node => coveredNodeSet.Contains(node.Id))
+            .SelectMany(static node => node.ProjectionAssignments
+                .Select(static assignment => assignment.Definition.Id)
+                .Concat(node.AggregateGroupings.Select(static grouping => grouping.Definition.Id))
+                .Concat(node.AggregateAssignments.Select(static assignment => assignment.Definition.Id)))
+            .ToHashSet();
+        var normalizedAssignments = coveredAssignments.IsDefault ? [] : coveredAssignments;
+        if (normalizedAssignments.Any(assignment => !coveredAssignmentCandidates.Contains(assignment)))
+        {
+            throw new ArgumentException(
+                "Native compilation provenance can cover only demanded assignments belonging to covered branch nodes.",
+                nameof(coveredAssignments));
+        }
+
+        var outputIds = selectedBranch.Outputs.Select(static output => output.Id).ToHashSet();
+        var branchInputFields = request.Plan.InputContract.Sources
+            .SelectMany(static source => source.Fields)
+            .Concat(request.Plan.InputContract.Traversals.SelectMany(static traversal => traversal.Fields))
+            .Where(field => field.Uses.Any(use => outputIds.Contains(use.Output.Id)))
+            .Select(static field => field.Input.Id)
+            .ToHashSet();
+        var normalizedInputFields = inputFields.IsDefault ? [] : inputFields;
+        if (normalizedInputFields.Any(input => !branchInputFields.Contains(input)))
+        {
+            throw new ArgumentException(
+                "Native compilation provenance can retain only compiled field inputs read by the selected branch.",
+                nameof(inputFields));
+        }
+        var relevantRequirements = request.Realization.Requirements
+            .Where(requirement => requirement.Uses.Any(use => outputIds.Contains(use.Output.Id)))
+            .Select(static requirement => requirement.Id)
+            .ToHashSet();
+        var decisionReferences = request.Realization.Decisions
+            .Where(decision => relevantRequirements.Contains(decision.Requirement))
+            .Select(CreateDecisionReference)
+            .ToImmutableArray();
+        return new(
+            request.PlanReference,
+            selectedBranch.Id,
+            request.Realization.TargetProfile.Target,
+            request.Realization.TargetProfile.Id,
+            request.Realization.Fingerprint,
+            request.Placement.Fingerprint,
+            compilerProfile,
+            conventionSetVersion,
+            coveredNodes,
+            coveredAssignments,
+            inputFields,
+            decisionReferences);
+    }
+
+    /// <summary>Projects one successful realization decision into compact native-artifact proof metadata.</summary>
+    /// <param name="decision">Successful final realization decision to retain.</param>
+    /// <returns>A normalized native-compilation decision reference preserving the decision's exact proof.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="decision"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// <paramref name="decision"/> is unavailable and therefore cannot prove a native artifact.
+    /// </exception>
+    public static RelationQueryNativeCompilationDecisionReference CreateDecisionReference(
+        RelationQueryRealizationDecision decision)
+    {
+        ArgumentNullException.ThrowIfNull(decision);
+        return decision switch
+        {
+            NativeRelationQueryRealizationDecision native => new(
+                native.Requirement,
+                native.Kind,
+                native.CapabilityEvidence,
+                preservedGuarantees: native.PreservedGuarantees),
+            ComposedRelationQueryRealizationDecision composed => new(
+                composed.Requirement,
+                composed.Kind,
+                composed.CapabilityEvidence,
+                composed.CompositionRules,
+                preservedGuarantees: composed.PreservedGuarantees),
+            ConstrainedRelationQueryRealizationDecision constrained => new(
+                constrained.Requirement,
+                constrained.Kind,
+                constrained.CapabilityEvidence,
+                constrained.CompositionRules,
+                operatingBoundaries:
+                [
+                    .. constrained.BoundaryValidations.Select(static validation => validation.Boundary)
+                ],
+                preservedGuarantees: constrained.PreservedGuarantees),
+            OverrideRelationQueryRealizationDecision overridden => new(
+                overridden.Requirement,
+                overridden.Kind,
+                overridden.CapabilityEvidence,
+                @override: overridden.Override,
+                operatingBoundaries:
+                [
+                    .. overridden.BoundaryValidations.Select(static validation => validation.Boundary)
+                ],
+                preservedGuarantees: overridden.PreservedGuarantees),
+            UnavailableRelationQueryRealizationDecision => throw new InvalidOperationException(
+                "An unavailable realization decision cannot prove target-native artifact provenance."),
+            _ => throw new InvalidOperationException(
+                $"Realization decision '{decision.GetType().Name}' cannot prove target-native artifact provenance.")
+        };
+    }
+}

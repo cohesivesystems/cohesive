@@ -93,6 +93,7 @@ public sealed class TypeScriptExprEmitter(TypeScriptExprEmitterOptions? options 
         {
             ExprFunctionNames.Contains => EmitContains(call),
             ExprFunctionNames.Count => EmitCount(call),
+            ExprFunctionNames.EndsWith => EmitEndsWith(call),
             _ => throw new NotSupportedException($"Function '{call.Function}' is not supported by the TypeScript expression emitter.")
         };
     }
@@ -116,6 +117,12 @@ public sealed class TypeScriptExprEmitter(TypeScriptExprEmitterOptions? options 
     {
         RequireArgumentCount(call, 1);
         return $"({EmitCore(call.Arguments[0])}).length";
+    }
+
+    string EmitEndsWith(CallExpr call)
+    {
+        RequireArgumentCount(call, 2);
+        return $"({EmitCore(call.Arguments[0])}).endsWith({EmitCore(call.Arguments[1])})";
     }
 
     static void RequireArgumentCount(CallExpr call, int count)

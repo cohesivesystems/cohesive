@@ -293,6 +293,42 @@ public sealed class RelationQueryRealizationRequirementProjectorTests
     }
 
     [Fact]
+    public void Project_EndsWithRetainsExactFunctionCapabilityAndFilterOrigin()
+    {
+        var (document, filter) = CreateEndsWithQueryDocument();
+        var plan = Compile(document);
+        var filterSite = Assert.Single(
+            plan.ExecutionSlice.ExpressionSites,
+            site => site.Node == filter
+                && site.Kind == RelationQueryExpressionSiteKind.FilterPredicate);
+
+        var requirements = RelationQueryRealizationRequirementProjector.Project(plan);
+
+        var requirement = Assert.Single(
+            requirements,
+            candidate => candidate.Capability is ExpressionRelationQueryCapability
+            {
+                Capability: var capability,
+                RequirementKind: ExprCapabilityRequirementKind.Operation
+            }
+            && capability == ExprCapabilities.ForFunction(ExprFunctionNames.EndsWith));
+        Assert.Equal(filter, requirement.Origin?.Node);
+        Assert.Equal(filterSite.Analysis.Site.Id.Value, requirement.Origin?.SemanticSite);
+        Assert.Equal("/", requirement.Origin?.ExpressionPath);
+        Assert.Contains(
+            RelationQueryGuaranteeCapabilityKind.MissingNullDistinction,
+            requirement.RequiredGuarantees);
+        Assert.Contains(
+            RelationQueryGuaranteeCapabilityKind.AbsenceAvailabilityFailureDistinction,
+            requirement.RequiredGuarantees);
+        Assert.Contains(
+            requirement.Uses.SelectMany(static use => use.Traces),
+            trace => trace.Steps.Any(step =>
+                step.Kind == RelationQueryRealizationTraceStepKind.ExpressionSite
+                && step.ExpressionSite == filterSite.Analysis.Site.Id));
+    }
+
+    [Fact]
     public void Project_DerivedBindingReadsRemainDistinctWithoutExternalInputIds()
     {
         var (document, join, left, right) = CreateDerivedBindingJoinDocument();
@@ -738,6 +774,51 @@ public sealed class RelationQueryRealizationRequirementProjectorTests
                         LoadCustomerRelationFixture.LoadAggregateShapeId,
                         LoadCustomerRelationFixture.AggregateLoadCountPath)
                 ])));
+
+    static (RelationQueryDocument Document, QueryNodeId Filter) CreateEndsWithQueryDocument()
+    {
+        var filter = new QueryNodeId("ends-with-filter");
+        var project = new QueryNodeId("ends-with-project");
+        var suffix = new QueryParameterId("suffix");
+        var definition = new QueryDefinition(
+            new("ends-with-query"),
+            new("EndsWithQuery"),
+            new LogicalQueryDefinition(
+                nodes:
+                [
+                    new SourceQueryNode(
+                        LoadCustomerRelationFixture.LoadSourceNodeId,
+                        LoadCustomerRelationFixture.LoadBinding,
+                        LoadCustomerRelationFixture.LoadShapeId),
+                    new FilterQueryNode(
+                        filter,
+                        LoadCustomerRelationFixture.LoadSourceNodeId,
+                        Expr.EndsWith(
+                            Expr.Field(
+                                LoadCustomerRelationFixture.LoadBinding,
+                                LoadCustomerRelationFixture.LoadStatusPath),
+                            Expr.Param(suffix.Value))),
+                    new ProjectQueryNode(
+                        project,
+                        filter,
+                        LoadCustomerRelationFixture.SearchBinding,
+                        LoadCustomerRelationFixture.LoadSearchShapeId,
+                        [
+                            new(
+                                new("ends-with-id"),
+                                LoadCustomerRelationFixture.SearchIdPath,
+                                Expr.Field(
+                                    LoadCustomerRelationFixture.LoadBinding,
+                                    LoadCustomerRelationFixture.LoadIdPath))
+                        ])
+                ],
+                parameters:
+                [
+                    new(suffix, new ScalarTypeRef(ScalarTypeKind.String))
+                ]),
+            [new RowsQueryResultDefinition(LoadCustomerRelationFixture.RowsResultId, project)]);
+        return (RelationQueryDocument.FromDefinition(definition), filter);
+    }
 
     static RelationQueryDocument CreateElementPathQueryDocument(FieldPath itemPath)
     {

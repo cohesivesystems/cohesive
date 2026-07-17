@@ -164,6 +164,114 @@ public sealed class CosmosRelationQueryCompilerTests
     }
 
     [Fact]
+    public void NativeCompilationProvenance_RejectsUnknownCoveredNode()
+    {
+        var fixture = Fixture.Row();
+        var request = new RelationQueryNativeCompilationRequest(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement);
+        var branch = Assert.Single(request.Branches);
+
+        var exception = Assert.Throws<ArgumentException>(() =>
+            RelationQueryNativeCompilationProvenanceFactory.Create(
+                request,
+                branch.Id,
+                "tests/cosmos/compiler-v1",
+                CosmosRelationQueryStorageBinding.SemanticPathConventionSet,
+                [new QueryNodeId("unknown-node")],
+                [],
+                []));
+
+        Assert.Equal("coveredNodes", exception.ParamName);
+        Assert.Contains("reachable by the selected branch", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NativeCompilationProvenance_RejectsCoveredNodeFromAnotherBranch()
+    {
+        var fixture = Fixture.IndependentBranches();
+        var request = new RelationQueryNativeCompilationRequest(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement);
+        var selectedBranch = Assert.Single(request.Branches, static branch => branch.QueryResult == new QueryResultId("rows"));
+        var unrelatedBranch = Assert.Single(request.Branches, branch => branch.Id != selectedBranch.Id);
+
+        var exception = Assert.Throws<ArgumentException>(() =>
+            RelationQueryNativeCompilationProvenanceFactory.Create(
+                request,
+                selectedBranch.Id,
+                "tests/cosmos/compiler-v1",
+                CosmosRelationQueryStorageBinding.SemanticPathConventionSet,
+                [unrelatedBranch.Node],
+                [],
+                []));
+
+        Assert.Equal("coveredNodes", exception.ParamName);
+        Assert.Contains("reachable by the selected branch", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NativeCompilationProvenance_RejectsAssignmentOutsideCoveredNodes()
+    {
+        var fixture = Fixture.Row();
+        var request = new RelationQueryNativeCompilationRequest(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement);
+        var branch = Assert.Single(request.Branches);
+        var projectionNode = Assert.Single(
+            fixture.Plan.ExecutionSlice.Nodes,
+            static node => !node.ProjectionAssignments.IsDefaultOrEmpty);
+        var assignment = projectionNode.ProjectionAssignments[0].Definition.Id;
+        var coveredNode = Assert.Single(
+            fixture.Plan.ExecutionSlice.Nodes,
+            static node => node.CanonicalNode is SourceQueryNode);
+
+        var exception = Assert.Throws<ArgumentException>(() =>
+            RelationQueryNativeCompilationProvenanceFactory.Create(
+                request,
+                branch.Id,
+                "tests/cosmos/compiler-v1",
+                CosmosRelationQueryStorageBinding.SemanticPathConventionSet,
+                [coveredNode.Id],
+                [assignment],
+                []));
+
+        Assert.Equal("coveredAssignments", exception.ParamName);
+        Assert.Contains("belonging to covered branch nodes", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NativeCompilationProvenance_RejectsPlanInputReadOnlyByAnotherBranch()
+    {
+        var fixture = Fixture.IndependentBranches();
+        var request = new RelationQueryNativeCompilationRequest(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement);
+        var selectedBranch = Assert.Single(request.Branches, static branch => branch.QueryResult == new QueryResultId("rows"));
+        var selectedOutputs = selectedBranch.Outputs.Select(static output => output.Id).ToHashSet();
+        var unrelatedInput = Assert.Single(
+            fixture.Plan.InputContract.Sources.SelectMany(static source => source.Fields),
+            field => field.Uses.All(use => !selectedOutputs.Contains(use.Output.Id)));
+
+        var exception = Assert.Throws<ArgumentException>(() =>
+            RelationQueryNativeCompilationProvenanceFactory.Create(
+                request,
+                selectedBranch.Id,
+                "tests/cosmos/compiler-v1",
+                CosmosRelationQueryStorageBinding.SemanticPathConventionSet,
+                [selectedBranch.Node],
+                [],
+                [unrelatedInput.Input.Id]));
+
+        Assert.Equal("inputFields", exception.ParamName);
+        Assert.Contains("read by the selected branch", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Bind_RuntimeParameter_ReusesTemplateAndRejectsInexactInvocations()
     {
         var artifact = Assert.Single(Fixture.Row().Compile().Artifacts);
@@ -657,6 +765,7 @@ public sealed class CosmosRelationQueryCompilerTests
         static readonly QueryNodeId Page = new("page-row");
         static readonly QueryNodeId Aggregate = new("aggregate-loads");
         static readonly QueryResultId Rows = new("rows");
+        static readonly QueryResultId CustomerRows = new("customer-rows");
         static readonly QueryResultId Aggregations = new("aggregations");
         static readonly QueryParameterId StatusParameter = new("status");
         static readonly QueryParameterId NumericParameter = new("numeric-value");
@@ -866,6 +975,32 @@ public sealed class CosmosRelationQueryCompilerTests
             return Create(
                 RelationQueryDocument.FromDefinition(definition),
                 overrideUnavailableRequirements: overrideUnavailableRequirements);
+        }
+
+        public static Fixture IndependentBranches()
+        {
+            IRQueryDefinition definition = new(
+                new("independent-branches-query"),
+                new("IndependentBranchesQuery"),
+                new(
+                [
+                    new SourceQueryNode(LoadSource, Load, LoadShape),
+                    new ProjectQueryNode(
+                        Project,
+                        LoadSource,
+                        RowBinding,
+                        RowShape,
+                        [
+                            new(new("row-id"), IdPath, Expr.Field(Load, IdPath)),
+                            new(new("row-status"), StatusPath, Expr.Field(Load, StatusPath))
+                        ]),
+                    new SourceQueryNode(CustomerSource, Customer, CustomerShape)
+                ]),
+                [
+                    new RowsQueryResultDefinition(Rows, Project),
+                    new RowsQueryResultDefinition(CustomerRows, CustomerSource)
+                ]);
+            return Create(RelationQueryDocument.FromDefinition(definition));
         }
 
         public static Fixture OrderingByStatus()
