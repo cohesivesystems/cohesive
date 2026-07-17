@@ -21,11 +21,13 @@ public sealed class TypeScriptExprEmitterTests
     }
 
     [Fact]
-    public void Emit_Functions_EmitsContainsAndCount()
+    public void Emit_Functions_EmitsContainsCountAndOrdinalSuffix()
     {
         var expr = Expr.And(
             Expr.Call(ExprFunctionNames.Contains, Expr.Param("statuses"), Expr.Const("Running")),
-            Expr.Gt(Expr.Call(ExprFunctionNames.Count, Expr.Field("items")), Expr.Const(0)));
+            Expr.And(
+                Expr.Gt(Expr.Call(ExprFunctionNames.Count, Expr.Field("items")), Expr.Const(0)),
+                Expr.EndsWith(Expr.Field("reference"), Expr.Const("-A"))));
 
         var text = new TypeScriptExprEmitter(new()
         {
@@ -36,7 +38,9 @@ public sealed class TypeScriptExprEmitterTests
             FieldRootIdentifier = "data"
         }).Emit(expr);
 
-        Assert.Equal("((state.statuses).includes('Running') && ((data.items).length > 0))", text);
+        Assert.Equal(
+            "((state.statuses).includes('Running') && (((data.items).length > 0) && (data.reference).endsWith('-A')))",
+            text);
     }
 
     [Fact]

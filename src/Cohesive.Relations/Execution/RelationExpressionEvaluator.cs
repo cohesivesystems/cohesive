@@ -191,11 +191,21 @@ sealed class RelExpressionEvaluator
             ExprFunctionNames.SourceRows => SourceRows(context),
             ExprFunctionNames.Count => ObservationValue.FromInt64(Count(args.Length == 0 ? ObservationValue.Null : args[0].Value)),
             ExprFunctionNames.Contains => ObservationValue.FromBool(Contains(args[0].Value, args[1].Value)),
+            ExprFunctionNames.EndsWith => ObservationValue.FromBool(EndsWith(args[0].Value, args[1].Value)),
             ExprFunctionNames.Object => BuildObject(args),
             _ => throw new InvalidOperationException($"Unsupported projection function '{function}'.")
         };
 
         return new(result, sources);
+    }
+
+    static bool EndsWith(ObservationValue value, ObservationValue suffix)
+    {
+        if (value.Kind != ObservationValueKind.String || value.String is null
+            || suffix.Kind != ObservationValueKind.String || suffix.String is null)
+            throw new InvalidOperationException("Function 'endsWith' requires two text arguments.");
+
+        return value.String.EndsWith(suffix.String, StringComparison.Ordinal);
     }
 
     static RelationEvaluationResult EvaluateFunctionInterpreted(CallExpr functionRel, RelationEvaluationContext context)

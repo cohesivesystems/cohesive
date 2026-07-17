@@ -613,6 +613,7 @@ public sealed class ExprSemanticsCatalog
                 Function(ExprFunctionNames.Contains, 2, 2, [ExprResultCategory.Collection, ExprResultCategory.Any], resultCategory: ExprResultCategory.Boolean, resultRule: ExprFunctionResultRule.Fixed, fixedResult: boolean),
                 Function(ExprFunctionNames.Count, 1, 1, [ExprResultCategory.Countable], resultCategory: ExprResultCategory.Integer, resultRule: ExprFunctionResultRule.Fixed, fixedResult: int64),
                 Function(ExprFunctionNames.EntityId, 0, 0, resultCategory: ExprResultCategory.Text, resultRule: ExprFunctionResultRule.Fixed, fixedResult: @string, ambient: [ExprCapabilities.EntityIdentity]),
+                Function(ExprFunctionNames.EndsWith, 2, 2, [ExprResultCategory.Text, ExprResultCategory.Text], resultCategory: ExprResultCategory.Boolean, resultRule: ExprFunctionResultRule.Fixed, fixedResult: boolean),
                 Function(ExprFunctionNames.GroupBy, 2, 2, [ExprResultCategory.Collection, ExprResultCategory.Any], resultCategory: ExprResultCategory.Object, scoped: [new(1, 0)]),
                 Function(ExprFunctionNames.GroupByRows, 2, 2, [ExprResultCategory.Collection, ExprResultCategory.Any], resultCategory: ExprResultCategory.Collection, scoped: [new(1, 0)]),
                 Function(ExprFunctionNames.InsertAt, 3, 3, [ExprResultCategory.Collection, ExprResultCategory.Integer, ExprResultCategory.Any], resultCategory: ExprResultCategory.Collection, resultRule: ExprFunctionResultRule.FirstArgument),

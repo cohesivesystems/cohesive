@@ -141,6 +141,36 @@ public abstract record Expr
     /// <summary>Creates a logical-negation expression.</summary>
     public static Expr Not(Expr operand) => new UnaryExpr(UnaryOperator.Not, operand);
 
+    /// <summary>
+    /// Creates an ordinal, case-sensitive text-suffix predicate.
+    /// </summary>
+    /// <param name="value">Text value whose suffix is tested.</param>
+    /// <param name="suffix">Text suffix required at the end of <paramref name="value"/>.</param>
+    /// <returns>A Boolean expression that is true when <paramref name="value"/> ends with <paramref name="suffix"/>.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="value"/> or <paramref name="suffix"/> is <see langword="null"/>.
+    /// </exception>
+    public static Expr EndsWith(Expr value, Expr suffix) =>
+        Call(
+            ExprFunctionNames.EndsWith,
+            Guard.RequireNotNull(value),
+            Guard.RequireNotNull(suffix));
+
+    /// <summary>
+    /// Creates a collection-membership predicate using canonical value equality.
+    /// </summary>
+    /// <param name="collection">Collection whose elements are searched.</param>
+    /// <param name="value">Value compared with each collection element.</param>
+    /// <returns>A Boolean expression that is true when <paramref name="collection"/> contains <paramref name="value"/>.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="collection"/> or <paramref name="value"/> is <see langword="null"/>.
+    /// </exception>
+    public static Expr Contains(Expr collection, Expr value) =>
+        Call(
+            ExprFunctionNames.Contains,
+            Guard.RequireNotNull(collection),
+            Guard.RequireNotNull(value));
+
     /// <summary>Creates a conditional expression.</summary>
     public static Expr If(Expr test, Expr ifTrue, Expr ifFalse) => new ConditionalExpr(test, ifTrue, ifFalse);
 

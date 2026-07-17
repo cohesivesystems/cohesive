@@ -165,6 +165,20 @@ sealed class RelExprTranslator
                 Translate(call.Arguments[0]));
         }
 
+        if (!call.Method.IsStatic
+            && string.Equals(call.Method.Name, nameof(string.EndsWith), StringComparison.Ordinal)
+            && call.Object is not null
+            && call.Arguments.Count == 2
+            && call.Arguments[1] is ConstantExpression
+            {
+                Value: StringComparison.Ordinal
+            })
+        {
+            return Expr.EndsWith(
+                Translate(call.Object),
+                Translate(call.Arguments[0]));
+        }
+
         throw new RelationDslException($"Unsupported method call '{call.Method.DeclaringType?.Name}.{call.Method.Name}'.");
     }
 

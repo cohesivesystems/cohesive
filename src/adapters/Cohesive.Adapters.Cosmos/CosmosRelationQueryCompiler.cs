@@ -206,7 +206,7 @@ public sealed class CosmosRelationQueryCompiler
         readonly Dictionary<ValueBindingId, string> collectionAliases = [];
         readonly HashSet<RelationQueryInputId> selectedInputIds;
         readonly CosmosSqlBuilder builder;
-        ImmutableArray<RelationQueryExecutionNode> pipeline;
+        readonly ImmutableArray<RelationQueryExecutionNode> pipeline;
         AggregateQueryNode? aggregateNode;
         CosmosRelationQueryPagingContract? paging;
 
@@ -1297,74 +1297,21 @@ public sealed class CosmosRelationQueryCompiler
         RelationQueryNativeCompilationProvenance CreateProvenance(
             ImmutableArray<CosmosRelationQuerySelectedField> selectedFields)
         {
-            var outputIds = branch.Outputs.Select(static output => output.Id).ToHashSet();
-            var relevantRequirements = request.Realization.Requirements
-                .Where(requirement => requirement.Uses.Any(use => outputIds.Contains(use.Output.Id)))
-                .Select(static requirement => requirement.Id)
-                .ToHashSet();
-            var decisions = request.Realization.Decisions
-                .Where(decision => relevantRequirements.Contains(decision.Requirement))
-                .ToArray();
-            var decisionReferences = decisions.Select(CreateDecisionReference).ToImmutableArray();
             var assignments = pipeline.SelectMany(static execution =>
                     execution.ProjectionAssignments.Select(static assignment => assignment.Definition.Id)
                         .Concat(execution.AggregateGroupings.Select(static grouping => grouping.Definition.Id))
                         .Concat(execution.AggregateAssignments.Select(static assignment => assignment.Definition.Id)))
                 .Distinct()
                 .ToImmutableArray();
-            return new(
-                request.PlanReference,
+            return RelationQueryNativeCompilationProvenanceFactory.Create(
+                request,
                 branch.Id,
-                request.Realization.TargetProfile.Target,
-                request.Realization.TargetProfile.Id,
-                request.Realization.Fingerprint,
-                request.Placement.Fingerprint,
                 options.CompilerProfile,
                 options.ConventionSetVersion,
                 [.. pipeline.Select(static execution => execution.Id)],
                 assignments,
-                [.. selectedFields.Select(static field => field.Input)],
-                decisionReferences);
+                [.. selectedFields.Select(static field => field.Input)]);
         }
-
-        static RelationQueryNativeCompilationDecisionReference CreateDecisionReference(
-            RelationQueryRealizationDecision decision) => decision switch
-        {
-            NativeRelationQueryRealizationDecision native => new(
-                native.Requirement,
-                native.Kind,
-                native.CapabilityEvidence,
-                preservedGuarantees: native.PreservedGuarantees),
-            ComposedRelationQueryRealizationDecision composed => new(
-                composed.Requirement,
-                composed.Kind,
-                composed.CapabilityEvidence,
-                composed.CompositionRules,
-                preservedGuarantees: composed.PreservedGuarantees),
-            ConstrainedRelationQueryRealizationDecision constrained => new(
-                constrained.Requirement,
-                constrained.Kind,
-                constrained.CapabilityEvidence,
-                constrained.CompositionRules,
-                operatingBoundaries:
-                [
-                    .. constrained.BoundaryValidations.Select(static validation => validation.Boundary)
-                ],
-                preservedGuarantees: constrained.PreservedGuarantees),
-            OverrideRelationQueryRealizationDecision overridden => new(
-                overridden.Requirement,
-                overridden.Kind,
-                overridden.CapabilityEvidence,
-                @override: overridden.Override,
-                operatingBoundaries:
-                [
-                    .. overridden.BoundaryValidations.Select(static validation => validation.Boundary)
-                ],
-                preservedGuarantees: overridden.PreservedGuarantees),
-            _ => throw Fail(
-                CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                $"Realization decision '{decision.Kind}' cannot prove a native Cosmos artifact.")
-        };
 
         FieldPath FullDocumentPath(FieldPath relative) => storageBinding.DocumentRoot is { } root
             ? new([.. root.Segments, .. relative.Segments])

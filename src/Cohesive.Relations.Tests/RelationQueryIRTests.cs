@@ -452,6 +452,23 @@ public sealed class RelationQueryIRTests
     }
 
     [Fact]
+    public void Fingerprint_EndsWithIncludesFunctionAndSuffixSemantics()
+    {
+        var first = RelationQueryDefinitionFingerprinter.Compute(WithScalarProjection(
+            Expr.EndsWith(Expr.Const("load-🚚*?\\"), Expr.Const("🚚*?\\"))));
+        var equivalent = RelationQueryDefinitionFingerprinter.Compute(WithScalarProjection(
+            Expr.Call(
+                ExprFunctionNames.EndsWith,
+                Expr.Const("load-🚚*?\\"),
+                Expr.Const("🚚*?\\"))));
+        var differentSuffix = RelationQueryDefinitionFingerprinter.Compute(WithScalarProjection(
+            Expr.EndsWith(Expr.Const("load-🚚*?\\"), Expr.Const("*?\\"))));
+
+        Assert.Equal(first, equivalent);
+        Assert.NotEqual(first, differentSuffix);
+    }
+
+    [Fact]
     public void Fingerprint_NormalizesSetLikeDefinitionCollections()
     {
         var definition = CreateLoadSearchRelation();

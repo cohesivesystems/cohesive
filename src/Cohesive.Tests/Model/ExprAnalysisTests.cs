@@ -294,6 +294,52 @@ public sealed class ExprAnalysisTests
     }
 
     [Fact]
+    public void Analyze_EndsWithDeclaresExactTextPredicateSemanticsAndCapability()
+    {
+        Assert.True(ExprSemanticsCatalog.Default.TryGetFunction(
+            ExprFunctionNames.EndsWith,
+            out var definition));
+        Assert.Equal(new ExprFunctionArity(2, 2), definition.Arity);
+        Assert.Equal(
+            [ExprResultCategory.Text, ExprResultCategory.Text],
+            definition.ArgumentCategories.ToArray());
+        Assert.Equal(ExprResultCategory.Boolean, definition.ResultCategory);
+        Assert.Equal(ExprFunctionResultRule.Fixed, definition.ResultRule);
+        Assert.Equal(new ScalarTypeRef(ScalarTypeKind.Bool), definition.FixedResult?.Type);
+
+        var valid = Analyze(
+            Expr.EndsWith(Expr.Const("Load-ABC"), Expr.Const("ABC")),
+            ExprScope.Empty,
+            "ends-with");
+        var nonText = Analyze(
+            Expr.EndsWith(Expr.Const(1), Expr.Const("1")),
+            ExprScope.Empty,
+            "ends-with-non-text");
+        var nullish = Analyze(
+            Expr.EndsWith(Expr.Null(), Expr.Const("suffix")),
+            ExprScope.Empty,
+            "ends-with-nullish");
+        var invalidArity = Analyze(
+            Expr.Call(ExprFunctionNames.EndsWith, Expr.Const("value")),
+            ExprScope.Empty,
+            "ends-with-arity");
+
+        Assert.True(valid.IsValid);
+        Assert.Equal(ExprResultCategory.Boolean, valid.ResultCategory);
+        Assert.Equal(new ScalarTypeRef(ScalarTypeKind.Bool), valid.KnownResult?.Type);
+        Assert.Equal(FieldPresence.Required, valid.KnownResult?.Presence);
+        Assert.Equal(FieldNullability.NonNullable, valid.KnownResult?.Nullability);
+        Assert.Contains(
+            valid.Requirements.Capabilities,
+            requirement => requirement == new ExprCapabilityRequirement(
+                ExprCapabilities.ForFunction(ExprFunctionNames.EndsWith),
+                ExprCapabilityRequirementKind.Operation));
+        AssertDiagnostic(nonText, ExprAnalysisDiagnosticCodes.ResultCategoryMismatch);
+        AssertDiagnostic(nullish, ExprAnalysisDiagnosticCodes.ResultTypeMismatch);
+        AssertDiagnostic(invalidArity, ExprAnalysisDiagnosticCodes.FunctionArityInvalid);
+    }
+
+    [Fact]
     public void Analyze_ConstrainedOperationCategoriesRejectNullishOrMaybeNullOperands()
     {
         var boolType = new ScalarTypeRef(ScalarTypeKind.Bool);
