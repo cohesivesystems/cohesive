@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Globalization;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -84,11 +85,9 @@ static class CanonicalJsonWriter
                     WriteCanonicalObservationValue(writer, observationValue);
                 }
                 else if (value.TryGetValue<JsonElement>(out var element)
-                         && element.ValueKind == JsonValueKind.Number
-                         && element.GetDouble() == 0d
-                         && element.GetRawText()[0] == '-')
+                         && element.ValueKind == JsonValueKind.Number)
                 {
-                    writer.WriteNumberValue(0);
+                    WriteCanonicalObservationValue(writer, ObservationValue.FromJsonElement(element));
                 }
                 else if (value.TryGetValue<double>(out var number)
                          && BitConverter.DoubleToInt64Bits(number) == long.MinValue)
@@ -173,7 +172,22 @@ static class CanonicalJsonWriter
                 writer.WriteNumberValue(value.Int64);
                 return;
             case ObservationValueKind.Double:
-                writer.WriteNumberValue(value.Double == 0d ? 0d : value.Double);
+                var normalizedDouble = value.Double == 0d ? 0d : value.Double;
+                if (Math.TryGetCanonicalDecimalFromDouble(normalizedDouble, out var exactDecimal))
+                {
+                    writer.WriteRawValue(
+                        exactDecimal.ToString("G29", CultureInfo.InvariantCulture),
+                        skipInputValidation: true);
+                }
+                else
+                {
+                    writer.WriteNumberValue(normalizedDouble);
+                }
+                return;
+            case ObservationValueKind.Decimal:
+                writer.WriteRawValue(
+                    value.Decimal.ToString("G29", CultureInfo.InvariantCulture),
+                    skipInputValidation: true);
                 return;
             case ObservationValueKind.Bool:
                 writer.WriteBooleanValue(value.Bool);

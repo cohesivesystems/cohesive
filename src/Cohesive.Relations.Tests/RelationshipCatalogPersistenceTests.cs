@@ -188,7 +188,7 @@ public sealed class RelationshipCatalogPersistenceTests
     {
         var fingerprint = RelationshipCatalogFingerprinter.Compute(CreateCatalog());
 
-        Assert.Equal("relationship-catalog/v1-c14n/v1", fingerprint.Canonicalization);
+        Assert.Equal("relationship-catalog/v1-c14n/v2", fingerprint.Canonicalization);
         Assert.Equal("9fde0e2e70dfc329915f805c50083fd7ec9e76f56d8756649a17b88d684e1d13", fingerprint.Value);
     }
 

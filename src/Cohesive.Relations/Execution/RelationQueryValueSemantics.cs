@@ -1,4 +1,4 @@
-using System.Globalization;
+using System.Numerics;
 using Cohesive.Relations.IR;
 
 namespace Cohesive.Relations.Execution;
@@ -16,19 +16,24 @@ internal static class RelationQueryValueSemantics
 
     public static bool Equals(ObservationValue left, ObservationValue right)
     {
-        if (left.Kind != right.Kind)
+        if (IsNumeric(left) && IsNumeric(right))
         {
-            return left.Kind == ObservationValueKind.Int64 && right.Kind == ObservationValueKind.Double
-                ? NumericKindsEqual(left.Int64, right.Double)
-                : left.Kind == ObservationValueKind.Double && right.Kind == ObservationValueKind.Int64
-                    && NumericKindsEqual(right.Int64, left.Double);
+            var leftIsDecimal = left.TryGetCanonicalNumericDecimal(out var leftDecimal);
+            var rightIsDecimal = right.TryGetCanonicalNumericDecimal(out var rightDecimal);
+            if (leftIsDecimal || rightIsDecimal)
+                return leftIsDecimal && rightIsDecimal && leftDecimal == rightDecimal;
+
+            return left.Kind == ObservationValueKind.Double
+                   && right.Kind == ObservationValueKind.Double
+                   && left.Double.Equals(right.Double);
         }
+
+        if (left.Kind != right.Kind)
+            return false;
 
         return left.Kind switch
         {
             ObservationValueKind.Undefined or ObservationValueKind.Null => true,
-            ObservationValueKind.Int64 => left.Int64 == right.Int64,
-            ObservationValueKind.Double => left.Double.Equals(right.Double),
             ObservationValueKind.Bool => left.Bool == right.Bool,
             ObservationValueKind.String
                 or ObservationValueKind.DateTimeOffset
@@ -49,8 +54,9 @@ internal static class RelationQueryValueSemantics
         {
             ObservationValueKind.Undefined => unchecked((int)0x5F9A43C1),
             ObservationValueKind.Null => unchecked((int)0x4A0F1B77),
-            ObservationValueKind.Int64 => HashInt64(value.Int64),
-            ObservationValueKind.Double => HashDouble(value.Double),
+            ObservationValueKind.Int64
+                or ObservationValueKind.Double
+                or ObservationValueKind.Decimal => HashNumeric(value),
             ObservationValueKind.Bool => value.Bool
                 ? unchecked((int)0x22E4D5B1)
                 : unchecked((int)0x11F1C2A3),
@@ -146,18 +152,14 @@ internal static class RelationQueryValueSemantics
         if (!IsNumeric(value))
             throw InvalidOperand($"Operation '{operation}' requires a numeric value, but received '{value.Kind}'.");
 
-        try
-        {
-            return value.Kind == ObservationValueKind.Int64
-                ? value.Int64
-                : Convert.ToDecimal(RequireFiniteDouble(value.Double, operation), CultureInfo.InvariantCulture);
-        }
-        catch (OverflowException exception)
-        {
-            throw NumericFailure(
-                $"Numeric value '{value}' is outside the supported decimal execution domain for '{operation}'.",
-                exception);
-        }
+        if (value.Kind == ObservationValueKind.Double)
+            RequireFiniteDouble(value.Double, operation);
+        if (value.TryGetCanonicalNumericDecimal(out var exact))
+            return exact;
+
+        var message =
+            $"Numeric value '{value}' has no exact representation in the supported decimal execution domain for '{operation}'.";
+        throw NumericFailure(message, new OverflowException(message));
     }
 
     static ObservationValue Arithmetic(
@@ -191,43 +193,22 @@ internal static class RelationQueryValueSemantics
 
     static int CompareNumeric(ObservationValue left, ObservationValue right)
     {
-        if (left.Kind == ObservationValueKind.Int64 && right.Kind == ObservationValueKind.Int64)
-            return left.Int64.CompareTo(right.Int64);
+        if (left.Kind == ObservationValueKind.Double)
+            RequireFiniteDouble(left.Double, "comparison");
+        if (right.Kind == ObservationValueKind.Double)
+            RequireFiniteDouble(right.Double, "comparison");
 
-        if (left.Kind == ObservationValueKind.Double && right.Kind == ObservationValueKind.Double)
-        {
-            var leftDouble = RequireFiniteDouble(left.Double, "comparison");
-            var rightDouble = RequireFiniteDouble(right.Double, "comparison");
-            return leftDouble.CompareTo(rightDouble);
-        }
+        var leftIsDecimal = left.TryGetCanonicalNumericDecimal(out var leftDecimal);
+        var rightIsDecimal = right.TryGetCanonicalNumericDecimal(out var rightDecimal);
+        if (leftIsDecimal && rightIsDecimal)
+            return leftDecimal.CompareTo(rightDecimal);
 
-        var integer = left.Kind == ObservationValueKind.Int64 ? left.Int64 : right.Int64;
-        var floatingPoint = left.Kind == ObservationValueKind.Double ? left.Double : right.Double;
-        RequireFiniteDouble(floatingPoint, "comparison");
-        var integerToFloatingPoint = CompareInt64ToDouble(integer, floatingPoint);
+        if (!leftIsDecimal && !rightIsDecimal)
+            return left.Double.CompareTo(right.Double);
 
-        return left.Kind == ObservationValueKind.Int64
-            ? integerToFloatingPoint
-            : -integerToFloatingPoint;
-    }
-
-    static int CompareInt64ToDouble(long integer, double floatingPoint)
-    {
-        const double Int64Minimum = -9223372036854775808d;
-        const double Int64MaximumExclusive = 9223372036854775808d;
-        if (floatingPoint < Int64Minimum)
-            return 1;
-        if (floatingPoint >= Int64MaximumExclusive)
-            return -1;
-        if (Math.TryGetExactInt64FromDouble(floatingPoint, out var exact))
-            return integer.CompareTo(exact);
-
-        var truncated = (long)floatingPoint;
-        var compared = integer.CompareTo(truncated);
-        if (compared != 0)
-            return compared;
-
-        return floatingPoint > truncated ? -1 : 1;
+        return leftIsDecimal
+            ? CompareDecimalToDouble(leftDecimal, right.Double)
+            : -CompareDecimalToDouble(rightDecimal, left.Double);
     }
 
     static int CompareDateTimeOffset(ObservationValue left, ObservationValue right)
@@ -275,10 +256,57 @@ internal static class RelationQueryValueSemantics
     }
 
     static bool IsNumeric(ObservationValue value) =>
-        value.Kind is ObservationValueKind.Int64 or ObservationValueKind.Double;
+        value.Kind is ObservationValueKind.Int64
+            or ObservationValueKind.Double
+            or ObservationValueKind.Decimal;
 
-    static bool NumericKindsEqual(long integer, double floatingPoint) =>
-        Math.TryGetExactInt64FromDouble(floatingPoint, out var exact) && exact == integer;
+    static int CompareDecimalToDouble(decimal exact, double floatingPoint)
+    {
+        if (Math.TryGetCanonicalDecimalFromDouble(floatingPoint, out var canonical))
+            return exact.CompareTo(canonical);
+
+        if (exact == decimal.Zero)
+            return floatingPoint == 0d ? 0 : floatingPoint > 0d ? -1 : 1;
+        if (floatingPoint == 0d)
+            return exact > decimal.Zero ? 1 : -1;
+
+        var exactNegative = exact < decimal.Zero;
+        var floatingPointNegative = floatingPoint < 0d;
+        if (exactNegative != floatingPointNegative)
+            return exactNegative ? -1 : 1;
+
+        var decimalBits = decimal.GetBits(exact);
+        var decimalCoefficient = new BigInteger((uint)decimalBits[0])
+            | new BigInteger((uint)decimalBits[1]) << 32
+            | new BigInteger((uint)decimalBits[2]) << 64;
+        var decimalScale = (decimalBits[3] >> 16) & 0xFF;
+
+        var doubleBits = BitConverter.DoubleToUInt64Bits(floatingPoint);
+        var exponentBits = (int)((doubleBits >> 52) & 0x7FF);
+        var significand = doubleBits & 0x000F_FFFF_FFFF_FFFFUL;
+        var binaryExponent = exponentBits == 0
+            ? -1074
+            : exponentBits - 1023 - 52;
+        if (exponentBits != 0)
+            significand |= 1UL << 52;
+
+        var decimalScaleFactor = BigInteger.Pow(10, decimalScale);
+        BigInteger decimalSide;
+        BigInteger doubleSide;
+        if (binaryExponent >= 0)
+        {
+            decimalSide = decimalCoefficient;
+            doubleSide = (new BigInteger(significand) << binaryExponent) * decimalScaleFactor;
+        }
+        else
+        {
+            decimalSide = decimalCoefficient << -binaryExponent;
+            doubleSide = new BigInteger(significand) * decimalScaleFactor;
+        }
+
+        var comparison = decimalSide.CompareTo(doubleSide);
+        return exactNegative ? -comparison : comparison;
+    }
 
     static bool ArraysEqual(
         IReadOnlyList<ObservationValue>? left,
@@ -328,21 +356,16 @@ internal static class RelationQueryValueSemantics
         return true;
     }
 
-    static int HashInt64(long value)
+    static int HashNumeric(ObservationValue value)
     {
-        var low = unchecked((int)value);
-        var high = unchecked((int)(value >> 32));
-        return Combine(unchecked((int)0x4E554D31), Combine(low, high));
-    }
+        if (value.TryGetCanonicalNumericDecimal(out var exact))
+            return Combine(unchecked((int)0x4E554D31), exact.GetHashCode());
 
-    static int HashDouble(double value)
-    {
-        if (Math.TryGetExactInt64FromDouble(value, out var integer))
-            return HashInt64(integer);
-        if (double.IsNaN(value))
+        var floatingPoint = value.Double;
+        if (double.IsNaN(floatingPoint))
             return Combine(unchecked((int)0x4E554D31), unchecked((int)0x7FF80000));
 
-        var bits = value == 0d ? 0L : BitConverter.DoubleToInt64Bits(value);
+        var bits = floatingPoint == 0d ? 0L : BitConverter.DoubleToInt64Bits(floatingPoint);
         return Combine(
             unchecked((int)0x4E554D31),
             Combine(unchecked((int)bits), unchecked((int)(bits >> 32))));

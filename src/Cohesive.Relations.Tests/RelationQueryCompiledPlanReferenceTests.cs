@@ -20,7 +20,7 @@ public sealed class RelationQueryCompiledPlanReferenceTests
         Assert.Equal(plan.Provenance.DefinitionFingerprint, first.DefinitionFingerprint);
         Assert.Equal(plan.Provenance.RelationshipCatalogFingerprint, first.RelationshipCatalogFingerprint);
         Assert.Equal("sha256", first.ShapeSnapshotsFingerprint.Algorithm);
-        Assert.Equal("relation-query-plan-shapes/v1-c14n/v1", first.ShapeSnapshotsFingerprint.Canonicalization);
+        Assert.Equal("relation-query-plan-shapes/v1-c14n/v2", first.ShapeSnapshotsFingerprint.Canonicalization);
         Assert.Equal("sha256", first.DemandFingerprint.Algorithm);
         Assert.Equal("relation-query-plan-demand/v1-c14n/v1", first.DemandFingerprint.Canonicalization);
         Assert.Equal(

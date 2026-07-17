@@ -283,7 +283,9 @@ public static class ObservationShapeValidator
             JsonTypeKind.Object => value.Kind == ObservationValueKind.Object,
             JsonTypeKind.Array => value.Kind == ObservationValueKind.Array,
             JsonTypeKind.String => value.Kind == ObservationValueKind.String,
-            JsonTypeKind.Number => value.Kind is ObservationValueKind.Int64 or ObservationValueKind.Double,
+            JsonTypeKind.Number => value.Kind is ObservationValueKind.Int64
+                or ObservationValueKind.Double
+                or ObservationValueKind.Decimal,
             JsonTypeKind.Boolean => value.Kind == ObservationValueKind.Bool,
             _ => false
         };
@@ -632,7 +634,7 @@ public static class ObservationShapeValidator
             ScalarTypeKind.Guid => TryGetString(value, out var guidValue) && Guid.TryParse(guidValue, out _),
             ScalarTypeKind.Date => value.TryGetDateOnly(out _),
             ScalarTypeKind.DateTime => value.TryGetDateTimeOffset(out _),
-            ScalarTypeKind.Instant => value.TryGetDateTimeOffset(out _),
+            ScalarTypeKind.Instant => value.TryGetInstant(out _),
             ScalarTypeKind.Bytes => value.Kind == ObservationValueKind.Bytes,
             _ => false
         };

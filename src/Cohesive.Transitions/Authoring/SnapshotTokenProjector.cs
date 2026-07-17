@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -15,6 +16,7 @@ public static class SnapshotTokenProjector
     const byte BytesMarker = 5;
     const byte ObjectMarker = 6;
     const byte ArrayMarker = 7;
+    const byte DecimalMarker = 8;
 
     /// <summary>Computes the value.</summary>
     public static string Compute(
@@ -48,12 +50,20 @@ public static class SnapshotTokenProjector
                 AppendByte(hash, NullMarker);
                 return;
             case ObservationValueKind.Int64:
-                AppendByte(hash, Int64Marker);
-                AppendInt64(hash, value.Int64);
+                AppendCanonicalDecimal(hash, value.Int64);
                 return;
             case ObservationValueKind.Double:
+                if (Math.TryGetCanonicalDecimalFromDouble(value.Double, out var canonicalDecimal))
+                {
+                    AppendCanonicalDecimal(hash, canonicalDecimal);
+                    return;
+                }
+
                 AppendByte(hash, DoubleMarker);
                 AppendInt64(hash, BitConverter.DoubleToInt64Bits(value.Double));
+                return;
+            case ObservationValueKind.Decimal:
+                AppendCanonicalDecimal(hash, value.Decimal);
                 return;
             case ObservationValueKind.Bool:
                 AppendByte(hash, BoolMarker);
@@ -109,6 +119,30 @@ public static class SnapshotTokenProjector
             default:
                 throw new InvalidOperationException($"Unsupported observation value kind '{value.Kind}'.");
         }
+    }
+
+    static void AppendCanonicalDecimal(IncrementalHash hash, decimal value)
+    {
+        if (value is >= long.MinValue and <= long.MaxValue
+            && decimal.Truncate(value) == value)
+        {
+            AppendByte(hash, Int64Marker);
+            AppendInt64(hash, (long)value);
+            return;
+        }
+
+        var legacyDouble = (double)value;
+        if (double.IsFinite(legacyDouble)
+            && Math.TryGetCanonicalDecimalFromDouble(legacyDouble, out var roundTrip)
+            && roundTrip == value)
+        {
+            AppendByte(hash, DoubleMarker);
+            AppendInt64(hash, BitConverter.DoubleToInt64Bits(legacyDouble));
+            return;
+        }
+
+        AppendByte(hash, DecimalMarker);
+        AppendString(hash, value.ToString("G29", CultureInfo.InvariantCulture));
     }
 
     static void AppendNullableString(IncrementalHash hash, string? value)

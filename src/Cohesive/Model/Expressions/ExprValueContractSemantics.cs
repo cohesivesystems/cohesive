@@ -114,13 +114,16 @@ internal static class ExprValueContractSemantics
         ScalarTypeKind.Guid => value.Kind == ObservationValueKind.String
             && Guid.TryParse(value.String, out _),
         ScalarTypeKind.Date => value.TryGetDateOnly(out _),
-        ScalarTypeKind.DateTime or ScalarTypeKind.Instant => value.TryGetDateTimeOffset(out _),
+        ScalarTypeKind.DateTime => value.TryGetDateTimeOffset(out _),
+        ScalarTypeKind.Instant => value.TryGetInstant(out _),
         ScalarTypeKind.Bytes => value.TryGetBytes(out _),
         _ => false
     };
 
     static bool IsNumeric(ObservationValue value) =>
-        value.Kind is ObservationValueKind.Int64 or ObservationValueKind.Double;
+        value.Kind is ObservationValueKind.Int64
+            or ObservationValueKind.Double
+            or ObservationValueKind.Decimal;
 
     static bool MatchesInt32(ObservationValue value) => value.Kind switch
     {
@@ -129,6 +132,8 @@ internal static class ExprValueContractSemantics
             && value.Double >= int.MinValue
             && value.Double <= int.MaxValue
             && Math.Truncate(value.Double) == value.Double,
+        ObservationValueKind.Decimal => value.Decimal is >= int.MinValue and <= int.MaxValue
+            && decimal.Truncate(value.Decimal) == value.Decimal,
         _ => false
     };
 
@@ -140,6 +145,8 @@ internal static class ExprValueContractSemantics
             && value.Double >= Int64InclusiveLowerBound
             && value.Double < Int64ExclusiveUpperBound
             && Math.Truncate(value.Double) == value.Double,
+        ObservationValueKind.Decimal => value.Decimal is >= long.MinValue and <= long.MaxValue
+            && decimal.Truncate(value.Decimal) == value.Decimal,
         _ => false
     };
 
@@ -153,7 +160,9 @@ internal static class ExprValueContractSemantics
             or ObservationValueKind.DateOnly
             or ObservationValueKind.TimeOnly
             or ObservationValueKind.TimeSpan,
-        JsonTypeKind.Number => value.Kind is ObservationValueKind.Int64 or ObservationValueKind.Double,
+        JsonTypeKind.Number => value.Kind is ObservationValueKind.Int64
+            or ObservationValueKind.Double
+            or ObservationValueKind.Decimal,
         JsonTypeKind.Boolean => value.Kind == ObservationValueKind.Bool,
         _ => false
     };

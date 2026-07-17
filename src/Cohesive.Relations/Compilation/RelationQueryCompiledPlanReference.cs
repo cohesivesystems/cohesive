@@ -197,7 +197,7 @@ public sealed class RelationQueryCompiledPlanReference
 static class RelationQueryCompiledPlanFingerprinter
 {
     const string Algorithm = "sha256";
-    const string ShapeSnapshotsCanonicalization = "relation-query-plan-shapes/v1-c14n/v1";
+    const string ShapeSnapshotsCanonicalization = "relation-query-plan-shapes/v1-c14n/v2";
     const string DemandCanonicalization = "relation-query-plan-demand/v1-c14n/v1";
 
     internal static RelationQueryPlanComponentFingerprint ComputeShapeSnapshots(

@@ -359,9 +359,153 @@ Source(Load as load)
     LoadSearchDto.CustomerName = customer.Name)
 ```
 
-This graph is persisted as canonical relation/query IR. The public structural C# authoring surface is a
-programmatic producer of that IR. The planned expression-based fluent surface is the primary developer UX,
-but it lowers through the same structural core rather than owning another graph-construction path.
+This graph is persisted as canonical relation/query IR. The expression-based C# surface is the primary
+developer UX and the structural surface is its unbounded escape hatch. Both lower through the same
+`RelationQueryAuthoringCore`; neither owns a second query model.
+
+### Expression-based C# authoring
+
+`RelationQuery.Expression()` creates a typed authoring session. CLR expressions are inspected, never
+compiled or executed, and immediately lower to canonical `Expr` values and structural operations. The
+session discovers deterministic shape documents using the configured attributes and System.Text.Json
+metadata. Explicit imported `ShapeGraphDocument` registrations and member-path overrides take precedence.
+Each typed shape exposes `IdentityOrigin`, while `ResolveMemberPathWithProvenance` reports the origin of
+every path segment as convention-, metadata-, explicit-, or import-derived. Imported documents are checked
+against the CLR member type, cardinality, presence, nullability, and reachable named-type structure before
+they can participate in a terminal.
+
+A simple DTO relation needs no manually authored shape IDs, field paths, expressions, or node arrays:
+
+```csharp
+var author = RelationQuery.Expression();
+var loads = author.Source<Load>();
+var documents = author.Project(
+    loads.Node,
+    (Load load) => new LoadDto
+    {
+        Id = load.Id,
+        Status = load.Status
+    },
+    loads.Binding);
+
+var relation = author.BuildRelation(
+    new RelationId("load-dto"),
+    new RelationName("LoadDto"),
+    loads.Binding,
+    documents.Node,
+    documents.Binding,
+    (LoadDto document) => document.Id);
+```
+
+The same session can author enrichment, correlated collection semantics, a row result, an aggregation,
+and a target-neutral typed invocation:
+
+```csharp
+var author = RelationQuery.Expression();
+var loadCustomer = author.Relationship<Load, Customer>(
+    load => load.CustomerId,
+    new RelationshipId("load/customer"));
+var loadEquipment = author.Relationship<Load, Equipment>(
+    load => load.EquipmentId,
+    new RelationshipId("load/equipment"));
+
+var loads = author.Source<Load>();
+var customers = author.Traverse(loads.Node, loads.Binding, loadCustomer);
+var equipment = author.Traverse(customers.Node, loads.Binding, loadEquipment);
+var location = author.Parameter<string>("location");
+
+var filtered = author.Filter(
+    equipment.Node,
+    (Load load, Customer customer, Equipment _) =>
+        customer.Name == "Acme"
+        && load.Stops.Any(stop => stop.Location == location.Value),
+    loads.Binding,
+    customers.Binding,
+    equipment.Binding);
+
+var documents = author.Project(
+    filtered,
+    (Load load, Customer customer, Equipment unit) => new LoadSearchDto
+    {
+        Id = load.Id,
+        CustomerId = load.CustomerId,
+        CustomerName = customer.Name,
+        CustomerType = customer.Type,
+        EquipmentNumber = unit.Number
+    },
+    loads.Binding,
+    customers.Binding,
+    equipment.Binding);
+
+var summary = author.Aggregate(
+    filtered,
+    author.Clr.Shape<LoadSearchSummary>(),
+    aggregate => aggregate
+        .Group(
+            result => result.CustomerType,
+            (Customer customer) => customer.Type,
+            customers.Binding)
+        .Count(result => result.Count));
+
+var rows = author.Rows(documents, id: "rows");
+var aggregation = author.Aggregation(summary, id: "summary");
+var query = author.BuildQuery(
+    new QueryId("load-search"),
+    new QueryName("LoadSearch"),
+    rows,
+    aggregation);
+
+var invocation = query.CreateDocument()
+    .Invoke(new RelationQueryEvaluationId("request/42"))
+    .Set(location, "Seattle")
+    .Select(rows, document => document.Id, document => document.CustomerName)
+    .Select(aggregation)
+    .Build();
+
+var shapeDocuments = author.ShapeDocuments;
+```
+
+The `Any` predicate preserves same-element correlation through canonical current-item scope; it is not
+flattened into independent collection tests. Typed parameters become declarations in the canonical query
+and only receive values in the invocation. Captured application state is rejected with a
+`RelationQueryExpressionAuthoringException` containing stable diagnostics, expression paths, source
+references, and suggested alternatives; arbitrary captured getters are never evaluated.
+
+The translator fails closed when ordinary C# syntax would imply semantics the canonical catalog does not
+promise. Examples include navigation through a nullable receiver, Int32-returning `Count`/`Length`, lazy
+`Select`, custom constructors or setters, and collection equality whose CLR contract differs from canonical
+equality. Author the intended behavior through `author.Structural` when one of those distinctions matters.
+
+Keyed ordering, distinctness, grouping, and relation identity require a fixed carrier-independent scalar
+domain. Raw `DateOnly`, `DateTime`, `DateTimeOffset`, `ObservationValue`, and dynamic JSON carriers are
+rejected even when hidden inside a conditional or composite key; project them to an explicitly normalized
+field first. The expression facade also rejects untyped whole-row distinctness because it cannot prove that
+every visible field has portable equality. A rows result or relation terminal must receive a branch exposing
+exactly one value binding, since canonical terminals persist the node and output shape rather than a selected
+binding. Project joined, traversed, or expanded branches to one output shape before declaring the terminal.
+
+`author.Structural` exposes the exact underlying core. Use it to add a canonical construct outside the
+expression translator's supported closure, then continue with the resulting handles. This is an explicit
+authoring escape hatch, not a separate semantic model.
+
+```csharp
+var structuralFilter = author.Structural.Filter(
+    loads.Node,
+    Expr.EndsWith(
+        loads.Binding.Structural.Field("status"),
+        Expr.Const("Ready")));
+
+// Typed expression authoring can resume over the structural node.
+var documents = author.Project(
+    structuralFilter,
+    (Load load) => new LoadDto { Id = load.Id, Status = load.Status },
+    loads.Binding);
+```
+
+Expression and structural authoring stop at canonical definitions. An invocation supplies parameters and
+selects named results; it still does not choose storage. Placement and adapter bindings attach physical
+sources and target capabilities to a compiled plan, and an execution integration performs I/O. Those are
+separate interpretations of the persisted canonical IR.
 
 ### Structural C# authoring
 
@@ -1315,7 +1459,7 @@ The format provides:
 
 Document metadata and physical plans do not participate in the semantic definition fingerprint.
 
-The current definition fingerprint profile is `relation-query/v1-c14n/v3`. Canonical query parameter
+The current definition fingerprint profile is `relation-query/v1-c14n/v4`. Canonical query parameter
 documents explicitly emit `defaultKind` (`None` or `Value`) so an absent fallback cannot collide with
 an explicit null fallback. The v1 reader remains compatible with legacy parameters that omit the
 discriminator: a concrete `defaultValue` implies `Value`, while an omitted or JSON-null value implies
@@ -1382,12 +1526,13 @@ The current foundation includes:
 - Same-element structured collection existentials with direct-field reference execution and exact Elasticsearch
   nested-query lowering when physical correlation evidence is available.
 - Object/observation mapping and runtime-compiled DTO kernels for supported canonical relation terminals.
+- Structural and typed expression-based C# authoring with deterministic CLR shape snapshots.
 - An explicitly temporary `Cohesive.Relations.Queries` compatibility boundary.
 - Contract projection for other host languages.
 
 Active areas of development include:
 
-- Structural, expression-based, CLR-shape, placement, and adapter-binding C# authoring over canonical IR.
+- Typed placement and adapter-binding C# authoring over canonical physical contracts.
 - Migration and removal of `Cohesive.Relations.Queries`.
 - PostgreSQL and broader Cosmos SQL and Elasticsearch compiler coverage; Gremlin is deferred.
 - Broader nested collection traversal, additional scoped collection operators, and target lowering.

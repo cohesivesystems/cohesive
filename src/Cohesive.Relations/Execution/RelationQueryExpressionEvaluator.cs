@@ -576,6 +576,24 @@ sealed class RelationQueryExpressionEvaluator
         RelationQueryExpressionContext context)
     {
         var source = RequireArray(Evaluate(call.Arguments[0], context), call.Function);
+        if (call.Function is ExprFunctionNames.Any or ExprFunctionNames.All)
+        {
+            if (call.Arguments.Length is < 1 or > 2)
+                throw InvalidOperand($"Expression function '{call.Function}' accepts an optional predicate selector.");
+
+            var expected = call.Function == ExprFunctionNames.All;
+            for (var index = 0; index < source.Count; index++)
+            {
+                var selected = call.Arguments.Length == 1
+                    ? source[index]
+                    : Evaluate(call.Arguments[1], context.WithCurrentItem(source[index]));
+                if (RequireBoolean(selected, call.Function) != expected)
+                    return ObservationValue.FromBool(!expected);
+            }
+
+            return ObservationValue.FromBool(expected);
+        }
+
         ObservationValue[] values;
         if (call.Arguments.Length == 1)
         {
@@ -594,8 +612,6 @@ sealed class RelationQueryExpressionEvaluator
             ExprFunctionNames.Min => MinOrMax(values, findMaximum: false),
             ExprFunctionNames.Max => MinOrMax(values, findMaximum: true),
             ExprFunctionNames.Avg => Average(values),
-            ExprFunctionNames.Any => Any(values),
-            ExprFunctionNames.All => All(values),
             _ => throw new UnreachableException()
         };
     }
@@ -663,6 +679,7 @@ sealed class RelationQueryExpressionEvaluator
             if (RequireBoolean(value, ExprFunctionNames.Any))
                 return ObservationValue.FromBool(true);
         }
+
         return ObservationValue.FromBool(false);
     }
 
@@ -673,6 +690,7 @@ sealed class RelationQueryExpressionEvaluator
             if (!RequireBoolean(value, ExprFunctionNames.All))
                 return ObservationValue.FromBool(false);
         }
+
         return ObservationValue.FromBool(true);
     }
 

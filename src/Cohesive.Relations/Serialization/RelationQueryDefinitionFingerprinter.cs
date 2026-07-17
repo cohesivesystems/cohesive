@@ -9,9 +9,11 @@ namespace Cohesive.Relations.Serialization;
 /// Computes stable content fingerprints for canonical relation/query definitions.
 /// </summary>
 /// <remarks>
-/// The v3 canonicalization profile writes UTF-8 JSON with ordinal object-key ordering,
+/// The v4 canonicalization profile writes UTF-8 JSON with ordinal object-key ordering,
 /// stable-id ordering for set-like definition collections, preserved order for semantic
-/// sequences, unescaped Unicode scalar text, and shortest round-trip JSON numbers.
+/// sequences, unescaped Unicode scalar text, and canonical round-trip JSON numbers. Exact
+/// decimal values and double values that round-trip through <see cref="decimal"/> share one
+/// normalized decimal spelling.
 /// Numerically equivalent positive and negative zero values are normalized to zero.
 /// Query parameter defaults include an explicit discriminator when a fallback is declared,
 /// preserving the semantic difference between no fallback and an explicit null fallback.
@@ -22,7 +24,7 @@ public static class RelationQueryDefinitionFingerprinter
     public const string Algorithm = "sha256";
 
     /// <summary>Canonicalization profile identifier.</summary>
-    public const string Canonicalization = "relation-query/v1-c14n/v3";
+    public const string Canonicalization = "relation-query/v1-c14n/v4";
 
     /// <summary>Computes a content fingerprint that excludes document metadata and physical plans.</summary>
     /// <param name="definition">Canonical semantic definition to fingerprint.</param>

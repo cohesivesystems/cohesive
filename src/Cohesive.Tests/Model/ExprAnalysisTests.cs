@@ -517,6 +517,28 @@ public sealed class ExprAnalysisTests
     }
 
     [Fact]
+    public void Analyze_HighPrecisionDecimalConstant_PreservesNumericValueContract()
+    {
+        const decimal expected = 12345678901234567890.123456789m;
+        var decimalResult = Analyze(
+            Expr.Const(expected),
+            ExprScope.Empty,
+            "decimal-constant",
+            new(value: new(new ScalarTypeRef(ScalarTypeKind.Decimal))));
+        var jsonNumberResult = Analyze(
+            Expr.Const(expected),
+            ExprScope.Empty,
+            "json-number-constant",
+            new(value: new(new JsonTypeRef(JsonTypeKind.Number))));
+
+        Assert.True(decimalResult.IsValid);
+        Assert.True(jsonNumberResult.IsValid);
+        Assert.Equal(
+            ScalarTypeKind.Decimal,
+            Assert.IsType<ScalarTypeRef>(decimalResult.KnownResult?.Type).Kind);
+    }
+
+    [Fact]
     public void ValueContractsValidateKnownCompositeStructureAroundUnresolvedNestedTypes()
     {
         var unresolved = new NamedTypeRef(new("Unresolved"));
@@ -555,6 +577,23 @@ public sealed class ExprAnalysisTests
             new(ExprResultCategory.Temporal, date));
 
         Assert.True(result.IsValid);
+    }
+
+    [Theory]
+    [InlineData("2026-07-17T12:34:56Z", true)]
+    [InlineData("2026-07-17T12:34:56-07:00", true)]
+    [InlineData("2026-07-17T12:34:56", false)]
+    public void Analyze_InstantStringLiteralRequiresExplicitOffset(string text, bool expected)
+    {
+        var instant = new ExprValueContract(new ScalarTypeRef(ScalarTypeKind.Instant));
+
+        var result = Analyze(
+            Expr.Const(text),
+            ExprScope.Empty,
+            "instant-literal",
+            new(ExprResultCategory.Temporal, instant));
+
+        Assert.Equal(expected, result.IsValid);
     }
 
     [Fact]

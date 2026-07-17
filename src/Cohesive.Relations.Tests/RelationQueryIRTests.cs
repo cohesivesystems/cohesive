@@ -487,7 +487,7 @@ public sealed class RelationQueryIRTests
     {
         var fingerprint = RelationQueryDefinitionFingerprinter.Compute(CreateLoadSearchRelation());
 
-        Assert.Equal("relation-query/v1-c14n/v3", fingerprint.Canonicalization);
+        Assert.Equal("relation-query/v1-c14n/v4", fingerprint.Canonicalization);
         Assert.Equal("6fa55fc022091a5cc6b9252e989a4843bbaab6fdcbe09ccb7771d2146badda49", fingerprint.Value);
     }
 
@@ -521,6 +521,48 @@ public sealed class RelationQueryIRTests
     }
 
     [Fact]
+    public void CanonicalJson_HighPrecisionDecimal_RoundTripsAsPlainNumber()
+    {
+        const decimal expected = 12345678901234567890.123456789m;
+        var document = RelationQueryDocument.FromDefinition(
+            WithScalarProjection(Expr.Const(expected)));
+
+        var json = RelationQueryJsonSerializer.Serialize(document, indented: false);
+        var roundTripped = RelationQueryJsonSerializer.Deserialize(json);
+        var relation = Assert.IsType<IRRelationDefinition>(roundTripped.Definition);
+        var projection = Assert.Single(relation.Body.Nodes.OfType<ProjectQueryNode>());
+        var constant = Assert.IsType<ConstantExpr>(Assert.Single(projection.Assignments).Value);
+
+        Assert.Contains("12345678901234567890.123456789", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"12345678901234567890.123456789\"", json, StringComparison.Ordinal);
+        Assert.Equal(ObservationValueKind.Decimal, constant.Value.Kind);
+        Assert.Equal(expected, constant.Value.Decimal);
+        Assert.Equal(document.DefinitionFingerprint, roundTripped.DefinitionFingerprint);
+        Assert.Equal(
+            RelationQueryDefinitionFingerprinter.Compute(WithScalarProjection(Expr.Const(1.2300m))),
+            RelationQueryDefinitionFingerprinter.Compute(WithScalarProjection(Expr.Const(1.23m))));
+    }
+
+    [Theory]
+    [InlineData(1e20)]
+    [InlineData(1e-20)]
+    [InlineData(1.0000000000000001e18)]
+    public void CanonicalJson_DoubleRepresentableAsDecimal_RoundTripsWithoutFingerprintDrift(
+        double value)
+    {
+        var document = RelationQueryDocument.FromDefinition(
+            WithScalarProjection(Expr.Const(value)));
+
+        var json = RelationQueryJsonSerializer.Serialize(document, indented: false);
+        var roundTripped = RelationQueryJsonSerializer.Deserialize(json);
+
+        Assert.Equal(document.DefinitionFingerprint, roundTripped.DefinitionFingerprint);
+        Assert.Equal(
+            document.DefinitionFingerprint,
+            RelationQueryDefinitionFingerprinter.Compute(roundTripped.Definition));
+    }
+
+    [Fact]
     public void TryDeserialize_ReturnsStructuredVersionFingerprintAndRequiredIdDiagnostics()
     {
         var json = RelationQueryJsonSerializer.Serialize(
@@ -534,7 +576,7 @@ public sealed class RelationQueryIRTests
         AssertDiagnostic(tamperedResult, "relationQuery.fingerprint.mismatch");
 
         var oldFingerprintProfile = JsonNode.Parse(json)!.AsObject();
-        oldFingerprintProfile["definitionFingerprint"]!["canonicalization"] = "relation-query/v1-c14n/v2";
+        oldFingerprintProfile["definitionFingerprint"]!["canonicalization"] = "relation-query/v1-c14n/v3";
         var oldProfileResult = RelationQueryJsonSerializer.TryDeserialize(oldFingerprintProfile.ToJsonString(), out _);
         AssertDiagnostic(oldProfileResult, "relationQuery.fingerprint.profileUnsupported");
 

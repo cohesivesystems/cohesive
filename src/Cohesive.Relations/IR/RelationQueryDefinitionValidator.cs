@@ -1237,31 +1237,24 @@ public static partial class RelationQueryDefinitionValidator
 
         void ValidatePortableObservationValue(ObservationValue value, string location)
         {
-            switch (value.Kind)
+            if (RelationQueryPortableObservationValueSemantics.TryGetCurrentNodeIssue(
+                    value,
+                    out var code,
+                    out var message))
             {
-                case ObservationValueKind.Undefined:
-                case ObservationValueKind.Bytes:
-                case ObservationValueKind.DateTimeOffset:
-                case ObservationValueKind.DateOnly:
-                case ObservationValueKind.TimeOnly:
-                case ObservationValueKind.TimeSpan:
-                    Add(code: "relationQuery.value.kindUnsupported",
-                        message: $"Observation value kind '{value.Kind}' does not have a lossless canonical relation/query JSON encoding.",
-                        location: location);
-                    break;
-                case ObservationValueKind.Double when !double.IsFinite(value.Double):
-                    Add(code: "relationQuery.value.numberNonFinite",
-                        message: "Canonical relation/query JSON cannot represent non-finite numeric values.",
-                        location: location);
-                    break;
-                case ObservationValueKind.Object when value.Fields is not null:
-                    foreach (var (property, child) in value.Fields)
-                        ValidatePortableObservationValue(child, $"{location}/{property}");
-                    break;
-                case ObservationValueKind.Array when value.Array is not null:
-                    for (var index = 0; index < value.Array.Length; index++)
-                        ValidatePortableObservationValue(value.Array[index], $"{location}/{index}");
-                    break;
+                Add(code: code!, message: message!, location: location);
+                return;
+            }
+
+            if (value.Kind == ObservationValueKind.Object && value.Fields is not null)
+            {
+                foreach (var (property, child) in value.Fields)
+                    ValidatePortableObservationValue(child, $"{location}/{property}");
+            }
+            else if (value.Kind == ObservationValueKind.Array && value.Array is not null)
+            {
+                for (var index = 0; index < value.Array.Length; index++)
+                    ValidatePortableObservationValue(value.Array[index], $"{location}/{index}");
             }
         }
 

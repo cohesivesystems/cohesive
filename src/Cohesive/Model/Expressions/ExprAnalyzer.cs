@@ -325,6 +325,7 @@ public static class ExprAnalyzer
                 ObservationValueKind.Bool => NodeResult.FromValue(new(new ScalarTypeRef(ScalarTypeKind.Bool)), value),
                 ObservationValueKind.Int64 => NodeResult.FromValue(new(new ScalarTypeRef(ScalarTypeKind.Int64)), value),
                 ObservationValueKind.Double => NodeResult.FromValue(new(new ScalarTypeRef(ScalarTypeKind.Decimal)), value),
+                ObservationValueKind.Decimal => NodeResult.FromValue(new(new ScalarTypeRef(ScalarTypeKind.Decimal)), value),
                 ObservationValueKind.String => NodeResult.FromValue(new(new ScalarTypeRef(ScalarTypeKind.String)), value),
                 ObservationValueKind.Bytes => NodeResult.FromValue(new(new ScalarTypeRef(ScalarTypeKind.Bytes)), value),
                 ObservationValueKind.DateTimeOffset => NodeResult.FromValue(new(new ScalarTypeRef(ScalarTypeKind.Instant)), value),

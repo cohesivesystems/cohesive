@@ -13,12 +13,15 @@ namespace Cohesive.Model;
 public sealed class ClrShapeGraphBuilder
 {
     readonly List<RootShapeRegistration> roots = [];
-    readonly List<IClrShapeMetadataProvider> metadataProviders = [ ClrShapeAttributeMetadataProvider.Instance ];
+    readonly List<IClrShapeMetadataProvider> metadataProviders = [ClrShapeAttributeMetadataProvider.Instance];
     readonly Dictionary<TypeId, TypeDefinition> contributedNamedTypes = [];
 
     /// <summary>
     /// Adds a CLR metadata provider used while deriving shapes, named types, and fields.
     /// </summary>
+    /// <param name="provider">Provider appended at the highest current metadata precedence.</param>
+    /// <returns>This builder for continued configuration.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="provider"/> is <see langword="null"/>.</exception>
     public ClrShapeGraphBuilder AddMetadataProvider(IClrShapeMetadataProvider provider)
     {
         metadataProviders.Add(Guard.RequireNotNull(provider));
@@ -28,6 +31,11 @@ public sealed class ClrShapeGraphBuilder
     /// <summary>
     /// Adds CLR metadata providers used while deriving shapes, named types, and fields.
     /// </summary>
+    /// <param name="providers">Providers appended in increasing precedence order.</param>
+    /// <returns>This builder for continued configuration.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="providers"/> or one of its entries is <see langword="null"/>.
+    /// </exception>
     public ClrShapeGraphBuilder AddMetadataProviders(IEnumerable<IClrShapeMetadataProvider> providers)
     {
         ArgumentNullException.ThrowIfNull(providers);
@@ -39,14 +47,30 @@ public sealed class ClrShapeGraphBuilder
     /// <summary>
     /// Registers a CLR type as a root shape.
     /// </summary>
-    /// <exception cref="InvalidOperationException">The CLR type is already registered as a shape role.</exception>
+    /// <typeparam name="T">CLR object type to infer as a root shape.</typeparam>
+    /// <param name="role">Default semantic shape role.</param>
+    /// <returns>This builder for continued root registration.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="role"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="role"/> is empty.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// <typeparamref name="T"/> cannot be inferred as a root shape or is already registered with another role.
+    /// </exception>
     public ClrShapeGraphBuilder AddShape<T>(string role = ShapeRoles.ValueObject) where T : notnull
         => AddShape(typeof(T), role);
 
     /// <summary>
     /// Registers a CLR type as a root shape.
     /// </summary>
-    /// <exception cref="InvalidOperationException">The CLR type is already registered as a shape role.</exception>
+    /// <param name="clrType">CLR object type to infer as a root shape.</param>
+    /// <param name="role">Default semantic shape role.</param>
+    /// <returns>This builder for continued root registration.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="clrType"/> or <paramref name="role"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="role"/> is empty.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// <paramref name="clrType"/> cannot be inferred as a root shape or is already registered with another role.
+    /// </exception>
     public ClrShapeGraphBuilder AddShape(Type clrType, string role = ShapeRoles.ValueObject)
     {
         ArgumentNullException.ThrowIfNull(clrType);
@@ -72,34 +96,94 @@ public sealed class ClrShapeGraphBuilder
     /// <summary>
     /// Builds an immutable shape graph for the registered CLR roots.
     /// </summary>
-    public ShapeGraph Build(GraphId? graphId = null)
+    /// <param name="graphId">
+    /// Optional stable graph identifier. When omitted, the returned runtime graph receives an ephemeral identifier.
+    /// </param>
+    /// <returns>The immutable shape graph derived from the registered CLR roots.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// A registered or referenced CLR type cannot be inferred, or metadata providers contribute
+    /// conflicting semantic definitions.
+    /// </exception>
+    public ShapeGraph Build(GraphId? graphId = null) => BuildResult(graphId).Graph;
+
+    /// <summary>
+    /// Builds an immutable shape graph together with the effective CLR-to-semantic metadata used to create it.
+    /// </summary>
+    /// <param name="graphId">
+    /// Optional stable graph identifier. When omitted, the returned runtime graph receives an ephemeral identifier.
+    /// </param>
+    /// <returns>
+    /// The immutable graph and the effective type, shape, and field identities selected by all metadata providers.
+    /// </returns>
+    /// <exception cref="InvalidOperationException">
+    /// A registered or referenced CLR type cannot be inferred, or metadata providers contribute
+    /// conflicting semantic definitions or inconsistent field names.
+    /// </exception>
+    public ClrShapeGraphBuildResult BuildResult(GraphId? graphId = null)
     {
         contributedNamedTypes.Clear();
+        var selectedGraphId = graphId ?? GraphId.New();
+        Dictionary<Type, ShapeId> shapeIds = [];
+        Dictionary<PropertyInfo, FieldName> fieldNames = [];
+        Dictionary<Type, ClrShapeIdentityOrigin> shapeIdentityOrigins = [];
+        Dictionary<PropertyInfo, ClrShapeIdentityOrigin> fieldIdentityOrigins = [];
 
         if (roots.Count == 0)
-            return new(id: graphId ?? GraphId.New(), shapes: [], namedTypes: []);
+        {
+            return new(
+                graph: new ShapeGraph(id: selectedGraphId, shapes: [], namedTypes: []),
+                typeIds: ImmutableDictionary<Type, TypeId>.Empty,
+                shapeIds: ImmutableDictionary<Type, ShapeId>.Empty,
+                fieldNames: ImmutableDictionary<PropertyInfo, FieldName>.Empty,
+                shapeIdentityOrigins: ImmutableDictionary<Type, ClrShapeIdentityOrigin>.Empty,
+                fieldIdentityOrigins: ImmutableDictionary<PropertyInfo, ClrShapeIdentityOrigin>.Empty);
+        }
 
         var discoveredTypes = DiscoverTypes();
         var identities = BuildTypeIdentities(discoveredTypes);
 
         var namedTypes = new TypeDefinition[discoveredTypes.Count];
         for (var i = 0; i < discoveredTypes.Count; i++)
-            namedTypes[i] = BuildNamedType(discoveredTypes[i], identities);
+        {
+            namedTypes[i] = BuildNamedType(
+                discoveredTypes[i],
+                identities,
+                fieldNames,
+                fieldIdentityOrigins);
+        }
 
         var shapes = new Shape[roots.Count];
         for (var i = 0; i < roots.Count; i++)
-            shapes[i] = BuildShape(roots[i], identities);
+        {
+            shapes[i] = BuildShape(
+                roots[i],
+                identities,
+                shapeIds,
+                fieldNames,
+                shapeIdentityOrigins,
+                fieldIdentityOrigins);
+        }
 
         HashSet<TypeId> discoveredTypeIds = [.. namedTypes.Select(static x => x.Id)];
         var additionalNamedTypes = contributedNamedTypes.Values
             .Where(type => !discoveredTypeIds.Contains(type.Id))
             .OrderBy(static type => type.Id.Value, StringComparer.Ordinal);
 
-        return new(
-            id: graphId ?? GraphId.New(),
+        var graph = new ShapeGraph(
+            id: selectedGraphId,
             shapes: [.. shapes],
             namedTypes: [.. namedTypes, .. additionalNamedTypes]
             );
+
+        return new(
+            graph,
+            typeIds: identities.ToImmutableDictionary(
+                static pair => pair.Key,
+                static pair => pair.Value.TypeId),
+            shapeIds: shapeIds.ToImmutableDictionary(),
+            fieldNames: fieldNames.ToImmutableDictionary(),
+            shapeIdentityOrigins: shapeIdentityOrigins.ToImmutableDictionary(),
+            fieldIdentityOrigins: fieldIdentityOrigins.ToImmutableDictionary());
     }
 
     List<Type> DiscoverTypes()
@@ -252,13 +336,17 @@ public sealed class ClrShapeGraphBuilder
         if (clrType.IsPrimitive || clrType.IsPointer || clrType.IsByRef)
             return false;
 
-        if (clrType == typeof(string))
+        if (clrType == typeof(string) || clrType == typeof(byte[]))
             return false;
 
         return ShapeTypeInspector.GetReadableProperties(clrType).Length > 0;
     }
 
-    TypeDefinition BuildNamedType(Type clrType, Dictionary<Type, ClrTypeIdentity> identities)
+    TypeDefinition BuildNamedType(
+        Type clrType,
+        Dictionary<Type, ClrTypeIdentity> identities,
+        Dictionary<PropertyInfo, FieldName> fieldNames,
+        Dictionary<PropertyInfo, ClrShapeIdentityOrigin> fieldIdentityOrigins)
     {
         var identity = identities[clrType];
         var typeMetadata = GetMetadata(ClrShapeMetadataContext.ForType(clrType));
@@ -276,7 +364,13 @@ public sealed class ClrShapeGraphBuilder
         var properties = ShapeTypeInspector.GetReadablePropertyMetadata(clrType);
         var fields = new StructuralField[properties.Length];
         for (var i = 0; i < properties.Length; i++)
-            fields[i] = BuildStructuralField(properties[i], identities);
+        {
+            fields[i] = BuildStructuralField(
+                properties[i],
+                identities,
+                fieldNames,
+                fieldIdentityOrigins);
+        }
 
         return new TypeDefinition.Structural(
             id: identity.TypeId,
@@ -352,7 +446,13 @@ public sealed class ClrShapeGraphBuilder
             annotations: typeMetadata.Annotations);
     }
 
-    Shape BuildShape(RootShapeRegistration root, Dictionary<Type, ClrTypeIdentity> identities)
+    Shape BuildShape(
+        RootShapeRegistration root,
+        Dictionary<Type, ClrTypeIdentity> identities,
+        Dictionary<Type, ShapeId> shapeIds,
+        Dictionary<PropertyInfo, FieldName> fieldNames,
+        Dictionary<Type, ClrShapeIdentityOrigin> shapeIdentityOrigins,
+        Dictionary<PropertyInfo, ClrShapeIdentityOrigin> fieldIdentityOrigins)
     {
         var identity = identities[root.ClrType];
         var shapeMetadata = GetMetadata(ClrShapeMetadataContext.ForShape(root.ClrType));
@@ -361,10 +461,24 @@ public sealed class ClrShapeGraphBuilder
         var properties = ShapeTypeInspector.GetReadablePropertyMetadata(root.ClrType);
         var fields = new FieldDefinition[properties.Length];
         for (var i = 0; i < properties.Length; i++)
-            fields[i] = BuildFieldDefinition(properties[i], identities);
+        {
+            fields[i] = BuildFieldDefinition(
+                properties[i],
+                identities,
+                fieldNames,
+                fieldIdentityOrigins);
+        }
+
+        var shapeId = shapeMetadata.ShapeId ?? identity.ShapeId;
+        shapeIds.Add(root.ClrType, shapeId);
+        shapeIdentityOrigins.Add(
+            root.ClrType,
+            shapeMetadata.ShapeId is null
+                ? ClrShapeIdentityOrigin.Convention
+                : ClrShapeIdentityOrigin.Metadata);
 
         return new Shape(
-            id: shapeMetadata.ShapeId ?? identity.ShapeId,
+            id: shapeId,
             fields: [.. fields],
             constraints: shapeMetadata.Constraints,
             annotations: shapeMetadata.Annotations,
@@ -417,7 +531,9 @@ public sealed class ClrShapeGraphBuilder
 
     StructuralField BuildStructuralField(
         ClrPropertyShapeMetadata propertyMetadata,
-        Dictionary<Type, ClrTypeIdentity> identities)
+        Dictionary<Type, ClrTypeIdentity> identities,
+        Dictionary<PropertyInfo, FieldName> fieldNames,
+        Dictionary<PropertyInfo, ClrShapeIdentityOrigin> fieldIdentityOrigins)
     {
         var fieldMetadata = GetMetadata(ClrShapeMetadataContext.ForField(propertyMetadata.Property));
         AddContributedNamedTypes(fieldMetadata.NamedTypes);
@@ -429,9 +545,18 @@ public sealed class ClrShapeGraphBuilder
             ? FieldCardinality.Many
             : FieldCardinality.Single;
         var effectiveType = isMany ? elementType : propertyMetadata.PropertyType;
+        var fieldName = fieldMetadata.FieldName ?? new FieldName(propertyMetadata.Name);
+        RegisterFieldIdentity(
+            propertyMetadata.Property,
+            fieldName,
+            fieldMetadata.FieldName is null
+                ? ClrShapeIdentityOrigin.Convention
+                : ClrShapeIdentityOrigin.Metadata,
+            fieldNames,
+            fieldIdentityOrigins);
 
         return new(
-            name: fieldMetadata.FieldName ?? new FieldName(propertyMetadata.Name),
+            name: fieldName,
             type: fieldMetadata.TypeRef ?? MapTypeRef(effectiveType, identities),
             cardinality: cardinality,
             presence: propertyMetadata.IsOptional ? FieldPresence.Optional : FieldPresence.Required,
@@ -441,7 +566,11 @@ public sealed class ClrShapeGraphBuilder
             );
     }
 
-    FieldDefinition BuildFieldDefinition(ClrPropertyShapeMetadata propertyMetadata, Dictionary<Type, ClrTypeIdentity> identities)
+    FieldDefinition BuildFieldDefinition(
+        ClrPropertyShapeMetadata propertyMetadata,
+        Dictionary<Type, ClrTypeIdentity> identities,
+        Dictionary<PropertyInfo, FieldName> fieldNames,
+        Dictionary<PropertyInfo, ClrShapeIdentityOrigin> fieldIdentityOrigins)
     {
         var fieldMetadata = GetMetadata(ClrShapeMetadataContext.ForField(propertyMetadata.Property));
         AddContributedNamedTypes(fieldMetadata.NamedTypes);
@@ -453,9 +582,18 @@ public sealed class ClrShapeGraphBuilder
             ? FieldCardinality.Many
             : FieldCardinality.Single;
         var effectiveType = isMany ? elementType : propertyMetadata.PropertyType;
+        var fieldName = fieldMetadata.FieldName ?? new FieldName(propertyMetadata.Name);
+        RegisterFieldIdentity(
+            propertyMetadata.Property,
+            fieldName,
+            fieldMetadata.FieldName is null
+                ? ClrShapeIdentityOrigin.Convention
+                : ClrShapeIdentityOrigin.Metadata,
+            fieldNames,
+            fieldIdentityOrigins);
 
         return new(
-            name: fieldMetadata.FieldName ?? new FieldName(propertyMetadata.Name),
+            name: fieldName,
             type: fieldMetadata.TypeRef ?? MapTypeRef(effectiveType, identities),
             cardinality: cardinality,
             presence: propertyMetadata.IsOptional ? FieldPresence.Optional : FieldPresence.Required,
@@ -463,6 +601,33 @@ public sealed class ClrShapeGraphBuilder
             constraints: fieldMetadata.Constraints,
             annotations: fieldMetadata.Annotations
             );
+    }
+
+    static void RegisterFieldIdentity(
+        PropertyInfo property,
+        FieldName fieldName,
+        ClrShapeIdentityOrigin origin,
+        IDictionary<PropertyInfo, FieldName> fieldNames,
+        IDictionary<PropertyInfo, ClrShapeIdentityOrigin> fieldIdentityOrigins)
+    {
+        if (!fieldNames.TryGetValue(property, out var existing))
+        {
+            fieldNames.Add(property, fieldName);
+            fieldIdentityOrigins.Add(property, origin);
+            return;
+        }
+
+        if (existing != fieldName)
+        {
+            throw new InvalidOperationException(
+                $"CLR metadata providers produced inconsistent field names for '{property.DeclaringType?.Name}.{property.Name}'.");
+        }
+
+        if (fieldIdentityOrigins[property] != origin)
+        {
+            throw new InvalidOperationException(
+                $"CLR metadata providers produced inconsistent field identity origins for '{property.DeclaringType?.Name}.{property.Name}'.");
+        }
     }
 
     void AddContributedNamedTypes(ImmutableArray<TypeDefinition> namedTypes)
@@ -486,7 +651,25 @@ public sealed class ClrShapeGraphBuilder
         }
     }
 
-    static TypeRef MapTypeRef(Type clrType, Dictionary<Type, ClrTypeIdentity> identities)
+    static TypeRef MapTypeRef(Type clrType, Dictionary<Type, ClrTypeIdentity> identities) =>
+        MapTypeRef(
+            clrType,
+            normalized => identities.TryGetValue(normalized, out var identity)
+                ? identity.TypeId
+                : null);
+
+    internal static TypeRef ResolveTypeRef(Type clrType, IReadOnlyDictionary<Type, TypeId> typeIds)
+    {
+        ArgumentNullException.ThrowIfNull(clrType);
+        ArgumentNullException.ThrowIfNull(typeIds);
+        return MapTypeRef(
+            clrType,
+            normalized => typeIds.TryGetValue(normalized, out var typeId)
+                ? typeId
+                : null);
+    }
+
+    static TypeRef MapTypeRef(Type clrType, Func<Type, TypeId?> resolveNamedType)
     {
         var normalized = UnwrapNullable(clrType);
         if (TryMapScalarType(normalized, out var scalar))
@@ -497,8 +680,10 @@ public sealed class ClrShapeGraphBuilder
 
         if (normalized.IsEnum)
         {
-            var enumIdentity = identities[normalized];
-            return new NamedTypeRef(enumIdentity.TypeId);
+            var enumTypeId = resolveNamedType(normalized)
+                ?? throw new InvalidOperationException(
+                    $"CLR enum type '{normalized.Name}' is not present in the built shape graph.");
+            return new NamedTypeRef(enumTypeId);
         }
 
         if (TryGetStructuredQuantity(normalized, out var quantity))
@@ -507,16 +692,16 @@ public sealed class ClrShapeGraphBuilder
         if (TryGetKeyValuePairTypes(normalized, out var keyType, out var valueType))
         {
             var fields = new ObjectFieldTypeDef[2];
-            fields[0] = new ObjectFieldTypeDef(name: "Key", type: MapTypeRef(keyType, identities));
-            fields[1] = new ObjectFieldTypeDef(name: "Value", type: MapTypeRef(valueType, identities));
+            fields[0] = new ObjectFieldTypeDef(name: "Key", type: MapTypeRef(keyType, resolveNamedType));
+            fields[1] = new ObjectFieldTypeDef(name: "Value", type: MapTypeRef(valueType, resolveNamedType));
             return new ObjectTypeRef([.. fields]);
         }
 
         if (TryGetEnumerableElementType(normalized, out var elementType))
-            return new ArrayTypeRef(MapTypeRef(elementType, identities));
+            return new ArrayTypeRef(MapTypeRef(elementType, resolveNamedType));
 
-        if (identities.TryGetValue(normalized, out var identity))
-            return new NamedTypeRef(identity.TypeId);
+        if (resolveNamedType(normalized) is { } typeId)
+            return new NamedTypeRef(typeId);
 
         throw new InvalidOperationException($"CLR type '{normalized.Name}' is not supported for shape inference.");
     }
@@ -614,7 +799,7 @@ public sealed class ClrShapeGraphBuilder
 
     static bool TryGetEnumerableElementType(Type clrType, out Type elementType)
     {
-        if (clrType == typeof(string))
+        if (clrType == typeof(string) || clrType == typeof(byte[]))
         {
             elementType = typeof(void);
             return false;
@@ -632,6 +817,7 @@ public sealed class ClrShapeGraphBuilder
             return true;
         }
 
+        Type? selectedElementType = null;
         var interfaces = clrType.GetInterfaces();
         for (var i = 0; i < interfaces.Length; i++)
         {
@@ -639,12 +825,19 @@ public sealed class ClrShapeGraphBuilder
             if (!@interface.IsGenericType || @interface.GetGenericTypeDefinition() != typeof(IEnumerable<>))
                 continue;
 
-            elementType = @interface.GetGenericArguments()[0];
-            return true;
+            var candidate = @interface.GetGenericArguments()[0];
+            if (selectedElementType is not null && selectedElementType != candidate)
+            {
+                throw new InvalidOperationException(
+                    $"CLR type '{clrType}' implements IEnumerable<T> for multiple distinct element types "
+                    + $"('{selectedElementType}' and '{candidate}'); shape inference requires one unambiguous collection contract.");
+            }
+
+            selectedElementType = candidate;
         }
 
-        elementType = typeof(void);
-        return false;
+        elementType = selectedElementType ?? typeof(void);
+        return selectedElementType is not null;
     }
 
     static bool TryGetKeyValuePairTypes(Type clrType, out Type keyType, out Type valueType)
@@ -791,9 +984,15 @@ public sealed class ClrShapeGraphBuilder
             return true;
         }
 
-        if (clrType == typeof(DateTime) || clrType == typeof(DateTimeOffset))
+        if (clrType == typeof(DateTime))
         {
             typeRef = new ScalarTypeRef(ScalarTypeKind.DateTime);
+            return true;
+        }
+
+        if (clrType == typeof(DateTimeOffset))
+        {
+            typeRef = new ScalarTypeRef(ScalarTypeKind.Instant);
             return true;
         }
 
@@ -916,9 +1115,15 @@ public sealed class ClrShapeGraphBuilder
             return true;
         }
 
-        if (clrType == typeof(DateTime) || clrType == typeof(DateTimeOffset))
+        if (clrType == typeof(DateTime))
         {
             kind = ScalarTypeKind.DateTime;
+            return true;
+        }
+
+        if (clrType == typeof(DateTimeOffset))
+        {
+            kind = ScalarTypeKind.Instant;
             return true;
         }
 

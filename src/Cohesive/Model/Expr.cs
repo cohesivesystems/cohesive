@@ -85,7 +85,7 @@ public abstract record Expr
     public static Expr Const(long value) => new ConstantExpr(ObservationValue.FromInt64(value));
 
     /// <summary>Creates a constant expression.</summary>
-    public static Expr Const(decimal value) => new ConstantExpr(ObservationValue.FromDouble((double)value));
+    public static Expr Const(decimal value) => new ConstantExpr(ObservationValue.FromDecimal(value));
 
     /// <summary>Creates a constant expression.</summary>
     public static Expr Const(double value) => new ConstantExpr(ObservationValue.FromDouble(value));

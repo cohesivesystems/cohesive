@@ -515,6 +515,37 @@ public sealed class RelationQueryExpressionAnalysisTests
             "relationQuery.parameter.defaultTypeMismatch");
     }
 
+    [Theory]
+    [InlineData("2026-07-17T12:34:56Z", false)]
+    [InlineData("2026-07-17T12:34:56+02:30", false)]
+    [InlineData("2026-07-17T12:34:56", true)]
+    public void Analyze_InstantParameterDefaultsRequireExplicitOffset(
+        string defaultValue,
+        bool expectsMismatch)
+    {
+        var query = CreateProjectionQuery(Expr.Param("probe"));
+        var definition = query with
+        {
+            Body = query.Body with
+            {
+                Parameters =
+                [
+                    new(
+                        new("probe"),
+                        new ScalarTypeRef(ScalarTypeKind.Instant),
+                        FieldPresence.Optional,
+                        ObservationValue.FromString(defaultValue))
+                ]
+            }
+        };
+
+        var analysis = RelationQueryExpressionAnalyzer.Analyze(definition);
+        var hasMismatch = analysis.Validation.Diagnostics.Any(
+            static diagnostic => diagnostic.Code == "relationQuery.parameter.defaultTypeMismatch");
+
+        Assert.Equal(expectsMismatch, hasMismatch);
+    }
+
     [Fact]
     public void Analyze_MalformedNestedParameterTypeProducesDiagnosticsWithoutThrowing()
     {

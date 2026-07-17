@@ -131,8 +131,7 @@ public sealed class SystemTextJsonClrShapeMetadataProvider : IClrShapeMetadataPr
         {
             var jsonProperty = typeInfo.Properties[i];
             if (jsonProperty.AttributeProvider is PropertyInfo candidate
-                && candidate.Module == property.Module
-                && candidate.MetadataToken == property.MetadataToken)
+                && ShapeTypeInspector.IsSameProperty(candidate, property))
             {
                 return jsonProperty.Name;
             }

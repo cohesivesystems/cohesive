@@ -94,6 +94,8 @@ public sealed class RelationQueryInvocationBuilder
     readonly Dictionary<QueryParameterId, ParameterAssignment> assignments = [];
     readonly Dictionary<QueryResultId, QueryResultDemand> resultDemands = [];
 
+    internal RelationQueryDefinitionFingerprint DefinitionFingerprint => document.DefinitionFingerprint;
+
     /// <summary>Creates an invocation builder for an exact persisted query document.</summary>
     /// <param name="document">Exact canonical query document to invoke.</param>
     /// <param name="evaluation">Caller-assigned identity for the evaluation.</param>

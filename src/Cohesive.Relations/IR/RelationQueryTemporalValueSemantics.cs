@@ -45,40 +45,13 @@ internal static class RelationQueryTemporalValueSemantics
             case ScalarTypeKind.DateTime when value.TryGetDateTimeOffset(out var dateTime):
                 ordinal = dateTime.DateTime.Ticks;
                 return true;
-            case ScalarTypeKind.Instant when TryGetInstant(value, out var instant):
+            case ScalarTypeKind.Instant when value.TryGetInstant(out var instant):
                 ordinal = instant.UtcDateTime.Ticks;
                 return true;
             default:
                 ordinal = 0;
                 return false;
         }
-    }
-
-    static bool TryGetInstant(ObservationValue value, out DateTimeOffset instant)
-    {
-        if (value.Kind == ObservationValueKind.DateTimeOffset)
-            return value.TryGetDateTimeOffset(out instant);
-
-        var text = value.Kind == ObservationValueKind.String ? value.String : null;
-        if (text is null || !HasExplicitOffset(text))
-        {
-            instant = default;
-            return false;
-        }
-
-        return value.TryGetDateTimeOffset(out instant);
-    }
-
-    static bool HasExplicitOffset(string value)
-    {
-        if (value.EndsWith('Z') || value.EndsWith('z'))
-            return true;
-
-        var timeSeparator = value.IndexOf('T');
-        if (timeSeparator < 0)
-            return false;
-        return value.LastIndexOf('+') > timeSeparator
-            || value.LastIndexOf('-') > timeSeparator;
     }
 
     static void ValidateDomain(ScalarTypeKind domain)
