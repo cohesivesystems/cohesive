@@ -359,9 +359,84 @@ Source(Load as load)
     LoadSearchDto.CustomerName = customer.Name)
 ```
 
-This graph is persisted as canonical relation/query IR. C# relation/query builders and expression-based
-authoring are planned convenience producers; they must lower into this IR rather than introduce another
-runtime relation model.
+This graph is persisted as canonical relation/query IR. The public structural C# authoring surface is a
+programmatic producer of that IR. The planned expression-based fluent surface is the primary developer UX,
+but it lowers through the same structural core rather than owning another graph-construction path.
+
+### Structural C# authoring
+
+`RelationQuery.Structural()` creates the reusable construction core. It returns typed handles for nodes,
+bindings, parameters, and named results; uses deterministic identities when an override is omitted; records
+the origin of every identity and producer-attributed decision; and runs the canonical validator at relation
+or query terminals. A terminal snapshots the current core, so the same derivation can first produce a rooted
+relation and then be extended into an independently invoked query without changing the earlier result.
+
+The following example flattens customer and equipment data into a load search DTO, exposes the derivation as
+a rooted relation, and then adds a status-filtered query and target-neutral invocation:
+
+```csharp
+var domain = new GraphId("example/domain/v1");
+var search = new GraphId("example/search/v1");
+var loadShape = new QualifiedShapeId(domain, new("Load"));
+var customerShape = new QualifiedShapeId(domain, new("Customer"));
+var equipmentShape = new QualifiedShapeId(domain, new("Equipment"));
+var loadSearchShape = new QualifiedShapeId(search, new("LoadSearchDto"));
+
+var loadCustomer = Relationship
+    .From(loadShape)
+    .Reference(FieldPath.FromField("CustomerId"))
+    .To(customerShape);
+var loadEquipment = Relationship
+    .From(loadShape)
+    .Reference(FieldPath.FromField("EquipmentId"))
+    .To(equipmentShape);
+
+var author = RelationQuery.Structural();
+var loads = author.Source(loadShape);
+var customers = author.Traverse(loads.Node, loads.Binding, loadCustomer.Id);
+var equipment = author.Traverse(customers.Node, loads.Binding, loadEquipment.Id);
+var documents = author.Project(
+    equipment.Node,
+    loadSearchShape,
+    [
+        new(FieldPath.FromField("Id"), loads.Binding.Field("Id")),
+        new(FieldPath.FromField("Status"), loads.Binding.Field("Status")),
+        new(FieldPath.FromField("CustomerName"), customers.Binding.Field("Name")),
+        new(FieldPath.FromField("EquipmentNumber"), equipment.Binding.Field("Number"))
+    ]);
+
+var relation = author.BuildRelation(
+    new RelationId("load-search-document"),
+    new RelationName("LoadSearchDocument"),
+    loads.Binding,
+    documents.Node,
+    loadSearchShape,
+    RelationOutputMode.OnePerRoot,
+    key: documents.Binding.Field("Id"));
+
+var status = author.Parameter(
+    new ScalarTypeRef(ScalarTypeKind.String),
+    id: new QueryParameterId("status"));
+var filtered = author.Filter(
+    documents.Node,
+    Expr.Eq(documents.Binding.Field("Status"), status.Expression));
+var rows = author.Rows(filtered, id: new QueryResultId("rows"));
+var query = author.BuildQuery(
+    new QueryId("loads-by-status"),
+    new QueryName("LoadsByStatus"),
+    [rows]);
+
+var invocation = query.CreateDocument()
+    .Invoke(new RelationQueryEvaluationId("request/42"))
+    .Set(status.Id, ObservationValue.FromString("InTransit"))
+    .Select(rows.Id)
+    .Build();
+```
+
+`relation.Validation` and `query.Validation` contain the authoritative structured diagnostics. The
+invocation retains the exact query document, evaluation identity, parameter evidence, selected result/field
+demand, and optional compiled-plan attribution; it does not select an adapter, placement, or execution engine.
+The complete executable version is in `RelationQueryStructuralAuthoringExampleTests`.
 
 ### Compiled mapper
 

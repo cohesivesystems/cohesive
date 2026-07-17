@@ -2373,7 +2373,7 @@ sealed class RelationQueryRequirementGraphBuilder
         new($"input/relationship/{Encode(traversal.Value)}");
 
     static RelationQueryInputId CreateParameterInputId(QueryParameterId parameter) =>
-        new($"input/parameter/{Encode(parameter.Value)}");
+        RelationQueryInputIds.ForParameter(parameter);
 
     static RelationQueryInputId CreateCapabilityInputId(ExprCapabilityRequirement capability) =>
         new($"input/capability/{((int)capability.Kind).ToString(CultureInfo.InvariantCulture)}/{Encode(capability.Capability.Value)}");
