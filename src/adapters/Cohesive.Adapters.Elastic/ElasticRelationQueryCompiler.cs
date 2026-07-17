@@ -470,6 +470,8 @@ public sealed class ElasticRelationQueryCompiler
                     or BinaryOperator.Ge
                     or BinaryOperator.Lt
                     or BinaryOperator.Le => CompileComparison(binary, site),
+                CallExpr call when string.Equals(call.Function, ExprFunctionNames.Contains, StringComparison.Ordinal)
+                                        && call.Arguments.Length == 2 => CompileCollectionMembership(call, site),
                 CallExpr call when string.Equals(call.Function, ExprFunctionNames.EndsWith, StringComparison.Ordinal)
                                         && call.Arguments.Length == 2 => CompileSuffix(call, site),
                 _ => throw Fail(
@@ -572,6 +574,53 @@ public sealed class ElasticRelationQueryCompiler
                     $"Binary operator '{physicalOperator}' is not a physical Elasticsearch comparison.",
                     site.Node ?? branch.Node)
             };
+        }
+
+        ElasticQueryTemplate CompileCollectionMembership(
+            CallExpr call,
+            RelationQueryExpressionSiteAnalysis site)
+        {
+            var collectionContract = AnalyzeSubexpression(
+                call.Arguments[0],
+                site,
+                "collection-membership-collection");
+            var valueContract = AnalyzeSubexpression(
+                call.Arguments[1],
+                site,
+                "collection-membership-value");
+            if (!IsRequiredNonNull(collectionContract) || !IsRequiredNonNull(valueContract))
+            {
+                throw Fail(
+                    ElasticRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
+                    "Canonical contains requires a required, non-null collection and membership value for exact Elasticsearch lowering.",
+                    site.Node ?? branch.Node);
+            }
+            if (collectionContract.GetEffectiveType() is not ArrayTypeRef { ElementType: var elementType }
+                || !IsSupportedScalar(elementType)
+                || valueContract.GetEffectiveType() != elementType)
+            {
+                throw Fail(
+                    ElasticRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
+                    "Canonical contains requires one collection of a supported scalar domain and one value in that same domain.",
+                    site.Node ?? branch.Node);
+            }
+            if (!TryResolveSourceField(call.Arguments[0], site, out var field))
+            {
+                throw Fail(
+                    ElasticRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
+                    "Canonical contains requires a direct physical collection field in Elasticsearch v1.",
+                    site.Node ?? branch.Node);
+            }
+
+            RequireNonNullField(field, site.Node ?? branch.Node, "collection membership");
+            RequireMappingCompatibility(field, elementType, site.Node ?? branch.Node);
+            var value = CreateValueTemplate(call.Arguments[1], site, requireNonNull: true);
+            var queryField = RequireQueryField(field, site.Node ?? branch.Node);
+            return WithCapability(
+                field,
+                ElasticRelationQueryFieldSemanticCapabilities.ExactCollectionMembership,
+                ElasticQueryTemplate.Term(queryField, value),
+                site.Node ?? branch.Node);
         }
 
         ElasticQueryTemplate CompileSuffix(

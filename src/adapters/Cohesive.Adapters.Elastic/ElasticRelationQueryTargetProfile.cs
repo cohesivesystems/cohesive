@@ -130,7 +130,7 @@ public static class ElasticRelationQueryTargetProfile
             [RelationQueryCompilationProvenance.CurrentCompilerProfile],
             evidence,
             boundaries,
-            "Canonical Elasticsearch v1: exact single-index structured rows and global or composite-grouped row counts within declared boundaries.");
+            "Canonical Elasticsearch v1: exact single-index structured rows, root scalar-array membership, and global or composite-grouped row counts within declared boundaries.");
     }
 
     static ImmutableArray<RelationQueryOperatingBoundaryId> LogicalBoundaries(
@@ -171,6 +171,7 @@ public static class ElasticRelationQueryTargetProfile
         yield return ExprCapabilities.ForUnary(UnaryOperator.Not);
         foreach (var @operator in SupportedBinaryOperators)
             yield return ExprCapabilities.ForBinary(@operator);
+        yield return ExprCapabilities.ForFunction(ExprFunctionNames.Contains);
         yield return ExprCapabilities.ForFunction(ExprFunctionNames.EndsWith);
     }
 
@@ -187,6 +188,8 @@ public static class ElasticRelationQueryTargetProfile
                 DeterministicProviderBoundary
             ];
         }
+        if (expression == ExprCapabilities.ForFunction(ExprFunctionNames.Contains))
+            return [SingleIndexBoundary, NonNullOperandsBoundary];
         if (expression == ExprCapabilities.ForUnary(UnaryOperator.Not)
             || SupportedBinaryOperators.Any(@operator =>
                 expression == ExprCapabilities.ForBinary(@operator)))

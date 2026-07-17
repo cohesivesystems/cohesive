@@ -214,6 +214,155 @@ public sealed class ElasticRelationQueryCompilerTests
     }
 
     [Fact]
+    public void Compile_CollectionMembership_ProducesExactTermQuery()
+    {
+        var fixture = Fixture.CollectionMembership();
+
+        var result = fixture.Compile();
+
+        Assert.True(result.IsSuccessful, Diagnostics(result));
+        var artifact = Assert.Single(result.Artifacts);
+        Assert.Equal(new QueryParameterId("location"), Assert.Single(artifact.Parameters).Parameter);
+        var selected = artifact.SelectedFields.Single(field => field.Field.Path == Fixture.StopLocationsPath);
+        Assert.Null(selected.SourceField);
+        Assert.Equal([FieldPath.Parse("stopLocations.keyword")], selected.QueryFields.ToArray());
+        var request = artifact.Bind(new Dictionary<QueryParameterId, ObservationValue>
+        {
+            [new("location")] = ObservationValue.FromString("SEA")
+        });
+
+        using var json = ElasticSdkRequestTestSupport.Serialize(request);
+        Assert.Equal(
+            "SEA",
+            FirstFilter(json.RootElement)
+                .GetProperty("term")
+                .GetProperty("stopLocations.keyword")
+                .GetProperty("value")
+                .GetString());
+        Assert.Throws<ArgumentException>(() => artifact.Bind(new Dictionary<QueryParameterId, ObservationValue>
+        {
+            [new("location")] = ObservationValue.FromInt64(42)
+        }));
+    }
+
+    [Fact]
+    public void Compile_CollectionMembership_SupportsAConstantCandidate()
+    {
+        var fixture = Fixture.CollectionMembership(Expr.Const("SEA"));
+
+        var result = fixture.Compile();
+
+        Assert.True(result.IsSuccessful, Diagnostics(result));
+        var artifact = Assert.Single(result.Artifacts);
+        Assert.Empty(artifact.Parameters);
+        using var json = ElasticSdkRequestTestSupport.Serialize(
+            artifact.Bind(new Dictionary<QueryParameterId, ObservationValue>()));
+        Assert.Equal(
+            "SEA",
+            FirstFilter(json.RootElement)
+                .GetProperty("term")
+                .GetProperty("stopLocations.keyword")
+                .GetProperty("value")
+                .GetString());
+    }
+
+    [Fact]
+    public void Compile_CollectionMembership_FailsWithoutExactBindingEvidence()
+    {
+        var fixture = Fixture.CollectionMembership();
+        var binding = fixture.StorageBindingWithoutCollectionMembership();
+
+        var result = fixture.Compile(binding);
+
+        Assert.NotEqual(fixture.StorageBinding.Fingerprint, binding.Fingerprint);
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == ElasticRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable);
+        Assert.Contains(
+            nameof(ElasticRelationQueryFieldSemanticCapabilities.ExactCollectionMembership),
+            diagnostic.Message,
+            StringComparison.Ordinal);
+        Assert.NotNull(diagnostic.Input);
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
+    public void Compile_CollectionMembership_FailsForMismatchedElementAndCandidateDomains()
+    {
+        var fixture = Fixture.CollectionMembership(
+            Expr.Param("location"),
+            ScalarTypeKind.Int64);
+
+        var result = fixture.Compile();
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        Assert.Contains(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == ElasticRelationQueryCompilationDiagnosticCodes.UnsupportedExpression
+            && diagnostic.Message.Contains("same domain", StringComparison.Ordinal));
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
+    public void Compile_CollectionMembership_FailsForNullCandidate()
+    {
+        var fixture = Fixture.CollectionMembership(Expr.Null());
+
+        var result = fixture.Compile();
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        Assert.Contains(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == ElasticRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable
+            && diagnostic.Message.Contains("required, non-null", StringComparison.Ordinal));
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
+    public void Compile_CollectionMembership_FailsForNestedDocumentScope()
+    {
+        var fixture = Fixture.CollectionMembership();
+        var binding = fixture.StorageBindingWithDocumentScope(
+            Fixture.StopLocationsPath,
+            ElasticRelationQueryFieldDocumentScope.NestedDocument);
+
+        var result = fixture.Compile(binding);
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        Assert.Contains(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == ElasticRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable
+            && diagnostic.Message.Contains("nested-query lowering is deferred", StringComparison.Ordinal));
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
+    public void Compile_LoadSearchRowsAndCount_ShareCollectionMembershipFilter()
+    {
+        var fixture = Fixture.LoadSearch();
+
+        var result = fixture.Compile();
+
+        Assert.True(result.IsSuccessful, Diagnostics(result));
+        Assert.Equal(2, result.Artifacts.Length);
+        var rows = result.Artifacts.Single(static artifact =>
+            artifact.Branch.Kind == RelationQueryNativeResultKind.QueryRows);
+        var count = result.Artifacts.Single(static artifact =>
+            artifact.Branch.Kind == RelationQueryNativeResultKind.QueryAggregation);
+        var parameters = new Dictionary<QueryParameterId, ObservationValue>
+        {
+            [new("customer-name-suffix")] = ObservationValue.FromString("Inc"),
+            [new("location")] = ObservationValue.FromString("SEA")
+        };
+
+        var rowsJson = ElasticSdkRequestTestSupport.SerializeToString(rows.Bind(parameters));
+        using var countJson = ElasticSdkRequestTestSupport.Serialize(count.Bind(parameters));
+
+        Assert.Contains("stopLocations.keyword", rowsJson, StringComparison.Ordinal);
+        Assert.Contains("SEA", rowsJson, StringComparison.Ordinal);
+        Assert.Equal(0, countJson.RootElement.GetProperty("size").GetInt32());
+        Assert.True(countJson.RootElement.GetProperty("track_total_hits").GetBoolean());
+        Assert.Contains("stopLocations.keyword", countJson.RootElement.GetRawText(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Compile_RowPaging_FailsWithoutStableUniqueFinalSortEvidence()
     {
         var fixture = Fixture.Row();
@@ -388,6 +537,26 @@ public sealed class ElasticRelationQueryCompilerTests
             documentScope: ElasticRelationQueryFieldDocumentScope.RootDocument,
             semanticCapabilities: ElasticRelationQueryFieldSemanticCapabilities.ExactOrdering,
             semanticProfile: "tests/id-v1"));
+        Assert.Throws<ArgumentException>(() => new ElasticRelationQueryFieldBinding(
+            input,
+            sourceField: null,
+            FieldPath.Parse("_id"),
+            ElasticRelationQueryFieldMappingKind.Keyword,
+            ElasticRelationQueryFieldRetrievalKind.Unavailable,
+            retrievalEncoding: null,
+            documentScope: ElasticRelationQueryFieldDocumentScope.RootDocument,
+            semanticCapabilities: ElasticRelationQueryFieldSemanticCapabilities.ExactCollectionMembership,
+            semanticProfile: "tests/id-v1"));
+        Assert.Throws<ArgumentException>(() => new ElasticRelationQueryFieldBinding(
+            input,
+            sourceField: null,
+            FieldPath.Parse("locations"),
+            ElasticRelationQueryFieldMappingKind.Double,
+            ElasticRelationQueryFieldRetrievalKind.Unavailable,
+            retrievalEncoding: null,
+            documentScope: ElasticRelationQueryFieldDocumentScope.RootDocument,
+            semanticCapabilities: ElasticRelationQueryFieldSemanticCapabilities.ExactCollectionMembership,
+            semanticProfile: "tests/array-v1"));
         Assert.Throws<ArgumentException>(() => new ElasticRelationQueryFieldBinding(
             input,
             FieldPath.Parse("id"),
@@ -682,6 +851,8 @@ public sealed class ElasticRelationQueryCompilerTests
         static readonly QueryResultId Aggregations = new("aggregations");
         static readonly QueryParameterId StatusParameter = new("status");
         static readonly QueryParameterId SuffixParameter = new("suffix");
+        static readonly QueryParameterId CustomerNameSuffixParameter = new("customer-name-suffix");
+        static readonly QueryParameterId LocationParameter = new("location");
         static readonly QueryParameterId CursorParameter = new("cursor");
         static readonly QueryParameterId InstantParameter = new("instant");
 
@@ -689,6 +860,7 @@ public sealed class ElasticRelationQueryCompilerTests
         static readonly FieldPath CustomerIdPath = FieldPath.FromField("CustomerId");
         public static readonly FieldPath StatusPath = FieldPath.FromField("Status");
         public static readonly FieldPath CustomerNamePath = FieldPath.FromField("CustomerName");
+        public static readonly FieldPath StopLocationsPath = FieldPath.FromField("StopLocations");
         static readonly FieldPath NotesPath = FieldPath.FromField("Notes");
         static readonly FieldPath OccurredAtPath = FieldPath.FromField("OccurredAt");
         static readonly FieldPath CountPath = FieldPath.FromField("Count");
@@ -769,6 +941,14 @@ public sealed class ElasticRelationQueryCompilerTests
                     : field)
             ]);
         }
+
+        public ElasticRelationQueryStorageBinding StorageBindingWithoutCollectionMembership() =>
+            StorageBindingWithField(
+                StopLocationsPath,
+                field => Rebind(
+                    field,
+                    field.SemanticCapabilities
+                    & ~ElasticRelationQueryFieldSemanticCapabilities.ExactCollectionMembership));
 
         public ElasticRelationQueryStorageBinding StorageBindingWithBoundaries(
             int maximumResultWindow,
@@ -1002,6 +1182,96 @@ public sealed class ElasticRelationQueryCompilerTests
                         new(secondSuffix, new ScalarTypeRef(ScalarTypeKind.String))
                     ]),
                 [new RowsQueryResultDefinition(Rows, Page)]);
+            return Create(RelationQueryDocument.FromDefinition(definition));
+        }
+
+        public static Fixture CollectionMembership(
+            Expr? value = null,
+            ScalarTypeKind valueKind = ScalarTypeKind.String)
+        {
+            value ??= Expr.Param(LocationParameter.Value);
+            ImmutableArray<QueryParameterDefinition> parameters = value is ParameterExpr
+                ? [new(LocationParameter, new ScalarTypeRef(valueKind))]
+                : [];
+            IRQueryDefinition definition = new(
+                new("collection-membership-query"),
+                new("CollectionMembershipQuery"),
+                new(
+                    nodes:
+                    [
+                        new SourceQueryNode(LoadSource, Load, LoadShape),
+                        new FilterQueryNode(
+                            Filter,
+                            LoadSource,
+                            Expr.Contains(
+                                Expr.Field(Load, StopLocationsPath),
+                                value)),
+                        new ProjectQueryNode(
+                            Project,
+                            Filter,
+                            RowBinding,
+                            RowShape,
+                            [
+                                new(new("row-id"), IdPath, Expr.Field(Load, IdPath)),
+                                new(new("row-status"), StatusPath, Expr.Field(Load, StatusPath))
+                            ]),
+                        new OrderQueryNode(Order, Project, [new(Expr.Field(RowBinding, IdPath))]),
+                        new PageQueryNode(Page, Order, new OffsetPageDefinition(25, 0))
+                    ],
+                    parameters: parameters),
+                [new RowsQueryResultDefinition(Rows, Page)]);
+            return Create(RelationQueryDocument.FromDefinition(definition));
+        }
+
+        public static Fixture LoadSearch()
+        {
+            IRQueryDefinition definition = new(
+                new("load-search-query"),
+                new("LoadSearchQuery"),
+                new(
+                    nodes:
+                    [
+                        new SourceQueryNode(LoadSource, Load, LoadShape),
+                        new FilterQueryNode(
+                            Filter,
+                            LoadSource,
+                            Expr.And(
+                                Expr.EndsWith(
+                                    Expr.Field(Load, CustomerNamePath),
+                                    Expr.Param(CustomerNameSuffixParameter.Value)),
+                                Expr.Contains(
+                                    Expr.Field(Load, StopLocationsPath),
+                                    Expr.Param(LocationParameter.Value)))),
+                        new ProjectQueryNode(
+                            Project,
+                            Filter,
+                            RowBinding,
+                            RowShape,
+                            [
+                                new(new("row-id"), IdPath, Expr.Field(Load, IdPath)),
+                                new(new("row-status"), StatusPath, Expr.Field(Load, StatusPath))
+                            ]),
+                        new OrderQueryNode(Order, Project, [new(Expr.Field(RowBinding, IdPath))]),
+                        new PageQueryNode(Page, Order, new OffsetPageDefinition(25, 0)),
+                        new AggregateQueryNode(
+                            Aggregate,
+                            Filter,
+                            AggregateBinding,
+                            CountShape,
+                            aggregates:
+                            [
+                                new(new("count-loads"), CountPath, AggregateOperator.Count)
+                            ])
+                    ],
+                    parameters:
+                    [
+                        new(CustomerNameSuffixParameter, new ScalarTypeRef(ScalarTypeKind.String)),
+                        new(LocationParameter, new ScalarTypeRef(ScalarTypeKind.String))
+                    ]),
+                [
+                    new RowsQueryResultDefinition(Rows, Page),
+                    new AggregationQueryResultDefinition(Aggregations, Aggregate)
+                ]);
             return Create(RelationQueryDocument.FromDefinition(definition));
         }
 
@@ -1291,6 +1561,19 @@ public sealed class ElasticRelationQueryCompilerTests
         static ElasticRelationQueryFieldBinding CreateFieldBinding(RelationQueryFieldInputContract contract)
         {
             var path = contract.Input.Field.Path;
+            if (path == StopLocationsPath)
+            {
+                return new(
+                    contract.Input.Id,
+                    sourceField: null,
+                    FieldPath.Parse("stopLocations.keyword"),
+                    ElasticRelationQueryFieldMappingKind.Keyword,
+                    retrievalKind: ElasticRelationQueryFieldRetrievalKind.Unavailable,
+                    retrievalEncoding: null,
+                    documentScope: ElasticRelationQueryFieldDocumentScope.RootDocument,
+                    semanticCapabilities: ElasticRelationQueryFieldSemanticCapabilities.ExactCollectionMembership,
+                    semanticProfile: "tests/ordinal-keyword-array-v1");
+            }
             var physical = path == IdPath
                 ? (Source: FieldPath.Parse("id"), Query: FieldPath.Parse("id.keyword"),
                     Mapping: ElasticRelationQueryFieldMappingKind.Keyword,
@@ -1440,6 +1723,10 @@ public sealed class ElasticRelationQueryCompilerTests
                     new(new("CustomerId"), stringType),
                     new(new("Status"), stringType),
                     new(new("CustomerName"), stringType),
+                    new(
+                        new("StopLocations"),
+                        stringType,
+                        cardinality: FieldCardinality.Many),
                     new(new("OccurredAt"), instantType),
                     new(
                         new("Notes"),

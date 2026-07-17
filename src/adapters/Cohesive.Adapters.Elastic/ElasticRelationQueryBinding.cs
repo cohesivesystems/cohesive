@@ -234,7 +234,14 @@ public enum ElasticRelationQueryFieldSemanticCapabilities
     /// A prefix query over <see cref="ElasticRelationQueryFieldBinding.ReversedSuffixField"/> is executable under
     /// the bound index and cluster settings and preserves ordinal suffix semantics.
     /// </summary>
-    ReversedPrefixSuffix = 1 << 6
+    ReversedPrefixSuffix = 1 << 6,
+
+    /// <summary>
+    /// A term query over a multivalued scalar field preserves canonical collection membership within the field's
+    /// declared document scope because every semantic element maps to one exact indexed term without lossy
+    /// normalization.
+    /// </summary>
+    ExactCollectionMembership = 1 << 7
 }
 
 /// <summary>Physical Elasticsearch evidence for one exact compiled semantic field input.</summary>
@@ -247,7 +254,8 @@ public sealed record ElasticRelationQueryFieldBinding
         | ElasticRelationQueryFieldSemanticCapabilities.StableUniqueOrdering
         | ElasticRelationQueryFieldSemanticCapabilities.ExactAggregation
         | ElasticRelationQueryFieldSemanticCapabilities.WildcardSuffix
-        | ElasticRelationQueryFieldSemanticCapabilities.ReversedPrefixSuffix;
+        | ElasticRelationQueryFieldSemanticCapabilities.ReversedPrefixSuffix
+        | ElasticRelationQueryFieldSemanticCapabilities.ExactCollectionMembership;
 
     /// <summary>Creates one compiled-input-to-Elasticsearch-field binding.</summary>
     /// <param name="input">Exact compiled field-input identity.</param>
@@ -375,6 +383,18 @@ public sealed record ElasticRelationQueryFieldBinding
                 "A reversed suffix field and its exact reversed-prefix capability must be declared together.",
                 nameof(reversedSuffixField));
         }
+        if (semanticCapabilities.HasFlag(ElasticRelationQueryFieldSemanticCapabilities.ExactCollectionMembership)
+            && mappingKind is not (
+                ElasticRelationQueryFieldMappingKind.Keyword
+                or ElasticRelationQueryFieldMappingKind.Wildcard
+                or ElasticRelationQueryFieldMappingKind.Boolean
+                or ElasticRelationQueryFieldMappingKind.Integer
+                or ElasticRelationQueryFieldMappingKind.Long))
+        {
+            throw new ArgumentException(
+                "Exact collection membership requires one supported exact scalar mapping family.",
+                nameof(semanticCapabilities));
+        }
         if (mappingKind is ElasticRelationQueryFieldMappingKind.Object or ElasticRelationQueryFieldMappingKind.Nested
             && semanticCapabilities != ElasticRelationQueryFieldSemanticCapabilities.None)
         {
@@ -388,12 +408,13 @@ public sealed record ElasticRelationQueryFieldBinding
                                                 | ElasticRelationQueryFieldSemanticCapabilities.StableUniqueOrdering
                                                 | ElasticRelationQueryFieldSemanticCapabilities.ExactAggregation
                                                 | ElasticRelationQueryFieldSemanticCapabilities.WildcardSuffix
-                                                | ElasticRelationQueryFieldSemanticCapabilities.ReversedPrefixSuffix;
+                                                | ElasticRelationQueryFieldSemanticCapabilities.ReversedPrefixSuffix
+                                                | ElasticRelationQueryFieldSemanticCapabilities.ExactCollectionMembership;
         if (IsMetadataId(normalizedQueryField)
             && (semanticCapabilities & metadataIdUnsupportedCapabilities) != 0)
         {
             throw new ArgumentException(
-                "Elasticsearch _id metadata cannot be sorted, ranged, aggregated, or used for suffix matching.",
+                "Elasticsearch _id metadata cannot be sorted, ranged, aggregated, used for suffix matching, or used as a collection-membership field.",
                 nameof(semanticCapabilities));
         }
 
