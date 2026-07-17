@@ -171,6 +171,33 @@ public abstract record Expr
             Guard.RequireNotNull(collection),
             Guard.RequireNotNull(value));
 
+    /// <summary>
+    /// Creates a scoped collection existential predicate.
+    /// </summary>
+    /// <remarks>
+    /// <paramref name="predicate"/> is evaluated once for each element of <paramref name="collection"/> in an
+    /// isolated current-item scope. Use <see cref="CurrentItem()"/> for the complete element or a field path rooted
+    /// at <see cref="Expressions.ExprFieldRoots.CurrentItem"/> for an element field. All predicate reads in one
+    /// evaluation are correlated to the same collection element. Canonical execution requires the collection to
+    /// produce a present, non-null array and the predicate to produce a present, non-null Boolean for every evaluated
+    /// element. A missing, null, or non-array collection and a missing, null, or non-Boolean predicate result are
+    /// evaluation failures; they are not coerced to an empty collection or <see langword="false"/>.
+    /// </remarks>
+    /// <param name="collection">Collection whose elements are tested.</param>
+    /// <param name="predicate">Required Boolean predicate evaluated against each current element.</param>
+    /// <returns>
+    /// A Boolean expression that is true when the predicate is true for at least one element; an empty collection
+    /// produces false.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="collection"/> or <paramref name="predicate"/> is <see langword="null"/>.
+    /// </exception>
+    public static Expr Any(Expr collection, Expr predicate) =>
+        Call(
+            ExprFunctionNames.Any,
+            Guard.RequireNotNull(collection),
+            Guard.RequireNotNull(predicate));
+
     /// <summary>Creates a conditional expression.</summary>
     public static Expr If(Expr test, Expr ifTrue, Expr ifFalse) => new ConditionalExpr(test, ifTrue, ifFalse);
 

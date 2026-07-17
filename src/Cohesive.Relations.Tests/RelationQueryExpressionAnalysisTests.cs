@@ -749,6 +749,203 @@ public sealed class RelationQueryExpressionAnalysisTests
     }
 
     [Fact]
+    public void Analyze_StructuredAnyKeepsElementReadsScopedAndCorrelated()
+    {
+        var stringType = new ScalarTypeRef(ScalarTypeKind.String);
+        var stops = new QueryParameterId("stops");
+        var expression = Expr.Any(
+            Expr.Param(stops.Value),
+            Expr.And(
+                Expr.Eq(Expr.Field("item.Location"), Expr.Const("SEA")),
+                Expr.Eq(Expr.Field("item.Type"), Expr.Const("Pickup"))));
+        var query = CreateProjectionQuery(expression);
+        query = query with
+        {
+            Body = query.Body with
+            {
+                Parameters =
+                [
+                    new(
+                        stops,
+                        new ArrayTypeRef(new ObjectTypeRef(
+                        [
+                            new("Location", stringType),
+                            new("Type", stringType)
+                        ])))
+                ]
+            }
+        };
+
+        var analysis = RelationQueryExpressionAnalyzer.Analyze(query);
+        var site = Site(analysis, "/node/project/project/assignment/value/value");
+
+        Assert.True(site.Requirements.RequiresCurrentItem);
+        Assert.Contains(
+            new ExprCapabilityRequirement(
+                ExprCapabilities.ForFunction(ExprFunctionNames.Any),
+                ExprCapabilityRequirementKind.Operation),
+            site.Requirements.Capabilities);
+        Assert.Equal(
+            ["item.Location", "item.Type"],
+            site.Requirements.Fields
+                .Where(static field => field.Root == ExprFieldRootKind.CurrentItem)
+                .Select(static field => field.Path.ToString())
+                .Order(StringComparer.Ordinal)
+                .ToArray());
+        Assert.DoesNotContain(
+            site.Requirements.Fields,
+            static field => field.Root == ExprFieldRootKind.Binding);
+        Assert.DoesNotContain(
+            analysis.Diagnostics,
+            static diagnostic => diagnostic.Code.StartsWith(
+                "relationQuery.expression.",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Analyze_StructuredAnyResolvesNamedCollectionElementFieldsFromShapeSnapshot()
+    {
+        var stringType = new ScalarTypeRef(ScalarTypeKind.String);
+        var stopType = new TypeId("Stop");
+        var graph = new ShapeGraph(
+            DomainGraph,
+            [
+                new Shape(
+                    LoadShape.ShapeId,
+                    [
+                        new(
+                            new("Stops"),
+                            new NamedTypeRef(stopType),
+                            cardinality: FieldCardinality.Many)
+                    ])
+            ],
+            [
+                new TypeDefinition.Structural(
+                    stopType,
+                    [
+                        new(new("Location"), stringType),
+                        new(new("Sequence"), new ScalarTypeRef(ScalarTypeKind.Int64))
+                    ])
+            ]);
+        var valid = CreateStructuredAnyQuery("item.Location");
+        var invalid = CreateStructuredAnyQuery("item.Locaton");
+        var invalidDomain = CreateStructuredAnyQuery("item.Sequence");
+
+        var validAnalysis = RelationQueryExpressionAnalyzer.Analyze(valid, [graph]);
+        var invalidAnalysis = RelationQueryExpressionAnalyzer.Analyze(invalid, [graph]);
+        var invalidDomainAnalysis = RelationQueryExpressionAnalyzer.Analyze(invalidDomain, [graph]);
+        var validSite = Site(validAnalysis, "/node/filter/filter/predicate");
+
+        Assert.DoesNotContain(
+            validAnalysis.Diagnostics,
+            static diagnostic => diagnostic.Code == "relationQuery.expression.fieldPathUnknown");
+        Assert.Contains(
+            validSite.Requirements.Fields,
+            static field => field.Root == ExprFieldRootKind.Binding
+                && field.Binding == Load
+                && field.Path.ToString() == "Stops");
+        Assert.Contains(
+            validSite.Requirements.Fields,
+            static field => field.Root == ExprFieldRootKind.CurrentItem
+                && field.Path.ToString() == "item.Location");
+        Assert.True(validSite.Site.Scope.TryGetBinding(Load, out var loadBinding));
+        Assert.IsType<ObjectTypeRef>(loadBinding.Value.ShapeDefinition!.GetField("Stops").Type);
+        Assert.Contains(
+            invalidAnalysis.Diagnostics,
+            static diagnostic => diagnostic.Code == "relationQuery.expression.fieldPathUnknown"
+                && diagnostic.SchemaLocation == "/arguments/1/arguments/0"
+                && diagnostic.Message.Contains("item.Locaton", StringComparison.Ordinal));
+        Assert.Contains(
+            invalidDomainAnalysis.Diagnostics,
+            static diagnostic => diagnostic.Code == "relationQuery.expression.resultCategoryMismatch"
+                && diagnostic.SchemaLocation == "/arguments/1/arguments/0");
+
+        static IRQueryDefinition CreateStructuredAnyQuery(string itemPath)
+        {
+            var source = new QueryNodeId("source");
+            var filter = new QueryNodeId("filter");
+            return new(
+                new("named-stop-any"),
+                new("NamedStopAny"),
+                new LogicalQueryDefinition(
+                [
+                    new SourceQueryNode(source, Load, LoadShape),
+                    new FilterQueryNode(
+                        filter,
+                        source,
+                        Expr.Any(
+                            Expr.Field(Load, "Stops"),
+                            Expr.EndsWith(Expr.Field(itemPath), Expr.Const("A"))))
+                ]),
+                [new RowsQueryResultDefinition(new("rows"), filter)]);
+        }
+    }
+
+    [Fact]
+    public void Analyze_StructuredAnyExpandsNamedArrayElementsWithoutExpandingSingleNamedFields()
+    {
+        var stringType = new ScalarTypeRef(ScalarTypeKind.String);
+        var stopType = new TypeId("Stop");
+        var detailsType = new TypeId("LoadDetails");
+        var graph = new ShapeGraph(
+            DomainGraph,
+            [
+                new Shape(
+                    LoadShape.ShapeId,
+                    [
+                        new(
+                            new("Stops"),
+                            new ArrayTypeRef(new NamedTypeRef(stopType))),
+                        new(
+                            new("Details"),
+                            new NamedTypeRef(detailsType))
+                    ])
+            ],
+            [
+                new TypeDefinition.Structural(
+                    stopType,
+                    [
+                        new(new("Location"), stringType)
+                    ]),
+                new TypeDefinition.Structural(
+                    detailsType,
+                    [
+                        new(new("Description"), stringType)
+                    ])
+            ]);
+        var source = new QueryNodeId("source");
+        var filter = new QueryNodeId("filter");
+        var query = new IRQueryDefinition(
+            new("named-stop-array-any"),
+            new("NamedStopArrayAny"),
+            new LogicalQueryDefinition(
+            [
+                new SourceQueryNode(source, Load, LoadShape),
+                new FilterQueryNode(
+                    filter,
+                    source,
+                    Expr.Any(
+                        Expr.Field(Load, "Stops"),
+                        Expr.EndsWith(Expr.Field("item.Location"), Expr.Const("A"))))
+            ]),
+            [new RowsQueryResultDefinition(new("rows"), filter)]);
+
+        var analysis = RelationQueryExpressionAnalyzer.Analyze(query, [graph]);
+        var site = Site(analysis, "/node/filter/filter/predicate");
+
+        Assert.DoesNotContain(
+            analysis.Diagnostics,
+            static diagnostic => diagnostic.Code.StartsWith(
+                "relationQuery.expression.",
+                StringComparison.Ordinal));
+        Assert.True(site.Site.Scope.TryGetBinding(Load, out var loadBinding));
+        var stops = Assert.IsType<ArrayTypeRef>(
+            loadBinding.Value.ShapeDefinition!.GetField("Stops").Type);
+        Assert.IsType<ObjectTypeRef>(stops.ElementType);
+        Assert.IsType<NamedTypeRef>(loadBinding.Value.ShapeDefinition.GetField("Details").Type);
+    }
+
+    [Fact]
     public void Analyze_OmitsAmbiguousDuplicateInvariantSites()
     {
         var project = new QueryNodeId("project");

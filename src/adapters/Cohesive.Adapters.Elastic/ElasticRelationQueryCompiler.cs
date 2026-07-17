@@ -166,7 +166,7 @@ public sealed class ElasticRelationQueryCompiler
                 || request.Plan.InputContract.Sources[0].Binding != placement.Binding)
             {
                 diagnostics.Add(BindingDiagnostic(
-                    "Canonical Elasticsearch v1 requires exactly one source contract and no relationship traversal contracts."));
+                    "Canonical Elasticsearch v2 requires exactly one source contract and no relationship traversal contracts."));
             }
         }
 
@@ -246,7 +246,7 @@ public sealed class ElasticRelationQueryCompiler
             {
                 throw Fail(
                     ElasticRelationQueryCompilationDiagnosticCodes.RelationTerminalUnsupported,
-                    "Elasticsearch v1 does not lower relation terminals until root correlation, cardinality, key, and invariant evidence are represented by the artifact contract.",
+                    "Elasticsearch v2 does not lower relation terminals until root correlation, cardinality, key, and invariant evidence are represented by the artifact contract.",
                     branch.Node);
             }
             if (request.Realization.Observability.OccurrenceProvenance
@@ -254,7 +254,7 @@ public sealed class ElasticRelationQueryCompiler
             {
                 throw Fail(
                     ElasticRelationQueryCompilationDiagnosticCodes.ResultObservabilityUnsupported,
-                    "Elasticsearch v1 compiles value results only and cannot provide exact contributor-occurrence lineage.",
+                    "Elasticsearch v2 compiles value results only and cannot provide exact contributor-occurrence lineage.",
                     branch.Node);
             }
 
@@ -267,7 +267,7 @@ public sealed class ElasticRelationQueryCompiler
                 RelationQueryNativeResultKind.QueryAggregation => CompileAggregation(query),
                 _ => throw Fail(
                     ElasticRelationQueryCompilationDiagnosticCodes.UnsupportedBranchTopology,
-                    $"Result kind '{branch.Kind}' is unsupported by canonical Elasticsearch v1.",
+                    $"Result kind '{branch.Kind}' is unsupported by canonical Elasticsearch v2.",
                     branch.Node)
             };
             var selectedFields = CreateSelectedFields();
@@ -305,8 +305,11 @@ public sealed class ElasticRelationQueryCompiler
             while (true)
             {
                 if (!visited.Add(current))
+                {
                     throw Fail(ElasticRelationQueryCompilationDiagnosticCodes.UnsupportedBranchTopology,
                         "The selected native branch contains a cycle.", current);
+                }
+
                 if (!nodes.TryGetValue(current, out var execution))
                 {
                     throw Fail(
@@ -316,13 +319,16 @@ public sealed class ElasticRelationQueryCompiler
                 }
                 reverse.Add(execution);
                 if (execution.CanonicalNode is SourceQueryNode)
+                {
                     break;
+                }
+
                 if (execution.LogicalPlan.EffectiveInputs.Length != 1
                     || execution.LogicalPlan.Inputs.Any(static input => !input.Bypasses.IsDefaultOrEmpty))
                 {
                     throw Fail(
                         ElasticRelationQueryCompilationDiagnosticCodes.UnsupportedBranchTopology,
-                        "Canonical Elasticsearch v1 supports only a linear single-source branch without traversal bypasses.",
+                        "Canonical Elasticsearch v2 supports only a linear single-source branch without traversal bypasses.",
                         execution.Id);
                 }
                 current = execution.LogicalPlan.EffectiveInputs[0];
@@ -404,13 +410,22 @@ public sealed class ElasticRelationQueryCompiler
                 {
                     case ProjectQueryNode projection:
                         foreach (var assignment in execution.ProjectionAssignments)
+                        {
                             projections.Add((projection.ResultBinding, assignment.Definition.Target), assignment);
+                        }
+
                         break;
                     case AggregateQueryNode aggregate:
                         foreach (var grouping in execution.AggregateGroupings)
+                        {
                             groupings.Add((aggregate.ResultBinding, grouping.Definition.Target), grouping);
+                        }
+
                         foreach (var assignment in execution.AggregateAssignments)
+                        {
                             aggregates.Add((aggregate.ResultBinding, assignment.Definition.Target), assignment);
+                        }
+
                         break;
                 }
             }
@@ -423,7 +438,10 @@ public sealed class ElasticRelationQueryCompiler
             foreach (var execution in pipeline)
             {
                 if (execution.CanonicalNode is not FilterQueryNode filter)
+                {
                     continue;
+                }
+
                 filters.Add(CompilePredicate(
                     filter.Predicate,
                     RequiredSite(execution, RelationQueryExpressionSiteKind.FilterPredicate)));
@@ -470,13 +488,15 @@ public sealed class ElasticRelationQueryCompiler
                     or BinaryOperator.Ge
                     or BinaryOperator.Lt
                     or BinaryOperator.Le => CompileComparison(binary, site),
+                CallExpr call when string.Equals(call.Function, ExprFunctionNames.Any, StringComparison.Ordinal)
+                                        && call.Arguments.Length == 2 => CompileCollectionAny(call, site),
                 CallExpr call when string.Equals(call.Function, ExprFunctionNames.Contains, StringComparison.Ordinal)
                                         && call.Arguments.Length == 2 => CompileCollectionMembership(call, site),
                 CallExpr call when string.Equals(call.Function, ExprFunctionNames.EndsWith, StringComparison.Ordinal)
                                         && call.Arguments.Length == 2 => CompileSuffix(call, site),
                 _ => throw Fail(
                     ElasticRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                    $"Expression node '{expression.GetType().Name}' is not in the exact Elasticsearch v1 predicate closure.",
+                    $"Expression node '{expression.GetType().Name}' is not in the exact Elasticsearch v2 predicate closure.",
                     site.Node ?? branch.Node)
             };
         }
@@ -521,7 +541,7 @@ public sealed class ElasticRelationQueryCompiler
             {
                 throw Fail(
                     ElasticRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                    "Elasticsearch v1 comparisons require one direct physical field and one constant or parameter.",
+                    "Elasticsearch v2 comparisons require one direct physical field and one constant or parameter.",
                     site.Node ?? branch.Node);
             }
 
@@ -608,7 +628,7 @@ public sealed class ElasticRelationQueryCompiler
             {
                 throw Fail(
                     ElasticRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                    "Canonical contains requires a direct physical collection field in Elasticsearch v1.",
+                    "Canonical contains requires a direct physical collection field in Elasticsearch v2.",
                     site.Node ?? branch.Node);
             }
 
@@ -621,6 +641,295 @@ public sealed class ElasticRelationQueryCompiler
                 ElasticRelationQueryFieldSemanticCapabilities.ExactCollectionMembership,
                 ElasticQueryTemplate.Term(queryField, value),
                 site.Node ?? branch.Node);
+        }
+
+        ElasticQueryTemplate CompileCollectionAny(
+            CallExpr call,
+            RelationQueryExpressionSiteAnalysis site)
+        {
+            var node = site.Node ?? branch.Node;
+            var collectionContract = AnalyzeSubexpression(
+                call.Arguments[0],
+                site,
+                "collection-any-collection");
+            if (!IsRequiredNonNull(collectionContract))
+            {
+                throw NestedFailure(
+                    "Canonical any requires a required, non-null collection; Elasticsearch cannot silently treat a missing or null collection as empty.",
+                    node);
+            }
+            var elementContract = GetCollectionElementContract(collectionContract);
+            if (elementContract is null
+                || elementContract.GetEffectiveType() is not ObjectTypeRef
+                    && elementContract.ShapeDefinition is null)
+            {
+                throw Fail(
+                    ElasticRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
+                    "Canonical any requires a structured object collection in the Elasticsearch v2 closure.",
+                    node);
+            }
+            if (!TryResolveSourceField(call.Arguments[0], site, out var collectionField))
+            {
+                throw Fail(
+                    ElasticRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
+                    "Canonical any requires one direct physical structured collection field in Elasticsearch v2.",
+                    node);
+            }
+            RequireNonNullField(collectionField, node, "structured collection existential");
+
+            var physical = collectionField.Physical;
+            if (physical.MappingKind == ElasticRelationQueryFieldMappingKind.Object
+                || physical.DocumentScope == ElasticRelationQueryFieldDocumentScope.RootDocument)
+            {
+                throw NestedFailure(
+                    "The structured collection is mapped as a flattened/root object array, which cannot preserve same-element correlation. Configure an Elasticsearch nested mapping, or denormalize an independently queried scalar to a root multivalued field and use canonical Contains.",
+                    node,
+                    collectionField.Contract.Input.Id);
+            }
+            if (physical.MappingKind != ElasticRelationQueryFieldMappingKind.Nested
+                || physical.DocumentScope != ElasticRelationQueryFieldDocumentScope.NestedDocument
+                || physical.NestedScope is not { } nested)
+            {
+                throw NestedFailure(
+                    "The structured collection binding does not provide an exact nested path, element scope, child mappings, and correlation evidence. Configure those facts, or use a denormalized root scalar collection with canonical Contains when correlation is unnecessary.",
+                    node,
+                    collectionField.Contract.Input.Id);
+            }
+            RequireExactNestedScope(nested, collectionField, node);
+
+            var predicateScope = site.Analysis.Site.Scope.WithCurrentItem(elementContract);
+            var predicateAnalysis = ExprAnalyzer.Analyze(
+                new ExprSite(
+                    new($"{site.Analysis.Site.Id.Value}/elastic/collection-any-predicate"),
+                    call.Arguments[1],
+                    predicateScope,
+                    ExprExpectation.Boolean,
+                    site.Analysis.Site.CapabilityProfile,
+                    site.Analysis.Site.DiagnosticLocation),
+                site.Analysis.Semantics);
+            if (!predicateAnalysis.IsValid
+                || !IsBooleanScalar(predicateAnalysis.KnownResult?.GetEffectiveType())
+                || !IsRequiredNonNull(predicateAnalysis.KnownResult))
+            {
+                throw Fail(
+                    ElasticRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
+                    "The canonical any predicate does not have one valid, required, non-null Boolean contract in its collection-element scope.",
+                    node,
+                    collectionField.Contract.Input.Id);
+            }
+
+            var inner = CompileNestedPredicate(
+                call.Arguments[1],
+                site,
+                predicateScope,
+                collectionField,
+                nested);
+            TrackQueryField(collectionField.Contract.Input.Id, nested.NestedPath);
+            return ElasticQueryTemplate.Nested(
+                ElasticRelationQuerySelectedField.PhysicalName(nested.NestedPath),
+                inner);
+        }
+
+        ElasticQueryTemplate CompileNestedPredicate(
+            Expr expression,
+            RelationQueryExpressionSiteAnalysis site,
+            ExprScope predicateScope,
+            ResolvedSourceField collectionField,
+            ElasticRelationQueryNestedScopeEvidence nested)
+        {
+            return expression switch
+            {
+                BinaryExpr { Operator: BinaryOperator.And } conjunction => ElasticQueryTemplate.Boolean(filter:
+                [
+                    CompileNestedPredicate(conjunction.Left, site, predicateScope, collectionField, nested),
+                    CompileNestedPredicate(conjunction.Right, site, predicateScope, collectionField, nested)
+                ]),
+                BinaryExpr { Operator: BinaryOperator.Or } disjunction => ElasticQueryTemplate.Boolean(should:
+                [
+                    CompileNestedPredicate(disjunction.Left, site, predicateScope, collectionField, nested),
+                    CompileNestedPredicate(disjunction.Right, site, predicateScope, collectionField, nested)
+                ]),
+                UnaryExpr { Operator: UnaryOperator.Not } negation => ElasticQueryTemplate.Boolean(mustNot:
+                [
+                    CompileNestedPredicate(negation.Operand, site, predicateScope, collectionField, nested)
+                ]),
+                BinaryExpr binary when binary.Operator is BinaryOperator.Eq or BinaryOperator.Ne =>
+                    CompileNestedComparison(binary, site, predicateScope, collectionField, nested),
+                _ => throw Fail(
+                    ElasticRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
+                    $"Expression node '{expression.GetType().Name}' is outside the direct-child Elasticsearch nested predicate closure.",
+                    site.Node ?? branch.Node,
+                    collectionField.Contract.Input.Id)
+            };
+        }
+
+        ElasticQueryTemplate CompileNestedComparison(
+            BinaryExpr binary,
+            RelationQueryExpressionSiteAnalysis site,
+            ExprScope predicateScope,
+            ResolvedSourceField collectionField,
+            ElasticRelationQueryNestedScopeEvidence nested)
+        {
+            var node = site.Node ?? branch.Node;
+            FieldPath elementPath;
+            Expr valueExpression;
+            if (TryResolveCurrentItemChildPath(binary.Left, out var leftPath))
+            {
+                elementPath = leftPath;
+                valueExpression = binary.Right;
+            }
+            else if (TryResolveCurrentItemChildPath(binary.Right, out var rightPath))
+            {
+                elementPath = rightPath;
+                valueExpression = binary.Left;
+            }
+            else
+            {
+                throw Fail(
+                    ElasticRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
+                    "An Elasticsearch nested comparison requires one direct current-element child field and one constant or parameter.",
+                    node,
+                    collectionField.Contract.Input.Id);
+            }
+
+            var fieldExpression = TryResolveCurrentItemChildPath(binary.Left, out _)
+                ? binary.Left
+                : binary.Right;
+            var childContract = AnalyzeSubexpression(
+                fieldExpression,
+                site,
+                "collection-any-child",
+                predicateScope);
+            var valueContract = AnalyzeSubexpression(
+                valueExpression,
+                site,
+                "collection-any-value",
+                predicateScope);
+            if (!IsRequiredNonNull(childContract) || !IsRequiredNonNull(valueContract))
+            {
+                throw NestedFailure(
+                    "A nested child comparison requires canonical child and value operands to be required and non-null.",
+                    node,
+                    collectionField.Contract.Input.Id);
+            }
+            var valueType = childContract.GetEffectiveType();
+            if (valueType != valueContract.GetEffectiveType() || !IsSupportedScalar(valueType))
+            {
+                throw Fail(
+                    ElasticRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
+                    "A nested child comparison requires operands in one supported canonical scalar domain.",
+                    node,
+                    collectionField.Contract.Input.Id);
+            }
+
+            ElasticRelationQueryNestedChildFieldBinding child;
+            try
+            {
+                child = nested.ResolveChild(elementPath);
+            }
+            catch (KeyNotFoundException)
+            {
+                throw NestedFailure(
+                    $"The nested binding has no terminal child mapping for current-element path '{elementPath}'.",
+                    node,
+                    collectionField.Contract.Input.Id);
+            }
+            if (child.MissingValueBehavior != ElasticRelationQueryNestedAbsenceBehavior.ProhibitedByIngestion
+                || child.NullValueBehavior != ElasticRelationQueryNestedAbsenceBehavior.ProhibitedByIngestion)
+            {
+                throw NestedFailure(
+                    $"Nested child path '{elementPath}' does not prove that ingestion prohibits missing and null values; Elasticsearch would otherwise turn an invalid canonical operand into a non-match.",
+                    node,
+                    collectionField.Contract.Input.Id);
+            }
+            if (!child.SemanticCapabilities.HasFlag(ElasticRelationQueryFieldSemanticCapabilities.ExactTerm))
+            {
+                throw NestedFailure(
+                    $"Nested child path '{elementPath}' does not attest '{ElasticRelationQueryFieldSemanticCapabilities.ExactTerm}'.",
+                    node,
+                    collectionField.Contract.Input.Id);
+            }
+            RequireNestedMappingCompatibility(child, valueType, node, collectionField.Contract.Input.Id);
+
+            var value = CreateValueTemplate(valueExpression, site, requireNonNull: true);
+            TrackQueryField(collectionField.Contract.Input.Id, child.QueryField);
+            var term = ElasticQueryTemplate.Term(
+                ElasticRelationQuerySelectedField.PhysicalName(child.QueryField),
+                value);
+            return binary.Operator == BinaryOperator.Eq
+                ? term
+                : ElasticQueryTemplate.Boolean(mustNot: [term]);
+        }
+
+        static void RequireExactNestedScope(
+            ElasticRelationQueryNestedScopeEvidence nested,
+            ResolvedSourceField field,
+            QueryNodeId node)
+        {
+            if (nested.CorrelationGuarantee != ElasticRelationQueryNestedCorrelationGuarantee.SameNestedDocument)
+            {
+                throw NestedFailure(
+                    "The Elasticsearch nested binding does not attest same-nested-document correlation.",
+                    node,
+                    field.Contract.Input.Id);
+            }
+            if (field.Physical.MissingValueBehavior != ElasticRelationQueryMissingValueBehavior.ProhibitedByIngestion
+                || field.Physical.NullValueBehavior != ElasticRelationQueryNullValueBehavior.ProhibitedByIngestion)
+            {
+                throw NestedFailure(
+                    "The Elasticsearch nested binding must attest that ingestion prohibits missing and null collections; treating them as empty would weaken canonical any semantics.",
+                    node,
+                    field.Contract.Input.Id);
+            }
+            if (nested.NullElementBehavior != ElasticRelationQueryNestedAbsenceBehavior.ProhibitedByIngestion)
+            {
+                throw NestedFailure(
+                    "The Elasticsearch nested binding must attest that ingestion prohibits explicit-null collection elements; Elasticsearch would otherwise omit an element and change negative-predicate semantics.",
+                    node,
+                    field.Contract.Input.Id);
+            }
+            if (nested.EmptyCollectionBehavior != ElasticRelationQueryEmptyCollectionBehavior.NoNestedDocuments)
+            {
+                throw NestedFailure(
+                    "The Elasticsearch nested binding does not prove that an empty collection contributes no matching nested documents.",
+                    node,
+                    field.Contract.Input.Id);
+            }
+        }
+
+        static bool TryResolveCurrentItemChildPath(Expr expression, out FieldPath path)
+        {
+            if (expression is FieldExpr
+                {
+                    Binding: null,
+                    Path.Segments: [{ Kind: SegmentKind.Field, Segment: ExprFieldRoots.CurrentItem }, .. var remainder]
+                }
+                && remainder.Length == 1
+                && remainder[0] is { Kind: SegmentKind.Field, Segment: not null })
+            {
+                path = new([remainder[0]]);
+                return true;
+            }
+
+            path = default;
+            return false;
+        }
+
+        static ExprValueContract? GetCollectionElementContract(ExprValueContract collection)
+        {
+            if (collection.Cardinality == FieldCardinality.Many)
+            {
+                return new(
+                    collection.Type,
+                    collection.Shape,
+                    shapeDefinition: collection.ShapeDefinition);
+            }
+            return collection.GetEffectiveType() is ArrayTypeRef array
+                ? new(
+                    array.ElementType,
+                    collection.Shape,
+                    shapeDefinition: collection.ShapeDefinition)
+                : null;
         }
 
         ElasticQueryTemplate CompileSuffix(
@@ -643,7 +952,7 @@ public sealed class ElasticRelationQueryCompiler
             {
                 throw Fail(
                     ElasticRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                    "Canonical endsWith requires a direct physical field as its value operand in Elasticsearch v1.",
+                    "Canonical endsWith requires a direct physical field as its value operand in Elasticsearch v2.",
                     site.Node ?? branch.Node);
             }
             RequireNonNullField(field, site.Node ?? branch.Node, "endsWith");
@@ -703,7 +1012,10 @@ public sealed class ElasticRelationQueryCompiler
             var allowedFields = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
             allowedFields.Add(queryField);
             if (field.Physical.ReversedSuffixField is { } reversedSuffixField)
+            {
                 allowedFields.Add(ElasticRelationQuerySelectedField.PhysicalName(reversedSuffixField));
+            }
+
             var referencedFields = resolvedQuery.ReferencedFields();
             if (referencedFields.IsEmpty || !referencedFields.IsSubsetOf(allowedFields))
             {
@@ -829,7 +1141,7 @@ public sealed class ElasticRelationQueryCompiler
             {
                 throw Fail(
                     ElasticRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                    "Elasticsearch row decoding v1 requires stored _source; synthetic and disabled source modes are not yet proven exact.",
+                    "Elasticsearch row decoding v2 requires stored _source; synthetic and disabled source modes are not yet proven exact.",
                     branch.Node);
             }
 
@@ -841,7 +1153,9 @@ public sealed class ElasticRelationQueryCompiler
                 var resolved = ResolveRowOutput(field);
                 resultFields.Add(resolved);
                 if (resolved.SourceKind == ElasticRelationQueryResultSourceKind.SourceField)
+                {
                     sourceIncludes.Add(resolved.PhysicalName!);
+                }
             }
 
             var orderExecution = pipeline.Single(static execution => execution.CanonicalNode is OrderQueryNode);
@@ -858,14 +1172,14 @@ public sealed class ElasticRelationQueryCompiler
                 {
                     throw Fail(
                         ElasticRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                        "Canonical Elasticsearch ordering v1 requires required, non-null keys.",
+                        "Canonical Elasticsearch ordering v2 requires required, non-null keys.",
                         orderExecution.Id);
                 }
                 if (!TryResolveSourceField(ordering.Key, site, out var field))
                 {
                     throw Fail(
                         ElasticRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                        "Canonical Elasticsearch ordering v1 requires direct physical source fields.",
+                        "Canonical Elasticsearch ordering v2 requires direct physical source fields.",
                         orderExecution.Id);
                 }
                 RequireNonNullField(field, orderExecution.Id, "ordering");
@@ -957,7 +1271,7 @@ public sealed class ElasticRelationQueryCompiler
                 default:
                     throw Fail(
                         ElasticRelationQueryCompilationDiagnosticCodes.UnsupportedLogicalOperator,
-                        $"Page kind '{page.GetType().Name}' is unsupported by Elasticsearch v1.",
+                    $"Page kind '{page.GetType().Name}' is unsupported by Elasticsearch v2.",
                         pageExecution.Id);
             }
 
@@ -1041,7 +1355,7 @@ public sealed class ElasticRelationQueryCompiler
             {
                 throw Fail(
                     ElasticRelationQueryCompilationDiagnosticCodes.FieldBindingMissing,
-                    $"Result field input '{source.Contract.Input.Id.Value}' requires _source retrieval in Elasticsearch v1.",
+                    $"Result field input '{source.Contract.Input.Id.Value}' requires _source retrieval in Elasticsearch v2.",
                     branch.Node,
                     source.Contract.Input.Id);
             }
@@ -1113,7 +1427,7 @@ public sealed class ElasticRelationQueryCompiler
             {
                 throw Fail(
                     ElasticRelationQueryCompilationDiagnosticCodes.AggregateUnsupported,
-                    "Canonical Elasticsearch v1 supports demanded row-count assignments only; value count, filters, and numeric metrics are deferred.",
+                    "Canonical Elasticsearch v2 supports demanded row-count assignments only; value count, filters, and numeric metrics are deferred.",
                     aggregateExecution.Id);
             }
 
@@ -1233,14 +1547,14 @@ public sealed class ElasticRelationQueryCompiler
                 {
                     throw Fail(
                         ElasticRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                        $"Grouping '{grouping.Definition.Id.Value}' may be missing or null; composite missing-bucket semantics are not canonical v1 semantics.",
+                        $"Grouping '{grouping.Definition.Id.Value}' may be missing or null; composite missing-bucket semantics are not canonical v2 semantics.",
                         aggregate.Id);
                 }
                 if (!IsExactCompositeGroupingType(grouping.KeySite.Analysis.KnownResult?.GetEffectiveType()))
                 {
                     throw Fail(
                         ElasticRelationQueryCompilationDiagnosticCodes.AggregateUnsupported,
-                        $"Grouping '{grouping.Definition.Id.Value}' is outside the exact Elasticsearch v1 composite-key domain; only text, GUID, and integer keys are supported.",
+                        $"Grouping '{grouping.Definition.Id.Value}' is outside the exact Elasticsearch v2 composite-key domain; only text, GUID, and integer keys are supported.",
                         aggregate.Id);
                 }
                 if (!TryResolveSourceField(grouping.Definition.Key, grouping.KeySite, out var field))
@@ -1388,9 +1702,15 @@ public sealed class ElasticRelationQueryCompiler
                 return false;
             }
             if (projections.TryGetValue((root.Binding, root.Path), out var projection))
+            {
                 return TryResolveSourceField(projection.Definition.Value, projection.ValueSite, out field);
+            }
+
             if (groupings.TryGetValue((root.Binding, root.Path), out var grouping))
+            {
                 return TryResolveSourceField(grouping.Definition.Key, grouping.KeySite, out field);
+            }
+
             if (!sourceFields.TryGetValue((root.Binding, root.Path), out var contract))
             {
                 field = default;
@@ -1468,7 +1788,10 @@ public sealed class ElasticRelationQueryCompiler
             string operation)
         {
             if (IsRequiredNonNull(field.Contract.Input.ValueContract))
+            {
                 return;
+            }
+
             throw Fail(
                 ElasticRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
                 $"Field input '{field.Contract.Input.Id.Value}' may be missing or null where exact {operation} semantics require a value.",
@@ -1482,7 +1805,10 @@ public sealed class ElasticRelationQueryCompiler
             QueryNodeId node)
         {
             if (field.Physical.SemanticCapabilities.HasFlag(capability))
+            {
                 return;
+            }
+
             throw Fail(
                 ElasticRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
                 $"Elasticsearch field input '{field.Contract.Input.Id.Value}' does not attest '{capability}'.",
@@ -1508,7 +1834,10 @@ public sealed class ElasticRelationQueryCompiler
                     field.Contract.Input.Id);
             }
             if (field.Physical.DocumentScope == ElasticRelationQueryFieldDocumentScope.RootDocument)
+            {
                 return path;
+            }
+
             throw Fail(
                 ElasticRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
                 $"Field input '{field.Contract.Input.Id.Value}' is not proven queryable in the root Elasticsearch document; nested-query lowering is deferred.",
@@ -1538,7 +1867,7 @@ public sealed class ElasticRelationQueryCompiler
             {
                 throw Fail(
                     ElasticRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                    $"Temporal field input '{field.Contract.Input.Id.Value}' is outside the exact Elasticsearch v1 query domain because canonical equality retains representation while Elasticsearch dates normalize instants and precision.",
+                    $"Temporal field input '{field.Contract.Input.Id.Value}' is outside the exact Elasticsearch v2 query domain because canonical equality retains representation while Elasticsearch dates normalize instants and precision.",
                     node,
                     field.Contract.Input.Id);
             }
@@ -1554,12 +1883,42 @@ public sealed class ElasticRelationQueryCompiler
                 _ => false
             };
             if (compatible)
+            {
                 return;
+            }
+
             throw Fail(
                 ElasticRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
                 $"Elasticsearch mapping '{field.Physical.MappingKind}' does not prove the canonical value domain for field input '{field.Contract.Input.Id.Value}'.",
                 node,
                 field.Contract.Input.Id);
+        }
+
+        static void RequireNestedMappingCompatibility(
+            ElasticRelationQueryNestedChildFieldBinding child,
+            TypeRef? type,
+            QueryNodeId node,
+            RelationQueryInputId input)
+        {
+            var compatible = (type, child.MappingKind) switch
+            {
+                (ScalarTypeRef { Kind: ScalarTypeKind.Bool }, ElasticRelationQueryFieldMappingKind.Boolean) => true,
+                (ScalarTypeRef { Kind: ScalarTypeKind.Int32 },
+                    ElasticRelationQueryFieldMappingKind.Integer or ElasticRelationQueryFieldMappingKind.Long) => true,
+                (ScalarTypeRef { Kind: ScalarTypeKind.Int64 }, ElasticRelationQueryFieldMappingKind.Long) => true,
+                (ScalarTypeRef { Kind: ScalarTypeKind.String or ScalarTypeKind.Guid },
+                    ElasticRelationQueryFieldMappingKind.Keyword or ElasticRelationQueryFieldMappingKind.Wildcard) => true,
+                _ => false
+            };
+            if (compatible)
+            {
+                return;
+            }
+
+            throw NestedFailure(
+                $"Elasticsearch nested child mapping '{child.MappingKind}' does not prove the canonical value domain for element path '{child.ElementPath}'.",
+                node,
+                input);
         }
 
         ImmutableArray<ElasticRelationQuerySelectedField> CreateSelectedFields()
@@ -1623,20 +1982,24 @@ public sealed class ElasticRelationQueryCompiler
         static ExprValueContract AnalyzeSubexpression(
             Expr expression,
             RelationQueryExpressionSiteAnalysis site,
-            string operand)
+            string operand,
+            ExprScope? scope = null)
         {
             var parent = site.Analysis.Site;
             var analysis = ExprAnalyzer.Analyze(
                 new ExprSite(
                     new($"{parent.Id.Value}/elastic/{operand}"),
                     expression,
-                    parent.Scope,
+                    scope ?? parent.Scope,
                     ExprExpectation.Any,
                     parent.CapabilityProfile,
                     parent.DiagnosticLocation),
                 site.Analysis.Semantics);
             if (analysis.IsValid && analysis.KnownResult is { } result)
+            {
                 return result;
+            }
+
             throw Fail(
                 ElasticRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
                 $"The {operand} operand does not have one valid, known value contract for exact Elasticsearch lowering.",
@@ -1649,7 +2012,10 @@ public sealed class ElasticRelationQueryCompiler
             string operation)
         {
             if (site.Analysis.KnownResult is { } result)
+            {
                 return result;
+            }
+
             throw Fail(
                 ElasticRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
                 $"Canonical {operation} does not have one known semantic value contract for result decoding.",
@@ -1664,7 +2030,7 @@ public sealed class ElasticRelationQueryCompiler
             {
                 throw Fail(
                     ElasticRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                    "Elasticsearch v1 result fields require a single-valued semantic contract.",
+                    "Elasticsearch v2 result fields require a single-valued semantic contract.",
                     node);
             }
             return contract.GetEffectiveType() switch
@@ -1679,7 +2045,7 @@ public sealed class ElasticRelationQueryCompiler
                     ElasticRelationQueryResultValueEncoding.CanonicalTemporalString,
                 _ => throw Fail(
                     ElasticRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                    "Elasticsearch v1 cannot prove a canonical physical result encoding for this value contract.",
+                    "Elasticsearch v2 cannot prove a canonical physical result encoding for this value contract.",
                     node)
             };
         }
@@ -1716,7 +2082,10 @@ public sealed class ElasticRelationQueryCompiler
         void RequireImmutablePagination(QueryNodeId node, string mechanism)
         {
             if (storageBinding.PaginationConsistency == ElasticRelationQueryPaginationConsistency.StableSearchView)
+            {
                 return;
+            }
+
             throw Fail(
                 ElasticRelationQueryCompilationDiagnosticCodes.PagingUnstable,
                 $"Exact Elasticsearch {mechanism} pagination requires a binding that attests one unchanged search-visible view for the complete logical page sequence; point-in-time execution is deferred.",
@@ -1742,6 +2111,16 @@ public sealed class ElasticRelationQueryCompiler
             QueryNodeId? node = null,
             RelationQueryInputId? input = null) =>
             new(code, message, node, input);
+
+        static BranchCompilationException NestedFailure(
+            string message,
+            QueryNodeId? node = null,
+            RelationQueryInputId? input = null) =>
+            Fail(
+                ElasticRelationQueryCompilationDiagnosticCodes.NestedCorrelationUnavailable,
+                message,
+                node,
+                input);
 
         enum PipelineStage
         {
@@ -1779,7 +2158,7 @@ public sealed class ElasticRelationQueryCompiler
 static class ElasticRelationQueryArtifactFingerprinter
 {
     const string Algorithm = "sha256";
-    const string Canonicalization = "cohesive.relations.elastic-artifact/v1-c14n/v1";
+    const string Canonicalization = "cohesive.relations.elastic-artifact/v2-c14n/v1";
 
     public static ElasticRelationQueryArtifactFingerprint Compute(
         RelationQueryNativeResultBranch branch,
@@ -1816,7 +2195,9 @@ static class ElasticRelationQueryArtifactFingerprinter
                 : null);
             Append(canonical, field.QueryFields.Length);
             foreach (var queryField in field.QueryFields)
+            {
                 Append(canonical, ElasticRelationQueryStorageBinding.FieldPathKey(queryField));
+            }
         }
         Append(canonical, resultFields.Length);
         foreach (var field in resultFields)
@@ -1847,7 +2228,9 @@ static class ElasticRelationQueryArtifactFingerprinter
             Append(canonical, paging.StableUniqueFinalField);
             Append(canonical, paging.SortFields.Length);
             foreach (var field in paging.SortFields)
+            {
                 Append(canonical, field);
+            }
         }
         Append(canonical, loweringDecisions.Length);
         foreach (var lowering in loweringDecisions.OrderBy(static item => item.SiteId, StringComparer.Ordinal))

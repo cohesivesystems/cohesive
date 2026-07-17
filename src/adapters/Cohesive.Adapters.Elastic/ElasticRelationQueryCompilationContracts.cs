@@ -11,7 +11,7 @@ namespace Cohesive.Adapters.Elastic;
 public sealed record ElasticRelationQueryCompilerOptions
 {
     /// <summary>Current canonical Elasticsearch compiler profile.</summary>
-    public const string CurrentCompilerProfile = "cohesive.adapters.elastic/compiler-v1/sdk-request-materializer-v1";
+    public const string CurrentCompilerProfile = "cohesive.adapters.elastic/compiler-v2/sdk-request-materializer-v2";
 
     /// <summary>Current framework-wide lowering convention identity.</summary>
     public const string DefaultConventionSetVersion = ElasticRelationQueryStorageBinding.SemanticPathConventionSet;
@@ -69,7 +69,9 @@ public sealed record ElasticRelationQuerySelectedField
     /// <param name="input">Exact compiled field-input identity.</param>
     /// <param name="field">Canonical graph-qualified semantic field.</param>
     /// <param name="sourceField">Physical <c>_source</c> selector used for result retrieval, or <see langword="null"/>.</param>
-    /// <param name="queryFields">Exact physical indexed fields used for filtering, ordering, or aggregation.</param>
+    /// <param name="queryFields">
+    /// Exact physical indexed fields and structural query-scope paths used for filtering, ordering, or aggregation.
+    /// </param>
     /// <exception cref="ArgumentException">An identity, semantic field, or supplied physical path is invalid.</exception>
     public ElasticRelationQuerySelectedField(
         RelationQueryInputId input,
@@ -78,7 +80,10 @@ public sealed record ElasticRelationQuerySelectedField
         ImmutableArray<FieldPath> queryFields = default)
     {
         if (string.IsNullOrWhiteSpace(input.Value))
+        {
             throw new ArgumentException("A selected Elasticsearch field requires a compiled input identity.", nameof(input));
+        }
+
         if (string.IsNullOrWhiteSpace(field.Shape.GraphId.Value)
             || string.IsNullOrWhiteSpace(field.Shape.ShapeId.Value)
             || field.Path.Segments.IsDefaultOrEmpty)
@@ -87,7 +92,10 @@ public sealed record ElasticRelationQuerySelectedField
         }
         var normalizedQueryFields = queryFields.IsDefault ? [] : queryFields;
         if (sourceField is null && normalizedQueryFields.IsDefaultOrEmpty)
+        {
             throw new ArgumentException("A selected Elasticsearch field requires a retrieval or query field.", nameof(sourceField));
+        }
+
         Input = input;
         Field = field;
         SourceField = sourceField is { } source ? RequirePhysicalPath(source, nameof(sourceField)) : null;
@@ -99,7 +107,9 @@ public sealed record ElasticRelationQuerySelectedField
                 .OrderBy(ElasticRelationQueryStorageBinding.FieldPathKey, StringComparer.Ordinal)
         ];
         if (QueryFields.Length != normalizedQueryFields.Length)
+        {
             throw new ArgumentException("Selected Elasticsearch query fields cannot be repeated.", nameof(queryFields));
+        }
     }
 
     /// <summary>Exact compiled field-input identity.</summary>
@@ -111,7 +121,9 @@ public sealed record ElasticRelationQuerySelectedField
     /// <summary>Physical <c>_source</c> selector, or <see langword="null"/> when the field is not retrieved.</summary>
     public FieldPath? SourceField { get; }
 
-    /// <summary>Exact physical indexed query fields in deterministic physical-path order.</summary>
+    /// <summary>
+    /// Exact physical indexed fields and structural query-scope paths in deterministic physical-path order.
+    /// </summary>
     public ImmutableArray<FieldPath> QueryFields { get; }
 
     internal static FieldPath RequirePhysicalPath(FieldPath path, string parameterName)
@@ -201,19 +213,37 @@ public sealed record ElasticRelationQueryResultFieldBinding
             throw new ArgumentException("An Elasticsearch result binding requires a graph-qualified canonical field.", nameof(field));
         }
         if (!Enum.IsDefined(sourceKind))
+        {
             throw new ArgumentOutOfRangeException(nameof(sourceKind), sourceKind, "Unsupported Elasticsearch result source.");
+        }
+
         if (!Enum.IsDefined(encoding))
+        {
             throw new ArgumentOutOfRangeException(nameof(encoding), encoding, "Unsupported Elasticsearch result encoding.");
+        }
+
         if (assignment is { } assignmentId && string.IsNullOrWhiteSpace(assignmentId.Value))
+        {
             throw new ArgumentException("A result assignment identity cannot be empty.", nameof(assignment));
+        }
+
         var requiresPhysicalName = sourceKind is ElasticRelationQueryResultSourceKind.SourceField
             or ElasticRelationQueryResultSourceKind.CompositeKey;
         if (requiresPhysicalName != !string.IsNullOrWhiteSpace(physicalName))
+        {
             throw new ArgumentException("The selected Elasticsearch result source conflicts with its physical name.", nameof(physicalName));
+        }
+
         if ((sourceKind == ElasticRelationQueryResultSourceKind.Constant) != (constant is not null))
+        {
             throw new ArgumentException("Only a constant result source may retain a canonical constant.", nameof(constant));
+        }
+
         if (constant is { } value && !ElasticQueryValueTemplate.IsSupportedScalar(value))
+        {
             throw new ArgumentException("An Elasticsearch result constant must be a supported scalar value.", nameof(constant));
+        }
+
         if (constant is { } constantValue && !normalizedValueContract.IsSatisfiedByConstant(constantValue))
         {
             throw new ArgumentException(
@@ -221,7 +251,9 @@ public sealed record ElasticRelationQueryResultFieldBinding
                 nameof(constant));
         }
         if (normalizedValueContract.Cardinality != FieldCardinality.Single)
+        {
             throw new ArgumentException("An Elasticsearch result binding requires a single-valued contract.", nameof(valueContract));
+        }
 
         var countSource = sourceKind is ElasticRelationQueryResultSourceKind.ExactTotalHits
             or ElasticRelationQueryResultSourceKind.CompositeDocumentCount;
@@ -310,7 +342,9 @@ public sealed record ElasticRelationQueryParameterBinding
         Definition = Guard.RequireNotNull(definition);
         ValueContract = Guard.RequireNotNull(valueContract);
         if (ValueContract != Definition.EffectiveValueContract)
+        {
             throw new ArgumentException("The parameter value contract must match the canonical declaration.", nameof(valueContract));
+        }
     }
 
     /// <summary>Canonical parameter declaration.</summary>
@@ -357,20 +391,41 @@ public sealed record ElasticRelationQueryPagingContract
         string? stableUniqueFinalField)
     {
         if (!Enum.IsDefined(kind))
+        {
             throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported Elasticsearch paging kind.");
+        }
+
         if (offset < 0)
+        {
             throw new ArgumentOutOfRangeException(nameof(offset), offset, "An Elasticsearch page offset cannot be negative.");
+        }
+
         if (limit <= 0)
+        {
             throw new ArgumentOutOfRangeException(nameof(limit), limit, "An Elasticsearch page limit must be positive.");
+        }
+
         var normalized = sortFields.IsDefault ? [] : sortFields;
         if (normalized.IsDefaultOrEmpty || normalized.Any(string.IsNullOrWhiteSpace))
+        {
             throw new ArgumentException("Elasticsearch paging requires non-empty physical sort fields.", nameof(sortFields));
+        }
+
         if (kind != ElasticRelationQueryPagingKind.Offset && offset != 0)
+        {
             throw new ArgumentException("Only offset paging may retain a non-zero offset.", nameof(offset));
+        }
+
         if (kind == ElasticRelationQueryPagingKind.CompositeAfter != (stableUniqueFinalField is null))
+        {
             throw new ArgumentException("Composite paging has no hit-level stable unique final field.", nameof(stableUniqueFinalField));
+        }
+
         if (stableUniqueFinalField is not null && string.IsNullOrWhiteSpace(stableUniqueFinalField))
+        {
             throw new ArgumentException("A stable unique final field cannot be empty.", nameof(stableUniqueFinalField));
+        }
+
         if (kind != ElasticRelationQueryPagingKind.CompositeAfter
             && !string.Equals(stableUniqueFinalField, normalized[^1], StringComparison.Ordinal))
         {
@@ -414,7 +469,10 @@ public sealed record ElasticRelationQueryLoweringDecision
     {
         SiteId = Guard.RequireNotNullOrWhiteSpace(siteId);
         if (SiteId.Any(char.IsControl))
+        {
             throw new ArgumentException("An Elasticsearch lowering site identity cannot contain control characters.", nameof(siteId));
+        }
+
         Decision = Guard.RequireNotNull(decision);
     }
 
@@ -457,7 +515,9 @@ public sealed class ElasticRelationQueryCompiledArtifact
         Provenance = Guard.RequireNotNull(provenance);
         Fingerprint = Guard.RequireNotNull(fingerprint);
         if (Branch.Id != Provenance.Branch)
+        {
             throw new ArgumentException("Artifact branch and provenance branch identities must match.", nameof(provenance));
+        }
     }
 
     /// <summary>Canonical terminal branch compiled by this artifact.</summary>
@@ -507,7 +567,9 @@ public sealed class ElasticRelationQueryCompiledArtifact
         ArgumentNullException.ThrowIfNull(parameters);
         var expected = Parameters.Select(static parameter => parameter.Parameter).ToHashSet();
         if (parameters.Keys.Any(parameter => !expected.Contains(parameter)))
+        {
             throw new ArgumentException("The invocation contains a parameter absent from this compiled artifact.", nameof(parameters));
+        }
 
         Dictionary<QueryParameterId, ObservationValue> effective = [];
         foreach (var binding in Parameters)
@@ -547,9 +609,15 @@ public sealed class ElasticRelationQueryCompiledArtifact
     {
         var normalized = values.IsDefault ? [] : values;
         if (normalized.Any(static value => value is null))
+        {
             throw new ArgumentException("Artifact metadata cannot contain null entries.", parameterName);
+        }
+
         if (normalized.GroupBy(key, StringComparer.Ordinal).Any(static group => group.Count() > 1))
+        {
             throw new ArgumentException("Artifact metadata identities cannot be repeated.", parameterName);
+        }
+
         return [.. normalized.OrderBy(key, StringComparer.Ordinal)];
     }
 
@@ -561,9 +629,15 @@ public sealed class ElasticRelationQueryCompiledArtifact
     {
         var normalized = values.IsDefault ? [] : values;
         if (normalized.Any(static value => value is null))
+        {
             throw new ArgumentException("Artifact metadata cannot contain null entries.", parameterName);
+        }
+
         if (normalized.GroupBy(key, StringComparer.Ordinal).Any(static group => group.Count() > 1))
+        {
             throw new ArgumentException("Artifact metadata identities cannot be repeated.", parameterName);
+        }
+
         return normalized;
     }
 }
@@ -577,20 +651,37 @@ public sealed class ElasticRelationQueryCompilationResult
         ImmutableArray<RelationQueryNativeCompilationDiagnostic> diagnostics)
     {
         if (!Enum.IsDefined(status))
+        {
             throw new ArgumentOutOfRangeException(nameof(status), status, "Unsupported native compilation status.");
+        }
+
         var normalizedArtifacts = artifacts.IsDefault ? [] : artifacts;
         var normalizedDiagnostics = diagnostics.IsDefault ? [] : diagnostics;
         if (normalizedArtifacts.Any(static artifact => artifact is null))
+        {
             throw new ArgumentException("Compilation artifacts cannot contain null entries.", nameof(artifacts));
+        }
+
         if (normalizedArtifacts.GroupBy(static artifact => artifact.Branch.Id).Any(static group => group.Count() > 1))
+        {
             throw new ArgumentException("Compilation artifacts cannot repeat a result branch.", nameof(artifacts));
+        }
+
         if (normalizedDiagnostics.Any(static diagnostic => diagnostic is null))
+        {
             throw new ArgumentException("Compilation diagnostics cannot contain null entries.", nameof(diagnostics));
+        }
+
         var hasErrors = normalizedDiagnostics.Any(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
         if (status == RelationQueryNativeCompilationStatus.Exact && (normalizedArtifacts.IsDefaultOrEmpty || hasErrors))
+        {
             throw new ArgumentException("Exact compilation requires artifacts and no error diagnostics.", nameof(status));
+        }
+
         if (status != RelationQueryNativeCompilationStatus.Exact && !hasErrors)
+        {
             throw new ArgumentException("Unsuccessful compilation requires an error diagnostic.", nameof(status));
+        }
 
         Status = status;
         Artifacts = [.. normalizedArtifacts.OrderBy(static artifact => artifact.Branch.Id.Value, StringComparer.Ordinal)];
@@ -652,10 +743,10 @@ public static class ElasticRelationQueryCompilationDiagnosticCodes
     /// <summary>Artifact construction failed an internal consistency check.</summary>
     public const string ArtifactInvalid = "REL2239";
 
-    /// <summary>The requested runtime result observability cannot be produced by Elasticsearch v1.</summary>
+    /// <summary>The requested runtime result observability cannot be produced by Elasticsearch v2.</summary>
     public const string ResultObservabilityUnsupported = "REL2240";
 
-    /// <summary>A relation terminal requires semantics absent from the v1 artifact contract.</summary>
+    /// <summary>A relation terminal requires semantics absent from the v2 artifact contract.</summary>
     public const string RelationTerminalUnsupported = "REL2241";
 
     /// <summary>No configured exact lowering strategy can realize a canonical operation.</summary>
@@ -663,4 +754,7 @@ public static class ElasticRelationQueryCompilationDiagnosticCodes
 
     /// <summary>Configured lowering policy or extension registration is inconsistent.</summary>
     public const string LoweringConfigurationInvalid = "REL2243";
+
+    /// <summary>A structured collection predicate lacks exact nested-path or same-element correlation evidence.</summary>
+    public const string NestedCorrelationUnavailable = "REL2244";
 }

@@ -158,7 +158,9 @@ public enum RelationQueryStructuralCapabilityRole
     /// <summary>Reads a path from a named expression binding.</summary>
     BindingRead = 0,
 
-    /// <summary>Reads a path from an expression's scoped current item.</summary>
+    /// <summary>
+    /// Reads a path from an expression's scoped collection element while preserving the element boundary.
+    /// </summary>
     CurrentItemRead = 1,
 
     /// <summary>Reconstructs a path from occurrence-scoped runtime evidence.</summary>
@@ -271,7 +273,13 @@ public enum RelationQueryGuaranteeCapabilityKind
     InconclusiveEvidence = 21,
 
     /// <summary>Reads all participating inputs from one semantically consistent snapshot.</summary>
-    ConsistentSnapshot = 22
+    ConsistentSnapshot = 22,
+
+    /// <summary>
+    /// Preserves same-element correlation among all current-item reads performed within one scoped
+    /// collection-expression evaluation.
+    /// </summary>
+    CollectionElementCorrelation = 23
 }
 
 /// <summary>Primitive target facility from which exact higher-level semantics may be composed.</summary>

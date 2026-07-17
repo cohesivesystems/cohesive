@@ -10,14 +10,14 @@ namespace Cohesive.Relations.Execution;
 static class RelationQueryInMemoryTargetProfile
 {
     const string TargetIdentity = "cohesive.relations.in-memory";
-    const string DefaultProfileIdentity = "cohesive.relations.in-memory/realization-v1";
+    const string DefaultProfileIdentity = "cohesive.relations.in-memory/realization-v2";
 
     public static RelationQueryTargetCapabilityProfile Default { get; } = CreateCore(
         RelationQueryTemporalExecutionCapabilityProfile.All,
         DefaultProfileIdentity);
 
     public static RelationQueryRealizationPolicy Policy { get; } = new(
-        new("cohesive.relations.in-memory/realization-policy-v1"),
+        new("cohesive.relations.in-memory/realization-policy-v2"),
         conventionSetVersion: "cohesive.relations/conventions-v1");
 
     public static RelationQueryTargetCapabilityProfile Create(
@@ -88,6 +88,10 @@ static class RelationQueryInMemoryTargetProfile
             foreach (var path in supportedPaths)
                 yield return new StructuralRelationQueryCapability(role, path);
         }
+
+        yield return new StructuralRelationQueryCapability(
+            RelationQueryStructuralCapabilityRole.CurrentItemRead,
+            RelationQueryStructuralPathKind.CollectionElement);
     }
 
     static ImmutableArray<RelationQueryStructuralCapabilityRole> StructuralRoles =>
@@ -169,6 +173,7 @@ static class RelationQueryInMemoryTargetProfile
         RelationQueryGuaranteeCapabilityKind.StablePaging,
         RelationQueryGuaranteeCapabilityKind.Grouping,
         RelationQueryGuaranteeCapabilityKind.Aggregation,
+        RelationQueryGuaranteeCapabilityKind.CollectionElementCorrelation,
         RelationQueryGuaranteeCapabilityKind.DuplicateHandling,
         RelationQueryGuaranteeCapabilityKind.OutputIdentity,
         RelationQueryGuaranteeCapabilityKind.OutputMode,

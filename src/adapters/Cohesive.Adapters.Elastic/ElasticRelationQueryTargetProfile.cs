@@ -13,9 +13,9 @@ public static class ElasticRelationQueryTargetProfile
     /// <summary>Stable Elasticsearch search interpretation-target identity.</summary>
     public static RelationQueryTargetId Target { get; } = new("cohesive.adapters.elastic.search");
 
-    /// <summary>Stable canonical v1 capability-profile identity.</summary>
+    /// <summary>Stable canonical v2 capability-profile identity.</summary>
     public static RelationQueryTargetProfileId ProfileId { get; } = new(
-        "cohesive.adapters.elastic.search/canonical-v1");
+        "cohesive.adapters.elastic.search/canonical-v2");
 
     /// <summary>Operating boundary requiring one physical source and concrete index.</summary>
     public static RelationQueryOperatingBoundaryId SingleIndexBoundary { get; } = new(
@@ -41,12 +41,12 @@ public static class ElasticRelationQueryTargetProfile
     public static RelationQueryOperatingBoundaryId PageSizeBoundary { get; } = new(
         "elastic/boundary/max-page-size");
 
-    /// <summary>Default canonical v1 page-size limit.</summary>
+    /// <summary>Default canonical v2 page-size limit.</summary>
     public const int MaximumPageSize = ElasticRelationQueryStorageBinding.DefaultMaximumPageSize;
 
     /// <summary>
     /// Default capability profile. It advertises only the single-index operation families interpreted by the
-    /// canonical v1 compiler; exact mapping, document scope, retrieval encoding, normalization, pagination
+    /// canonical v2 compiler; exact mapping, document scope, retrieval encoding, normalization, pagination
     /// consistency, result-window, and strategy checks remain binding-scoped compiler obligations.
     /// </summary>
     public static RelationQueryTargetCapabilityProfile Default { get; } = CreateProfile();
@@ -56,7 +56,7 @@ public static class ElasticRelationQueryTargetProfile
     /// have been validated.
     /// </summary>
     public static RelationQueryRealizationPolicy Policy { get; } = new(
-        new("cohesive.adapters.elastic.search/realization-policy-v1"),
+        new("cohesive.adapters.elastic.search/realization-policy-v2"),
         conventionSetVersion: ElasticRelationQueryStorageBinding.SemanticPathConventionSet,
         constrainedRealizations: RelationQueryConstrainedRealizationPolicy.AllowValidated);
 
@@ -101,6 +101,13 @@ public static class ElasticRelationQueryTargetProfile
             }
         }
 
+        declarations.Add((
+            $"structural/{(int)RelationQueryStructuralCapabilityRole.CurrentItemRead}/{(int)RelationQueryStructuralPathKind.CollectionElement}",
+            new StructuralRelationQueryCapability(
+                RelationQueryStructuralCapabilityRole.CurrentItemRead,
+                RelationQueryStructuralPathKind.CollectionElement),
+            [SingleIndexBoundary, NonNullOperandsBoundary]));
+
         foreach (var guarantee in GuaranteeCapabilities)
         {
             declarations.Add((
@@ -130,48 +137,53 @@ public static class ElasticRelationQueryTargetProfile
             [RelationQueryCompilationProvenance.CurrentCompilerProfile],
             evidence,
             boundaries,
-            "Canonical Elasticsearch v1: exact single-index structured rows, root scalar-array membership, and global or composite-grouped row counts within declared boundaries.");
+            "Canonical Elasticsearch v2: exact single-index structured rows, scalar-array membership, correlated nested-object existential predicates, and global or composite-grouped row counts within declared boundaries.");
     }
 
     static ImmutableArray<RelationQueryOperatingBoundaryId> LogicalBoundaries(
         RelationQueryLogicalCapabilityKind logical) => logical switch
-    {
-        RelationQueryLogicalCapabilityKind.AggregateGrouping =>
-            [
-                SingleIndexBoundary,
+        {
+            RelationQueryLogicalCapabilityKind.AggregateGrouping =>
+                [
+                    SingleIndexBoundary,
                 NonNullOperandsBoundary,
                 ScalarOperandsBoundary,
                 StableOrderingBoundary,
                 PageSizeBoundary
-            ],
-        RelationQueryLogicalCapabilityKind.Ordering
-            or RelationQueryLogicalCapabilityKind.AscendingOrdering
-            or RelationQueryLogicalCapabilityKind.DescendingOrdering
-            or RelationQueryLogicalCapabilityKind.NullsFirst
-            or RelationQueryLogicalCapabilityKind.NullsLast =>
-            [SingleIndexBoundary, ScalarOperandsBoundary],
-        RelationQueryLogicalCapabilityKind.StableTieOrdering =>
-            [SingleIndexBoundary, StableOrderingBoundary],
-        RelationQueryLogicalCapabilityKind.OffsetPaging
-            or RelationQueryLogicalCapabilityKind.KeysetPaging =>
-            [SingleIndexBoundary, StableOrderingBoundary, PageSizeBoundary],
-        RelationQueryLogicalCapabilityKind.CountAggregate =>
-            [SingleIndexBoundary],
-        _ => [SingleIndexBoundary]
-    };
+                ],
+            RelationQueryLogicalCapabilityKind.Ordering
+                or RelationQueryLogicalCapabilityKind.AscendingOrdering
+                or RelationQueryLogicalCapabilityKind.DescendingOrdering
+                or RelationQueryLogicalCapabilityKind.NullsFirst
+                or RelationQueryLogicalCapabilityKind.NullsLast =>
+                [SingleIndexBoundary, ScalarOperandsBoundary],
+            RelationQueryLogicalCapabilityKind.StableTieOrdering =>
+                [SingleIndexBoundary, StableOrderingBoundary],
+            RelationQueryLogicalCapabilityKind.OffsetPaging
+                or RelationQueryLogicalCapabilityKind.KeysetPaging =>
+                [SingleIndexBoundary, StableOrderingBoundary, PageSizeBoundary],
+            RelationQueryLogicalCapabilityKind.CountAggregate =>
+                [SingleIndexBoundary],
+            _ => [SingleIndexBoundary]
+        };
 
     static IEnumerable<ExprCapabilityId> ExpressionCapabilities()
     {
         yield return ExprCapabilities.Field;
         yield return ExprCapabilities.NestedFieldPath;
+        yield return ExprCapabilities.CurrentItem;
         yield return ExprCapabilities.Parameter;
         yield return ExprCapabilities.Constant;
         yield return ExprCapabilities.TypedField;
         yield return ExprCapabilities.TypedLiteral;
         yield return ExprCapabilities.ForUnary(UnaryOperator.Not);
         foreach (var @operator in SupportedBinaryOperators)
+        {
             yield return ExprCapabilities.ForBinary(@operator);
+        }
+
         yield return ExprCapabilities.ForFunction(ExprFunctionNames.Contains);
+        yield return ExprCapabilities.ForFunction(ExprFunctionNames.Any);
         yield return ExprCapabilities.ForFunction(ExprFunctionNames.EndsWith);
     }
 
@@ -189,7 +201,15 @@ public static class ElasticRelationQueryTargetProfile
             ];
         }
         if (expression == ExprCapabilities.ForFunction(ExprFunctionNames.Contains))
+        {
             return [SingleIndexBoundary, NonNullOperandsBoundary];
+        }
+
+        if (expression == ExprCapabilities.ForFunction(ExprFunctionNames.Any)
+            || expression == ExprCapabilities.CurrentItem)
+        {
+            return [SingleIndexBoundary, NonNullOperandsBoundary];
+        }
         if (expression == ExprCapabilities.ForUnary(UnaryOperator.Not)
             || SupportedBinaryOperators.Any(@operator =>
                 expression == ExprCapabilities.ForBinary(@operator)))
@@ -201,26 +221,28 @@ public static class ElasticRelationQueryTargetProfile
 
     static ImmutableArray<RelationQueryOperatingBoundaryId> GuaranteeBoundaries(
         RelationQueryGuaranteeCapabilityKind guarantee) => guarantee switch
-    {
-        RelationQueryGuaranteeCapabilityKind.Ordering
-            or RelationQueryGuaranteeCapabilityKind.NullPlacement =>
-            [SingleIndexBoundary, ScalarOperandsBoundary],
-        RelationQueryGuaranteeCapabilityKind.StablePaging =>
-            [SingleIndexBoundary, StableOrderingBoundary, PageSizeBoundary],
-        RelationQueryGuaranteeCapabilityKind.Grouping =>
-            [
-                SingleIndexBoundary,
+        {
+            RelationQueryGuaranteeCapabilityKind.Ordering
+                or RelationQueryGuaranteeCapabilityKind.NullPlacement =>
+                [SingleIndexBoundary, ScalarOperandsBoundary],
+            RelationQueryGuaranteeCapabilityKind.StablePaging =>
+                [SingleIndexBoundary, StableOrderingBoundary, PageSizeBoundary],
+            RelationQueryGuaranteeCapabilityKind.Grouping =>
+                [
+                    SingleIndexBoundary,
                 NonNullOperandsBoundary,
                 ScalarOperandsBoundary,
                 StableOrderingBoundary,
                 PageSizeBoundary
-            ],
-        RelationQueryGuaranteeCapabilityKind.DeterministicResult =>
-            [SingleIndexBoundary, DeterministicProviderBoundary],
-        RelationQueryGuaranteeCapabilityKind.MissingNullDistinction =>
-            [SingleIndexBoundary, NonNullOperandsBoundary],
-        _ => [SingleIndexBoundary]
-    };
+                ],
+            RelationQueryGuaranteeCapabilityKind.DeterministicResult =>
+                [SingleIndexBoundary, DeterministicProviderBoundary],
+            RelationQueryGuaranteeCapabilityKind.MissingNullDistinction =>
+                [SingleIndexBoundary, NonNullOperandsBoundary],
+            RelationQueryGuaranteeCapabilityKind.CollectionElementCorrelation =>
+                [SingleIndexBoundary, NonNullOperandsBoundary],
+            _ => [SingleIndexBoundary]
+        };
 
     static ImmutableArray<RelationQueryLogicalCapabilityKind> LogicalCapabilities =>
     [
@@ -264,6 +286,7 @@ public static class ElasticRelationQueryTargetProfile
     static ImmutableArray<RelationQueryGuaranteeCapabilityKind> GuaranteeCapabilities =>
     [
         RelationQueryGuaranteeCapabilityKind.MissingNullDistinction,
+        RelationQueryGuaranteeCapabilityKind.CollectionElementCorrelation,
         RelationQueryGuaranteeCapabilityKind.AbsenceAvailabilityFailureDistinction,
         RelationQueryGuaranteeCapabilityKind.Cardinality,
         RelationQueryGuaranteeCapabilityKind.Ordering,

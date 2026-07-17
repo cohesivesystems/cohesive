@@ -14,8 +14,15 @@ public static class ExprFunctionNames
     public const string All = "all";
 
     /// <summary>
-    /// Function name for testing whether any value in a sequence evaluates to true.
+    /// Function name for collection existential semantics.
     /// </summary>
+    /// <remarks>
+    /// The one-argument form tests Boolean collection elements directly. The two-argument form evaluates its
+    /// Boolean predicate in a current-item scope for each collection element and preserves same-element correlation
+    /// across every predicate field read. Canonical execution rejects missing, null, and non-array collection values.
+    /// In the two-argument form it also rejects missing, null, and non-Boolean predicate results rather than coercing
+    /// them to <see langword="false"/>.
+    /// </remarks>
     public const string Any = "any";
 
     /// <summary>

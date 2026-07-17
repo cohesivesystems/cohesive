@@ -8,6 +8,36 @@ namespace Cohesive.Relations.Tests;
 public sealed class RelationQueryInMemorySupportTests
 {
     [Fact]
+    public void DefaultProfileAdvertisesCollectionElementAccessOnlyForCurrentItemReads()
+    {
+        var structuralCapabilities = RelationQueryInMemoryInterpreter.DefaultTargetProfile.Capabilities
+            .Select(static evidence => evidence.Capability)
+            .OfType<StructuralRelationQueryCapability>()
+            .ToArray();
+
+        Assert.Contains(
+            structuralCapabilities,
+            static capability => capability is
+            {
+                Role: RelationQueryStructuralCapabilityRole.CurrentItemRead,
+                PathKind: RelationQueryStructuralPathKind.CollectionElement
+            });
+        Assert.DoesNotContain(
+            structuralCapabilities,
+            static capability => capability.PathKind == RelationQueryStructuralPathKind.CollectionElement
+                && capability.Role != RelationQueryStructuralCapabilityRole.CurrentItemRead);
+        Assert.DoesNotContain(
+            structuralCapabilities,
+            static capability => capability.PathKind == RelationQueryStructuralPathKind.NestedCollectionElement);
+        Assert.Equal(
+            "cohesive.relations.in-memory/realization-v2",
+            RelationQueryInMemoryInterpreter.DefaultTargetProfile.Id.Value);
+        Assert.Equal(
+            "cohesive.relations.in-memory/realization-policy-v2",
+            RelationQueryInMemoryInterpreter.DefaultRealizationPolicy.Id.Value);
+    }
+
+    [Fact]
     public void Realize_RepresentativePlanClassifiesEveryDemandedRequirementThroughSharedProfile()
     {
         var compilation = RelationQueryStaticCompiler.Compile(new(

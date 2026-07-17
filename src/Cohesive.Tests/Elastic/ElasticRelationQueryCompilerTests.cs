@@ -8,7 +8,6 @@ using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.Physical;
 using Cohesive.Relations.Realization;
-using Cohesive.Relations.Serialization;
 using IRQueryDefinition = Cohesive.Relations.IR.QueryDefinition;
 using IRRelationDefinition = Cohesive.Relations.IR.RelationDefinition;
 
@@ -330,6 +329,286 @@ public sealed class ElasticRelationQueryCompilerTests
         Assert.Contains(result.Diagnostics, static diagnostic =>
             diagnostic.Code == ElasticRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable
             && diagnostic.Message.Contains("nested-query lowering is deferred", StringComparison.Ordinal));
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
+    public void Compile_StructuredCollectionAny_PreservesTwoFieldSameElementCorrelationInOneNestedQuery()
+    {
+        var fixture = Fixture.StructuredCollectionAny();
+
+        var result = fixture.Compile();
+
+        Assert.True(result.IsSuccessful, Diagnostics(result));
+        var artifact = Assert.Single(result.Artifacts);
+        var selected = artifact.SelectedFields.Single(field => field.Field.Path == Fixture.StopsPath);
+        Assert.Null(selected.SourceField);
+        Assert.Equal(
+            [
+                FieldPath.Parse("stops"),
+                FieldPath.Parse("stops.type.keyword"),
+                FieldPath.Parse("stops.location.keyword")
+            ],
+            selected.QueryFields.ToArray());
+
+        var request = artifact.Bind(new Dictionary<QueryParameterId, ObservationValue>
+        {
+            [new("location")] = ObservationValue.FromString("SEA")
+        });
+        var nestedQuery = Assert.IsType<global::Elastic.Clients.Elasticsearch.QueryDsl.NestedQuery>(
+            Assert.IsType<global::Elastic.Clients.Elasticsearch.QueryDsl.BoolQuery>(request.Query!.Bool)
+                .Filter!
+                .Single()
+                .Nested);
+        Assert.Equal("stops", nestedQuery.Path.ToString());
+        var correlated = Assert.IsType<global::Elastic.Clients.Elasticsearch.QueryDsl.BoolQuery>(nestedQuery.Query.Bool);
+        Assert.Equal(2, correlated.Filter?.Count);
+
+        using var json = ElasticSdkRequestTestSupport.Serialize(request);
+        var nested = FirstFilter(json.RootElement).GetProperty("nested");
+        Assert.Equal("stops", nested.GetProperty("path").GetString());
+        var clauses = nested.GetProperty("query").GetProperty("bool").GetProperty("filter");
+        Assert.Equal(2, clauses.GetArrayLength());
+        Assert.Equal(
+            "SEA",
+            clauses[0]
+                .GetProperty("term")
+                .GetProperty("stops.location.keyword")
+                .GetProperty("value")
+                .GetString());
+        Assert.Equal(
+            "Pickup",
+            clauses[1]
+                .GetProperty("term")
+                .GetProperty("stops.type.keyword")
+                .GetProperty("value")
+                .GetString());
+    }
+
+    [Fact]
+    public void TargetProfile_AdvertisesOnlyDirectCurrentItemCollectionElementReads()
+    {
+        var structural = ElasticRelationQueryTargetProfile.Default.Capabilities
+            .Select(static evidence => evidence.Capability)
+            .OfType<StructuralRelationQueryCapability>()
+            .ToArray();
+
+        Assert.Contains(
+            structural,
+            static capability =>
+                capability.Role == RelationQueryStructuralCapabilityRole.CurrentItemRead
+                && capability.PathKind == RelationQueryStructuralPathKind.CollectionElement);
+        Assert.DoesNotContain(
+            structural,
+            static capability =>
+                capability.PathKind == RelationQueryStructuralPathKind.CollectionElement
+                && capability.Role != RelationQueryStructuralCapabilityRole.CurrentItemRead);
+        Assert.DoesNotContain(
+            structural,
+            static capability =>
+                capability.Role == RelationQueryStructuralCapabilityRole.CurrentItemRead
+                && capability.PathKind != RelationQueryStructuralPathKind.CollectionElement);
+        Assert.DoesNotContain(
+            structural,
+            static capability =>
+                capability.PathKind == RelationQueryStructuralPathKind.NestedCollectionElement);
+    }
+
+    [Fact]
+    public void Compile_StructuredCollectionAny_FailsClosedForFlattenedObjectMapping()
+    {
+        var fixture = Fixture.StructuredCollectionAny();
+
+        var result = fixture.Compile(fixture.StorageBindingWithFlattenedStops());
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == ElasticRelationQueryCompilationDiagnosticCodes.NestedCorrelationUnavailable);
+        Assert.Contains("flattened", diagnostic.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Contains", diagnostic.Message, StringComparison.Ordinal);
+        Assert.NotNull(diagnostic.Input);
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
+    public void Compile_StructuredCollectionAny_FailsClosedWithoutNestedScopeEvidence()
+    {
+        var fixture = Fixture.StructuredCollectionAny();
+
+        var result = fixture.Compile(fixture.StorageBindingWithoutNestedEvidence());
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == ElasticRelationQueryCompilationDiagnosticCodes.NestedCorrelationUnavailable);
+        Assert.Contains("does not provide", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Contains("denormalized", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
+    public void Compile_StructuredCollectionAny_FailsClosedWithoutSameElementGuarantee()
+    {
+        var fixture = Fixture.StructuredCollectionAny();
+        var current = fixture.StopsNestedScope;
+        var binding = fixture.StorageBindingWithNestedScope(new(
+            current.NestedPath,
+            ElasticRelationQueryNestedCorrelationGuarantee.Unproven,
+            current.NullElementBehavior,
+            current.EmptyCollectionBehavior,
+            current.ChildFields));
+
+        var result = fixture.Compile(binding);
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == ElasticRelationQueryCompilationDiagnosticCodes.NestedCorrelationUnavailable);
+        Assert.Contains("same-nested-document", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
+    public void Compile_StructuredCollectionAny_FailsClosedWhenNullElementsWouldBeDropped()
+    {
+        var fixture = Fixture.StructuredCollectionAny();
+        var current = fixture.StopsNestedScope;
+        var binding = fixture.StorageBindingWithNestedScope(new(
+            current.NestedPath,
+            current.CorrelationGuarantee,
+            ElasticRelationQueryNestedAbsenceBehavior.NotIndexed,
+            current.EmptyCollectionBehavior,
+            current.ChildFields));
+
+        var result = fixture.Compile(binding);
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == ElasticRelationQueryCompilationDiagnosticCodes.NestedCorrelationUnavailable);
+        Assert.Contains("null collection elements", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
+    public void Compile_StructuredCollectionAny_FailsClosedWithoutEmptyCollectionRepresentation()
+    {
+        var fixture = Fixture.StructuredCollectionAny();
+        var current = fixture.StopsNestedScope;
+        var binding = fixture.StorageBindingWithNestedScope(new(
+            current.NestedPath,
+            current.CorrelationGuarantee,
+            current.NullElementBehavior,
+            ElasticRelationQueryEmptyCollectionBehavior.Unproven,
+            current.ChildFields));
+
+        var result = fixture.Compile(binding);
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == ElasticRelationQueryCompilationDiagnosticCodes.NestedCorrelationUnavailable);
+        Assert.Contains("empty collection", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
+    public void Compile_StructuredCollectionAny_FailsClosedWhenMissingCollectionIsTreatedAsEmpty()
+    {
+        var fixture = Fixture.StructuredCollectionAny();
+        var binding = fixture.StorageBindingWithStopsAbsence(
+            ElasticRelationQueryMissingValueBehavior.NotIndexed,
+            ElasticRelationQueryNullValueBehavior.ProhibitedByIngestion);
+
+        var result = fixture.Compile(binding);
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == ElasticRelationQueryCompilationDiagnosticCodes.NestedCorrelationUnavailable);
+        Assert.Contains("treating them as empty", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
+    public void Compile_StructuredCollectionAny_FailsClosedWhenChildMissingBehaviorIsUnproven()
+    {
+        var fixture = Fixture.StructuredCollectionAny();
+        var current = fixture.StopsNestedScope;
+        var location = current.ResolveChild(Fixture.StopLocationPath);
+        var weakLocation = new ElasticRelationQueryNestedChildFieldBinding(
+            location.ElementPath,
+            location.QueryField,
+            location.MappingKind,
+            location.SemanticCapabilities,
+            location.SemanticProfile,
+            ElasticRelationQueryNestedAbsenceBehavior.Unproven,
+            location.NullValueBehavior);
+        var binding = fixture.StorageBindingWithNestedScope(new(
+            current.NestedPath,
+            current.CorrelationGuarantee,
+            current.NullElementBehavior,
+            current.EmptyCollectionBehavior,
+            [
+                .. current.ChildFields.Select(child =>
+                    child.ElementPath == Fixture.StopLocationPath ? weakLocation : child)
+            ]));
+
+        var result = fixture.Compile(binding);
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == ElasticRelationQueryCompilationDiagnosticCodes.NestedCorrelationUnavailable);
+        Assert.Contains("prohibits missing and null", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
+    public void Compile_StructuredCollectionAny_FailsClosedWithoutReferencedChildMapping()
+    {
+        var fixture = Fixture.StructuredCollectionAny();
+        var current = fixture.StopsNestedScope;
+        var binding = fixture.StorageBindingWithNestedScope(new(
+            current.NestedPath,
+            current.CorrelationGuarantee,
+            current.NullElementBehavior,
+            current.EmptyCollectionBehavior,
+            [.. current.ChildFields.Where(child => child.ElementPath != Fixture.StopLocationPath)]));
+
+        var result = fixture.Compile(binding);
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == ElasticRelationQueryCompilationDiagnosticCodes.NestedCorrelationUnavailable);
+        Assert.Contains("no terminal child mapping", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
+    public void Compile_StructuredCollectionAny_FailsClosedWithoutExactChildTermEvidence()
+    {
+        var fixture = Fixture.StructuredCollectionAny();
+        var current = fixture.StopsNestedScope;
+        var location = current.ResolveChild(Fixture.StopLocationPath);
+        var weakLocation = new ElasticRelationQueryNestedChildFieldBinding(
+            location.ElementPath,
+            location.QueryField,
+            location.MappingKind,
+            ElasticRelationQueryFieldSemanticCapabilities.None,
+            semanticProfile: null,
+            missingValueBehavior: location.MissingValueBehavior,
+            nullValueBehavior: location.NullValueBehavior);
+        var binding = fixture.StorageBindingWithNestedScope(new(
+            current.NestedPath,
+            current.CorrelationGuarantee,
+            current.NullElementBehavior,
+            current.EmptyCollectionBehavior,
+            [
+                .. current.ChildFields.Select(child =>
+                    child.ElementPath == Fixture.StopLocationPath ? weakLocation : child)
+            ]));
+
+        var result = fixture.Compile(binding);
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == ElasticRelationQueryCompilationDiagnosticCodes.NestedCorrelationUnavailable);
+        Assert.Contains("ExactTerm", diagnostic.Message, StringComparison.Ordinal);
         Assert.Empty(result.Artifacts);
     }
 
@@ -861,6 +1140,9 @@ public sealed class ElasticRelationQueryCompilerTests
         public static readonly FieldPath StatusPath = FieldPath.FromField("Status");
         public static readonly FieldPath CustomerNamePath = FieldPath.FromField("CustomerName");
         public static readonly FieldPath StopLocationsPath = FieldPath.FromField("StopLocations");
+        public static readonly FieldPath StopsPath = FieldPath.FromField("Stops");
+        public static readonly FieldPath StopLocationPath = FieldPath.FromField("Location");
+        public static readonly FieldPath StopTypePath = FieldPath.FromField("Type");
         static readonly FieldPath NotesPath = FieldPath.FromField("Notes");
         static readonly FieldPath OccurredAtPath = FieldPath.FromField("OccurredAt");
         static readonly FieldPath CountPath = FieldPath.FromField("Count");
@@ -950,6 +1232,84 @@ public sealed class ElasticRelationQueryCompilerTests
                     field.SemanticCapabilities
                     & ~ElasticRelationQueryFieldSemanticCapabilities.ExactCollectionMembership));
 
+        public ElasticRelationQueryStorageBinding StorageBindingWithFlattenedStops() =>
+            StorageBindingWithField(
+                StopsPath,
+                field => new(
+                    field.Input,
+                    sourceField: null,
+                    queryField: FieldPath.Parse("stops"),
+                    mappingKind: ElasticRelationQueryFieldMappingKind.Object,
+                    retrievalKind: ElasticRelationQueryFieldRetrievalKind.Unavailable,
+                    retrievalEncoding: null,
+                    documentScope: ElasticRelationQueryFieldDocumentScope.RootDocument));
+
+        public ElasticRelationQueryStorageBinding StorageBindingWithoutNestedEvidence() =>
+            StorageBindingWithField(
+                StopsPath,
+                field => new(
+                    field.Input,
+                    field.SourceField,
+                    field.QueryField,
+                    field.MappingKind,
+                    field.RetrievalKind,
+                    field.RetrievalEncoding,
+                    field.DocumentScope,
+                    field.SemanticCapabilities,
+                    field.ReversedSuffixField,
+                    field.SemanticProfile,
+                    field.MissingValueBehavior,
+                    field.MissingValueSentinel,
+                    field.NullValueBehavior,
+                    field.NullValueSentinel,
+                    nestedScope: null));
+
+        public ElasticRelationQueryStorageBinding StorageBindingWithNestedScope(
+            ElasticRelationQueryNestedScopeEvidence nestedScope) =>
+            StorageBindingWithField(
+                StopsPath,
+                field => new(
+                    field.Input,
+                    field.SourceField,
+                    field.QueryField,
+                    field.MappingKind,
+                    field.RetrievalKind,
+                    field.RetrievalEncoding,
+                    field.DocumentScope,
+                    field.SemanticCapabilities,
+                    field.ReversedSuffixField,
+                    field.SemanticProfile,
+                    field.MissingValueBehavior,
+                    field.MissingValueSentinel,
+                    field.NullValueBehavior,
+                    field.NullValueSentinel,
+                    nestedScope));
+
+        public ElasticRelationQueryStorageBinding StorageBindingWithStopsAbsence(
+            ElasticRelationQueryMissingValueBehavior missingValueBehavior,
+            ElasticRelationQueryNullValueBehavior nullValueBehavior) =>
+            StorageBindingWithField(
+                StopsPath,
+                field => new(
+                    field.Input,
+                    field.SourceField,
+                    field.QueryField,
+                    field.MappingKind,
+                    field.RetrievalKind,
+                    field.RetrievalEncoding,
+                    field.DocumentScope,
+                    field.SemanticCapabilities,
+                    field.ReversedSuffixField,
+                    field.SemanticProfile,
+                    missingValueBehavior,
+                    missingValueSentinel: null,
+                    nullValueBehavior,
+                    nullValueSentinel: null,
+                    nestedScope: field.NestedScope));
+
+        public ElasticRelationQueryNestedScopeEvidence StopsNestedScope =>
+            StorageBinding.ResolveField(InputFor(StopsPath)).NestedScope!;
+
         public ElasticRelationQueryStorageBinding StorageBindingWithBoundaries(
             int maximumResultWindow,
             int maximumPageSize) => new(
@@ -1030,7 +1390,8 @@ public sealed class ElasticRelationQueryCompilerTests
                 missingValueBehavior: field.MissingValueBehavior,
                 missingValueSentinel: field.MissingValueSentinel,
                 nullValueBehavior: field.NullValueBehavior,
-                nullValueSentinel: field.NullValueSentinel);
+                nullValueSentinel: field.NullValueSentinel,
+                nestedScope: field.NestedScope);
 
         public static Fixture Row(
             int offset = 5,
@@ -1219,6 +1580,47 @@ public sealed class ElasticRelationQueryCompilerTests
                         new PageQueryNode(Page, Order, new OffsetPageDefinition(25, 0))
                     ],
                     parameters: parameters),
+                [new RowsQueryResultDefinition(Rows, Page)]);
+            return Create(RelationQueryDocument.FromDefinition(definition));
+        }
+
+        public static Fixture StructuredCollectionAny()
+        {
+            IRQueryDefinition definition = new(
+                new("structured-collection-any-query"),
+                new("StructuredCollectionAnyQuery"),
+                new(
+                    nodes:
+                    [
+                        new SourceQueryNode(LoadSource, Load, LoadShape),
+                        new FilterQueryNode(
+                            Filter,
+                            LoadSource,
+                            Expr.Any(
+                                Expr.Field(Load, StopsPath),
+                                Expr.And(
+                                    Expr.Eq(
+                                        Expr.Field($"{ExprFieldRoots.CurrentItem}.Location"),
+                                        Expr.Param(LocationParameter.Value)),
+                                    Expr.Eq(
+                                        Expr.Field($"{ExprFieldRoots.CurrentItem}.Type"),
+                                        Expr.Const("Pickup"))))),
+                        new ProjectQueryNode(
+                            Project,
+                            Filter,
+                            RowBinding,
+                            RowShape,
+                            [
+                                new(new("row-id"), IdPath, Expr.Field(Load, IdPath)),
+                                new(new("row-status"), StatusPath, Expr.Field(Load, StatusPath))
+                            ]),
+                        new OrderQueryNode(Order, Project, [new(Expr.Field(RowBinding, IdPath))]),
+                        new PageQueryNode(Page, Order, new OffsetPageDefinition(25, 0))
+                    ],
+                    parameters:
+                    [
+                        new(LocationParameter, new ScalarTypeRef(ScalarTypeKind.String))
+                    ]),
                 [new RowsQueryResultDefinition(Rows, Page)]);
             return Create(RelationQueryDocument.FromDefinition(definition));
         }
@@ -1574,6 +1976,42 @@ public sealed class ElasticRelationQueryCompilerTests
                     semanticCapabilities: ElasticRelationQueryFieldSemanticCapabilities.ExactCollectionMembership,
                     semanticProfile: "tests/ordinal-keyword-array-v1");
             }
+            if (path == StopsPath)
+            {
+                return new(
+                    contract.Input.Id,
+                    sourceField: null,
+                    queryField: FieldPath.Parse("stops"),
+                    mappingKind: ElasticRelationQueryFieldMappingKind.Nested,
+                    retrievalKind: ElasticRelationQueryFieldRetrievalKind.Unavailable,
+                    retrievalEncoding: null,
+                    documentScope: ElasticRelationQueryFieldDocumentScope.NestedDocument,
+                    missingValueBehavior: ElasticRelationQueryMissingValueBehavior.ProhibitedByIngestion,
+                    nullValueBehavior: ElasticRelationQueryNullValueBehavior.ProhibitedByIngestion,
+                    nestedScope: new(
+                        FieldPath.Parse("stops"),
+                        ElasticRelationQueryNestedCorrelationGuarantee.SameNestedDocument,
+                        ElasticRelationQueryNestedAbsenceBehavior.ProhibitedByIngestion,
+                        ElasticRelationQueryEmptyCollectionBehavior.NoNestedDocuments,
+                        [
+                            new(
+                                StopLocationPath,
+                                FieldPath.Parse("stops.location.keyword"),
+                                ElasticRelationQueryFieldMappingKind.Keyword,
+                                ElasticRelationQueryFieldSemanticCapabilities.ExactTerm,
+                                "tests/ordinal-keyword-v1",
+                                ElasticRelationQueryNestedAbsenceBehavior.ProhibitedByIngestion,
+                                ElasticRelationQueryNestedAbsenceBehavior.ProhibitedByIngestion),
+                            new(
+                                StopTypePath,
+                                FieldPath.Parse("stops.type.keyword"),
+                                ElasticRelationQueryFieldMappingKind.Keyword,
+                                ElasticRelationQueryFieldSemanticCapabilities.ExactTerm,
+                                "tests/ordinal-keyword-v1",
+                                ElasticRelationQueryNestedAbsenceBehavior.ProhibitedByIngestion,
+                                ElasticRelationQueryNestedAbsenceBehavior.ProhibitedByIngestion)
+                        ]));
+            }
             var physical = path == IdPath
                 ? (Source: FieldPath.Parse("id"), Query: FieldPath.Parse("id.keyword"),
                     Mapping: ElasticRelationQueryFieldMappingKind.Keyword,
@@ -1647,7 +2085,10 @@ public sealed class ElasticRelationQueryCompilerTests
                 ElasticRelationQueryTargetProfile.Policy,
                 RelationQueryResultObservability.NotRequested);
             if (!overrideUnavailableRequirements || baseline.IsRealizable)
+            {
                 return baseline;
+            }
+
             var requirements = baseline.Requirements.ToDictionary(static requirement => requirement.Id);
             ImmutableArray<RelationQueryRealizationOverride> overrides =
             [
@@ -1726,6 +2167,14 @@ public sealed class ElasticRelationQueryCompilerTests
                     new(
                         new("StopLocations"),
                         stringType,
+                        cardinality: FieldCardinality.Many),
+                    new(
+                        new("Stops"),
+                        new ObjectTypeRef(
+                        [
+                            new("Location", stringType),
+                            new("Type", stringType)
+                        ]),
                         cardinality: FieldCardinality.Many),
                     new(new("OccurredAt"), instantType),
                     new(

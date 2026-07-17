@@ -576,7 +576,7 @@ export interface RelationQueryRealizationRequirementUse {
   traces: RelationQueryRealizationTrace[];
 }
 
-export type RelationQueryGuaranteeCapabilityKind = 'MissingNullDistinction' | 'AbsenceAvailabilityFailureDistinction' | 'JoinMembership' | 'Cardinality' | 'RelationshipDirection' | 'RelationshipMultiplicity' | 'TemporalDomain' | 'TemporalBoundary' | 'UnboundedTemporalBoundary' | 'Ordering' | 'NullPlacement' | 'StablePaging' | 'Grouping' | 'Aggregation' | 'DuplicateHandling' | 'OutputIdentity' | 'OutputMode' | 'InvariantEnforcement' | 'DeterministicResult' | 'OccurrenceProvenance' | 'EvidenceCompleteness' | 'InconclusiveEvidence' | 'ConsistentSnapshot';
+export type RelationQueryGuaranteeCapabilityKind = 'MissingNullDistinction' | 'AbsenceAvailabilityFailureDistinction' | 'JoinMembership' | 'Cardinality' | 'RelationshipDirection' | 'RelationshipMultiplicity' | 'TemporalDomain' | 'TemporalBoundary' | 'UnboundedTemporalBoundary' | 'Ordering' | 'NullPlacement' | 'StablePaging' | 'Grouping' | 'Aggregation' | 'DuplicateHandling' | 'OutputIdentity' | 'OutputMode' | 'InvariantEnforcement' | 'DeterministicResult' | 'OccurrenceProvenance' | 'EvidenceCompleteness' | 'InconclusiveEvidence' | 'ConsistentSnapshot' | 'CollectionElementCorrelation';
 
 export const relationQueryGuaranteeCapabilityKinds = {
   missingNullDistinction: 'MissingNullDistinction',
@@ -602,6 +602,7 @@ export const relationQueryGuaranteeCapabilityKinds = {
   evidenceCompleteness: 'EvidenceCompleteness',
   inconclusiveEvidence: 'InconclusiveEvidence',
   consistentSnapshot: 'ConsistentSnapshot',
+  collectionElementCorrelation: 'CollectionElementCorrelation',
 } as const satisfies Record<string, RelationQueryGuaranteeCapabilityKind>;
 
 export const relationQueryGuaranteeCapabilityKindLabels: Record<RelationQueryGuaranteeCapabilityKind, string> = {
@@ -628,6 +629,7 @@ export const relationQueryGuaranteeCapabilityKindLabels: Record<RelationQueryGua
   EvidenceCompleteness: 'EvidenceCompleteness',
   InconclusiveEvidence: 'InconclusiveEvidence',
   ConsistentSnapshot: 'ConsistentSnapshot',
+  CollectionElementCorrelation: 'CollectionElementCorrelation',
 };
 
 export interface RelationQueryRealizationStaticFact {
