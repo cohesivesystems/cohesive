@@ -30,6 +30,7 @@ using Cohesive.Adapters.Elastic;
 using Cohesive.Model;
 using Cohesive.Model.Expressions;
 using Cohesive.Model.Serialization;
+using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Physical;
@@ -149,92 +150,52 @@ var plan = staticCompilation.Plan as CompiledRelationQueryPlan
 ```
 
 Placement and storage bindings are versioned deployment artifacts that would normally be persisted and loaded rather
-than rebuilt for each query. They are expanded here to keep the example self-contained. This binding maps the single
-source to the `loads-read` index and records the evidence used to prove each lowering:
+than rebuilt for each query. The adapter-owned authoring surface consumes the exact plan-bound placed input, maps it
+to the `loads-read` index, and records both the effective evidence and the origin of every configurable decision:
 
 ```csharp
 var sourceContract = plan.InputContract.Sources.Single();
-RelationQuerySourceInstanceId sourceId = new("elastic/loads-read");
-var sourceInstance = new RelationQuerySourceInstance(
-    sourceId,
-    new("example/elasticsearch"),
-    ElasticRelationQueryTargetProfile.Default,
-    new(
-        maximumBatchSize: 100,
-        maximumBufferedRows: 10_000,
-        maximumFanOut: 100,
-        maximumConcurrency: 4));
-var placementBinding = new RelationQuerySourcePlacementBinding(
-    new("placement/loads-read"),
-    sourceContract.Input.Id,
-    sourceContract.Node,
-    sourceContract.Binding,
-    sourceContract.Shape,
-    sourceId,
-    RelationQuerySourcePlacementBindingKind.SourceSet,
-    RelationQuerySourceAcquisitionKind.BoundedEnumeration,
-    RelationQuerySourcePlacementOrigin.Explicit,
-    new(sourceContract.Shape, "Id"),
-    [
-        .. sourceContract.Fields.Select(field => new RelationQuerySourceFieldBinding(
-            field.Input.Id,
-            field.Input.Field.Path,
-            field.Input.Field.Path.ToString()))
-    ]);
-var placement = new RelationQuerySourcePlacement(
-    RelationQuerySourcePlacement.CurrentSchemaVersion,
-    RelationQueryCompiledPlanReference.From(plan),
-    ElasticRelationQueryStorageBinding.SemanticPathConventionSet,
-    [sourceInstance],
-    [placementBinding]);
+var placementBuilder = RelationQueryPlacement.For(plan);
+var source = placementBuilder.Source(
+    sourceKey: "elastic/loads-read",
+    targetProfile: ElasticRelationQueryTargetProfile.Default);
+var placementInput = placementBuilder.Place(sourceContract, source)
+    .Identity("Id")
+    .FieldsBySemanticPath();
+var authoredPlacement = placementBuilder.Build().RequireValue();
+var placement = authoredPlacement.Placement;
+var placed = authoredPlacement.GetInput(placementInput);
 
-RelationQueryInputId Input(FieldPath path) => sourceContract.Fields
-    .Single(field => field.Input.Field.Path == path)
-    .Input.Id;
-
-var storageBinding = new ElasticRelationQueryStorageBinding(
-    new("example/loads-read/v2"),
-    sourceId,
-    placementBinding.Id,
-    ElasticRelationQueryTargetProfile.Target,
-    ElasticRelationQueryTargetProfile.ProfileId,
-    "loads-read",
-    [
-        new(
-            Input(idPath),
-            FieldPath.FromField("id"),
-            FieldPath.Parse("id.keyword"),
-            ElasticRelationQueryFieldMappingKind.Keyword,
-            ElasticRelationQueryFieldRetrievalKind.Source,
-            ElasticRelationQueryFieldValueEncoding.JsonString,
-            ElasticRelationQueryFieldDocumentScope.RootDocument,
+var storageBinding = ElasticRelationQueryBinding.For(placed)
+    .Index("loads-read")
+    .FieldsExplicitly()
+    .Field(idPath, field => field
+        .Source(FieldPath.FromField("id"), ElasticRelationQueryFieldValueEncoding.JsonString)
+        .Query(FieldPath.Parse("id.keyword"), ElasticRelationQueryFieldMappingKind.Keyword)
+        .RootDocument()
+        .Attest(
             ElasticRelationQueryFieldSemanticCapabilities.ExactOrdering
                 | ElasticRelationQueryFieldSemanticCapabilities.StableUniqueOrdering,
-            semanticProfile: "example/ordinal-keyword-v1"),
-        new(
-            Input(customerNamePath),
+            "example/ordinal-keyword-v1"))
+    .Field(customerNamePath, field => field
+        .Source(
             FieldPath.FromField("customerName"),
+            ElasticRelationQueryFieldValueEncoding.JsonString)
+        .Query(
             FieldPath.Parse("customerName.keyword"),
-            ElasticRelationQueryFieldMappingKind.Keyword,
-            ElasticRelationQueryFieldRetrievalKind.Source,
-            ElasticRelationQueryFieldValueEncoding.JsonString,
-            ElasticRelationQueryFieldDocumentScope.RootDocument,
+            ElasticRelationQueryFieldMappingKind.Keyword)
+        .RootDocument()
+        .ReversedSuffix(FieldPath.Parse("customerName.reversed"))
+        .Attest(
             ElasticRelationQueryFieldSemanticCapabilities.WildcardSuffix
                 | ElasticRelationQueryFieldSemanticCapabilities.ReversedPrefixSuffix,
-            reversedSuffixField: FieldPath.Parse("customerName.reversed"),
-            semanticProfile: "example/ordinal-suffix-v1"),
-        new(
-            Input(stopLocationsPath),
-            sourceField: null,
-            FieldPath.Parse("stopLocations.keyword"),
-            ElasticRelationQueryFieldMappingKind.Keyword,
-            ElasticRelationQueryFieldRetrievalKind.Unavailable,
-            retrievalEncoding: null,
-            ElasticRelationQueryFieldDocumentScope.RootDocument,
-            ElasticRelationQueryFieldSemanticCapabilities.ExactCollectionMembership,
-            semanticProfile: "example/ordinal-keyword-array-v1")
-    ],
-    conventionSetVersion: ElasticRelationQueryStorageBinding.SemanticPathConventionSet);
+            "example/ordinal-suffix-v1"))
+    .CollectionKeyword(
+        stopLocationsPath,
+        FieldPath.Parse("stopLocations.keyword"),
+        "example/ordinal-keyword-array-v1")
+    .Build()
+    .RequireValue();
 
 var realization = RelationQueryRealizationCompiler.Compile(
     plan,
@@ -262,6 +223,59 @@ var countResult = compilation.Artifacts.Single(
 
 SearchRequest rowsRequest = rows.Bind(parameters);
 SearchRequest countRequest = countResult.Bind(parameters);
+```
+
+`ElasticRelationQueryBindingAuthoringOptions` supplies a named scoped profile between adapter conventions and local
+declarations. Local calls such as `Index` take precedence. The fixed Elasticsearch target and target-profile
+selection are recorded as adapter-convention decisions. Source instance and placement-binding identities are not
+configurable storage-binding settings: they are inherited plan-bound affinity from `placed`, preventing a binding
+from being silently reused with a different compiled placement. Repeating a setting at the same precedence tier,
+selecting an undemanded field, using a stale or non-Elasticsearch placed input, or leaving required evidence absent
+returns structured diagnostics from `Build`.
+
+Successful authoring proves that the artifact is well formed and has exact plan/source/placement affinity. It does
+not claim that every query branch is realizable: the Elasticsearch compiler still checks each branch against the
+field capabilities, physical evidence, operating boundaries, and selected lowering policy.
+
+The immutable constructors remain available for importing or rehydrating an already normalized binding, while the
+authoring builder is the usual path for application configuration. A direct constructor call may omit both the
+compiled-plan and placement fingerprints as an explicitly unverified escape hatch; supplying only one is rejected.
+Builder-authored bindings always persist both, and native compilation rejects either fingerprint when it does not
+match the request:
+
+```csharp
+var productionProfile = new ElasticRelationQueryBindingAuthoringOptions(
+    authority: "example/elastic-production/v3",
+    indexName: "loads-read-blue",
+    sourceMode: ElasticRelationQuerySourceMode.Synthetic,
+    maximumPageSize: 500);
+
+var locallyOverridden = ElasticRelationQueryBinding.For(placed, productionProfile)
+    .Index("loads-read-green") // Explicit local declaration wins over the scoped index.
+    .Build();
+```
+
+When placement authoring has a `RelationQueryPlacedInput<T>`, the same builder accepts CLR property expressions and
+resolves them through the authoritative CLR shape mapping rather than reflection-time naming guesses:
+
+```csharp
+var typedBinding = ElasticRelationQueryBinding.For(typedPlacedLoad)
+    .Index("loads-read")
+    .SourceOnly(
+        load => load.Id,
+        FieldPath.FromField("id"),
+        ElasticRelationQueryFieldValueEncoding.JsonString)
+    .Keyword(
+        load => load.CustomerName,
+        FieldPath.Parse("customerName.keyword"),
+        ElasticRelationQueryFieldSemanticCapabilities.ExactTerm,
+        "example/ordinal-keyword-v1",
+        sourceField: FieldPath.FromField("customerName"))
+    .CollectionKeyword(
+        load => load.StopLocations,
+        FieldPath.Parse("stopLocations.keyword"),
+        "example/ordinal-keyword-array-v1")
+    .Build();
 ```
 
 Both values are fresh Elastic SDK `SearchRequest` objects. The count request uses `size: 0` and exact total-hit
@@ -335,40 +349,25 @@ The resulting plan has one outer `Stops` input. That input owns all Elasticsearc
 synthetic child input is added to the canonical plan:
 
 ```csharp
-new ElasticRelationQueryFieldBinding(
-    Input(stopsPath),
-    sourceField: null,
-    queryField: FieldPath.Parse("stops"),
-    mappingKind: ElasticRelationQueryFieldMappingKind.Nested,
-    retrievalKind: ElasticRelationQueryFieldRetrievalKind.Unavailable,
-    retrievalEncoding: null,
-    documentScope: ElasticRelationQueryFieldDocumentScope.NestedDocument,
-    missingValueBehavior: ElasticRelationQueryMissingValueBehavior.ProhibitedByIngestion,
-    nullValueBehavior: ElasticRelationQueryNullValueBehavior.ProhibitedByIngestion,
-    nestedScope: new ElasticRelationQueryNestedScopeEvidence(
-        nestedPath: FieldPath.Parse("stops"),
-        correlationGuarantee: ElasticRelationQueryNestedCorrelationGuarantee.SameNestedDocument,
-        nullElementBehavior: ElasticRelationQueryNestedAbsenceBehavior.ProhibitedByIngestion,
-        emptyCollectionBehavior: ElasticRelationQueryEmptyCollectionBehavior.NoNestedDocuments,
-        childFields:
-        [
-            new(
-                locationPath,
-                FieldPath.Parse("stops.location.keyword"),
-                ElasticRelationQueryFieldMappingKind.Keyword,
-                ElasticRelationQueryFieldSemanticCapabilities.ExactTerm,
-                "example/ordinal-keyword-v1",
-                ElasticRelationQueryNestedAbsenceBehavior.ProhibitedByIngestion,
-                ElasticRelationQueryNestedAbsenceBehavior.ProhibitedByIngestion),
-            new(
-                typePath,
-                FieldPath.Parse("stops.type.keyword"),
-                ElasticRelationQueryFieldMappingKind.Keyword,
-                ElasticRelationQueryFieldSemanticCapabilities.ExactTerm,
-                "example/ordinal-keyword-v1",
-                ElasticRelationQueryNestedAbsenceBehavior.ProhibitedByIngestion,
-                ElasticRelationQueryNestedAbsenceBehavior.ProhibitedByIngestion)
-        ]));
+// placedWithStops is the plan-bound placed input produced for the alternative Stops query.
+var nestedStorageBinding = ElasticRelationQueryBinding.For(placedWithStops)
+    .Index("loads-read")
+    .Nested(stopsPath, FieldPath.Parse("stops"), nested => nested
+        .AttestCanonicalAnyRepresentation()
+        .Child(
+            locationPath,
+            FieldPath.Parse("stops.location.keyword"),
+            ElasticRelationQueryFieldMappingKind.Keyword,
+            ElasticRelationQueryFieldSemanticCapabilities.ExactTerm,
+            "example/ordinal-keyword-v1")
+        .Child(
+            typePath,
+            FieldPath.Parse("stops.type.keyword"),
+            ElasticRelationQueryFieldMappingKind.Keyword,
+            ElasticRelationQueryFieldSemanticCapabilities.ExactTerm,
+            "example/ordinal-keyword-v1"))
+    .Build()
+    .RequireValue();
 ```
 
 The resulting SDK request contains one `NestedQuery` at `stops`, with both term clauses inside the same child Boolean

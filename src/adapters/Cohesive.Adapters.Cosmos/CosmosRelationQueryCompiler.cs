@@ -108,6 +108,22 @@ public sealed class CosmosRelationQueryCompiler
         ImmutableArray<RelationQueryNativeCompilationDiagnostic>.Builder diagnostics =
             ImmutableArray.CreateBuilder<RelationQueryNativeCompilationDiagnostic>();
         var reportProfile = request.Realization.TargetProfile;
+        if (storageBinding.CompiledPlanFingerprint is { } compiledPlanFingerprint
+            && !Equals(
+                compiledPlanFingerprint,
+                RelationQueryCompiledPlanReferenceFingerprinter.Compute(request.PlanReference)))
+        {
+            diagnostics.Add(BindingDiagnostic(
+                "The Cosmos storage binding's exact compiled-plan affinity does not match the native-compilation request."));
+        }
+
+        if (storageBinding.PlacementFingerprint is { } placementFingerprint
+            && !Equals(placementFingerprint, request.Placement.Fingerprint))
+        {
+            diagnostics.Add(BindingDiagnostic(
+                "The Cosmos storage binding's exact source-placement affinity does not match the native-compilation request."));
+        }
+
         if (storageBinding.Target != reportProfile.Target
             || storageBinding.TargetProfile != reportProfile.Id
             || storageBinding.Target != CosmosRelationQueryTargetProfile.Target
@@ -181,7 +197,7 @@ public sealed class CosmosRelationQueryCompiler
             message);
     }
 
-    static bool ProfilesEquivalent(
+    internal static bool ProfilesEquivalent(
         RelationQueryTargetCapabilityProfile left,
         RelationQueryTargetCapabilityProfile right)
     {
@@ -286,14 +302,23 @@ public sealed class CosmosRelationQueryCompiler
             while (true)
             {
                 if (!visited.Add(current))
+                {
                     throw Fail(CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedBranchTopology,
                         "The selected native branch contains a cycle.", current);
+                }
+
                 if (!nodes.TryGetValue(current, out var execution))
+                {
                     throw Fail(CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedBranchTopology,
                         $"Branch node '{current.Value}' is absent from the demand-scoped execution slice.", current);
+                }
+
                 reverse.Add(execution);
                 if (execution.CanonicalNode is SourceQueryNode)
+                {
                     break;
+                }
+
                 if (execution.LogicalPlan.EffectiveInputs.Length != 1)
                 {
                     throw Fail(
@@ -435,7 +460,10 @@ public sealed class CosmosRelationQueryCompiler
                         }
                     case ProjectQueryNode projection:
                         foreach (var assignment in execution.ProjectionAssignments)
+                        {
                             projections.Add((projection.ResultBinding, assignment.Definition.Target), assignment);
+                        }
+
                         break;
                     case AggregateQueryNode aggregate:
                         foreach (var grouping in execution.AggregateGroupings)
@@ -715,7 +743,10 @@ public sealed class CosmosRelationQueryCompiler
             foreach (var execution in pipeline)
             {
                 if (execution.CanonicalNode is not OrderQueryNode order)
+                {
                     continue;
+                }
+
                 orderExecution = execution;
                 for (var index = 0; index < order.Orderings.Length; index++)
                 {
@@ -749,7 +780,10 @@ public sealed class CosmosRelationQueryCompiler
 
             var pageExecution = pipeline.SingleOrDefault(static execution => execution.CanonicalNode is PageQueryNode);
             if (pageExecution is null)
+            {
                 return;
+            }
+
             var page = (OffsetPageDefinition)((PageQueryNode)pageExecution.CanonicalNode).Page;
             if (page.Limit > CosmosRelationQueryTargetProfile.MaximumPageSize)
             {
@@ -766,10 +800,13 @@ public sealed class CosmosRelationQueryCompiler
                     pageExecution.Id);
             }
             if (stableOrderingPath is null)
+            {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.PagingUnstable,
                     "The preceding order node has no stable unique path for offset paging.",
                     pageExecution.Id);
+            }
+
             builder.OffsetLimit(page.Offset, page.Limit);
             paging = new(page.Offset, page.Limit, stableOrderingPath.Value);
         }
@@ -777,12 +814,21 @@ public sealed class CosmosRelationQueryCompiler
         FieldPath? TryResolveStableSourcePath(Expr expression, RelationQueryExpressionSiteAnalysis? site)
         {
             if (expression is not FieldExpr field)
+            {
                 return null;
+            }
+
             var resolved = ResolveFieldRoot(field.Path, field.Binding, site);
             if (resolved.Root != FieldRoot.Binding)
+            {
                 return null;
+            }
+
             if (projections.TryGetValue((resolved.Binding!.Value, resolved.Path), out var projection))
+            {
                 return TryResolveStableSourcePath(projection.Definition.Value, projection.ValueSite);
+            }
+
             if (groupings.ContainsKey((resolved.Binding!.Value, resolved.Path))
                 || aggregates.ContainsKey((resolved.Binding!.Value, resolved.Path)))
             {
@@ -992,7 +1038,9 @@ public sealed class CosmosRelationQueryCompiler
                     parent.DiagnosticLocation),
                 site.Analysis.Semantics);
             if (analysis.IsValid && analysis.KnownResult is { } result)
+            {
                 return result;
+            }
 
             throw Fail(
                 CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
@@ -1071,7 +1119,10 @@ public sealed class CosmosRelationQueryCompiler
                     requireNonNullInputs: true);
             }
             if (aggregates.TryGetValue((binding, resolved.Path), out var aggregate))
+            {
                 return CompileAggregate(aggregate);
+            }
+
             if (!sourceFields.TryGetValue((binding, resolved.Path), out var sourceField))
             {
                 throw Fail(
@@ -1131,7 +1182,10 @@ public sealed class CosmosRelationQueryCompiler
             }
             var binding = ResolveCurrentItemBinding(site?.Node);
             if (binding is { } current && collectionAliases.TryGetValue(current, out var currentAlias))
+            {
                 return CosmosSqlExpression.Alias(currentAlias);
+            }
+
             if (collectionAliases.Count != 1)
             {
                 throw Fail(
@@ -1186,7 +1240,10 @@ public sealed class CosmosRelationQueryCompiler
             RelationQueryExpressionSiteAnalysis? site)
         {
             if (explicitBinding is { } binding)
+            {
                 return new(FieldRoot.Binding, binding, path);
+            }
+
             if (site is null)
             {
                 throw Fail(
@@ -1226,10 +1283,16 @@ public sealed class CosmosRelationQueryCompiler
         ValueBindingId? ResolveCurrentItemBinding(QueryNodeId? node)
         {
             if (node is null)
+            {
                 return collectionAliases.Count == 1 ? collectionAliases.Keys.Single() : null;
+            }
+
             var index = pipeline.FindIndex(execution => execution.Id == node.Value);
             if (index < 0)
+            {
                 return null;
+            }
+
             return pipeline.Take(index + 1)
                 .Select(static execution => execution.CanonicalNode)
                 .OfType<ExpandCollectionQueryNode>()
@@ -1328,7 +1391,10 @@ public sealed class CosmosRelationQueryCompiler
             string operation)
         {
             if (IsRequiredNonNull(site.Analysis.KnownResult))
+            {
                 return;
+            }
+
             throw Fail(
                 CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
                 $"Canonical {operation} semantics for missing or null values are not proven exact by Cosmos SQL v1.",
@@ -1341,7 +1407,10 @@ public sealed class CosmosRelationQueryCompiler
             string operation)
         {
             if (site.Analysis.KnownResult is { } result)
+            {
                 return result;
+            }
+
             throw Fail(
                 CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
                 $"Canonical {operation} does not have one known semantic value contract for result decoding.",
@@ -1387,7 +1456,10 @@ public sealed class CosmosRelationQueryCompiler
             string operation)
         {
             if (IsCosmosEqualityScalar(site.Analysis.KnownResult?.GetEffectiveType()))
+            {
                 return;
+            }
+
             throw Fail(
                 CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
                 $"Canonical {operation} requires one proven exact scalar equality domain in Cosmos SQL v1.",
@@ -1401,11 +1473,17 @@ public sealed class CosmosRelationQueryCompiler
         {
             var type = site.Analysis.KnownResult?.GetEffectiveType();
             if (type is ScalarTypeRef { Kind: ScalarTypeKind.Int32 })
+            {
                 return;
+            }
+
             if (type is ScalarTypeRef { Kind: ScalarTypeKind.String or ScalarTypeKind.Date }
                 && sourcePath is { } path
                 && storageBinding.ExactOrderingPaths.Contains(path))
+            {
                 return;
+            }
+
             throw Fail(
                 CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
                 "Canonical ordering requires Int32 values or an explicitly proven string/date source path; wider numeric and temporal ordering is not exact in Cosmos SQL v1.",
@@ -1605,10 +1683,16 @@ static class CosmosRelationQueryArtifactFingerprinter
         Append(canonical, provenance.ConventionSetVersion);
         Append(canonical, provenance.CoveredNodes.Length);
         foreach (var node in provenance.CoveredNodes)
+        {
             Append(canonical, node.Value);
+        }
+
         Append(canonical, provenance.CoveredAssignments.Length);
         foreach (var assignment in provenance.CoveredAssignments)
+        {
             Append(canonical, assignment.Value);
+        }
+
         Append(canonical, provenance.RealizationDecisions.Length);
         foreach (var decision in provenance.RealizationDecisions)
         {
@@ -1617,23 +1701,39 @@ static class CosmosRelationQueryArtifactFingerprinter
             Append(canonical, decision.Override?.Value);
             Append(canonical, decision.CapabilityEvidence.Length);
             foreach (var evidence in decision.CapabilityEvidence)
+            {
                 Append(canonical, evidence.Value);
+            }
+
             Append(canonical, decision.CompositionRules.Length);
             foreach (var rule in decision.CompositionRules)
+            {
                 Append(canonical, rule.Value);
+            }
+
             Append(canonical, decision.OperatingBoundaries.Length);
             foreach (var boundary in decision.OperatingBoundaries)
+            {
                 Append(canonical, boundary.Value);
+            }
+
             Append(canonical, decision.PreservedGuarantees.Length);
             foreach (var guarantee in decision.PreservedGuarantees)
+            {
                 Append(canonical, (int)guarantee);
+            }
         }
         Append(canonical, provenance.CapabilityEvidence.Length);
         foreach (var evidence in provenance.CapabilityEvidence)
+        {
             Append(canonical, evidence.Value);
+        }
+
         Append(canonical, provenance.OperatingBoundaries.Length);
         foreach (var boundary in provenance.OperatingBoundaries)
+        {
             Append(canonical, boundary.Value);
+        }
 
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString()));
         return new(Algorithm, Canonicalization, Convert.ToHexStringLower(bytes));
@@ -1673,7 +1773,9 @@ static class RelationQueryExecutionNodeListExtensions
         for (var index = 0; index < nodes.Length; index++)
         {
             if (predicate(nodes[index]))
+            {
                 return index;
+            }
         }
         return -1;
     }

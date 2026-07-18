@@ -1,6 +1,5 @@
 using System.Collections.Immutable;
 using System.Linq.Expressions;
-using System.Reflection;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
 
@@ -323,6 +322,154 @@ public sealed partial class RelationQueryExpressionAuthoring
         where TResult : notnull =>
         Project(input, clr.Shape<TResult>(), projection, [first, second, third], sourceReference);
 
+    /// <summary>Projects the focused binding carried by a bound node.</summary>
+    /// <typeparam name="TValue">CLR type of the focused input binding.</typeparam>
+    /// <typeparam name="TResult">CLR projection type.</typeparam>
+    /// <param name="input">Logical input and focused binding to project.</param>
+    /// <param name="projection">Object projection over the focused binding.</param>
+    /// <param name="sourceReference">Optional stable producer reference.</param>
+    /// <returns>Typed projection-node and result-binding handles retaining the input's relation-root context.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="input"/> or <paramref name="projection"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">The input belongs to another session or its binding is not visible.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// <typeparamref name="TResult"/> cannot be represented by the configured CLR shape context.
+    /// </exception>
+    /// <exception cref="RelationQueryExpressionAuthoringException">The projection cannot be lowered exactly.</exception>
+    public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> Project<TValue, TResult>(
+        RelationQueryExpressionBoundNode<TValue> input,
+        Expression<Func<TValue, TResult>> projection,
+        string? sourceReference = null)
+        where TValue : notnull
+        where TResult : notnull
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        var projected = Project(input.StructuralNode, projection, input.Binding, sourceReference);
+        return new(projected.Node, projected.Binding, input.RelationRoot);
+    }
+
+    /// <summary>Projects an originating relation root together with a bound node's focused binding.</summary>
+    /// <typeparam name="TRoot">CLR type of the originating relation-root binding.</typeparam>
+    /// <typeparam name="TFocus">CLR type of the focused input binding.</typeparam>
+    /// <typeparam name="TResult">CLR projection type.</typeparam>
+    /// <param name="input">Logical input whose retained root and focused binding are projected.</param>
+    /// <param name="projection">
+    /// Object projection whose first parameter is the originating root and whose second parameter is the focused
+    /// binding.
+    /// </param>
+    /// <param name="sourceReference">Optional stable producer reference.</param>
+    /// <returns>Typed projection-node and result-binding handles retaining the input's relation-root context.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="input"/> or <paramref name="projection"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">The input belongs to another session or a binding is not visible.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The input has no distinct originating root of type <typeparamref name="TRoot"/>, or
+    /// <typeparamref name="TResult"/> cannot be represented by the configured CLR shape context.
+    /// </exception>
+    /// <exception cref="RelationQueryExpressionAuthoringException">The projection cannot be lowered exactly.</exception>
+    public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> Project<TRoot, TFocus, TResult>(
+        RelationQueryExpressionBoundNode<TFocus> input,
+        Expression<Func<TRoot, TFocus, TResult>> projection,
+        string? sourceReference = null)
+        where TRoot : notnull
+        where TFocus : notnull
+        where TResult : notnull
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        var root = input.RelationRoot as RelationQueryExpressionValueBinding<TRoot>
+            ?? throw new InvalidOperationException(
+                $"The bound node does not retain an originating relation root of CLR type '{StableTypeName(typeof(TRoot))}'. "
+                + "Pass the required bindings to the explicit Project overload.");
+        if (ReferenceEquals(root, input.Binding))
+        {
+            throw new InvalidOperationException(
+                "A two-binding projection requires a focused binding distinct from its originating relation root. "
+                + "Use the one-binding or explicit Project overload.");
+        }
+
+        var projected = Project(input.StructuralNode, projection, root, input.Binding, sourceReference);
+        return new(projected.Node, projected.Binding, input.RelationRoot);
+    }
+
+    /// <summary>Projects one explicit earlier binding together with a bound node's focused binding.</summary>
+    /// <typeparam name="TFirst">CLR type of the explicit earlier binding.</typeparam>
+    /// <typeparam name="TFocus">CLR type of the focused input binding.</typeparam>
+    /// <typeparam name="TResult">CLR projection type.</typeparam>
+    /// <param name="input">Logical input and focused final binding.</param>
+    /// <param name="projection">Object projection whose final parameter corresponds to the focused binding.</param>
+    /// <param name="first">Visible binding corresponding to the first lambda parameter.</param>
+    /// <param name="sourceReference">Optional stable producer reference.</param>
+    /// <returns>Typed projection-node and result-binding handles retaining the input's relation-root context.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="input"/>, <paramref name="projection"/>, or <paramref name="first"/> is
+    /// <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// A binding belongs to another session, is not visible in <paramref name="input"/>, or has a mismatched CLR
+    /// type.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// <typeparamref name="TResult"/> cannot be represented by the configured CLR shape context.
+    /// </exception>
+    /// <exception cref="RelationQueryExpressionAuthoringException">The projection cannot be lowered exactly.</exception>
+    public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> Project<TFirst, TFocus, TResult>(
+        RelationQueryExpressionBoundNode<TFocus> input,
+        Expression<Func<TFirst, TFocus, TResult>> projection,
+        RelationQueryExpressionValueBinding<TFirst> first,
+        string? sourceReference = null)
+        where TFirst : notnull
+        where TFocus : notnull
+        where TResult : notnull
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(first);
+        var projected = Project(input.StructuralNode, projection, first, input.Binding, sourceReference);
+        return new(projected.Node, projected.Binding, input.RelationRoot);
+    }
+
+    /// <summary>Projects two explicit earlier bindings together with a bound node's focused binding.</summary>
+    /// <typeparam name="TFirst">CLR type of the first explicit earlier binding.</typeparam>
+    /// <typeparam name="TSecond">CLR type of the second explicit earlier binding.</typeparam>
+    /// <typeparam name="TFocus">CLR type of the focused input binding.</typeparam>
+    /// <typeparam name="TResult">CLR projection type.</typeparam>
+    /// <param name="input">Logical input and focused final binding.</param>
+    /// <param name="projection">Object projection whose final parameter corresponds to the focused binding.</param>
+    /// <param name="first">Visible binding corresponding to the first lambda parameter.</param>
+    /// <param name="second">Visible binding corresponding to the second lambda parameter.</param>
+    /// <param name="sourceReference">Optional stable producer reference.</param>
+    /// <returns>Typed projection-node and result-binding handles retaining the input's relation-root context.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="input"/>, <paramref name="projection"/>, <paramref name="first"/>, or
+    /// <paramref name="second"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// A binding belongs to another session, is not visible in <paramref name="input"/>, or has a mismatched CLR
+    /// type.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// <typeparamref name="TResult"/> cannot be represented by the configured CLR shape context.
+    /// </exception>
+    /// <exception cref="RelationQueryExpressionAuthoringException">The projection cannot be lowered exactly.</exception>
+    public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> Project<TFirst, TSecond, TFocus, TResult>(
+        RelationQueryExpressionBoundNode<TFocus> input,
+        Expression<Func<TFirst, TSecond, TFocus, TResult>> projection,
+        RelationQueryExpressionValueBinding<TFirst> first,
+        RelationQueryExpressionValueBinding<TSecond> second,
+        string? sourceReference = null)
+        where TFirst : notnull
+        where TSecond : notnull
+        where TFocus : notnull
+        where TResult : notnull
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(first);
+        ArgumentNullException.ThrowIfNull(second);
+        var projected = Project(input.StructuralNode, projection, first, second, input.Binding, sourceReference);
+        return new(projected.Node, projected.Binding, input.RelationRoot);
+    }
+
     /// <summary>Joins two logical branches using a typed arbitrary-width correlation predicate.</summary>
     /// <typeparam name="TLeft">Canonical type of the left node.</typeparam>
     /// <typeparam name="TRight">Canonical type of the right node.</typeparam>
@@ -546,13 +693,18 @@ public sealed partial class RelationQueryExpressionAuthoring
         {
             Expression? root = member;
             while (root is MemberExpression nested)
+            {
                 root = nested.Expression;
+            }
+
             if (root is ParameterExpression parameter)
             {
                 for (var index = 0; index < parameters.Count; index++)
                 {
                     if (ReferenceEquals(parameters[index], parameter))
+                    {
                         return new(bindings[index], IsAmbiguous: false);
+                    }
                 }
             }
 
@@ -581,11 +733,20 @@ public sealed partial class RelationQueryExpressionAuthoring
         CollectionBindingProvenance right)
     {
         if (left.IsAmbiguous || right.IsAmbiguous)
+        {
             return new(null, IsAmbiguous: true);
+        }
+
         if (left.Binding is null && right.Binding is null)
+        {
             return default;
+        }
+
         if (left.Binding is null || right.Binding is null)
+        {
             return new(null, IsAmbiguous: true);
+        }
+
         return ReferenceEquals(left.Binding, right.Binding)
             ? left
             : new(null, IsAmbiguous: true);
@@ -720,6 +881,134 @@ public sealed partial class RelationQueryExpressionAuthoring
         return structural.Page(input, page, source: Source(reference, "Expression-authored paging."));
     }
 
+    /// <summary>
+    /// Builds a convention-identified relation from a keyed output retaining one originating source root.
+    /// </summary>
+    /// <typeparam name="TOutputNode">Canonical type of the output node.</typeparam>
+    /// <typeparam name="TOutput">CLR output type.</typeparam>
+    /// <typeparam name="TKey">CLR output-key type.</typeparam>
+    /// <param name="output">Typed output retaining its originating source binding.</param>
+    /// <param name="key">Stable non-null output-key expression.</param>
+    /// <param name="mode">Output cardinality relative to each root.</param>
+    /// <param name="invariants">Optional output invariants lowered before the terminal commits.</param>
+    /// <param name="id">Optional explicit relation identity overriding the endpoint convention.</param>
+    /// <param name="name">Optional explicit relation display name overriding the CLR output-type convention.</param>
+    /// <param name="sourceReference">Optional stable producer reference.</param>
+    /// <returns>The canonical relation, validation result, and authoring provenance.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="output"/> or <paramref name="key"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// The output belongs to another session, exposes more than one visible binding, an invariant is null, invariant
+    /// names repeat, or an endpoint has no graph-qualified shape.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="mode"/> is unsupported.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// <paramref name="output"/> has no unambiguous originating source. Use the explicit overload accepting a root.
+    /// </exception>
+    /// <exception cref="RelationQueryExpressionAuthoringException">
+    /// The key or an invariant cannot be lowered exactly, or the key contains a raw CLR temporal carrier instead
+    /// of an explicitly normalized canonical scalar; no relation terminal is committed.
+    /// </exception>
+    public RelationQueryAuthoringResult<RelationDefinition> BuildRelation<TOutputNode, TOutput, TKey>(
+        RelationQueryExpressionBoundNode<TOutputNode, TOutput> output,
+        Expression<Func<TOutput, TKey>> key,
+        RelationOutputMode mode = RelationOutputMode.OnePerRoot,
+        IEnumerable<RelationQueryExpressionInvariant<TOutput>>? invariants = null,
+        RelationId? id = null,
+        RelationName? name = null,
+        string? sourceReference = null)
+        where TOutputNode : LogicalQueryNode
+        where TOutput : notnull
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(key);
+        var root = RequireRetainedRelationRoot(output);
+        var terminal = ResolveRelationTerminal(
+            root,
+            output.Binding,
+            typeof(TOutput),
+            mode,
+            id,
+            name,
+            sourceReference);
+        var result = BuildExpressionRelationCore(
+            terminal.Id,
+            terminal.Name,
+            root,
+            output.Node,
+            output.Binding,
+            key,
+            mode,
+            invariants,
+            terminal.Reference);
+        return WithConventionRelationRoot(WithRelationTerminalProvenance(result, terminal), root, terminal.Source);
+    }
+
+    /// <summary>Builds a convention-identified relation with an expression-authored output key and invariants.</summary>
+    /// <typeparam name="TRoot">CLR root type.</typeparam>
+    /// <typeparam name="TOutputNode">Canonical type of the output node.</typeparam>
+    /// <typeparam name="TOutput">CLR output type.</typeparam>
+    /// <typeparam name="TKey">CLR output-key type.</typeparam>
+    /// <param name="root">Typed source node whose binding is the relation root.</param>
+    /// <param name="output">Typed logical node and focused binding producing relation outputs.</param>
+    /// <param name="key">Stable non-null output-key expression.</param>
+    /// <param name="mode">Output cardinality relative to each root.</param>
+    /// <param name="invariants">Optional output invariants lowered before the terminal commits.</param>
+    /// <param name="id">Optional explicit relation identity overriding the endpoint convention.</param>
+    /// <param name="name">Optional explicit relation display name overriding the CLR output-type convention.</param>
+    /// <param name="sourceReference">Optional stable producer reference.</param>
+    /// <returns>The canonical relation, validation result, and authoring provenance.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="root"/>, <paramref name="output"/>, or <paramref name="key"/> is
+    /// <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// A handle belongs to another session, the output exposes more than one visible binding, an endpoint has no
+    /// graph-qualified shape, an invariant is null, or invariant names repeat.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="mode"/> is unsupported.</exception>
+    /// <exception cref="RelationQueryExpressionAuthoringException">
+    /// The key or an invariant cannot be lowered exactly, or the key contains a raw CLR temporal carrier instead
+    /// of an explicitly normalized canonical scalar; no relation terminal is committed.
+    /// </exception>
+    public RelationQueryAuthoringResult<RelationDefinition> BuildRelation<TRoot, TOutputNode, TOutput, TKey>(
+        RelationQueryExpressionBoundNode<SourceQueryNode, TRoot> root,
+        RelationQueryExpressionBoundNode<TOutputNode, TOutput> output,
+        Expression<Func<TOutput, TKey>> key,
+        RelationOutputMode mode = RelationOutputMode.OnePerRoot,
+        IEnumerable<RelationQueryExpressionInvariant<TOutput>>? invariants = null,
+        RelationId? id = null,
+        RelationName? name = null,
+        string? sourceReference = null)
+        where TRoot : notnull
+        where TOutputNode : LogicalQueryNode
+        where TOutput : notnull
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(key);
+        var terminal = ResolveRelationTerminal(
+            root.Binding,
+            output.Binding,
+            typeof(TOutput),
+            mode,
+            id,
+            name,
+            sourceReference);
+        var result = BuildExpressionRelationCore(
+            terminal.Id,
+            terminal.Name,
+            root.Binding,
+            output.Node,
+            output.Binding,
+            key,
+            mode,
+            invariants,
+            terminal.Reference);
+        return WithRelationTerminalProvenance(result, terminal);
+    }
+
     /// <summary>Builds a canonical relation with an expression-authored output key and invariants.</summary>
     /// <typeparam name="TRoot">CLR root type.</typeparam>
     /// <typeparam name="TOutputNode">Canonical type of the output node.</typeparam>
@@ -763,6 +1052,32 @@ public sealed partial class RelationQueryExpressionAuthoring
         where TOutput : notnull
     {
         ArgumentNullException.ThrowIfNull(root);
+        return BuildExpressionRelationCore(
+            id,
+            name,
+            root,
+            output,
+            outputBinding,
+            key,
+            mode,
+            invariants,
+            sourceReference);
+    }
+
+    RelationQueryAuthoringResult<RelationDefinition> BuildExpressionRelationCore<TOutputNode, TOutput, TKey>(
+        RelationId id,
+        RelationName name,
+        RelationQueryExpressionValueBinding root,
+        RelationQueryNodeHandle<TOutputNode> output,
+        RelationQueryExpressionValueBinding<TOutput> outputBinding,
+        Expression<Func<TOutput, TKey>>? key,
+        RelationOutputMode mode,
+        IEnumerable<RelationQueryExpressionInvariant<TOutput>>? invariants,
+        string? sourceReference)
+        where TOutputNode : LogicalQueryNode
+        where TOutput : notnull
+    {
+        ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(outputBinding);
         RequireOwner(root);
         RequireBindingVisible(output, outputBinding, nameof(outputBinding));
@@ -784,7 +1099,10 @@ public sealed partial class RelationQueryExpressionAuthoring
 
         var authoredInvariants = invariants?.ToImmutableArray() ?? [];
         if (authoredInvariants.Any(static invariant => invariant is null))
+        {
             throw new ArgumentException("Relation invariants cannot contain null entries.", nameof(invariants));
+        }
+
         if (authoredInvariants.Select(static invariant => invariant.Name).Distinct(StringComparer.Ordinal).Count()
             != authoredInvariants.Length)
         {
@@ -844,7 +1162,9 @@ public sealed partial class RelationQueryExpressionAuthoring
         where TInput : LogicalQueryNode
     {
         foreach (var binding in bindings)
+        {
             RequireBindingVisible(input, binding, parameterName);
+        }
     }
 
     internal void RequireBindingsVisibleInEither<TLeft, TRight>(

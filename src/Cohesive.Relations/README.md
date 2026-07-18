@@ -379,39 +379,82 @@ A simple DTO relation needs no manually authored shape IDs, field paths, express
 ```csharp
 var author = RelationQuery.Expression();
 var loads = author.Source<Load>();
-var documents = author.Project(
-    loads.Node,
-    (Load load) => new LoadDto
-    {
-        Id = load.Id,
-        Status = load.Status
-    },
-    loads.Binding);
-
-var relation = author.BuildRelation(
-    new RelationId("load-dto"),
-    new RelationName("LoadDto"),
-    loads.Binding,
-    documents.Node,
-    documents.Binding,
-    (LoadDto document) => document.Id);
+var relation = author
+    .Project(
+        loads,
+        (Load load) => new LoadDto
+        {
+            Id = load.Id,
+            Status = load.Status
+        })
+    .BuildRelation((LoadDto document) => document.Id);
 ```
 
-The same session can author enrichment, correlated collection semantics, a row result, an aggregation,
-and a target-neutral typed invocation:
+Relationship and terminal identities, display names, and provenance references are convention-derived unless an
+explicit overload or optional override is used. The versioned relation convention hashes the root shape, output
+shape, and output mode; multiple conceptual relations with the same endpoints use the optional `id` or the explicit
+terminal overload. A minimal joined DTO relation is therefore:
+
+```csharp
+var author = RelationQuery.Expression();
+var loads = author.Source<Load>();
+var customers = author.Traverse<Load, Customer>(
+    loads,
+    load => load.CustomerId);
+
+var relation = author
+    .Project(
+        customers,
+        (Load load, Customer customer) => new LoadSearchDto
+        {
+            Id = load.Id,
+            CustomerId = load.CustomerId,
+            CustomerName = customer.Name,
+            CustomerType = customer.Type
+        })
+    .BuildRelation((LoadSearchDto document) => document.Id);
+
+var relationshipCatalog = author.CreateRelationshipCatalogDocument();
+```
+
+Inline traversal definitions are retained in the session's deterministic `RelationshipCatalog`; the document above
+can be supplied directly to static compilation. A bound node carries its focused binding and, along the unary
+`Source → Traverse → Project` path, its originating relation root. A one-parameter projection uses the focused
+binding. A two-parameter projection without explicit bindings uses the root first and the focus second. For other
+binding layouts, the focused-binding-last overload accepts the earlier bindings explicitly:
+
+```csharp
+var loadEquipment = author.Relationship<Load, Equipment>(load => load.EquipmentId);
+var equipment = author.Traverse(customers, loads.Binding, loadEquipment);
+
+var documents = author.Project(
+    equipment,
+    (Load load, Customer customer, Equipment unit) => new LoadSearchDto
+    {
+        Id = load.Id,
+        CustomerId = load.CustomerId,
+        CustomerName = customer.Name,
+        CustomerType = customer.Type,
+        EquipmentNumber = unit.Number
+    },
+    loads.Binding,
+    customers.Binding);
+```
+
+Branches assembled through joins or the structural escape hatch do not guess a relation root; pass the intended root
+to the existing explicit `BuildRelation` overload. The same session can consequently author multiple enrichments,
+correlated collection semantics, a row result, an aggregation, and a target-neutral typed invocation:
 
 ```csharp
 var author = RelationQuery.Expression();
 var loadCustomer = author.Relationship<Load, Customer>(
-    load => load.CustomerId,
-    new RelationshipId("load/customer"));
+    load => load.CustomerId);
 var loadEquipment = author.Relationship<Load, Equipment>(
-    load => load.EquipmentId,
-    new RelationshipId("load/equipment"));
+    load => load.EquipmentId);
 
 var loads = author.Source<Load>();
-var customers = author.Traverse(loads.Node, loads.Binding, loadCustomer);
-var equipment = author.Traverse(customers.Node, loads.Binding, loadEquipment);
+var customers = author.Traverse(loads, loadCustomer);
+var equipment = author.Traverse(customers, loads.Binding, loadEquipment);
 var location = author.Parameter<string>("location");
 
 var filtered = author.Filter(
@@ -1320,6 +1363,41 @@ It lets execution, diagnostics, explain tooling, and artifact fingerprints attri
 native representation to the semantic requirements that produced it without rescanning or redefining those
 semantics.
 
+### Typed source-placement authoring
+
+`RelationQueryPlacement` authors the physical placement for one exact compiled plan without requiring callers to
+copy its input, node, binding, or shape identities into low-level constructors. The builder reads the plan's exact
+input contract, derives safe acquisition modes and stable plan-scoped identities, and lowers typed CLR selectors or
+structural `FieldPath` selectors into the persisted `RelationQuerySourcePlacement` artifact:
+
+```csharp
+var placementBuilder = RelationQueryPlacement.For(plan);
+var source = placementBuilder.Source(
+    sourceKey: "loads-read",
+    targetProfile: targetProfile);
+
+var loads = placementBuilder.PlaceSource(source, loadShape)
+    .Identity(load => load.Id)
+    .FieldsBySemanticPath();
+
+var authoredPlacement = placementBuilder.Build().RequireValue();
+RelationQueryPlacedInput<LoadSearchDocument> placedLoads =
+    authoredPlacement.GetInput(loads);
+```
+
+The `sourceKey` is a deterministic authoring key used to derive convention identities. It is not a database,
+container, index, or endpoint name; adapter-owned binding builders declare those physical target facts. Imported
+or non-CLR shapes use the same builder through exact compiled contracts and structural paths. A typed shape handle
+must match the plan's complete shape-graph snapshot, so rehydrated equivalent documents are accepted while stale
+same-ID documents are diagnosed. Missing, duplicate, foreign, stale, or incompatible declarations return stable
+structured diagnostics rather than partially populated artifacts.
+
+Placement schema v2 retains one normalized configuration decision for each effective setting. Each decision records
+whether the value came from an explicit local declaration, a scoped profile, an adapter convention, or a framework
+default, together with the responsible versioned authority. Effective values remain in their dedicated artifact
+properties, so provenance is inspectable without creating another source of truth. These decisions participate in
+the placement fingerprint and survive serialization.
+
 ### Deterministic federated physical planning
 
 `RelationQueryPhysicalPlanner` turns one exact `CompiledRelationQueryPlan`, its canonical reference-interpreter
@@ -1527,12 +1605,13 @@ The current foundation includes:
   nested-query lowering when physical correlation evidence is available.
 - Object/observation mapping and runtime-compiled DTO kernels for supported canonical relation terminals.
 - Structural and typed expression-based C# authoring with deterministic CLR shape snapshots.
+- Plan-bound typed and structural source-placement authoring with deterministic conventions, per-setting
+  configuration provenance, and adapter-ready placed-input handles.
 - An explicitly temporary `Cohesive.Relations.Queries` compatibility boundary.
 - Contract projection for other host languages.
 
 Active areas of development include:
 
-- Typed placement and adapter-binding C# authoring over canonical physical contracts.
 - Migration and removal of `Cohesive.Relations.Queries`.
 - PostgreSQL and broader Cosmos SQL and Elasticsearch compiler coverage; Gremlin is deferred.
 - Broader nested collection traversal, additional scoped collection operators, and target lowering.

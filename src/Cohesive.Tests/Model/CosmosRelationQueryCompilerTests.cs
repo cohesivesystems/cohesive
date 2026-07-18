@@ -1,14 +1,12 @@
 using System.Collections.Immutable;
 using System.Globalization;
 using Cohesive.Adapters.Cosmos;
-using Cohesive.Model.Expressions;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.Physical;
 using Cohesive.Relations.Realization;
-using Cohesive.Relations.Serialization;
 using IRQueryDefinition = Cohesive.Relations.IR.QueryDefinition;
 using IRRelationDefinition = Cohesive.Relations.IR.RelationDefinition;
 
@@ -329,6 +327,39 @@ public sealed class CosmosRelationQueryCompilerTests
         Assert.Contains(stalePlacement.Diagnostics, static diagnostic =>
             diagnostic.Code == RelationQueryNativeCompilationDiagnosticCodes.PlacementPlanMismatch);
         Assert.Empty(stalePlacement.Artifacts);
+    }
+
+    [Fact]
+    public void Compile_ExplicitIdBindingAffinityRejectsReuseAcrossAlignedPlanAndPlacementSnapshots()
+    {
+        var current = Fixture.Row(offset: 5);
+        var changedPlan = Fixture.Row(offset: 6);
+        var verified = current.StorageBindingWithAffinity();
+        var changedPlacement = new RelationQuerySourcePlacement(
+            current.Placement.SchemaVersion,
+            current.Placement.Plan,
+            current.Placement.ConventionSetVersion + "/changed",
+            current.Placement.SourceInstances,
+            current.Placement.Bindings);
+
+        var planReuse = current.Compile(
+            verified,
+            new(changedPlan.Plan, changedPlan.Realization, changedPlan.Placement));
+        var placementReuse = current.Compile(
+            verified,
+            new(current.Plan, current.Realization, changedPlacement));
+
+        Assert.Equal(current.StorageBinding.Id, verified.Id);
+        Assert.Equal(RelationQueryNativeCompilationStatus.Invalid, planReuse.Status);
+        Assert.Contains(planReuse.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.StorageBindingMismatch
+            && diagnostic.Message.Contains("compiled-plan affinity", StringComparison.Ordinal));
+        Assert.Equal(RelationQueryNativeCompilationStatus.Invalid, placementReuse.Status);
+        Assert.Contains(placementReuse.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.StorageBindingMismatch
+            && diagnostic.Message.Contains("source-placement affinity", StringComparison.Ordinal));
+        Assert.Empty(planReuse.Artifacts);
+        Assert.Empty(placementReuse.Artifacts);
     }
 
     [Fact]
@@ -821,6 +852,29 @@ public sealed class CosmosRelationQueryCompilerTests
                 request ?? new(Plan, Realization, Placement),
                 storageBinding ?? StorageBinding);
 
+        public CosmosRelationQueryStorageBinding StorageBindingWithAffinity() => new(
+            StorageBinding.Id,
+            StorageBinding.Source,
+            StorageBinding.PlacementBinding,
+            StorageBinding.Target,
+            StorageBinding.TargetProfile,
+            StorageBinding.ContainerName,
+            StorageBinding.RootAlias,
+            StorageBinding.IdentityPath,
+            StorageBinding.Fields,
+            StorageBinding.DocumentRoot,
+            StorageBinding.PartitionPath,
+            StorageBinding.StableUniqueOrderingPaths,
+            StorageBinding.ExactOrderingPaths,
+            StorageBinding.MaximumInputRows,
+            StorageBinding.MissingValueEncoding,
+            StorageBinding.NullValueEncoding,
+            StorageBinding.Origin,
+            StorageBinding.ConventionSetVersion,
+            StorageBinding.ConfigurationDecisions,
+            RelationQueryCompiledPlanReferenceFingerprinter.Compute(PlanReference),
+            Placement.Fingerprint);
+
         public RelationQueryRealizationReport RealizeExactContributors() => Realize(
             Plan,
             overrideUnavailableRequirements: true,
@@ -944,7 +998,10 @@ public sealed class CosmosRelationQueryCompilerTests
                 new(StatusParameter, new ScalarTypeRef(ScalarTypeKind.String))
             ];
             if (keyset)
+            {
                 parameters.Add(new(new("cursor"), new ScalarTypeRef(ScalarTypeKind.String)));
+            }
+
             IRQueryDefinition definition = new(
                 new("row-query"),
                 new("RowQuery"),
@@ -1528,7 +1585,10 @@ public sealed class CosmosRelationQueryCompilerTests
                 CosmosRelationQueryTargetProfile.Policy,
                 effectiveObservability);
             if (!overrideUnavailableRequirements || baseline.IsRealizable)
+            {
                 return baseline;
+            }
+
             var requirements = baseline.Requirements.ToDictionary(static requirement => requirement.Id);
             ImmutableArray<RelationQueryRealizationOverride> overrides =
             [

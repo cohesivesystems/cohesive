@@ -15,7 +15,7 @@ public static class RelationQuerySourcePlacementFingerprinter
     public const string Algorithm = "sha256";
 
     /// <summary>Canonicalization profile identifier.</summary>
-    public const string Canonicalization = "relation-query-source-placement/v1-c14n/v1";
+    public const string Canonicalization = "relation-query-source-placement/v2-c14n/v1";
 
     /// <summary>Computes a deterministic source-placement fingerprint.</summary>
     /// <param name="placement">Normalized source placement to fingerprint.</param>
@@ -75,6 +75,15 @@ public static class RelationQuerySourcePlacementFingerprinter
             writer.AppendOptional(binding.Partition?.SourceSelector);
         }
 
+        writer.Append(placement.ConfigurationDecisions.Length);
+        foreach (var decision in placement.ConfigurationDecisions
+                     .OrderBy(static decision => decision.Setting, StringComparer.Ordinal))
+        {
+            writer.Append(decision.Setting);
+            writer.Append((int)decision.Origin);
+            writer.Append(decision.Authority);
+        }
+
         return new(Algorithm, Canonicalization, writer.Hash());
     }
 }
@@ -107,7 +116,10 @@ public static class RelationQueryPhysicalPlanFingerprinter
         AppendPolicy(writer, plan.Policy);
         writer.Append(plan.Stages.Length);
         foreach (var stage in plan.Stages.OrderBy(static stage => stage.Id.Value, StringComparer.Ordinal))
+        {
             AppendStage(writer, stage);
+        }
+
         writer.Append(plan.Terminal.Value);
         writer.Append(plan.Diagnostics.Length);
         foreach (var diagnostic in plan.Diagnostics)
@@ -219,7 +231,9 @@ sealed class PhysicalFingerprintWriter
     {
         Append(value.HasValue);
         if (value is { } concrete)
+        {
             Append(concrete);
+        }
     }
 
     public void AppendIds(IEnumerable<string> values)
@@ -227,7 +241,9 @@ sealed class PhysicalFingerprintWriter
         var normalized = values.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         Append(normalized.Length);
         foreach (var value in normalized)
+        {
             Append(value);
+        }
     }
 
     public void AppendShape(QualifiedShapeId shape)

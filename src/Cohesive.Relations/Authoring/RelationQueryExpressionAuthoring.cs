@@ -28,6 +28,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     readonly RelationQueryClrAuthoringContext clr;
     readonly RelationQueryExpressionLowerer lowerer;
     readonly Dictionary<Type, ClrPathRegistration> clrPaths = [];
+    readonly Dictionary<RelationshipId, RelationshipDefinition> relationships = [];
     readonly HashSet<RelationQueryDefinitionFingerprint> builtQueryFingerprints = [];
 
     /// <summary>Creates a CLR expression-authoring session.</summary>
@@ -63,6 +64,27 @@ public sealed partial class RelationQueryExpressionAuthoring
             .OrderBy(static group => group.Key.Value, StringComparer.Ordinal)
             .Select(group => clr.GetShapeDocument(group.First().Id))
     ];
+
+    /// <summary>Canonical relationships authored by this session in deterministic identity order.</summary>
+    public RelationshipCatalog RelationshipCatalog => new(
+        [
+            .. relationships.Values
+                .OrderBy(static relationship => relationship.Id.Value, StringComparer.Ordinal)
+        ]);
+
+    /// <summary>Creates a persisted snapshot of the relationships authored by this session.</summary>
+    /// <param name="metadata">Optional document provenance and descriptive metadata.</param>
+    /// <returns>A current-version relationship catalog document with a deterministic semantic fingerprint.</returns>
+    /// <exception cref="ArgumentException">The authored catalog fails catalog-local semantic validation.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The catalog contains a value that has no canonical relationship-catalog JSON encoding.
+    /// </exception>
+    /// <exception cref="NotSupportedException">
+    /// The catalog contains a runtime type that the canonical JSON serializer does not support.
+    /// </exception>
+    public RelationshipCatalogDocument CreateRelationshipCatalogDocument(
+        RelationshipCatalogDocumentMetadata? metadata = null) =>
+        RelationshipCatalogDocument.FromCatalog(RelationshipCatalog, metadata);
 
     internal RelationQueryExpressionLowerer ExpressionLowerer => lowerer;
 
@@ -114,16 +136,15 @@ public sealed partial class RelationQueryExpressionAuthoring
             shape.Id,
             source: Source(reference, $"CLR source '{StableTypeName(typeof(T))}'."),
             bindingSource: Source(reference + "/binding", $"CLR binding '{StableTypeName(typeof(T))}'."));
-        return new(
-            source.Node,
-            new RelationQueryExpressionValueBinding<T>(
-                this,
-                source.Binding,
-                shape.Type,
-                shape.Id,
-                shape.ResolveMemberPath,
-                shape.ResolveType,
-                shape.IdentityOrigin == RelationQueryClrIdentityOrigin.Imported));
+        var binding = new RelationQueryExpressionValueBinding<T>(
+            this,
+            source.Binding,
+            shape.Type,
+            shape.Id,
+            shape.ResolveMemberPath,
+            shape.ResolveType,
+            shape.IdentityOrigin == RelationQueryClrIdentityOrigin.Imported);
+        return new(source.Node, binding, relationRoot: binding);
     }
 
     /// <summary>Declares a required or optional typed invocation parameter without a default value.</summary>
@@ -178,7 +199,8 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// </exception>
     /// <exception cref="InvalidOperationException">
     /// A CLR endpoint cannot be represented by the configured shape metadata profile or is already
-    /// bound to an incompatible semantic shape in this session.
+    /// bound to an incompatible semantic shape in this session, or <paramref name="id"/> is already registered
+    /// for different relationship semantics.
     /// </exception>
     public RelationQueryExpressionRelationship<TSource, TTarget> Relationship<TSource, TReference, TTarget>(
         Expression<Func<TSource, TReference>> sourceReference,
@@ -187,24 +209,17 @@ public sealed partial class RelationQueryExpressionAuthoring
         where TSource : notnull
         where TTarget : notnull
     {
-        ArgumentNullException.ThrowIfNull(sourceReference);
-        var sourceShape = clr.Shape<TSource>();
-        var targetShape = clr.Shape<TTarget>();
+        var definition = CreateRelationshipDefinition<TSource, TReference, TTarget>(
+            sourceReference,
+            id,
+            sourceReferenceUniqueness,
+            out var sourceShape,
+            out var targetShape);
+        var available = RequireRelationshipAvailable(definition);
         TrackShape(sourceShape);
         TrackShape(targetShape);
-        var path = ResolveSelectorPath(sourceReference, nameof(sourceReference));
-        if (path.Segments.Length != 1)
-        {
-            throw new ArgumentException(
-                "A relationship source reference must identify exactly one top-level CLR property.",
-                nameof(sourceReference));
-        }
-
-        var definition = global::Cohesive.Relations.Authoring.Relationship
-            .From(sourceShape.Id)
-            .Reference(path)
-            .To(targetShape.Id, id, sourceReferenceUniqueness);
-        return new(definition);
+        CommitRelationship(available);
+        return new(available);
     }
 
     /// <summary>Authors a typed canonical CLR relationship using a boxed direct reference selector.</summary>
@@ -226,7 +241,8 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// </exception>
     /// <exception cref="InvalidOperationException">
     /// A CLR endpoint cannot be represented by the configured shape metadata profile or is already
-    /// bound to an incompatible semantic shape in this session.
+    /// bound to an incompatible semantic shape in this session, or <paramref name="id"/> is already registered
+    /// for different relationship semantics.
     /// </exception>
     public RelationQueryExpressionRelationship<TSource, TTarget> Relationship<TSource, TTarget>(
         Expression<Func<TSource, object?>> sourceReference,
@@ -284,7 +300,9 @@ public sealed partial class RelationQueryExpressionAuthoring
     static void RequireMetadataIndependentParameterType(TypeRef type, Type clrType)
     {
         if (IsMetadataIndependentParameterType(type))
+        {
             return;
+        }
 
         throw new NotSupportedException(
             $"CLR parameter type '{StableTypeName(clrType)}' maps to semantic type '{type}', which requires "
@@ -444,6 +462,171 @@ public sealed partial class RelationQueryExpressionAuthoring
             sourceReference);
     }
 
+    /// <summary>Traverses a typed relationship from the focused binding introduced by a bound node.</summary>
+    /// <typeparam name="TInput">Canonical type of the input logical node.</typeparam>
+    /// <typeparam name="TFrom">CLR type at the relationship source endpoint.</typeparam>
+    /// <typeparam name="TRelated">CLR type at the relationship target endpoint.</typeparam>
+    /// <param name="input">Logical input and focused source binding from which traversal starts.</param>
+    /// <param name="relationship">Typed canonical relationship to traverse.</param>
+    /// <param name="joinKind">Behavior when related values are absent.</param>
+    /// <param name="requirement">Whether resolving the related value is required.</param>
+    /// <param name="sourceReference">Optional stable producer reference for provenance.</param>
+    /// <returns>Typed traversal-node and related-binding handles.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="input"/> or <paramref name="relationship"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// A handle belongs to another session or the focused binding is incompatible with the relationship.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="joinKind"/> or <paramref name="requirement"/> is unsupported.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// <typeparamref name="TRelated"/> cannot be mapped to the relationship target shape.
+    /// </exception>
+    public RelationQueryExpressionBoundNode<TraverseRelationshipQueryNode, TRelated> Traverse<TInput, TFrom, TRelated>(
+        RelationQueryExpressionBoundNode<TInput, TFrom> input,
+        RelationQueryExpressionRelationship<TFrom, TRelated> relationship,
+        JoinKind joinKind = JoinKind.Left,
+        QueryInputRequirement requirement = QueryInputRequirement.Required,
+        string? sourceReference = null)
+        where TInput : LogicalQueryNode
+        where TFrom : notnull
+        where TRelated : notnull
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        var traversed = Traverse(input.Node, input.Binding, relationship, joinKind, requirement, sourceReference);
+        return new(traversed.Node, traversed.Binding, input.RelationRoot);
+    }
+
+    /// <summary>Traverses from an explicit earlier binding while retaining a bound input's logical branch.</summary>
+    /// <typeparam name="TInput">Canonical type of the input logical node.</typeparam>
+    /// <typeparam name="TFocus">CLR type of the input's focused binding.</typeparam>
+    /// <typeparam name="TFrom">CLR type at the relationship source endpoint.</typeparam>
+    /// <typeparam name="TRelated">CLR type at the relationship target endpoint.</typeparam>
+    /// <param name="input">Logical input whose branch and relation-root context are retained.</param>
+    /// <param name="from">Visible earlier binding from which traversal starts.</param>
+    /// <param name="relationship">Typed canonical relationship to traverse.</param>
+    /// <param name="joinKind">Behavior when related values are absent.</param>
+    /// <param name="requirement">Whether resolving the related value is required.</param>
+    /// <param name="sourceReference">Optional stable producer reference for provenance.</param>
+    /// <returns>Typed traversal-node and related-binding handles retaining the input's relation-root context.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="input"/>, <paramref name="from"/>, or <paramref name="relationship"/> is
+    /// <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// A handle belongs to another session, <paramref name="from"/> is not visible in <paramref name="input"/>, or
+    /// a shape is incompatible.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="joinKind"/> or <paramref name="requirement"/> is unsupported.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// <typeparamref name="TRelated"/> cannot be mapped to the relationship target shape.
+    /// </exception>
+    public RelationQueryExpressionBoundNode<TraverseRelationshipQueryNode, TRelated> Traverse<
+        TInput,
+        TFocus,
+        TFrom,
+        TRelated>(
+        RelationQueryExpressionBoundNode<TInput, TFocus> input,
+        RelationQueryExpressionValueBinding<TFrom> from,
+        RelationQueryExpressionRelationship<TFrom, TRelated> relationship,
+        JoinKind joinKind = JoinKind.Left,
+        QueryInputRequirement requirement = QueryInputRequirement.Required,
+        string? sourceReference = null)
+        where TInput : LogicalQueryNode
+        where TFocus : notnull
+        where TFrom : notnull
+        where TRelated : notnull
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        var traversed = Traverse(input.Node, from, relationship, joinKind, requirement, sourceReference);
+        return new(traversed.Node, traversed.Binding, input.RelationRoot);
+    }
+
+    /// <summary>Authors and traverses a conventional relationship declared by an inline CLR reference selector.</summary>
+    /// <typeparam name="TFrom">CLR type at the relationship source endpoint.</typeparam>
+    /// <typeparam name="TRelated">CLR type at the relationship target endpoint.</typeparam>
+    /// <param name="input">Logical input and focused source binding from which traversal starts.</param>
+    /// <param name="reference">Direct source property containing target observation identities.</param>
+    /// <param name="joinKind">Behavior when related values are absent.</param>
+    /// <param name="requirement">Whether resolving the related value is required.</param>
+    /// <param name="sourceReferenceUniqueness">Global uniqueness guarantee for source reference values.</param>
+    /// <param name="relationshipId">Optional explicit relationship identity overriding the semantic convention.</param>
+    /// <param name="producerReference">Optional stable producer reference for traversal provenance.</param>
+    /// <returns>Typed traversal-node and related-binding handles.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="input"/> or <paramref name="reference"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// The input belongs to another session, its focused binding is incompatible with the relationship, or
+    /// <paramref name="reference"/> is not one direct readable property rooted at its parameter, or
+    /// <paramref name="producerReference"/> is empty or white space.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="joinKind"/>, <paramref name="requirement"/>, or
+    /// <paramref name="sourceReferenceUniqueness"/> is unsupported.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// A CLR endpoint cannot be mapped by the configured shape context or <paramref name="relationshipId"/> is
+    /// already registered for different relationship semantics.
+    /// </exception>
+    public RelationQueryExpressionBoundNode<TraverseRelationshipQueryNode, TRelated> Traverse<TFrom, TRelated>(
+        RelationQueryExpressionBoundNode<TFrom> input,
+        Expression<Func<TFrom, object?>> reference,
+        JoinKind joinKind = JoinKind.Left,
+        QueryInputRequirement requirement = QueryInputRequirement.Required,
+        SourceReferenceUniqueness sourceReferenceUniqueness = SourceReferenceUniqueness.NotGuaranteed,
+        RelationshipId? relationshipId = null,
+        string? producerReference = null)
+        where TFrom : notnull
+        where TRelated : notnull
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(reference);
+        RequireOwner(input.Binding);
+        if (!Enum.IsDefined(joinKind) || joinKind is JoinKind.Right or JoinKind.Full)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(joinKind),
+                joinKind,
+                "A relationship traversal supports only inner or left join semantics.");
+        }
+
+        if (!Enum.IsDefined(requirement))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(requirement),
+                requirement,
+                "Unsupported relationship input requirement.");
+        }
+
+        if (producerReference is not null)
+        {
+            _ = Guard.RequireNotNullOrWhiteSpace(producerReference);
+        }
+
+        var definition = CreateRelationshipDefinition<TFrom, object?, TRelated>(
+            reference,
+            relationshipId,
+            sourceReferenceUniqueness,
+            out _,
+            out _);
+        var available = RequireRelationshipAvailable(definition);
+        var relationship = new RelationQueryExpressionRelationship<TFrom, TRelated>(available);
+        var traversed = Traverse(
+            input.StructuralNode,
+            input.Binding,
+            relationship,
+            joinKind,
+            requirement,
+            producerReference);
+        CommitRelationship(available);
+        return new(traversed.Node, traversed.Binding, input.RelationRoot);
+    }
+
     /// <summary>Traverses a typed expression-authored relationship from its target to its source endpoint.</summary>
     /// <typeparam name="TInput">Canonical type of the input logical node.</typeparam>
     /// <typeparam name="TSource">CLR type at the inverse traversal result.</typeparam>
@@ -488,6 +671,43 @@ public sealed partial class RelationQueryExpressionAuthoring
             joinKind,
             requirement,
             sourceReference);
+    }
+
+    /// <summary>Traverses a typed relationship inversely from the focused binding introduced by a bound node.</summary>
+    /// <typeparam name="TInput">Canonical type of the input logical node.</typeparam>
+    /// <typeparam name="TSource">CLR type at the inverse traversal result.</typeparam>
+    /// <typeparam name="TTarget">CLR type at the relationship target endpoint.</typeparam>
+    /// <param name="input">Logical input and focused target binding from which inverse traversal starts.</param>
+    /// <param name="relationship">Typed canonical relationship to traverse inversely.</param>
+    /// <param name="joinKind">Behavior when related values are absent.</param>
+    /// <param name="requirement">Whether resolving related source values is required.</param>
+    /// <param name="sourceReference">Optional stable producer reference for provenance.</param>
+    /// <returns>Typed traversal-node and source-binding handles.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="input"/> or <paramref name="relationship"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// A handle belongs to another session or the focused binding is incompatible with the relationship.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="joinKind"/> or <paramref name="requirement"/> is unsupported.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// <typeparamref name="TSource"/> cannot be mapped to the relationship source shape.
+    /// </exception>
+    public RelationQueryExpressionBoundNode<TraverseRelationshipQueryNode, TSource> TraverseInverse<TInput, TSource, TTarget>(
+        RelationQueryExpressionBoundNode<TInput, TTarget> input,
+        RelationQueryExpressionRelationship<TSource, TTarget> relationship,
+        JoinKind joinKind = JoinKind.Left,
+        QueryInputRequirement requirement = QueryInputRequirement.Required,
+        string? sourceReference = null)
+        where TInput : LogicalQueryNode
+        where TSource : notnull
+        where TTarget : notnull
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        var traversed = TraverseInverse(input.Node, input.Binding, relationship, joinKind, requirement, sourceReference);
+        return new(traversed.Node, traversed.Binding, input.RelationRoot);
     }
 
     /// <summary>Declares a typed named row result over an expression-authored branch.</summary>
@@ -601,9 +821,14 @@ public sealed partial class RelationQueryExpressionAuthoring
         ArgumentNullException.ThrowIfNull(results);
         var materialized = results.ToImmutableArray();
         if (materialized.Any(static result => result is null))
+        {
             throw new ArgumentException("Query results cannot contain null entries.", nameof(results));
+        }
+
         foreach (var result in materialized)
+        {
             RequireOwner(result);
+        }
 
         var reference = sourceReference ?? $"query/{id.Value}";
         var builtQuery = structural.BuildQuery(
@@ -612,7 +837,10 @@ public sealed partial class RelationQueryExpressionAuthoring
             [.. materialized.Select(static result => result.Structural)],
             Source(reference, $"Expression-authored query '{name.Value}'."));
         if (builtQuery.Validation.IsValid)
+        {
             builtQueryFingerprints.Add(RelationQueryDefinitionFingerprinter.Compute(builtQuery.Definition));
+        }
+
         return builtQuery;
     }
 
@@ -631,6 +859,113 @@ public sealed partial class RelationQueryExpressionAuthoring
         QueryName name,
         params RelationQueryExpressionResult[] results) =>
         BuildQuery(id, name, (IEnumerable<RelationQueryExpressionResult>)results);
+
+    /// <summary>Builds a convention-identified relation from an output retaining one originating source root.</summary>
+    /// <typeparam name="TOutputNode">Canonical type of the output logical node.</typeparam>
+    /// <typeparam name="TOutput">CLR output type.</typeparam>
+    /// <param name="output">Typed output retaining its originating source binding.</param>
+    /// <param name="mode">Output cardinality relative to each root.</param>
+    /// <param name="invariants">Optional already-canonical output invariants.</param>
+    /// <param name="id">Optional explicit relation identity overriding the endpoint convention.</param>
+    /// <param name="name">Optional explicit relation display name overriding the CLR output-type convention.</param>
+    /// <param name="sourceReference">Optional stable producer reference for provenance.</param>
+    /// <returns>The canonical relation, validation result, and authoring provenance.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="output"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// The output belongs to another authoring session, exposes more than one visible binding,
+    /// <paramref name="invariants"/> contains a null entry, or an endpoint has no graph-qualified shape.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="mode"/> is unsupported.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// <paramref name="output"/> has no unambiguous originating source. Use the explicit overload accepting a root.
+    /// </exception>
+    public RelationQueryAuthoringResult<RelationDefinition> BuildRelation<TOutputNode, TOutput>(
+        RelationQueryExpressionBoundNode<TOutputNode, TOutput> output,
+        RelationOutputMode mode = RelationOutputMode.OnePerRoot,
+        ImmutableArray<InvariantDefinition> invariants = default,
+        RelationId? id = null,
+        RelationName? name = null,
+        string? sourceReference = null)
+        where TOutputNode : LogicalQueryNode
+        where TOutput : notnull
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        var root = RequireRetainedRelationRoot(output);
+        var terminal = ResolveRelationTerminal(
+            root,
+            output.Binding,
+            typeof(TOutput),
+            mode,
+            id,
+            name,
+            sourceReference);
+        var result = BuildRelationCore(
+            terminal.Id,
+            terminal.Name,
+            root,
+            output.Node,
+            output.Binding,
+            mode,
+            key: null,
+            invariants: invariants,
+            sourceReference: terminal.Reference);
+        return WithConventionRelationRoot(WithRelationTerminalProvenance(result, terminal), root, terminal.Source);
+    }
+
+    /// <summary>Builds a convention-identified relation without an output key.</summary>
+    /// <typeparam name="TRoot">CLR root type.</typeparam>
+    /// <typeparam name="TOutputNode">Canonical type of the output logical node.</typeparam>
+    /// <typeparam name="TOutput">CLR output type.</typeparam>
+    /// <param name="root">Typed source node whose binding is the relation root.</param>
+    /// <param name="output">Typed logical node and focused binding producing relation outputs.</param>
+    /// <param name="mode">Output cardinality relative to each root.</param>
+    /// <param name="invariants">Optional already-canonical output invariants.</param>
+    /// <param name="id">Optional explicit relation identity overriding the endpoint convention.</param>
+    /// <param name="name">Optional explicit relation display name overriding the CLR output-type convention.</param>
+    /// <param name="sourceReference">Optional stable producer reference for provenance.</param>
+    /// <returns>The canonical relation, validation result, and authoring provenance.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="root"/> or <paramref name="output"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// A handle belongs to another authoring session, the output exposes more than one visible binding,
+    /// <paramref name="invariants"/> contains a null entry, or an endpoint has no graph-qualified shape.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="mode"/> is unsupported.</exception>
+    public RelationQueryAuthoringResult<RelationDefinition> BuildRelation<TRoot, TOutputNode, TOutput>(
+        RelationQueryExpressionBoundNode<SourceQueryNode, TRoot> root,
+        RelationQueryExpressionBoundNode<TOutputNode, TOutput> output,
+        RelationOutputMode mode = RelationOutputMode.OnePerRoot,
+        ImmutableArray<InvariantDefinition> invariants = default,
+        RelationId? id = null,
+        RelationName? name = null,
+        string? sourceReference = null)
+        where TRoot : notnull
+        where TOutputNode : LogicalQueryNode
+        where TOutput : notnull
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        ArgumentNullException.ThrowIfNull(output);
+        var terminal = ResolveRelationTerminal(
+            root.Binding,
+            output.Binding,
+            typeof(TOutput),
+            mode,
+            id,
+            name,
+            sourceReference);
+        var result = BuildRelationCore(
+            terminal.Id,
+            terminal.Name,
+            root.Binding,
+            output.Node,
+            output.Binding,
+            mode,
+            key: null,
+            invariants: invariants,
+            sourceReference: terminal.Reference);
+        return WithRelationTerminalProvenance(result, terminal);
+    }
 
     /// <summary>
     /// Builds and validates a canonical relation when its optional key and invariants are already canonical.
@@ -672,6 +1007,32 @@ public sealed partial class RelationQueryExpressionAuthoring
         where TOutput : notnull
     {
         ArgumentNullException.ThrowIfNull(root);
+        return BuildRelationCore(
+            id,
+            name,
+            root,
+            output,
+            outputBinding,
+            mode,
+            key,
+            invariants,
+            sourceReference);
+    }
+
+    RelationQueryAuthoringResult<RelationDefinition> BuildRelationCore<TOutputNode, TOutput>(
+        RelationId id,
+        RelationName name,
+        RelationQueryExpressionValueBinding root,
+        RelationQueryNodeHandle<TOutputNode> output,
+        RelationQueryExpressionValueBinding<TOutput> outputBinding,
+        RelationOutputMode mode,
+        Expr? key,
+        ImmutableArray<InvariantDefinition> invariants,
+        string? sourceReference)
+        where TOutputNode : LogicalQueryNode
+        where TOutput : notnull
+    {
+        ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(outputBinding);
         RequireOwner(root);
         RequireBindingVisible(output, outputBinding, nameof(outputBinding));
@@ -690,13 +1051,123 @@ public sealed partial class RelationQueryExpressionAuthoring
             key is null ? null : Source(reference + "/key", "Relation output key."));
     }
 
+    ResolvedRelationTerminal ResolveRelationTerminal(
+        RelationQueryExpressionValueBinding root,
+        RelationQueryExpressionValueBinding output,
+        Type outputType,
+        RelationOutputMode mode,
+        RelationId? id,
+        RelationName? name,
+        string? sourceReference)
+    {
+        RequireOwner(root);
+        RequireOwner(output);
+        var effectiveId = id ?? RelationQueryExpressionRelationConvention.CreateId(
+            RequireShape(root),
+            RequireShape(output),
+            mode);
+        var effectiveName = name ?? RelationQueryExpressionRelationConvention.CreateName(outputType);
+        var reference = sourceReference ?? $"relation/{effectiveId.Value}";
+        return new(
+            effectiveId,
+            effectiveName,
+            reference,
+            Source(reference, $"Expression-authored relation '{effectiveName.Value}'."),
+            id is null
+                ? RelationQueryAuthoringIdentityOrigin.Convention
+                : RelationQueryAuthoringIdentityOrigin.Explicit,
+            name is null
+                ? RelationQueryAuthoringValueOrigin.Convention
+                : RelationQueryAuthoringValueOrigin.Explicit,
+            sourceReference is null
+                ? RelationQueryAuthoringValueOrigin.Convention
+                : RelationQueryAuthoringValueOrigin.Explicit);
+    }
+
+    static RelationQueryAuthoringResult<RelationDefinition> WithRelationTerminalProvenance(
+        RelationQueryAuthoringResult<RelationDefinition> result,
+        ResolvedRelationTerminal terminal) =>
+        new(
+            result.Definition,
+            result.Validation,
+            new RelationQueryAuthoringManifest(
+                [
+                    .. result.Provenance.Identities,
+                    new RelationQueryAuthoringIdentityDecision(
+                        RelationQueryAuthoringIdentityKind.Relation,
+                        terminal.Id.Value,
+                        terminal.IdOrigin,
+                        terminal.IdOrigin == RelationQueryAuthoringIdentityOrigin.Convention
+                            ? RelationQueryExpressionRelationConvention.Version
+                            : null,
+                        terminal.Source)
+                ],
+                result.Provenance.Sources,
+                [
+                    .. result.Provenance.Configuration,
+                    new RelationQueryAuthoringConfigurationDecision(
+                        terminal.Id.Value,
+                        RelationQueryExpressionRelationConvention.NameSetting,
+                        terminal.Name.Value,
+                        terminal.NameOrigin,
+                        terminal.NameOrigin == RelationQueryAuthoringValueOrigin.Convention
+                            ? RelationQueryExpressionRelationConvention.Version
+                            : null,
+                        terminal.Source),
+                    new RelationQueryAuthoringConfigurationDecision(
+                        terminal.Id.Value,
+                        RelationQueryExpressionRelationConvention.SourceReferenceSetting,
+                        terminal.Reference,
+                        terminal.SourceReferenceOrigin,
+                        terminal.SourceReferenceOrigin == RelationQueryAuthoringValueOrigin.Convention
+                            ? RelationQueryExpressionRelationConvention.Version
+                            : null,
+                        terminal.Source)
+                ]));
+
+    RelationQueryExpressionValueBinding RequireRetainedRelationRoot<TNode, TOutput>(
+        RelationQueryExpressionBoundNode<TNode, TOutput> output)
+        where TNode : LogicalQueryNode
+        where TOutput : notnull
+    {
+        var root = output.RelationRoot
+            ?? throw new InvalidOperationException(
+                "The bound output does not retain one originating source root. Start from a typed Source and use "
+                + "the bound-node Traverse and Project overloads, or pass the intended root to BuildRelation explicitly.");
+        RequireOwner(root);
+        return root;
+    }
+
+    static RelationQueryAuthoringResult<RelationDefinition> WithConventionRelationRoot(
+        RelationQueryAuthoringResult<RelationDefinition> result,
+        RelationQueryExpressionValueBinding root,
+        RelationQueryAuthoringSource source) =>
+        new(
+            result.Definition,
+            result.Validation,
+            new RelationQueryAuthoringManifest(
+                result.Provenance.Identities,
+                result.Provenance.Sources,
+                [
+                    .. result.Provenance.Configuration,
+                    new RelationQueryAuthoringConfigurationDecision(
+                        result.Definition.Id.Value,
+                        RelationQueryExpressionRelationConvention.RootBindingSetting,
+                        root.Id.Value,
+                        RelationQueryAuthoringValueOrigin.Convention,
+                        RelationQueryExpressionRelationConvention.Version,
+                        source)
+                ]));
+
     void RequireSingleVisibleBinding<TNode>(
         RelationQueryNodeHandle<TNode> node,
         string parameterName)
         where TNode : LogicalQueryNode
     {
         if (structural.GetVisibleBindingCount(node) == 1)
+        {
             return;
+        }
 
         throw new ArgumentException(
             $"Logical node '{node.Id.Value}' exposes multiple value bindings, but the canonical terminal does not "
@@ -757,7 +1228,10 @@ public sealed partial class RelationQueryExpressionAuthoring
         while (current is MemberExpression member)
         {
             if (member.Member is not PropertyInfo property)
+            {
                 throw new ArgumentException("A semantic field selector must use readable CLR properties.", parameterName);
+            }
+
             reversed.Add(property);
             current = member.Expression
                 ?? throw new ArgumentException("A semantic field selector cannot use a static member.", parameterName);
@@ -779,19 +1253,65 @@ public sealed partial class RelationQueryExpressionAuthoring
         string? description = null) =>
         new(Producer, Guard.RequireNotNullOrWhiteSpace(reference), description);
 
+    RelationshipDefinition CreateRelationshipDefinition<TSource, TReference, TTarget>(
+        Expression<Func<TSource, TReference>> sourceReference,
+        RelationshipId? id,
+        SourceReferenceUniqueness sourceReferenceUniqueness,
+        out RelationQueryClrShape<TSource> sourceShape,
+        out RelationQueryClrShape<TTarget> targetShape)
+        where TSource : notnull
+        where TTarget : notnull
+    {
+        ArgumentNullException.ThrowIfNull(sourceReference);
+        sourceShape = clr.Shape<TSource>();
+        targetShape = clr.Shape<TTarget>();
+        var path = ResolveSelectorPath(sourceReference, nameof(sourceReference));
+        if (path.Segments.Length != 1)
+        {
+            throw new ArgumentException(
+                "A relationship source reference must identify exactly one top-level CLR property.",
+                nameof(sourceReference));
+        }
+
+        return global::Cohesive.Relations.Authoring.Relationship
+            .From(sourceShape.Id)
+            .Reference(path)
+            .To(targetShape.Id, id, sourceReferenceUniqueness);
+    }
+
+    RelationshipDefinition RequireRelationshipAvailable(RelationshipDefinition definition)
+    {
+        if (!relationships.TryGetValue(definition.Id, out var registered))
+        {
+            return definition;
+        }
+
+        return registered == definition
+            ? registered
+            : throw new InvalidOperationException(
+                $"Relationship id '{definition.Id.Value}' is already registered for different relationship semantics.");
+    }
+
+    void CommitRelationship(RelationshipDefinition definition) =>
+        relationships.TryAdd(definition.Id, definition);
+
     internal static string StableTypeName(Type type) =>
         type.FullName ?? type.Name;
 
     internal void RequireOwner(RelationQueryExpressionValueBinding binding)
     {
         if (!ReferenceEquals(binding.Owner, this))
+        {
             throw new ArgumentException("The CLR binding belongs to another expression-authoring session.", nameof(binding));
+        }
     }
 
     internal void RequireOwner(RelationQueryExpressionResult result)
     {
         if (!ReferenceEquals(result.Owner, this))
+        {
             throw new ArgumentException("The query result belongs to another expression-authoring session.", nameof(result));
+        }
     }
 
     internal void RequireInvocationDefinition(
@@ -816,4 +1336,13 @@ public sealed partial class RelationQueryExpressionAuthoring
     sealed record ClrPathRegistration(
         QualifiedShapeId Id,
         Func<IReadOnlyList<PropertyInfo>, FieldPath> Resolve);
+
+    sealed record ResolvedRelationTerminal(
+        RelationId Id,
+        RelationName Name,
+        string Reference,
+        RelationQueryAuthoringSource Source,
+        RelationQueryAuthoringIdentityOrigin IdOrigin,
+        RelationQueryAuthoringValueOrigin NameOrigin,
+        RelationQueryAuthoringValueOrigin SourceReferenceOrigin);
 }

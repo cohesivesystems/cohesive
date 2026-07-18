@@ -59,16 +59,37 @@ realization provenance. Use the canonical compiler when those guarantees are req
 
 ## Canonical Relation/Query Compilation
 
-Canonical compilation starts after static compilation, capability realization, and source placement. The
-Cosmos adapter supplies a conservative target profile and policy. The realization must explicitly request
-value results without contributor-occurrence lineage because Cosmos SQL v1 does not reconstruct source
-occurrence identities:
+Canonical native compilation starts with a statically compiled plan and its typed CLR shape handle (here,
+`plan` and `loadShape`). Source placement and the Cosmos storage binding are separate persisted interpretations
+of that plan. The Cosmos adapter supplies a conservative target profile and policy. The realization must
+explicitly request value results without contributor-occurrence lineage because Cosmos SQL v1 does not
+reconstruct source occurrence identities:
 
 ```csharp
 using Cohesive.Adapters.Cosmos;
 using Cohesive.Model;
+using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Realization;
+
+var placementBuilder = RelationQueryPlacement.For(plan);
+var source = placementBuilder.Source(
+    sourceKey: "loads-read",
+    targetProfile: CosmosRelationQueryTargetProfile.Default);
+var loads = placementBuilder.PlaceSource(source, loadShape)
+    .Identity(load => load.Id)
+    .FieldsBySemanticPath();
+var authoredPlacement = placementBuilder.Build().RequireValue();
+var placedLoads = authoredPlacement.GetInput(loads);
+
+var storageBinding = CosmosRelationQueryBinding.For(placedLoads)
+    .Container("loads")
+    .Identity(load => load.Id)
+    .StableUnique(load => load.Id)
+    .ExactOrdering(load => load.Id)
+    .MaximumInputRows(10_000)
+    .Build()
+    .RequireValue();
 
 var realization = RelationQueryRealizationCompiler.Compile(
     plan,
@@ -76,33 +97,37 @@ var realization = RelationQueryRealizationCompiler.Compile(
     CosmosRelationQueryTargetProfile.Policy,
     RelationQueryResultObservability.NotRequested);
 
-var request = new RelationQueryNativeCompilationRequest(plan, realization, placement);
-var placedSource = placement.Bindings.Single();
-var storageBinding = CosmosRelationQueryStorageBinding.FromSemanticPathConvention(
-    new("cosmos-binding:loads/v1"),
-    placedSource,
-    CosmosRelationQueryTargetProfile.Target,
-    CosmosRelationQueryTargetProfile.ProfileId,
-    containerName: "loads",
-    identityPath: FieldPath.FromField("Id"),
-    stableUniqueOrderingPaths: [FieldPath.FromField("Id")],
-    exactOrderingPaths: [FieldPath.FromField("Id")],
-    maximumInputRows: 10_000);
+var request = new RelationQueryNativeCompilationRequest(
+    plan,
+    realization,
+    authoredPlacement.Placement);
 
 var result = new CosmosRelationQueryCompiler().Compile(request, storageBinding);
 if (!result.IsSuccessful)
     throw new InvalidOperationException(string.Join(Environment.NewLine, result.Diagnostics));
 
-CosmosRelationQueryCompiledArtifact artifact = result.Artifacts.Single();
-CosmosSqlStatement statement = artifact.Bind(parameterValues);
-QueryDefinition query = statement.ToQueryDefinition();
+var rows = result.Artifacts.Single(
+    artifact => artifact.Branch.Kind == RelationQueryNativeResultKind.QueryRows);
+var aggregation = result.Artifacts.Single(
+    artifact => artifact.Branch.Kind == RelationQueryNativeResultKind.QueryAggregation);
+
+QueryDefinition rowsQuery = rows.Bind(parameterValues).ToQueryDefinition();
+QueryDefinition aggregationQuery = aggregation.Bind(parameterValues).ToQueryDefinition();
 ```
 
-The storage binding is a versioned physical interpretation of one exact placed source. Explicit bindings map
-compiled input identities to arbitrary Cosmos document paths; `FromSemanticPathConvention` deterministically
-maps semantic field paths to matching document paths. Container, document-root, identity, partition, missing/null,
-stable-unique ordering, exact-ordering, maximum-input-row, origin, and convention facts participate in the binding
-fingerprint. `maximumInputRows` is an asserted deployment fact needed only by plans containing row `COUNT`; it must
+The storage binding is a versioned physical interpretation of one exact placed source. The typed builder resolves
+CLR selectors through the same structural field-path mapping used by imported shapes; explicit field overrides map
+compiled inputs to arbitrary Cosmos document paths. The fixed Cosmos target and target-profile selection are
+recorded as adapter-convention decisions. Source and placement-binding identities are inherited as exact affinity
+from the placed input rather than treated as configurable storage settings. A successful `Build` proves a
+well-formed binding with exact affinity; realization and native compilation remain authoritative for branch-specific
+capability sufficiency. The low-level constructor and `FromSemanticPathConvention` remain available as escape
+hatches. A direct constructor call may omit both the compiled-plan and placement fingerprints, but that creates an
+explicitly unverified binding; supplying only one is rejected. Builder-authored bindings always persist both, and
+native compilation rejects either fingerprint when it does not match the request. Container, document-root, identity, partition,
+missing/null, stable-unique ordering, exact-ordering, maximum-input-row, origin, convention, and per-setting
+configuration-attribution facts participate in the binding fingerprint. `maximumInputRows` is an asserted
+deployment fact needed only by plans containing row `COUNT`; it must
 be no greater than `CosmosRelationQueryTargetProfile.MaximumExactInteger` (`2^53 - 1`). When a binding is rehydrated,
 its persisted schema version must be supported and its supplied fingerprint must match the recomputed fingerprint
 of the normalized facts. Stale or modified persisted bindings are rejected before compilation.
