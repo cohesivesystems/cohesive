@@ -171,6 +171,48 @@ public sealed class RelationQueryExpressionAggregateBuilder<TResult>
         return this;
     }
 
+    /// <summary>Adds a count of non-null, available values using one typed binding.</summary>
+    /// <typeparam name="TTarget">CLR type of the target result field.</typeparam>
+    /// <typeparam name="TBinding">CLR type of the source binding.</typeparam>
+    /// <typeparam name="TValue">CLR type produced by the value expression.</typeparam>
+    /// <param name="target">Direct or nested result property receiving the count.</param>
+    /// <param name="value">Value expression whose non-null, available results are counted.</param>
+    /// <param name="binding">Binding corresponding to the value-expression parameter.</param>
+    /// <param name="assignmentSourceReference">Optional stable producer reference for this assignment.</param>
+    /// <returns>This builder for continued aggregate authoring.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="target"/> or <paramref name="value"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// The target is not an Int64 property, or <paramref name="binding"/> belongs to another session, has a
+    /// mismatched CLR type, or is not visible in the aggregate input.
+    /// </exception>
+    /// <exception cref="RelationQueryExpressionAuthoringException">The value cannot be lowered exactly.</exception>
+    public RelationQueryExpressionAggregateBuilder<TResult> Count<TTarget, TBinding, TValue>(
+        Expression<Func<TResult, TTarget>> target,
+        Expression<Func<TBinding, TValue>> value,
+        RelationQueryExpressionValueBinding<TBinding> binding,
+        string? assignmentSourceReference = null)
+        where TBinding : notnull
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        RequireCountTarget<TTarget>(nameof(target));
+        ArgumentNullException.ThrowIfNull(value);
+        var reference = assignmentSourceReference ?? $"{sourceReference}/aggregates/{aggregates.Count}";
+        var handles = owner.RequireBindings(value, [binding]);
+        RequireBindingsVisible(handles, nameof(binding));
+        var loweredValue = owner.ExpressionLowerer
+            .LowerValue(value, handles, reference + "/value")
+            .RequireValue();
+        aggregates.Add(new(
+            owner.ResolveSelectorPath(target, nameof(target)),
+            AggregateOperator.Count,
+            loweredValue.Value,
+            assignmentSource: RelationQueryExpressionAuthoring.Source(
+                reference,
+                "Expression-authored non-null value count."),
+            valueSource: loweredValue.Source));
+        return this;
+    }
+
     /// <summary>Adds a value aggregate with optional independently scoped filter bindings.</summary>
     /// <typeparam name="TTarget">CLR type of the target result field.</typeparam>
     /// <param name="target">Direct or nested result property receiving the aggregate value.</param>
@@ -270,6 +312,8 @@ public sealed class RelationQueryExpressionAggregateBuilder<TResult>
         {
             AggregateOperator.Sum =>
                 valueType == targetType && IsExactNumeric(valueType),
+            AggregateOperator.Average =>
+                IsExactNumeric(valueType) && targetType == typeof(decimal),
             AggregateOperator.Min or AggregateOperator.Max =>
                 valueType == targetType && IsCanonicalComparable(valueType),
             AggregateOperator.Any or AggregateOperator.All =>
@@ -293,6 +337,9 @@ public sealed class RelationQueryExpressionAggregateBuilder<TResult>
         AggregateOperator.Sum =>
             "Sum requires the value and target to use the same supported exact numeric CLR type "
             + "(Byte, Int16, Int32, Int64, or Decimal).",
+        AggregateOperator.Average =>
+            "Average accepts a supported exact numeric CLR value type "
+            + "(Byte, Int16, Int32, Int64, or Decimal) and requires a Decimal target.",
         AggregateOperator.Min or AggregateOperator.Max =>
             "Min and Max require the value and target to use the same supported exact numeric or String CLR type.",
         AggregateOperator.Any or AggregateOperator.All =>

@@ -173,6 +173,8 @@ sealed class RelationQueryExpressionEvaluator
             ExprFunctionNames.Contains,
             ExprFunctionNames.Count,
             ExprFunctionNames.EndsWith,
+            ExprFunctionNames.StartsWith,
+            ExprFunctionNames.TextContains,
             ExprFunctionNames.Object,
             ExprFunctionNames.Select,
             ExprFunctionNames.Append,
@@ -229,6 +231,7 @@ sealed class RelationQueryExpressionEvaluator
             AggregateOperator.Max => MinOrMax(values, findMaximum: true),
             AggregateOperator.Any => Any(values),
             AggregateOperator.All => All(values),
+            AggregateOperator.Average => Average(values),
             _ => throw Failure(
                 RelationQueryExpressionEvaluationError.UnsupportedExpression,
                 $"Aggregate operator '{operation}' is not supported.")
@@ -260,7 +263,7 @@ sealed class RelationQueryExpressionEvaluator
 
         if (!context.Bindings.TryGetValue(binding.Value, out var bound) || !bound.IsPresent)
             return ObservationValue.Undefined;
-        
+
         if (!context.IsFieldAvailable(binding.Value, path))
         {
             throw Failure(
@@ -425,6 +428,8 @@ sealed class RelationQueryExpressionEvaluator
             ExprFunctionNames.Contains => EvaluateContains(call, context),
             ExprFunctionNames.Count => EvaluateCount(call, context),
             ExprFunctionNames.EndsWith => EvaluateEndsWith(call, context),
+            ExprFunctionNames.StartsWith => EvaluateStartsWith(call, context),
+            ExprFunctionNames.TextContains => EvaluateTextContains(call, context),
             ExprFunctionNames.Object => EvaluateObject(call, context),
             ExprFunctionNames.Select => EvaluateSelect(call, context),
             ExprFunctionNames.Append => EvaluateAppend(call, context),
@@ -483,6 +488,20 @@ sealed class RelationQueryExpressionEvaluator
         var value = RequireString(Evaluate(call.Arguments[0], context), call.Function);
         var suffix = RequireString(Evaluate(call.Arguments[1], context), call.Function);
         return ObservationValue.FromBool(value.EndsWith(suffix, StringComparison.Ordinal));
+    }
+
+    ObservationValue EvaluateStartsWith(CallExpr call, RelationQueryExpressionContext context)
+    {
+        var value = RequireString(Evaluate(call.Arguments[0], context), call.Function);
+        var prefix = RequireString(Evaluate(call.Arguments[1], context), call.Function);
+        return ObservationValue.FromBool(value.StartsWith(prefix, StringComparison.Ordinal));
+    }
+
+    ObservationValue EvaluateTextContains(CallExpr call, RelationQueryExpressionContext context)
+    {
+        var value = RequireString(Evaluate(call.Arguments[0], context), call.Function);
+        var substring = RequireString(Evaluate(call.Arguments[1], context), call.Function);
+        return ObservationValue.FromBool(value.Contains(substring, StringComparison.Ordinal));
     }
 
     ObservationValue EvaluateObject(CallExpr call, RelationQueryExpressionContext context)
@@ -823,6 +842,7 @@ sealed class RelationQueryExpressionEvaluator
         ExprCapabilities.ForAggregate(AggregateOperator.Max),
         ExprCapabilities.ForAggregate(AggregateOperator.Any),
         ExprCapabilities.ForAggregate(AggregateOperator.All),
+        ExprCapabilities.ForAggregate(AggregateOperator.Average),
         .. SupportedFunctionNames.Select(ExprCapabilities.ForFunction)
     ]);
 

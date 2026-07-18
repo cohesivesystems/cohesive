@@ -1745,6 +1745,15 @@ function evaluateDataSourceAggregateMeasure(
       .reduce<number | null>((max, value) => max === null ? value : Math.max(max, value), null)
   }
 
+  if (matchesAggregateOperator(operator, aggregateOperators.average, 'average')) {
+    const numericValues = values.filter(
+      (value): value is number => typeof value === 'number',
+    )
+    return numericValues.length === 0
+      ? null
+      : numericValues.reduce((sum, value) => sum + value, 0) / numericValues.length
+  }
+
   if (matchesAggregateOperator(operator, aggregateOperators.any, 'any')) {
     return values.some(Boolean)
   }

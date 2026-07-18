@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Globalization;
+using System.Text.Json.Serialization;
 using Cohesive.Relations.IR;
 
 namespace Cohesive.Relations.Compilation;
@@ -45,6 +46,7 @@ public readonly record struct RelationQueryFieldReference
     /// <exception cref="ArgumentException">
     /// <paramref name="shape"/> is default or incomplete, or <paramref name="path"/> is empty or malformed.
     /// </exception>
+    [JsonConstructor]
     public RelationQueryFieldReference(QualifiedShapeId shape, FieldPath path)
     {
         if (string.IsNullOrWhiteSpace(shape.GraphId.Value)

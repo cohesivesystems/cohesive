@@ -598,7 +598,7 @@ export interface RelationQueryRealizationRequirementUse {
   traces: RelationQueryRealizationTrace[];
 }
 
-export type RelationQueryGuaranteeCapabilityKind = 'MissingNullDistinction' | 'AbsenceAvailabilityFailureDistinction' | 'JoinMembership' | 'Cardinality' | 'RelationshipDirection' | 'RelationshipMultiplicity' | 'TemporalDomain' | 'TemporalBoundary' | 'UnboundedTemporalBoundary' | 'Ordering' | 'NullPlacement' | 'StablePaging' | 'Grouping' | 'Aggregation' | 'DuplicateHandling' | 'OutputIdentity' | 'OutputMode' | 'InvariantEnforcement' | 'DeterministicResult' | 'OccurrenceProvenance' | 'EvidenceCompleteness' | 'InconclusiveEvidence' | 'ConsistentSnapshot' | 'CollectionElementCorrelation';
+export type RelationQueryGuaranteeCapabilityKind = 'MissingNullDistinction' | 'AbsenceAvailabilityFailureDistinction' | 'JoinMembership' | 'Cardinality' | 'RelationshipDirection' | 'RelationshipMultiplicity' | 'TemporalDomain' | 'TemporalBoundary' | 'UnboundedTemporalBoundary' | 'Ordering' | 'NullPlacement' | 'StablePaging' | 'Grouping' | 'Aggregation' | 'DuplicateHandling' | 'OutputIdentity' | 'OutputMode' | 'InvariantEnforcement' | 'DeterministicResult' | 'OccurrenceProvenance' | 'EvidenceCompleteness' | 'InconclusiveEvidence' | 'ConsistentSnapshot' | 'CollectionElementCorrelation' | 'RelationRootCorrelation';
 
 export const relationQueryGuaranteeCapabilityKinds = {
   missingNullDistinction: 'MissingNullDistinction',
@@ -625,6 +625,7 @@ export const relationQueryGuaranteeCapabilityKinds = {
   inconclusiveEvidence: 'InconclusiveEvidence',
   consistentSnapshot: 'ConsistentSnapshot',
   collectionElementCorrelation: 'CollectionElementCorrelation',
+  relationRootCorrelation: 'RelationRootCorrelation',
 } as const satisfies Record<string, RelationQueryGuaranteeCapabilityKind>;
 
 export const relationQueryGuaranteeCapabilityKindLabels: Record<RelationQueryGuaranteeCapabilityKind, string> = {
@@ -652,6 +653,7 @@ export const relationQueryGuaranteeCapabilityKindLabels: Record<RelationQueryGua
   InconclusiveEvidence: 'InconclusiveEvidence',
   ConsistentSnapshot: 'ConsistentSnapshot',
   CollectionElementCorrelation: 'CollectionElementCorrelation',
+  RelationRootCorrelation: 'RelationRootCorrelation',
 };
 
 export interface RelationQueryRealizationStaticFact {
@@ -700,7 +702,7 @@ export const relationQueryUnavailableReasonLabels: Record<RelationQueryUnavailab
 
 export type RelationQueryOperatingBoundaryId = string;
 
-export type RelationQueryOperatingBoundaryKind = 'MaximumInputRows' | 'MaximumOutputRows' | 'MaximumFanOut' | 'MaximumPageSize' | 'MaximumFieldPathDepth' | 'MaximumExpressionDepth' | 'MaximumBatchSize' | 'SingleSource' | 'SinglePartition' | 'MaterializedInputs' | 'CompleteInputEvidence' | 'NonNullOperands' | 'ScalarOperands' | 'HomogeneousTemporalDomain' | 'FiniteTemporalBounds' | 'StableUniqueOrdering' | 'DeterministicProvider';
+export type RelationQueryOperatingBoundaryKind = 'MaximumInputRows' | 'MaximumOutputRows' | 'MaximumFanOut' | 'MaximumPageSize' | 'MaximumFieldPathDepth' | 'MaximumExpressionDepth' | 'MaximumBatchSize' | 'SingleSource' | 'SinglePartition' | 'MaterializedInputs' | 'CompleteInputEvidence' | 'NonNullOperands' | 'ScalarOperands' | 'HomogeneousTemporalDomain' | 'FiniteTemporalBounds' | 'StableUniqueOrdering' | 'DeterministicProvider' | 'ExactNumericAggregateDomain' | 'ExactTemporalDomain' | 'SuppliedRelationRoot';
 
 export const relationQueryOperatingBoundaryKinds = {
   maximumInputRows: 'MaximumInputRows',
@@ -720,6 +722,9 @@ export const relationQueryOperatingBoundaryKinds = {
   finiteTemporalBounds: 'FiniteTemporalBounds',
   stableUniqueOrdering: 'StableUniqueOrdering',
   deterministicProvider: 'DeterministicProvider',
+  exactNumericAggregateDomain: 'ExactNumericAggregateDomain',
+  exactTemporalDomain: 'ExactTemporalDomain',
+  suppliedRelationRoot: 'SuppliedRelationRoot',
 } as const satisfies Record<string, RelationQueryOperatingBoundaryKind>;
 
 export const relationQueryOperatingBoundaryKindLabels: Record<RelationQueryOperatingBoundaryKind, string> = {
@@ -740,6 +745,9 @@ export const relationQueryOperatingBoundaryKindLabels: Record<RelationQueryOpera
   FiniteTemporalBounds: 'FiniteTemporalBounds',
   StableUniqueOrdering: 'StableUniqueOrdering',
   DeterministicProvider: 'DeterministicProvider',
+  ExactNumericAggregateDomain: 'ExactNumericAggregateDomain',
+  ExactTemporalDomain: 'ExactTemporalDomain',
+  SuppliedRelationRoot: 'SuppliedRelationRoot',
 };
 
 export type RelationDraftId = string;
@@ -955,7 +963,7 @@ export interface FieldPath {
   segments: FieldPathSegment[];
 }
 
-export type RelationQueryLogicalCapabilityKind = 'Source' | 'Filter' | 'RelationshipTraversal' | 'ForwardRelationshipTraversal' | 'InverseRelationshipTraversal' | 'AtMostOneRelationshipTraversal' | 'ManyRelationshipTraversal' | 'RequiredRelationshipTraversal' | 'OptionalRelationshipTraversal' | 'Join' | 'InnerJoin' | 'LeftOuterJoin' | 'RightOuterJoin' | 'FullOuterJoin' | 'TemporalJoin' | 'ExpandCollection' | 'Projection' | 'ProjectionAssignment' | 'DistinctRows' | 'DistinctKeys' | 'Aggregation' | 'AggregateGrouping' | 'AggregateFilter' | 'CountAggregate' | 'SumAggregate' | 'MinimumAggregate' | 'MaximumAggregate' | 'AnyAggregate' | 'AllAggregate' | 'Ordering' | 'AscendingOrdering' | 'DescendingOrdering' | 'NullsFirst' | 'NullsLast' | 'StableTieOrdering' | 'OffsetPaging' | 'KeysetPaging' | 'OnePerRootRelationOutput' | 'ZeroOrOnePerRootRelationOutput' | 'ManyPerRootRelationOutput' | 'SetRelationOutput' | 'RelationOutputIdentity' | 'RelationInvariant' | 'QueryRowsResult' | 'QueryAggregationResult' | 'AlwaysPresentBinding' | 'MayBeAbsentBinding';
+export type RelationQueryLogicalCapabilityKind = 'Source' | 'Filter' | 'RelationshipTraversal' | 'ForwardRelationshipTraversal' | 'InverseRelationshipTraversal' | 'AtMostOneRelationshipTraversal' | 'ManyRelationshipTraversal' | 'RequiredRelationshipTraversal' | 'OptionalRelationshipTraversal' | 'Join' | 'InnerJoin' | 'LeftOuterJoin' | 'RightOuterJoin' | 'FullOuterJoin' | 'TemporalJoin' | 'ExpandCollection' | 'Projection' | 'ProjectionAssignment' | 'DistinctRows' | 'DistinctKeys' | 'Aggregation' | 'AggregateGrouping' | 'AggregateFilter' | 'CountAggregate' | 'SumAggregate' | 'MinimumAggregate' | 'MaximumAggregate' | 'AnyAggregate' | 'AllAggregate' | 'Ordering' | 'AscendingOrdering' | 'DescendingOrdering' | 'NullsFirst' | 'NullsLast' | 'StableTieOrdering' | 'OffsetPaging' | 'KeysetPaging' | 'OnePerRootRelationOutput' | 'ZeroOrOnePerRootRelationOutput' | 'ManyPerRootRelationOutput' | 'SetRelationOutput' | 'RelationOutputIdentity' | 'RelationInvariant' | 'QueryRowsResult' | 'QueryAggregationResult' | 'AlwaysPresentBinding' | 'MayBeAbsentBinding' | 'AverageAggregate';
 
 export const relationQueryLogicalCapabilityKinds = {
   source: 'Source',
@@ -1005,6 +1013,7 @@ export const relationQueryLogicalCapabilityKinds = {
   queryAggregationResult: 'QueryAggregationResult',
   alwaysPresentBinding: 'AlwaysPresentBinding',
   mayBeAbsentBinding: 'MayBeAbsentBinding',
+  averageAggregate: 'AverageAggregate',
 } as const satisfies Record<string, RelationQueryLogicalCapabilityKind>;
 
 export const relationQueryLogicalCapabilityKindLabels: Record<RelationQueryLogicalCapabilityKind, string> = {
@@ -1055,6 +1064,7 @@ export const relationQueryLogicalCapabilityKindLabels: Record<RelationQueryLogic
   QueryAggregationResult: 'QueryAggregationResult',
   AlwaysPresentBinding: 'AlwaysPresentBinding',
   MayBeAbsentBinding: 'MayBeAbsentBinding',
+  AverageAggregate: 'AverageAggregate',
 };
 
 export interface ExprCapabilityId {
@@ -1515,7 +1525,7 @@ export interface JsonTypeRef {
   kind: JsonTypeKind;
 }
 
-export type AggregateOperator = 'Count' | 'Sum' | 'Min' | 'Max' | 'Any' | 'All';
+export type AggregateOperator = 'Count' | 'Sum' | 'Min' | 'Max' | 'Any' | 'All' | 'Average';
 
 export const aggregateOperators = {
   count: 'Count',
@@ -1524,6 +1534,7 @@ export const aggregateOperators = {
   max: 'Max',
   any: 'Any',
   all: 'All',
+  average: 'Average',
 } as const satisfies Record<string, AggregateOperator>;
 
 export const aggregateOperatorLabels: Record<AggregateOperator, string> = {
@@ -1533,6 +1544,7 @@ export const aggregateOperatorLabels: Record<AggregateOperator, string> = {
   Max: 'Max',
   Any: 'Any',
   All: 'All',
+  Average: 'Average',
 };
 
 export type EntityId = string;
@@ -1898,9 +1910,7 @@ export const relationQueryExpressionSiteKindLabels: Record<RelationQueryExpressi
   TemporalJoinIntervalUpperBound: 'TemporalJoinIntervalUpperBound',
 };
 
-export interface ExprSiteId {
-  value: string;
-}
+export type ExprSiteId = string;
 
 export interface TemporalInterval {
   lower: TemporalIntervalBound;

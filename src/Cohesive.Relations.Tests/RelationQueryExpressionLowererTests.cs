@@ -237,9 +237,98 @@ public sealed class RelationQueryExpressionLowererTests
             [load.Binding],
             sourceReference: "literal/high-precision-decimal").RequireValue();
 
-        var constant = Assert.IsType<ConstantExpr>(lowered.Value);
-        Assert.Equal(ObservationValue.FromDecimal(Expected), constant.Value);
-        Assert.Equal(ObservationValueKind.Decimal, constant.Value.Kind);
+        var literalValue = Assert.IsType<LiteralExpr>(lowered.Value);
+        Assert.Equal(new ScalarTypeRef(ScalarTypeKind.Decimal), literalValue.Type);
+        Assert.Equal(ObservationValue.FromDecimal(Expected), literalValue.Value);
+        Assert.Equal(ObservationValueKind.Decimal, literalValue.Value.Kind);
+    }
+
+    [Fact]
+    public void IntegralLiterals_LowerWithTheirExactPortableClrTypes()
+    {
+        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        (LambdaExpression Expression, ScalarTypeKind Kind)[] cases =
+        [
+            ((Expression<Func<int>>)(() => 1), ScalarTypeKind.Int32),
+            ((Expression<Func<long>>)(() => 1L), ScalarTypeKind.Int64)
+        ];
+
+        foreach (var (expression, kind) in cases)
+        {
+            var lowered = lowerer.LowerValue(
+                expression,
+                sourceReference: $"literal/{kind}").RequireValue();
+
+            var literalValue = Assert.IsType<LiteralExpr>(lowered.Value);
+            Assert.Equal(new ScalarTypeRef(kind), literalValue.Type);
+            Assert.Equal(ObservationValueKind.Int64, literalValue.Value.Kind);
+            Assert.Equal(1, literalValue.Value.Int64);
+        }
+    }
+
+    [Fact]
+    public void AggregateNumericLiteralTypes_SurviveCanonicalJsonNormalization()
+    {
+        var author = RelationQuery.Expression();
+        var rows = author.Source<LiteralAggregateRow>();
+        var aggregate = author.Aggregate<SourceQueryNode, LiteralAggregateResult>(
+            rows.Node,
+            builder => builder
+                .Value(
+                    result => result.DecimalSum,
+                    AggregateOperator.Sum,
+                    (LiteralAggregateRow _) => 1m,
+                    rows.Binding)
+                .Value(
+                    result => result.DecimalMinimum,
+                    AggregateOperator.Min,
+                    (LiteralAggregateRow _) => 1m,
+                    rows.Binding)
+                .Value(
+                    result => result.IntegerSum,
+                    AggregateOperator.Sum,
+                    (LiteralAggregateRow _) => 1,
+                    rows.Binding));
+        var query = author.BuildQuery(
+            new QueryId("typed-literal-aggregates"),
+            new QueryName("TypedLiteralAggregates"),
+            author.Aggregation(aggregate));
+
+        var json = RelationQueryJsonSerializer.Serialize(query.CreateDocument(), indented: false);
+        var roundTripped = RelationQueryJsonSerializer.Deserialize(json);
+        var definition = Assert.IsType<QueryDefinition>(roundTripped.Definition);
+        var aggregateNode = Assert.Single(definition.Body.Nodes.OfType<AggregateQueryNode>());
+        var literals = aggregateNode.Aggregates
+            .ToDictionary(
+                static assignment => assignment.Target.ToString(),
+                static assignment => Assert.IsType<LiteralExpr>(assignment.Value),
+                StringComparer.Ordinal);
+
+        Assert.Equal(
+            new ScalarTypeRef(ScalarTypeKind.Decimal),
+            literals[nameof(LiteralAggregateResult.DecimalSum)].Type);
+        Assert.Equal(
+            new ScalarTypeRef(ScalarTypeKind.Decimal),
+            literals[nameof(LiteralAggregateResult.DecimalMinimum)].Type);
+        Assert.Equal(
+            new ScalarTypeRef(ScalarTypeKind.Int32),
+            literals[nameof(LiteralAggregateResult.IntegerSum)].Type);
+        Assert.All(
+            literals.Values,
+            static literalValue => Assert.Equal(ObservationValueKind.Int64, literalValue.Value.Kind));
+
+        var analysis = RelationQueryExpressionAnalyzer.Analyze(
+            definition,
+            author.ShapeDocuments.Select(static document => document.Graph));
+
+        Assert.True(
+            analysis.IsValid,
+            string.Join(
+                Environment.NewLine,
+                analysis.Diagnostics.Select(static diagnostic => $"{diagnostic.Code}: {diagnostic.Message}")));
+        Assert.DoesNotContain(
+            analysis.Diagnostics,
+            static diagnostic => diagnostic.Code == "relationQuery.expression.resultTypeMismatch");
     }
 
     [Fact]
@@ -496,7 +585,9 @@ public sealed class RelationQueryExpressionLowererTests
         foreach (var child in children)
         {
             foreach (var descendant in Descendants(child))
+            {
                 yield return descendant;
+            }
         }
     }
 
@@ -515,21 +606,30 @@ public sealed class RelationQueryExpressionLowererTests
         static IEnumerable<object> Enumerate(object? value, ISet<object> visited)
         {
             if (value is null)
+            {
                 yield break;
+            }
 
             yield return value;
             var type = value.GetType();
             if (type.IsPrimitive || type.IsEnum || value is string or decimal)
+            {
                 yield break;
+            }
+
             if (!type.IsValueType && !visited.Add(value))
+            {
                 yield break;
+            }
 
             if (value is System.Collections.IEnumerable sequence)
             {
                 foreach (var item in sequence)
                 {
                     foreach (var nested in Enumerate(item, visited))
+                    {
                         yield return nested;
+                    }
                 }
                 yield break;
             }
@@ -543,7 +643,9 @@ public sealed class RelationQueryExpressionLowererTests
                     continue;
                 }
                 foreach (var nested in Enumerate(property.GetValue(value), visited))
+                {
                     yield return nested;
+                }
             }
         }
     }
@@ -700,5 +802,19 @@ public sealed class RelationQueryExpressionLowererTests
         public string Id { get; init; } = string.Empty;
 
         public string Note { get; init; } = "default";
+    }
+
+    sealed class LiteralAggregateRow
+    {
+        public string Id { get; init; } = string.Empty;
+    }
+
+    sealed class LiteralAggregateResult
+    {
+        public decimal DecimalSum { get; init; }
+
+        public decimal DecimalMinimum { get; init; }
+
+        public int IntegerSum { get; init; }
     }
 }

@@ -619,7 +619,7 @@ public static class ExprAnalyzer
                 Child(expressionPath, "source"));
             AnalyzeAggregateGroups(aggregate, scope, expressionPath);
             return ReconcileDeclaredResult(
-                new(definition.ResultCategory, null),
+                new(definition.ResultCategory, definition.FixedResult),
                 ResultFromDeclaredType(aggregate.ReturnType),
                 $"Aggregate '{aggregate.Operator}'",
                 Child(expressionPath, "returnType"));

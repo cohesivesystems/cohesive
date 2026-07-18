@@ -8,12 +8,14 @@ namespace Cohesive.Model.Expressions;
 /// <summary>
 /// Stable identity for one semantic location at which an <see cref="Expr"/> is evaluated.
 /// </summary>
+[JsonConverter(typeof(SingleValueWrapperJsonConverter))]
 public readonly record struct ExprSiteId
 {
     /// <summary>Creates an expression-site identifier.</summary>
     /// <param name="value">Stable, non-empty identifier.</param>
     /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException"><paramref name="value"/> is empty or white space.</exception>
+    [JsonConstructor]
     public ExprSiteId(string value)
     {
         Value = Guard.RequireNotNullOrWhiteSpace(value);

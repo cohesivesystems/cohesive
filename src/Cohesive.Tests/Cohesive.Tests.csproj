@@ -35,6 +35,7 @@
     <ProjectReference Include="..\Cohesive.CodeGen.Cli\Cohesive.CodeGen.Cli.csproj" />
     <ProjectReference Include="..\adapters\Cohesive.Adapters.Cosmos\Cohesive.Adapters.Cosmos.csproj" />
     <ProjectReference Include="..\adapters\Cohesive.Adapters.Elastic\Cohesive.Adapters.Elastic.csproj" />
+    <ProjectReference Include="..\adapters\Cohesive.Adapters.Postgres\Cohesive.Adapters.Postgres.csproj" />
     <ProjectReference Include="..\adapters\Cohesive.Adapters.CSharp\Cohesive.Adapters.CSharp.csproj" />
     <ProjectReference Include="..\adapters\Cohesive.Adapters.DurableTask\Cohesive.Adapters.DurableTask.csproj" />
     <ProjectReference Include="..\adapters\Cohesive.Adapters.GraphQL\Cohesive.Adapters.GraphQL.csproj" />

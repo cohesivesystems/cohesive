@@ -34,7 +34,7 @@ public abstract record Expr
     /// <param name="path">Field path within the bound value.</param>
     /// <returns>A binding-qualified field expression.</returns>
     public static Expr Field(ValueBindingId binding, FieldPath path) => new FieldExpr(path, binding);
-    
+
     /// <summary>
     /// Expression that references a source field/path.
     /// </summary>
@@ -67,7 +67,7 @@ public abstract record Expr
     /// Expression that references a named parameter in the current evaluation context.
     /// </summary>
     public static Expr Param(string name) => new ParameterExpr(Guard.RequireNotNullOrWhiteSpace(name));
-    
+
     /// <summary>
     /// Constant value expression.
     /// </summary>
@@ -155,6 +155,32 @@ public abstract record Expr
             ExprFunctionNames.EndsWith,
             Guard.RequireNotNull(value),
             Guard.RequireNotNull(suffix));
+
+    /// <summary>Creates an ordinal, case-sensitive text-prefix predicate.</summary>
+    /// <param name="value">Text value whose prefix is tested.</param>
+    /// <param name="prefix">Text prefix required at the start of <paramref name="value"/>.</param>
+    /// <returns>A Boolean expression that is true when <paramref name="value"/> starts with <paramref name="prefix"/>.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="value"/> or <paramref name="prefix"/> is <see langword="null"/>.
+    /// </exception>
+    public static Expr StartsWith(Expr value, Expr prefix) =>
+        Call(
+            ExprFunctionNames.StartsWith,
+            Guard.RequireNotNull(value),
+            Guard.RequireNotNull(prefix));
+
+    /// <summary>Creates an ordinal, case-sensitive text-substring predicate.</summary>
+    /// <param name="value">Text value searched for the substring.</param>
+    /// <param name="substring">Text substring searched for in <paramref name="value"/>.</param>
+    /// <returns>A Boolean expression that is true when <paramref name="value"/> contains <paramref name="substring"/>.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="value"/> or <paramref name="substring"/> is <see langword="null"/>.
+    /// </exception>
+    public static Expr TextContains(Expr value, Expr substring) =>
+        Call(
+            ExprFunctionNames.TextContains,
+            Guard.RequireNotNull(value),
+            Guard.RequireNotNull(substring));
 
     /// <summary>
     /// Creates a collection-membership predicate using canonical value equality.
@@ -285,7 +311,9 @@ public enum AggregateOperator
     /// <summary>Represents the any option.</summary>
     Any = 4,
     /// <summary>Represents the all option.</summary>
-    All = 5
+    All = 5,
+    /// <summary>Represents the arithmetic average option in the canonical decimal result domain.</summary>
+    Average = 6
 }
 
 /// <summary>

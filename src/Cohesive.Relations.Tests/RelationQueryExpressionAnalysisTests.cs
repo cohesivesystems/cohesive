@@ -1336,6 +1336,88 @@ public sealed class RelationQueryExpressionAnalysisTests
     }
 
     [Fact]
+    public void Analyze_StructuralAggregatesRequireExactOperandAndTargetTypes()
+    {
+        var sourceGraph = new ShapeGraph(
+            DomainGraph,
+            [
+                new Shape(
+                    LoadShape.ShapeId,
+                    [
+                        new(new("DecimalValue"), new ScalarTypeRef(ScalarTypeKind.Decimal)),
+                        new(new("IntegerValue"), new ScalarTypeRef(ScalarTypeKind.Int64)),
+                        new(new("TextValue"), new ScalarTypeRef(ScalarTypeKind.String))
+                    ])
+            ]);
+        var resultGraph = new ShapeGraph(
+            DtoGraph,
+            [
+                new Shape(
+                    AggregateShape.ShapeId,
+                    [
+                        new(new("DecimalSum"), new ScalarTypeRef(ScalarTypeKind.Decimal)),
+                        new(new("MismatchedSum"), new ScalarTypeRef(ScalarTypeKind.Int64)),
+                        new(new("TextMinimum"), new ScalarTypeRef(ScalarTypeKind.String)),
+                        new(new("MismatchedMinimum"), new ScalarTypeRef(ScalarTypeKind.Date)),
+                        new(new("Average"), new ScalarTypeRef(ScalarTypeKind.Decimal))
+                    ])
+            ]);
+        var query = new IRQueryDefinition(
+            new("aggregate-types"),
+            new("AggregateTypes"),
+            new LogicalQueryDefinition(
+            [
+                new SourceQueryNode(new("source"), Load, LoadShape),
+                new AggregateQueryNode(
+                    new("aggregate"),
+                    new("source"),
+                    Row,
+                    AggregateShape,
+                    aggregates:
+                    [
+                        new(
+                            new("decimal-sum"),
+                            FieldPath.FromField("DecimalSum"),
+                            AggregateOperator.Sum,
+                            Expr.Field(Load, "DecimalValue")),
+                        new(
+                            new("mismatched-sum"),
+                            FieldPath.FromField("MismatchedSum"),
+                            AggregateOperator.Sum,
+                            Expr.Field(Load, "DecimalValue")),
+                        new(
+                            new("text-minimum"),
+                            FieldPath.FromField("TextMinimum"),
+                            AggregateOperator.Min,
+                            Expr.Field(Load, "TextValue")),
+                        new(
+                            new("mismatched-minimum"),
+                            FieldPath.FromField("MismatchedMinimum"),
+                            AggregateOperator.Min,
+                            Expr.Field(Load, "TextValue")),
+                        new(
+                            new("average"),
+                            FieldPath.FromField("Average"),
+                            AggregateOperator.Average,
+                            Expr.Field(Load, "IntegerValue"))
+                    ])
+            ]),
+            [new AggregationQueryResultDefinition(new("result"), new("aggregate"))]);
+
+        var analysis = RelationQueryExpressionAnalyzer.Analyze(query, [sourceGraph, resultGraph]);
+
+        Assert.Equal(
+        [
+            "/definition/body/nodes/aggregate/aggregates/mismatched-minimum/target",
+            "/definition/body/nodes/aggregate/aggregates/mismatched-sum/target"
+        ],
+            analysis.Diagnostics
+                .Where(static diagnostic => diagnostic.Code == "relationQuery.expression.resultTypeMismatch")
+                .Select(static diagnostic => diagnostic.Location ?? string.Empty)
+                .ToArray());
+    }
+
+    [Fact]
     public void Analyze_TargetCategoryRejectsCategoryOnlyObjectResultForTextField()
     {
         var graph = new ShapeGraph(

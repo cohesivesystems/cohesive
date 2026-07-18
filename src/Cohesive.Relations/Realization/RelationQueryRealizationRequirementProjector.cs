@@ -26,12 +26,6 @@ public static class RelationQueryRealizationRequirementProjector
         RelationQueryGuaranteeCapabilityKind.InconclusiveEvidence
     ];
 
-    static readonly ImmutableArray<RelationQueryGuaranteeCapabilityKind> StrictBaselineGuarantees =
-    [
-        .. SemanticBaselineGuarantees,
-        RelationQueryGuaranteeCapabilityKind.OccurrenceProvenance
-    ];
-
     /// <summary>Projects deterministic, demand-scoped realization requirements from a compiled plan.</summary>
     /// <param name="plan">Successful target-independent relation/query plan.</param>
     /// <returns>Requirements sorted by stable requirement identity.</returns>
@@ -1037,13 +1031,21 @@ public static class RelationQueryRealizationRequirementProjector
         }
 
         ImmutableArray<RelationQueryGuaranteeCapabilityKind> RequiredBaselineGuarantees() =>
-            RequiresOccurrenceProvenance()
-                ? StrictBaselineGuarantees
-                : SemanticBaselineGuarantees;
+        [
+            .. SemanticBaselineGuarantees,
+            .. RequiresRelationRootCorrelation()
+                ? [RelationQueryGuaranteeCapabilityKind.RelationRootCorrelation]
+                : ImmutableArray<RelationQueryGuaranteeCapabilityKind>.Empty,
+            .. RequiresOccurrenceProvenance()
+                ? [RelationQueryGuaranteeCapabilityKind.OccurrenceProvenance]
+                : ImmutableArray<RelationQueryGuaranteeCapabilityKind>.Empty
+        ];
+
+        bool RequiresRelationRootCorrelation() =>
+            slice.RelationOutput is { Definition.Mode: not RelationOutputMode.Set };
 
         bool RequiresOccurrenceProvenance() =>
-            observability.OccurrenceProvenance == RelationQueryOccurrenceProvenanceMode.ExactContributors
-            || slice.RelationOutput is { Definition.Mode: not RelationOutputMode.Set };
+            observability.OccurrenceProvenance == RelationQueryOccurrenceProvenanceMode.ExactContributors;
 
         void AddGuarantee(RelationQueryGuaranteeCapabilityKind guarantee) => guarantees.Add(guarantee);
 
@@ -1525,6 +1527,7 @@ public static class RelationQueryRealizationRequirementProjector
             AggregateOperator.Max => RelationQueryLogicalCapabilityKind.MaximumAggregate,
             AggregateOperator.Any => RelationQueryLogicalCapabilityKind.AnyAggregate,
             AggregateOperator.All => RelationQueryLogicalCapabilityKind.AllAggregate,
+            AggregateOperator.Average => RelationQueryLogicalCapabilityKind.AverageAggregate,
             _ => throw new InvalidOperationException($"Unsupported demanded aggregate operation '{operation}'.")
         };
 

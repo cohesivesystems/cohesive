@@ -36,7 +36,7 @@ public static class ExprFunctionNames
     public const string AppendRange = "appendRange";
 
     /// <summary>
-    /// Function name for computing the numeric average of values in a sequence.
+    /// Function name for computing the numeric average of values in a sequence in the canonical decimal result domain.
     /// </summary>
     public const string Avg = "avg";
 
@@ -64,6 +64,17 @@ public static class ExprFunctionNames
     /// Function name for testing whether one text value ends with another using ordinal, case-sensitive semantics.
     /// </summary>
     public const string EndsWith = "endsWith";
+
+    /// <summary>
+    /// Function name for testing whether one text value starts with another using ordinal, case-sensitive semantics.
+    /// </summary>
+    public const string StartsWith = "startsWith";
+
+    /// <summary>
+    /// Function name for testing whether one text value contains another using ordinal, case-sensitive semantics.
+    /// </summary>
+    /// <remarks>This is distinct from <see cref="Contains"/>, which represents collection membership.</remarks>
+    public const string TextContains = "textContains";
 
     /// <summary>
     /// Function name for grouping source items into an object keyed by a selector expression.
