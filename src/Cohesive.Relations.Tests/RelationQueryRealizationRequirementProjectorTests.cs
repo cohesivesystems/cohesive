@@ -70,6 +70,7 @@ public sealed class RelationQueryRealizationRequirementProjectorTests
         Assert.Contains(RelationQueryGuaranteeCapabilityKind.OutputMode, guarantees);
         Assert.Contains(RelationQueryGuaranteeCapabilityKind.OutputIdentity, guarantees);
         Assert.Contains(RelationQueryGuaranteeCapabilityKind.DeterministicResult, guarantees);
+        Assert.Contains(RelationQueryGuaranteeCapabilityKind.RelationRootCorrelation, guarantees);
         Assert.Contains(RelationQueryGuaranteeCapabilityKind.OccurrenceProvenance, guarantees);
         Assert.Contains(RelationQueryGuaranteeCapabilityKind.EvidenceCompleteness, guarantees);
         Assert.Contains(RelationQueryGuaranteeCapabilityKind.InconclusiveEvidence, guarantees);
@@ -80,6 +81,7 @@ public sealed class RelationQueryRealizationRequirementProjectorTests
             RelationQueryGuaranteeCapabilityKind.MissingNullDistinction,
             RelationQueryGuaranteeCapabilityKind.AbsenceAvailabilityFailureDistinction,
             RelationQueryGuaranteeCapabilityKind.DeterministicResult,
+            RelationQueryGuaranteeCapabilityKind.RelationRootCorrelation,
             RelationQueryGuaranteeCapabilityKind.OccurrenceProvenance,
             RelationQueryGuaranteeCapabilityKind.EvidenceCompleteness,
             RelationQueryGuaranteeCapabilityKind.InconclusiveEvidence
@@ -129,6 +131,12 @@ public sealed class RelationQueryRealizationRequirementProjectorTests
             {
                 Role: RelationQueryStructuralCapabilityRole.OccurrenceEvidenceReconstruction
             });
+        Assert.DoesNotContain(
+            requirements,
+            static requirement => requirement.Capability is GuaranteeRelationQueryCapability
+            {
+                Kind: RelationQueryGuaranteeCapabilityKind.RelationRootCorrelation
+            });
         Assert.Contains(
             requirements,
             static requirement => requirement.Origin?.Input is not null
@@ -153,13 +161,53 @@ public sealed class RelationQueryRealizationRequirementProjectorTests
     }
 
     [Fact]
-    public void Project_NotRequestedRetainsRootProvenanceRequiredByRootedRelations()
+    public void Project_NotRequestedNonSetRelationRequiresRootCorrelationButNotContributorProvenance()
     {
         var plan = Compile(LoadCustomerRelationFixture.BaselineRelationDocument);
 
         var requirements = RelationQueryRealizationRequirementProjector.Project(
             plan,
             RelationQueryResultObservability.NotRequested);
+
+        Assert.DoesNotContain(
+            requirements,
+            static requirement => requirement.Capability is GuaranteeRelationQueryCapability
+            {
+                Kind: RelationQueryGuaranteeCapabilityKind.OccurrenceProvenance
+            });
+        Assert.DoesNotContain(
+            requirements,
+            static requirement => requirement.Capability is StructuralRelationQueryCapability
+            {
+                Role: RelationQueryStructuralCapabilityRole.OccurrenceEvidenceReconstruction
+            });
+        Assert.Contains(
+            requirements,
+            static requirement => requirement.Capability is GuaranteeRelationQueryCapability
+            {
+                Kind: RelationQueryGuaranteeCapabilityKind.RelationRootCorrelation
+            });
+        Assert.All(
+            requirements.Where(static requirement => requirement.Capability is not GuaranteeRelationQueryCapability),
+            static requirement =>
+            {
+                Assert.DoesNotContain(
+                    RelationQueryGuaranteeCapabilityKind.OccurrenceProvenance,
+                    requirement.RequiredGuarantees);
+                Assert.Contains(
+                    RelationQueryGuaranteeCapabilityKind.RelationRootCorrelation,
+                    requirement.RequiredGuarantees);
+            });
+    }
+
+    [Fact]
+    public void Project_ExactContributorsRequiresOccurrenceProvenanceForNonSetRelation()
+    {
+        var plan = Compile(LoadCustomerRelationFixture.BaselineRelationDocument);
+
+        var requirements = RelationQueryRealizationRequirementProjector.Project(
+            plan,
+            RelationQueryResultObservability.ExactContributors);
 
         Assert.Contains(
             requirements,
@@ -173,11 +221,23 @@ public sealed class RelationQueryRealizationRequirementProjectorTests
             {
                 Role: RelationQueryStructuralCapabilityRole.OccurrenceEvidenceReconstruction
             });
+        Assert.Contains(
+            requirements,
+            static requirement => requirement.Capability is GuaranteeRelationQueryCapability
+            {
+                Kind: RelationQueryGuaranteeCapabilityKind.RelationRootCorrelation
+            });
         Assert.All(
             requirements.Where(static requirement => requirement.Capability is not GuaranteeRelationQueryCapability),
-            static requirement => Assert.Contains(
-                RelationQueryGuaranteeCapabilityKind.OccurrenceProvenance,
-                requirement.RequiredGuarantees));
+            static requirement =>
+            {
+                Assert.Contains(
+                    RelationQueryGuaranteeCapabilityKind.OccurrenceProvenance,
+                    requirement.RequiredGuarantees);
+                Assert.Contains(
+                    RelationQueryGuaranteeCapabilityKind.RelationRootCorrelation,
+                    requirement.RequiredGuarantees);
+            });
     }
 
     [Fact]
@@ -221,6 +281,19 @@ public sealed class RelationQueryRealizationRequirementProjectorTests
         {
             AssertLogical(queryRequirements, kind);
         }
+    }
+
+    [Fact]
+    public void Project_AverageAggregatePreservesCanonicalLogicalRequirement()
+    {
+        var (document, aggregate) = CreateAverageAggregateQueryDocument();
+
+        var requirements = RelationQueryRealizationRequirementProjector.Project(Compile(document));
+
+        AssertLogicalAtNode(
+            requirements,
+            aggregate,
+            RelationQueryLogicalCapabilityKind.AverageAggregate);
     }
 
     [Fact]
@@ -702,7 +775,8 @@ public sealed class RelationQueryRealizationRequirementProjectorTests
                     RelationQueryGuaranteeCapabilityKind.DeterministicResult,
                     RelationQueryGuaranteeCapabilityKind.OccurrenceProvenance,
                     RelationQueryGuaranteeCapabilityKind.EvidenceCompleteness,
-                    RelationQueryGuaranteeCapabilityKind.InconclusiveEvidence
+                    RelationQueryGuaranteeCapabilityKind.InconclusiveEvidence,
+                    RelationQueryGuaranteeCapabilityKind.RelationRootCorrelation
                 ],
                 optionalCustomer.RequiredGuarantees.ToArray()));
     }
@@ -887,6 +961,43 @@ public sealed class RelationQueryRealizationRequirementProjectorTests
                 ]),
             [new RowsQueryResultDefinition(LoadCustomerRelationFixture.RowsResultId, project)]);
         return (RelationQueryDocument.FromDefinition(definition), filter);
+    }
+
+    static (RelationQueryDocument Document, QueryNodeId Aggregate) CreateAverageAggregateQueryDocument()
+    {
+        var aggregate = new QueryNodeId("average-load-amount");
+        var result = new QueryResultId("average-load-amount-result");
+        var definition = new QueryDefinition(
+            new("average-load-amount-query"),
+            new("AverageLoadAmountQuery"),
+            new LogicalQueryDefinition(
+            [
+                new SourceQueryNode(
+                    LoadCustomerRelationFixture.LoadSourceNodeId,
+                    LoadCustomerRelationFixture.LoadBinding,
+                    LoadCustomerRelationFixture.LoadShapeId),
+                new AggregateQueryNode(
+                    aggregate,
+                    LoadCustomerRelationFixture.LoadSourceNodeId,
+                    LoadCustomerRelationFixture.AggregateBinding,
+                    LoadCustomerRelationFixture.LoadAggregateShapeId,
+                    aggregates:
+                    [
+                        new(
+                            new("assign-average-load-count"),
+                            LoadCustomerRelationFixture.AggregateLoadCountPath,
+                            AggregateOperator.Count),
+                        new(
+                            new("assign-average-load-amount"),
+                            LoadCustomerRelationFixture.AggregateTotalAmountPath,
+                            AggregateOperator.Average,
+                            Expr.Field(
+                                LoadCustomerRelationFixture.LoadBinding,
+                                LoadCustomerRelationFixture.LoadAmountPath))
+                    ])
+            ]),
+            [new AggregationQueryResultDefinition(result, aggregate)]);
+        return (RelationQueryDocument.FromDefinition(definition), aggregate);
     }
 
     static RelationQueryDocument CreateElementPathQueryDocument(FieldPath itemPath)

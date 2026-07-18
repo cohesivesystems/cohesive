@@ -391,7 +391,18 @@ public enum RelationQueryOutputReferenceKind
 /// </summary>
 public sealed record RelationQueryOutputReference
 {
-    internal RelationQueryOutputReference(
+    /// <summary>Creates one demanded relation or query-result output reference.</summary>
+    /// <param name="id">Stable output identity.</param>
+    /// <param name="kind">Relation or query-result output kind.</param>
+    /// <param name="node">Node producing the output.</param>
+    /// <param name="shape">Graph-qualified output shape.</param>
+    /// <param name="relation">Canonical relation identity for a relation output.</param>
+    /// <param name="queryResult">Canonical query-result identity for a query output.</param>
+    /// <param name="field">Selected output field, or <see langword="null"/> for the complete output.</param>
+    /// <exception cref="ArgumentException">An identity, shape, field, or output-kind combination is invalid.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="kind"/> is unsupported.</exception>
+    [System.Text.Json.Serialization.JsonConstructor]
+    public RelationQueryOutputReference(
         RelationQueryOutputId id,
         RelationQueryOutputReferenceKind kind,
         QueryNodeId node,

@@ -190,6 +190,10 @@ public static class RelationQueryExpressionAnalyzer
         var parameters = CreateParameters(definition);
         List<DocumentValidationDiagnostic> siteDiagnostics = [];
         var siteAnalyses = AnalyzeSites(definition, bindingFlow, parameters, shapeResolver, siteDiagnostics);
+        siteDiagnostics.AddRange(ValidateAggregateOperandTargetTypes(
+            definition,
+            siteAnalyses,
+            shapeResolver));
         siteDiagnostics.AddRange(ValidateTemporalJoinDomains(
             siteAnalyses,
             requireKnownDomains: requireResolvedTemporalDomains));
@@ -890,7 +894,7 @@ public static class RelationQueryExpressionAnalyzer
 
     static ExprExpectation GetAggregateValueExpectation(AggregateOperator operation) => operation switch
     {
-        AggregateOperator.Sum => new(ExprResultCategory.Numeric),
+        AggregateOperator.Sum or AggregateOperator.Average => new(ExprResultCategory.Numeric),
         AggregateOperator.Min or AggregateOperator.Max => new(ExprResultCategory.Comparable),
         AggregateOperator.Any or AggregateOperator.All => ExprExpectation.Boolean,
         _ => ExprExpectation.Any
@@ -910,6 +914,7 @@ public static class RelationQueryExpressionAnalyzer
         {
             AggregateOperator.Count => targetType == new ScalarTypeRef(ScalarTypeKind.Int64),
             AggregateOperator.Sum => IsNumeric(target),
+            AggregateOperator.Average => targetType == new ScalarTypeRef(ScalarTypeKind.Decimal),
             AggregateOperator.Min or AggregateOperator.Max => IsComparable(target),
             AggregateOperator.Any or AggregateOperator.All =>
                 targetType == new ScalarTypeRef(ScalarTypeKind.Bool),
@@ -923,6 +928,77 @@ public static class RelationQueryExpressionAnalyzer
             Severity: DiagnosticSeverity.Error,
             Message: $"Aggregate operation '{operation}' result does not satisfy target field contract.",
             Location: location));
+    }
+
+    static IEnumerable<DocumentValidationDiagnostic> ValidateAggregateOperandTargetTypes(
+        RelationQueryDefinition definition,
+        ImmutableArray<RelationQueryExpressionSiteAnalysis> sites,
+        RelationQueryShapeResolver shapeResolver)
+    {
+        if (definition.Body is null)
+            yield break;
+
+        var valueSites = sites
+            .Where(static site => site.Kind == RelationQueryExpressionSiteKind.AggregateAssignmentValue
+                && site.Node is not null
+                && site.Assignment is not null)
+            .GroupBy(static site => (Node: site.Node!.Value, Assignment: site.Assignment!.Value))
+            .Where(static group => group.Count() == 1)
+            .ToDictionary(static group => group.Key, static group => group.Single());
+
+        foreach (var aggregate in definition.Body.Nodes
+                     .OfType<AggregateQueryNode>()
+                     .GroupBy(static node => node.Id)
+                     .Where(static group => group.Count() == 1)
+                     .Select(static group => group.Single())
+                     .OrderBy(static node => node.Id.Value, StringComparer.Ordinal))
+        {
+            foreach (var assignment in aggregate.Aggregates
+                         .Where(static assignment => assignment is not null)
+                         .GroupBy(static assignment => assignment.Id)
+                         .Where(static group => group.Count() == 1)
+                         .Select(static group => group.Single())
+                         .OrderBy(static assignment => assignment.Id.Value, StringComparer.Ordinal))
+            {
+                if (assignment.Value is null
+                    || !valueSites.TryGetValue((aggregate.Id, assignment.Id), out var valueSite)
+                    || valueSite.Analysis.KnownResult is not { } operand
+                    || !shapeResolver.TryGetTargetExpectation(
+                        aggregate.ResultShape,
+                        assignment.Target,
+                        out var targetExpectation)
+                    || targetExpectation.Value is not { } target)
+                {
+                    continue;
+                }
+
+                var operandType = operand.GetEffectiveType();
+                var targetType = target.GetEffectiveType();
+                var requiresExactType = assignment.Operation switch
+                {
+                    AggregateOperator.Sum => IsNumeric(operand) && IsNumeric(target),
+                    AggregateOperator.Min or AggregateOperator.Max =>
+                        IsComparable(operand) && IsComparable(target),
+                    _ => false
+                };
+                if (!requiresExactType
+                    || operandType is null
+                    || targetType is null
+                    || operandType == targetType)
+                {
+                    continue;
+                }
+
+                var contract = assignment.Operation == AggregateOperator.Sum
+                    ? "the same exact numeric type"
+                    : "the same exact comparable type";
+                yield return new(
+                    Code: "relationQuery.expression.resultTypeMismatch",
+                    Severity: DiagnosticSeverity.Error,
+                    Message: $"Aggregate operation '{assignment.Operation}' requires its operand and target to use {contract}.",
+                    Location: $"{NodeLocation(aggregate.Id)}/aggregates/{assignment.Id.Value}/target");
+            }
+        }
     }
 
     static bool IsNumeric(ExprValueContract value) =>
@@ -1163,7 +1239,7 @@ sealed class RelationQueryShapeResolver
         var bindingShape = binding.Shape is { } shapeIdentity && IsUsableShapeIdentity(shapeIdentity)
             ? binding.Shape
             : null;
-        
+
         if (bindingShape is { } qualifiedShape
             && graphs.TryGetValue(qualifiedShape.GraphId, out var graph)
             && graph.TryGetShape(qualifiedShape.ShapeId, out var shape))
@@ -1411,17 +1487,17 @@ sealed class RelationQueryShapeResolver
         switch (effectiveType)
         {
             case ObjectTypeRef objectType:
-            {
-                var field = objectType.Fields.FirstOrDefault(candidate =>
-                    string.Equals(candidate.Name, segment.Segment, StringComparison.Ordinal));
-                if (field is null)
-                    return false;
+                {
+                    var field = objectType.Fields.FirstOrDefault(candidate =>
+                        string.Equals(candidate.Name, segment.Segment, StringComparison.Ordinal));
+                    if (field is null)
+                        return false;
 
-                next = ComposePathValue(
-                    current,
-                    new(field.Type, presence: field.Presence));
-                return true;
-            }
+                    next = ComposePathValue(
+                        current,
+                        new(field.Type, presence: field.Presence));
+                    return true;
+                }
             case NamedTypeRef named
                 when graph.TryGetType(named.TypeId, out var definition)
                      && definition is TypeDefinition.Structural structural

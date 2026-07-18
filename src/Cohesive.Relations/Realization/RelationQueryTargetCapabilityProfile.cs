@@ -60,7 +60,16 @@ public enum RelationQueryOperatingBoundaryKind
     StableUniqueOrdering = 15,
 
     /// <summary>Requires the provider to return deterministic results for equivalent inputs.</summary>
-    DeterministicProvider = 16
+    DeterministicProvider = 16,
+
+    /// <summary>Requires explicit evidence that numeric aggregate intermediates and results preserve canonical semantics.</summary>
+    ExactNumericAggregateDomain = 17,
+
+    /// <summary>Requires explicit evidence that physical temporal precision and range preserve canonical values.</summary>
+    ExactTemporalDomain = 18,
+
+    /// <summary>Limits rooted relation execution to one explicitly supplied root occurrence per invocation.</summary>
+    SuppliedRelationRoot = 19
 }
 
 /// <summary>One explicit, inspectable target operating boundary.</summary>

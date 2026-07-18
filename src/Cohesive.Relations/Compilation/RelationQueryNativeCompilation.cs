@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using System.Text.Json.Serialization;
+using Cohesive.Model.Serialization;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.Physical;
@@ -7,12 +9,14 @@ using Cohesive.Relations.Realization;
 namespace Cohesive.Relations.Compilation;
 
 /// <summary>Stable identity of one native-compilation result branch within a compiled plan.</summary>
+[JsonConverter(typeof(SingleValueWrapperJsonConverter))]
 public readonly record struct RelationQueryNativeResultBranchId
 {
     /// <summary>Creates a native result-branch identity.</summary>
     /// <param name="value">Stable ordinal identity value.</param>
     /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException"><paramref name="value"/> is empty or white space.</exception>
+    [JsonConstructor]
     public RelationQueryNativeResultBranchId(string value) => Value = Guard.RequireNotNullOrWhiteSpace(value);
 
     /// <summary>Stable ordinal identity value.</summary>
@@ -38,7 +42,20 @@ public enum RelationQueryNativeResultKind
 /// <summary>One demanded terminal branch prepared for target-native compilation.</summary>
 public sealed record RelationQueryNativeResultBranch
 {
-    internal RelationQueryNativeResultBranch(
+    /// <summary>Creates one normalized demanded terminal branch.</summary>
+    /// <param name="id">Stable branch identity.</param>
+    /// <param name="kind">Semantic result kind.</param>
+    /// <param name="node">Retained node producing the result.</param>
+    /// <param name="binding">Binding containing each result value.</param>
+    /// <param name="shape">Graph-qualified result shape.</param>
+    /// <param name="outputs">One or more demanded outputs represented by this branch.</param>
+    /// <param name="fields">Demanded result fields.</param>
+    /// <param name="relation">Canonical relation identity for a relation branch.</param>
+    /// <param name="queryResult">Canonical query-result identity for a query branch.</param>
+    /// <exception cref="ArgumentException">An identity, shape, output, field, or terminal-kind combination is invalid.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="kind"/> is unsupported.</exception>
+    [JsonConstructor]
+    public RelationQueryNativeResultBranch(
         RelationQueryNativeResultBranchId id,
         RelationQueryNativeResultKind kind,
         QueryNodeId node,

@@ -103,6 +103,33 @@ When designing abstractions:
 - Validate semantic equivalence across interpreters with reference implementations, conformance suites, or differential tests where practical.
 - When backend IR is the source of truth for identifiers, shapes, routes, actions, selectors, roles, workflows, states, permissions, or other semantic data, favor generated codegen artifacts over hand-written strings or duplicated frontend models. If a generated artifact is missing, extend the codegen path rather than introducing a parallel constant unless the duplication is explicitly temporary and documented.
 
+### Abstraction Distillation and Type Discipline
+
+Cohesive has many semantic layers, compilation phases, and target interpreters, but a layer, phase, or target boundary does not by itself justify another type. Continuously distill recurring concepts and mechanisms into the smallest coherent set of abstractions that preserves semantic distinctions, invalid-state prevention, provenance, and target capabilities. Prefer semantic compression over type proliferation.
+
+When adding or changing a type, helper, compiler, or adapter:
+
+- Search the repository, especially sibling target implementations and the core/prelude, for the same concept or algorithm before introducing a parallel implementation.
+- Identify the semantic authority for the concept. If multiple enums, records, constants, or switch tables describe the same closed set and are expected to evolve together, default to one canonical type or catalog and project from it.
+- Treat exhaustive one-to-one conversions between types with identical cases as evidence of a duplicated model. Keep separate types only when they enforce a real distinction such as different valid states, units, ownership, lifecycle, versioning, serialization contracts, or capability guarantees.
+- Do not duplicate a type merely because it might diverge later. Share the present semantic model and split it when a concrete differing invariant appears. When an external or persisted boundary requires a distinct type, prefer a thin attributed wrapper or explicit projection over a second independently maintained case list.
+- Centralize mappings from semantic scalar kinds to target types, encodings, constants, readers, writers, and capability evidence. Do not scatter parallel switch expressions across authoring, validation, compilation, execution, and serialization.
+- Prefer extending a cohesive existing abstraction or using a small function, value object, catalog, or policy over creating a family of phase-specific records and interfaces. Avoid inheritance hierarchies and generic frameworks whose only purpose is removing superficial syntactic repetition.
+- Consider the net conceptual and type count of a change. New types should make an invalid state unrepresentable, establish an ownership or versioning boundary, or remove more duplication and ambiguity than they add.
+
+Use recurrence as a prompt for architectural review:
+
+- At the second substantial implementation of a mechanism, compare the implementations and identify the stable common shape.
+- At the third implementation, shared extraction is the default expectation unless target semantics materially differ. If extraction is deferred, keep the implementations visibly parallel and document the concrete point of divergence so a later consolidation remains straightforward.
+- Look for repetition beyond identical syntax or type names. Common abstractions often hide in control flow, data flow, traversal, normalization, validation, canonicalization, naming, diagnostics, serialization, builders, caching, allocation strategy, and lifecycle management.
+- Extract target-independent mechanism while parameterizing target policy. Across families of compilers and interpreters, orchestration, input-validation flow, traversal, status derivation, diagnostic normalization, provenance checks, deterministic ordering, and result invariants are likely shared mechanisms; capability matching, binding evidence, lowering choices, target construction, and target serialization remain interpretation policy.
+- Extract the smallest complete operation with a stable contract rather than a collection of incidental utility methods. Place it in the lowest layer that owns the shared meaning without making core packages depend on adapters or infrastructure.
+- Reuse existing primitives and builders before introducing local equivalents. If the existing primitive is close but incomplete, prefer generalizing it coherently over creating another narrowly named helper.
+- Keep uncertain shared abstractions internal while their boundaries are being learned. Promote them to public framework concepts only when their semantics, ownership, and extension model are clear across multiple uses.
+- Prefer conformance tests and shared test fixtures for common compiler contracts over copying the same behavioral tests for every target. Keep target-specific tests for genuine capability and lowering differences.
+
+Before completing a change that adds types or repeats a mechanism, perform a brief abstraction audit: inspect related implementations, identify duplicated models and behavior, consolidate what now has a stable shared meaning, and note any intentionally separate concepts whose invariants justify the distinction. Do not create an abstraction solely to satisfy this audit; the goal is fewer independent concepts, not more indirection.
+
 ## Repository Shape
 
 The reusable toolchain is developed primarily through the `Cohesive.*` libraries:

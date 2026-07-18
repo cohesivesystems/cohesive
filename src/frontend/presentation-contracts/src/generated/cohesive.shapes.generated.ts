@@ -320,7 +320,7 @@ export const dataSourceAggregateMaterializationKindLabels: Record<DataSourceAggr
   1: 'AllPages',
 };
 
-export type AggregateOperator = 0 | 1 | 2 | 3 | 4 | 5;
+export type AggregateOperator = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
 export const aggregateOperators = {
   count: 0,
@@ -329,6 +329,7 @@ export const aggregateOperators = {
   max: 3,
   any: 4,
   all: 5,
+  average: 6,
 } as const satisfies Record<string, AggregateOperator>;
 
 export const aggregateOperatorLabels: Record<AggregateOperator, string> = {
@@ -338,6 +339,7 @@ export const aggregateOperatorLabels: Record<AggregateOperator, string> = {
   3: 'Max',
   4: 'Any',
   5: 'All',
+  6: 'Average',
 };
 
 export interface FieldPath {
@@ -1470,6 +1472,7 @@ export type Expr = {
 
 export interface FieldExpr {
   Path: FieldPath;
+  Binding?: ValueBindingId | null;
 }
 
 export type CurrentItemExpr = Record<never, never>;
@@ -1549,6 +1552,7 @@ export interface NamedTypeRef {
 
 export interface OpaqueRuntimeTypeRef {
   RuntimeType: string;
+  InferenceDiagnostic?: TypeInferenceDiagnostic | null;
 }
 
 export interface ScalarTypeRef {
@@ -1989,6 +1993,10 @@ export interface FieldPathSegment {
   Segment?: string | null;
 }
 
+export interface ValueBindingId {
+  Value: string;
+}
+
 export type UnaryOperator = 0;
 
 export const unaryOperators = {
@@ -2033,6 +2041,11 @@ export const binaryOperatorLabels: Record<BinaryOperator, string> = {
 
 export interface TypeId {
   Value: string;
+}
+
+export interface TypeInferenceDiagnostic {
+  Reason: string;
+  Message?: string | null;
 }
 
 export type ScalarTypeKind = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;

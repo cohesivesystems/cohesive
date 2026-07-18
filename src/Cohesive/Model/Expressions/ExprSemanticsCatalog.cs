@@ -429,10 +429,12 @@ public sealed record ExprBinaryOperatorDefinition(
 /// <param name="Operator">Canonical aggregate operator.</param>
 /// <param name="SourceCategory">Expected source category.</param>
 /// <param name="ResultCategory">Known result category when not refined by the node's declared return type.</param>
+/// <param name="FixedResult">Known portable result contract that declared return-type metadata must match.</param>
 public sealed record ExprAggregateOperatorDefinition(
     AggregateOperator Operator,
     ExprResultCategory SourceCategory,
-    ExprResultCategory ResultCategory)
+    ExprResultCategory ResultCategory,
+    ExprValueContract? FixedResult = null)
 {
     /// <summary>Stable operation capability required by this aggregate.</summary>
     public ExprCapabilityId OperationCapability => ExprCapabilities.ForAggregate(Operator);
@@ -570,6 +572,9 @@ public sealed class ExprSemanticsCatalog
     static ExprSemanticsCatalog CreateDefault()
     {
         var boolean = new ExprValueContract(new ScalarTypeRef(ScalarTypeKind.Bool));
+        var decimalNumber = new ExprValueContract(
+            new ScalarTypeRef(ScalarTypeKind.Decimal),
+            presence: FieldPresence.Optional);
         var int64 = new ExprValueContract(new ScalarTypeRef(ScalarTypeKind.Int64));
         var @string = new ExprValueContract(new ScalarTypeRef(ScalarTypeKind.String));
 
@@ -600,7 +605,12 @@ public sealed class ExprSemanticsCatalog
                 new(AggregateOperator.Min, ExprResultCategory.Collection, ExprResultCategory.Scalar),
                 new(AggregateOperator.Max, ExprResultCategory.Collection, ExprResultCategory.Scalar),
                 new(AggregateOperator.Any, ExprResultCategory.Collection, ExprResultCategory.Boolean),
-                new(AggregateOperator.All, ExprResultCategory.Collection, ExprResultCategory.Boolean)
+                new(AggregateOperator.All, ExprResultCategory.Collection, ExprResultCategory.Boolean),
+                new(
+                    AggregateOperator.Average,
+                    ExprResultCategory.Collection,
+                    ExprResultCategory.Numeric,
+                    decimalNumber)
             ],
             functions:
             [
@@ -608,12 +618,23 @@ public sealed class ExprSemanticsCatalog
                 Function(ExprFunctionNames.Any, 1, 2, [ExprResultCategory.Collection, ExprResultCategory.Boolean], ExprResultCategory.Any, ExprResultCategory.Boolean, ExprFunctionResultRule.Fixed, boolean, [new(1, 0)]),
                 Function(ExprFunctionNames.Append, 2, 2, [ExprResultCategory.Collection, ExprResultCategory.Any], resultRule: ExprFunctionResultRule.FirstArgument, resultCategory: ExprResultCategory.Collection),
                 Function(ExprFunctionNames.AppendRange, 2, 2, [ExprResultCategory.Collection, ExprResultCategory.Collection], resultRule: ExprFunctionResultRule.FirstArgument, resultCategory: ExprResultCategory.Collection),
-                Function(ExprFunctionNames.Avg, 1, 2, [ExprResultCategory.Collection, ExprResultCategory.Numeric], ExprResultCategory.Any, ExprResultCategory.Numeric, scoped: [new(1, 0)]),
+                Function(
+                    id: ExprFunctionNames.Avg,
+                    minimum: 1,
+                    maximum: 2,
+                    argumentCategories: [ExprResultCategory.Collection, ExprResultCategory.Numeric],
+                    variadicCategory: ExprResultCategory.Any,
+                    resultCategory: ExprResultCategory.Numeric,
+                    resultRule: ExprFunctionResultRule.Fixed,
+                    fixedResult: decimalNumber,
+                    scoped: [new(1, 0)]),
                 Function(ExprFunctionNames.Concat, 1, null, argumentCategories: [], variadicCategory: ExprResultCategory.Text, resultCategory: ExprResultCategory.Text, resultRule: ExprFunctionResultRule.Fixed, fixedResult: @string),
                 Function(ExprFunctionNames.Contains, 2, 2, [ExprResultCategory.Collection, ExprResultCategory.Any], resultCategory: ExprResultCategory.Boolean, resultRule: ExprFunctionResultRule.Fixed, fixedResult: boolean),
                 Function(ExprFunctionNames.Count, 1, 1, [ExprResultCategory.Countable], resultCategory: ExprResultCategory.Integer, resultRule: ExprFunctionResultRule.Fixed, fixedResult: int64),
                 Function(ExprFunctionNames.EntityId, 0, 0, resultCategory: ExprResultCategory.Text, resultRule: ExprFunctionResultRule.Fixed, fixedResult: @string, ambient: [ExprCapabilities.EntityIdentity]),
                 Function(ExprFunctionNames.EndsWith, 2, 2, [ExprResultCategory.Text, ExprResultCategory.Text], resultCategory: ExprResultCategory.Boolean, resultRule: ExprFunctionResultRule.Fixed, fixedResult: boolean),
+                Function(ExprFunctionNames.StartsWith, 2, 2, [ExprResultCategory.Text, ExprResultCategory.Text], resultCategory: ExprResultCategory.Boolean, resultRule: ExprFunctionResultRule.Fixed, fixedResult: boolean),
+                Function(ExprFunctionNames.TextContains, 2, 2, [ExprResultCategory.Text, ExprResultCategory.Text], resultCategory: ExprResultCategory.Boolean, resultRule: ExprFunctionResultRule.Fixed, fixedResult: boolean),
                 Function(ExprFunctionNames.GroupBy, 2, 2, [ExprResultCategory.Collection, ExprResultCategory.Any], resultCategory: ExprResultCategory.Object, scoped: [new(1, 0)]),
                 Function(ExprFunctionNames.GroupByRows, 2, 2, [ExprResultCategory.Collection, ExprResultCategory.Any], resultCategory: ExprResultCategory.Collection, scoped: [new(1, 0)]),
                 Function(ExprFunctionNames.InsertAt, 3, 3, [ExprResultCategory.Collection, ExprResultCategory.Integer, ExprResultCategory.Any], resultCategory: ExprResultCategory.Collection, resultRule: ExprFunctionResultRule.FirstArgument),
@@ -706,7 +727,11 @@ public sealed class ExprSemanticsCatalog
         if (aggregate.Any(static definition =>
                 !Enum.IsDefined(definition.Operator)
                 || !Enum.IsDefined(definition.SourceCategory)
-                || !Enum.IsDefined(definition.ResultCategory)))
+                || !Enum.IsDefined(definition.ResultCategory)
+                || definition.FixedResult is not null
+                    && !ExprResultCategorySemantics.Satisfies(
+                        ExprResultCategorySemantics.Classify(definition.FixedResult),
+                        definition.ResultCategory)))
         {
             throw new ArgumentException("Aggregate operator definitions contain an unsupported value.", nameof(aggregate));
         }
@@ -806,6 +831,7 @@ public static class ExprCapabilities
         AggregateOperator.Max => "max",
         AggregateOperator.Any => "any",
         AggregateOperator.All => "all",
+        AggregateOperator.Average => "average",
         _ => $"unknown.{((int)@operator).ToString(CultureInfo.InvariantCulture)}"
     };
 }

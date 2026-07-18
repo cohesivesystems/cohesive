@@ -148,7 +148,10 @@ public enum RelationQueryLogicalCapabilityKind
     AlwaysPresentBinding = 45,
 
     /// <summary>Consumes a named binding that may be absent for some evaluation rows.</summary>
-    MayBeAbsentBinding = 46
+    MayBeAbsentBinding = 46,
+
+    /// <summary>Computes an arithmetic average in the canonical decimal result domain.</summary>
+    AverageAggregate = 47
 }
 
 /// <summary>Semantic role in which a target interprets a structural field path.</summary>
@@ -279,7 +282,10 @@ public enum RelationQueryGuaranteeCapabilityKind
     /// Preserves same-element correlation among all current-item reads performed within one scoped
     /// collection-expression evaluation.
     /// </summary>
-    CollectionElementCorrelation = 23
+    CollectionElementCorrelation = 23,
+
+    /// <summary>Correlates every rooted non-set relation output row with the root occurrence that produced it.</summary>
+    RelationRootCorrelation = 24
 }
 
 /// <summary>Primitive target facility from which exact higher-level semantics may be composed.</summary>

@@ -46,7 +46,7 @@ public enum DataSourceAggregateMaterializationKind
 /// <param name="Id">Stable measure identifier.</param>
 /// <param name="TargetPath">Path written in the aggregate result object.</param>
 /// <param name="Operator">Aggregate operator.</param>
-/// <param name="SourceField">Optional source field used by value aggregates such as sum or min.</param>
+/// <param name="SourceField">Optional source field used by value aggregates such as sum, average, or min.</param>
 /// <param name="Predicate">Optional record predicate applied before this measure is computed.</param>
 public sealed record DataSourceAggregateMeasure(
     string Id,

@@ -4,6 +4,7 @@ using Cohesive.Model.Serialization;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.IR;
+using Cohesive.Relations.Realization;
 using IRQueryDefinition = Cohesive.Relations.IR.QueryDefinition;
 using IRRelationDefinition = Cohesive.Relations.IR.RelationDefinition;
 
@@ -339,6 +340,95 @@ public sealed class RelationQueryInMemoryInterpreterTests
             (LoadCustomerRelationFixture.AggregateCustomerNameFieldName, ObservationValue.FromString("Beta")),
             (LoadCustomerRelationFixture.AggregateLoadCountFieldName, ObservationValue.FromInt64(1)),
             (LoadCustomerRelationFixture.AggregateTotalAmountFieldName, ObservationValue.FromDouble(7d)));
+    }
+
+    [Fact]
+    public void Execute_AverageAggregateRealizesAndProducesCanonicalDecimalResults()
+    {
+        var original = Assert.IsType<IRQueryDefinition>(
+            LoadCustomerRelationFixture.RepresentativeQueryDocument.Definition);
+        var definition = original with
+        {
+            Body = original.Body with
+            {
+                Nodes =
+                [
+                    .. original.Body.Nodes.Select(static node => node is AggregateQueryNode aggregate
+                        ? aggregate with
+                        {
+                            Aggregates =
+                            [
+                                .. aggregate.Aggregates.Select(static assignment =>
+                                    assignment.Id == LoadCustomerRelationFixture.AggregateTotalAmountAssignmentId
+                                        ? assignment with
+                                        {
+                                            Operation = AggregateOperator.Average,
+                                            Filter = null
+                                        }
+                                        : assignment)
+                            ]
+                        }
+                        : node)
+                ]
+            }
+        };
+        var plan = Compile(
+            RelationQueryDocument.FromDefinition(definition),
+            RelationQueryCompilationDemand.ForQueryResults(
+            [
+                QueryResultDemand.SelectedFields(
+                    LoadCustomerRelationFixture.AggregationResultId,
+                    [
+                        new(
+                            LoadCustomerRelationFixture.LoadAggregateShapeId,
+                            LoadCustomerRelationFixture.AggregateTotalAmountPath)
+                    ])
+            ]));
+        var realization = RelationQueryInMemoryInterpreter.Default.Realize(plan);
+        var scenario = CreateEvidence(
+            plan,
+            specs:
+            [
+                new("a", "load-a", "customer-1", "Acme", Amount: 10d),
+                new("b", "load-b", "customer-1", "Acme", Amount: 5d),
+                new("c", "load-c", "customer-2", "Beta", Amount: 7d)
+            ],
+            parameters: new Dictionary<QueryParameterId, ObservationValue>
+            {
+                [LoadCustomerRelationFixture.StatusParameterId] = ObservationValue.FromString("Open")
+            });
+
+        var result = Execute(plan, scenario.Evidence);
+
+        Assert.True(realization.IsRealizable);
+        var averageRequirement = Assert.Single(
+            realization.Requirements,
+            static requirement => requirement.Capability is LogicalRelationQueryCapability
+            {
+                Kind: RelationQueryLogicalCapabilityKind.AverageAggregate
+            });
+        Assert.Contains(
+            realization.Decisions,
+            decision => decision.Requirement == averageRequirement.Id
+                && decision.Kind == RelationQueryRealizationDecisionKind.Native);
+        Assert.Equal(RelationQueryExecutionStatus.Succeeded, result.Status);
+        Assert.Empty(result.Diagnostics);
+        var branch = Assert.Single(result.QueryResults);
+        Assert.Equal(RelationQueryExecutionOutputState.Complete, branch.State);
+        var averages = branch.Rows
+            .Select(static row => row.Value.Fields![
+                LoadCustomerRelationFixture.AggregateTotalAmountFieldName])
+            .ToArray();
+        Assert.Equal(
+            [7m, 7.5m],
+            averages
+                .Select(static average =>
+                {
+                    Assert.True(average.TryGetDecimal(out var value));
+                    return value;
+                })
+                .Order()
+                .ToArray());
     }
 
     [Fact]

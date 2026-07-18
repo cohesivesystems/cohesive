@@ -68,6 +68,39 @@ public sealed class RelationQueryExpressionTemporalAggregateAuthoringTests
     }
 
     [Fact]
+    public void Aggregate_AverageAcceptsExactNumericInputOnlyWithDecimalTarget()
+    {
+        var author = RelationQuery.Expression();
+        var rows = author.Source<AggregateRow>();
+
+        var invalidTarget = Assert.Throws<ArgumentException>(() =>
+            author.Aggregate<SourceQueryNode, LongAverageResult>(
+                rows.Node,
+                aggregate => aggregate.Value(
+                    result => result.Average,
+                    AggregateOperator.Average,
+                    (AggregateRow row) => row.Units,
+                    rows.Binding)));
+        Assert.Contains("requires a Decimal target", invalidTarget.Message, StringComparison.Ordinal);
+
+        var average = author.Aggregate<SourceQueryNode, DecimalAverageResult>(
+            rows.Node,
+            aggregate => aggregate.Value(
+                result => result.Average,
+                AggregateOperator.Average,
+                (AggregateRow row) => row.Units,
+                rows.Binding));
+
+        var query = author.BuildQuery(
+            new QueryId("exact-decimal-average"),
+            new QueryName("ExactDecimalAverage"),
+            author.Aggregation(average));
+        Assert.True(query.Validation.IsValid);
+        var aggregateNode = Assert.Single(query.Definition.Body.Nodes.OfType<AggregateQueryNode>());
+        Assert.Equal(AggregateOperator.Average, Assert.Single(aggregateNode.Aggregates).Operation);
+    }
+
+    [Fact]
     public void Aggregate_RejectsBindingsOutsideItsInputBranch()
     {
         var author = RelationQuery.Expression();
@@ -410,6 +443,16 @@ public sealed class RelationQueryExpressionTemporalAggregateAuthoringTests
     sealed class LongSumResult
     {
         public long Total { get; init; }
+    }
+
+    sealed class LongAverageResult
+    {
+        public long Average { get; init; }
+    }
+
+    sealed class DecimalAverageResult
+    {
+        public decimal Average { get; init; }
     }
 
     sealed class GuidMinimumResult

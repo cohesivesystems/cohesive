@@ -86,6 +86,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{6F2CE868-7
 		README.md = README.md
 	EndProjectSection
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Adapters.Postgres", "src\adapters\Cohesive.Adapters.Postgres\Cohesive.Adapters.Postgres.csproj", "{5C867DD2-FBB3-44C8-9C00-CA02006E6FB2}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -552,6 +554,18 @@ Global
 		{2768E70C-0685-490D-ACD0-D747845906ED}.Release|x64.Build.0 = Release|Any CPU
 		{2768E70C-0685-490D-ACD0-D747845906ED}.Release|x86.ActiveCfg = Release|Any CPU
 		{2768E70C-0685-490D-ACD0-D747845906ED}.Release|x86.Build.0 = Release|Any CPU
+		{5C867DD2-FBB3-44C8-9C00-CA02006E6FB2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5C867DD2-FBB3-44C8-9C00-CA02006E6FB2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5C867DD2-FBB3-44C8-9C00-CA02006E6FB2}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{5C867DD2-FBB3-44C8-9C00-CA02006E6FB2}.Debug|x64.Build.0 = Debug|Any CPU
+		{5C867DD2-FBB3-44C8-9C00-CA02006E6FB2}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{5C867DD2-FBB3-44C8-9C00-CA02006E6FB2}.Debug|x86.Build.0 = Debug|Any CPU
+		{5C867DD2-FBB3-44C8-9C00-CA02006E6FB2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5C867DD2-FBB3-44C8-9C00-CA02006E6FB2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5C867DD2-FBB3-44C8-9C00-CA02006E6FB2}.Release|x64.ActiveCfg = Release|Any CPU
+		{5C867DD2-FBB3-44C8-9C00-CA02006E6FB2}.Release|x64.Build.0 = Release|Any CPU
+		{5C867DD2-FBB3-44C8-9C00-CA02006E6FB2}.Release|x86.ActiveCfg = Release|Any CPU
+		{5C867DD2-FBB3-44C8-9C00-CA02006E6FB2}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -581,5 +595,6 @@ Global
 		{444DBC5C-E61F-4A0A-AB80-B117A09BFF51} = {E43C7668-D288-496F-90C4-887287F717D4}
 		{05FD9E64-5AE4-4271-993B-63B7FF4824A7} = {E43C7668-D288-496F-90C4-887287F717D4}
 		{2768E70C-0685-490D-ACD0-D747845906ED} = {5751A714-1C63-4459-AE6F-B239AFE570E4}
+		{5C867DD2-FBB3-44C8-9C00-CA02006E6FB2} = {E43C7668-D288-496F-90C4-887287F717D4}
 	EndGlobalSection
 EndGlobal

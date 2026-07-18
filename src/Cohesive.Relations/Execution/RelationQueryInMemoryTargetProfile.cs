@@ -135,6 +135,7 @@ static class RelationQueryInMemoryTargetProfile
         RelationQueryLogicalCapabilityKind.SumAggregate,
         RelationQueryLogicalCapabilityKind.MinimumAggregate,
         RelationQueryLogicalCapabilityKind.MaximumAggregate,
+        RelationQueryLogicalCapabilityKind.AverageAggregate,
         RelationQueryLogicalCapabilityKind.AnyAggregate,
         RelationQueryLogicalCapabilityKind.AllAggregate,
         RelationQueryLogicalCapabilityKind.Ordering,
@@ -180,6 +181,7 @@ static class RelationQueryInMemoryTargetProfile
         RelationQueryGuaranteeCapabilityKind.InvariantEnforcement,
         RelationQueryGuaranteeCapabilityKind.DeterministicResult,
         RelationQueryGuaranteeCapabilityKind.OccurrenceProvenance,
+        RelationQueryGuaranteeCapabilityKind.RelationRootCorrelation,
         RelationQueryGuaranteeCapabilityKind.EvidenceCompleteness,
         RelationQueryGuaranteeCapabilityKind.InconclusiveEvidence
     ];

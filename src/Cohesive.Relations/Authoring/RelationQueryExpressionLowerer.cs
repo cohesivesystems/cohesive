@@ -98,7 +98,9 @@ public sealed class RelationQueryExpressionLowerer
     public const string Producer = "cohesive.relations.csharp-expression/v1";
 
     readonly RelationQueryExpressionMemberPathResolver memberPathResolver;
+    readonly Func<Type, TypeRef> literalTypeResolver;
     readonly RelationQueryExpressionAuthoring? expectedParameterOwner;
+    static readonly RelationQueryClrAuthoringContext DefaultLiteralTypeContext = new();
     static readonly ConcurrentDictionary<PropertyInfo, bool> NonNullProperties = [];
     static readonly ConcurrentDictionary<PropertyInfo, bool> NonNullSequenceElementProperties = [];
 
@@ -119,6 +121,7 @@ public sealed class RelationQueryExpressionLowerer
     {
         this.memberPathResolver = Guard.RequireNotNull(memberPathResolver);
         this.expectedParameterOwner = expectedParameterOwner;
+        literalTypeResolver = (expectedParameterOwner?.Clr ?? DefaultLiteralTypeContext).GetTypeRef;
     }
 
     /// <summary>Lowers a value lambda with no source-binding parameters.</summary>
@@ -633,6 +636,42 @@ public sealed class RelationQueryExpressionLowerer
                 sourceReference,
                 symbol: Display(call.Method),
                 suggestion: "Call EndsWith(suffix, StringComparison.Ordinal).");
+        }
+
+        if (IsOrdinalStartsWith(call))
+        {
+            return Expr.StartsWith(
+                Translate(call.Object!, scope, sourceReference, expressionPath + "/value"),
+                Translate(call.Arguments[0], scope, sourceReference, expressionPath + "/prefix"));
+        }
+
+        if (IsStringStartsWith(call))
+        {
+            throw Fail(
+                RelationQueryExpressionDiagnosticCodes.MethodUnsupported,
+                "Only the ordinal, case-sensitive StartsWith overload has the same semantics as the canonical startsWith function.",
+                expressionPath,
+                sourceReference,
+                symbol: Display(call.Method),
+                suggestion: "Call StartsWith(prefix, StringComparison.Ordinal).");
+        }
+
+        if (IsOrdinalStringContains(call))
+        {
+            return Expr.TextContains(
+                Translate(call.Object!, scope, sourceReference, expressionPath + "/value"),
+                Translate(call.Arguments[0], scope, sourceReference, expressionPath + "/substring"));
+        }
+
+        if (IsStringContains(call))
+        {
+            throw Fail(
+                RelationQueryExpressionDiagnosticCodes.MethodUnsupported,
+                "Only the ordinal, case-sensitive string Contains overload has the same semantics as the canonical textContains function.",
+                expressionPath,
+                sourceReference,
+                symbol: Display(call.Method),
+                suggestion: "Call Contains(substring, StringComparison.Ordinal).");
         }
 
         if (IsStringConcat(call))
@@ -1786,13 +1825,13 @@ public sealed class RelationQueryExpressionLowerer
         }
     }
 
-    static Expr TranslateConstant(
+    Expr TranslateConstant(
         ConstantExpression constant,
         string sourceReference,
         string expressionPath)
     {
         if (constant.Value is null)
-            return new ConstantExpr(ObservationValue.Null);
+            return CreateTypedLiteralOrConstant(constant.Type, ObservationValue.Null);
 
         if (!TryConvertPortableLiteral(constant.Value, out var value))
         {
@@ -1805,7 +1844,29 @@ public sealed class RelationQueryExpressionLowerer
                 suggestion: "Use a portable scalar literal or declare the runtime value as an explicit query parameter.");
         }
 
-        return new ConstantExpr(value);
+        return CreateTypedLiteralOrConstant(constant.Type, value);
+    }
+
+    Expr CreateTypedLiteralOrConstant(Type clrType, ObservationValue value)
+    {
+        TypeRef literalType;
+        try
+        {
+            literalType = literalTypeResolver(Nullable.GetUnderlyingType(clrType) ?? clrType);
+        }
+        catch (InvalidOperationException)
+        {
+            return new ConstantExpr(value);
+        }
+
+        if (literalType is not ScalarTypeRef
+            || value.Kind is not (ObservationValueKind.Null or ObservationValueKind.Undefined)
+                && !new ExprValueContract(literalType).IsSatisfiedByConstant(value))
+        {
+            return new ConstantExpr(value);
+        }
+
+        return new LiteralExpr(literalType, value);
     }
 
     static bool TryConvertPortableLiteral(object value, out ObservationValue observed)
@@ -2491,8 +2552,26 @@ public sealed class RelationQueryExpressionLowerer
         && string.Equals(call.Method.Name, nameof(string.EndsWith), StringComparison.Ordinal);
 
     static bool IsOrdinalEndsWith(MethodCallExpression call)
+        => IsOrdinalStringPredicate(call, nameof(string.EndsWith));
+
+    static bool IsStringStartsWith(MethodCallExpression call) =>
+        call.Object?.Type == typeof(string)
+        && string.Equals(call.Method.Name, nameof(string.StartsWith), StringComparison.Ordinal);
+
+    static bool IsOrdinalStartsWith(MethodCallExpression call) =>
+        IsOrdinalStringPredicate(call, nameof(string.StartsWith));
+
+    static bool IsStringContains(MethodCallExpression call) =>
+        call.Object?.Type == typeof(string)
+        && string.Equals(call.Method.Name, nameof(string.Contains), StringComparison.Ordinal);
+
+    static bool IsOrdinalStringContains(MethodCallExpression call) =>
+        IsOrdinalStringPredicate(call, nameof(string.Contains));
+
+    static bool IsOrdinalStringPredicate(MethodCallExpression call, string methodName)
     {
-        if (!IsStringEndsWith(call)
+        if (call.Object?.Type != typeof(string)
+            || !string.Equals(call.Method.Name, methodName, StringComparison.Ordinal)
             || call.Arguments.Count != 2
             || call.Arguments[0].Type != typeof(string))
         {

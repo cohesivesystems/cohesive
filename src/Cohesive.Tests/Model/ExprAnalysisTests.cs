@@ -294,6 +294,61 @@ public sealed class ExprAnalysisTests
     }
 
     [Fact]
+    public void Analyze_AverageRequiresTheCanonicalDecimalResultContract()
+    {
+        var decimalType = new ScalarTypeRef(ScalarTypeKind.Decimal);
+        var values = Expr.Const(ObservationValue.FromArray(
+        [
+            ObservationValue.FromDecimal(1m),
+            ObservationValue.FromDecimal(2m)
+        ]));
+
+        Assert.True(ExprSemanticsCatalog.Default.TryGetAggregate(
+            AggregateOperator.Average,
+            out var aggregateDefinition));
+        Assert.Equal(decimalType, aggregateDefinition.FixedResult?.Type);
+        Assert.True(ExprSemanticsCatalog.Default.TryGetFunction(
+            ExprFunctionNames.Avg,
+            out var functionDefinition));
+        Assert.Equal(ExprFunctionResultRule.Fixed, functionDefinition.ResultRule);
+        Assert.Equal(decimalType, functionDefinition.FixedResult?.Type);
+
+        var validAggregate = Analyze(
+            new AggregateExpr(AggregateOperator.Average, values, decimalType),
+            ExprScope.Empty,
+            "average-aggregate-decimal");
+        var invalidAggregate = Analyze(
+            new AggregateExpr(AggregateOperator.Average, values, Int64Type),
+            ExprScope.Empty,
+            "average-aggregate-int64");
+        var validFunction = Analyze(
+            new CallExpr(ExprFunctionNames.Avg, [values], decimalType),
+            ExprScope.Empty,
+            "average-function-decimal");
+        var inferredFunction = Analyze(
+            Expr.Call(ExprFunctionNames.Avg, values),
+            ExprScope.Empty,
+            "average-function-inferred");
+        var invalidFunction = Analyze(
+            new CallExpr(ExprFunctionNames.Avg, [values], Int64Type),
+            ExprScope.Empty,
+            "average-function-int64");
+
+        Assert.True(validAggregate.IsValid);
+        Assert.Equal(decimalType, validAggregate.KnownResult?.Type);
+        Assert.Equal(FieldPresence.Optional, validAggregate.KnownResult?.Presence);
+        Assert.True(validFunction.IsValid);
+        Assert.Equal(decimalType, validFunction.KnownResult?.Type);
+        Assert.Equal(FieldPresence.Optional, validFunction.KnownResult?.Presence);
+        Assert.True(inferredFunction.IsValid);
+        Assert.Equal(decimalType, inferredFunction.KnownResult?.Type);
+        AssertDiagnostic(invalidAggregate, ExprAnalysisDiagnosticCodes.ResultTypeMismatch);
+        Assert.Equal(decimalType, invalidAggregate.KnownResult?.Type);
+        AssertDiagnostic(invalidFunction, ExprAnalysisDiagnosticCodes.ResultTypeMismatch);
+        Assert.Equal(decimalType, invalidFunction.KnownResult?.Type);
+    }
+
+    [Fact]
     public void Analyze_EndsWithDeclaresExactTextPredicateSemanticsAndCapability()
     {
         Assert.True(ExprSemanticsCatalog.Default.TryGetFunction(
@@ -1139,6 +1194,15 @@ public sealed class ExprAnalysisTests
                     ExprResultCategory.Numeric,
                     ExprResultCategory.Numeric,
                 new ExprValueContract(StringType))
+            ]));
+        Assert.Throws<ArgumentException>(() => new ExprSemanticsCatalog(
+            aggregateOperators:
+            [
+                new(
+                    AggregateOperator.Average,
+                    ExprResultCategory.Collection,
+                    ExprResultCategory.Numeric,
+                    new ExprValueContract(StringType))
             ]));
         Assert.Throws<ArgumentException>(() => new ExprExpectation(
             ExprResultCategory.Boolean,

@@ -531,6 +531,22 @@ public sealed class RelationQueryExpressionEvaluatorTests
             AggregateOperator.Max,
             []).Kind);
 
+        var average = evaluator.Evaluate(
+            new AggregateExpr(
+                AggregateOperator.Average,
+                Expr.Const(ObservationValue.FromArray(
+                [
+                    ObservationValue.FromDecimal(0.1m),
+                    ObservationValue.FromDecimal(0.2m)
+                ])),
+                new ScalarTypeRef(ScalarTypeKind.Decimal)),
+            new RelationQueryExpressionContext());
+        Assert.Equal(ObservationValueKind.Decimal, average.Kind);
+        Assert.Equal(0.15m, average.Decimal);
+        Assert.Equal(
+            ObservationValueKind.Undefined,
+            evaluator.Aggregate(AggregateOperator.Average, []).Kind);
+
         var grouped = expression with { GroupBy = [Expr.Const("group")] };
         var exception = Assert.Throws<RelationQueryExpressionEvaluationException>(() =>
             evaluator.Evaluate(grouped, new RelationQueryExpressionContext()));

@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  aggregateOperators,
+  dataSourceAggregateMaterializationKinds,
   dataSourceKinds,
   presentationBindingKinds,
   type DataSourceDefinition,
   type PresentationModuleDefinition,
 } from '@cohesivesystems/presentation-contracts'
 import {
+  createDataSourceAggregateQueryBinding,
   createLocalStateDataSourceBindingProjectionRegistry,
   createPresentationDataSourceTargetInterpretation,
   presentationDataSourceBindingKinds,
@@ -105,5 +108,68 @@ describe('data source binding projection', () => {
       retry: 2,
       staleTime: 5000,
     })
+  })
+
+  it('projects the shared average aggregate operator', async () => {
+    const source = {
+      Annotations: [],
+      Binding: {
+        EndpointId: 'loads.query',
+        Kind: presentationBindingKinds.apiEndpoint,
+      },
+      DefaultSort: [],
+      Id: 'loads',
+      Kind: dataSourceKinds.collectionQuery,
+      Name: 'Loads',
+      Parameters: [],
+      ResultShape: 'Load',
+    } as unknown as DataSourceDefinition
+    const aggregate = {
+      Aggregation: {
+        Materialization: {
+          Kind: dataSourceAggregateMaterializationKinds.currentPage,
+        },
+        Measures: [
+          {
+            Id: 'average-amount',
+            Operator: aggregateOperators.average,
+            SourceField: { Segments: [{ Segment: 'Amount' }] },
+            TargetPath: 'AverageAmount',
+          },
+        ],
+        SourceDataSourceId: source.Id,
+      },
+      Annotations: [],
+      DefaultSort: [],
+      Id: 'load-summary',
+      Kind: dataSourceKinds.aggregateQuery,
+      Name: 'Load summary',
+      Parameters: [],
+      ResultShape: 'LoadSummary',
+    } as unknown as DataSourceDefinition
+    const module = {
+      DataSources: [source, aggregate],
+    } as unknown as PresentationModuleDefinition
+    const targetInterpretation = createPresentationDataSourceTargetInterpretation({
+      apiEndpoint: {
+        executeEndpoint: async () => [
+          { Amount: 10 },
+          { Amount: 20 },
+        ],
+      },
+    })
+
+    const binding = createDataSourceAggregateQueryBinding({
+      context: {
+        binding: null,
+        context: {},
+        dataSource: aggregate,
+        module,
+      },
+      targetInterpretation,
+    })
+
+    expect(binding).not.toBeNull()
+    await expect(binding?.queryFn()).resolves.toEqual({ AverageAmount: 15 })
   })
 })
