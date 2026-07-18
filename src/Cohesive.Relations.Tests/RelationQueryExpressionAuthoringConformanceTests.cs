@@ -117,40 +117,113 @@ public sealed class RelationQueryExpressionAuthoringConformanceTests
     }
 
     [Fact]
+    public void ConventionAuthoredJoinedRelation_IsStableAcrossCultureAndClrRegistrationOrder()
+    {
+        var conventional = WithCulture(
+            new CultureInfo("en-US"),
+            () => AuthorJoinedRelation(registerOutputFirst: false));
+        var reversed = WithCulture(
+            new CultureInfo("tr-TR"),
+            () => AuthorJoinedRelation(registerOutputFirst: true));
+
+        Assert.Equal(conventional.Relationship, reversed.Relationship);
+        Assert.Equal(conventional.Catalog.CatalogFingerprint, reversed.Catalog.CatalogFingerprint);
+        Assert.Equal(
+            RelationshipCatalogJsonSerializer.Serialize(conventional.Catalog, indented: false),
+            RelationshipCatalogJsonSerializer.Serialize(reversed.Catalog, indented: false));
+        Assert.Equal(
+            conventional.Relation.CreateDocument().DefinitionFingerprint,
+            reversed.Relation.CreateDocument().DefinitionFingerprint);
+        Assert.Equal(
+            RelationQueryJsonSerializer.Serialize(conventional.Relation.CreateDocument(), indented: false),
+            RelationQueryJsonSerializer.Serialize(reversed.Relation.CreateDocument(), indented: false));
+        Assert.Equal(
+            ProvenanceSnapshot(conventional.Relation.Provenance),
+            ProvenanceSnapshot(reversed.Relation.Provenance));
+        Assert.Equal(
+            ShapeSnapshot(conventional.Author.ShapeDocuments),
+            ShapeSnapshot(reversed.Author.ShapeDocuments));
+    }
+
+    [Fact]
     public void ExpressionAuthoredJoinedRelation_CompilesTraversesExecutesAndMapsFlattenedDto()
     {
         var author = RelationQuery.Expression();
-        var loadCustomer = author.Relationship<JoinedLoad, JoinedCustomer>(
-            load => load.CustomerId,
-            new RelationshipId("conformance/load-customer"));
-        var loads = author.Source<JoinedLoad>(sourceReference: "conformance/joined/source");
-        var customers = author.Traverse(
-            loads.Node,
-            loads.Binding,
-            loadCustomer,
-            sourceReference: "conformance/joined/customer");
+        var loads = author.Source<JoinedLoad>();
+        var customers = author.Traverse<JoinedLoad, JoinedCustomer>(
+            loads,
+            load => load.CustomerId);
         var projected = author.Project(
-            customers.Node,
+            customers,
             (JoinedLoad load, JoinedCustomer customer) => new JoinedLoadSearchDto
             {
                 Id = load.Id,
                 CustomerId = load.CustomerId,
                 CustomerName = customer.Name,
                 CustomerType = customer.Type
-            },
-            loads.Binding,
-            customers.Binding,
-            sourceReference: "conformance/joined/project");
-        var relation = author.BuildRelation(
-            new RelationId("joined-load-search-conformance"),
-            new RelationName("JoinedLoadSearchConformance"),
-            loads.Binding,
-            projected.Node,
-            projected.Binding,
-            (JoinedLoadSearchDto document) => document.Id,
-            sourceReference: "conformance/joined/relation");
-        var catalog = RelationshipCatalogDocument.FromCatalog(
-            new RelationshipCatalog([loadCustomer.Definition]));
+            });
+        var relation = projected.BuildRelation((JoinedLoadSearchDto document) => document.Id);
+
+        var catalog = author.CreateRelationshipCatalogDocument();
+        var loadCustomer = Assert.Single(catalog.Catalog.Relationships);
+
+        Assert.Equal(RelationshipIdConvention.Create(loadCustomer), loadCustomer.Id);
+        Assert.Equal(
+            RelationQueryExpressionRelationConvention.CreateId(
+                loads.Binding.Shape!.Value,
+                projected.Binding.Shape!.Value),
+            relation.Definition.Id);
+        Assert.Equal(
+            RelationQueryExpressionRelationConvention.CreateName(typeof(JoinedLoadSearchDto)),
+            relation.Definition.Name);
+        var relationIdentity = Assert.Single(
+            relation.Provenance.Identities,
+            static identity => identity.Kind == RelationQueryAuthoringIdentityKind.Relation);
+        Assert.Equal(RelationQueryAuthoringIdentityOrigin.Convention, relationIdentity.Origin);
+        Assert.Equal(RelationQueryExpressionRelationConvention.Version, relationIdentity.Convention);
+        Assert.Equal($"relation/{relation.Definition.Id.Value}", relationIdentity.Source?.Reference);
+        Assert.All(
+            relation.Provenance.Configuration,
+            static decision =>
+            {
+                Assert.Equal(RelationQueryAuthoringValueOrigin.Convention, decision.Origin);
+                Assert.Equal(RelationQueryExpressionRelationConvention.Version, decision.Convention);
+            });
+        Assert.Contains(
+            relation.Provenance.Configuration,
+            decision => decision.Target == relation.Definition.Id.Value
+                        && decision.Setting == RelationQueryExpressionRelationConvention.NameSetting
+                        && decision.Value == relation.Definition.Name.Value);
+        Assert.Contains(
+            relation.Provenance.Configuration,
+            decision => decision.Target == relation.Definition.Id.Value
+                        && decision.Setting == RelationQueryExpressionRelationConvention.SourceReferenceSetting
+                        && decision.Value == $"relation/{relation.Definition.Id.Value}");
+        Assert.Contains(
+            relation.Provenance.Configuration,
+            decision => decision.Target == relation.Definition.Id.Value
+                        && decision.Setting == RelationQueryExpressionRelationConvention.RootBindingSetting
+                        && decision.Value == loads.Binding.Id.Value);
+        Assert.Contains(
+            relation.Provenance.Sources,
+            source => source.Kind == RelationQueryAuthoringDecisionKind.Node
+                      && source.Target == loads.Node.Id.Value
+                      && source.Source.Reference == $"source/{typeof(JoinedLoad).FullName}");
+        Assert.Contains(
+            relation.Provenance.Sources,
+            source => source.Kind == RelationQueryAuthoringDecisionKind.Node
+                      && source.Target == customers.Node.Id.Value
+                      && source.Source.Reference == $"traverse/{loadCustomer.Id.Value}");
+        Assert.Contains(
+            relation.Provenance.Sources,
+            source => source.Kind == RelationQueryAuthoringDecisionKind.Node
+                      && source.Target == projected.Node.Id.Value
+                      && source.Source.Reference == $"project/{typeof(JoinedLoadSearchDto).FullName}");
+        Assert.Contains(
+            relation.Provenance.Sources,
+            source => source.Kind == RelationQueryAuthoringDecisionKind.Terminal
+                      && source.Target == relation.Definition.Id.Value
+                      && source.Source.Reference == $"relation/{relation.Definition.Id.Value}");
 
         Assert.True(relation.Validation.IsValid, Format(relation.Validation.Diagnostics));
         var compilation = RelationQueryStaticCompiler.Compile(new(
@@ -303,6 +376,39 @@ public sealed class RelationQueryExpressionAuthoringConformanceTests
             ],
             sourceReference: "conformance/relation");
         return new(author, relation);
+    }
+
+    static JoinedAuthoredScenario AuthorJoinedRelation(bool registerOutputFirst)
+    {
+        var context = new RelationQueryClrAuthoringContext();
+        if (registerOutputFirst)
+        {
+            _ = context.Shape<JoinedLoadSearchDto>();
+            _ = context.Shape<JoinedCustomer>();
+            _ = context.Shape<JoinedLoad>();
+        }
+        else
+        {
+            _ = context.Shape<JoinedLoad>();
+            _ = context.Shape<JoinedCustomer>();
+            _ = context.Shape<JoinedLoadSearchDto>();
+        }
+
+        var author = RelationQuery.Expression(context);
+        var loads = author.Source<JoinedLoad>();
+        var customers = author.Traverse<JoinedLoad, JoinedCustomer>(loads, load => load.CustomerId);
+        var projected = author.Project(
+            customers,
+            (JoinedLoad load, JoinedCustomer customer) => new JoinedLoadSearchDto
+            {
+                Id = load.Id,
+                CustomerId = load.CustomerId,
+                CustomerName = customer.Name,
+                CustomerType = customer.Type
+            });
+        var relation = projected.BuildRelation((JoinedLoadSearchDto document) => document.Id);
+        var catalog = author.CreateRelationshipCatalogDocument();
+        return new(author, Assert.Single(catalog.Catalog.Relationships), catalog, relation);
     }
 
     sealed class JoinedCustomerRow
@@ -477,7 +583,11 @@ public sealed class RelationQueryExpressionAuthoringConformanceTests
                     $"identity:{decision.Kind}:{decision.Value}:{decision.Origin}:{decision.Convention}")
                 .Concat(provenance.Sources.Select(static decision =>
                     $"source:{decision.Kind}:{decision.Target}:{decision.Role}:" +
-                    $"{decision.Source.Producer}:{decision.Source.Reference}")));
+                    $"{decision.Source.Producer}:{decision.Source.Reference}"))
+                .Concat(provenance.Configuration.Select(static decision =>
+                    $"configuration:{decision.Target}:{decision.Setting}:{decision.Value}:" +
+                    $"{decision.Origin}:{decision.Convention}:{decision.Source?.Producer}:" +
+                    $"{decision.Source?.Reference}")));
 
     static IEnumerable<Expr> Descendants(Expr root)
     {
@@ -493,7 +603,9 @@ public sealed class RelationQueryExpressionAuthoringConformanceTests
         foreach (var child in children)
         {
             foreach (var descendant in Descendants(child))
+            {
                 yield return descendant;
+            }
         }
     }
 
@@ -519,13 +631,18 @@ public sealed class RelationQueryExpressionAuthoringConformanceTests
                 continue;
             }
             if (!visited.Add(current))
+            {
                 continue;
+            }
 
             yield return current;
             if (current is IEnumerable sequence)
             {
                 foreach (var item in sequence)
+                {
                     pending.Push(item);
+                }
+
                 continue;
             }
 
@@ -546,6 +663,12 @@ public sealed class RelationQueryExpressionAuthoringConformanceTests
 
     sealed record AuthoredScenario(
         RelationQueryExpressionAuthoring Author,
+        RelationQueryAuthoringResult<Cohesive.Relations.IR.RelationDefinition> Relation);
+
+    sealed record JoinedAuthoredScenario(
+        RelationQueryExpressionAuthoring Author,
+        RelationshipDefinition Relationship,
+        RelationshipCatalogDocument Catalog,
         RelationQueryAuthoringResult<Cohesive.Relations.IR.RelationDefinition> Relation);
 
     public sealed class Load

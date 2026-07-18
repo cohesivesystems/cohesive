@@ -11,25 +11,56 @@ namespace Cohesive.Relations.Tests;
 public sealed class RelationQueryExpressionAuthoringTests
 {
     [Fact]
+    public void ExpressionRelationConvention_IsDeterministicAndEndpointScoped()
+    {
+        var root = ClrRelationshipShapeConvention.GetQualifiedShapeId<Load>();
+        var output = ClrRelationshipShapeConvention.GetQualifiedShapeId<LoadDto>();
+
+        var first = RelationQueryExpressionRelationConvention.CreateId(root, output);
+        var second = RelationQueryExpressionRelationConvention.CreateId(root, output);
+
+        Assert.Equal(first, second);
+        Assert.StartsWith(RelationQueryExpressionRelationConvention.IdPrefix, first.Value, StringComparison.Ordinal);
+        Assert.NotEqual(
+            first,
+            RelationQueryExpressionRelationConvention.CreateId(
+                root,
+                output,
+                RelationOutputMode.ManyPerRoot));
+        Assert.NotEqual(first, RelationQueryExpressionRelationConvention.CreateId(output, root));
+        Assert.Equal(
+            new RelationName(nameof(LoadDto)),
+            RelationQueryExpressionRelationConvention.CreateName(typeof(LoadDto)));
+        Assert.Throws<ArgumentException>(() =>
+            RelationQueryExpressionRelationConvention.CreateId(default, output));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            RelationQueryExpressionRelationConvention.CreateId(root, output, (RelationOutputMode)999));
+
+        var unicodeId = RelationQueryExpressionRelationConvention.CreateId(
+            new QualifiedShapeId(new GraphId("graph/😀"), new ShapeId("Load🚚")),
+            new QualifiedShapeId(new GraphId("graph/検索"), new ShapeId("LoadSearchDto📦")));
+        Assert.Equal(
+            "relation:v1:sha256:77f19d902638392ee39da503c549cc10c9856625f729c4be6f75fab91a18c93d",
+            unicodeId.Value);
+    }
+
+    [Fact]
     public void SimpleDtoRelation_IsCanonicallyEquivalentToStructuralAuthoring()
     {
         var expression = RelationQuery.Expression();
         var loads = expression.Source<Load>();
         var documents = expression.Project(
-            loads.Node,
+            loads,
             (Load load) => new LoadDto
             {
                 Id = load.Id,
                 Status = load.Status
-            },
-            loads.Binding);
-        var authored = expression.BuildRelation(
-            new RelationId("load-dto"),
-            new RelationName("LoadDto"),
-            loads.Binding,
-            documents.Node,
-            documents.Binding,
-            (LoadDto document) => document.Id);
+            });
+        var authored = documents.BuildRelation((LoadDto document) => document.Id);
+        var relationId = RelationQueryExpressionRelationConvention.CreateId(
+            loads.Binding.Shape!.Value,
+            documents.Binding.Shape!.Value);
+        var relationName = RelationQueryExpressionRelationConvention.CreateName(typeof(LoadDto));
 
         var structural = RelationQuery.Structural();
         var source = structural.Source(loads.Binding.Shape!.Value);
@@ -41,8 +72,8 @@ public sealed class RelationQueryExpressionAuthoringTests
                 new(FieldPath.FromField("status"), source.Binding.Field("status"))
             ]);
         var expected = structural.BuildRelation(
-            new RelationId("load-dto"),
-            new RelationName("LoadDto"),
+            relationId,
+            relationName,
             source.Binding,
             projected.Node,
             documents.Binding.Shape.Value,
@@ -50,12 +81,140 @@ public sealed class RelationQueryExpressionAuthoringTests
             projected.Binding.Field("id"));
 
         Assert.True(authored.Validation.IsValid, Format(authored.Validation));
+        Assert.Equal(relationId, authored.Definition.Id);
+        Assert.Equal(relationName, authored.Definition.Name);
+        var relationIdentity = Assert.Single(
+            authored.Provenance.Identities,
+            static identity => identity.Kind == RelationQueryAuthoringIdentityKind.Relation);
+        Assert.Equal(RelationQueryAuthoringIdentityOrigin.Convention, relationIdentity.Origin);
+        Assert.Equal(RelationQueryExpressionRelationConvention.Version, relationIdentity.Convention);
         Assert.Equal(
             expected.CreateDocument().DefinitionFingerprint,
             authored.CreateDocument().DefinitionFingerprint);
         Assert.Equal(
             RelationQueryJsonSerializer.Serialize(expected.CreateDocument(), indented: false),
             RelationQueryJsonSerializer.Serialize(authored.CreateDocument(), indented: false));
+    }
+
+    [Fact]
+    public void PipelineShorthands_AreCanonicallyEquivalentToExpandedJoinedAuthoring()
+    {
+        Expression<Func<Load, Customer, LoadSearchDto>> projection =
+            (load, customer) => new LoadSearchDto
+            {
+                Id = load.Id,
+                CustomerId = load.CustomerId,
+                CustomerName = customer.Name,
+                CustomerType = customer.Type,
+                EquipmentNumber = ""
+            };
+        Expression<Func<LoadSearchDto, string>> key = document => document.Id;
+
+        var ergonomic = RelationQuery.Expression();
+        var ergonomicLoads = ergonomic.Source<Load>();
+        var ergonomicCustomers = ergonomic.Traverse<Load, Customer>(
+            ergonomicLoads,
+            load => load.CustomerId);
+        var ergonomicDocuments = ergonomic.Project(ergonomicCustomers, projection);
+        var ergonomicRelation = ergonomicDocuments.BuildRelation(key);
+
+        var expanded = RelationQuery.Expression();
+        var expandedRelationship = expanded.Relationship<Load, Customer>(load => load.CustomerId);
+        var expandedLoads = expanded.Source<Load>();
+        var expandedCustomers = expanded.Traverse(
+            expandedLoads.Node,
+            expandedLoads.Binding,
+            expandedRelationship);
+        var expandedDocuments = expanded.Project(
+            expandedCustomers.Node,
+            projection,
+            expandedLoads.Binding,
+            expandedCustomers.Binding);
+        var expandedRelation = expanded.BuildRelation(expandedLoads, expandedDocuments, key);
+
+        Assert.Equal(
+            RelationQueryJsonSerializer.Serialize(expandedRelation.CreateDocument(), indented: false),
+            RelationQueryJsonSerializer.Serialize(ergonomicRelation.CreateDocument(), indented: false));
+        Assert.Equal(
+            RelationshipCatalogJsonSerializer.Serialize(
+                expanded.CreateRelationshipCatalogDocument(),
+                indented: false),
+            RelationshipCatalogJsonSerializer.Serialize(
+                ergonomic.CreateRelationshipCatalogDocument(),
+                indented: false));
+        Assert.Contains(
+            ergonomicRelation.Provenance.Configuration,
+            decision => decision.Setting == RelationQueryExpressionRelationConvention.RootBindingSetting
+                        && decision.Value == ergonomicLoads.Binding.Id.Value
+                        && decision.Origin == RelationQueryAuthoringValueOrigin.Convention);
+        Assert.DoesNotContain(
+            expandedRelation.Provenance.Configuration,
+            static decision => decision.Setting == RelationQueryExpressionRelationConvention.RootBindingSetting);
+    }
+
+    [Fact]
+    public void RelationshipRegistry_DeduplicatesEquivalentDefinitionsAndRejectsConflictingIds()
+    {
+        var author = RelationQuery.Expression();
+        var id = new RelationshipId("load/reference");
+
+        var first = author.Relationship<Load, Customer>(load => load.CustomerId, id);
+        var repeated = author.Relationship<Load, Customer>(load => load.CustomerId, id);
+
+        Assert.Same(first.Definition, repeated.Definition);
+        Assert.Single(author.RelationshipCatalog.Relationships);
+        Assert.Throws<InvalidOperationException>(() =>
+            author.Relationship<Load, Equipment>(load => load.EquipmentId, id));
+        Assert.Single(author.RelationshipCatalog.Relationships);
+    }
+
+    [Fact]
+    public void RejectedInlineTraversal_DoesNotCommitRelationshipOrConsumeStructuralIdentity()
+    {
+        var rejected = RelationQuery.Expression();
+        var rejectedLoads = rejected.Source<Load>();
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            rejected.Traverse<Load, Customer>(
+                rejectedLoads,
+                load => load.CustomerId,
+                joinKind: JoinKind.Right));
+        Assert.Throws<ArgumentException>(() =>
+            rejected.Traverse<Load, Customer>(
+                rejectedLoads,
+                load => load.CustomerId,
+                producerReference: " "));
+        Assert.Empty(rejected.RelationshipCatalog.Relationships);
+
+        var recoveredCustomers = rejected.Traverse<Load, Customer>(
+            rejectedLoads,
+            load => load.CustomerId);
+
+        var clean = RelationQuery.Expression();
+        var cleanLoads = clean.Source<Load>();
+        var cleanCustomers = clean.Traverse<Load, Customer>(cleanLoads, load => load.CustomerId);
+
+        Assert.Equal(cleanCustomers.Node.Id, recoveredCustomers.Node.Id);
+        Assert.Equal(cleanCustomers.Binding.Id, recoveredCustomers.Binding.Id);
+        Assert.Equal(
+            RelationshipCatalogJsonSerializer.Serialize(clean.CreateRelationshipCatalogDocument(), indented: false),
+            RelationshipCatalogJsonSerializer.Serialize(rejected.CreateRelationshipCatalogDocument(), indented: false));
+    }
+
+    [Fact]
+    public void FluentTerminal_RequiresRetainedSingleSourceContext()
+    {
+        var author = RelationQuery.Expression();
+        var loads = author.Source<Load>();
+        var documentsWithoutContext = author.Project(
+            loads.Node,
+            (Load load) => new LoadDto { Id = load.Id, Status = load.Status },
+            loads.Binding);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            documentsWithoutContext.BuildRelation((LoadDto document) => document.Id));
+
+        Assert.Contains("pass the intended root", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -88,6 +247,123 @@ public sealed class RelationQueryExpressionAuthoringTests
     }
 
     [Fact]
+    public void ConventionRelationWithoutKey_DerivesTerminalIdentityAndName()
+    {
+        var author = RelationQuery.Expression();
+        var loads = author.Source<Load>();
+        var documents = author.Project(
+            loads,
+            (Load load) => new LoadDto { Id = load.Id, Status = load.Status });
+
+        var relation = documents.BuildRelation();
+        var explicitlyNamed = author.BuildRelation(
+            loads,
+            documents,
+            id: new RelationId("load-dto/custom"),
+            name: new RelationName("CustomLoadDto"));
+        var explicitlyIdentified = author.BuildRelation(
+            loads,
+            documents,
+            id: new RelationId("load-dto/identified"));
+        var explicitlyConfigured = author.BuildRelation(
+            loads,
+            documents,
+            name: new RelationName("NamedByProducer"),
+            sourceReference: "relations/load-dto");
+
+        Assert.True(relation.Validation.IsValid, Format(relation.Validation));
+        Assert.Null(relation.Definition.Output.Key);
+        Assert.Equal(
+            RelationQueryExpressionRelationConvention.CreateId(
+                loads.Binding.Shape!.Value,
+                documents.Binding.Shape!.Value),
+            relation.Definition.Id);
+        Assert.Equal(
+            RelationQueryExpressionRelationConvention.CreateName(typeof(LoadDto)),
+            relation.Definition.Name);
+        Assert.Equal(new RelationId("load-dto/custom"), explicitlyNamed.Definition.Id);
+        Assert.Equal(new RelationName("CustomLoadDto"), explicitlyNamed.Definition.Name);
+        var conventionalIdentity = Assert.Single(
+            relation.Provenance.Identities,
+            static identity => identity.Kind == RelationQueryAuthoringIdentityKind.Relation);
+        Assert.Equal(RelationQueryAuthoringIdentityOrigin.Convention, conventionalIdentity.Origin);
+        var conventionalName = Assert.Single(
+            relation.Provenance.Configuration,
+            static decision => decision.Setting == RelationQueryExpressionRelationConvention.NameSetting);
+        var conventionalReference = Assert.Single(
+            relation.Provenance.Configuration,
+            static decision => decision.Setting == RelationQueryExpressionRelationConvention.SourceReferenceSetting);
+        Assert.Equal(RelationQueryAuthoringValueOrigin.Convention, conventionalName.Origin);
+        Assert.Equal(RelationQueryExpressionRelationConvention.Version, conventionalName.Convention);
+        Assert.Equal(RelationQueryAuthoringValueOrigin.Convention, conventionalReference.Origin);
+        Assert.Equal(RelationQueryExpressionRelationConvention.Version, conventionalReference.Convention);
+        var explicitIdentity = Assert.Single(
+            explicitlyNamed.Provenance.Identities,
+            static identity => identity.Kind == RelationQueryAuthoringIdentityKind.Relation);
+        Assert.Equal(RelationQueryAuthoringIdentityOrigin.Explicit, explicitIdentity.Origin);
+        Assert.Null(explicitIdentity.Convention);
+        var explicitName = Assert.Single(
+            explicitlyNamed.Provenance.Configuration,
+            static decision => decision.Setting == RelationQueryExpressionRelationConvention.NameSetting);
+        var defaultReference = Assert.Single(
+            explicitlyNamed.Provenance.Configuration,
+            static decision => decision.Setting == RelationQueryExpressionRelationConvention.SourceReferenceSetting);
+        Assert.Equal(RelationQueryAuthoringValueOrigin.Explicit, explicitName.Origin);
+        Assert.Null(explicitName.Convention);
+        Assert.Equal(RelationQueryAuthoringValueOrigin.Convention, defaultReference.Origin);
+        var identifiedName = Assert.Single(
+            explicitlyIdentified.Provenance.Configuration,
+            static decision => decision.Setting == RelationQueryExpressionRelationConvention.NameSetting);
+        Assert.Equal(RelationQueryAuthoringValueOrigin.Convention, identifiedName.Origin);
+        Assert.Equal(RelationQueryExpressionRelationConvention.Version, identifiedName.Convention);
+        var partiallyExplicitIdentity = Assert.Single(
+            explicitlyConfigured.Provenance.Identities,
+            static identity => identity.Kind == RelationQueryAuthoringIdentityKind.Relation);
+        Assert.Equal(RelationQueryAuthoringIdentityOrigin.Convention, partiallyExplicitIdentity.Origin);
+        Assert.All(
+            explicitlyConfigured.Provenance.Configuration,
+            static decision => Assert.Equal(RelationQueryAuthoringValueOrigin.Explicit, decision.Origin));
+        Assert.Contains(
+            explicitlyConfigured.Provenance.Configuration,
+            static decision => decision.Setting == RelationQueryExpressionRelationConvention.NameSetting
+                               && decision.Value == "NamedByProducer");
+        Assert.Contains(
+            explicitlyConfigured.Provenance.Configuration,
+            static decision => decision.Setting == RelationQueryExpressionRelationConvention.SourceReferenceSetting
+                               && decision.Value == "relations/load-dto");
+    }
+
+    [Fact]
+    public void AuthoringManifest_RejectsDuplicateEffectiveConfigurationSettings()
+    {
+        var source = new RelationQueryAuthoringSource("test", "relation/test");
+        var decision = new RelationQueryAuthoringConfigurationDecision(
+            "relation/test",
+            RelationQueryExpressionRelationConvention.NameSetting,
+            "Test",
+            RelationQueryAuthoringValueOrigin.Explicit,
+            source: source);
+
+        var exception = Assert.Throws<ArgumentException>(() =>
+            new RelationQueryAuthoringManifest(configuration: [decision, decision]));
+
+        Assert.Equal("configuration", exception.ParamName);
+    }
+
+    [Fact]
+    public void BoundNodeInverseTraversal_UsesItsFocusedTargetBinding()
+    {
+        var author = RelationQuery.Expression();
+        var loadCustomer = author.Relationship<Load, Customer>(load => load.CustomerId);
+        var customers = author.Source<Customer>();
+
+        var loads = author.TraverseInverse(customers, loadCustomer);
+
+        Assert.Equal(loadCustomer.SourceShape, loads.Binding.Shape);
+        Assert.False(string.IsNullOrWhiteSpace(loads.Node.Id.Value));
+    }
+
+    [Fact]
     public void EnrichedRelationQueryAggregationAndInvocation_LowerThroughOneTypedSession()
     {
         var author = RelationQuery.Expression();
@@ -98,16 +374,13 @@ public sealed class RelationQueryExpressionAuthoringTests
             load => load.EquipmentId,
             new RelationshipId("load/equipment"));
         var loads = author.Source<Load>();
-        var customers = author.Traverse(
-            loads.Node,
-            loads.Binding,
-            loadCustomer);
+        var customers = author.Traverse(loads, loadCustomer);
         var equipment = author.Traverse(
-            customers.Node,
+            customers,
             loads.Binding,
             loadEquipment);
         var relationDocuments = author.Project(
-            equipment.Node,
+            equipment,
             (Load load, Customer customer, Equipment unit) => new LoadSearchDto
             {
                 Id = load.Id,
@@ -118,14 +391,8 @@ public sealed class RelationQueryExpressionAuthoringTests
             },
             loads.Binding,
             customers.Binding,
-            equipment.Binding,
             sourceReference: "load-search/relation-projection");
-        var relation = author.BuildRelation(
-            new RelationId("load-search"),
-            new RelationName("LoadSearch"),
-            loads.Binding,
-            relationDocuments.Node,
-            relationDocuments.Binding,
+        var relation = relationDocuments.BuildRelation(
             (LoadSearchDto document) => document.Id,
             invariants:
             [
@@ -133,7 +400,9 @@ public sealed class RelationQueryExpressionAuthoringTests
                     "customer-name-required",
                     document => document.CustomerName != "",
                     "A load search document requires its customer name.")
-            ]);
+            ],
+            id: new RelationId("load-search"),
+            name: new RelationName("LoadSearch"));
 
         var location = author.Parameter<string>("location");
         var filtered = author.Filter(
@@ -318,7 +587,9 @@ public sealed class RelationQueryExpressionAuthoringTests
         {
             var author = RelationQuery.Expression();
             if (typeof(T) != typeof(TimeOnly))
+            {
                 _ = author.Clr.Shape<ParameterRoot>();
+            }
 
             var exception = Assert.Throws<NotSupportedException>(() => author.Parameter<T>("value"));
             Assert.Contains("metadata-aware", exception.Message, StringComparison.Ordinal);
@@ -387,8 +658,15 @@ public sealed class RelationQueryExpressionAuthoringTests
         var author = RelationQuery.Expression();
         var loads = author.Source<Load>();
         var customers = author.Source<Customer>();
+        var loadCustomer = author.Relationship<Load, Customer>(load => load.CustomerId);
+        var foreignLoads = RelationQuery.Expression().Source<Load>();
+        var inlineAuthor = RelationQuery.Expression();
 
         Assert.Throws<InvalidOperationException>(() => author.Source(foreignShape));
+        Assert.Throws<ArgumentException>(() => author.Traverse(foreignLoads, loadCustomer));
+        Assert.Throws<ArgumentException>(() =>
+            inlineAuthor.Traverse<Load, Customer>(foreignLoads, load => load.CustomerId));
+        Assert.Empty(inlineAuthor.RelationshipCatalog.Relationships);
         Assert.Throws<ArgumentException>(() => author.Rows(loads.Node, customers.Binding));
         Assert.Throws<ArgumentException>(() => author.BuildRelation(
             new RelationId("invalid-output-binding"),
@@ -636,26 +914,49 @@ public sealed class RelationQueryExpressionAuthoringTests
         {
             case UnaryExpr unary:
                 foreach (var item in Descendants(unary.Operand))
+                {
                     yield return item;
+                }
+
                 break;
             case BinaryExpr binary:
                 foreach (var item in Descendants(binary.Left))
+                {
                     yield return item;
+                }
+
                 foreach (var item in Descendants(binary.Right))
+                {
                     yield return item;
+                }
+
                 break;
             case ConditionalExpr conditional:
                 foreach (var item in Descendants(conditional.Test))
+                {
                     yield return item;
+                }
+
                 foreach (var item in Descendants(conditional.IfTrue))
+                {
                     yield return item;
+                }
+
                 foreach (var item in Descendants(conditional.IfFalse))
+                {
                     yield return item;
+                }
+
                 break;
             case CallExpr call:
                 foreach (var argument in call.Arguments)
+                {
                     foreach (var item in Descendants(argument))
+                    {
                         yield return item;
+                    }
+                }
+
                 break;
         }
     }
@@ -668,15 +969,23 @@ public sealed class RelationQueryExpressionAuthoringTests
         while (pending.TryPop(out var current))
         {
             if (current is null || current is string || current.GetType().IsPrimitive || current.GetType().IsEnum)
+            {
                 continue;
+            }
+
             if (!visited.Add(current))
+            {
                 continue;
+            }
 
             yield return current;
             if (current is IEnumerable sequence)
             {
                 foreach (var item in sequence)
+                {
                     pending.Push(item);
+                }
+
                 continue;
             }
 

@@ -85,7 +85,10 @@ public sealed record RelationQuerySourcePlacementLimits
     {
         const long maximumPortableInteger = 9_007_199_254_740_991;
         if (value is <= 0 or > maximumPortableInteger)
+        {
             throw new ArgumentOutOfRangeException(parameterName, value, "A physical limit must be positive and portable to JSON runtimes.");
+        }
+
         return value;
     }
 }
@@ -102,7 +105,10 @@ public sealed record RelationQuerySourceIdentityBinding
     public RelationQuerySourceIdentityBinding(QualifiedShapeId shape, string sourceSelector)
     {
         if (string.IsNullOrWhiteSpace(shape.GraphId.Value) || string.IsNullOrWhiteSpace(shape.ShapeId.Value))
+        {
             throw new ArgumentException("An identity binding requires a graph-qualified shape.", nameof(shape));
+        }
+
         Shape = shape;
         SourceSelector = Guard.RequireNotNullOrWhiteSpace(sourceSelector);
     }
@@ -130,9 +136,15 @@ public sealed record RelationQuerySourceFieldBinding
         string sourceSelector)
     {
         if (string.IsNullOrWhiteSpace(input.Value))
+        {
             throw new ArgumentException("A field binding requires a compiled input identity.", nameof(input));
+        }
+
         if (semanticPath.Segments.IsDefaultOrEmpty)
+        {
             throw new ArgumentException("A field binding requires a semantic path.", nameof(semanticPath));
+        }
+
         Input = input;
         SemanticPath = semanticPath;
         SourceSelector = Guard.RequireNotNullOrWhiteSpace(sourceSelector);
@@ -164,9 +176,15 @@ public sealed record RelationQueryRelationshipKeyBinding
         string sourceSelector)
     {
         if (string.IsNullOrWhiteSpace(input.Value))
+        {
             throw new ArgumentException("A relationship-key binding requires a compiled input identity.", nameof(input));
+        }
+
         if (semanticPath.Segments.IsDefaultOrEmpty)
+        {
             throw new ArgumentException("A relationship-key binding requires a semantic path.", nameof(semanticPath));
+        }
+
         Input = input;
         SemanticPath = semanticPath;
         SourceSelector = Guard.RequireNotNullOrWhiteSpace(sourceSelector);
@@ -215,9 +233,15 @@ public sealed record RelationQuerySourceInstance
         RelationQuerySourcePlacementLimits limits)
     {
         if (string.IsNullOrWhiteSpace(id.Value))
+        {
             throw new ArgumentException("A source instance requires an identity.", nameof(id));
+        }
+
         if (string.IsNullOrWhiteSpace(executionDomain.Value))
+        {
             throw new ArgumentException("A source instance requires an execution domain.", nameof(executionDomain));
+        }
+
         Id = id;
         ExecutionDomain = executionDomain;
         TargetProfile = Guard.RequireNotNull(targetProfile);
@@ -274,32 +298,63 @@ public sealed record RelationQuerySourcePlacementBinding
     {
         if (string.IsNullOrWhiteSpace(id.Value) || string.IsNullOrWhiteSpace(input.Value)
             || string.IsNullOrWhiteSpace(node.Value) || string.IsNullOrWhiteSpace(binding.Value))
+        {
             throw new ArgumentException("A placement binding requires non-default identities.", nameof(id));
+        }
+
         if (string.IsNullOrWhiteSpace(shape.GraphId.Value) || string.IsNullOrWhiteSpace(shape.ShapeId.Value))
+        {
             throw new ArgumentException("A placement binding requires a graph-qualified shape.", nameof(shape));
+        }
+
         if (string.IsNullOrWhiteSpace(source.Value))
+        {
             throw new ArgumentException("A placement binding requires a source instance.", nameof(source));
+        }
+
         if (!Enum.IsDefined(kind))
+        {
             throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported placement-binding kind.");
+        }
+
         if (!Enum.IsDefined(acquisition))
+        {
             throw new ArgumentOutOfRangeException(nameof(acquisition), acquisition, "Unsupported source-acquisition kind.");
+        }
+
         if (!Enum.IsDefined(origin))
+        {
             throw new ArgumentOutOfRangeException(nameof(origin), origin, "Unsupported placement origin.");
+        }
+
         if (kind == RelationQuerySourcePlacementBindingKind.RelationshipTraversal
             && acquisition != RelationQuerySourceAcquisitionKind.BoundedLookup)
+        {
             throw new ArgumentException("A traversal placement requires bounded lookup acquisition.", nameof(acquisition));
+        }
+
         if (kind == RelationQuerySourcePlacementBindingKind.SourceSet
             && acquisition == RelationQuerySourceAcquisitionKind.BoundedLookup)
+        {
             throw new ArgumentException("A source-set placement cannot use relationship lookup acquisition.", nameof(acquisition));
+        }
 
         var normalizedFields = Normalize(fields, static field => field.Input.Value, nameof(fields));
         var normalizedKeys = Normalize(relationshipKeys, static key => key.Input.Value, nameof(relationshipKeys));
         if (normalizedFields.GroupBy(static field => field.Input).Any(static group => group.Count() > 1))
+        {
             throw new ArgumentException("A placement cannot bind one compiled field more than once.", nameof(fields));
+        }
+
         if (normalizedKeys.GroupBy(static key => key.Input).Any(static group => group.Count() > 1))
+        {
             throw new ArgumentException("A placement cannot bind one relationship key more than once.", nameof(relationshipKeys));
+        }
+
         if (identity is not null && identity.Shape != shape)
+        {
             throw new ArgumentException("An identity selector must describe the placed shape.", nameof(identity));
+        }
 
         Id = id;
         Input = input;
@@ -360,7 +415,10 @@ public sealed record RelationQuerySourcePlacementBinding
     {
         var normalized = values.IsDefault ? [] : values;
         if (normalized.Any(static value => value is null))
+        {
             throw new ArgumentException("Placement metadata cannot contain null entries.", parameterName);
+        }
+
         return [.. normalized.OrderBy(key, StringComparer.Ordinal)];
     }
 }
@@ -369,7 +427,7 @@ public sealed record RelationQuerySourcePlacementBinding
 public sealed class RelationQuerySourcePlacement
 {
     /// <summary>Current portable source-placement schema version.</summary>
-    public const string CurrentSchemaVersion = "relation-query-source-placement/v1";
+    public const string CurrentSchemaVersion = "relation-query-source-placement/v2";
 
     /// <summary>Creates a normalized source-placement artifact.</summary>
     /// <param name="schemaVersion">Portable placement schema version.</param>
@@ -378,11 +436,20 @@ public sealed class RelationQuerySourcePlacement
     /// <param name="sourceInstances">Concrete physical source instances.</param>
     /// <param name="bindings">Plan-scoped source and traversal bindings.</param>
     /// <param name="fingerprint">Persisted fingerprint to verify, or <see langword="null"/> to compute it.</param>
+    /// <param name="configurationDecisions">
+    /// Optional, potentially partial per-setting attribution for effective explicit, profile, adapter, and framework
+    /// values. Every setting must identify a fact present in this artifact, and a binding's source-selection decision
+    /// must agree with its <see cref="RelationQuerySourcePlacementBinding.Origin"/>.
+    /// </param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="schemaVersion"/>, <paramref name="plan"/>, or <paramref name="conventionSetVersion"/> is
     /// <see langword="null"/>.
     /// </exception>
-    /// <exception cref="ArgumentException">A string is empty, a collection is empty or conflicts, a source is unknown, or the fingerprint is stale.</exception>
+    /// <exception cref="ArgumentException">
+    /// A string is empty; a collection is empty, contains null, or conflicts; a source is unknown; a
+    /// configuration setting is repeated, does not identify an actual placement fact, or conflicts with placement
+    /// origin; or the fingerprint is stale.
+    /// </exception>
     [JsonConstructor]
     public RelationQuerySourcePlacement(
         string schemaVersion,
@@ -390,39 +457,104 @@ public sealed class RelationQuerySourcePlacement
         string conventionSetVersion,
         ImmutableArray<RelationQuerySourceInstance> sourceInstances,
         ImmutableArray<RelationQuerySourcePlacementBinding> bindings,
-        RelationQuerySourcePlacementFingerprint? fingerprint = null)
+        RelationQuerySourcePlacementFingerprint? fingerprint = null,
+        ImmutableArray<RelationQueryConfigurationDecision> configurationDecisions = default)
     {
         SchemaVersion = Guard.RequireNotNullOrWhiteSpace(schemaVersion);
         if (!string.Equals(SchemaVersion, CurrentSchemaVersion, StringComparison.Ordinal))
+        {
             throw new ArgumentException($"Unsupported source-placement schema version '{SchemaVersion}'.", nameof(schemaVersion));
+        }
+
         Plan = Guard.RequireNotNull(plan);
         ConventionSetVersion = Guard.RequireNotNullOrWhiteSpace(conventionSetVersion);
         SourceInstances = NormalizeRequired(sourceInstances, static source => source.Id.Value, nameof(sourceInstances));
         Bindings = NormalizeRequired(bindings, static binding => binding.Id.Value, nameof(bindings));
         if (SourceInstances.GroupBy(static source => source.Id).Any(static group => group.Count() > 1))
+        {
             throw new ArgumentException("Source instances cannot repeat an identity.", nameof(sourceInstances));
+        }
+
         if (Bindings.GroupBy(static binding => binding.Id).Any(static group => group.Count() > 1)
             || Bindings.GroupBy(static binding => binding.Input).Any(static group => group.Count() > 1))
+        {
             throw new ArgumentException("Placement bindings cannot repeat a binding or compiled input identity.", nameof(bindings));
+        }
+
         var sourceIds = SourceInstances.Select(static source => source.Id).ToHashSet();
         if (Bindings.Any(binding => !sourceIds.Contains(binding.Source)))
+        {
             throw new ArgumentException("Every placement binding must reference a declared source instance.", nameof(bindings));
+        }
+
         if (Bindings.Any(binding => !Plan.Inputs.Contains(binding.Input)))
+        {
             throw new ArgumentException("Every placement binding must reference an input in the compiled-plan reference.", nameof(bindings));
+        }
+
         var fieldBindings = Bindings.SelectMany(static binding => binding.Fields).ToArray();
         if (fieldBindings.Any(field => !Plan.Inputs.Contains(field.Input)))
+        {
             throw new ArgumentException("Every physical field binding must reference an input in the compiled-plan reference.", nameof(bindings));
+        }
+
         if (fieldBindings.GroupBy(static field => field.Input).Any(static group => group.Count() > 1))
+        {
             throw new ArgumentException("A compiled field input cannot be placed more than once.", nameof(bindings));
+        }
+
         var relationshipKeys = Bindings.SelectMany(static binding => binding.RelationshipKeys).ToArray();
         if (relationshipKeys.Any(key => !Plan.Inputs.Contains(key.Input)))
+        {
             throw new ArgumentException("Every relationship-key binding must reference an input in the compiled-plan reference.", nameof(bindings));
+        }
+
         if (relationshipKeys.GroupBy(static key => key.Input).Any(static group => group.Count() > 1))
+        {
             throw new ArgumentException("A compiled relationship key cannot be placed more than once.", nameof(bindings));
+        }
+
+        var normalizedDecisions = configurationDecisions.IsDefault ? [] : configurationDecisions;
+        if (normalizedDecisions.Any(static decision => decision is null))
+        {
+            throw new ArgumentException("Configuration decisions cannot contain null entries.", nameof(configurationDecisions));
+        }
+
+        if (normalizedDecisions.GroupBy(static decision => decision.Setting, StringComparer.Ordinal)
+            .Any(static group => group.Count() > 1))
+        {
+            throw new ArgumentException(
+                "Configuration decisions cannot repeat a setting identity.",
+                nameof(configurationDecisions));
+        }
+
+        var knownConfigurationSettings = GetConfigurationSettings(SourceInstances, Bindings);
+        var foreignConfigurationSettings = normalizedDecisions
+            .Select(static decision => decision.Setting)
+            .Where(setting => !knownConfigurationSettings.Contains(setting))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (foreignConfigurationSettings.Length > 0)
+        {
+            throw new ArgumentException(
+                $"Configuration decision setting '{foreignConfigurationSettings[0]}' does not identify an actual "
+                + "artifact, source, placement binding, or field fact.",
+                nameof(configurationDecisions));
+        }
+
+        ValidateSourceSelectionDecisions(normalizedDecisions, Bindings, nameof(configurationDecisions));
+
+        ConfigurationDecisions =
+        [
+            .. normalizedDecisions.OrderBy(static decision => decision.Setting, StringComparer.Ordinal)
+        ];
 
         var computed = RelationQuerySourcePlacementFingerprinter.Compute(this);
         if (fingerprint is not null && !Equals(fingerprint, computed))
+        {
             throw new ArgumentException("The source-placement fingerprint does not match normalized content.", nameof(fingerprint));
+        }
+
         Fingerprint = computed;
     }
 
@@ -441,6 +573,9 @@ public sealed class RelationQuerySourcePlacement
     /// <summary>Plan-scoped bindings in deterministic identity order.</summary>
     public ImmutableArray<RelationQuerySourcePlacementBinding> Bindings { get; }
 
+    /// <summary>Per-setting effective configuration attribution in deterministic setting order.</summary>
+    public ImmutableArray<RelationQueryConfigurationDecision> ConfigurationDecisions { get; }
+
     /// <summary>Deterministic identity of this placement artifact.</summary>
     public RelationQuerySourcePlacementFingerprint Fingerprint { get; }
 
@@ -449,9 +584,101 @@ public sealed class RelationQuerySourcePlacement
     {
         var normalized = values.IsDefault ? [] : values;
         if (normalized.IsDefaultOrEmpty)
+        {
             throw new ArgumentException("At least one placement entry is required.", parameterName);
+        }
+
         if (normalized.Any(static value => value is null))
+        {
             throw new ArgumentException("Placement collections cannot contain null entries.", parameterName);
+        }
+
         return [.. normalized.OrderBy(key, StringComparer.Ordinal)];
+    }
+
+    static HashSet<string> GetConfigurationSettings(
+        ImmutableArray<RelationQuerySourceInstance> sources,
+        ImmutableArray<RelationQuerySourcePlacementBinding> bindings)
+    {
+        HashSet<string> settings = new(StringComparer.Ordinal)
+        {
+            "placement/convention-set-version"
+        };
+        foreach (var source in sources)
+        {
+            var prefix = $"source/{EncodeConfigurationSegment(source.Id.Value)}";
+            settings.Add($"{prefix}/id");
+            settings.Add($"{prefix}/execution-domain");
+            settings.Add($"{prefix}/target-profile");
+            settings.Add($"{prefix}/limits/maximum-batch-size");
+            settings.Add($"{prefix}/limits/maximum-buffered-rows");
+            settings.Add($"{prefix}/limits/maximum-fan-out");
+            settings.Add($"{prefix}/limits/maximum-concurrency");
+        }
+
+        foreach (var binding in bindings)
+        {
+            var prefix = $"placement/{EncodeConfigurationSegment(binding.Id.Value)}";
+            settings.Add($"{prefix}/id");
+            settings.Add($"{prefix}/source");
+            settings.Add($"{prefix}/acquisition");
+            if (binding.Identity is not null)
+            {
+                settings.Add($"{prefix}/identity/source-selector");
+            }
+
+            if (!binding.RelationshipKeys.IsDefaultOrEmpty)
+            {
+                settings.Add($"{prefix}/relationship-key/source-selector");
+            }
+
+            if (binding.Partition is not null)
+            {
+                settings.Add($"{prefix}/partition/source-selector");
+            }
+
+            foreach (var field in binding.Fields)
+            {
+                settings.Add(
+                    $"{prefix}/field/{EncodeConfigurationSegment(field.Input.Value)}/source-selector");
+            }
+        }
+
+        return settings;
+    }
+
+    static string EncodeConfigurationSegment(string value) => Uri.EscapeDataString(value);
+
+    static void ValidateSourceSelectionDecisions(
+        ImmutableArray<RelationQueryConfigurationDecision> decisions,
+        ImmutableArray<RelationQuerySourcePlacementBinding> bindings,
+        string parameterName)
+    {
+        var decisionsBySetting = decisions.ToDictionary(static decision => decision.Setting, StringComparer.Ordinal);
+        foreach (var binding in bindings)
+        {
+            var setting = $"placement/{EncodeConfigurationSegment(binding.Id.Value)}/source";
+            if (!decisionsBySetting.TryGetValue(setting, out var decision))
+            {
+                continue;
+            }
+
+            var isConsistent = binding.Origin switch
+            {
+                RelationQuerySourcePlacementOrigin.Explicit =>
+                    decision.Origin == RelationQueryConfigurationValueOrigin.Explicit,
+                RelationQuerySourcePlacementOrigin.Convention =>
+                    decision.Origin is RelationQueryConfigurationValueOrigin.AdapterConvention
+                        or RelationQueryConfigurationValueOrigin.FrameworkDefault,
+                _ => false
+            };
+            if (!isConsistent)
+            {
+                throw new ArgumentException(
+                    $"Configuration decision setting '{setting}' has origin '{decision.Origin}', which conflicts "
+                    + $"with placement binding origin '{binding.Origin}'.",
+                    parameterName);
+            }
+        }
     }
 }

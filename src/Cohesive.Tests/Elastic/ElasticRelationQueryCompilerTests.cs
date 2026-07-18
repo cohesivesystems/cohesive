@@ -992,6 +992,39 @@ public sealed class ElasticRelationQueryCompilerTests
     }
 
     [Fact]
+    public void Compile_ExplicitIdBindingAffinityRejectsReuseAcrossAlignedPlanAndPlacementSnapshots()
+    {
+        var current = Fixture.Row(offset: 5);
+        var changedPlan = Fixture.Row(offset: 6);
+        var verified = current.StorageBindingWithAffinity();
+        var changedPlacement = new RelationQuerySourcePlacement(
+            current.Placement.SchemaVersion,
+            current.Placement.Plan,
+            current.Placement.ConventionSetVersion + "/changed",
+            current.Placement.SourceInstances,
+            current.Placement.Bindings);
+
+        var planReuse = current.Compile(
+            verified,
+            new(changedPlan.Plan, changedPlan.Realization, changedPlan.Placement));
+        var placementReuse = current.Compile(
+            verified,
+            new(current.Plan, current.Realization, changedPlacement));
+
+        Assert.Equal(current.StorageBinding.Id, verified.Id);
+        Assert.Equal(RelationQueryNativeCompilationStatus.Invalid, planReuse.Status);
+        Assert.Contains(planReuse.Diagnostics, static diagnostic =>
+            diagnostic.Code == ElasticRelationQueryCompilationDiagnosticCodes.StorageBindingMismatch
+            && diagnostic.Message.Contains("compiled-plan affinity", StringComparison.Ordinal));
+        Assert.Equal(RelationQueryNativeCompilationStatus.Invalid, placementReuse.Status);
+        Assert.Contains(placementReuse.Diagnostics, static diagnostic =>
+            diagnostic.Code == ElasticRelationQueryCompilationDiagnosticCodes.StorageBindingMismatch
+            && diagnostic.Message.Contains("source-placement affinity", StringComparison.Ordinal));
+        Assert.Empty(planReuse.Artifacts);
+        Assert.Empty(placementReuse.Artifacts);
+    }
+
+    [Fact]
     public void Compile_ReorderedEquivalentBindingsHaveDeterministicFingerprints()
     {
         var fixture = Fixture.Suffix();
@@ -1176,6 +1209,24 @@ public sealed class ElasticRelationQueryCompilerTests
             new ElasticRelationQueryCompiler(loweringPolicy: loweringPolicy).Compile(
                 request ?? new(Plan, Realization, Placement),
                 storageBinding ?? StorageBinding);
+
+        public ElasticRelationQueryStorageBinding StorageBindingWithAffinity() => new(
+            StorageBinding.Id,
+            StorageBinding.Source,
+            StorageBinding.PlacementBinding,
+            StorageBinding.Target,
+            StorageBinding.TargetProfile,
+            StorageBinding.IndexName,
+            StorageBinding.Fields,
+            StorageBinding.SourceMode,
+            StorageBinding.MaximumResultWindow,
+            StorageBinding.MaximumPageSize,
+            StorageBinding.PaginationConsistency,
+            StorageBinding.Origin,
+            StorageBinding.ConventionSetVersion,
+            StorageBinding.ConfigurationDecisions,
+            RelationQueryCompiledPlanReferenceFingerprinter.Compute(PlanReference),
+            Placement.Fingerprint);
 
         public ElasticRelationQueryStorageBinding StorageBindingWithFields(
             ImmutableArray<ElasticRelationQueryFieldBinding> fields) => new(

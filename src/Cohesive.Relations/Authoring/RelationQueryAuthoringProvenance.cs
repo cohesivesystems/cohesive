@@ -43,7 +43,7 @@ public sealed record RelationQueryAuthoringSource
     public string? Description { get; init; }
 }
 
-/// <summary>Category of identity assigned by the structural authoring core.</summary>
+/// <summary>Category of canonical identity retained by authoring provenance.</summary>
 public enum RelationQueryAuthoringIdentityKind
 {
     /// <summary>Logical query-node identity.</summary>
@@ -59,20 +59,23 @@ public enum RelationQueryAuthoringIdentityKind
     Assignment = 3,
 
     /// <summary>Named query-result identity.</summary>
-    Result = 4
+    Result = 4,
+
+    /// <summary>Expression-authoring relation-terminal identity.</summary>
+    Relation = 5
 }
 
-/// <summary>Origin of an identity selected by the structural authoring core.</summary>
+/// <summary>Origin of an identity selected by an authoring frontend or the structural core.</summary>
 public enum RelationQueryAuthoringIdentityOrigin
 {
     /// <summary>The producer supplied the identity explicitly.</summary>
     Explicit = 0,
 
-    /// <summary>The structural identity convention derived the identity.</summary>
+    /// <summary>An attributable authoring convention derived the identity.</summary>
     Convention = 1
 }
 
-/// <summary>Inspectable attribution for one identity retained in canonical IR.</summary>
+/// <summary>Inspectable attribution for one identity selected while authoring a canonical definition.</summary>
 public sealed record RelationQueryAuthoringIdentityDecision
 {
     /// <summary>Creates an identity-attribution decision.</summary>
@@ -100,16 +103,26 @@ public sealed record RelationQueryAuthoringIdentityDecision
         RelationQueryAuthoringSource? source = null)
     {
         if (!Enum.IsDefined(kind))
+        {
             throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported authoring identity kind.");
+        }
+
         if (!Enum.IsDefined(origin))
+        {
             throw new ArgumentOutOfRangeException(nameof(origin), origin, "Unsupported authoring identity origin.");
+        }
 
         value = Guard.RequireNotNullOrWhiteSpace(value);
         convention = convention.TrimmedEmptyOrWhiteSpaceAs();
         if (origin == RelationQueryAuthoringIdentityOrigin.Convention && convention is null)
+        {
             throw new ArgumentException("A convention-derived identity requires a convention version.", nameof(convention));
+        }
+
         if (origin == RelationQueryAuthoringIdentityOrigin.Explicit && convention is not null)
+        {
             throw new ArgumentException("An explicit identity cannot declare a convention version.", nameof(convention));
+        }
 
         Kind = kind;
         Value = value;
@@ -179,7 +192,9 @@ public sealed record RelationQueryAuthoringSourceDecision
         string? role = null)
     {
         if (!Enum.IsDefined(kind))
+        {
             throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported authoring decision kind.");
+        }
 
         Kind = kind;
         Target = Guard.RequireNotNullOrWhiteSpace(target);
@@ -200,6 +215,93 @@ public sealed record RelationQueryAuthoringSourceDecision
     public RelationQueryAuthoringSource Source { get; init; }
 }
 
+/// <summary>Origin of an effective non-identity authoring configuration value.</summary>
+public enum RelationQueryAuthoringValueOrigin
+{
+    /// <summary>The producer supplied the value explicitly.</summary>
+    Explicit = 0,
+
+    /// <summary>An attributable authoring convention derived the value.</summary>
+    Convention = 1
+}
+
+/// <summary>Inspectable attribution for one effective non-identity authoring value.</summary>
+public sealed record RelationQueryAuthoringConfigurationDecision
+{
+    /// <summary>Creates attribution for one effective authoring value.</summary>
+    /// <param name="target">Stable identity of the canonical construct configured by the decision.</param>
+    /// <param name="setting">Stable setting identity within <paramref name="target"/>.</param>
+    /// <param name="value">Effective value selected for the setting.</param>
+    /// <param name="origin">Whether the producer supplied or a convention derived the value.</param>
+    /// <param name="convention">
+    /// Convention version when <paramref name="origin"/> is
+    /// <see cref="RelationQueryAuthoringValueOrigin.Convention"/>; otherwise <see langword="null"/>.
+    /// </param>
+    /// <param name="source">Optional producer source responsible for the configuration decision.</param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="target"/>, <paramref name="setting"/>, or <paramref name="value"/> is
+    /// <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="target"/>, <paramref name="setting"/>, or <paramref name="value"/> is empty or white
+    /// space, a convention-derived decision omits <paramref name="convention"/>, or an explicit decision declares
+    /// a convention.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="origin"/> is unsupported.</exception>
+    public RelationQueryAuthoringConfigurationDecision(
+        string target,
+        string setting,
+        string value,
+        RelationQueryAuthoringValueOrigin origin,
+        string? convention = null,
+        RelationQueryAuthoringSource? source = null)
+    {
+        if (!Enum.IsDefined(origin))
+        {
+            throw new ArgumentOutOfRangeException(nameof(origin), origin, "Unsupported authoring value origin.");
+        }
+
+        target = Guard.RequireNotNullOrWhiteSpace(target);
+        setting = Guard.RequireNotNullOrWhiteSpace(setting);
+        value = Guard.RequireNotNullOrWhiteSpace(value);
+        convention = convention.TrimmedEmptyOrWhiteSpaceAs();
+        if (origin == RelationQueryAuthoringValueOrigin.Convention && convention is null)
+        {
+            throw new ArgumentException("A convention-derived value requires a convention version.", nameof(convention));
+        }
+
+        if (origin == RelationQueryAuthoringValueOrigin.Explicit && convention is not null)
+        {
+            throw new ArgumentException("An explicit value cannot declare a convention version.", nameof(convention));
+        }
+
+        Target = target;
+        Setting = setting;
+        Value = value;
+        Origin = origin;
+        Convention = convention;
+        Source = source;
+    }
+
+    /// <summary>Stable identity of the canonical construct configured by the decision.</summary>
+    public string Target { get; init; }
+
+    /// <summary>Stable setting identity within <see cref="Target"/>.</summary>
+    public string Setting { get; init; }
+
+    /// <summary>Effective value selected for the setting.</summary>
+    public string Value { get; init; }
+
+    /// <summary>Whether the producer supplied or a convention derived the value.</summary>
+    public RelationQueryAuthoringValueOrigin Origin { get; init; }
+
+    /// <summary>Convention version for a convention-derived value.</summary>
+    public string? Convention { get; init; }
+
+    /// <summary>Optional producer source responsible for the configuration decision.</summary>
+    public RelationQueryAuthoringSource? Source { get; init; }
+}
+
 /// <summary>
 /// Non-semantic construction provenance produced alongside a canonical relation/query definition.
 /// </summary>
@@ -212,17 +314,44 @@ public sealed record RelationQueryAuthoringManifest
     /// <summary>Creates a normalized authoring manifest.</summary>
     /// <param name="identities">Identity-origin decisions made while constructing the definition.</param>
     /// <param name="sources">Producer-source decisions made while constructing the definition.</param>
+    /// <param name="configuration">Effective non-identity configuration decisions made during authoring.</param>
     /// <exception cref="ArgumentException">
-    /// <paramref name="identities"/> or <paramref name="sources"/> contains a <see langword="null"/> entry.
+    /// <paramref name="identities"/>, <paramref name="sources"/>, or <paramref name="configuration"/> contains a
+    /// <see langword="null"/> entry, or <paramref name="configuration"/> repeats a target and setting pair.
     /// </exception>
     public RelationQueryAuthoringManifest(
         ImmutableArray<RelationQueryAuthoringIdentityDecision> identities = default,
-        ImmutableArray<RelationQueryAuthoringSourceDecision> sources = default)
+        ImmutableArray<RelationQueryAuthoringSourceDecision> sources = default,
+        ImmutableArray<RelationQueryAuthoringConfigurationDecision> configuration = default)
     {
         if (!identities.IsDefault && identities.Any(static decision => decision is null))
+        {
             throw new ArgumentException("Identity decisions cannot contain null entries.", nameof(identities));
+        }
+
         if (!sources.IsDefault && sources.Any(static decision => decision is null))
+        {
             throw new ArgumentException("Source decisions cannot contain null entries.", nameof(sources));
+        }
+
+        if (!configuration.IsDefault && configuration.Any(static decision => decision is null))
+        {
+            throw new ArgumentException("Configuration decisions cannot contain null entries.", nameof(configuration));
+        }
+
+        if (!configuration.IsDefault)
+        {
+            HashSet<(string Target, string Setting)> configurationKeys = [];
+            foreach (var decision in configuration)
+            {
+                if (!configurationKeys.Add((decision.Target, decision.Setting)))
+                {
+                    throw new ArgumentException(
+                        $"Configuration setting '{decision.Setting}' repeats for target '{decision.Target}'.",
+                        nameof(configuration));
+                }
+            }
+        }
 
         Identities = identities.IsDefault
             ? []
@@ -243,6 +372,19 @@ public sealed record RelationQueryAuthoringManifest
                     .ThenBy(static decision => decision.Source.Producer, StringComparer.Ordinal)
                     .ThenBy(static decision => decision.Source.Reference, StringComparer.Ordinal)
             ];
+        Configuration = configuration.IsDefault
+            ? []
+            :
+            [
+                .. configuration
+                    .OrderBy(static decision => decision.Target, StringComparer.Ordinal)
+                    .ThenBy(static decision => decision.Setting, StringComparer.Ordinal)
+                    .ThenBy(static decision => decision.Value, StringComparer.Ordinal)
+                    .ThenBy(static decision => decision.Origin)
+                    .ThenBy(static decision => decision.Convention, StringComparer.Ordinal)
+                    .ThenBy(static decision => decision.Source?.Producer, StringComparer.Ordinal)
+                    .ThenBy(static decision => decision.Source?.Reference, StringComparer.Ordinal)
+            ];
     }
 
     /// <summary>Identity-origin decisions retained for the authored definition.</summary>
@@ -250,4 +392,7 @@ public sealed record RelationQueryAuthoringManifest
 
     /// <summary>Producer-source decisions retained for the authored definition.</summary>
     public ImmutableArray<RelationQueryAuthoringSourceDecision> Sources { get; init; }
+
+    /// <summary>Effective non-identity configuration decisions retained for the authored definition.</summary>
+    public ImmutableArray<RelationQueryAuthoringConfigurationDecision> Configuration { get; init; }
 }

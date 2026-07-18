@@ -117,6 +117,22 @@ public sealed class ElasticRelationQueryCompiler
     {
         var diagnostics = ImmutableArray.CreateBuilder<RelationQueryNativeCompilationDiagnostic>();
         var reportProfile = request.Realization.TargetProfile;
+        if (storageBinding.CompiledPlanFingerprint is { } compiledPlanFingerprint
+            && !Equals(
+                compiledPlanFingerprint,
+                RelationQueryCompiledPlanReferenceFingerprinter.Compute(request.PlanReference)))
+        {
+            diagnostics.Add(BindingDiagnostic(
+                "The Elasticsearch storage binding's exact compiled-plan affinity does not match the native-compilation request."));
+        }
+
+        if (storageBinding.PlacementFingerprint is { } placementFingerprint
+            && !Equals(placementFingerprint, request.Placement.Fingerprint))
+        {
+            diagnostics.Add(BindingDiagnostic(
+                "The Elasticsearch storage binding's exact source-placement affinity does not match the native-compilation request."));
+        }
+
         if (storageBinding.Target != reportProfile.Target
             || storageBinding.TargetProfile != reportProfile.Id
             || storageBinding.Target != ElasticRelationQueryTargetProfile.Target
@@ -188,7 +204,7 @@ public sealed class ElasticRelationQueryCompiler
             message);
     }
 
-    static bool ProfilesEquivalent(
+    internal static bool ProfilesEquivalent(
         RelationQueryTargetCapabilityProfile left,
         RelationQueryTargetCapabilityProfile right)
     {

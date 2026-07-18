@@ -680,7 +680,7 @@ public sealed class RelationQueryAuthoringCore
             selectedBody.Body,
             [.. results.Select(static result => result.Definition)]);
         var validation = RelationQueryDefinitionValidator.Validate(definition);
-        HashSet<string> includedResults = results
+        var includedResults = results
             .Select(static result => result.Id.Value)
             .ToHashSet(StringComparer.Ordinal);
         return new(

@@ -1,4 +1,5 @@
-using System.Reflection;
+using System.Collections.Immutable;
+using System.Linq.Expressions;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
 
@@ -117,28 +118,120 @@ public sealed class RelationQueryExpressionValueBinding<T> : RelationQueryExpres
     internal override Type ClrType => typeof(T);
 }
 
+/// <summary>Node-type-erased base for a logical node and its focused CLR value binding.</summary>
+/// <typeparam name="TValue">CLR type represented by <see cref="Binding"/>.</typeparam>
+/// <remarks>
+/// The erased node and relation-root context are authoring conveniences only. Canonical definitions retain the
+/// exact logical node, binding, and root identities rather than this handle or its CLR type.
+/// </remarks>
+public abstract class RelationQueryExpressionBoundNode<TValue>
+    where TValue : notnull
+{
+    private protected RelationQueryExpressionBoundNode(
+        RelationQueryNodeHandle<LogicalQueryNode> node,
+        RelationQueryExpressionValueBinding<TValue> binding,
+        RelationQueryExpressionValueBinding? relationRoot)
+    {
+        Binding = Guard.RequireNotNull(binding);
+        if (!ReferenceEquals(node.Owner, binding.Structural.Owner))
+        {
+            throw new InvalidOperationException(
+                "A bound node and its focused binding must belong to the same authoring session.");
+        }
+
+        if (relationRoot is not null && !ReferenceEquals(binding.Owner, relationRoot.Owner))
+        {
+            throw new InvalidOperationException(
+                "A bound node and its relation-root context must belong to the same authoring session.");
+        }
+
+        StructuralNode = node;
+        RelationRoot = relationRoot;
+    }
+
+    internal RelationQueryNodeHandle<LogicalQueryNode> StructuralNode { get; }
+
+    internal RelationQueryExpressionValueBinding? RelationRoot { get; }
+
+    /// <summary>Typed CLR binding focused by the node.</summary>
+    public RelationQueryExpressionValueBinding<TValue> Binding { get; }
+}
+
 /// <summary>
 /// Typed pair returned by an expression-authored logical node that introduces a CLR value binding.
 /// </summary>
 /// <typeparam name="TNode">Canonical logical-node type referenced by <see cref="Node"/>.</typeparam>
-/// <typeparam name="TValue">CLR type represented by <see cref="Binding"/>.</typeparam>
-public sealed class RelationQueryExpressionBoundNode<TNode, TValue>
+/// <typeparam name="TValue">CLR type represented by <see cref="RelationQueryExpressionBoundNode{TValue}.Binding"/>.</typeparam>
+public sealed class RelationQueryExpressionBoundNode<TNode, TValue> : RelationQueryExpressionBoundNode<TValue>
     where TNode : LogicalQueryNode
     where TValue : notnull
 {
     internal RelationQueryExpressionBoundNode(
         RelationQueryNodeHandle<TNode> node,
-        RelationQueryExpressionValueBinding<TValue> binding)
+        RelationQueryExpressionValueBinding<TValue> binding,
+        RelationQueryExpressionValueBinding? relationRoot = null)
+        : base(
+            new RelationQueryNodeHandle<LogicalQueryNode>(Guard.RequireNotNull(node.Owner), node.Id),
+            binding,
+            relationRoot)
     {
         Node = node;
-        Binding = binding;
     }
 
     /// <summary>Structural handle for the canonical logical node.</summary>
     public RelationQueryNodeHandle<TNode> Node { get; }
 
-    /// <summary>Typed CLR binding introduced by the node.</summary>
-    public RelationQueryExpressionValueBinding<TValue> Binding { get; }
+    /// <summary>Builds this rooted output into a convention-identified relation without an output key.</summary>
+    /// <param name="mode">Output cardinality relative to each root.</param>
+    /// <param name="invariants">Optional already-canonical output invariants.</param>
+    /// <param name="id">Optional explicit relation identity overriding the endpoint convention.</param>
+    /// <param name="name">Optional explicit relation display name overriding the CLR output-type convention.</param>
+    /// <param name="sourceReference">Optional stable producer reference for provenance.</param>
+    /// <returns>The canonical relation, validation result, and authoring provenance.</returns>
+    /// <exception cref="ArgumentException">
+    /// The output is invalid for a relation terminal or <paramref name="invariants"/> contains a null entry.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="mode"/> is unsupported.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// This handle has no unambiguous originating source. Use the explicit authoring overload that accepts a root.
+    /// </exception>
+    public RelationQueryAuthoringResult<RelationDefinition> BuildRelation(
+        RelationOutputMode mode = RelationOutputMode.OnePerRoot,
+        ImmutableArray<InvariantDefinition> invariants = default,
+        RelationId? id = null,
+        RelationName? name = null,
+        string? sourceReference = null) =>
+        Binding.Owner.BuildRelation(this, mode, invariants, id, name, sourceReference);
+
+    /// <summary>Builds this rooted output into a convention-identified relation with an expression-authored key.</summary>
+    /// <typeparam name="TKey">CLR output-key type.</typeparam>
+    /// <param name="key">Stable non-null output-key expression.</param>
+    /// <param name="mode">Output cardinality relative to each root.</param>
+    /// <param name="invariants">Optional output invariants lowered before the terminal commits.</param>
+    /// <param name="id">Optional explicit relation identity overriding the endpoint convention.</param>
+    /// <param name="name">Optional explicit relation display name overriding the CLR output-type convention.</param>
+    /// <param name="sourceReference">Optional stable producer reference for provenance.</param>
+    /// <returns>The canonical relation, validation result, and authoring provenance.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="key"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// The output is invalid for a relation terminal, an invariant is null, or invariant names repeat.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="mode"/> is unsupported.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// This handle has no unambiguous originating source. Use the explicit authoring overload that accepts a root.
+    /// </exception>
+    /// <exception cref="RelationQueryExpressionAuthoringException">
+    /// The key or an invariant cannot be lowered exactly, or the key contains a raw CLR temporal carrier instead
+    /// of an explicitly normalized canonical scalar; no relation terminal is committed.
+    /// </exception>
+    public RelationQueryAuthoringResult<RelationDefinition> BuildRelation<TKey>(
+        Expression<Func<TValue, TKey>> key,
+        RelationOutputMode mode = RelationOutputMode.OnePerRoot,
+        IEnumerable<RelationQueryExpressionInvariant<TValue>>? invariants = null,
+        RelationId? id = null,
+        RelationName? name = null,
+        string? sourceReference = null) =>
+        Binding.Owner.BuildRelation(this, key, mode, invariants, id, name, sourceReference);
 }
 
 /// <summary>

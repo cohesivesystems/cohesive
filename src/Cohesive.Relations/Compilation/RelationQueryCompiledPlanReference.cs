@@ -106,11 +106,19 @@ public sealed class RelationQueryCompiledPlanReference
 
         var normalizedInputs = inputs.IsDefault ? [] : inputs;
         if (normalizedInputs.IsDefaultOrEmpty)
+        {
             throw new ArgumentException("A compiled plan reference requires at least one input identity.", nameof(inputs));
+        }
+
         if (normalizedInputs.Any(static input => string.IsNullOrWhiteSpace(input.Value)))
+        {
             throw new ArgumentException("Compiled plan input identities cannot be default.", nameof(inputs));
+        }
+
         if (normalizedInputs.GroupBy(static input => input).Any(static group => group.Count() > 1))
+        {
             throw new ArgumentException("Compiled plan input identities cannot be repeated.", nameof(inputs));
+        }
 
         Inputs =
         [
@@ -167,19 +175,40 @@ public sealed class RelationQueryCompiledPlanReference
         var candidate = From(plan);
         ImmutableArray<string>.Builder mismatches = ImmutableArray.CreateBuilder<string>();
         if (!string.Equals(CompilerProfile, candidate.CompilerProfile, StringComparison.Ordinal))
+        {
             mismatches.Add(CompilerProfileComponent);
+        }
+
         if (!string.Equals(DefinitionSchemaVersion, candidate.DefinitionSchemaVersion, StringComparison.Ordinal))
+        {
             mismatches.Add(DefinitionSchemaVersionComponent);
+        }
+
         if (!Equals(DefinitionFingerprint, candidate.DefinitionFingerprint))
+        {
             mismatches.Add(DefinitionComponent);
+        }
+
         if (!Equals(ShapeSnapshotsFingerprint, candidate.ShapeSnapshotsFingerprint))
+        {
             mismatches.Add(ShapesComponent);
+        }
+
         if (!Equals(RelationshipCatalogFingerprint, candidate.RelationshipCatalogFingerprint))
+        {
             mismatches.Add(CatalogComponent);
+        }
+
         if (!Equals(DemandFingerprint, candidate.DemandFingerprint))
+        {
             mismatches.Add(DemandComponent);
+        }
+
         if (!Inputs.SequenceEqual(candidate.Inputs))
+        {
             mismatches.Add(InputsComponent);
+        }
+
         return mismatches.ToImmutable();
     }
 
@@ -194,11 +223,56 @@ public sealed class RelationQueryCompiledPlanReference
             [.. plan.RequirementGraph.Inputs.Select(static input => input.Id)]);
 }
 
+/// <summary>Computes a versioned semantic fingerprint for one exact compiled-plan reference.</summary>
+public static class RelationQueryCompiledPlanReferenceFingerprinter
+{
+    /// <summary>Hash algorithm identifier.</summary>
+    public const string Algorithm = "sha256";
+
+    /// <summary>Canonicalization profile identifier.</summary>
+    public const string Canonicalization = "relation-query-compiled-plan-reference/v1-c14n/v1";
+
+    /// <summary>Computes a fingerprint over every versioned component and normalized input identity.</summary>
+    /// <param name="reference">Exact compiled-plan reference to fingerprint.</param>
+    /// <returns>A versioned SHA-256 fingerprint of the complete portable reference.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="reference"/> is <see langword="null"/>.</exception>
+    public static RelationQueryPlanComponentFingerprint Compute(RelationQueryCompiledPlanReference reference)
+    {
+        ArgumentNullException.ThrowIfNull(reference);
+        return RelationQueryCompiledPlanFingerprinter.ComputeReference(reference);
+    }
+}
+
 static class RelationQueryCompiledPlanFingerprinter
 {
     const string Algorithm = "sha256";
     const string ShapeSnapshotsCanonicalization = "relation-query-plan-shapes/v1-c14n/v2";
     const string DemandCanonicalization = "relation-query-plan-demand/v1-c14n/v1";
+
+    internal static RelationQueryPlanComponentFingerprint ComputeReference(
+        RelationQueryCompiledPlanReference reference)
+    {
+        ArrayBufferWriter<byte> canonical = new();
+        Append(canonical, RelationQueryCompiledPlanReferenceFingerprinter.Canonicalization);
+        Append(canonical, reference.CompilerProfile);
+        Append(canonical, reference.DefinitionSchemaVersion);
+        AppendFingerprint(canonical, reference.DefinitionFingerprint);
+        AppendFingerprint(canonical, reference.ShapeSnapshotsFingerprint);
+        Append(canonical, reference.RelationshipCatalogFingerprint is null ? 0 : 1);
+        if (reference.RelationshipCatalogFingerprint is { } catalog)
+        {
+            AppendFingerprint(canonical, catalog);
+        }
+
+        AppendFingerprint(canonical, reference.DemandFingerprint);
+        Append(canonical, reference.Inputs.Length);
+        foreach (var input in reference.Inputs.OrderBy(static input => input.Value, StringComparer.Ordinal))
+        {
+            Append(canonical, input.Value);
+        }
+
+        return Hash(RelationQueryCompiledPlanReferenceFingerprinter.Canonicalization, canonical.WrittenSpan);
+    }
 
     internal static RelationQueryPlanComponentFingerprint ComputeShapeSnapshots(
         ImmutableArray<ShapeGraphDocument> documents)
@@ -236,6 +310,13 @@ static class RelationQueryCompiledPlanFingerprinter
         return Hash(ShapeSnapshotsCanonicalization, canonical.WrittenSpan);
     }
 
+    internal static RelationQueryPlanComponentFingerprint ComputeShapeSnapshot(
+        ShapeGraphDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        return ComputeShapeSnapshots([document]);
+    }
+
     internal static RelationQueryPlanComponentFingerprint ComputeDemand(RelationQueryCompilationDemand demand)
     {
         ArrayBufferWriter<byte> canonical = new();
@@ -266,6 +347,32 @@ static class RelationQueryCompiledPlanFingerprinter
     {
         var hash = SHA256.HashData(canonical);
         return new(Algorithm, canonicalization, Convert.ToHexString(hash).ToLowerInvariant());
+    }
+
+    static void AppendFingerprint(
+        ArrayBufferWriter<byte> buffer,
+        RelationQueryDefinitionFingerprint fingerprint) =>
+        AppendFingerprint(buffer, fingerprint.Algorithm, fingerprint.Canonicalization, fingerprint.Value);
+
+    static void AppendFingerprint(
+        ArrayBufferWriter<byte> buffer,
+        RelationshipCatalogFingerprint fingerprint) =>
+        AppendFingerprint(buffer, fingerprint.Algorithm, fingerprint.Canonicalization, fingerprint.Value);
+
+    static void AppendFingerprint(
+        ArrayBufferWriter<byte> buffer,
+        RelationQueryPlanComponentFingerprint fingerprint) =>
+        AppendFingerprint(buffer, fingerprint.Algorithm, fingerprint.Canonicalization, fingerprint.Value);
+
+    static void AppendFingerprint(
+        ArrayBufferWriter<byte> buffer,
+        string algorithm,
+        string canonicalization,
+        string value)
+    {
+        Append(buffer, algorithm);
+        Append(buffer, canonicalization);
+        Append(buffer, value);
     }
 
     static void Append(ArrayBufferWriter<byte> buffer, RelationQueryFieldReference field)

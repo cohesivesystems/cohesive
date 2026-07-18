@@ -872,10 +872,15 @@ public sealed record ElasticRelationQueryFieldBinding
 /// <summary>
 /// Immutable, versioned binding from one exact placed semantic source to one concrete Elasticsearch index mapping.
 /// </summary>
+/// <remarks>
+/// Adapter authoring supplies exact compiled-plan and placement fingerprints. Direct construction may omit both
+/// affinity facts as an explicit unverified escape hatch; native compilation then validates structural identities but
+/// cannot detect reuse of stale artifacts that deliberately retain the same identities.
+/// </remarks>
 public sealed class ElasticRelationQueryStorageBinding
 {
-    /// <summary>Portable binding schema understood by the canonical Elasticsearch v2 compiler.</summary>
-    public const string CurrentSchemaVersion = "cohesive.relations.elastic-binding/v2";
+    /// <summary>Current portable persisted Elasticsearch binding schema.</summary>
+    public const string CurrentSchemaVersion = "cohesive.relations.elastic-binding/v4";
 
     /// <summary>Default deterministic convention set for semantic-path Elasticsearch bindings.</summary>
     public const string SemanticPathConventionSet = "cohesive.relations.elastic/semantic-path-conventions/v2";
@@ -900,9 +905,23 @@ public sealed class ElasticRelationQueryStorageBinding
     /// <param name="paginationConsistency">Consistency evidence available across multi-request pagination.</param>
     /// <param name="origin">Whether the binding was explicit or convention-derived.</param>
     /// <param name="conventionSetVersion">Attributable convention-set identity, when applicable.</param>
+    /// <param name="configurationDecisions">
+    /// Effective configuration-value origins and authorities retained for explainability and fingerprinting.
+    /// </param>
+    /// <param name="compiledPlanFingerprint">
+    /// Exact compiled-plan fingerprint, or <see langword="null"/> together with <paramref name="placementFingerprint"/>
+    /// for an explicitly unverified low-level binding.
+    /// </param>
+    /// <param name="placementFingerprint">
+    /// Exact source-placement fingerprint, or <see langword="null"/> together with
+    /// <paramref name="compiledPlanFingerprint"/> for an explicitly unverified low-level binding.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="indexName"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
-    /// An identity, index name, field collection, source mode, or convention attribution is invalid.
+    /// An identity, index name, field collection, source mode, or convention attribution is invalid; or
+    /// <paramref name="configurationDecisions"/> contains a <see langword="null"/> entry, repeats a setting, or
+    /// contains a setting foreign to this binding; convention origin conflicts with explicit or scoped provenance;
+    /// or plan and placement affinity are only partially supplied.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException">
     /// An enum value, result-window size, or page-size boundary is unsupported.
@@ -920,7 +939,10 @@ public sealed class ElasticRelationQueryStorageBinding
         int maximumPageSize = DefaultMaximumPageSize,
         ElasticRelationQueryPaginationConsistency paginationConsistency = ElasticRelationQueryPaginationConsistency.Unproven,
         ElasticRelationQueryBindingOrigin origin = ElasticRelationQueryBindingOrigin.Explicit,
-        string? conventionSetVersion = null)
+        string? conventionSetVersion = null,
+        ImmutableArray<RelationQueryConfigurationDecision> configurationDecisions = default,
+        RelationQueryPlanComponentFingerprint? compiledPlanFingerprint = null,
+        RelationQuerySourcePlacementFingerprint? placementFingerprint = null)
     {
         if (string.IsNullOrWhiteSpace(id.Value) || string.IsNullOrWhiteSpace(source.Value)
             || string.IsNullOrWhiteSpace(placementBinding.Value) || string.IsNullOrWhiteSpace(target.Value)
@@ -984,6 +1006,37 @@ public sealed class ElasticRelationQueryStorageBinding
         {
             throw new ArgumentException("Source retrieval cannot be used when Elasticsearch _source is disabled.", nameof(sourceMode));
         }
+
+        var normalizedDecisions = configurationDecisions.IsDefault ? [] : configurationDecisions;
+        if (normalizedDecisions.Any(static decision => decision is null))
+        {
+            throw new ArgumentException(
+                "Elasticsearch configuration decisions cannot contain null entries.",
+                nameof(configurationDecisions));
+        }
+        if (normalizedDecisions.GroupBy(static decision => decision.Setting, StringComparer.Ordinal)
+            .Any(static group => group.Count() > 1))
+        {
+            throw new ArgumentException(
+                "Elasticsearch configuration decisions cannot repeat a setting.",
+                nameof(configurationDecisions));
+        }
+        if ((compiledPlanFingerprint is null) != (placementFingerprint is null))
+        {
+            throw new ArgumentException(
+                "Elasticsearch compiled-plan and source-placement affinity must be supplied together or both omitted.",
+                nameof(compiledPlanFingerprint));
+        }
+
+        if (origin == ElasticRelationQueryBindingOrigin.Convention
+            && normalizedDecisions.Any(static decision => decision.Origin is
+                RelationQueryConfigurationValueOrigin.Explicit
+                or RelationQueryConfigurationValueOrigin.ScopedProfile))
+        {
+            throw new ArgumentException(
+                "A convention-origin Elasticsearch binding cannot retain explicit or scoped-profile configuration decisions.",
+                nameof(configurationDecisions));
+        }
         Id = id;
         Source = source;
         PlacementBinding = placementBinding;
@@ -997,6 +1050,13 @@ public sealed class ElasticRelationQueryStorageBinding
         PaginationConsistency = paginationConsistency;
         Origin = origin;
         ConventionSetVersion = conventionSetVersion;
+        ConfigurationDecisions =
+        [
+            .. normalizedDecisions.OrderBy(static decision => decision.Setting, StringComparer.Ordinal)
+        ];
+        ValidateConfigurationDecisionSettings(this, ConfigurationDecisions, nameof(configurationDecisions));
+        CompiledPlanFingerprint = compiledPlanFingerprint;
+        PlacementFingerprint = placementFingerprint;
         Fingerprint = ElasticRelationQueryBindingFingerprinter.Compute(this);
     }
 
@@ -1016,12 +1076,24 @@ public sealed class ElasticRelationQueryStorageBinding
     /// <param name="paginationConsistency">Consistency evidence available across multi-request pagination.</param>
     /// <param name="origin">Whether the binding was explicit or convention-derived.</param>
     /// <param name="conventionSetVersion">Attributable convention-set identity, when applicable.</param>
+    /// <param name="configurationDecisions">
+    /// Effective configuration-value origins and authorities retained for explainability and fingerprinting.
+    /// </param>
+    /// <param name="compiledPlanFingerprint">
+    /// Exact persisted compiled-plan fingerprint, or <see langword="null"/> together with
+    /// <paramref name="placementFingerprint"/> for an unverified low-level binding.
+    /// </param>
+    /// <param name="placementFingerprint">
+    /// Exact persisted source-placement fingerprint, or <see langword="null"/> together with
+    /// <paramref name="compiledPlanFingerprint"/> for an unverified low-level binding.
+    /// </param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="schemaVersion"/>, <paramref name="fingerprint"/>, or another required value is
     /// <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// The schema version or fingerprint is stale, or another normalized binding invariant is violated.
+    /// The schema version or fingerprint is stale; <paramref name="configurationDecisions"/> contains a
+    /// <see langword="null"/> entry or repeats a setting; or another normalized binding invariant is violated.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException">An enum or numeric boundary is unsupported.</exception>
     [JsonConstructor]
@@ -1040,7 +1112,10 @@ public sealed class ElasticRelationQueryStorageBinding
         int maximumPageSize = DefaultMaximumPageSize,
         ElasticRelationQueryPaginationConsistency paginationConsistency = ElasticRelationQueryPaginationConsistency.Unproven,
         ElasticRelationQueryBindingOrigin origin = ElasticRelationQueryBindingOrigin.Explicit,
-        string? conventionSetVersion = null)
+        string? conventionSetVersion = null,
+        ImmutableArray<RelationQueryConfigurationDecision> configurationDecisions = default,
+        RelationQueryPlanComponentFingerprint? compiledPlanFingerprint = null,
+        RelationQuerySourcePlacementFingerprint? placementFingerprint = null)
         : this(
             id,
             source,
@@ -1054,7 +1129,10 @@ public sealed class ElasticRelationQueryStorageBinding
             maximumPageSize,
             paginationConsistency,
             origin,
-            conventionSetVersion)
+            conventionSetVersion,
+            configurationDecisions,
+            compiledPlanFingerprint,
+            placementFingerprint)
     {
         var persistedSchemaVersion = Guard.RequireNotNullOrWhiteSpace(schemaVersion);
         if (!string.Equals(persistedSchemaVersion, CurrentSchemaVersion, StringComparison.Ordinal))
@@ -1115,6 +1193,21 @@ public sealed class ElasticRelationQueryStorageBinding
     /// <summary>Attributable convention-set identity, or <see langword="null"/>.</summary>
     public string? ConventionSetVersion { get; }
 
+    /// <summary>Effective configuration origins and authorities in deterministic setting order.</summary>
+    public ImmutableArray<RelationQueryConfigurationDecision> ConfigurationDecisions { get; }
+
+    /// <summary>
+    /// Exact compiled-plan fingerprint verified by adapter authoring, or <see langword="null"/> for an explicitly
+    /// unverified low-level binding.
+    /// </summary>
+    public RelationQueryPlanComponentFingerprint? CompiledPlanFingerprint { get; }
+
+    /// <summary>
+    /// Exact source-placement fingerprint verified by adapter authoring, or <see langword="null"/> for an explicitly
+    /// unverified low-level binding.
+    /// </summary>
+    public RelationQuerySourcePlacementFingerprint? PlacementFingerprint { get; }
+
     /// <summary>Deterministic identity of every normalized binding fact.</summary>
     public ElasticRelationQueryBindingFingerprint Fingerprint { get; }
 
@@ -1156,7 +1249,7 @@ public sealed class ElasticRelationQueryStorageBinding
             ":",
             segment.Segment)));
 
-    static string RequireConcreteIndexName(string value, string parameterName)
+    internal static string RequireConcreteIndexName(string value, string parameterName)
     {
         var index = Guard.RequireNotNullOrWhiteSpace(value);
         if (index is "." or ".."
@@ -1172,12 +1265,93 @@ public sealed class ElasticRelationQueryStorageBinding
         }
         return index;
     }
+
+    static void ValidateConfigurationDecisionSettings(
+        ElasticRelationQueryStorageBinding binding,
+        ImmutableArray<RelationQueryConfigurationDecision> decisions,
+        string parameterName)
+    {
+        HashSet<string> allowed = new(StringComparer.Ordinal)
+        {
+            "target",
+            "targetProfile",
+            "indexName",
+            "sourceMode",
+            "maximumResultWindow",
+            "maximumPageSize",
+            "paginationConsistency",
+            "conventionSetVersion",
+            "bindingId"
+        };
+        string[] fieldLeaves =
+        [
+            "sourceField",
+            "queryField",
+            "mappingKind",
+            "retrievalKind",
+            "retrievalEncoding",
+            "documentScope",
+            "semanticCapabilities",
+            "reversedSuffixField",
+            "semanticProfile",
+            "missingValueBehavior",
+            "missingValueSentinel",
+            "nullValueBehavior",
+            "nullValueSentinel",
+            "nestedScope"
+        ];
+        string[] childLeaves =
+        [
+            "elementPath",
+            "queryField",
+            "mappingKind",
+            "semanticCapabilities",
+            "semanticProfile",
+            "missingValueBehavior",
+            "nullValueBehavior"
+        ];
+        foreach (var field in binding.Fields)
+        {
+            var prefix = "field/" + field.Input.Value + "/";
+            foreach (var leaf in fieldLeaves)
+            {
+                allowed.Add(prefix + leaf);
+            }
+
+            if (field.NestedScope is not { } nested)
+            {
+                continue;
+            }
+
+            var nestedPrefix = prefix + "nested/";
+            allowed.Add(nestedPrefix + "nestedPath");
+            allowed.Add(nestedPrefix + "correlationGuarantee");
+            allowed.Add(nestedPrefix + "nullElementBehavior");
+            allowed.Add(nestedPrefix + "emptyCollectionBehavior");
+            foreach (var child in nested.ChildFields)
+            {
+                var childPrefix = nestedPrefix + "child/" + FieldPathKey(child.ElementPath) + "/";
+                foreach (var leaf in childLeaves)
+                {
+                    allowed.Add(childPrefix + leaf);
+                }
+            }
+        }
+
+        var foreign = decisions.FirstOrDefault(decision => !allowed.Contains(decision.Setting));
+        if (foreign is not null)
+        {
+            throw new ArgumentException(
+                $"Configuration setting '{foreign.Setting}' does not belong to this Elasticsearch storage binding.",
+                parameterName);
+        }
+    }
 }
 
 static class ElasticRelationQueryBindingFingerprinter
 {
     const string Algorithm = "sha256";
-    const string Canonicalization = "cohesive.relations.elastic-binding/v2-c14n/v1";
+    const string Canonicalization = "cohesive.relations.elastic-binding/v4-c14n/v1";
 
     public static ElasticRelationQueryBindingFingerprint Compute(ElasticRelationQueryStorageBinding binding)
     {
@@ -1196,6 +1370,24 @@ static class ElasticRelationQueryBindingFingerprinter
         Append(canonical, (int)binding.PaginationConsistency);
         Append(canonical, (int)binding.Origin);
         Append(canonical, binding.ConventionSetVersion);
+        Append(canonical, binding.CompiledPlanFingerprint is null ? 0 : 1);
+        if (binding.CompiledPlanFingerprint is { } compiledPlan)
+        {
+            var placement = binding.PlacementFingerprint!;
+            Append(canonical, compiledPlan.Algorithm);
+            Append(canonical, compiledPlan.Canonicalization);
+            Append(canonical, compiledPlan.Value);
+            Append(canonical, placement.Algorithm);
+            Append(canonical, placement.Canonicalization);
+            Append(canonical, placement.Value);
+        }
+        Append(canonical, binding.ConfigurationDecisions.Length);
+        foreach (var decision in binding.ConfigurationDecisions)
+        {
+            Append(canonical, decision.Setting);
+            Append(canonical, (int)decision.Origin);
+            Append(canonical, decision.Authority);
+        }
         Append(canonical, binding.Fields.Length);
         foreach (var field in binding.Fields)
         {

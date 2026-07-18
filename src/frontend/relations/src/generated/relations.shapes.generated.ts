@@ -84,6 +84,12 @@ export interface RelationQuerySourcePlacementBinding {
   partition?: RelationQueryPartitionBinding | null;
 }
 
+export interface RelationQueryConfigurationDecision {
+  setting: string;
+  origin: RelationQueryConfigurationValueOrigin;
+  authority: string;
+}
+
 export interface RelationQuerySourcePlacementFingerprint {
   algorithm: string;
   canonicalization: string;
@@ -446,6 +452,22 @@ export interface RelationQueryRelationshipKeyBinding {
 export interface RelationQueryPartitionBinding {
   sourceSelector: string;
 }
+
+export type RelationQueryConfigurationValueOrigin = 'Explicit' | 'ScopedProfile' | 'AdapterConvention' | 'FrameworkDefault';
+
+export const relationQueryConfigurationValueOrigins = {
+  explicit: 'Explicit',
+  scopedProfile: 'ScopedProfile',
+  adapterConvention: 'AdapterConvention',
+  frameworkDefault: 'FrameworkDefault',
+} as const satisfies Record<string, RelationQueryConfigurationValueOrigin>;
+
+export const relationQueryConfigurationValueOriginLabels: Record<RelationQueryConfigurationValueOrigin, string> = {
+  Explicit: 'Explicit',
+  ScopedProfile: 'ScopedProfile',
+  AdapterConvention: 'AdapterConvention',
+  FrameworkDefault: 'FrameworkDefault',
+};
 
 export type RelationQueryRealizationPolicyId = string;
 
@@ -1997,6 +2019,7 @@ export interface RelationQuerySourcePlacement {
   conventionSetVersion: string;
   sourceInstances: RelationQuerySourceInstance[];
   bindings: RelationQuerySourcePlacementBinding[];
+  configurationDecisions: RelationQueryConfigurationDecision[];
   fingerprint: RelationQuerySourcePlacementFingerprint;
 }
 
