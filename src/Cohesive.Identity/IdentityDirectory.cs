@@ -1,10 +1,10 @@
 using System.Collections.Immutable;
 using Cohesive.Model;
-using Cohesive.Prelude;
+using Cohesive.Relations.Authoring;
+using Cohesive.Relations.Diagnostics;
+using Cohesive.Relations.Execution;
 using Cohesive.Relations.Mapping;
-using Cohesive.Relations.Queries;
-using Cohesive.Storage;
-using Cohesive.Transitions.Authoring;
+using Cohesive.Relations.Model;
 
 namespace Cohesive.Identity;
 
@@ -43,6 +43,12 @@ public interface IIdentityDirectory
     /// <param name="lookup">Lookup keys extracted from transport claims or host policy.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The matched principal account, or <see langword="null"/> when no active account matches.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="lookup"/> is <see langword="null"/>.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="ct"/> is canceled.</exception>
+    /// <exception cref="IdentityDirectoryEvaluationException">
+    /// Canonical evaluation is inconclusive, fails, returns a foreign outcome, violates the expected result contract,
+    /// cannot be mapped, or finds more than one matching principal.
+    /// </exception>
     ValueTask<PrincipalAccountRecord?> FindPrincipalAsync(
         IdentityPrincipalLookup lookup,
         CancellationToken ct = default
@@ -54,6 +60,12 @@ public interface IIdentityDirectory
     /// <param name="principalId">Principal id whose grants should be listed.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>Active membership/scope grant records for the principal.</returns>
+    /// <exception cref="ArgumentException"><paramref name="principalId"/> is empty or white space.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="ct"/> is canceled.</exception>
+    /// <exception cref="IdentityDirectoryEvaluationException">
+    /// Canonical evaluation is inconclusive, fails, returns a foreign outcome, violates an expected result contract,
+    /// cannot be mapped, or finds an ambiguous principal or scope.
+    /// </exception>
     ValueTask<ImmutableArray<IdentityScopeGrantRecord>> ListScopeGrantsAsync(
         string principalId,
         CancellationToken ct = default
@@ -67,6 +79,15 @@ public interface IIdentityDirectory
     /// <param name="candidateScopeIds">Visible candidate scope ids.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The default scope id, or <see langword="null"/> when no visible default exists.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="candidateScopeIds"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="principalId"/> or <paramref name="scopeKind"/> is empty or white space.
+    /// </exception>
+    /// <exception cref="OperationCanceledException"><paramref name="ct"/> is canceled.</exception>
+    /// <exception cref="IdentityDirectoryEvaluationException">
+    /// Canonical evaluation is inconclusive, fails, returns a foreign outcome, violates an expected result contract,
+    /// cannot be mapped, or finds an ambiguous principal, default membership, or scope.
+    /// </exception>
     ValueTask<string?> FindDefaultScopeIdAsync(
         string principalId,
         string scopeKind,
@@ -76,20 +97,43 @@ public interface IIdentityDirectory
 }
 
 /// <summary>
-/// Identity directory backed by the semantic identity entity repositories.
+/// Failure to obtain an authoritative, contract-valid Identity directory result from canonical query evaluation.
 /// </summary>
-/// <param name="scopeRepository">Query repository for <see cref="IdentityDomainModel.Scope"/>.</param>
-/// <param name="principalRepository">Query repository for <see cref="IdentityDomainModel.PrincipalAccount"/>.</param>
-/// <param name="membershipRepository">Query repository for <see cref="IdentityDomainModel.ScopeMembership"/>.</param>
+public sealed class IdentityDirectoryEvaluationException : InvalidOperationException
+{
+    internal IdentityDirectoryEvaluationException(
+        string message,
+        RelationQueryEvaluation evaluation,
+        RelationQueryEvaluationOutcome? outcome = null,
+        Exception? innerException = null)
+        : base(message, innerException)
+    {
+        Evaluation = evaluation ?? throw new ArgumentNullException(nameof(evaluation));
+        Outcome = outcome;
+    }
+
+    /// <summary>Exact canonical evaluation whose directory projection failed.</summary>
+    public RelationQueryEvaluation Evaluation { get; }
+
+    /// <summary>
+    /// Canonical outcome that could not be consumed, or <see langword="null"/> when the evaluator returned no outcome.
+    /// </summary>
+    public RelationQueryEvaluationOutcome? Outcome { get; }
+}
+
+/// <summary>
+/// Identity directory backed by canonical relation/query evaluation over registered entity sources.
+/// </summary>
+/// <param name="evaluator">Canonical evaluator configured with the Identity entity sources.</param>
 /// <param name="mappingContext">Optional mapping context used to materialize identity records.</param>
+/// <exception cref="ArgumentNullException"><paramref name="evaluator"/> is <see langword="null"/>.</exception>
 public sealed class EntityRepositoryIdentityDirectory(
-    IEntityQueryRepository scopeRepository,
-    IEntityQueryRepository principalRepository,
-    IEntityQueryRepository membershipRepository,
+    IRelationQueryEvaluator evaluator,
     ShapeMappingContext? mappingContext = null
     ) : IIdentityDirectory
 {
-    readonly ShapeMappingContext mappingContext = mappingContext ?? principalRepository.MappingContext;
+    readonly IRelationQueryEvaluator evaluator = evaluator ?? throw new ArgumentNullException(nameof(evaluator));
+    readonly ShapeMappingContext mappingContext = mappingContext ?? ShapeMappingContext.Default;
 
     /// <inheritdoc />
     public async ValueTask<PrincipalAccountRecord?> FindPrincipalAsync(
@@ -99,25 +143,58 @@ public sealed class EntityRepositoryIdentityDirectory(
     {
         ArgumentNullException.ThrowIfNull(lookup);
         ct.ThrowIfCancellationRequested();
-        EnsureRepository(scopeRepository, IdentityDomainModel.Scope);
-        EnsureRepository(principalRepository, IdentityDomainModel.PrincipalAccount);
-        EnsureRepository(membershipRepository, IdentityDomainModel.ScopeMembership);
 
         var principalId = IdentityBootstrap.NormalizeOptional(lookup.PrincipalId);
         if (principalId is not null)
-            return await FindPrincipalByFieldAsync(nameof(PrincipalAccountRecord.Id), principalId, ct);
+        {
+            var evaluation = IdentityDirectoryQueries.EvaluatePrincipalById(
+                CreateEvaluationId("principal-by-id"),
+                principalId);
+            return await EvaluateSingleAsync<PrincipalAccountRecord>(
+                "find principal by id",
+                evaluation,
+                IdentityDomainModel.PrincipalAccountShape,
+                ct);
+        }
 
         var email = IdentityBootstrap.NormalizeEmail(lookup.Email);
         if (email is not null)
-            return await FindPrincipalByFieldAsync(nameof(PrincipalAccountRecord.Email), email, ct);
+        {
+            var evaluation = IdentityDirectoryQueries.EvaluatePrincipalByEmail(
+                CreateEvaluationId("principal-by-email"),
+                email);
+            return await EvaluateSingleAsync<PrincipalAccountRecord>(
+                "find principal by email",
+                evaluation,
+                IdentityDomainModel.PrincipalAccountShape,
+                ct);
+        }
 
         var subject = IdentityBootstrap.NormalizeOptional(lookup.Subject);
         if (subject is not null)
-            return await FindPrincipalByFieldAsync(nameof(PrincipalAccountRecord.Subject), subject, ct);
+        {
+            var evaluation = IdentityDirectoryQueries.EvaluatePrincipalBySubject(
+                CreateEvaluationId("principal-by-subject"),
+                subject);
+            return await EvaluateSingleAsync<PrincipalAccountRecord>(
+                "find principal by subject",
+                evaluation,
+                IdentityDomainModel.PrincipalAccountShape,
+                ct);
+        }
 
         var clientId = IdentityBootstrap.NormalizeOptional(lookup.ClientId);
         if (clientId is not null)
-            return await FindPrincipalByFieldAsync(nameof(PrincipalAccountRecord.ClientId), clientId, ct);
+        {
+            var evaluation = IdentityDirectoryQueries.EvaluatePrincipalByClientId(
+                CreateEvaluationId("principal-by-client-id"),
+                clientId);
+            return await EvaluateSingleAsync<PrincipalAccountRecord>(
+                "find principal by client id",
+                evaluation,
+                IdentityDomainModel.PrincipalAccountShape,
+                ct);
+        }
 
         return null;
     }
@@ -134,18 +211,17 @@ public sealed class EntityRepositoryIdentityDirectory(
         if (await FindPrincipalAsync(new(PrincipalId: principalId), ct) is null)
             return ImmutableArray<IdentityScopeGrantRecord>.Empty;
 
-        var context = OperationContext.Create(cancellationToken: ct);
-        var memberships = await QueryRecordsAsync<ScopeMembershipRecord>(
-            membershipRepository,
-            context,
-            Equal(nameof(ScopeMembershipRecord.PrincipalId), principalId)
-            );
+        var membershipEvaluation = IdentityDirectoryQueries.EvaluateActiveMembershipsByPrincipal(
+            CreateEvaluationId("active-memberships-by-principal"),
+            principalId);
+        var (memberships, _) = await EvaluateRowsAsync<ScopeMembershipRecord>(
+            "list active memberships by principal",
+            membershipEvaluation,
+            IdentityDomainModel.ScopeMembershipShape,
+            ct);
         var grants = ImmutableArray.CreateBuilder<IdentityScopeGrantRecord>();
         foreach (var membership in memberships)
         {
-            if (membership.Status != ScopeMembershipStatus.Active)
-                continue;
-
             var scope = await FindActiveScopeAsync(membership.ScopeKind, membership.ScopeId, ct);
             if (scope is not null)
                 grants.Add(new(scope, membership));
@@ -173,105 +249,216 @@ public sealed class EntityRepositoryIdentityDirectory(
             return null;
         }
 
-        var context = OperationContext.Create(cancellationToken: ct);
-        var memberships = await QueryRecordsAsync<ScopeMembershipRecord>(
-            membershipRepository,
-            context,
-            And(
-                EqualField(nameof(ScopeMembershipRecord.PrincipalId), principalId),
-                EqualField(nameof(ScopeMembershipRecord.ScopeKind), scopeKind),
-                EqualField(nameof(ScopeMembershipRecord.IsDefaultScope), true)
-                )
-            );
+        var membershipEvaluation =
+            IdentityDirectoryQueries.EvaluateActiveDefaultMembershipsByPrincipalAndKind(
+                CreateEvaluationId("active-default-membership-by-principal-and-kind"),
+                principalId,
+                scopeKind,
+                [.. candidateScopeIds.Order(StringComparer.Ordinal)]);
+        var membership = await EvaluateSingleAsync<ScopeMembershipRecord>(
+            "find active default membership by principal and scope kind",
+            membershipEvaluation,
+            IdentityDomainModel.ScopeMembershipShape,
+            ct);
+        if (membership is null)
+            return null;
 
-        foreach (var membership in memberships)
-        {
-            if (membership.Status != ScopeMembershipStatus.Active
-                || !candidateScopeIds.Contains(membership.ScopeId))
-            {
-                continue;
-            }
-
-            var scope = await FindActiveScopeAsync(membership.ScopeKind, membership.ScopeId, ct);
-            if (scope is not null)
-                return membership.ScopeId;
-        }
-
-        return null;
-    }
-
-    async ValueTask<PrincipalAccountRecord?> FindPrincipalByFieldAsync(
-        string fieldName,
-        string value,
-        CancellationToken ct
-        )
-    {
-        var context = OperationContext.Create(cancellationToken: ct);
-        var records = await QueryRecordsAsync<PrincipalAccountRecord>(
-            principalRepository,
-            context,
-            Equal(fieldName, value)
-            );
-
-        return records.FirstOrDefault(static principal => principal.Status == PrincipalAccountStatus.Active);
+        var scope = await FindActiveScopeAsync(membership.ScopeKind, membership.ScopeId, ct);
+        return scope is null ? null : membership.ScopeId;
     }
 
     async ValueTask<IdentityScopeRecord?> FindActiveScopeAsync(
         string scopeKind,
         string scopeId,
-        CancellationToken ct
-        )
+        CancellationToken ct)
     {
-        var context = OperationContext.Create(cancellationToken: ct);
-        var records = await QueryRecordsAsync<IdentityScopeRecord>(
-            scopeRepository,
-            context,
-            And(
-                EqualField(nameof(IdentityScopeRecord.Kind), scopeKind),
-                EqualField(nameof(IdentityScopeRecord.Id), scopeId)
-                ),
-            limit: 2
-            );
-
-        return records.FirstOrDefault(static scope => scope.Status == IdentityScopeStatus.Active);
+        var evaluation = IdentityDirectoryQueries.EvaluateActiveScopeByKindAndId(
+            CreateEvaluationId("active-scope-by-kind-and-id"),
+            scopeKind,
+            scopeId);
+        return await EvaluateSingleAsync<IdentityScopeRecord>(
+            "find active scope by kind and id",
+            evaluation,
+            IdentityDomainModel.ScopeShape,
+            ct);
     }
 
-    async ValueTask<ImmutableArray<TRecord>> QueryRecordsAsync<TRecord>(
-        IEntityQueryRepository repository,
-        OperationContext context,
-        EntityPredicate predicate,
-        int? limit = null
-        ) where TRecord : notnull
+    async ValueTask<TRecord?> EvaluateSingleAsync<TRecord>(
+        string operation,
+        RelationQueryEvaluation evaluation,
+        QualifiedShapeId expectedShape,
+        CancellationToken ct)
+        where TRecord : notnull
     {
-        var response = await repository.Query(
-            context,
-            EntityQuery.ForRows(
-                predicate,
-                window: limit is null
-                    ? null
-                    : new ResultPageOptions(Limit: limit, Mode: ResultPaginationMode.Offset)
-                )
-            ).ConfigureAwait(false);
+        var (rows, outcome) = await EvaluateRowsAsync<TRecord>(
+            operation,
+            evaluation,
+            expectedShape,
+            ct);
+        if (rows.Length <= 1)
+            return rows.IsDefaultOrEmpty ? default : rows[0];
 
-        return [.. response.Rows.Select(snapshot => snapshot.Entity.Map<TRecord>(mappingContext))];
+        throw Failure(
+            operation,
+            evaluation,
+            outcome,
+            $"expected at most one authoritative row but received {rows.Length}");
     }
 
-    static EntityPredicate Equal(string fieldName, object value) =>
-        new(EqualField(fieldName, value));
-
-    static EntityPredicate And(params FieldPredicate[] predicates) =>
-        new(BoolExpr.And(predicates));
-
-    static FieldPredicate EqualField(string fieldName, object value) =>
-        new(FieldPath.FromField(fieldName), ValuePredicate.EqualTo(value));
-
-    static void EnsureRepository(IEntityRepository repository, Entity entity)
+    async ValueTask<(ImmutableArray<TRecord> Rows, RelationQueryEvaluationOutcome Outcome)>
+        EvaluateRowsAsync<TRecord>(
+            string operation,
+            RelationQueryEvaluation evaluation,
+            QualifiedShapeId expectedShape,
+            CancellationToken ct)
+        where TRecord : notnull
     {
-        if (!string.Equals(repository.EntityDefinition.Shape.Id.Value, entity.Definition.Shape.Id.Value, StringComparison.Ordinal))
+        ct.ThrowIfCancellationRequested();
+        RelationQueryEvaluationOutcome? outcome;
+        try
         {
-            throw new InvalidOperationException(
-                $"Identity repository for '{entity.Definition.Shape.Id.Value}' cannot use repository for '{repository.EntityDefinition.Shape.Id.Value}'."
-                );
+            outcome = await evaluator.EvaluateAsync(evaluation, ct).ConfigureAwait(false);
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
+        {
+            ct.ThrowIfCancellationRequested();
+            throw Failure(
+                operation,
+                evaluation,
+                outcome: null,
+                "the configured evaluator threw before producing an authoritative outcome",
+                exception);
+        }
+
+        ct.ThrowIfCancellationRequested();
+        if (outcome is null)
+        {
+            throw Failure(
+                operation,
+                evaluation,
+                outcome: null,
+                "the configured evaluator returned no outcome");
+        }
+
+        if (!evaluation.HasSameSemantics(outcome.Evaluation))
+        {
+            throw Failure(
+                operation,
+                evaluation,
+                outcome,
+                "the configured evaluator returned an outcome for a different evaluation");
+        }
+
+        if (outcome.Status != RelationQueryExecutionStatus.Succeeded || outcome.Result is null)
+            throw Failure(operation, evaluation, outcome, "canonical evaluation was not conclusive");
+
+        var result = outcome.Result;
+        if (result.Status != RelationQueryExecutionStatus.Succeeded
+            || result.Relation is not null
+            || result.QueryResults.Length != 1)
+        {
+            throw Failure(
+                operation,
+                evaluation,
+                outcome,
+                "canonical evaluation did not produce exactly one successful named query result");
+        }
+
+        var branch = result.QueryResults[0];
+        if (branch.Result != IdentityDirectoryQueries.RowsResultId
+            || branch.Kind != RelationQueryExecutionResultKind.Rows
+            || branch.State != RelationQueryExecutionOutputState.Complete
+            || branch.Shape != expectedShape
+            || branch.Rows.Any(static row => !row.IsComplete))
+        {
+            throw Failure(
+                operation,
+                evaluation,
+                outcome,
+                "canonical evaluation returned an incomplete or incompatible named row result");
+        }
+
+        var records = ImmutableArray.CreateBuilder<TRecord>(branch.Rows.Length);
+        try
+        {
+            foreach (var row in branch.Rows)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (row.Identity is not { Kind: ObservationValueKind.String, String: { } identity }
+                    || string.IsNullOrWhiteSpace(identity)
+                    || row.Value.Fields is null)
+                {
+                    throw new InvalidOperationException(
+                        "An Identity entity result row requires a string identity and an object field payload.");
+                }
+
+                var observation = new Observation(
+                    row.Shape.ShapeId,
+                    identity,
+                    row.Value.Fields);
+                records.Add(observation.Map<TRecord>(mappingContext));
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException
+                                          and not OutOfMemoryException
+                                          and not StackOverflowException)
+        {
+            throw Failure(
+                operation,
+                evaluation,
+                outcome,
+                "canonical rows could not be materialized as the expected Identity record",
+                exception);
+        }
+
+        return (records.ToImmutable(), outcome);
+    }
+
+    static RelationQueryEvaluationId CreateEvaluationId(string operation) =>
+        new($"cohesive.identity/{operation}/{Guid.NewGuid():N}");
+
+    static IdentityDirectoryEvaluationException Failure(
+        string operation,
+        RelationQueryEvaluation evaluation,
+        RelationQueryEvaluationOutcome? outcome,
+        string reason,
+        Exception? innerException = null)
+    {
+        var diagnosticSummary = outcome is null ? string.Empty : FormatDiagnostics(outcome);
+        var message =
+            $"Identity directory operation '{operation}' failed for evaluation '{evaluation.Evaluation.Value}': {reason}.";
+        if (!string.IsNullOrWhiteSpace(diagnosticSummary))
+            message += " " + diagnosticSummary;
+        return new(message, evaluation, outcome, innerException);
+    }
+
+    static string FormatDiagnostics(RelationQueryEvaluationOutcome outcome)
+    {
+        IEnumerable<string> diagnostics = outcome.Diagnostics.Select(static diagnostic =>
+            $"evaluation {diagnostic.Code}: {diagnostic.Message}");
+        diagnostics = diagnostics.Concat(outcome.Compilation.Diagnostics.Select(static diagnostic =>
+            $"compilation {diagnostic.Code}: {diagnostic.Message}"));
+        if (outcome.Realization is { } realization)
+        {
+            diagnostics = diagnostics.Concat(realization.Diagnostics.Select(static diagnostic =>
+                $"realization {diagnostic.Code}: {diagnostic.Message}"));
+        }
+        if (outcome.PhysicalPlanning is { } planning)
+        {
+            diagnostics = diagnostics.Concat(planning.Diagnostics.Select(static diagnostic =>
+                $"planning {diagnostic.Code}: {diagnostic.Message}"));
+        }
+        if (outcome.PhysicalExecution is { } execution)
+        {
+            diagnostics = diagnostics.Concat(execution.Diagnostics.Select(static diagnostic =>
+                $"execution {diagnostic.Code}: {diagnostic.Message}"));
+        }
+
+        var summary = string.Join("; ", diagnostics.Take(8));
+        return string.IsNullOrWhiteSpace(summary) ? string.Empty : "Diagnostics: " + summary;
     }
 }

@@ -1,6 +1,5 @@
 using Cohesive.Relations.Mapping;
 using Cohesive.Relations.Model;
-using Cohesive.Relations.Queries;
 using Cohesive.Transitions.Model;
 
 namespace Cohesive.Storage;
@@ -8,7 +7,7 @@ namespace Cohesive.Storage;
 /// <summary>
 /// In-memory observation repository with atomic outbox support for one logical observation type.
 /// </summary>
-public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IEntityQueryRepository
+public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository
 {
     readonly Lock gate = new();
     readonly Dictionary<string, EntitySnapshot> snapshotsByKey = new(StringComparer.Ordinal);
@@ -172,84 +171,17 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
         return new(snapshot, commit.Messages);
     }
 
-    /// <summary>Queries the value.</summary>
-    public Task<EntityQueryResponse<EntitySnapshot>> Query(OperationContext context, EntityQuery query)
+    /// <summary>
+    /// Captures one immutable snapshot for canonical in-memory relation/query acquisition.
+    /// </summary>
+    /// <returns>
+    /// An isolated array of the current entity snapshots and monotonic repository version captured under the
+    /// repository lock. The caller owns and may reorder the returned array.
+    /// </returns>
+    internal (EntitySnapshot[] Snapshots, long Version) CaptureRelationQuerySnapshot()
     {
-        ArgumentNullException.ThrowIfNull(context);
-        ArgumentNullException.ThrowIfNull(query);
-        context.ThrowIfCancellationRequested();
-
-        EntitySnapshot[] snapshots;
         lock (gate)
-            snapshots = [.. snapshotsByKey.Values];
-
-        var filtered = snapshots
-            .Where(snapshot => query.Predicate is null || EntityPredicateEvaluator.Evaluate(snapshot.Entity, query.Predicate))
-            .ToArray();
-
-        IReadOnlyList<EntitySnapshot> rows = [];
-        QueryPageInfo? pageInfo = null;
-        if (query.IncludeRows)
-        {
-            rows = [.. ApplyWindow(filtered, query.Window).Select(snapshot => Project(snapshot, query.Fields?.Fields))];
-            pageInfo = CreatePageInfo(query.Window, filtered.Length, rows.Count);
-        }
-
-        var aggregations = query.Aggregations is null
-            ? null
-            : AggregationPlanEvaluator.Evaluate(
-                snapshots.Select(static snapshot => snapshot.Entity),
-                new(query.Aggregations.Roots, query.Predicate));
-
-        return Task.FromResult(new EntityQueryResponse<EntitySnapshot>(rows, pageInfo, aggregations));
-    }
-
-    static IEnumerable<EntitySnapshot> ApplyWindow(IEnumerable<EntitySnapshot> snapshots, ResultPageOptions? window)
-    {
-        var results = snapshots;
-
-        if (window?.OrderBy is { Length: > 0 } orderBy)
-        {
-            IOrderedEnumerable<EntitySnapshot>? ordered = null;
-            foreach (var order in orderBy)
-            {
-                ordered = ordered is null
-                    ? ApplyPrimaryOrdering(results, order)
-                    : ApplySecondaryOrdering(ordered, order);
-            }
-
-            results = ordered ?? results;
-        }
-
-        if (window?.Cursor is not null)
-            throw new NotSupportedException("In-memory entity repositories do not yet support cursor page resumption.");
-
-        if (window?.EffectiveMode == ResultPaginationMode.Offset && window.Offset is { } offset and > 0)
-            results = results.Skip(offset);
-
-        if (window?.Limit is { } limit)
-        {
-            if (limit < 0)
-                throw new ArgumentOutOfRangeException(nameof(window), limit, "Read-query limit must be non-negative.");
-
-            results = results.Take(limit);
-        }
-
-        return results;
-    }
-
-    static QueryPageInfo CreatePageInfo(ResultPageOptions? window, int totalCount, int returnedCount)
-    {
-        var offset = window?.EffectiveMode == ResultPaginationMode.Offset ? window.Offset ?? 0 : 0;
-        var limit = window?.Limit;
-        var hasMore = limit is not null && offset + returnedCount < totalCount;
-
-        return new(
-            TotalCount: totalCount,
-            NextCursor: null,
-            Offset: window?.EffectiveMode == ResultPaginationMode.Offset ? offset : null,
-            Limit: limit,
-            HasMore: hasMore);
+            return ([.. snapshotsByKey.Values], nextConcurrencyVersion);
     }
 
     /// <summary>Gets change stream.</summary>
@@ -392,97 +324,4 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
 
     static string CreateKey(string id, string partitionKey) => $"{partitionKey}::{id}";
 
-    static IOrderedEnumerable<EntitySnapshot> ApplyPrimaryOrdering(IEnumerable<EntitySnapshot> source, QueryOrderBy order) =>
-        order.Descending
-            ? source.OrderByDescending(static snapshot => snapshot.Entity, ObservationOrderingComparer.ForField(order.Path))
-            : source.OrderBy(static snapshot => snapshot.Entity, ObservationOrderingComparer.ForField(order.Path));
-
-    static IOrderedEnumerable<EntitySnapshot> ApplySecondaryOrdering(IOrderedEnumerable<EntitySnapshot> source, QueryOrderBy order) =>
-        order.Descending
-            ? source.ThenByDescending(static snapshot => snapshot.Entity, ObservationOrderingComparer.ForField(order.Path))
-            : source.ThenBy(static snapshot => snapshot.Entity, ObservationOrderingComparer.ForField(order.Path));
-
-    sealed class ObservationOrderingComparer(FieldPath path) : IComparer<Observation>
-    {
-        public int Compare(Observation? x, Observation? y)
-        {
-            if (ReferenceEquals(x, y))
-                return 0;
-            if (x is null)
-                return -1;
-            if (y is null)
-                return 1;
-
-            var leftResolved = TryResolveField(x, path, out var leftValue, out var leftExists);
-            var rightResolved = TryResolveField(y, path, out var rightValue, out var rightExists);
-            if (!leftResolved || !rightResolved)
-            {
-                throw new NotSupportedException(
-                    $"In-memory observation ordering does not support field path '{path}'.");
-            }
-
-            if (!leftExists && !rightExists)
-                return 0;
-            if (!leftExists)
-                return -1;
-            if (!rightExists)
-                return 1;
-
-            return CompareObservationValues(leftValue, rightValue);
-        }
-
-        public static ObservationOrderingComparer ForField(FieldPath path) => new(path);
-
-        static bool TryResolveField(Observation observation, FieldPath field, out ObservationValue value, out bool exists)
-        {
-            value = ObservationValue.FromObject(observation.Fields);
-            exists = true;
-
-            foreach (var segment in field.Segments)
-            {
-                switch (segment.Kind)
-                {
-                    case SegmentKind.Field:
-                        if (value.Kind != ObservationValueKind.Object
-                            || value.Fields is null
-                            || !value.Fields.TryGetValue(segment.Segment!, out value))
-                        {
-                            value = default;
-                            exists = false;
-                            return true;
-                        }
-
-                        break;
-                    case SegmentKind.Element:
-                        throw new NotSupportedException(
-                            $"In-memory observation ordering does not support element segment '{field}'.");
-                    default:
-                        throw new InvalidOperationException(
-                            $"Unsupported field-path segment kind '{segment.Kind}'.");
-                }
-            }
-
-            return true;
-        }
-
-        static int CompareObservationValues(ObservationValue left, ObservationValue right)
-        {
-            if (ObservationValue.DeepEquals(left, right))
-                return 0;
-
-            if (left.TryGetDateTimeOffset(out var leftDate) && right.TryGetDateTimeOffset(out var rightDate))
-                return leftDate.CompareTo(rightDate);
-
-            if (left.TryGetDecimal(out var leftDecimal) && right.TryGetDecimal(out var rightDecimal))
-                return leftDecimal.CompareTo(rightDecimal);
-
-            if (left.TryGetDouble(out var leftDouble) && right.TryGetDouble(out var rightDouble))
-                return leftDouble.CompareTo(rightDouble);
-
-            if (left.TryGetBoolean(out var leftBool) && right.TryGetBoolean(out var rightBool))
-                return leftBool.CompareTo(rightBool);
-
-            return string.CompareOrdinal(left.ToString(), right.ToString());
-        }
-    }
 }

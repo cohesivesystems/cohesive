@@ -1,4 +1,3 @@
-using Cohesive.Relations.Queries;
 using Cohesive.Storage;
 
 namespace Cohesive.Tests.Model;
@@ -21,29 +20,6 @@ public sealed class InMemoryEntityOutboxRepositoryTests
         Assert.NotNull(snapshot);
         Assert.Equal("alpha", snapshot.Entity.GetField(nameof(SampleObservation.Name)).GetString());
         Assert.Equal("tenant-a", snapshot.PartitionKey);
-    }
-
-    [Fact]
-    public async Task InMemoryObservationOutboxRepository_QueryAsync_WithDuplicateIdsAcrossPartitions_PreservesPartitionKeys()
-    {
-        var repository = CreateRepository(
-            [
-                new SampleSeed { Id = "shared-id", PartitionKey = "tenant-a", Name = "alpha-a" },
-                new SampleSeed { Id = "shared-id", PartitionKey = "tenant-b", Name = "alpha-b" }
-            ]);
-
-        var results = await ReadAllAsync(repository.QueryStream(
-            OperationContext.Create(),
-            new EntityQuery(
-                Predicate: new(
-                    new FieldPredicate(
-                        FieldPath.FromField(nameof(SampleObservation.Name)),
-                        new PrefixValuePredicate("alpha"))))));
-
-        Assert.Equal(2, results.Count);
-        Assert.Contains(results, snapshot => snapshot.PartitionKey == "tenant-a");
-        Assert.Contains(results, snapshot => snapshot.PartitionKey == "tenant-b");
-        Assert.All(results, snapshot => Assert.Equal("shared-id", snapshot.Entity.Id));
     }
 
     [Fact]
@@ -142,15 +118,6 @@ public sealed class InMemoryEntityOutboxRepositoryTests
             seedData: seedData,
             partitionKeyFieldName: nameof(SampleObservation.PartitionKey),
             idFieldName: nameof(SampleSeed.Id));
-
-    static async Task<IReadOnlyList<EntitySnapshot>> ReadAllAsync(IAsyncEnumerable<EntitySnapshot> snapshots)
-    {
-        List<EntitySnapshot> results = [];
-        await foreach (var snapshot in snapshots)
-            results.Add(snapshot);
-
-        return results;
-    }
 
     sealed class SampleObservation : Entity<SampleObservation>
     {

@@ -83,6 +83,76 @@ public readonly struct ObservationValue(
     /// </summary>
     public ReadOnlyMemory<byte> Bytes { get; } = bytes;
 
+    /// <summary>Attempts to resolve a direct or nested field from this object value.</summary>
+    /// <param name="path">Canonical field-only path to resolve. A default path is treated as absent.</param>
+    /// <param name="value">The resolved value when present; otherwise the default value.</param>
+    /// <returns>
+    /// <see langword="true"/> when this value is an object containing the complete path; otherwise
+    /// <see langword="false"/>. A default path is treated as absent.
+    /// </returns>
+    /// <exception cref="NotSupportedException"><paramref name="path"/> contains collection-element navigation.</exception>
+    public bool TryGetField(FieldPath path, out ObservationValue value) =>
+        TryGetFieldSegments(path.Segments.AsSpan(), out value);
+
+    /// <summary>
+    /// Attempts to resolve a direct or nested field from this object value without materializing a
+    /// <see cref="FieldPath"/>.
+    /// </summary>
+    /// <param name="path">Canonical field-only path segments to resolve. An empty span is treated as absent.</param>
+    /// <param name="value">The resolved value when present; otherwise the default value.</param>
+    /// <returns>
+    /// <see langword="true"/> when this value is an object containing the complete path using ordinal field-name
+    /// matching; otherwise <see langword="false"/>.
+    /// </returns>
+    /// <exception cref="NotSupportedException"><paramref name="path"/> contains collection-element navigation.</exception>
+    public bool TryGetFieldSegments(ReadOnlySpan<FieldPathSegment> path, out ObservationValue value)
+    {
+        if (path.IsEmpty)
+        {
+            value = default;
+            return false;
+        }
+
+        var current = this;
+        foreach (var segment in path)
+        {
+            if (segment.Kind != SegmentKind.Field)
+            {
+                throw new NotSupportedException(
+                    "Observation value field lookup does not support collection-element navigation.");
+            }
+
+            if (!current.TryGetProperty(segment.Segment!, out var next))
+            {
+                value = default;
+                return false;
+            }
+
+            current = next;
+        }
+
+        value = current;
+        return true;
+    }
+
+    static bool TryGetOrdinal(
+        IReadOnlyDictionary<string, ObservationValue> fields,
+        string name,
+        out ObservationValue value)
+    {
+        foreach (var (candidateName, candidateValue) in fields)
+        {
+            if (!string.Equals(candidateName, name, StringComparison.Ordinal))
+                continue;
+
+            value = candidateValue;
+            return true;
+        }
+
+        value = default;
+        return false;
+    }
+
     static readonly ObservationValue[] EmptyArrayValues = [];
     static readonly IReadOnlyDictionary<string, ObservationValue> EmptyObjectValues = new ReadOnlyDictionary<string, ObservationValue>(new Dictionary<string, ObservationValue>(capacity: 0, comparer: StringComparer.Ordinal));
     const int UndefinedHash = unchecked((int)0x5F9A43C1);
@@ -1098,8 +1168,12 @@ public readonly struct ObservationValue(
     /// </summary>
     /// <param name="propertyName">The property name to read.</param>
     /// <param name="value">The property value when found; otherwise default.</param>
-    /// <returns><c>true</c> when this value is an object containing <paramref name="propertyName"/>; otherwise <c>false</c>.</returns>
-    /// <exception cref="ArgumentException"></exception>
+    /// <returns>
+    /// <c>true</c> when this value is an object containing the ordinally matched
+    /// <paramref name="propertyName"/>; otherwise <c>false</c>.
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="propertyName"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="propertyName"/> is empty or white space.</exception>
     public bool TryGetProperty(string propertyName, out ObservationValue value)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(propertyName);
@@ -1109,7 +1183,7 @@ public readonly struct ObservationValue(
             return false;
         }
 
-        return Fields.TryGetValue(propertyName, out value);
+        return TryGetOrdinal(Fields, propertyName, out value);
     }
 
     /// <summary>

@@ -44,38 +44,50 @@ public sealed class TypedEntityRepository<TEntity>(
             MappingContext);
 }
 
-/// <summary>Represents a typed entity query repository.</summary>
+/// <summary>Typed wrapper for the temporary Cosmos-compatible legacy entity query repository.</summary>
+/// <remarks>
+/// This type exists only until the Cosmos entity repository executes canonical relation/query evaluations directly.
+/// New code should use <see cref="Cohesive.Relations.Execution.IRelationQueryEvaluator"/>.
+/// </remarks>
+/// <param name="repository">Typed point-read and write repository.</param>
+/// <param name="queryRepository">Legacy query repository for the same entity source.</param>
+/// <exception cref="ArgumentNullException">
+/// <paramref name="repository"/> or <paramref name="queryRepository"/> is <see langword="null"/>.
+/// </exception>
 public sealed class TypedEntityQueryRepository<TEntity>(
     IEntityRepository<TEntity> repository,
     IEntityQueryRepository queryRepository
     ) : IEntityQueryRepository<TEntity> where TEntity : notnull
 {
-    /// <summary>Gets the entity definition.</summary>
+    readonly IEntityRepository<TEntity> repository = Guard.RequireNotNull(repository);
+    readonly IEntityQueryRepository queryRepository = Guard.RequireNotNull(queryRepository);
+
+    /// <inheritdoc />
     public EntityDefinition EntityDefinition => repository.EntityDefinition;
 
-    /// <summary>Gets the mapping context.</summary>
+    /// <inheritdoc />
     public ShapeMappingContext MappingContext => repository.MappingContext;
 
-    /// <summary>Gets the entity type.</summary>
+    /// <inheritdoc />
     public string EntityType => repository.EntityType;
 
-    /// <summary>Attempts to get the value.</summary>
+    /// <inheritdoc />
     public Task<EntitySnapshot?> TryGet(OperationContext context, string id, EntityReadOptions? options = null) =>
         repository.TryGet(context, id, options);
 
-    /// <summary>Attempts to get entity.</summary>
+    /// <inheritdoc />
     public Task<TEntity?> TryGetEntity(OperationContext context, string id, EntityReadOptions? options = null) =>
         repository.TryGetEntity(context, id, options);
 
-    /// <summary>Upserts the value.</summary>
+    /// <inheritdoc />
     public Task<EntitySnapshot> Upsert(OperationContext context, EntityWriteRequest write) =>
         repository.Upsert(context, write);
 
-    /// <summary>Upserts the value.</summary>
+    /// <inheritdoc />
     public Task<EntitySnapshot> Upsert(OperationContext context, TEntity entity, EntityConcurrencyToken? expectedConcurrencyToken = null) =>
         repository.Upsert(context, entity, expectedConcurrencyToken);
 
-    /// <summary>Queries the value.</summary>
+    /// <inheritdoc />
     public Task<EntityQueryResponse<EntitySnapshot>> Query(OperationContext context, EntityQuery query) =>
         queryRepository.Query(context, query);
 }

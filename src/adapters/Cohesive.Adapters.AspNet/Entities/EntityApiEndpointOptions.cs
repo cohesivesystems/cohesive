@@ -1,5 +1,4 @@
 using Cohesive.Api;
-using Cohesive.Relations.Queries;
 using Cohesive.Storage;
 using Cohesive.Transitions.Authoring;
 using Cohesive.Transitions.Model;
@@ -42,12 +41,6 @@ public sealed class EntityApiEndpointOptions
     /// </summary>
     public Func<IServiceProvider, EntityDefinition, IEntityRepository> RepositoryResolver { get; init; } =
         static (sp, entity) => sp.GetEntityRepository(entity);
-
-    /// <summary>
-    /// Resolves the entity query repository. Defaults to the standard shape-keyed query repository registration.
-    /// </summary>
-    public Func<IServiceProvider, EntityDefinition, IEntityQueryRepository> QueryRepositoryResolver { get; init; } =
-        static (sp, entity) => sp.GetEntityQueryRepository(entity);
 
     /// <summary>
     /// Resolves the outbox-capable entity repository. Defaults to the standard shape-keyed outbox repository registration.
@@ -199,30 +192,6 @@ public abstract class EntityApiOperationBinding
         new LoadEntityApiOperationBinding(endpoint, createResult);
 
     /// <summary>
-    /// Creates an entity query operation binding.
-    /// </summary>
-    public static EntityApiOperationBinding Query(string operationName, Func<EntityApiRequestContext, object?, EntityQuery> createQuery, Func<EntityApiQueryResultContext, IReadOnlyList<EntitySnapshot>, IResult> createResult) =>
-        new QueryEntityApiOperationBinding(operationName, createQuery, createResult);
-
-    /// <summary>
-    /// Creates an entity query operation binding.
-    /// </summary>
-    public static EntityApiOperationBinding Query(ApiEndpoint endpoint, Func<EntityApiRequestContext, object?, EntityQuery> createQuery, Func<EntityApiQueryResultContext, IReadOnlyList<EntitySnapshot>, IResult> createResult) =>
-        new QueryEntityApiOperationBinding(endpoint, createQuery, createResult);
-
-    /// <summary>
-    /// Creates an entity query operation binding with asynchronous response projection.
-    /// </summary>
-    public static EntityApiOperationBinding Query(string operationName, Func<EntityApiRequestContext, object?, EntityQuery> createQuery, Func<EntityApiQueryResultContext, IReadOnlyList<EntitySnapshot>, ValueTask<IResult>> createResult) =>
-        new QueryEntityApiOperationBinding(operationName, createQuery, createResult);
-
-    /// <summary>
-    /// Creates an entity query operation binding with asynchronous response projection.
-    /// </summary>
-    public static EntityApiOperationBinding Query(ApiEndpoint endpoint, Func<EntityApiRequestContext, object?, EntityQuery> createQuery, Func<EntityApiQueryResultContext, IReadOnlyList<EntitySnapshot>, ValueTask<IResult>> createResult) =>
-        new QueryEntityApiOperationBinding(endpoint, createQuery, createResult);
-
-    /// <summary>
     /// Creates an entity create operation binding.
     /// </summary>
     public static EntityApiOperationBinding Create(
@@ -327,18 +296,6 @@ public sealed record EntityApiLoadedRequestContext(
     EntityDefinition Entity,
     IEntityRepository Repository,
     string EntityId,
-    object? Request
-    );
-
-/// <summary>
-/// Query result context passed to query response mappers.
-/// </summary>
-public sealed record EntityApiQueryResultContext(
-    OperationContext OperationContext,
-    HttpContext HttpContext,
-    ApiOperation Operation,
-    EntityDefinition Entity,
-    IEntityQueryRepository Repository,
     object? Request
     );
 

@@ -91,6 +91,41 @@ public sealed class ObservationValueTests
     }
 
     [Fact]
+    public void TryGetField_ResolvesNestedObjectPath()
+    {
+        var observed = ObservationValue.FromObject(new
+        {
+            Customer = new { Name = "Contoso" }
+        });
+
+        Assert.True(observed.TryGetField(FieldPath.Parse("Customer.Name"), out var name));
+        Assert.Equal(ObservationValue.FromString("Contoso"), name);
+        Assert.False(observed.TryGetField(FieldPath.Parse("Customer.Type"), out _));
+        Assert.False(observed.TryGetField(default, out _));
+    }
+
+    [Fact]
+    public void TryGetField_UsesOrdinalNamesIndependentOfDictionaryComparer()
+    {
+        var customer = new Dictionary<string, ObservationValue>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Name"] = ObservationValue.FromString("Contoso")
+        };
+        var root = new Dictionary<string, ObservationValue>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Customer"] = ObservationValue.FromObject(customer)
+        };
+        var observed = ObservationValue.FromObject(root);
+
+        Assert.True(observed.TryGetField(FieldPath.Parse("Customer.Name"), out var name));
+        Assert.Equal(ObservationValue.FromString("Contoso"), name);
+        Assert.False(observed.TryGetField(FieldPath.Parse("customer.Name"), out _));
+        Assert.False(observed.TryGetField(FieldPath.Parse("Customer.name"), out _));
+        Assert.True(observed.TryGetProperty("Customer", out _));
+        Assert.False(observed.TryGetProperty("customer", out _));
+    }
+
+    [Fact]
     public void TryGetInt64_DoubleIntegralSucceeds_AndFractionalFails()
     {
         var integral = ObservationValue.FromDouble(42d);

@@ -276,6 +276,33 @@ public sealed class RelationQueryTargetCapabilityProfile
     /// <summary>Optional descriptive metadata that does not affect semantic matching or identity.</summary>
     public string? Description { get; }
 
+    /// <summary>Determines whether another profile carries the same normalized capability snapshot.</summary>
+    /// <param name="other">Profile snapshot to compare.</param>
+    /// <returns>
+    /// <see langword="true"/> when target identity, supported versions, operating boundaries, and capability
+    /// evidence are equivalent; otherwise <see langword="false"/>. Non-semantic descriptions are ignored.
+    /// </returns>
+    public bool HasSameSemantics(RelationQueryTargetCapabilityProfile? other) =>
+        other is not null
+        && Target == other.Target
+        && Id == other.Id
+        && SupportedDefinitionSchemaVersions.SequenceEqual(
+            other.SupportedDefinitionSchemaVersions,
+            StringComparer.Ordinal)
+        && SupportedCompilerProfiles.SequenceEqual(
+            other.SupportedCompilerProfiles,
+            StringComparer.Ordinal)
+        && OperatingBoundaries.Length == other.OperatingBoundaries.Length
+        && OperatingBoundaries.Zip(other.OperatingBoundaries).All(static pair =>
+            pair.First.Id == pair.Second.Id
+            && pair.First.Kind == pair.Second.Kind
+            && pair.First.Limit == pair.Second.Limit)
+        && Capabilities.Length == other.Capabilities.Length
+        && Capabilities.Zip(other.Capabilities).All(static pair =>
+            pair.First.Id == pair.Second.Id
+            && Equals(pair.First.Capability, pair.Second.Capability)
+            && pair.First.OperatingBoundaries.SequenceEqual(pair.Second.OperatingBoundaries));
+
     static ImmutableArray<RelationQueryOperatingBoundary> NormalizeBoundaries(
         ImmutableArray<RelationQueryOperatingBoundary> boundaries)
     {

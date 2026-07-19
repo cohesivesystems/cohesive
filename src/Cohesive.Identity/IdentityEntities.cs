@@ -1,3 +1,5 @@
+using Cohesive.Model;
+using Cohesive.Model.Serialization;
 using Cohesive.Transitions.Authoring;
 
 namespace Cohesive.Identity;
@@ -7,6 +9,9 @@ namespace Cohesive.Identity;
 /// </summary>
 public static class IdentityDomainModel
 {
+    /// <summary>Stable graph identity for the canonical Identity entity shapes.</summary>
+    public static readonly GraphId ShapeGraphId = new("cohesive.identity/domain/v1");
+
     /// <summary>Security scope entity.</summary>
     public static readonly IdentityScope Scope = IdentityScope.Instance;
 
@@ -15,6 +20,29 @@ public static class IdentityDomainModel
 
     /// <summary>Principal membership in a scope.</summary>
     public static readonly ScopeMembership ScopeMembership = ScopeMembership.Instance;
+
+    /// <summary>Persisted canonical shape snapshot shared by Identity relations and Storage source registrations.</summary>
+    public static readonly ShapeGraphDocument ShapeGraphDocument = ShapeGraphDocument.FromGraph(
+        new ShapeGraph(
+            ShapeGraphId,
+            [
+                Scope.Definition.Shape,
+                PrincipalAccount.Definition.Shape,
+                ScopeMembership.Definition.Shape
+            ]));
+
+    /// <summary>Graph-qualified canonical security-scope shape.</summary>
+    public static readonly QualifiedShapeId ScopeShape = new(ShapeGraphId, Scope.Definition.Shape.Id);
+
+    /// <summary>Graph-qualified canonical principal-account shape.</summary>
+    public static readonly QualifiedShapeId PrincipalAccountShape = new(
+        ShapeGraphId,
+        PrincipalAccount.Definition.Shape.Id);
+
+    /// <summary>Graph-qualified canonical scope-membership shape.</summary>
+    public static readonly QualifiedShapeId ScopeMembershipShape = new(
+        ShapeGraphId,
+        ScopeMembership.Definition.Shape.Id);
 }
 
 /// <summary>

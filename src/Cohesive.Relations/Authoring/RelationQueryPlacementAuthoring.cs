@@ -179,8 +179,11 @@ public sealed class RelationQueryPlacementBuilder
     /// <summary>Stable authority for explicit local placement declarations.</summary>
     public const string ExplicitDeclarationAuthority = "cohesive.relations.placement/explicit-local-v1";
 
-    const string DefaultIdentitySelector = "$identity";
-    const string DefaultRelationshipKeySelector = "$relationship";
+    /// <summary>Framework physical selector for stable observation identity.</summary>
+    public const string FrameworkIdentitySourceSelector = "$identity";
+
+    /// <summary>Framework physical selector used when an inverse relationship key has no scoped override.</summary>
+    public const string FrameworkRelationshipKeySourceSelector = "$relationship";
     static readonly RelationQuerySourcePlacementLimits FrameworkLimits = new(
         maximumBatchSize: 100,
         maximumBufferedRows: 10_000,
@@ -675,7 +678,7 @@ public sealed class RelationQueryPlacementBuilder
         }
         else if (acquisition != RelationQuerySourceAcquisitionKind.Supplied)
         {
-            var effective = options?.IdentitySourceSelector ?? DefaultIdentitySelector;
+            var effective = options?.IdentitySourceSelector ?? FrameworkIdentitySourceSelector;
             identity = new(contract.Shape, effective);
             decisions.Add(Decision(
                 InputSetting(bindingId, "identity/source-selector"),
@@ -707,7 +710,7 @@ public sealed class RelationQueryPlacementBuilder
             }
             var selector = declaration.RelationshipKeySelector
                 ?? options?.RelationshipKeySourceSelector
-                ?? DefaultRelationshipKeySelector;
+                ?? FrameworkRelationshipKeySourceSelector;
             relationshipKeys = [new(contract.Input, traversal.Definition.SourceReference, selector)];
             decisions.Add(Decision(
                 InputSetting(bindingId, "relationship-key/source-selector"),

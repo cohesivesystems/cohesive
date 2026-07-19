@@ -177,6 +177,59 @@ public sealed class ObservationMapperTests
         Assert.Equal("Enterprise", projected.Customer.Segment);
     }
 
+    [Fact]
+    public void Observation_TryGetFieldPath_ResolvesNestedObjectFieldsAndAbsence()
+    {
+        var observation = new Observation(
+            shapeId: new("SearchOrderDto"),
+            id: "order-field-path",
+            fields: Fields(new
+            {
+                Customer = new { Name = "Contoso", Segment = (string?)null }
+            }));
+
+        Assert.True(observation.TryGetField(FieldPath.Parse("Customer.Name"), out var name));
+        Assert.Equal(ObservationValue.FromString("Contoso"), name);
+        Assert.True(observation.TryGetField(FieldPath.Parse("Customer.Segment"), out var segment));
+        Assert.Equal(ObservationValue.Null, segment);
+        Assert.False(observation.TryGetField(FieldPath.Parse("Customer.Type"), out _));
+        Assert.False(observation.TryGetField(FieldPath.Parse("Missing.Name"), out _));
+    }
+
+    [Fact]
+    public void Observation_TryGetFieldPath_UsesOrdinalNestedNamesAndTreatsDefaultAsAbsent()
+    {
+        var customer = new Dictionary<string, ObservationValue>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Name"] = ObservationValue.FromString("Contoso")
+        };
+        var observation = new Observation(
+            shapeId: new("SearchOrderDto"),
+            id: "order-ordinal-path",
+            fields: new Dictionary<string, ObservationValue>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Customer"] = ObservationValue.FromObject(customer)
+            });
+
+        Assert.True(observation.TryGetField(FieldPath.Parse("Customer.Name"), out var name));
+        Assert.Equal(ObservationValue.FromString("Contoso"), name);
+        Assert.False(observation.TryGetField(FieldPath.Parse("customer.Name"), out _));
+        Assert.False(observation.TryGetField(FieldPath.Parse("Customer.name"), out _));
+        Assert.False(observation.TryGetField(default(FieldPath), out _));
+    }
+
+    [Fact]
+    public void Observation_TryGetFieldPath_RejectsCollectionElementNavigation()
+    {
+        var observation = new Observation(
+            shapeId: new("SearchOrderDto"),
+            id: "order-element-path",
+            fields: Fields(new { Stops = new[] { new { Location = "SEA" } } }));
+
+        Assert.Throws<NotSupportedException>(() =>
+            observation.TryGetField(FieldPath.Parse("Stops[].Location"), out _));
+    }
+
     static IReadOnlyDictionary<string, ObservationValue> Fields(object expression) => ObservationValue.ToFieldDictionary(expression);
 
     [Fact]
