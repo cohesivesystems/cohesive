@@ -78,6 +78,358 @@ public enum CosmosNullValueEncoding
     JsonNull = 0
 }
 
+/// <summary>Physical element scope asserted for one structured Cosmos collection.</summary>
+public enum CosmosRelationQueryCollectionElementScope
+{
+    /// <summary>No exact collection-element scope is asserted.</summary>
+    Unproven = 0,
+
+    /// <summary>Each current item is one element produced by iterating the bound JSON array.</summary>
+    JsonArrayElement = 1
+}
+
+/// <summary>Physical guarantee that preserves predicates over one structured collection element.</summary>
+public enum CosmosRelationQueryCollectionCorrelationGuarantee
+{
+    /// <summary>No same-element correlation guarantee is asserted.</summary>
+    Unproven = 0,
+
+    /// <summary>Every child predicate in one existential scope is evaluated against the same JSON array element.</summary>
+    SameArrayElement = 1
+}
+
+/// <summary>Physical treatment of unavailable structured-collection values.</summary>
+public enum CosmosRelationQueryStructuredCollectionAbsenceBehavior
+{
+    /// <summary>The binding does not prove how the unavailable value is handled.</summary>
+    Unproven = 0,
+
+    /// <summary>Ingestion rejects the unavailable value, so every stored document satisfies the canonical contract.</summary>
+    ProhibitedByIngestion = 1
+}
+
+/// <summary>Physical representation of an empty structured collection.</summary>
+public enum CosmosRelationQueryEmptyCollectionBehavior
+{
+    /// <summary>The binding does not prove how an empty collection is represented.</summary>
+    Unproven = 0,
+
+    /// <summary>An empty JSON array produces no collection elements.</summary>
+    NoElements = 1
+}
+
+/// <summary>Exact canonical scalar domain stored by one Cosmos collection-element child field.</summary>
+public enum CosmosRelationQueryCollectionElementValueDomain
+{
+    /// <summary>A JSON Boolean preserving canonical <see cref="ScalarTypeKind.Bool"/> values.</summary>
+    Bool = 0,
+
+    /// <summary>An exact JSON integer preserving canonical <see cref="ScalarTypeKind.Int32"/> values.</summary>
+    Int32 = 1,
+
+    /// <summary>A JSON string preserving canonical ordinal <see cref="ScalarTypeKind.String"/> values.</summary>
+    String = 2,
+
+    /// <summary>A canonical GUID string preserving <see cref="ScalarTypeKind.Guid"/> identity.</summary>
+    Guid = 3,
+
+    /// <summary>A canonical date string preserving <see cref="ScalarTypeKind.Date"/> identity.</summary>
+    Date = 4
+}
+
+/// <summary>Exact scalar comparison facilities attested for one Cosmos collection-element child field.</summary>
+[Flags]
+public enum CosmosRelationQueryCollectionElementSemanticCapabilities
+{
+    /// <summary>No exact scalar comparison facility is asserted.</summary>
+    None = 0,
+
+    /// <summary>Cosmos equality preserves canonical equality for the declared value domain.</summary>
+    ExactEquality = 1 << 0,
+
+    /// <summary>Cosmos inequality preserves canonical inequality for the declared value domain.</summary>
+    ExactInequality = 1 << 1
+}
+
+/// <summary>Exact physical mapping of one canonical field relative to a structured JSON-array element.</summary>
+public sealed record CosmosRelationQueryCollectionElementFieldBinding
+{
+    const CosmosRelationQueryCollectionElementSemanticCapabilities AllSemanticCapabilities =
+        CosmosRelationQueryCollectionElementSemanticCapabilities.ExactEquality
+        | CosmosRelationQueryCollectionElementSemanticCapabilities.ExactInequality;
+
+    /// <summary>Creates one direct collection-element child-field binding.</summary>
+    /// <param name="elementPath">Canonical field path relative to one collection element.</param>
+    /// <param name="documentPath">Physical JSON property path relative to one collection element.</param>
+    /// <param name="valueDomain">Exact scalar value domain stored by the physical field.</param>
+    /// <param name="semanticCapabilities">Exact equality and inequality facilities attested by the binding.</param>
+    /// <param name="semanticProfile">Stable encoding and comparison profile supporting the asserted capabilities.</param>
+    /// <param name="missingValueBehavior">Physical treatment of a missing child property.</param>
+    /// <param name="nullValueBehavior">Physical treatment of an explicit-null child property.</param>
+    /// <exception cref="ArgumentException">A path, profile, or capability combination is malformed.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">An enum value or capability flag is unsupported.</exception>
+    public CosmosRelationQueryCollectionElementFieldBinding(
+        FieldPath elementPath,
+        FieldPath documentPath,
+        CosmosRelationQueryCollectionElementValueDomain valueDomain,
+        CosmosRelationQueryCollectionElementSemanticCapabilities semanticCapabilities,
+        string? semanticProfile,
+        CosmosRelationQueryStructuredCollectionAbsenceBehavior missingValueBehavior,
+        CosmosRelationQueryStructuredCollectionAbsenceBehavior nullValueBehavior)
+    {
+        if (!Enum.IsDefined(valueDomain))
+        {
+            throw new ArgumentOutOfRangeException(nameof(valueDomain), valueDomain, "Unsupported collection-element value domain.");
+        }
+
+        if ((semanticCapabilities & ~AllSemanticCapabilities) != 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(semanticCapabilities),
+                semanticCapabilities,
+                "Unsupported collection-element semantic capability flag.");
+        }
+
+        if (!Enum.IsDefined(missingValueBehavior))
+        {
+            throw new ArgumentOutOfRangeException(nameof(missingValueBehavior), missingValueBehavior, "Unsupported missing-child behavior.");
+        }
+
+        if (!Enum.IsDefined(nullValueBehavior))
+        {
+            throw new ArgumentOutOfRangeException(nameof(nullValueBehavior), nullValueBehavior, "Unsupported null-child behavior.");
+        }
+
+        if (semanticCapabilities != CosmosRelationQueryCollectionElementSemanticCapabilities.None
+            && string.IsNullOrWhiteSpace(semanticProfile))
+        {
+            throw new ArgumentException(
+                "Exact collection-element comparisons require an attributable semantic profile.",
+                nameof(semanticProfile));
+        }
+
+        if (semanticProfile is not null && string.IsNullOrWhiteSpace(semanticProfile))
+        {
+            throw new ArgumentException("A collection-element semantic profile cannot be empty.", nameof(semanticProfile));
+        }
+
+        ElementPath = RequireDirectFieldPath(elementPath, nameof(elementPath), "canonical element");
+        DocumentPath = RequireDirectFieldPath(documentPath, nameof(documentPath), "physical element");
+        ValueDomain = valueDomain;
+        SemanticCapabilities = semanticCapabilities;
+        SemanticProfile = semanticProfile;
+        MissingValueBehavior = missingValueBehavior;
+        NullValueBehavior = nullValueBehavior;
+    }
+
+    /// <summary>Canonical direct field path relative to one collection element.</summary>
+    public FieldPath ElementPath { get; }
+
+    /// <summary>Physical direct JSON property path relative to one collection element.</summary>
+    public FieldPath DocumentPath { get; }
+
+    /// <summary>Exact canonical scalar value domain stored by the physical field.</summary>
+    public CosmosRelationQueryCollectionElementValueDomain ValueDomain { get; }
+
+    /// <summary>Exact scalar comparison facilities attested by this binding.</summary>
+    public CosmosRelationQueryCollectionElementSemanticCapabilities SemanticCapabilities { get; }
+
+    /// <summary>Stable encoding and comparison profile supporting the asserted capabilities.</summary>
+    public string? SemanticProfile { get; }
+
+    /// <summary>Physical treatment of a missing child property.</summary>
+    public CosmosRelationQueryStructuredCollectionAbsenceBehavior MissingValueBehavior { get; }
+
+    /// <summary>Physical treatment of an explicit-null child property.</summary>
+    public CosmosRelationQueryStructuredCollectionAbsenceBehavior NullValueBehavior { get; }
+
+    static FieldPath RequireDirectFieldPath(FieldPath path, string parameterName, string description)
+    {
+        var normalized = CosmosRelationQueryStorageBinding.RequirePropertyPath(path, parameterName);
+        if (normalized.Segments.Length != 1)
+        {
+            throw new ArgumentException(
+                $"The Cosmos v2 structured-collection closure requires one direct {description} field segment.",
+                parameterName);
+        }
+
+        return normalized;
+    }
+}
+
+/// <summary>Explicit physical evidence tying one canonical structured collection input to a Cosmos JSON array.</summary>
+public sealed record CosmosRelationQueryCollectionScopeEvidence
+{
+    /// <summary>Creates collection-scope evidence owned by one structured collection field binding.</summary>
+    /// <param name="semanticProfile">Stable JSON-array storage and iteration profile supporting the scope evidence.</param>
+    /// <param name="elementScope">Physical scope represented by a canonical current item.</param>
+    /// <param name="correlationGuarantee">Same-element correlation guarantee supplied by array iteration.</param>
+    /// <param name="collectionMissingValueBehavior">Physical treatment of a missing collection property.</param>
+    /// <param name="collectionNullValueBehavior">Physical treatment of an explicit-null collection property.</param>
+    /// <param name="nullElementBehavior">Physical treatment of an explicit-null collection element.</param>
+    /// <param name="emptyCollectionBehavior">Physical treatment of an empty collection.</param>
+    /// <param name="childFields">Direct child mappings keyed by canonical element-relative paths.</param>
+    /// <exception cref="ArgumentException">The profile or child mapping collection is invalid or ambiguous.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">An enum value is unsupported.</exception>
+    public CosmosRelationQueryCollectionScopeEvidence(
+        string semanticProfile,
+        CosmosRelationQueryCollectionElementScope elementScope,
+        CosmosRelationQueryCollectionCorrelationGuarantee correlationGuarantee,
+        CosmosRelationQueryStructuredCollectionAbsenceBehavior collectionMissingValueBehavior,
+        CosmosRelationQueryStructuredCollectionAbsenceBehavior collectionNullValueBehavior,
+        CosmosRelationQueryStructuredCollectionAbsenceBehavior nullElementBehavior,
+        CosmosRelationQueryEmptyCollectionBehavior emptyCollectionBehavior,
+        ImmutableArray<CosmosRelationQueryCollectionElementFieldBinding> childFields)
+    {
+        if (!Enum.IsDefined(elementScope))
+        {
+            throw new ArgumentOutOfRangeException(nameof(elementScope), elementScope, "Unsupported collection-element scope.");
+        }
+
+        if (!Enum.IsDefined(correlationGuarantee))
+        {
+            throw new ArgumentOutOfRangeException(nameof(correlationGuarantee), correlationGuarantee, "Unsupported collection correlation guarantee.");
+        }
+
+        if (!Enum.IsDefined(collectionMissingValueBehavior))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(collectionMissingValueBehavior),
+                collectionMissingValueBehavior,
+                "Unsupported missing-collection behavior.");
+        }
+
+        if (!Enum.IsDefined(collectionNullValueBehavior))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(collectionNullValueBehavior),
+                collectionNullValueBehavior,
+                "Unsupported null-collection behavior.");
+        }
+
+        if (!Enum.IsDefined(nullElementBehavior))
+        {
+            throw new ArgumentOutOfRangeException(nameof(nullElementBehavior), nullElementBehavior, "Unsupported null-element behavior.");
+        }
+
+        if (!Enum.IsDefined(emptyCollectionBehavior))
+        {
+            throw new ArgumentOutOfRangeException(nameof(emptyCollectionBehavior), emptyCollectionBehavior, "Unsupported empty-collection behavior.");
+        }
+
+        SemanticProfile = Guard.RequireNotNullOrWhiteSpace(semanticProfile);
+        var normalizedChildren = childFields.IsDefault ? [] : childFields;
+        if (normalizedChildren.IsDefaultOrEmpty || normalizedChildren.Any(static child => child is null))
+        {
+            throw new ArgumentException(
+                "Cosmos collection-scope evidence requires at least one non-null child-field binding.",
+                nameof(childFields));
+        }
+
+        if (normalizedChildren.GroupBy(static child => child.ElementPath).Any(static group => group.Count() > 1))
+        {
+            throw new ArgumentException(
+                "Cosmos collection-scope evidence cannot repeat a canonical element-relative path.",
+                nameof(childFields));
+        }
+
+        ElementScope = elementScope;
+        CorrelationGuarantee = correlationGuarantee;
+        CollectionMissingValueBehavior = collectionMissingValueBehavior;
+        CollectionNullValueBehavior = collectionNullValueBehavior;
+        NullElementBehavior = nullElementBehavior;
+        EmptyCollectionBehavior = emptyCollectionBehavior;
+        ChildFields =
+        [
+            .. normalizedChildren.OrderBy(
+                static child => CosmosRelationQueryStorageBinding.FieldPathKey(child.ElementPath),
+                StringComparer.Ordinal)
+        ];
+    }
+
+    /// <summary>Physical scope represented by a canonical current item.</summary>
+    public CosmosRelationQueryCollectionElementScope ElementScope { get; }
+
+    /// <summary>Same-element correlation guarantee supplied by JSON-array iteration.</summary>
+    public CosmosRelationQueryCollectionCorrelationGuarantee CorrelationGuarantee { get; }
+
+    /// <summary>Physical treatment of a missing collection property.</summary>
+    public CosmosRelationQueryStructuredCollectionAbsenceBehavior CollectionMissingValueBehavior { get; }
+
+    /// <summary>Physical treatment of an explicit-null collection property.</summary>
+    public CosmosRelationQueryStructuredCollectionAbsenceBehavior CollectionNullValueBehavior { get; }
+
+    /// <summary>Physical treatment of an explicit-null collection element.</summary>
+    public CosmosRelationQueryStructuredCollectionAbsenceBehavior NullElementBehavior { get; }
+
+    /// <summary>Physical treatment of an empty collection.</summary>
+    public CosmosRelationQueryEmptyCollectionBehavior EmptyCollectionBehavior { get; }
+
+    /// <summary>Stable JSON-array storage and iteration profile supporting the scope evidence.</summary>
+    public string SemanticProfile { get; }
+
+    /// <summary>Direct child mappings in deterministic canonical element-path order.</summary>
+    public ImmutableArray<CosmosRelationQueryCollectionElementFieldBinding> ChildFields { get; }
+
+    /// <summary>Resolves one direct child mapping by canonical element-relative path.</summary>
+    /// <param name="elementPath">Canonical path relative to the current collection element.</param>
+    /// <returns>The exact collection-element child-field binding.</returns>
+    /// <exception cref="KeyNotFoundException"><paramref name="elementPath"/> is not bound.</exception>
+    public CosmosRelationQueryCollectionElementFieldBinding ResolveChild(FieldPath elementPath)
+    {
+        foreach (var child in ChildFields)
+        {
+            if (child.ElementPath == elementPath)
+            {
+                return child;
+            }
+        }
+
+        throw new KeyNotFoundException($"Collection element field '{elementPath}' has no Cosmos child binding.");
+    }
+
+    /// <summary>Compares normalized collection-scope evidence using value semantics for child mappings.</summary>
+    /// <param name="other">Other evidence to compare.</param>
+    /// <returns><see langword="true"/> when every normalized evidence fact is equal.</returns>
+    public bool Equals(CosmosRelationQueryCollectionScopeEvidence? other)
+    {
+        if (ReferenceEquals(this, other))
+        {
+            return true;
+        }
+
+        return other is not null
+               && ElementScope == other.ElementScope
+               && CorrelationGuarantee == other.CorrelationGuarantee
+               && CollectionMissingValueBehavior == other.CollectionMissingValueBehavior
+               && CollectionNullValueBehavior == other.CollectionNullValueBehavior
+               && NullElementBehavior == other.NullElementBehavior
+               && EmptyCollectionBehavior == other.EmptyCollectionBehavior
+               && string.Equals(SemanticProfile, other.SemanticProfile, StringComparison.Ordinal)
+               && ChildFields.SequenceEqual(other.ChildFields);
+    }
+
+    /// <summary>Computes a value-semantic hash code for the normalized evidence.</summary>
+    /// <returns>A hash code aligned with <see cref="Equals(CosmosRelationQueryCollectionScopeEvidence?)"/>.</returns>
+    public override int GetHashCode()
+    {
+        HashCode hash = new();
+        hash.Add((int)ElementScope);
+        hash.Add((int)CorrelationGuarantee);
+        hash.Add((int)CollectionMissingValueBehavior);
+        hash.Add((int)CollectionNullValueBehavior);
+        hash.Add((int)NullElementBehavior);
+        hash.Add((int)EmptyCollectionBehavior);
+        hash.Add(SemanticProfile, StringComparer.Ordinal);
+        foreach (var child in ChildFields)
+        {
+            hash.Add(child);
+        }
+
+        return hash.ToHashCode();
+    }
+}
+
 /// <summary>Physical Cosmos document selector for one exact compiled field input.</summary>
 public sealed record CosmosRelationQueryFieldBinding
 {
@@ -87,10 +439,16 @@ public sealed record CosmosRelationQueryFieldBinding
     /// Structural path relative to the configured document root. Element segments identify traversal through an
     /// expanded array and are interpreted only in an expansion scope; direct SQL property access remains property-only.
     /// </param>
+    /// <param name="collectionScope">
+    /// Optional explicit structured-collection evidence owned by this outer collection field.
+    /// </param>
     /// <exception cref="ArgumentException">
     /// <paramref name="input"/> is default, or <paramref name="documentPath"/> is empty or malformed.
     /// </exception>
-    public CosmosRelationQueryFieldBinding(RelationQueryInputId input, FieldPath documentPath)
+    public CosmosRelationQueryFieldBinding(
+        RelationQueryInputId input,
+        FieldPath documentPath,
+        CosmosRelationQueryCollectionScopeEvidence? collectionScope = null)
     {
         if (string.IsNullOrWhiteSpace(input.Value))
         {
@@ -98,7 +456,10 @@ public sealed record CosmosRelationQueryFieldBinding
         }
 
         Input = input;
-        DocumentPath = CosmosRelationQueryStorageBinding.RequireDocumentSelectorPath(documentPath, nameof(documentPath));
+        DocumentPath = collectionScope is null
+            ? CosmosRelationQueryStorageBinding.RequireDocumentSelectorPath(documentPath, nameof(documentPath))
+            : CosmosRelationQueryStorageBinding.RequirePropertyPath(documentPath, nameof(documentPath));
+        CollectionScope = collectionScope;
     }
 
     /// <summary>Exact compiled field-input identity.</summary>
@@ -106,6 +467,9 @@ public sealed record CosmosRelationQueryFieldBinding
 
     /// <summary>Structural path relative to the configured document root.</summary>
     public FieldPath DocumentPath { get; }
+
+    /// <summary>Explicit structured-collection scope evidence, or <see langword="null"/>.</summary>
+    public CosmosRelationQueryCollectionScopeEvidence? CollectionScope { get; }
 }
 
 /// <summary>
@@ -120,7 +484,7 @@ public sealed record CosmosRelationQueryFieldBinding
 public sealed class CosmosRelationQueryStorageBinding
 {
     /// <summary>Current portable Cosmos relation/query storage-binding schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive.relations.cosmos-binding/v4";
+    public const string CurrentSchemaVersion = "cohesive.relations.cosmos-binding/v5";
 
     /// <summary>Default deterministic convention set for semantic-path document bindings.</summary>
     public const string SemanticPathConventionSet = "cohesive.relations.cosmos/semantic-path-conventions/v1";
@@ -560,13 +924,23 @@ public sealed class CosmosRelationQueryStorageBinding
     /// <exception cref="KeyNotFoundException"><paramref name="input"/> is not bound.</exception>
     public FieldPath ResolveField(RelationQueryInputId input)
     {
+        return ResolveFieldBinding(input).DocumentPath;
+    }
+
+    /// <summary>Resolves the complete physical field binding for an exact compiled field input.</summary>
+    /// <param name="input">Compiled field-input identity.</param>
+    /// <returns>The exact field binding, including any structured-collection evidence.</returns>
+    /// <exception cref="KeyNotFoundException"><paramref name="input"/> is not bound.</exception>
+    public CosmosRelationQueryFieldBinding ResolveFieldBinding(RelationQueryInputId input)
+    {
         foreach (var field in Fields)
         {
             if (field.Input == input)
             {
-                return field.DocumentPath;
+                return field;
             }
         }
+
         throw new KeyNotFoundException($"Compiled input '{input.Value}' has no Cosmos field binding.");
     }
 
@@ -734,7 +1108,7 @@ public sealed class CosmosRelationQueryStorageBinding
 static class CosmosRelationQueryBindingFingerprinter
 {
     const string Algorithm = "sha256";
-    const string Canonicalization = "cohesive.relations.cosmos-binding/v4-c14n/v1";
+    const string Canonicalization = "cohesive.relations.cosmos-binding/v5-c14n/v1";
 
     public static CosmosRelationQueryBindingFingerprint Compute(CosmosRelationQueryStorageBinding binding)
     {
@@ -773,6 +1147,28 @@ static class CosmosRelationQueryBindingFingerprinter
         {
             Append(canonical, field.Input.Value);
             Append(canonical, field.DocumentPath);
+            Append(canonical, field.CollectionScope is null ? 0 : 1);
+            if (field.CollectionScope is { } collection)
+            {
+                Append(canonical, (int)collection.ElementScope);
+                Append(canonical, (int)collection.CorrelationGuarantee);
+                Append(canonical, (int)collection.CollectionMissingValueBehavior);
+                Append(canonical, (int)collection.CollectionNullValueBehavior);
+                Append(canonical, (int)collection.NullElementBehavior);
+                Append(canonical, (int)collection.EmptyCollectionBehavior);
+                Append(canonical, collection.SemanticProfile);
+                Append(canonical, collection.ChildFields.Length);
+                foreach (var child in collection.ChildFields)
+                {
+                    Append(canonical, child.ElementPath);
+                    Append(canonical, child.DocumentPath);
+                    Append(canonical, (int)child.ValueDomain);
+                    Append(canonical, (int)child.SemanticCapabilities);
+                    Append(canonical, child.SemanticProfile);
+                    Append(canonical, (int)child.MissingValueBehavior);
+                    Append(canonical, (int)child.NullValueBehavior);
+                }
+            }
         }
         Append(canonical, binding.StableUniqueOrderingPaths.Length);
         foreach (var path in binding.StableUniqueOrderingPaths)

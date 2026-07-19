@@ -10,7 +10,7 @@ namespace Cohesive.Adapters.Cosmos;
 public sealed record CosmosRelationQueryCompilerOptions
 {
     /// <summary>Current canonical Cosmos SQL compiler profile.</summary>
-    public const string CurrentCompilerProfile = "cohesive.adapters.cosmos.sql/compiler-v1";
+    public const string CurrentCompilerProfile = "cohesive.adapters.cosmos.sql/compiler-v2";
 
     /// <summary>Creates canonical Cosmos compiler options.</summary>
     /// <param name="compilerProfile">Stable compiler implementation/profile identity.</param>
@@ -545,9 +545,12 @@ public static class CosmosRelationQueryCompilationDiagnosticCodes
     /// <summary>Artifact construction failed an internal consistency check.</summary>
     public const string ArtifactInvalid = "REL2219";
 
-    /// <summary>The requested runtime result observability cannot be produced by Cosmos SQL v1.</summary>
+    /// <summary>The requested runtime result observability cannot be produced by Cosmos SQL v2.</summary>
     public const string ResultObservabilityUnsupported = "REL2220";
 
-    /// <summary>A relation terminal requires root, cardinality, key, or invariant semantics absent from the v1 artifact contract.</summary>
+    /// <summary>A relation terminal requires root, cardinality, key, or invariant semantics absent from the v2 artifact contract.</summary>
     public const string RelationTerminalUnsupported = "REL2221";
+
+    /// <summary>Exact structured collection-element binding evidence is unavailable or insufficient.</summary>
+    public const string CollectionElementEvidenceUnavailable = "REL2222";
 }

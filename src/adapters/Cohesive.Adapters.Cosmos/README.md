@@ -49,7 +49,8 @@ QueryDefinition query = statement.ToQueryDefinition();
 ```
 
 The same builder supports aliased or `SELECT VALUE` projection, object construction, in-document array
-expansion, predicates, `DISTINCT`, grouping, aggregation, ordering, and offset/limit paging. It deliberately
+expansion, correlated collection `EXISTS`, predicates, `DISTINCT`, grouping, aggregation, ordering, and
+offset/limit paging. It deliberately
 does not accept raw SQL fragments or arbitrary identifiers. `CosmosSqlCommandTemplate` can be bound repeatedly;
 `CosmosSqlStatement` and its parameter values are immutable snapshots.
 
@@ -64,7 +65,7 @@ illustrative fragment below assumes `plan`, `loadShape`, an SDK `loadsContainer`
 a `cancellationToken`; the authored query requests both a row branch and an aggregation branch. Source placement
 and the Cosmos storage binding are separate persisted interpretations of that plan. The Cosmos adapter supplies a
 conservative target profile and policy. The realization must explicitly request value results without
-contributor-occurrence lineage because Cosmos SQL v1 does not reconstruct source occurrence identities:
+contributor-occurrence lineage because Cosmos SQL v2 does not reconstruct source occurrence identities:
 
 ```csharp
 using Cohesive.Adapters.Cosmos;
@@ -172,6 +173,149 @@ Collection-element segments are retained in field selectors and selected-input p
 `Items.*.Name`) and are interpreted only through an expansion alias. Identity, partition, and ordering proofs—and
 every document path rendered directly into Cosmos SQL—remain property-only.
 
+### Correlated Structured-Collection Existentials
+
+Canonical `Any` represents an existential predicate over one structured collection. For example, this expression
+means that one stop must have both the requested location and the `Pickup` type:
+
+```csharp
+var stopsPath = FieldPath.FromField("Stops");
+var locationPath = FieldPath.FromField("Location");
+var typePath = FieldPath.FromField("Type");
+
+Expr pickupInLocation = Expr.Any(
+    Expr.Field(loadBinding, stopsPath),
+    Expr.And(
+        Expr.Eq(
+            Expr.Field($"{ExprFieldRoots.CurrentItem}.Location"),
+            Expr.Param("location")),
+        Expr.Eq(
+            Expr.Field($"{ExprFieldRoots.CurrentItem}.Type"),
+            Expr.Const("Pickup"))));
+```
+
+All reads in the predicate share one current-item scope. A load with a Seattle delivery stop and a Portland pickup
+stop therefore does not match a request for a Seattle pickup. An empty collection evaluates to false without
+removing or multiplying the root row before filtering.
+
+The outer canonical `Stops` input owns the physical child mappings and correlation evidence; the compiler does not
+invent synthetic canonical inputs for `Location` or `Type`. The following fragment illustrates the explicit
+evidence attached to that outer input. `stopsInput` is the compiled field-input identity for `Stops`; physical paths
+can differ from the semantic paths shown here:
+
+```csharp
+var exactText =
+    CosmosRelationQueryCollectionElementSemanticCapabilities.ExactEquality
+    | CosmosRelationQueryCollectionElementSemanticCapabilities.ExactInequality;
+
+CosmosRelationQueryFieldBinding stopsBinding = new(
+    stopsInput,
+    stopsPath,
+    new CosmosRelationQueryCollectionScopeEvidence(
+        semanticProfile: "loads/stops-json-array-v1",
+        elementScope: CosmosRelationQueryCollectionElementScope.JsonArrayElement,
+        correlationGuarantee: CosmosRelationQueryCollectionCorrelationGuarantee.SameArrayElement,
+        collectionMissingValueBehavior:
+            CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion,
+        collectionNullValueBehavior:
+            CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion,
+        nullElementBehavior:
+            CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion,
+        emptyCollectionBehavior: CosmosRelationQueryEmptyCollectionBehavior.NoElements,
+        childFields:
+        [
+            new(
+                locationPath,
+                FieldPath.FromField("Location"),
+                CosmosRelationQueryCollectionElementValueDomain.String,
+                exactText,
+                semanticProfile: "loads/stops-ordinal-string-v1",
+                missingValueBehavior:
+                    CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion,
+                nullValueBehavior:
+                    CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion),
+            new(
+                typePath,
+                FieldPath.FromField("Type"),
+                CosmosRelationQueryCollectionElementValueDomain.String,
+                exactText,
+                semanticProfile: "loads/stops-ordinal-string-v1",
+                missingValueBehavior:
+                    CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion,
+                nullValueBehavior:
+                    CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion)
+        ]));
+```
+
+Every evidence fact participates in normalized storage-binding and artifact identity. The compiler requires proof
+that the physical value is a JSON array, iteration produces one current element, all predicate terms retain
+same-array-element correlation, empty arrays produce no elements, and ingestion prohibits missing or null
+collections, null elements, and missing or null referenced children. Each child also attests its exact scalar value
+domain, comparison facilities, and an attributable semantic profile.
+
+When those facts and the canonical value contracts are sufficient, the compiler emits one expression-local,
+correlated subquery:
+
+```sql
+EXISTS (
+    SELECT VALUE e0
+    FROM e0 IN c["Stops"]
+    WHERE ((e0["Location"] = @p0) AND (e0["Type"] = @p1))
+)
+```
+
+The v2 closure accepts the canonical two-argument `Any(collection, predicate)` form over a direct structured source
+field. Predicates may compose direct current-element child comparisons with `And`, `Or`, and `Not`; comparisons are
+exact scalar `Eq` and `Ne` between one child field and a required, non-null constant or invocation parameter.
+Supported child domains are `Bool`, `Int32`, `String`, `Guid`, and `Date`, with equality and inequality advertised
+separately by the binding. A missing capability, incompatible domain, ambiguous operand, weak absence guarantee,
+deeper element path such as `item.Address.City`, nested collection, function, or conversion produces a structured
+diagnostic and no trustworthy artifact.
+
+These absence requirements are semantic, not merely defensive validation. Canonical `Any` treats a missing, null,
+or non-array collection as an evaluation failure rather than an empty collection. Canonical equality and inequality
+also distinguish missing from null and define `Ne` as the complement of `Eq`, whereas Cosmos propagates undefined
+through comparisons and negation and omits a non-true subquery row. In particular, weakening child evidence can
+turn `item.Code != value` or `Not(item.Code == value)` into a false negative. The compiler therefore fails closed
+instead of relying on Cosmos's implicit undefined behavior.
+
+`ARRAY_CONTAINS` is appropriate for scalar collection membership and is the physical primitive used by the
+supported canonical `Contains` closure; it is not a substitute for a correlated predicate over multiple fields of
+one structured element. A top-level `JOIN item IN c["Stops"]` represents collection expansion and can multiply root
+rows, changing projection, paging, count, and aggregation semantics. Canonical structured `Any` uses the correlated
+`EXISTS` expression above and preserves root cardinality.
+
+The standalone builder exposes the same safe physical form for callers intentionally authoring Cosmos SQL:
+
+```csharp
+var exists = CosmosSqlExpression.CollectionExists(
+    CosmosSqlExpression.Property("c", stopsPath),
+    stop => CosmosSqlExpression.Binary(
+        CosmosSqlBinaryOperator.And,
+        CosmosSqlExpression.Binary(
+            CosmosSqlBinaryOperator.Equal,
+            CosmosSqlExpression.Property(stop, locationPath),
+            CosmosSqlExpression.RuntimeParameter("location")),
+        CosmosSqlExpression.Binary(
+            CosmosSqlBinaryOperator.Equal,
+            CosmosSqlExpression.Property(stop, typePath),
+            CosmosSqlExpression.Parameter("Pickup"))));
+
+CosmosSqlStatement statement = new CosmosSqlBuilder("c")
+    .Select(CosmosSqlExpression.Property("c", FieldPath.FromField("Id")), "id")
+    .Where(exists)
+    .BuildTemplate()
+    .Bind(new Dictionary<string, object?>
+    {
+        ["location"] = "SEA"
+    });
+```
+
+`CollectionExists` allocates the item alias and parameter slots deterministically, escapes every property path, and
+keeps the item expression inside its predicate scope. As with every direct builder use, this statement has Cosmos
+semantics; only canonical compilation combines the physical expression with value contracts, binding evidence,
+capability decisions, and provenance.
+
 The compiler consumes the standalone builder but adds semantic validation. Each successful branch artifact
 retains selected-input and result-field bindings, canonical parameter contracts, paging evidence, its complete
 storage binding, deterministic artifact identity, and provenance back to the exact plan, realization decisions,
@@ -187,9 +331,9 @@ demand-scoped compiled plan and accepts only the exact native variants described
 variant produces an attributable `REL22xx` diagnostic; successful capability realization alone is not a promise
 that every shape of the operation has a Cosmos-native lowering.
 
-### Exact v1 Semantic Envelope
+### Exact v2 Semantic Envelope
 
-The default `cohesive.adapters.cosmos.sql/canonical-v1` profile and compiler support only the closure they can
+The default `cohesive.adapters.cosmos.sql/canonical-v2` profile and compiler support only the closure they can
 currently prove exact:
 
 - One placed source set bound to one Cosmos container, with no relationship traversal or cross-source stage.
@@ -201,19 +345,22 @@ currently prove exact:
 - Field and nested-field reads, invocation parameters, constants, typed field/literal sites, collection current
   items, boolean negation, supported comparisons and boolean operators, conditionals, and `contains` when their
   compiled value contracts meet the target's exactness constraints.
+- Correlated structured-collection `Any` over one direct JSON-array field, with direct required child comparisons
+  and the explicit same-element, absence, empty-array, scalar-domain, and comparison evidence described above.
 - Numeric comparison and ordering over known required, non-null `Int32` values. String and date `ORDER BY`
   additionally require the source path in the binding's `ExactOrderingPaths` proof set.
 - Ungrouped row `COUNT` (emitted as `COUNT(1)`) when the storage binding proves
   `maximumInputRows <= 2^53 - 1`.
 
-The v1 compiler rejects unsupported topology or semantics with deterministic `REL22xx` diagnostics. Notable
+The v2 compiler rejects unsupported topology or semantics with deterministic `REL22xx` diagnostics. Notable
 deferrals include relationship joins, relation-row output, cross-container queries, keyset paging, aggregate
 filters, `COUNT(expression)`, `SUM`, ungrouped `MIN`/`MAX`, aggregate ordering or paging, `GROUP BY` combined
 with `ORDER BY`, grouped aggregation without an attributable deterministic output-order strategy, expanded row
 results without collection-element ordering evidence, unordered `DISTINCT`, precision-unsafe numeric comparison
 or ordering, `DateTime`/`Instant` relational comparison or ordering, string/date `ORDER BY` without physical
-ordering evidence, and any expression or aggregate outside the advertised exact type closure. It never falls back
-to client evaluation or silently substitutes weaker Cosmos behavior.
+ordering evidence, nested collections and deeper current-element paths, and any expression or aggregate outside the
+advertised exact type closure. It never falls back to client evaluation or silently substitutes weaker Cosmos
+behavior.
 
 ### Missing, Null, Distinctness, Ordering, Paging, Parameters, and Aggregation
 
@@ -255,7 +402,7 @@ projection results. Unsupported scalar
 widths, structures, defaults, typed literals, or invocation values produce structured diagnostics or binding
 errors instead of coercion.
 
-Aggregation is intentionally conservative. Canonical v1 supports ungrouped row count, which yields one
+Aggregation is intentionally conservative. Canonical v2 supports ungrouped row count, which yields one
 deterministically positioned result row and requires an explicit positive `maximumInputRows` storage fact no greater
 than `9,007,199,254,740,991` (`2^53 - 1`), the largest integer Cosmos's binary64 JSON-number domain represents
 exactly. Grouped aggregation is deferred until an attributable output-order strategy can reproduce canonical group

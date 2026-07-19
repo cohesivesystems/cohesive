@@ -64,6 +64,10 @@ public sealed class CosmosRelationQueryStorageBindingPersistenceTests
         var binding = CreateBinding();
         var document = SerializeToObject(binding);
         Reverse(document["fields"]!.AsArray());
+        var collectionField = document["fields"]!.AsArray()
+            .Select(static field => field!.AsObject())
+            .Single(static field => field["input"]!.GetValue<string>() == "field:stops");
+        Reverse(collectionField["collectionScope"]!["childFields"]!.AsArray());
         Reverse(document["stableUniqueOrderingPaths"]!.AsArray());
         Reverse(document["exactOrderingPaths"]!.AsArray());
         Reverse(document["configurationDecisions"]!.AsArray());
@@ -199,6 +203,10 @@ public sealed class CosmosRelationQueryStorageBindingPersistenceTests
             new(new RelationQueryInputId("field:status"), FieldPath.Parse("status")),
             new(new RelationQueryInputId("field:id"), FieldPath.Parse("id")),
             new(
+                new RelationQueryInputId("field:stops"),
+                FieldPath.Parse("stops"),
+                CollectionScope()),
+            new(
                 new RelationQueryInputId("field:item-name"),
                 new FieldPath(
                 [
@@ -232,6 +240,31 @@ public sealed class CosmosRelationQueryStorageBindingPersistenceTests
         ],
         compiledPlanFingerprint: includeAffinity ? CompiledPlanFingerprint : null,
         placementFingerprint: includeAffinity ? PlacementFingerprint : null);
+
+    static CosmosRelationQueryCollectionScopeEvidence CollectionScope() => new(
+        "tests/cosmos-json-array/v1",
+        CosmosRelationQueryCollectionElementScope.JsonArrayElement,
+        CosmosRelationQueryCollectionCorrelationGuarantee.SameArrayElement,
+        CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion,
+        CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion,
+        CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion,
+        CosmosRelationQueryEmptyCollectionBehavior.NoElements,
+        [
+            CollectionChild("type", CosmosRelationQueryCollectionElementValueDomain.String),
+            CollectionChild("location", CosmosRelationQueryCollectionElementValueDomain.String)
+        ]);
+
+    static CosmosRelationQueryCollectionElementFieldBinding CollectionChild(
+        string field,
+        CosmosRelationQueryCollectionElementValueDomain valueDomain) => new(
+        FieldPath.Parse(field),
+        FieldPath.Parse(field),
+        valueDomain,
+        CosmosRelationQueryCollectionElementSemanticCapabilities.ExactEquality
+        | CosmosRelationQueryCollectionElementSemanticCapabilities.ExactInequality,
+        "tests/cosmos-json-scalar/v1",
+        CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion,
+        CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion);
 
     static JsonObject SerializeToObject(CosmosRelationQueryStorageBinding binding) =>
         JsonNode.Parse(JsonSerializer.Serialize(binding, JsonOptions))!.AsObject();

@@ -85,6 +85,52 @@ public sealed class CosmosSqlConstructionTests
     }
 
     [Fact]
+    public void BuildTemplate_CorrelatedCollectionExists_BindsScopedItemAndParametersDeterministically()
+    {
+        var predicateFactoryCalls = 0;
+        var exists = CosmosSqlExpression.CollectionExists(
+            CosmosSqlExpression.Property("c", FieldPath.FromField("Stops")),
+            item =>
+            {
+                predicateFactoryCalls++;
+                return CosmosSqlExpression.Binary(
+                    CosmosSqlBinaryOperator.And,
+                    CosmosSqlExpression.Binary(
+                        CosmosSqlBinaryOperator.Equal,
+                        CosmosSqlExpression.Property(item, FieldPath.FromField("Location")),
+                        CosmosSqlExpression.RuntimeParameter("location")),
+                    CosmosSqlExpression.Binary(
+                        CosmosSqlBinaryOperator.Equal,
+                        CosmosSqlExpression.Property(item, FieldPath.FromField("Type")),
+                        CosmosSqlExpression.Parameter("Pickup")));
+            });
+        var builder = new CosmosSqlBuilder()
+            .SelectValue(CosmosSqlExpression.Property("c", FieldPath.FromField("Id")))
+            .Where(exists);
+
+        var first = builder.BuildTemplate();
+        var second = builder.BuildTemplate();
+
+        Assert.Equal(1, predicateFactoryCalls);
+        Assert.Equal(
+            "SELECT VALUE c[\"Id\"] FROM c WHERE EXISTS (SELECT VALUE e0 FROM e0 IN c[\"Stops\"] "
+            + "WHERE ((e0[\"Location\"] = @p0) AND (e0[\"Type\"] = @p1)))",
+            first.Text);
+        Assert.Equal(first.Text, second.Text);
+        Assert.True(first.Parameters.SequenceEqual(second.Parameters));
+        Assert.Equal(
+            [CosmosSqlParameterBindingKind.Runtime, CosmosSqlParameterBindingKind.Constant],
+            first.Parameters.Select(static parameter => parameter.Kind));
+
+        var statement = first.Bind(new Dictionary<string, object?>
+        {
+            ["location"] = "Seattle"
+        });
+        Assert.Equal(["Seattle", "Pickup"], statement.Parameters.Select(static parameter => parameter.Value));
+        Assert.NotNull(statement.ToQueryDefinition());
+    }
+
+    [Fact]
     public void Build_ArrayExpansionGroupingAndAggregate_UsesOneSafeEmitter()
     {
         var statement = new CosmosSqlBuilder()

@@ -116,6 +116,75 @@ public sealed class CosmosSqlStandaloneContractTests
     }
 
     [Fact]
+    public void CollectionExists_NestedScopesAndStatementAliases_AllocateDeterministically()
+    {
+        var first = CosmosSqlExpression.CollectionExists(
+            CosmosSqlExpression.Property("e1", FieldPath.FromField("Children")),
+            item => CosmosSqlExpression.Binary(
+                CosmosSqlBinaryOperator.Equal,
+                CosmosSqlExpression.Property(item, FieldPath.FromField("Code")),
+                CosmosSqlExpression.Parameter("first")));
+        var second = CosmosSqlExpression.CollectionExists(
+            CosmosSqlExpression.Property("e1", FieldPath.FromField("Children")),
+            item => CosmosSqlExpression.CollectionExists(
+                CosmosSqlExpression.Property(item, FieldPath.FromField("Details")),
+                detail => CosmosSqlExpression.Binary(
+                    CosmosSqlBinaryOperator.Equal,
+                    CosmosSqlExpression.Property(detail, FieldPath.FromField("Value")),
+                    CosmosSqlExpression.Parameter("second"))));
+        var builder = new CosmosSqlBuilder("e0")
+            .JoinCollection("e1", CosmosSqlExpression.Property("e0", FieldPath.FromField("Items")))
+            .SelectValue(CosmosSqlExpression.Alias("e0"))
+            .Where(CosmosSqlExpression.Binary(CosmosSqlBinaryOperator.And, first, second));
+
+        var firstBuild = builder.Build();
+        var secondBuild = builder.Build();
+
+        Assert.Equal(
+            "SELECT VALUE e0 FROM e0 JOIN e1 IN e0[\"Items\"] WHERE "
+            + "(EXISTS (SELECT VALUE e2 FROM e2 IN e1[\"Children\"] WHERE (e2[\"Code\"] = @p0)) AND "
+            + "EXISTS (SELECT VALUE e3 FROM e3 IN e1[\"Children\"] WHERE EXISTS (SELECT VALUE e4 FROM e4 IN "
+            + "e3[\"Details\"] WHERE (e4[\"Value\"] = @p1))))",
+            firstBuild.Text);
+        Assert.Equal(firstBuild.Text, secondBuild.Text);
+        Assert.Equal(["first", "second"], firstBuild.Parameters.Select(static parameter => parameter.Value));
+        Assert.True(firstBuild.Parameters.SequenceEqual(secondBuild.Parameters));
+    }
+
+    [Fact]
+    public void CollectionExists_InvalidInputsAndEscapedItem_FailClosed()
+    {
+        var collection = CosmosSqlExpression.Property("c", FieldPath.FromField("Items"));
+        var nullCollection = Assert.Throws<ArgumentNullException>(() =>
+            CosmosSqlExpression.CollectionExists(
+                null!,
+                static item => item));
+        var nullPredicate = Assert.Throws<ArgumentNullException>(() =>
+            CosmosSqlExpression.CollectionExists(collection, null!));
+        var nullPredicateResult = Assert.Throws<ArgumentException>(() =>
+            CosmosSqlExpression.CollectionExists(
+                collection,
+                static _ => null!));
+
+        CosmosSqlExpression? escapedItem = null;
+        var valid = CosmosSqlExpression.CollectionExists(
+            collection,
+            item =>
+            {
+                escapedItem = item;
+                return CosmosSqlExpression.Parameter(true);
+            });
+        Assert.NotNull(new CosmosSqlBuilder().SelectValue(valid).Build());
+        var escaped = Assert.Throws<InvalidOperationException>(() =>
+            new CosmosSqlBuilder().SelectValue(escapedItem!).Build());
+
+        Assert.Equal("collection", nullCollection.ParamName);
+        Assert.Equal("predicate", nullPredicate.ParamName);
+        Assert.Equal("predicate", nullPredicateResult.ParamName);
+        Assert.Contains("outside its existential predicate scope", escaped.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Bind_ObservationObject_NormalizesNestedValuesDeterministically()
     {
         var template = new CosmosSqlBuilder()
