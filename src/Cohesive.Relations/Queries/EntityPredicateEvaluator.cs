@@ -187,7 +187,7 @@ public static class EntityPredicateEvaluator
 
     static bool MatchesAnyValue(ObservationValue value, AnyValuePredicate predicate)
     {
-        if (value.Kind != ObservationValueKind.Array || value.Array is null)
+        if (value.Kind != ObservationValueKind.Array || value.Array.IsDefault)
             return false;
 
         var normalized = predicate.Predicate.Normalize();
@@ -202,7 +202,7 @@ public static class EntityPredicateEvaluator
 
     static bool MatchesAnyField(ObservationValue value, AnyFieldPredicate predicate)
     {
-        if (value.Kind != ObservationValueKind.Array || value.Array is null)
+        if (value.Kind != ObservationValueKind.Array || value.Array.IsDefault)
             return false;
 
         var normalized = predicate.Predicate.Normalize();
@@ -278,7 +278,7 @@ public static class EntityPredicateEvaluator
 
         foreach (var candidate in current)
         {
-            if (candidate.Kind == ObservationValueKind.Array && candidate.Array is not null)
+            if (candidate.Kind == ObservationValueKind.Array && !candidate.Array.IsDefault)
             {
                 foreach (var item in candidate.Array)
                     yield return item;
@@ -305,7 +305,7 @@ public static class EntityPredicateEvaluator
     {
         foreach (var value in values)
         {
-            if (value.Kind != ObservationValueKind.Array || value.Array is null)
+            if (value.Kind != ObservationValueKind.Array || value.Array.IsDefault)
                 continue;
 
             foreach (var item in value.Array)
@@ -338,7 +338,9 @@ public static class EntityPredicateEvaluator
         latitude = 0;
         longitude = 0;
 
-        if (value.Kind == ObservationValueKind.Array && value.Array is { Length: >= 2 })
+        if (value.Kind == ObservationValueKind.Array
+            && !value.Array.IsDefault
+            && value.Array.Length >= 2)
         {
             if (value.Array[0].TryGetDouble(out latitude) && value.Array[1].TryGetDouble(out longitude))
                 return true;

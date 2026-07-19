@@ -41,6 +41,8 @@ public sealed class ExpressionAuthoredAdapterCompilationTests
         var storage = CosmosRelationQueryBinding.For(
                 placedInput,
                 explicitAuthority: "tests/cosmos-expression/v1")
+            .Account(new Uri("https://localhost:8081"))
+            .Database("operations")
             .Container("loads")
             .Identity(load => load.Id)
             .FieldsBySemanticPath()
@@ -68,8 +70,9 @@ public sealed class ExpressionAuthoredAdapterCompilationTests
 
         var aggregation = Assert.Single(result.Artifacts, static artifact =>
             artifact.Branch.Kind == RelationQueryNativeResultKind.QueryAggregation);
-        Assert.Contains("COUNT(1)", aggregation.Statement.Text, StringComparison.Ordinal);
-        Assert.Contains("GROUP BY c[\"status\"]", aggregation.Statement.Text, StringComparison.Ordinal);
+        Assert.Equal(
+            "SELECT COUNT(1) AS f0 FROM c WHERE (c[\"status\"] = @p0)",
+            aggregation.Statement.Text);
         AssertConfigurationDecision(
             storage.ConfigurationDecisions,
             "maximumInputRows",
@@ -193,12 +196,11 @@ public sealed class ExpressionAuthoredAdapterCompilationTests
             ordered,
             new OffsetPageDefinition(limit: 25),
             sourceReference: "portable-loads/page");
-        var summary = author.Aggregate<FilterQueryNode, StatusCount>(
+        var summary = author.Aggregate<FilterQueryNode, PortableLoadCount>(
             filtered,
             aggregate => aggregate
-                .Group(result => result.Status, (PortableLoad load) => load.Status, loads.Binding)
                 .Count(result => result.Count),
-            sourceReference: "portable-loads/aggregate-status");
+            sourceReference: "portable-loads/count");
         var rows = author.Rows(paged, projected.Binding, id: "rows");
         var aggregation = author.Aggregation(summary, id: "status-counts");
         var authored = author.BuildQuery(
@@ -321,11 +323,8 @@ public sealed class ExpressionAuthoredAdapterCompilationTests
         public required string Status { get; init; }
     }
 
-    sealed class StatusCount
+    sealed class PortableLoadCount
     {
-        [JsonPropertyName("status")]
-        public required string Status { get; init; }
-
         [JsonPropertyName("count")]
         public long Count { get; init; }
     }

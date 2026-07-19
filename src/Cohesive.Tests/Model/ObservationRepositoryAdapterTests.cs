@@ -154,27 +154,25 @@ public sealed class ObservationRepositoryAdapterTests
     }
 
     [Fact]
-    public void CosmosObservationOutboxRepository_BuildOrderByClause_UsesCanonicalObservationDocumentPaths()
+    public void CosmosObservationOutboxRepositoryOptions_RequireDistinctNonemptyDocumentKinds()
     {
-        var clause = CosmosEntityOutboxRepository.BuildOrderByClause(
-        [
-            new(FieldPath.FromField("TimestampUtc")),
-            new(FieldPath.Parse("Context.Partner"), Descending: true)
-        ]);
+        Assert.Throws<ArgumentException>(() =>
+            CosmosObservationOutboxRepositoryOptions.RequireValid(new() { EntityDocumentKind = " " }));
+        Assert.Throws<ArgumentException>(() =>
+            CosmosObservationOutboxRepositoryOptions.RequireValid(new() { OutboxDocumentKind = string.Empty }));
+        Assert.Throws<ArgumentException>(() =>
+            CosmosObservationOutboxRepositoryOptions.RequireValid(new()
+            {
+                EntityDocumentKind = "document",
+                OutboxDocumentKind = "document"
+            }));
 
-        Assert.Equal(
-            "c.observation.TimestampUtc ASC, c.observation.Context.Partner DESC",
-            clause);
-        Assert.DoesNotContain("IIF(", clause, StringComparison.Ordinal);
-        Assert.DoesNotContain("[\"", clause, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void CosmosObservationOutboxRepository_BuildOrderByClause_WithoutExplicitFields_FallsBackToDocumentId()
-    {
-        var clause = CosmosEntityOutboxRepository.BuildOrderByClause(null);
-
-        Assert.Equal("c.id ASC", clause);
+        var options = new CosmosObservationOutboxRepositoryOptions
+        {
+            EntityDocumentKind = "entity-v2",
+            OutboxDocumentKind = "outbox-v2"
+        };
+        Assert.Same(options, CosmosObservationOutboxRepositoryOptions.RequireValid(options));
     }
 
     static CosmosObservationContainerDocument CreateDocument(

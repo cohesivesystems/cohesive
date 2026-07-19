@@ -107,7 +107,7 @@ public static class ObservationShapeValidator
             }
 
             var items = value.EnumerateArray();
-            for (var i = 0; i < items.Count; i++)
+            for (var i = 0; i < items.Length; i++)
             {
                 var item = items[i];
                 if (item.Kind is ObservationValueKind.Null or ObservationValueKind.Undefined)
@@ -210,7 +210,7 @@ public static class ObservationShapeValidator
                 }
 
                 var items = value.EnumerateArray();
-                for (var i = 0; i < items.Count; i++)
+                for (var i = 0; i < items.Length; i++)
                 {
                     if (!TryMatchType(
                             type: arrayType.ElementType,
@@ -444,7 +444,7 @@ public static class ObservationShapeValidator
                 }
 
                 var items = fieldValue.EnumerateArray();
-                for (var i = 0; i < items.Count; i++)
+                for (var i = 0; i < items.Length; i++)
                 {
                     var item = items[i];
                     if (item.Kind is ObservationValueKind.Null or ObservationValueKind.Undefined)

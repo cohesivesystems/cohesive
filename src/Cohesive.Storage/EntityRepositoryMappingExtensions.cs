@@ -66,7 +66,7 @@ public static class EntityRepositoryMappingExtensions
     }
 
     /// <summary>
-    /// Streams rows from the temporary Cosmos-compatible legacy entity query response.
+    /// Streams rows from the deletion-boundary legacy entity query response.
     /// </summary>
     /// <remarks>New query consumers should execute canonical relation/query evaluations.</remarks>
     /// <param name="repository">Legacy query repository to execute.</param>
@@ -96,7 +96,7 @@ public static class EntityRepositoryMappingExtensions
     }
 
     /// <summary>
-    /// Materializes entity values from the temporary Cosmos-compatible legacy query facade.
+    /// Materializes entity values from the deletion-boundary legacy query facade.
     /// </summary>
     /// <remarks>New query consumers should execute canonical relation/query evaluations.</remarks>
     /// <param name="repository">Legacy query repository to execute.</param>

@@ -444,7 +444,7 @@ public sealed class QueryExecutionEngine(IReadRepositoryRegistry repositoryRegis
     {
         foreach (var value in values)
         {
-            if (value.Kind != ObservationValueKind.Array || value.Array is null)
+            if (value.Kind != ObservationValueKind.Array || value.Array.IsDefault)
                 continue;
 
             foreach (var element in value.Array)

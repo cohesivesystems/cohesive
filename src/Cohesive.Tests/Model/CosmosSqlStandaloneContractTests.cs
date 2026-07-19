@@ -142,29 +142,20 @@ public sealed class CosmosSqlStandaloneContractTests
     }
 
     [Fact]
-    public void Parameter_RejectsCyclicStructuredValues()
+    public void Parameter_RejectsCyclicClrStructuredValues()
     {
         List<object?> cyclicSequence = [];
         cyclicSequence.Add(cyclicSequence);
         Dictionary<string, object?> cyclicObject = new(StringComparer.Ordinal);
         cyclicObject.Add("self", cyclicObject);
-        Dictionary<string, ObservationValue> cyclicObservationFields = new(StringComparer.Ordinal)
-        {
-            ["self"] = ObservationValue.Null
-        };
-        var cyclicObservation = ObservationValue.FromObject(cyclicObservationFields);
-        cyclicObservationFields["self"] = cyclicObservation;
 
         var sequenceException = Assert.Throws<NotSupportedException>(
             () => CosmosSqlExpression.Parameter(cyclicSequence));
         var objectException = Assert.Throws<NotSupportedException>(
             () => CosmosSqlExpression.Parameter(cyclicObject));
-        var observationException = Assert.Throws<NotSupportedException>(
-            () => CosmosSqlExpression.Parameter(cyclicObservation));
 
         Assert.Contains("Cyclic structured values", sequenceException.Message, StringComparison.Ordinal);
         Assert.Contains("Cyclic structured values", objectException.Message, StringComparison.Ordinal);
-        Assert.Contains("Cyclic structured values", observationException.Message, StringComparison.Ordinal);
     }
 
     [Fact]

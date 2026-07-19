@@ -476,7 +476,7 @@ sealed class RelationQueryExpressionEvaluator
         var value = Evaluate(call.Arguments[0], context);
         return value.Kind switch
         {
-            ObservationValueKind.Array => ObservationValue.FromInt64(value.Array?.Length ?? 0),
+            ObservationValueKind.Array => ObservationValue.FromInt64(value.Array.IsDefault ? 0 : value.Array.Length),
             ObservationValueKind.Object => ObservationValue.FromInt64(value.Fields?.Count ?? 0),
             _ => throw InvalidOperand(
                 $"Expression function '{call.Function}' requires an array or object, but received '{value.Kind}'.")
@@ -715,7 +715,7 @@ sealed class RelationQueryExpressionEvaluator
 
     static IReadOnlyList<ObservationValue> RequireArray(ObservationValue value, string operation)
     {
-        if (value.Kind != ObservationValueKind.Array || value.Array is null)
+        if (value.Kind != ObservationValueKind.Array || value.Array.IsDefault)
             throw InvalidOperand($"Operation '{operation}' requires an array, but received '{value.Kind}'.");
         return value.Array;
     }

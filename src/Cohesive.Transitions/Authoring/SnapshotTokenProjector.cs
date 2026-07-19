@@ -104,7 +104,7 @@ public static class SnapshotTokenProjector
             {
                 AppendByte(hash, ArrayMarker);
                 var arrayValues = value.Array;
-                if (arrayValues is null)
+                if (arrayValues.IsDefault)
                 {
                     AppendInt32(hash, 0);
                     return;

@@ -11,6 +11,8 @@ namespace Cohesive.Tests.Model;
 
 public sealed class CosmosRelationQueryBindingAuthoringTests
 {
+    static readonly Uri AccountEndpoint = new("https://localhost:8081/");
+    const string DatabaseName = "operations";
     static readonly FieldPath IdPath = FieldPath.FromField("id");
     static readonly FieldPath StatusPath = FieldPath.FromField("status");
 
@@ -20,6 +22,8 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
         var fixture = CreateRowFixture();
 
         var authored = CosmosRelationQueryBinding.For(fixture.Placed)
+            .Account(AccountEndpoint)
+            .Database(DatabaseName)
             .Container("loads")
             .Identity(load => load.Id)
             .Field(load => load.Id, FieldPath.FromField("documentId"))
@@ -56,10 +60,12 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
     }
 
     [Fact]
-    public void Build_ExpressionAuthoredAggregationFlowsThroughPlacementBindingAndCosmosCompilation()
+    public void Build_ExpressionAuthoredGroupedAggregationFailsWithoutDeterministicOrderingStrategy()
     {
         var fixture = CreateAggregationFixture();
         var binding = CosmosRelationQueryBinding.For(fixture.Placed)
+            .Account(AccountEndpoint)
+            .Database(DatabaseName)
             .Container("loads")
             .IdentityDocumentPath(IdPath)
             .MaximumInputRows(10_000)
@@ -76,11 +82,11 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
             new(fixture.Plan, realization, fixture.AuthoredPlacement.Placement),
             binding);
 
-        Assert.True(compilation.IsSuccessful, Format(compilation.Diagnostics));
-        var artifact = Assert.Single(compilation.Artifacts);
-        Assert.Equal(RelationQueryNativeResultKind.QueryAggregation, artifact.Branch.Kind);
-        Assert.Contains("COUNT(1)", artifact.Statement.Text, StringComparison.Ordinal);
-        Assert.Contains("GROUP BY c[\"status\"]", artifact.Statement.Text, StringComparison.Ordinal);
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, compilation.Status);
+        var diagnostic = Assert.Single(compilation.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable);
+        Assert.Contains("deterministic order", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Empty(compilation.Artifacts);
         AssertDecision(
             binding,
             "maximumInputRows",
@@ -94,6 +100,8 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
         var fixture = CreateRowFixture();
 
         var binding = CosmosRelationQueryBinding.For(fixture.Placed)
+            .Account(AccountEndpoint)
+            .Database(DatabaseName)
             .Container("loads")
             .Identity(load => load.Id)
             .Build()
@@ -105,6 +113,25 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
     }
 
     [Fact]
+    public void Build_MissingPhysicalLocationReportsAllRequiredAffinityFacts()
+    {
+        var fixture = CreateRowFixture();
+
+        var result = CosmosRelationQueryBinding.For(fixture.Placed)
+            .Identity(load => load.Id)
+            .Build();
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(
+            ["accountEndpoint", "containerName", "databaseName"],
+            result.Diagnostics
+                .Where(static diagnostic =>
+                    diagnostic.Code == CosmosRelationQueryBindingAuthoringDiagnosticCodes.BindingMissing)
+                .Select(static diagnostic => diagnostic.Setting)
+                .Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
     public void Build_PlacementSelectorsAndEffectiveFieldOverridesProducePhysicalIdentityAndPartitionPaths()
     {
         var fixture = CreateRowFixture(
@@ -112,6 +139,8 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
             partitionByStatus: true);
 
         var binding = CosmosRelationQueryBinding.For(fixture.Placed)
+            .Account(AccountEndpoint)
+            .Database(DatabaseName)
             .Container("loads")
             .AtDocumentRoot(FieldPath.FromField("payload"))
             .Field(load => load.Status, FieldPath.FromField("state"))
@@ -128,6 +157,8 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
         var fixture = CreateRowFixture();
         var options = new CosmosRelationQueryBindingAuthoringOptions(
             "tests/cosmos-profile/v1",
+            accountEndpoint: new Uri("https://profile.documents.azure.com"),
+            databaseName: "profile-operations",
             containerName: "profile-loads",
             rootAlias: "profileRoot",
             identityPath: FieldPath.FromField("profileId"),
@@ -141,6 +172,8 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
                 fixture.Placed,
                 options,
                 explicitAuthority: "tests/local-overrides/v1")
+            .Account(AccountEndpoint)
+            .Database(DatabaseName)
             .Container("loads")
             .RootAlias("localRoot")
             .Identity(load => load.Id)
@@ -150,12 +183,16 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
         Assert.True(result.IsSuccess, Format(result.Diagnostics));
         var binding = result.RequireValue();
         Assert.Equal(CosmosRelationQueryBindingOrigin.Explicit, binding.Origin);
+        Assert.Equal(AccountEndpoint, binding.AccountEndpoint);
+        Assert.Equal(DatabaseName, binding.DatabaseName);
         Assert.Equal("localRoot", binding.RootAlias);
         Assert.Equal(IdPath, binding.IdentityPath);
         Assert.Equal(
             FieldPath.FromField("localStatus"),
             binding.ResolveField(fixture.Placed.GetField(load => load.Status).Input.Id));
         AssertDecision(binding, "rootAlias", RelationQueryConfigurationValueOrigin.Explicit, "tests/local-overrides/v1");
+        AssertDecision(binding, "accountEndpoint", RelationQueryConfigurationValueOrigin.Explicit, "tests/local-overrides/v1");
+        AssertDecision(binding, "databaseName", RelationQueryConfigurationValueOrigin.Explicit, "tests/local-overrides/v1");
         AssertDecision(binding, "containerName", RelationQueryConfigurationValueOrigin.Explicit, "tests/local-overrides/v1");
         AssertDecision(binding, "identityPath", RelationQueryConfigurationValueOrigin.Explicit, "tests/local-overrides/v1");
         AssertDecision(binding, "maximumInputRows", RelationQueryConfigurationValueOrigin.ScopedProfile, "tests/cosmos-profile/v1");
@@ -184,6 +221,8 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
         [
             "target",
             "targetProfile",
+            "accountEndpoint",
+            "databaseName",
             "containerName",
             "rootAlias",
             "identityPath",
@@ -254,6 +293,8 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
         CosmosRelationQueryBindingId id = new("tests/cosmos-differential/v1");
 
         var typed = CosmosRelationQueryBinding.For(fixture.Placed)
+            .Account(AccountEndpoint)
+            .Database(DatabaseName)
             .Container("loads")
             .WithId(id)
             .Identity(load => load.Id)
@@ -262,6 +303,8 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
             .Build()
             .RequireValue();
         var structural = CosmosRelationQueryBinding.For((RelationQueryPlacedInput)fixture.Placed)
+            .Account(AccountEndpoint)
+            .Database(DatabaseName)
             .Container("loads")
             .WithId(id)
             .Identity(fixture.Placed.GetField(IdPath))
@@ -282,6 +325,8 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
         var fixture = CreateRowFixture();
         var firstOptions = new CosmosRelationQueryBindingAuthoringOptions(
             "tests/order/v1",
+            accountEndpoint: new Uri("https://LOCALHOST:8081"),
+            databaseName: DatabaseName,
             fieldPaths: new Dictionary<FieldPath, FieldPath>
             {
                 [IdPath] = FieldPath.FromField("documentId"),
@@ -291,6 +336,8 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
             exactOrderingPaths: [FieldPath.FromField("documentId"), FieldPath.FromField("state")]);
         var reversedOptions = new CosmosRelationQueryBindingAuthoringOptions(
             "tests/order/v1",
+            accountEndpoint: AccountEndpoint,
+            databaseName: DatabaseName,
             fieldPaths: new Dictionary<FieldPath, FieldPath>
             {
                 [StatusPath] = FieldPath.FromField("state"),
@@ -323,11 +370,15 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
         var firstFixture = CreateRowFixture(placementConventionSetVersion: "tests/placement/v1");
         var secondFixture = CreateRowFixture(placementConventionSetVersion: "tests/placement/v2");
         var first = CosmosRelationQueryBinding.For(firstFixture.Placed)
+            .Account(AccountEndpoint)
+            .Database(DatabaseName)
             .Container("loads")
             .Identity(load => load.Id)
             .Build()
             .RequireValue();
         var second = CosmosRelationQueryBinding.For(secondFixture.Placed)
+            .Account(AccountEndpoint)
+            .Database(DatabaseName)
             .Container("loads")
             .Identity(load => load.Id)
             .Build()
@@ -345,6 +396,8 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
         var fixture = CreateRowFixture();
 
         var result = CosmosRelationQueryBinding.For(fixture.Placed)
+            .Account(AccountEndpoint)
+            .Database(DatabaseName)
             .Container("loads")
             .IdentityDocumentPath(IdPath)
             .FieldsExplicitly()
@@ -364,6 +417,8 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
         var fixture = CreateRowFixture();
 
         var result = CosmosRelationQueryBinding.For(fixture.Placed)
+            .Account(AccountEndpoint)
+            .Database(DatabaseName)
             .Container("loads")
             .Identity(load => load.Id)
             .Field(load => load.Status, FieldPath.FromField("state"))
@@ -386,6 +441,10 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
         var fixture = CreateRowFixture();
 
         var result = CosmosRelationQueryBinding.For(fixture.Placed)
+            .Account(AccountEndpoint)
+            .Account(new Uri("https://other.documents.azure.com"))
+            .Database(DatabaseName)
+            .Database("other-operations")
             .Container("loads")
             .Container("other-loads")
             .WithId(new("tests/first"))
@@ -418,6 +477,8 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
             .ToHashSet(StringComparer.Ordinal);
         HashSet<string> expectedSettings =
         [
+            "accountEndpoint",
+            "databaseName",
             "containerName",
             "bindingId",
             "rootAlias",
@@ -446,6 +507,8 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
             stableUniqueOrderingPaths: [default]);
 
         var result = CosmosRelationQueryBinding.For(fixture.Placed, options)
+            .Account(AccountEndpoint)
+            .Database(DatabaseName)
             .Container("loads")
             .Identity(load => load.Id)
             .StableUnique(load => load.Status)
@@ -464,6 +527,8 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
         var status = FieldPath.FromField("status");
         var options = new CosmosRelationQueryBindingAuthoringOptions(
             "tests/repeated-scoped-evidence/v1",
+            accountEndpoint: AccountEndpoint,
+            databaseName: DatabaseName,
             containerName: "loads",
             stableUniqueOrderingPaths: [status, status]);
 
@@ -479,13 +544,15 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
     }
 
     [Fact]
-    public void Build_InvalidScopedContainerAndBindingIdReturnSpecificConfigurationDiagnostics()
+    public void Build_InvalidScopedPhysicalLocationAndBindingIdReturnSpecificConfigurationDiagnostics()
     {
         var fixture = CreateRowFixture();
         CosmosRelationQueryBindingId defaultId = default;
         var options = new CosmosRelationQueryBindingAuthoringOptions(
             "tests/invalid-scalars/v1",
             bindingId: defaultId,
+            accountEndpoint: new Uri("relative-account", UriKind.Relative),
+            databaseName: " ",
             containerName: " ");
 
         var result = CosmosRelationQueryBinding.For(fixture.Placed, options)
@@ -493,6 +560,12 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
             .Build();
 
         Assert.False(result.IsSuccess);
+        Assert.Contains(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryBindingAuthoringDiagnosticCodes.ConfigurationConflict
+            && diagnostic.Setting == "accountEndpoint");
+        Assert.Contains(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryBindingAuthoringDiagnosticCodes.ConfigurationConflict
+            && diagnostic.Setting == "databaseName");
         Assert.Contains(result.Diagnostics, static diagnostic =>
             diagnostic.Code == CosmosRelationQueryBindingAuthoringDiagnosticCodes.ConfigurationConflict
             && diagnostic.Setting == "containerName");
@@ -509,6 +582,8 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
         var fixture = CreateRowFixture();
         var options = new CosmosRelationQueryBindingAuthoringOptions(
             "tests/invalid-field-convention/v1",
+            accountEndpoint: AccountEndpoint,
+            databaseName: DatabaseName,
             containerName: "loads",
             fieldPaths: new Dictionary<FieldPath, FieldPath>
             {
@@ -531,6 +606,8 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
         var fixture = CreateRowFixture(ElasticRelationQueryTargetProfile.Default);
 
         var result = CosmosRelationQueryBinding.For(fixture.Placed)
+            .Account(AccountEndpoint)
+            .Database(DatabaseName)
             .Container("loads")
             .Identity(load => load.Id)
             .Build();
@@ -545,6 +622,8 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
     {
         var fixture = CreateRowFixture();
         var binding = CosmosRelationQueryBinding.For(fixture.Placed)
+            .Account(AccountEndpoint)
+            .Database(DatabaseName)
             .Container("loads")
             .Identity(load => load.Id)
             .ExactOrdering(load => load.Id)

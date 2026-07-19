@@ -388,13 +388,19 @@ public sealed record RelationQuerySourceReadObservation
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum RelationQuerySourceReadState
 {
-    /// <summary>The request completed authoritatively, including an empty result.</summary>
+    /// <summary>
+    /// This request exhausted its declared acquisition boundary authoritatively, including an empty result. The state
+    /// does not assert temporal atomicity with separate source requests.
+    /// </summary>
     Complete = 0,
 
     /// <summary>The request returned attributable rows but cannot claim complete results.</summary>
     Partial = 1,
 
-    /// <summary>The request authoritatively proved that no matching observation exists.</summary>
+    /// <summary>
+    /// This request authoritatively proved that no matching observation existed within its acquisition boundary. The
+    /// state does not assert temporal atomicity with separate source requests.
+    /// </summary>
     NotFound = 2,
 
     /// <summary>The source request failed.</summary>
@@ -412,7 +418,7 @@ public sealed class RelationQuerySourceReadResult
     /// <summary>Creates a physical source-read result.</summary>
     /// <param name="state">Overall read outcome.</param>
     /// <param name="observations">Identity-bearing observations returned by complete or partial reads.</param>
-    /// <param name="evidenceReference">Optional opaque acquisition, snapshot, or failure reference.</param>
+    /// <param name="evidenceReference">Optional opaque acquisition, provider-version, or failure reference.</param>
     /// <exception cref="ArgumentException">
     /// <paramref name="observations"/> contains a <see langword="null"/> entry or duplicate identity, observations are
     /// supplied for a state that cannot carry rows, or <paramref name="evidenceReference"/> is empty or white space.
@@ -455,10 +461,13 @@ public sealed class RelationQuerySourceReadResult
     /// <summary>Returned observations in deterministic identity order.</summary>
     public ImmutableArray<RelationQuerySourceReadObservation> Observations { get; }
 
-    /// <summary>Opaque acquisition, snapshot, or failure reference, or <see langword="null"/>.</summary>
+    /// <summary>Opaque acquisition, provider-version, or failure reference, or <see langword="null"/>.</summary>
     public string? EvidenceReference { get; }
 
-    /// <summary>Whether absence from this result is authoritative.</summary>
+    /// <summary>
+    /// Whether absence is authoritative for this exact source request and acquisition boundary. Complete evidence
+    /// does not by itself establish a consistent snapshot across multiple requests.
+    /// </summary>
     [JsonIgnore]
     public RelationQueryEvidenceCompleteness Completeness =>
         State is RelationQuerySourceReadState.Complete or RelationQuerySourceReadState.NotFound
@@ -508,7 +517,10 @@ public interface IRelationQuerySourceReader
     /// <summary>Executes one bounded, exactly projected source request.</summary>
     /// <param name="request">Plan-attributed source request.</param>
     /// <param name="cancellationToken">Token that cancels source I/O and result materialization.</param>
-    /// <returns>The complete, partial, not-found, failed, or inconclusive source outcome.</returns>
+    /// <returns>
+    /// The complete, partial, not-found, failed, or inconclusive outcome for this exact acquisition. Completeness is
+    /// request-local unless a separate capability guarantees consistency across requests.
+    /// </returns>
     /// <exception cref="ArgumentNullException"><paramref name="request"/> is <see langword="null"/>.</exception>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> is canceled.</exception>
     /// <remarks>Expected provider failures should be returned as evidence-bearing results; cancellation propagates.</remarks>

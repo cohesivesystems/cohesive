@@ -639,7 +639,7 @@ public sealed class DeclarativeEntityRuntime
 
     static ObservationValue InsertAt(ObservationValue source, ObservationValue indexValue, ObservationValue item, string entityId)
     {
-        if (source.Kind != ObservationValueKind.Array || source.Array is null)
+        if (source.Kind != ObservationValueKind.Array || source.Array.IsDefault)
             throw new SemanticRuleViolationException($"Function 'insertAt' expects an array as first argument on entity '{entityId}'.");
 
         var index = AsInt32(indexValue, "insertAt index");
@@ -664,7 +664,7 @@ public sealed class DeclarativeEntityRuntime
 
     static ObservationValue Append(ObservationValue source, ObservationValue item, string entityId)
     {
-        if (source.Kind != ObservationValueKind.Array || source.Array is null)
+        if (source.Kind != ObservationValueKind.Array || source.Array.IsDefault)
             throw new SemanticRuleViolationException($"Function 'append' expects an array as first argument on entity '{entityId}'.");
 
         List<ObservationValue> result = new(source.Array.Length + 1);
@@ -675,10 +675,10 @@ public sealed class DeclarativeEntityRuntime
 
     static ObservationValue InsertRangeAt(ObservationValue source, ObservationValue indexValue, ObservationValue items, string entityId)
     {
-        if (source.Kind != ObservationValueKind.Array || source.Array is null)
+        if (source.Kind != ObservationValueKind.Array || source.Array.IsDefault)
             throw new SemanticRuleViolationException($"Function 'insertRangeAt' expects an array as first argument on entity '{entityId}'.");
 
-        if (items.Kind != ObservationValueKind.Array || items.Array is null)
+        if (items.Kind != ObservationValueKind.Array || items.Array.IsDefault)
             throw new SemanticRuleViolationException($"Function 'insertRangeAt' expects an array as third argument on entity '{entityId}'.");
 
         var index = AsInt32(indexValue, "insertRangeAt index");
@@ -699,10 +699,10 @@ public sealed class DeclarativeEntityRuntime
 
     static ObservationValue AppendRange(ObservationValue source, ObservationValue items, string entityId)
     {
-        if (source.Kind != ObservationValueKind.Array || source.Array is null)
+        if (source.Kind != ObservationValueKind.Array || source.Array.IsDefault)
             throw new SemanticRuleViolationException($"Function 'appendRange' expects an array as first argument on entity '{entityId}'.");
 
-        if (items.Kind != ObservationValueKind.Array || items.Array is null)
+        if (items.Kind != ObservationValueKind.Array || items.Array.IsDefault)
             throw new SemanticRuleViolationException($"Function 'appendRange' expects an array as second argument on entity '{entityId}'.");
 
         List<ObservationValue> result = new(source.Array.Length + items.Array.Length);

@@ -211,7 +211,7 @@ static class CanonicalJsonWriter
                 return;
             case ObservationValueKind.Array:
                 writer.WriteStartArray();
-                if (value.Array is not null)
+                if (!value.Array.IsDefault)
                 {
                     foreach (var item in value.Array)
                         WriteCanonicalObservationValue(writer, item);

@@ -24,7 +24,7 @@ static class RelationQueryPortableObservationValueSemantics
                     return true;
             }
         }
-        else if (value.Kind == ObservationValueKind.Array && value.Array is not null)
+        else if (value.Kind == ObservationValueKind.Array && !value.Array.IsDefault)
         {
             foreach (var child in value.Array)
             {

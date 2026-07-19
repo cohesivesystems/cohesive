@@ -51,52 +51,44 @@ public sealed class CosmosRelationQueryCompilerTests
     }
 
     [Fact]
-    public void Compile_Aggregation_EmitsGroupedCountAndMinimumWithResultBindings()
+    public void Compile_UngroupedRowCount_ProducesDeterministicSingleRowArtifact()
     {
-        var fixture = Fixture.Aggregation();
+        var fixture = Fixture.UngroupedRowCount();
 
         var result = fixture.Compile();
 
         Assert.True(result.IsSuccessful, Diagnostics(result));
         var artifact = Assert.Single(result.Artifacts);
         Assert.Equal(RelationQueryNativeResultKind.QueryAggregation, artifact.Branch.Kind);
+        Assert.Equal("SELECT COUNT(1) AS f0 FROM c", artifact.Statement.Text);
+        Assert.Empty(artifact.SelectedFields);
+        Assert.Equal("Count", Assert.Single(artifact.ResultFields).Field.Path.ToString());
         Assert.Equal(
-            "SELECT COUNT(1) AS f0, MIN(c[\"Amount\"]) AS f1, c[\"Status\"] AS f2 "
-            + "FROM c GROUP BY c[\"Status\"]",
-            artifact.Statement.Text);
-        Assert.Equal(["Amount", "Status"], artifact.SelectedFields.Select(FieldPathText));
-        Assert.Equal(["Count", "Total", "Status"], artifact.ResultFields.Select(field => field.Field.Path.ToString()));
-        Assert.Equal(
-            [
-                CosmosRelationQueryResultValueEncoding.ExactCountInteger,
-                CosmosRelationQueryResultValueEncoding.JsonInt32,
-                CosmosRelationQueryResultValueEncoding.JsonString
-            ],
-            artifact.ResultFields.Select(static field => field.Encoding));
+            CosmosRelationQueryResultValueEncoding.ExactCountInteger,
+            Assert.Single(artifact.ResultFields).Encoding);
         Assert.Equal(
             new ScalarTypeRef(ScalarTypeKind.Int64),
-            artifact.ResultFields[0].ValueContract.GetEffectiveType());
-        Assert.Equal(3, artifact.Provenance.CoveredAssignments.Length);
+            Assert.Single(artifact.ResultFields).ValueContract.GetEffectiveType());
+        Assert.Single(artifact.Provenance.CoveredAssignments);
         Assert.Null(artifact.Paging);
     }
 
     [Fact]
-    public void Compile_GroupedMaximum_UsesExactInt32AggregateEncoding()
+    public void Compile_GroupedAggregation_FailsWithoutDeterministicResultOrdering()
     {
         var result = Fixture.Aggregation(AggregateOperator.Max).Compile();
 
-        Assert.True(result.IsSuccessful, Diagnostics(result));
-        var artifact = Assert.Single(result.Artifacts);
-        Assert.Contains("MAX(c[\"Amount\"]) AS f1", artifact.Statement.Text, StringComparison.Ordinal);
-        Assert.Equal(
-            CosmosRelationQueryResultValueEncoding.JsonInt32,
-            artifact.ResultFields[1].Encoding);
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable);
+        Assert.Contains("deterministic order", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Empty(result.Artifacts);
     }
 
     [Fact]
     public void Compile_RowCountWithoutExactInputBound_FailsClosed()
     {
-        var fixture = Fixture.Aggregation();
+        var fixture = Fixture.UngroupedRowCount();
 
         var result = fixture.Compile(fixture.StorageBindingWithMaximumInputRows(null));
 
@@ -309,6 +301,26 @@ public sealed class CosmosRelationQueryCompilerTests
     }
 
     [Fact]
+    public void Compile_RequiredStringEquality_MatchesLegacyCompilerOverlapOracle()
+    {
+        var canonicalArtifact = Assert.Single(Fixture.Row().Compile().Artifacts);
+        var canonical = canonicalArtifact.Bind(new Dictionary<QueryParameterId, ObservationValue>
+        {
+            [new("status")] = ObservationValue.FromString("active")
+        });
+        var legacy = new CosmosSqlQueryCompiler().Compile(new EntityPredicate(
+            new FieldPredicate(
+                Fixture.StatusPath,
+                new ExactValuePredicate("active"))));
+        const string sharedEquality = "c[\"Status\"] = @p0";
+
+        Assert.Contains(sharedEquality, canonical.Text, StringComparison.Ordinal);
+        Assert.Contains(sharedEquality, legacy.Text, StringComparison.Ordinal);
+        Assert.Equal("active", Assert.Single(canonical.Parameters).Value);
+        Assert.Equal("active", Assert.Single(legacy.Parameters).Value);
+    }
+
+    [Fact]
     public void Compile_StaleRealizationOrPlacement_IsInvalidBeforeLowering()
     {
         var current = Fixture.Row(offset: 5);
@@ -470,25 +482,52 @@ public sealed class CosmosRelationQueryCompilerTests
         Assert.True(result.IsSuccessful, Diagnostics(result));
         var artifact = Assert.Single(result.Artifacts);
         Assert.Equal(
-            "SELECT DISTINCT c[\"Id\"] AS f0, c[\"Status\"] AS __distinct0 FROM c",
+            "SELECT DISTINCT c[\"Id\"] AS f0, c[\"Status\"] AS __distinct0 FROM c "
+            + "ORDER BY c[\"Id\"] ASC",
             artifact.Statement.Text);
         Assert.Equal(["Id", "Status"], artifact.SelectedFields.Select(FieldPathText));
         Assert.Equal("Id", Assert.Single(artifact.ResultFields).Field.Path.ToString());
     }
 
     [Fact]
-    public void Compile_ExpansionFieldWithExplicitItemBinding_UsesJoinAlias()
+    public void Compile_UnorderedWholeRowDistinct_FailsClosed()
+    {
+        var result = Fixture.DistinctSelectedId(ordered: false).Compile();
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable);
+        Assert.Contains("first-seen row order", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
+    public void Compile_ImplicitIdentityOrdering_RequiresExactOrderingEvidence()
+    {
+        var fixture = Fixture.Int32LiteralEquality(ObservationValue.FromInt64(42));
+        var binding = fixture.StorageBindingWithOrderingProofs(
+            stableUniqueOrderingPaths: [Fixture.IdPath],
+            exactOrderingPaths: []);
+
+        var result = fixture.Compile(binding);
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable);
+        Assert.Contains("exact physical ordering evidence", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
+    public void Compile_ExpansionFieldWithoutElementOrderingEvidence_FailsClosed()
     {
         var result = Fixture.ExpandedItemField().Compile();
 
-        Assert.True(result.IsSuccessful, Diagnostics(result));
-        var artifact = Assert.Single(result.Artifacts);
-        Assert.Equal(
-            "SELECT c[\"Id\"] AS f0, j0[\"Name\"] AS f1 FROM c JOIN j0 IN c[\"Items\"]",
-            artifact.Statement.Text);
-        Assert.Equal(
-            [CosmosRelationQueryResultValueEncoding.JsonString, CosmosRelationQueryResultValueEncoding.JsonString],
-            artifact.ResultFields.Select(static field => field.Encoding));
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable);
+        Assert.Contains("collection-element ordering evidence", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Empty(result.Artifacts);
     }
 
     [Theory]
@@ -504,6 +543,21 @@ public sealed class CosmosRelationQueryCompilerTests
             diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable);
         Assert.Contains("ordering", diagnostic.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("temporal ordering is not exact", diagnostic.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Theory]
+    [InlineData(ScalarTypeKind.Instant)]
+    [InlineData(ScalarTypeKind.DateTime)]
+    public void Compile_TemporalEquality_FailsClosedWithoutCanonicalStorageEncoding(
+        ScalarTypeKind temporalKind)
+    {
+        var result = Fixture.TemporalEquality(temporalKind).Compile();
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression);
+        Assert.Contains("proven exact Cosmos JSON value domain", diagnostic.Message, StringComparison.Ordinal);
         Assert.Empty(result.Artifacts);
     }
 
@@ -661,6 +715,64 @@ public sealed class CosmosRelationQueryCompilerTests
     }
 
     [Fact]
+    public void Compile_TypedInt32LiteralWithCanonicalRepresentation_Succeeds()
+    {
+        var result = Fixture.Int32LiteralEquality(ObservationValue.FromInt64(42)).Compile();
+
+        Assert.True(result.IsSuccessful, Diagnostics(result));
+        var artifact = Assert.Single(result.Artifacts);
+        Assert.Contains("c[\"Amount\"] = @p0", artifact.Statement.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Compile_TypedInt32LiteralWithNoncanonicalRepresentation_FailsDeterministically()
+    {
+        var fixture = Fixture.Int32LiteralEquality(ObservationValue.FromDouble(42d));
+
+        var first = fixture.Compile();
+        var second = fixture.Compile();
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, first.Status);
+        Assert.Equal(first.Status, second.Status);
+        Assert.Equal(first.Diagnostics.ToArray(), second.Diagnostics.ToArray());
+        var diagnostic = Assert.Single(first.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression);
+        Assert.Contains("exact canonical representation", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Empty(first.Artifacts);
+        Assert.Empty(second.Artifacts);
+    }
+
+    [Fact]
+    public void Compile_Int32ParameterDefaultWithCanonicalRepresentation_Succeeds()
+    {
+        var result = Fixture.Int32ParameterDefaultEquality(ObservationValue.FromInt64(42)).Compile();
+
+        Assert.True(result.IsSuccessful, Diagnostics(result));
+        var artifact = Assert.Single(result.Artifacts);
+        Assert.Contains("c[\"Amount\"] = @p0", artifact.Statement.Text, StringComparison.Ordinal);
+        Assert.Equal(Fixture.NumericParameter, Assert.Single(artifact.Parameters).Parameter);
+    }
+
+    [Fact]
+    public void Compile_Int32ParameterDefaultWithNoncanonicalRepresentation_FailsDeterministically()
+    {
+        var fixture = Fixture.Int32ParameterDefaultEquality(ObservationValue.FromDouble(42d));
+
+        var first = fixture.Compile();
+        var second = fixture.Compile();
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, first.Status);
+        Assert.Equal(first.Status, second.Status);
+        Assert.Equal(first.Diagnostics.ToArray(), second.Diagnostics.ToArray());
+        var diagnostic = Assert.Single(first.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.ParameterUnsupported);
+        Assert.Contains("default outside its exact Cosmos representation", diagnostic.Message, StringComparison.Ordinal);
+        Assert.NotNull(diagnostic.Input);
+        Assert.Empty(first.Artifacts);
+        Assert.Empty(second.Artifacts);
+    }
+
+    [Fact]
     public void CanonicalDocument_UndefinedConstant_IsRejectedBeforeNativeArtifactConstruction()
     {
         var exception = Assert.Throws<ArgumentException>(Fixture.UndefinedConstantProjection);
@@ -724,7 +836,7 @@ public sealed class CosmosRelationQueryCompilerTests
         var artifact = Assert.Single(result.Artifacts);
         Assert.Equal(
             "SELECT c[\"Id\"] AS f0, c[\"Status\"] AS f1 FROM c "
-            + "WHERE ARRAY_CONTAINS(@p0, c[\"Status\"])",
+            + "WHERE ARRAY_CONTAINS(@p0, c[\"Status\"]) ORDER BY c[\"Id\"] ASC",
             artifact.Statement.Text);
         Assert.Equal(new QueryParameterId("contains-values"), Assert.Single(artifact.Parameters).Parameter);
     }
@@ -767,7 +879,7 @@ public sealed class CosmosRelationQueryCompilerTests
         Decimal
     }
 
-    sealed class Fixture
+    internal sealed class Fixture
     {
         static readonly GraphId Graph = new("cosmos-compiler-tests/v1");
         static readonly QualifiedShapeId LoadShape = new(Graph, new ShapeId("Load"));
@@ -782,6 +894,7 @@ public sealed class CosmosRelationQueryCompilerTests
         static readonly QualifiedShapeId BytesRowShape = new(Graph, new ShapeId("LoadBytesRow"));
         static readonly QualifiedShapeId UndefinedRowShape = new(Graph, new ShapeId("LoadUndefinedRow"));
         static readonly QualifiedShapeId AggregateShape = new(Graph, new ShapeId("LoadAggregate"));
+        static readonly QualifiedShapeId CountAggregateShape = new(Graph, new ShapeId("LoadCountAggregate"));
         static readonly QualifiedShapeId StringAggregateShape = new(Graph, new ShapeId("LoadStringAggregate"));
         static readonly ValueBindingId Load = new("load");
         static readonly ValueBindingId Customer = new("customer");
@@ -799,7 +912,7 @@ public sealed class CosmosRelationQueryCompilerTests
         static readonly QueryResultId CustomerRows = new("customer-rows");
         static readonly QueryResultId Aggregations = new("aggregations");
         static readonly QueryParameterId StatusParameter = new("status");
-        static readonly QueryParameterId NumericParameter = new("numeric-value");
+        public static readonly QueryParameterId NumericParameter = new("numeric-value");
         static readonly QueryParameterId BytesParameter = new("bytes-value");
         static readonly QueryParameterId ContainsValuesParameter = new("contains-values");
 
@@ -858,6 +971,8 @@ public sealed class CosmosRelationQueryCompilerTests
             StorageBinding.PlacementBinding,
             StorageBinding.Target,
             StorageBinding.TargetProfile,
+            StorageBinding.AccountEndpoint,
+            StorageBinding.DatabaseName,
             StorageBinding.ContainerName,
             StorageBinding.RootAlias,
             StorageBinding.IdentityPath,
@@ -887,6 +1002,8 @@ public sealed class CosmosRelationQueryCompilerTests
                 StorageBinding.PlacementBinding,
                 StorageBinding.Target,
                 StorageBinding.TargetProfile,
+                StorageBinding.AccountEndpoint,
+                StorageBinding.DatabaseName,
                 StorageBinding.ContainerName,
                 StorageBinding.RootAlias,
                 StorageBinding.IdentityPath,
@@ -907,6 +1024,8 @@ public sealed class CosmosRelationQueryCompilerTests
             StorageBinding.PlacementBinding,
             target,
             StorageBinding.TargetProfile,
+            StorageBinding.AccountEndpoint,
+            StorageBinding.DatabaseName,
             StorageBinding.ContainerName,
             StorageBinding.RootAlias,
             StorageBinding.IdentityPath,
@@ -927,6 +1046,8 @@ public sealed class CosmosRelationQueryCompilerTests
             StorageBinding.PlacementBinding,
             StorageBinding.Target,
             StorageBinding.TargetProfile,
+            StorageBinding.AccountEndpoint,
+            StorageBinding.DatabaseName,
             containerName,
             StorageBinding.RootAlias,
             StorageBinding.IdentityPath,
@@ -949,6 +1070,8 @@ public sealed class CosmosRelationQueryCompilerTests
             StorageBinding.PlacementBinding,
             StorageBinding.Target,
             StorageBinding.TargetProfile,
+            StorageBinding.AccountEndpoint,
+            StorageBinding.DatabaseName,
             StorageBinding.ContainerName,
             StorageBinding.RootAlias,
             StorageBinding.IdentityPath,
@@ -970,6 +1093,8 @@ public sealed class CosmosRelationQueryCompilerTests
             StorageBinding.PlacementBinding,
             StorageBinding.Target,
             StorageBinding.TargetProfile,
+            StorageBinding.AccountEndpoint,
+            StorageBinding.DatabaseName,
             StorageBinding.ContainerName,
             StorageBinding.RootAlias,
             StorageBinding.IdentityPath,
@@ -1198,6 +1323,52 @@ public sealed class CosmosRelationQueryCompilerTests
             return Create(RelationQueryDocument.FromDefinition(definition));
         }
 
+        public static Fixture Int32LiteralEquality(ObservationValue value) => Int32Equality(
+            "typed-int32-literal-query",
+            new LiteralExpr(new ScalarTypeRef(ScalarTypeKind.Int32), value));
+
+        public static Fixture Int32ParameterDefaultEquality(ObservationValue defaultValue) => Int32Equality(
+            "int32-parameter-default-query",
+            Expr.Param(NumericParameter.Value),
+            [
+                new(
+                    NumericParameter,
+                    new ScalarTypeRef(ScalarTypeKind.Int32),
+                    FieldPresence.Optional,
+                    defaultValue)
+            ]);
+
+        static Fixture Int32Equality(
+            string queryId,
+            Expr right,
+            ImmutableArray<QueryParameterDefinition> parameters = default)
+        {
+            IRQueryDefinition definition = new(
+                new(queryId),
+                new(queryId),
+                new(
+                    nodes:
+                    [
+                        new SourceQueryNode(LoadSource, Load, LoadShape),
+                        new FilterQueryNode(
+                            Filter,
+                            LoadSource,
+                            Expr.Eq(Expr.Field(Load, AmountPath), right)),
+                        new ProjectQueryNode(
+                            Project,
+                            Filter,
+                            RowBinding,
+                            RowShape,
+                            [
+                                new(new("row-id"), IdPath, Expr.Field(Load, IdPath)),
+                                new(new("row-status"), StatusPath, Expr.Field(Load, StatusPath))
+                            ])
+                    ],
+                    parameters: parameters),
+                [new RowsQueryResultDefinition(Rows, Project)]);
+            return Create(RelationQueryDocument.FromDefinition(definition));
+        }
+
         public static Fixture UndefinedConstantProjection() => ConstantProjection(
             "undefined-constant-query",
             UndefinedRowShape,
@@ -1233,28 +1404,31 @@ public sealed class CosmosRelationQueryCompilerTests
             return Create(RelationQueryDocument.FromDefinition(definition));
         }
 
-        public static Fixture DistinctSelectedId(bool keyed = false)
+        public static Fixture DistinctSelectedId(bool keyed = false, bool ordered = true)
         {
             var distinct = new QueryNodeId("distinct-row");
             ImmutableArray<Expr> keys = keyed ? [Expr.Field(RowBinding, IdPath)] : [];
+            List<LogicalQueryNode> nodes =
+            [
+                new SourceQueryNode(LoadSource, Load, LoadShape),
+                new ProjectQueryNode(
+                    Project,
+                    LoadSource,
+                    RowBinding,
+                    RowShape,
+                    [
+                        new(new("row-id"), IdPath, Expr.Field(Load, IdPath)),
+                        new(new("row-status"), StatusPath, Expr.Field(Load, StatusPath))
+                    ]),
+                new DistinctQueryNode(distinct, Project, keys)
+            ];
+            if (ordered)
+                nodes.Add(new OrderQueryNode(Order, distinct, [new(Expr.Field(RowBinding, IdPath))]));
             IRQueryDefinition definition = new(
                 new("distinct-row-query"),
                 new("DistinctRowQuery"),
-                new(
-                [
-                    new SourceQueryNode(LoadSource, Load, LoadShape),
-                    new ProjectQueryNode(
-                        Project,
-                        LoadSource,
-                        RowBinding,
-                        RowShape,
-                        [
-                            new(new("row-id"), IdPath, Expr.Field(Load, IdPath)),
-                            new(new("row-status"), StatusPath, Expr.Field(Load, StatusPath))
-                        ]),
-                    new DistinctQueryNode(distinct, Project, keys)
-                ]),
-                [new RowsQueryResultDefinition(Rows, distinct)]);
+                new([.. nodes]),
+                [new RowsQueryResultDefinition(Rows, ordered ? Order : distinct)]);
             var demand = RelationQueryCompilationDemand.ForQueryResults(
             [
                 QueryResultDemand.SelectedFields(
@@ -1424,6 +1598,46 @@ public sealed class CosmosRelationQueryCompilerTests
             return Create(RelationQueryDocument.FromDefinition(definition));
         }
 
+        public static Fixture TemporalEquality(ScalarTypeKind temporalKind)
+        {
+            var sourcePath = temporalKind switch
+            {
+                ScalarTypeKind.Instant => ObservedInstantPath,
+                ScalarTypeKind.DateTime => ObservedDateTimePath,
+                _ => throw new ArgumentOutOfRangeException(
+                    nameof(temporalKind),
+                    temporalKind,
+                    "The fixture supports instant and date-time equality only.")
+            };
+            QueryParameterId parameter = new("temporal-value");
+            IRQueryDefinition definition = new(
+                new($"{temporalKind}-equality-query"),
+                new($"{temporalKind}EqualityQuery"),
+                new(
+                    nodes:
+                    [
+                        new SourceQueryNode(LoadSource, Load, LoadShape),
+                        new FilterQueryNode(
+                            Filter,
+                            LoadSource,
+                            Expr.Eq(
+                                Expr.Field(Load, sourcePath),
+                                Expr.Param(parameter.Value))),
+                        new ProjectQueryNode(
+                            Project,
+                            Filter,
+                            RowBinding,
+                            RowShape,
+                            [
+                                new(new("row-id"), IdPath, Expr.Field(Load, IdPath)),
+                                new(new("row-status"), StatusPath, Expr.Field(Load, StatusPath))
+                            ])
+                    ],
+                    parameters: [new(parameter, new ScalarTypeRef(temporalKind))]),
+                [new RowsQueryResultDefinition(Rows, Project)]);
+            return Create(RelationQueryDocument.FromDefinition(definition));
+        }
+
         public static Fixture Aggregation(AggregateOperator operation = AggregateOperator.Min)
         {
             IRQueryDefinition definition = new(
@@ -1451,6 +1665,28 @@ public sealed class CosmosRelationQueryCompilerTests
             return Create(
                 RelationQueryDocument.FromDefinition(definition),
                 overrideUnavailableRequirements: operation == AggregateOperator.Sum);
+        }
+
+        public static Fixture UngroupedRowCount()
+        {
+            IRQueryDefinition definition = new(
+                new("row-count-query"),
+                new("RowCountQuery"),
+                new(
+                [
+                    new SourceQueryNode(LoadSource, Load, LoadShape),
+                    new AggregateQueryNode(
+                        Aggregate,
+                        LoadSource,
+                        AggregateBinding,
+                        CountAggregateShape,
+                        aggregates:
+                        [
+                            new(new("count-loads"), CountPath, AggregateOperator.Count)
+                        ])
+                ]),
+                [new AggregationQueryResultDefinition(Aggregations, Aggregate)]);
+            return Create(RelationQueryDocument.FromDefinition(definition));
         }
 
         public static Fixture NonNumericAggregation(AggregateOperator operation)
@@ -1565,6 +1801,8 @@ public sealed class CosmosRelationQueryCompilerTests
                 sourcePlacement,
                 CosmosRelationQueryTargetProfile.Target,
                 CosmosRelationQueryTargetProfile.ProfileId,
+                new Uri("https://tests.invalid"),
+                "operations",
                 "loads",
                 IdPath,
                 stableUniqueOrderingPaths: [IdPath],
@@ -1760,6 +1998,12 @@ public sealed class CosmosRelationQueryCompilerTests
                     new(new("Total"), new ScalarTypeRef(ScalarTypeKind.Int32))
                 ],
                 role: ShapeRoles.Projection);
+            var countAggregate = new Shape(
+                CountAggregateShape.ShapeId,
+                [
+                    new(new("Count"), new ScalarTypeRef(ScalarTypeKind.Int64))
+                ],
+                role: ShapeRoles.Projection);
             var stringAggregate = new Shape(
                 StringAggregateShape.ShapeId,
                 [
@@ -1782,6 +2026,7 @@ public sealed class CosmosRelationQueryCompilerTests
                     bytesRow,
                     undefinedRow,
                     aggregate,
+                    countAggregate,
                     stringAggregate
                 ]));
         }

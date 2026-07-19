@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Immutable;
 using System.Collections.ObjectModel;
 using System.Buffers;
 using System.Globalization;
@@ -24,6 +25,10 @@ namespace Cohesive.Model;
 /// <param name="array">The array items when <paramref name="kind"/> is <see cref="ObservationValueKind.Array"/>.</param>
 /// <param name="bytes">The binary payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Bytes"/>.</param>
 /// <param name="dec">The exact base-10 payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Decimal"/>.</param>
+/// <remarks>
+/// Caller-owned object dictionaries, arrays, and byte buffers are snapshotted during construction. Subsequent
+/// mutation of the supplied storage does not change the observation value.
+/// </remarks>
 [JsonConverter(typeof(ObservationValueJsonConverter))]
 public readonly struct ObservationValue(
     ObservationValueKind kind,
@@ -71,17 +76,17 @@ public readonly struct ObservationValue(
     /// <summary>
     /// Object payload when <see cref="Kind"/> is <see cref="ObservationValueKind.Object"/>.
     /// </summary>
-    public IReadOnlyDictionary<string, ObservationValue>? Fields { get; } = fields;
+    public IReadOnlyDictionary<string, ObservationValue>? Fields { get; } = SnapshotFields(fields);
 
     /// <summary>
-    /// Array payload when <see cref="Kind"/> is <see cref="ObservationValueKind.Array"/>.
+    /// Immutable array payload when <see cref="Kind"/> is <see cref="ObservationValueKind.Array"/>.
     /// </summary>
-    public ObservationValue[]? Array { get; } = array;
+    public ImmutableArray<ObservationValue> Array { get; } = SnapshotArray(array);
 
     /// <summary>
     /// Binary payload when <see cref="Kind"/> is <see cref="ObservationValueKind.Bytes"/>.
     /// </summary>
-    public ReadOnlyMemory<byte> Bytes { get; } = bytes;
+    public ReadOnlyMemory<byte> Bytes { get; } = SnapshotBytes(bytes);
 
     /// <summary>Attempts to resolve a direct or nested field from this object value.</summary>
     /// <param name="path">Canonical field-only path to resolve. A default path is treated as absent.</param>
@@ -93,6 +98,53 @@ public readonly struct ObservationValue(
     /// <exception cref="NotSupportedException"><paramref name="path"/> contains collection-element navigation.</exception>
     public bool TryGetField(FieldPath path, out ObservationValue value) =>
         TryGetFieldSegments(path.Segments.AsSpan(), out value);
+
+    /// <summary>Returns an object value with one direct or nested field assigned immutably.</summary>
+    /// <param name="path">Non-empty canonical field-only path to assign.</param>
+    /// <param name="value">
+    /// Value to assign. <see cref="Undefined"/> removes the terminal field and every empty object ancestor
+    /// encountered along <paramref name="path"/>.
+    /// </param>
+    /// <returns>
+    /// A new object value containing the assignment. Existing object properties are retained and ordered ordinally.
+    /// </returns>
+    /// <remarks>
+    /// An <see cref="Undefined"/> or <see cref="Null"/> receiver is treated as an empty object. An existing object is
+    /// copied; this value and its dictionaries are never mutated.
+    /// </remarks>
+    /// <exception cref="ArgumentException"><paramref name="path"/> is empty.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// An assignment traverses an existing scalar or array value.
+    /// </exception>
+    /// <exception cref="NotSupportedException">
+    /// <paramref name="path"/> contains a non-field segment, including collection-element navigation.
+    /// </exception>
+    public ObservationValue WithField(FieldPath path, ObservationValue value)
+    {
+        if (path.Segments.IsDefaultOrEmpty)
+            throw new ArgumentException("An object assignment requires a non-empty field path.", nameof(path));
+
+        return WithFieldCore(this, path, segmentIndex: 0, value);
+    }
+
+    /// <summary>Returns an object value with one direct or nested field removed immutably.</summary>
+    /// <param name="path">Non-empty canonical field-only path to remove.</param>
+    /// <returns>
+    /// A new object value without the terminal field. Every empty object ancestor encountered along
+    /// <paramref name="path"/> is removed as well.
+    /// </returns>
+    /// <remarks>
+    /// An <see cref="Undefined"/> or <see cref="Null"/> receiver is treated as an empty object, so removing from either
+    /// produces an empty object value. An existing object is copied and is never mutated.
+    /// </remarks>
+    /// <exception cref="ArgumentException"><paramref name="path"/> is empty.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The removal traverses an existing scalar or array value.
+    /// </exception>
+    /// <exception cref="NotSupportedException">
+    /// <paramref name="path"/> contains a non-field segment, including collection-element navigation.
+    /// </exception>
+    public ObservationValue WithoutField(FieldPath path) => WithField(path, Undefined);
 
     /// <summary>
     /// Attempts to resolve a direct or nested field from this object value without materializing a
@@ -153,6 +205,79 @@ public readonly struct ObservationValue(
         return false;
     }
 
+    static IReadOnlyDictionary<string, ObservationValue>? SnapshotFields(
+        IReadOnlyDictionary<string, ObservationValue>? fields)
+    {
+        if (fields is null)
+            return null;
+        if (fields.Count == 0)
+            return EmptyObjectValues;
+
+        Dictionary<string, ObservationValue> snapshot = new(fields.Count, StringComparer.Ordinal);
+        foreach (var (name, value) in fields)
+            snapshot.Add(name, value);
+        return new ReadOnlyDictionary<string, ObservationValue>(snapshot);
+    }
+
+    static ImmutableArray<ObservationValue> SnapshotArray(ObservationValue[]? array) => array switch
+    {
+        null => [],
+        { Length: 0 } => [],
+        _ => ImmutableArray.CreateRange(array)
+    };
+
+    static ReadOnlyMemory<byte> SnapshotBytes(ReadOnlyMemory<byte> bytes) =>
+        bytes.IsEmpty ? ReadOnlyMemory<byte>.Empty : bytes.ToArray();
+
+    static ObservationValue WithFieldCore(
+        ObservationValue current,
+        FieldPath path,
+        int segmentIndex,
+        ObservationValue value)
+    {
+        var segment = path.Segments[segmentIndex];
+        if (segment.Kind != SegmentKind.Field || string.IsNullOrWhiteSpace(segment.Segment))
+        {
+            throw new NotSupportedException(
+                $"Observation value assignment does not support collection-element path '{path}'.");
+        }
+
+        var name = segment.Segment;
+        Dictionary<string, ObservationValue> fields = new(StringComparer.Ordinal);
+        if (current.Kind == ObservationValueKind.Object && current.Fields is not null)
+        {
+            foreach (var (key, existing) in current.Fields)
+                fields[key] = existing;
+        }
+        else if (current.Kind is not ObservationValueKind.Undefined and not ObservationValueKind.Null)
+        {
+            throw new InvalidOperationException(
+                $"Field path '{path}' cannot be assigned through value kind '{current.Kind}'.");
+        }
+
+        if (segmentIndex == path.Segments.Length - 1)
+        {
+            if (value.Kind == ObservationValueKind.Undefined)
+                fields.Remove(name);
+            else
+                fields[name] = value;
+        }
+        else
+        {
+            var child = fields.GetValueOrDefault(name, EmptyObject);
+            var updated = WithFieldCore(child, path, segmentIndex + 1, value);
+            if (updated.Kind == ObservationValueKind.Object && updated.Fields?.Count == 0)
+                fields.Remove(name);
+            else
+                fields[name] = updated;
+        }
+
+        var ordered = fields
+            .OrderBy(static pair => pair.Key, StringComparer.Ordinal)
+            .ToDictionary(static pair => pair.Key, static pair => pair.Value, StringComparer.Ordinal);
+        return FromObject(ordered);
+    }
+
     static readonly ObservationValue[] EmptyArrayValues = [];
     static readonly IReadOnlyDictionary<string, ObservationValue> EmptyObjectValues = new ReadOnlyDictionary<string, ObservationValue>(new Dictionary<string, ObservationValue>(capacity: 0, comparer: StringComparer.Ordinal));
     const int UndefinedHash = unchecked((int)0x5F9A43C1);
@@ -178,6 +303,9 @@ public readonly struct ObservationValue(
     /// Creates a null observation value.
     /// </summary>
     public static ObservationValue Null => new(ObservationValueKind.Null);
+
+    /// <summary>Gets the shared immutable empty object value.</summary>
+    public static ObservationValue EmptyObject => new(ObservationValueKind.Object, fields: EmptyObjectValues);
 
     /// <summary>
     /// Creates an Int64 observation value.
@@ -226,35 +354,32 @@ public readonly struct ObservationValue(
     /// <summary>
     /// Creates a bytes observation value and copies the source buffer.
     /// </summary>
-    public static ObservationValue FromBytes(ReadOnlyMemory<byte> value)
-    {
-        if (value.IsEmpty)
-            return new(ObservationValueKind.Bytes, bytes: ReadOnlyMemory<byte>.Empty);
-
-        return new(ObservationValueKind.Bytes, bytes: value.ToArray());
-    }
+    /// <param name="value">Caller-owned bytes to snapshot.</param>
+    /// <returns>A bytes observation value backed by an owned snapshot of <paramref name="value"/>.</returns>
+    public static ObservationValue FromBytes(ReadOnlyMemory<byte> value) =>
+        new(ObservationValueKind.Bytes, bytes: value);
 
     /// <summary>
     /// Creates an object observation value and copies the provided properties.
     /// </summary>
-    /// <exception cref="ArgumentNullException"></exception>
+    /// <param name="values">Caller-owned properties to snapshot.</param>
+    /// <returns>An object observation value backed by an ordinal, read-only property snapshot.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="values"/> is <see langword="null"/>.</exception>
     public static ObservationValue FromObject(IReadOnlyDictionary<string, ObservationValue> values)
     {
         ArgumentNullException.ThrowIfNull(values);
-        if (values.Count == 0)
-            return new(ObservationValueKind.Object, fields: EmptyObjectValues);
         return new(ObservationValueKind.Object, fields: values);
     }
 
     /// <summary>
     /// Creates an array observation value and copies the provided items.
     /// </summary>
-    /// <exception cref="ArgumentNullException"></exception>
+    /// <param name="values">Caller-owned array items to snapshot.</param>
+    /// <returns>An array observation value backed by an owned snapshot of <paramref name="values"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="values"/> is <see langword="null"/>.</exception>
     public static ObservationValue FromArray(ObservationValue[] values)
     {
         ArgumentNullException.ThrowIfNull(values);
-        if (values.Length == 0)
-            return new(ObservationValueKind.Array, array: EmptyArrayValues);
         return new(ObservationValueKind.Array, array: values);
     }
 
@@ -1201,22 +1326,28 @@ public readonly struct ObservationValue(
     /// <summary>
     /// Gets the length of an array value.
     /// </summary>
-    /// <exception cref="InvalidOperationException"></exception>
+    /// <returns>The number of retained array items.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// This value is not an array or does not retain an array payload.
+    /// </exception>
     public int GetArrayLength()
     {
-        if (Kind != ObservationValueKind.Array || Array is null)
+        if (Kind != ObservationValueKind.Array || Array.IsDefault)
             throw new InvalidOperationException($"Value kind '{Kind}' cannot be read as Array.");
 
         return Array.Length;
     }
 
     /// <summary>
-    /// Enumerates array items.
+    /// Gets the immutable retained array items without copying.
     /// </summary>
-    /// <exception cref="InvalidOperationException"></exception>
-    public IReadOnlyList<ObservationValue> EnumerateArray()
+    /// <returns>The immutable retained array payload.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// This value is not an array or does not retain an array payload.
+    /// </exception>
+    public ImmutableArray<ObservationValue> EnumerateArray()
     {
-        if (Kind != ObservationValueKind.Array || Array is null)
+        if (Kind != ObservationValueKind.Array || Array.IsDefault)
             throw new InvalidOperationException($"Value kind '{Kind}' cannot be read as Array.");
 
         return Array;
@@ -1307,7 +1438,7 @@ public readonly struct ObservationValue(
 
                 case ObservationValueKind.Array:
                     writer.WriteStartArray();
-                    if (value.Array is not null)
+                    if (!value.Array.IsDefault)
                     {
                         foreach (var item in value.Array)
                             WriteValue(writer, item, bytesEncoding);
@@ -1395,16 +1526,16 @@ public readonly struct ObservationValue(
             return true;
         }
 
-        static bool AreArraysEqual(IReadOnlyList<ObservationValue>? left, IReadOnlyList<ObservationValue>? right)
+        static bool AreArraysEqual(
+            ImmutableArray<ObservationValue> left,
+            ImmutableArray<ObservationValue> right)
         {
-            if (ReferenceEquals(left, right))
-                return true;
-            if (left is null || right is null)
-                return false;
-            if (left.Count != right.Count)
+            if (left.IsDefault || right.IsDefault)
+                return left.IsDefault == right.IsDefault;
+            if (left.Length != right.Length)
                 return false;
 
-            for (var i = 0; i < left.Count; i++)
+            for (var i = 0; i < left.Length; i++)
             {
                 if (!DeepEquals(left[i], right[i]))
                     return false;
@@ -1625,17 +1756,17 @@ public readonly struct ObservationValue(
             }
         }
 
-        static int HashArray(IReadOnlyList<ObservationValue>? values)
+        static int HashArray(ImmutableArray<ObservationValue> values)
         {
-            if (values is null || values.Count == 0)
+            if (values.IsDefaultOrEmpty)
                 return ArrayHashSeed;
 
             unchecked
             {
                 var hash = ArrayHashSeed;
-                for (var i = 0; i < values.Count; i++)
+                for (var i = 0; i < values.Length; i++)
                     hash = CombineHash(hash, values[i].GetHashCode());
-                return CombineHash(hash, values.Count);
+                return CombineHash(hash, values.Length);
             }
         }
 

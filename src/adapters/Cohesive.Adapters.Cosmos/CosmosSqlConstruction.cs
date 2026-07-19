@@ -92,7 +92,10 @@ public enum CosmosSqlFunction
     Lower = 7,
 
     /// <summary>Converts a string to upper case.</summary>
-    Upper = 8
+    Upper = 8,
+
+    /// <summary>Tests whether a value is a JSON object.</summary>
+    IsObject = 9
 }
 
 /// <summary>Aggregate functions exposed by the safe Cosmos SQL construction layer.</summary>
@@ -1010,6 +1013,7 @@ static class CosmosSqlFunctions
     {
         CosmosSqlFunction.IsDefined => "IS_DEFINED",
         CosmosSqlFunction.IsNull => "IS_NULL",
+        CosmosSqlFunction.IsObject => "IS_OBJECT",
         CosmosSqlFunction.ArrayContains => "ARRAY_CONTAINS",
         CosmosSqlFunction.StartsWith => "STARTSWITH",
         CosmosSqlFunction.EndsWith => "ENDSWITH",
@@ -1034,7 +1038,7 @@ static class CosmosSqlFunctions
     {
         var valid = function switch
         {
-            CosmosSqlFunction.IsDefined or CosmosSqlFunction.IsNull
+            CosmosSqlFunction.IsDefined or CosmosSqlFunction.IsNull or CosmosSqlFunction.IsObject
                 or CosmosSqlFunction.Lower or CosmosSqlFunction.Upper => count == 1,
             CosmosSqlFunction.ArrayContains => count is 2 or 3,
             CosmosSqlFunction.StartsWith or CosmosSqlFunction.EndsWith
@@ -1099,7 +1103,9 @@ static class CosmosSqlParameterValues
             ObservationValueKind.Object => NormalizeObservationObject(
                 value.Fields ?? new Dictionary<string, ObservationValue>(StringComparer.Ordinal),
                 nesting),
-            ObservationValueKind.Array => NormalizeObservationArray(value.Array ?? [], nesting),
+            ObservationValueKind.Array => NormalizeObservationArray(
+                value.Array.IsDefault ? [] : value.Array,
+                nesting),
             ObservationValueKind.Undefined => throw new NotSupportedException(
                 "An undefined observation value cannot be bound as a Cosmos SQL parameter."),
             _ => throw new NotSupportedException(
@@ -1195,7 +1201,9 @@ static class CosmosSqlParameterValues
             }
         }
 
-        ImmutableArray<object?> NormalizeObservationArray(ObservationValue[] values, int nesting)
+        ImmutableArray<object?> NormalizeObservationArray(
+            ImmutableArray<ObservationValue> values,
+            int nesting)
         {
             Enter(values, nesting);
             try

@@ -55,6 +55,8 @@ public sealed class CosmosRelationQueryBindingAuthoringOptions
     /// <summary>Creates a named, immutable scoped Cosmos authoring profile.</summary>
     /// <param name="authority">Stable profile identity and version attributed to every supplied option.</param>
     /// <param name="bindingId">Optional non-default scoped storage-binding identity, validated by the builder.</param>
+    /// <param name="accountEndpoint">Optional absolute scoped Cosmos account endpoint, normalized by the builder.</param>
+    /// <param name="databaseName">Optional non-empty scoped physical Cosmos database name, validated by the builder.</param>
     /// <param name="containerName">Optional non-empty scoped physical Cosmos container name, validated by the builder.</param>
     /// <param name="rootAlias">Optional simple Cosmos SQL root alias, validated by the builder.</param>
     /// <param name="identityPath">Optional identity path relative to <paramref name="documentRoot"/>.</param>
@@ -85,6 +87,8 @@ public sealed class CosmosRelationQueryBindingAuthoringOptions
     public CosmosRelationQueryBindingAuthoringOptions(
         string authority,
         CosmosRelationQueryBindingId? bindingId = null,
+        Uri? accountEndpoint = null,
+        string? databaseName = null,
         string? containerName = null,
         string? rootAlias = null,
         FieldPath? identityPath = null,
@@ -102,6 +106,8 @@ public sealed class CosmosRelationQueryBindingAuthoringOptions
         Authority = Guard.RequireNotNullOrWhiteSpace(authority);
         var mappings = fieldPaths ?? ImmutableDictionary<FieldPath, FieldPath>.Empty;
         BindingId = bindingId;
+        AccountEndpoint = accountEndpoint;
+        DatabaseName = databaseName;
         ContainerName = containerName;
         RootAlias = rootAlias;
         IdentityPath = identityPath;
@@ -122,6 +128,12 @@ public sealed class CosmosRelationQueryBindingAuthoringOptions
 
     /// <summary>Optional scoped storage-binding identity.</summary>
     public CosmosRelationQueryBindingId? BindingId { get; }
+
+    /// <summary>Optional scoped absolute Cosmos account endpoint.</summary>
+    public Uri? AccountEndpoint { get; }
+
+    /// <summary>Optional scoped physical Cosmos database name.</summary>
+    public string? DatabaseName { get; }
 
     /// <summary>Optional scoped physical Cosmos container name.</summary>
     public string? ContainerName { get; }
@@ -217,6 +229,28 @@ public sealed class CosmosRelationQueryStorageBindingBuilder<T>
     {
         this.placedInput = Guard.RequireNotNull(placedInput);
         inner = new(placedInput, options, explicitAuthority);
+    }
+
+    /// <summary>Declares the physical Cosmos account.</summary>
+    /// <param name="endpoint">Absolute account endpoint without credentials, a query, or a fragment.</param>
+    /// <returns>This typed builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="endpoint"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="endpoint"/> is not a valid account endpoint.</exception>
+    public CosmosRelationQueryStorageBindingBuilder<T> Account(Uri endpoint)
+    {
+        inner.Account(endpoint);
+        return this;
+    }
+
+    /// <summary>Declares the physical Cosmos database.</summary>
+    /// <param name="name">Non-empty physical database name.</param>
+    /// <returns>This typed builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="name"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is empty or white space.</exception>
+    public CosmosRelationQueryStorageBindingBuilder<T> Database(string name)
+    {
+        inner.Database(name);
+        return this;
     }
 
     /// <summary>Declares the physical Cosmos container.</summary>
@@ -459,9 +493,11 @@ public sealed class CosmosRelationQueryStorageBindingBuilder<T>
 /// </remarks>
 public sealed class CosmosRelationQueryStorageBindingBuilder
 {
-    const string DerivedIdAuthority = "cohesive.relations.cosmos/binding-id-convention/v3";
+    const string DerivedIdAuthority = "cohesive.relations.cosmos/binding-id-convention/v4";
     const string TargetSetting = "target";
     const string TargetProfileSetting = "targetProfile";
+    const string AccountEndpointSetting = "accountEndpoint";
+    const string DatabaseSetting = "databaseName";
     const string ContainerSetting = "containerName";
     const string RootAliasSetting = "rootAlias";
     const string IdentityPathSetting = "identityPath";
@@ -488,6 +524,8 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
     readonly HashSet<string> explicitScalarDeclarations = new(StringComparer.Ordinal);
 
     Effective<CosmosRelationQueryBindingId>? explicitId;
+    Effective<Uri>? accountEndpoint;
+    Effective<string>? databaseName;
     Effective<string>? containerName;
     Effective<string>? rootAlias;
     Effective<FieldPath>? identityPath;
@@ -509,6 +547,38 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
         this.placedInput = Guard.RequireNotNull(placedInput);
         this.options = options;
         this.explicitAuthority = Guard.RequireNotNullOrWhiteSpace(explicitAuthority);
+    }
+
+    /// <summary>Declares the physical Cosmos account.</summary>
+    /// <param name="endpoint">Absolute account endpoint without credentials, a query, or a fragment.</param>
+    /// <returns>This builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="endpoint"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="endpoint"/> is not a valid account endpoint.</exception>
+    public CosmosRelationQueryStorageBindingBuilder Account(Uri endpoint)
+    {
+        var normalized = CosmosPhysicalAffinity.NormalizeAccountEndpoint(endpoint);
+        if (TryDeclareScalar(AccountEndpointSetting))
+        {
+            accountEndpoint = Explicit(normalized);
+        }
+
+        return this;
+    }
+
+    /// <summary>Declares the physical Cosmos database.</summary>
+    /// <param name="name">Non-empty physical database name.</param>
+    /// <returns>This builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="name"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is empty or white space.</exception>
+    public CosmosRelationQueryStorageBindingBuilder Database(string name)
+    {
+        var validated = Guard.RequireNotNullOrWhiteSpace(name);
+        if (TryDeclareScalar(DatabaseSetting))
+        {
+            databaseName = Explicit(validated);
+        }
+
+        return this;
     }
 
     /// <summary>Declares the physical Cosmos container.</summary>
@@ -969,6 +1039,8 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
                 placedInput.Binding.Id,
                 CosmosRelationQueryTargetProfile.Target,
                 CosmosRelationQueryTargetProfile.ProfileId,
+                effective.AccountEndpoint.Value,
+                effective.DatabaseName.Value,
                 effective.ContainerName.Value,
                 effective.RootAlias.Value,
                 effective.IdentityPath.Value,
@@ -1039,6 +1111,56 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
                                   ?? (options?.ConventionSetVersion is { } configuredConvention
                                       ? Scoped(configuredConvention, optionAuthority!)
                                       : Adapter(convention, convention));
+        var effectiveAccount = accountEndpoint
+                               ?? (options?.AccountEndpoint is { } configuredAccount
+                                   ? Scoped(configuredAccount, optionAuthority!)
+                                   : null);
+        if (effectiveAccount is null)
+        {
+            Error(
+                CosmosRelationQueryBindingAuthoringDiagnosticCodes.BindingMissing,
+                "Cosmos binding authoring requires an explicit physical account endpoint.",
+                setting: AccountEndpointSetting);
+            effectiveAccount = Explicit(new Uri("https://invalid.invalid/", UriKind.Absolute));
+        }
+        else
+        {
+            try
+            {
+                effectiveAccount = new(
+                    CosmosPhysicalAffinity.NormalizeAccountEndpoint(effectiveAccount.Value.Value),
+                    effectiveAccount.Value.Origin,
+                    effectiveAccount.Value.Authority);
+            }
+            catch (ArgumentException exception)
+            {
+                Error(
+                    CosmosRelationQueryBindingAuthoringDiagnosticCodes.ConfigurationConflict,
+                    exception.Message,
+                    setting: AccountEndpointSetting);
+            }
+        }
+
+        var effectiveDatabase = databaseName
+                                ?? (options?.DatabaseName is { } configuredDatabase
+                                    ? Scoped(configuredDatabase, optionAuthority!)
+                                    : null);
+        if (effectiveDatabase is null)
+        {
+            Error(
+                CosmosRelationQueryBindingAuthoringDiagnosticCodes.BindingMissing,
+                "Cosmos binding authoring requires an explicit physical database name.",
+                setting: DatabaseSetting);
+            effectiveDatabase = Explicit(string.Empty);
+        }
+        else if (string.IsNullOrWhiteSpace(effectiveDatabase.Value.Value))
+        {
+            Error(
+                CosmosRelationQueryBindingAuthoringDiagnosticCodes.ConfigurationConflict,
+                "The Cosmos database name cannot be empty or white space.",
+                setting: DatabaseSetting);
+        }
+
         var effectiveContainer = containerName
                                  ?? (options?.ContainerName is { } configuredContainer
                                      ? Scoped(configuredContainer, optionAuthority!)
@@ -1076,6 +1198,8 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
                 TargetProfileSetting,
                 RelationQueryConfigurationValueOrigin.AdapterConvention,
                 CosmosRelationQueryTargetProfile.ProfileId.Value),
+            Configuration(AccountEndpointSetting, effectiveAccount.Value),
+            Configuration(DatabaseSetting, effectiveDatabase.Value),
             Configuration(ContainerSetting, effectiveContainer.Value),
             Configuration(RootAliasSetting, effectiveAlias),
             Configuration(IdentityPathSetting, effectiveIdentity),
@@ -1116,6 +1240,8 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
 
         return new(
             selectedId,
+            effectiveAccount.Value,
+            effectiveDatabase.Value,
             effectiveContainer.Value,
             effectiveAlias,
             effectiveIdentity,
@@ -1675,6 +1801,8 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
         Append(canonical, placedInput.Binding.Id.Value);
         Append(canonical, CosmosRelationQueryTargetProfile.Target.Value);
         Append(canonical, CosmosRelationQueryTargetProfile.ProfileId.Value);
+        Append(canonical, effective.AccountEndpoint.Value.AbsoluteUri);
+        Append(canonical, effective.DatabaseName.Value);
         Append(canonical, effective.ContainerName.Value);
         Append(canonical, effective.RootAlias.Value);
         Append(canonical, effective.IdentityPath.Value);
@@ -1803,6 +1931,8 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
 
     sealed record EffectiveConfiguration(
         Effective<CosmosRelationQueryBindingId>? Id,
+        Effective<Uri> AccountEndpoint,
+        Effective<string> DatabaseName,
         Effective<string> ContainerName,
         Effective<string> RootAlias,
         Effective<FieldPath> IdentityPath,

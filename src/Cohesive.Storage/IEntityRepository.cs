@@ -92,13 +92,15 @@ public interface IEntityRepository<TEntity> : IEntityRepository where TEntity : 
 }
 
 /// <summary>
-/// Temporary legacy query repository retained for the Cosmos entity-repository compatibility path.
+/// Temporary legacy query repository retained as a deletion-boundary compatibility facade.
 /// </summary>
 /// <remarks>
+/// Cohesive ships no built-in production backend for this contract. It remains temporarily so differential tests
+/// and external compatibility code can overlap with canonical relation/query execution during deletion.
 /// New integrations register canonical source readers and execute
 /// <see cref="Cohesive.Relations.Authoring.RelationQueryEvaluation"/> through
-/// <see cref="Cohesive.Relations.Execution.IRelationQueryEvaluator"/>. This facade will be removed with
-/// <c>Cohesive.Relations.Queries</c> after the Cosmos repository migrates.
+/// <see cref="Cohesive.Relations.Execution.IRelationQueryEvaluator"/>. This facade will be removed together with
+/// <c>Cohesive.Relations.Queries</c> in the follow-up deletion change.
 /// </remarks>
 public interface IEntityQueryRepository : IEntityRepository
 {
@@ -137,9 +139,10 @@ public interface IEntityQueryRepository : IEntityRepository
 }
 
 /// <summary>
-/// Strongly typed wrapper for the temporary Cosmos-compatible legacy query repository.
+/// Strongly typed wrapper for the deletion-boundary legacy query repository.
 /// </summary>
 /// <remarks>
+/// Cohesive ships no built-in production backend for the underlying legacy contract.
 /// New typed query consumers should author canonical relation/query evaluations and materialize their canonical
 /// outputs through the Relations mapping infrastructure.
 /// </remarks>

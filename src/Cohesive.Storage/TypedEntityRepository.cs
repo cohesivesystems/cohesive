@@ -44,10 +44,11 @@ public sealed class TypedEntityRepository<TEntity>(
             MappingContext);
 }
 
-/// <summary>Typed wrapper for the temporary Cosmos-compatible legacy entity query repository.</summary>
+/// <summary>Typed wrapper for the deletion-boundary legacy entity query repository.</summary>
 /// <remarks>
-/// This type exists only until the Cosmos entity repository executes canonical relation/query evaluations directly.
-/// New code should use <see cref="Cohesive.Relations.Execution.IRelationQueryEvaluator"/>.
+/// Cohesive ships no built-in production backend for the underlying legacy contract. This type remains only until
+/// the legacy query facade is deleted. New code should use
+/// <see cref="Cohesive.Relations.Execution.IRelationQueryEvaluator"/>.
 /// </remarks>
 /// <param name="repository">Typed point-read and write repository.</param>
 /// <param name="queryRepository">Legacy query repository for the same entity source.</param>

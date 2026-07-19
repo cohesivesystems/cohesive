@@ -182,7 +182,7 @@ public sealed class TypeScriptExprEmitter(TypeScriptExprEmitterOptions? options 
                 or ObservationValueKind.DateOnly
                 or ObservationValueKind.TimeOnly
                 or ObservationValueKind.TimeSpan => QuoteString(value.String ?? string.Empty),
-            ObservationValueKind.Array => EmitArray(value.Array ?? []),
+            ObservationValueKind.Array => EmitArray(value.Array.IsDefault ? [] : value.Array),
             ObservationValueKind.Object => EmitObject(value.Fields ?? new Dictionary<string, ObservationValue>(StringComparer.Ordinal)),
             ObservationValueKind.Bytes => throw new NotSupportedException("Bytes values are not supported by the TypeScript expression emitter."),
             _ => throw new NotSupportedException($"Observation value kind '{value.Kind}' is not supported by the TypeScript expression emitter.")

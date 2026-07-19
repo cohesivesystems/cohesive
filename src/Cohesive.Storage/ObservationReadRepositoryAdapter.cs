@@ -7,8 +7,8 @@ namespace Cohesive.Storage;
 /// Adapts point-read observation repositories to the temporary legacy read-repository contract.
 /// </summary>
 /// <remarks>
-/// Retained only for Cosmos compatibility until the legacy Relations query namespace is removed. Canonical
-/// integrations implement <see cref="Cohesive.Relations.Acquisition.IRelationQuerySourceReader"/> instead.
+/// Retained only with the deletion-boundary legacy Relations query namespace. Canonical integrations implement
+/// <see cref="Cohesive.Relations.Acquisition.IRelationQuerySourceReader"/> instead.
 /// </remarks>
 /// <param name="repository">Point-read entity repository to adapt.</param>
 /// <exception cref="ArgumentNullException"><paramref name="repository"/> is <see langword="null"/>.</exception>

@@ -160,11 +160,12 @@ public static class EntityRepositoryRegistration
             sp.GetRequiredKeyedService<IEntityRepository>(serviceKey: TypeServiceKey<TEntity>());
 
         /// <summary>
-        /// Gets the temporary Cosmos-compatible legacy query repository for the specified entity definition.
+        /// Gets the deletion-boundary legacy query repository for the specified entity definition.
         /// </summary>
         /// <remarks>
         /// New query consumers should resolve <see cref="IRelationQueryEvaluator"/> and execute canonical
-        /// relation/query evaluations. This resolver is removed when the Cosmos entity repository migrates.
+        /// relation/query evaluations. Cohesive ships no built-in backend for this contract; this resolver is
+        /// removed with the legacy query facade.
         /// </remarks>
         /// <param name="entity">Entity definition whose legacy keyed repository should be resolved.</param>
         /// <returns>The legacy query repository registered for <paramref name="entity"/>.</returns>
@@ -176,11 +177,12 @@ public static class EntityRepositoryRegistration
             sp.GetRequiredKeyedService<IEntityQueryRepository>(serviceKey: ShapeServiceKey(entity));
 
         /// <summary>
-        /// Gets the temporary Cosmos-compatible legacy query repository for the specified entity.
+        /// Gets the deletion-boundary legacy query repository for the specified entity.
         /// </summary>
         /// <remarks>
         /// New query consumers should resolve <see cref="IRelationQueryEvaluator"/> and execute canonical
-        /// relation/query evaluations. This resolver is removed when the Cosmos entity repository migrates.
+        /// relation/query evaluations. Cohesive ships no built-in backend for this contract; this resolver is
+        /// removed with the legacy query facade.
         /// </remarks>
         /// <param name="entity">Entity whose legacy keyed repository should be resolved.</param>
         /// <returns>The legacy query repository registered for <paramref name="entity"/>.</returns>
@@ -192,11 +194,12 @@ public static class EntityRepositoryRegistration
             sp.GetEntityQueryRepository(entity.Definition);
 
         /// <summary>
-        /// Gets the temporary Cosmos-compatible legacy query repository for the specified registered CLR type.
+        /// Gets the deletion-boundary legacy query repository for the specified registered CLR type.
         /// </summary>
         /// <remarks>
         /// New query consumers should resolve <see cref="IRelationQueryEvaluator"/> and execute canonical
-        /// relation/query evaluations. This resolver is removed when the Cosmos entity repository migrates.
+        /// relation/query evaluations. Cohesive ships no built-in backend for this contract; this resolver is
+        /// removed with the legacy query facade.
         /// </remarks>
         /// <typeparam name="TEntity">Registered CLR entity type.</typeparam>
         /// <returns>The legacy query repository registered for <typeparamref name="TEntity"/>.</returns>
@@ -225,11 +228,12 @@ public static class EntityRepositoryRegistration
             sp.GetRequiredService<IEntityRepository<TEntity>>();
 
         /// <summary>
-        /// Gets the temporary Cosmos-compatible strongly typed legacy query repository.
+        /// Gets the deletion-boundary strongly typed legacy query repository.
         /// </summary>
         /// <remarks>
         /// New query consumers should resolve <see cref="IRelationQueryEvaluator"/> and materialize canonical
-        /// results through Relations mapping. This resolver is removed when the Cosmos entity repository migrates.
+        /// results through Relations mapping. Cohesive ships no built-in backend for this contract; this resolver
+        /// is removed with the legacy query facade.
         /// </remarks>
         /// <typeparam name="TEntity">Registered CLR entity type.</typeparam>
         /// <returns>The typed legacy query repository registered for <typeparamref name="TEntity"/>.</returns>
@@ -289,7 +293,7 @@ public static class EntityRepositoryRegistration
             configureObjectMapper: configureObjectMapper,
             mappingContext: mappingContext
             ));
-        // Temporary Cosmos compatibility. Canonical consumers resolve IRelationQueryEvaluator instead.
+        // Deletion-boundary legacy compatibility. Canonical consumers resolve IRelationQueryEvaluator instead.
         services.AddSingleton<IEntityQueryRepository<TEntity>>(sp => new TypedEntityQueryRepository<TEntity>(
             repository: sp.GetRequiredService<IEntityRepository<TEntity>>(),
             queryRepository: sp.GetRequiredKeyedService<IEntityQueryRepository>(serviceKey)
@@ -304,7 +308,7 @@ public static class EntityRepositoryRegistration
     {
         foreach (var serviceKey in serviceKeys)
         {
-            // Temporary Cosmos compatibility. Remove with IEntityQueryRepository after canonical Cosmos migration.
+            // Deletion-boundary legacy compatibility. Remove with IEntityQueryRepository in the follow-up change.
             services.AddKeyedSingleton<IEntityQueryRepository>(
                 serviceKey,
                 (sp, key) => sp.GetRequiredKeyedService<IEntityRepository>(key) as IEntityQueryRepository

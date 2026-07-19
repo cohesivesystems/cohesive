@@ -1,13 +1,11 @@
 using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text;
-using System.Text.Json;
 using System.Threading.Channels;
 using System.Text.Json.Serialization;
 using Cohesive.Model;
 using Cohesive.Relations.Mapping;
 using Cohesive.Relations.Model;
-using Cohesive.Relations.Queries;
 using Cohesive.Storage;
 using Cohesive.Transitions.Model;
 using Microsoft.Azure.Cosmos;
@@ -17,11 +15,8 @@ namespace Cohesive.Adapters.Cosmos;
 /// <summary>
 /// Cosmos DB-backed observation repository with optional atomic outbox support.
 /// </summary>
-public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEntityQueryRepository
+public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
 {
-    static readonly CosmosSqlQueryCompiler QueryCompiler = new();
-    const string SelectWherePrefix = "SELECT * FROM c WHERE ";
-
     readonly EntityDefinition entityDefinition;
     readonly string observationType;
     readonly Container container;
@@ -33,6 +28,30 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
     /// <summary>
     /// Creates a repository for one entity definition persisted in observation format.
     /// </summary>
+    /// <param name="entityDefinition">Entity shape and semantic identity persisted by this repository.</param>
+    /// <param name="container">Cosmos container containing entity and optional outbox documents.</param>
+    /// <param name="leaseContainer">Cosmos container used by entity and outbox change-feed processors.</param>
+    /// <param name="partitionKeySelector">
+    /// Legacy observation-to-partition selector, or <see langword="null"/> to use <paramref name="partitionKeyPolicy"/>
+    /// or the entity-identity convention.
+    /// </param>
+    /// <param name="pointReadPartitionKeySelector">
+    /// Legacy entity-identity-to-partition selector, or <see langword="null"/> when unavailable.
+    /// </param>
+    /// <param name="itemIdSelector">Observation-to-item-id selector, or <see langword="null"/> for the default.</param>
+    /// <param name="options">Repository and change-feed options, or <see langword="null"/> for conventions.</param>
+    /// <param name="mappingContext">Object/observation mapping context, or <see langword="null"/> for the default.</param>
+    /// <param name="partitionKeyPolicy">
+    /// Explicit read/write partition policy. It is mutually exclusive with either legacy partition selector.
+    /// </param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="entityDefinition"/>, <paramref name="container"/>, or <paramref name="leaseContainer"/> is
+    /// <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// Explicit and legacy partition policies are combined, the legacy selectors are incomplete, or the entity and
+    /// outbox document discriminators are empty or equal.
+    /// </exception>
     public CosmosEntityOutboxRepository(
         EntityDefinition entityDefinition,
         Container container,
@@ -55,7 +74,7 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
             pointReadPartitionKeySelector
             );
         this.itemIdSelector = itemIdSelector ?? DefaultItemIdSelector;
-        this.options = options ?? new();
+        this.options = CosmosObservationOutboxRepositoryOptions.RequireValid(options ?? new());
         MappingContext = mappingContext ?? ShapeMappingContext.Default;
     }
 
@@ -93,86 +112,6 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
             ConcurrencyToken: new(Guard.RequireNotNullOrWhiteSpace(document.ETag)),
             LoadedFields: readOptions?.Fields
             );
-    }
-
-    /// <inheritdoc />
-    public async Task<EntityQueryResponse<EntitySnapshot>> Query(OperationContext context, EntityQuery query)
-    {
-        ArgumentNullException.ThrowIfNull(context);
-        ArgumentNullException.ThrowIfNull(query);
-        context.ThrowIfCancellationRequested();
-
-        IReadOnlyList<EntitySnapshot> rows = [];
-        QueryPageInfo? pageInfo = null;
-        if (query.IncludeRows)
-        {
-            List<EntitySnapshot> materializedRows = [];
-            await foreach (var snapshot in QueryStream(context, query).WithCancellation(context.CancellationToken))
-                materializedRows.Add(snapshot);
-
-            rows = materializedRows;
-            pageInfo = new(
-                TotalCount: null,
-                NextCursor: null,
-                Offset: query.Window?.EffectiveMode == ResultPaginationMode.Offset ? query.Window.Offset ?? 0 : null,
-                Limit: query.Window?.Limit,
-                HasMore: false
-                );
-        }
-
-        IReadOnlyDictionary<string, AggregationResult>? aggregations = null;
-        if (query.Aggregations is not null)
-            aggregations = await QueryAggregationsAsync(context, query.Aggregations, query.Predicate).ConfigureAwait(false);
-
-        return new(rows, pageInfo, aggregations);
-    }
-
-    /// <inheritdoc />
-    public async IAsyncEnumerable<EntitySnapshot> QueryStream(OperationContext context, EntityQuery query)
-    {
-        ArgumentNullException.ThrowIfNull(context);
-        ArgumentNullException.ThrowIfNull(query);
-        context.ThrowIfCancellationRequested();
-
-        var window = query.Window;
-        if (window?.Limit is < 0)
-            throw new ArgumentOutOfRangeException(nameof(query), window.Limit, "Observation query limit must be non-negative.");
-        if (window?.Offset is < 0)
-            throw new ArgumentOutOfRangeException(nameof(query), window.Offset, "Observation query offset must be non-negative.");
-        if (window?.Cursor is not null)
-            throw new NotSupportedException("Cosmos entity repositories do not yet support cursor page resumption through EntityQuery.");
-        if (!query.IncludeRows)
-            yield break;
-        if (window?.Limit == 0)
-            yield break;
-        
-        var queryDefinition = BuildQueryDefinition(query);
-        var remainingCursorPageItems = window?.EffectiveMode == ResultPaginationMode.Cursor ? window.Limit : null;
-        var iterator = container.GetItemQueryIterator<CosmosObservationQueryDocument>(
-            queryDefinition,
-            requestOptions: new()
-            {
-                MaxItemCount = window?.Limit is { } limit ? Math.Min(Math.Max(limit, 1), 256) : 256
-            });
-        
-        while (iterator.HasMoreResults)
-        {
-            context.ThrowIfCancellationRequested();
-            var page = await iterator.ReadNextAsync(context.CancellationToken).ConfigureAwait(false);
-            foreach (var document in page)
-            {
-                if (remainingCursorPageItems is 0)
-                    yield break;
-
-                yield return CreateQuerySnapshot(document);
-
-                if (remainingCursorPageItems is { } remaining)
-                    remainingCursorPageItems = remaining - 1;
-            }
-
-            if (remainingCursorPageItems is 0)
-                yield break;
-        }
     }
 
     /// <inheritdoc />
@@ -300,6 +239,13 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
     /// <summary>
     /// Counts outbox documents in this repository's container associated with the supplied subject id.
     /// </summary>
+    /// <param name="context">Operation context carrying cancellation and attribution.</param>
+    /// <param name="subjectId">Non-empty outbox subject identity.</param>
+    /// <returns>The number of matching outbox documents returned by Cosmos.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="context"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="subjectId"/> is empty or white space.</exception>
+    /// <exception cref="OperationCanceledException">The operation context is canceled.</exception>
+    /// <exception cref="CosmosException">Cosmos rejects or fails the count query.</exception>
     public async Task<int> CountOutboxMessages(OperationContext context, string subjectId)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -499,242 +445,6 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
             fields: projected,
             version: observation.Version
             );
-    }
-
-    QueryDefinition BuildQueryDefinition(EntityQuery query)
-    {
-        Dictionary<string, object?> parameters = new(StringComparer.Ordinal)
-        {
-            ["@entityDocumentKind"] = options.EntityDocumentKind,
-            ["@observationType"] = observationType
-        };
-
-        var observationFilter = "(c[\"documentKind\"] = @entityDocumentKind AND c[\"observationType\"] = @observationType AND IS_DEFINED(c[\"observation\"]))";
-        if (query.Predicate is not null)
-        {
-            var (observationWhere, observationParameters) = CompileQueryClause(query.Predicate, rootField: "observation", parameterPrefix: "obs");
-            foreach (var (name, value) in observationParameters)
-                parameters[name] = value;
-
-            observationFilter = $"({observationFilter} AND {observationWhere})";
-        }
-
-        var orderByClause = BuildOrderByClause(query.Window?.OrderBy);
-        var text = $"SELECT * FROM c WHERE {observationFilter} ORDER BY {orderByClause}";
-        
-        if (query.Window?.EffectiveMode == ResultPaginationMode.Offset
-            && (query.Window.Offset is not null || query.Window.Limit is not null))
-        {
-            parameters["@offset"] = query.Window?.Offset ?? 0;
-            parameters["@limit"] = query.Window?.Limit ?? int.MaxValue;
-            text += " OFFSET @offset LIMIT @limit";
-        }
-
-        return new CosmosSqlQuery(text, parameters).ToQueryDefinition();
-    }
-
-    internal static string BuildOrderByClause(QueryOrderBy[]? orderBy)
-    {
-        List<string> orderExpressions = [];
-
-        if (orderBy is { Length: > 0 })
-        {
-            foreach (var field in orderBy)
-            {
-                var observationAccess = CompileOrderByFieldAccess("c", FieldPath.Parse($"observation.{field.Path}"));
-                var direction = field.Descending ? " DESC" : " ASC";
-                orderExpressions.Add($"{observationAccess}{direction}");
-            }
-        }
-
-        if (orderExpressions.Count == 0)
-            orderExpressions.Add("c.id ASC");
-
-        return string.Join(", ", orderExpressions);
-    }
-
-    static string CompileOrderByFieldAccess(string alias, FieldPath field)
-    {
-        StringBuilder builder = new(alias);
-        foreach (var segment in field.Segments)
-        {
-            switch (segment.Kind)
-            {
-                case SegmentKind.Field:
-                    builder.Append(CanUseBarePropertyIdentifier(segment.Segment!)
-                        ? $".{segment.Segment}"
-                        : $"[{JsonSerializer.Serialize(segment.Segment!)}]");
-                    break;
-                case SegmentKind.Element:
-                    throw new NotSupportedException($"Cosmos SQL ordering does not support element segment '{field}'.");
-                default:
-                    throw new InvalidOperationException($"Unsupported field-path segment kind '{segment.Kind}'.");
-            }
-        }
-
-        return builder.ToString();
-    }
-
-    static bool CanUseBarePropertyIdentifier(string segment)
-    {
-        if (string.IsNullOrWhiteSpace(segment))
-            return false;
-        if (!(char.IsLetter(segment[0]) || segment[0] == '_'))
-            return false;
-
-        for (var index = 1; index < segment.Length; index++)
-        {
-            var ch = segment[index];
-            if (!(char.IsLetterOrDigit(ch) || ch == '_'))
-                return false;
-        }
-
-        return true;
-    }
-
-    async Task<IReadOnlyDictionary<string, AggregationResult>> QueryAggregationsAsync(
-        OperationContext context,
-        EntityAggregationQuery aggregationQuery,
-        EntityPredicate? predicate
-        )
-    {
-        var plan = new AggregationPlan(aggregationQuery.Roots, predicate);
-        CosmosSqlAggregationPlan compiled;
-        try
-        {
-            compiled = CreateAggregationCompiler().Compile(plan);
-        }
-        catch (AggregationPlanValidationException ex)
-        {
-            throw new NotSupportedException(
-                $"Cosmos entity repository for '{observationType}' cannot execute the requested aggregation query.",
-                ex);
-        }
-
-        Dictionary<string, IReadOnlyList<JsonElement>> rowsByRoot = new(StringComparer.Ordinal);
-        foreach (var root in compiled.Roots)
-            rowsByRoot[root.RootName] = await ReadAggregationRowsAsync(context, root.Query).ConfigureAwait(false);
-
-        return CosmosSqlAggregationResultReader.Read(rowsByRoot, plan);
-    }
-
-    CosmosSqlAggregationCompiler CreateAggregationCompiler() => new(new(
-        RootAlias: "c",
-        ValueRootExpression: "c[\"observation\"]",
-        BaseWhereClauses:
-        [
-            "c[\"documentKind\"] = @entityDocumentKind",
-            "c[\"observationType\"] = @observationType",
-            "IS_DEFINED(c[\"observation\"])"
-        ],
-        Parameters: new Dictionary<string, object?>(StringComparer.Ordinal)
-        {
-            ["@entityDocumentKind"] = options.EntityDocumentKind,
-            ["@observationType"] = observationType
-        }));
-
-    async Task<IReadOnlyList<JsonElement>> ReadAggregationRowsAsync(OperationContext context, CosmosSqlQuery query)
-    {
-        var iterator = container.GetItemQueryIterator<JsonElement>(
-            query.ToQueryDefinition(),
-            requestOptions: new() { MaxItemCount = 256 });
-        List<JsonElement> rows = [];
-        while (iterator.HasMoreResults)
-        {
-            context.ThrowIfCancellationRequested();
-            var page = await iterator.ReadNextAsync(context.CancellationToken).ConfigureAwait(false);
-            rows.AddRange(page.Select(static row => row.Clone()));
-        }
-
-        return rows;
-    }
-
-    EntitySnapshot CreateQuerySnapshot(CosmosObservationQueryDocument document)
-    {
-        ArgumentNullException.ThrowIfNull(document);
-
-        if (document.Observation is { } observation)
-        {
-            return new(
-                Entity: new(
-                    shapeId: new(document.ObservationType ?? observationType),
-                    id: document.ObservationId ?? document.Id,
-                    fields: observation,
-                    version: document.ObservationVersion
-                ),
-                PartitionKey: document.PartitionKey,
-                ConcurrencyToken: ResolveQueryConcurrencyToken(document.ETag, document.ObservationVersion)
-            );
-        }
-
-        if (document.State is { } state)
-        {
-            return new(
-                Entity: new(
-                    shapeId: entityDefinition.Shape.Id,
-                    id: document.EntityId ?? document.Id,
-                    fields: state,
-                    version: document.StateVersion
-                    ),
-                PartitionKey: document.PartitionKey,
-                ConcurrencyToken: ResolveQueryConcurrencyToken(document.ETag, document.StateVersion)
-            );
-        }
-
-        throw new InvalidOperationException($"Cosmos query result '{document.Id}' does not contain an observation payload.");
-    }
-
-    static EntityConcurrencyToken ResolveQueryConcurrencyToken(string? etag, long version) =>
-        new(string.IsNullOrWhiteSpace(etag) ? $"query:{version}" : etag);
-
-    static (string WhereClause, IReadOnlyDictionary<string, object?> Parameters) CompileQueryClause(EntityPredicate predicate, string rootField, string parameterPrefix)
-    {
-        var compiled = QueryCompiler.Compile(PrefixQueryRoot(predicate, rootField));
-        return RenameParameters(ExtractWhereClause(compiled.Text), compiled.Parameters, parameterPrefix);
-    }
-
-    static EntityPredicate PrefixQueryRoot(EntityPredicate predicate, string rootField) => new(
-        Predicate: PrefixFieldPredicateRoot(predicate.Predicate, rootField),
-        Scope: predicate.Scope is { } scope ? FieldPath.Parse($"{rootField}.{scope}") : null);
-
-    static BoolExpr<FieldPredicate> PrefixFieldPredicateRoot(BoolExpr<FieldPredicate> predicate, string rootField) => predicate switch
-    {
-        Atom<FieldPredicate> atom => new Atom<FieldPredicate>(PrefixFieldPredicateRoot(atom.Term, rootField)),
-        And<FieldPredicate> conjunction => new And<FieldPredicate>([.. conjunction.Terms.Select(term => PrefixFieldPredicateRoot(term, rootField))]),
-        Or<FieldPredicate> disjunction => new Or<FieldPredicate>([.. disjunction.Terms.Select(term => PrefixFieldPredicateRoot(term, rootField))]),
-        Not<FieldPredicate> negation => new Not<FieldPredicate>(PrefixFieldPredicateRoot(negation.Term, rootField)),
-        _ => throw new InvalidOperationException($"Unknown boolean-expression node '{predicate.GetType().Name}'.")
-    };
-
-    static FieldPredicate PrefixFieldPredicateRoot(FieldPredicate predicate, string rootField) => predicate with
-    {
-        Field = FieldPath.Parse($"{rootField}.{predicate.Field}")
-    };
-
-    static string ExtractWhereClause(string sql)
-    {
-        if (!sql.StartsWith(SelectWherePrefix, StringComparison.Ordinal))
-            throw new InvalidOperationException($"Unexpected Cosmos query format '{sql}'.");
-
-        return sql[SelectWherePrefix.Length..];
-    }
-
-    static (string WhereClause, IReadOnlyDictionary<string, object?> Parameters) RenameParameters(string whereClause, IReadOnlyDictionary<string, object?> parameters, string parameterPrefix)
-    {
-        Dictionary<string, object?> renamedParameters = new(StringComparer.Ordinal);
-        var renamedClause = whereClause;
-        var replacements = parameters.Keys
-            .Select((key, index) => (Old: key, New: $"@{parameterPrefix}{index}"))
-            .OrderByDescending(static replacement => replacement.Old.Length)
-            .ToArray();
-
-        foreach (var (oldName, newName) in replacements)
-        {
-            renamedClause = renamedClause.Replace(oldName, newName, StringComparison.Ordinal);
-            renamedParameters[newName] = parameters[oldName];
-        }
-
-        return (renamedClause, renamedParameters);
     }
 
     CosmosObservationContainerDocument CreateEntityDocument(OperationContext context, Observation observation, string partitionKey)
@@ -972,38 +682,6 @@ sealed record CosmosObservationContainerDocument(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? SpanId = null,
     
-    [property: JsonPropertyName("_etag")]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    string? ETag = null
-    );
-
-[JsonSerializable(typeof(CosmosObservationQueryDocument))]
-sealed record CosmosObservationQueryDocument(
-    [property: JsonPropertyName("id")] string Id,
-    [property: JsonPropertyName("partitionKey")] string PartitionKey,
-    [property: JsonPropertyName("documentKind")]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    string? DocumentKind = null,
-    [property: JsonPropertyName("observationType")]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    string? ObservationType = null,
-    [property: JsonPropertyName("observationId")]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    string? ObservationId = null,
-    [property: JsonPropertyName("observationVersion")] long ObservationVersion = 0,
-    [property: JsonPropertyName("observation")]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    Dictionary<string, ObservationValue>? Observation = null,
-    [property: JsonPropertyName("entityType")]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    string? EntityType = null,
-    [property: JsonPropertyName("entityId")]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    string? EntityId = null,
-    [property: JsonPropertyName("state")]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    Dictionary<string, ObservationValue>? State = null,
-    [property: JsonPropertyName("stateVersion")] long StateVersion = 0,
     [property: JsonPropertyName("_etag")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? ETag = null
