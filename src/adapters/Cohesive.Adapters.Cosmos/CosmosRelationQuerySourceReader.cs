@@ -488,16 +488,20 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
                 if (extraction == RelationQueryReferenceKeyExtractionState.Invalid)
                     return Failed(request, "relationship-reference-invalid", providerEvidence);
 
-                var matchedKeys = referenceKeys.Where(chunkKeys.Contains).ToArray();
-                if (matchedKeys.Length == 0)
-                    return Failed(request, "relationship-query-returned-unrequested-row", providerEvidence);
-                foreach (var key in matchedKeys)
+                var matched = false;
+                foreach (var key in referenceKeys)
                 {
+                    if (!chunkKeys.Contains(key))
+                        continue;
+
+                    matched = true;
                     var fanOut = fanOutByKey.GetValueOrDefault(key) + 1;
                     if (fanOut > source.Limits.MaximumFanOut)
                         return Inconclusive(request, "relationship-fan-out-boundary-exceeded", providerEvidence);
                     fanOutByKey[key] = fanOut;
                 }
+                if (!matched)
+                    return Failed(request, "relationship-query-returned-unrequested-row", providerEvidence);
 
                 if (!TryAddOccurrence(
                         row,
@@ -551,6 +555,8 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
         var observations = ImmutableArray.CreateBuilder<RelationQuerySourceReadObservation>(rows.Length);
         foreach (ref readonly var row in rows)
             observations.Add(row.Observation);
+        observations.Sort(
+            static (left, right) => StringComparer.Ordinal.Compare(left.Identity, right.Identity));
         return observations.MoveToImmutable();
     }
 
@@ -617,34 +623,52 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
 
     ProjectionPlan CreateProjection(RelationQuerySourceReadRequest request, string? relationshipSelector)
     {
-        Dictionary<string, string> aliasBySelector = new(StringComparer.Ordinal);
-        List<CosmosSqlObjectProperty> properties = [];
-        var identityAlias = AddSelector(IdentitySourceSelector, IdentityAlias);
-        var fieldAliases = new string[request.Fields.Length];
+        Dictionary<string, (string Alias, FieldPath Path)> selectorBindings = new(StringComparer.Ordinal);
+        var identityAlias = RegisterSelector(IdentitySourceSelector, IdentityAlias);
+        var fieldAliases = ImmutableArray.CreateBuilder<string>(request.Fields.Length);
         for (var index = 0; index < request.Fields.Length; index++)
-            fieldAliases[index] = AddSelector(request.Fields[index].SourceSelector, $"_field{index}");
+            fieldAliases.Add(RegisterSelector(request.Fields[index].SourceSelector, $"_field{index}"));
         var relationshipAlias = relationshipSelector is null
             ? null
-            : AddSelector(relationshipSelector, RelationshipAlias);
+            : RegisterSelector(relationshipSelector, RelationshipAlias);
         var partitionAlias = Policy.FixedPartitionKey is null
-            ? AddSelector(Policy.PartitionSourceSelector, PartitionAlias)
+            ? RegisterSelector(Policy.PartitionSourceSelector, PartitionAlias)
             : null;
+
+        var properties = ImmutableArray.CreateBuilder<CosmosSqlObjectProperty>(selectorBindings.Count);
+        var aliases = ImmutableArray.CreateBuilder<string>(selectorBindings.Count);
+        AddProperty(IdentitySourceSelector, IdentityAlias);
+        for (var index = 0; index < request.Fields.Length; index++)
+            AddProperty(request.Fields[index].SourceSelector, $"_field{index}");
+        if (relationshipSelector is not null)
+            AddProperty(relationshipSelector, RelationshipAlias);
+        if (Policy.FixedPartitionKey is null)
+            AddProperty(Policy.PartitionSourceSelector, PartitionAlias);
+        var immutableProperties = properties.MoveToImmutable();
         return new(
-            CosmosSqlExpression.Object([.. properties]),
+            CosmosSqlExpression.ObjectFromImmutable(immutableProperties),
             identityAlias,
-            [.. fieldAliases],
+            fieldAliases.MoveToImmutable(),
             relationshipAlias,
             partitionAlias,
-            [.. properties.Select(static property => property.Name)]);
+            aliases.MoveToImmutable());
 
-        string AddSelector(string selector, string preferredAlias)
+        string RegisterSelector(string selector, string preferredAlias)
         {
-            if (aliasBySelector.TryGetValue(selector, out var existing))
-                return existing;
+            if (selectorBindings.TryGetValue(selector, out var existing))
+                return existing.Alias;
             var path = CosmosRelationQuerySourceSelectors.RequirePropertyPath(selector, nameof(selector));
-            aliasBySelector.Add(selector, preferredAlias);
-            properties.Add(new(preferredAlias, CosmosSqlExpression.Property(RootAlias, path)));
+            selectorBindings.Add(selector, (preferredAlias, path));
             return preferredAlias;
+        }
+
+        void AddProperty(string selector, string preferredAlias)
+        {
+            var binding = selectorBindings[selector];
+            if (!string.Equals(binding.Alias, preferredAlias, StringComparison.Ordinal))
+                return;
+            properties.Add(new(binding.Alias, CosmosSqlExpression.Property(RootAlias, binding.Path)));
+            aliases.Add(binding.Alias);
         }
     }
 
@@ -718,7 +742,9 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
                 observation,
                 relationship,
                 partitionToken,
-                Signature(projection.Aliases, values)));
+                projection.RelationshipAlias is null
+                    ? null
+                    : Signature(projection.Aliases, values)));
         }
         return new(rows.MoveToImmutable(), FailureReason: null);
     }
@@ -1051,26 +1077,25 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
 
     static RelationQueryTargetCapabilityProfile CreateTargetProfile()
     {
-        RelationQueryPrimitiveCapabilityKind[] capabilities =
-        [
-            RelationQueryPrimitiveCapabilityKind.BatchedKeyLookup,
-            RelationQueryPrimitiveCapabilityKind.BatchedPredicateLookup,
-            RelationQueryPrimitiveCapabilityKind.CompleteSetEnumeration,
-            RelationQueryPrimitiveCapabilityKind.FieldProjection,
-            RelationQueryPrimitiveCapabilityKind.ObservationIdentityRead,
-            RelationQueryPrimitiveCapabilityKind.RelationshipReferenceRead
-        ];
         return new(
             new("cohesive.adapters.cosmos.entity-source"),
             new("cohesive.adapters.cosmos.entity-source/v1"),
             [RelationQueryDocument.CurrentSchemaVersion],
             [RelationQueryCompilationProvenance.CurrentCompilerProfile],
             [
-                .. capabilities.Select(static capability => new RelationQueryTargetCapabilityEvidence(
-                    new($"cohesive.adapters.cosmos.entity-source/capability/{(int)capability}"),
-                    new PrimitiveRelationQueryCapability(capability)))
+                Capability(RelationQueryPrimitiveCapabilityKind.BatchedKeyLookup),
+                Capability(RelationQueryPrimitiveCapabilityKind.BatchedPredicateLookup),
+                Capability(RelationQueryPrimitiveCapabilityKind.CompleteSetEnumeration),
+                Capability(RelationQueryPrimitiveCapabilityKind.FieldProjection),
+                Capability(RelationQueryPrimitiveCapabilityKind.ObservationIdentityRead),
+                Capability(RelationQueryPrimitiveCapabilityKind.RelationshipReferenceRead)
             ],
             description: "Bounded canonical acquisition over one Cosmos entity-document container.");
+
+        static RelationQueryTargetCapabilityEvidence Capability(
+            RelationQueryPrimitiveCapabilityKind capability) => new(
+            new($"cohesive.adapters.cosmos.entity-source/capability/{(int)capability}"),
+            new PrimitiveRelationQueryCapability(capability));
     }
 
     sealed record ProjectionPlan(
@@ -1085,7 +1110,7 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
         RelationQuerySourceReadObservation Observation,
         ObservationValue? RelationshipReference,
         string? PartitionToken,
-        string Signature);
+        string? Signature);
 
     readonly record struct MaterializationResult(
         ImmutableArray<MaterializedRow> Rows,
@@ -1094,5 +1119,5 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
     readonly record struct PhysicalOccurrence(
         string? PartitionToken,
         int ChunkIndex,
-        string Signature);
+        string? Signature);
 }

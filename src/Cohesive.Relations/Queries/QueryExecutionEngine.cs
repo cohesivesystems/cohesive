@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.InteropServices;
 using Cohesive.Relations.Mapping;
 using Cohesive.Relations.Model;
 
@@ -74,7 +75,7 @@ public sealed class QueryExecutionEngine(IReadRepositoryRegistry repositoryRegis
                 JoinCardinality.One => context.One(join.Alias) is { } one
                     ? ObservationValue.FromObject(one.Fields)
                     : ObservationValue.Null,
-                JoinCardinality.Many => ObservationValue.FromArray([.. context.Many(join.Alias).Select(static item => ObservationValue.FromObject(item.Fields))]),
+                JoinCardinality.Many => CreateManyJoinValue(context.Many(join.Alias)),
                 _ => throw new InvalidOperationException($"Unsupported join cardinality '{join.Cardinality}'.")
             };
         }
@@ -86,6 +87,16 @@ public sealed class QueryExecutionEngine(IReadRepositoryRegistry repositoryRegis
             version: context.Root.Version,
             lineage: context.Root.Lineage
             );
+    }
+
+    static ObservationValue CreateManyJoinValue(IReadOnlyList<Observation> observations)
+    {
+        var values = new ObservationValue[observations.Count];
+        for (var index = 0; index < observations.Count; index++)
+            values[index] = ObservationValue.FromObject(observations[index].Fields);
+
+        return ObservationValue.FromImmutableArray(
+            ImmutableCollectionsMarshal.AsImmutableArray(values));
     }
     
     /// <summary>

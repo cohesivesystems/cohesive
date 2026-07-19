@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using Cohesive.Model;
 using Cohesive.Transitions.Model;
@@ -649,17 +650,11 @@ public sealed class DeclarativeEntityRuntime
                 $"Function 'insertAt' received out-of-range index '{index}' on entity '{entityId}'.");
         }
 
-        List<ObservationValue> result = new(source.Array.Length + 1);
-        for (var i = 0; i <= source.Array.Length; i++)
-        {
-            if (i == index)
-                result.Add(item);
-
-            if (i < source.Array.Length)
-                result.Add(source.Array[i]);
-        }
-
-        return ObservationValue.FromArray([..result]);
+        var result = new ObservationValue[source.Array.Length + 1];
+        source.Array.AsSpan()[..index].CopyTo(result);
+        result[index] = item;
+        source.Array.AsSpan()[index..].CopyTo(result.AsSpan(index + 1));
+        return FromOwnedArray(result);
     }
 
     static ObservationValue Append(ObservationValue source, ObservationValue item, string entityId)
@@ -667,10 +662,10 @@ public sealed class DeclarativeEntityRuntime
         if (source.Kind != ObservationValueKind.Array || source.Array.IsDefault)
             throw new SemanticRuleViolationException($"Function 'append' expects an array as first argument on entity '{entityId}'.");
 
-        List<ObservationValue> result = new(source.Array.Length + 1);
-        result.AddRange(source.Array);
-        result.Add(item);
-        return ObservationValue.FromArray([..result]);
+        var result = new ObservationValue[source.Array.Length + 1];
+        source.Array.AsSpan().CopyTo(result);
+        result[^1] = item;
+        return FromOwnedArray(result);
     }
 
     static ObservationValue InsertRangeAt(ObservationValue source, ObservationValue indexValue, ObservationValue items, string entityId)
@@ -685,16 +680,11 @@ public sealed class DeclarativeEntityRuntime
         if (index < 0 || index > source.Array.Length)
             throw new SemanticRuleViolationException($"Function 'insertRangeAt' received out-of-range index '{index}' on entity '{entityId}'.");
 
-        List<ObservationValue> result = new(source.Array.Length + items.Array.Length);
-        for (var i = 0; i < index; i++)
-            result.Add(source.Array[i]);
-
-        result.AddRange(items.Array);
-
-        for (var i = index; i < source.Array.Length; i++)
-            result.Add(source.Array[i]);
-
-        return ObservationValue.FromArray([..result]);
+        var result = new ObservationValue[source.Array.Length + items.Array.Length];
+        source.Array.AsSpan()[..index].CopyTo(result);
+        items.Array.AsSpan().CopyTo(result.AsSpan(index));
+        source.Array.AsSpan()[index..].CopyTo(result.AsSpan(index + items.Array.Length));
+        return FromOwnedArray(result);
     }
 
     static ObservationValue AppendRange(ObservationValue source, ObservationValue items, string entityId)
@@ -705,11 +695,14 @@ public sealed class DeclarativeEntityRuntime
         if (items.Kind != ObservationValueKind.Array || items.Array.IsDefault)
             throw new SemanticRuleViolationException($"Function 'appendRange' expects an array as second argument on entity '{entityId}'.");
 
-        List<ObservationValue> result = new(source.Array.Length + items.Array.Length);
-        result.AddRange(source.Array);
-        result.AddRange(items.Array);
-        return ObservationValue.FromArray([..result]);
+        var result = new ObservationValue[source.Array.Length + items.Array.Length];
+        source.Array.AsSpan().CopyTo(result);
+        items.Array.AsSpan().CopyTo(result.AsSpan(source.Array.Length));
+        return FromOwnedArray(result);
     }
+
+    static ObservationValue FromOwnedArray(ObservationValue[] values) =>
+        ObservationValue.FromImmutableArray(ImmutableCollectionsMarshal.AsImmutableArray(values));
 
     static int AsInt32(ObservationValue value, string context)
     {

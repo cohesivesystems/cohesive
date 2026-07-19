@@ -160,7 +160,9 @@ internal sealed class CosmosJsonQueryFeedReader
         if (!exhausted && !boundaryStopped)
             boundaryStopped = true;
 
-        var materializedRows = rows.ToImmutable();
+        var materializedRows = rows.Count == rows.Capacity
+            ? rows.MoveToImmutable()
+            : rows.ToImmutable();
         return new(
             materializedRows,
             exhausted,

@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using Cohesive.Model.Expressions;
 using Cohesive.Relations.Diagnostics;
@@ -506,18 +507,19 @@ sealed class RelationQueryExpressionEvaluator
 
     ObservationValue EvaluateObject(CallExpr call, RelationQueryExpressionContext context)
     {
-        Dictionary<string, ObservationValue> fields = new(call.Arguments.Length / 2, StringComparer.Ordinal);
+        var fields = ImmutableSortedDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
         for (var index = 0; index < call.Arguments.Length; index += 2)
         {
             var key = Evaluate(call.Arguments[index], context);
             if (key.Kind != ObservationValueKind.String || string.IsNullOrWhiteSpace(key.String))
                 throw InvalidOperand("Expression function 'object' requires non-empty string keys.");
-            if (!fields.TryAdd(key.String, Evaluate(call.Arguments[index + 1], context)))
+            var fieldValue = Evaluate(call.Arguments[index + 1], context);
+            if (fields.ContainsKey(key.String))
                 throw InvalidOperand($"Expression function 'object' contains duplicate key '{key.String}'.");
+            fields.Add(key.String, fieldValue);
         }
 
-        return ObservationValue.FromObject(
-            new ReadOnlyDictionary<string, ObservationValue>(fields));
+        return ObservationValue.FromObject(fields.ToImmutable());
     }
 
     ObservationValue EvaluateSelect(CallExpr call, RelationQueryExpressionContext context)
@@ -526,7 +528,7 @@ sealed class RelationQueryExpressionEvaluator
         ObservationValue[] result = new ObservationValue[source.Count];
         for (var index = 0; index < source.Count; index++)
             result[index] = Evaluate(call.Arguments[1], context.WithCurrentItem(source[index]));
-        return ObservationValue.FromArray(result);
+        return FromOwnedArray(result);
     }
 
     ObservationValue EvaluateAppend(CallExpr call, RelationQueryExpressionContext context)
@@ -536,7 +538,7 @@ sealed class RelationQueryExpressionEvaluator
         for (var index = 0; index < source.Count; index++)
             result[index] = source[index];
         result[^1] = Evaluate(call.Arguments[1], context);
-        return ObservationValue.FromArray(result);
+        return FromOwnedArray(result);
     }
 
     ObservationValue EvaluateAppendRange(CallExpr call, RelationQueryExpressionContext context)
@@ -546,7 +548,7 @@ sealed class RelationQueryExpressionEvaluator
         var result = new ObservationValue[source.Count + appended.Count];
         Copy(source, result, destinationIndex: 0);
         Copy(appended, result, destinationIndex: source.Count);
-        return ObservationValue.FromArray(result);
+        return FromOwnedArray(result);
     }
 
     ObservationValue EvaluateInsertAt(CallExpr call, RelationQueryExpressionContext context)
@@ -560,7 +562,7 @@ sealed class RelationQueryExpressionEvaluator
         result[index] = item;
         for (var sourceIndex = index; sourceIndex < source.Count; sourceIndex++)
             result[sourceIndex + 1] = source[sourceIndex];
-        return ObservationValue.FromArray(result);
+        return FromOwnedArray(result);
     }
 
     ObservationValue EvaluateInsertRangeAt(CallExpr call, RelationQueryExpressionContext context)
@@ -574,7 +576,7 @@ sealed class RelationQueryExpressionEvaluator
         Copy(inserted, result, destinationIndex: index);
         for (var sourceIndex = index; sourceIndex < source.Count; sourceIndex++)
             result[sourceIndex + inserted.Count] = source[sourceIndex];
-        return ObservationValue.FromArray(result);
+        return FromOwnedArray(result);
     }
 
     ObservationValue EvaluateConcat(CallExpr call, RelationQueryExpressionContext context)
@@ -877,6 +879,9 @@ sealed class RelationQueryExpressionEvaluator
         for (var index = 0; index < source.Count; index++)
             destination[destinationIndex + index] = source[index];
     }
+
+    static ObservationValue FromOwnedArray(ObservationValue[] values) =>
+        ObservationValue.FromImmutableArray(ImmutableCollectionsMarshal.AsImmutableArray(values));
 
     static RelationQueryExpressionEvaluationException InvalidOperand(string message) =>
         Failure(RelationQueryExpressionEvaluationError.InvalidOperand, message);

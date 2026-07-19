@@ -1,6 +1,8 @@
 using System.Buffers;
 using System.Collections;
+using System.Collections.Immutable;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -180,6 +182,66 @@ public sealed class ObservationValueTests
         Assert.Equal("Contoso", objectValue.GetProperty("Name").GetString());
         Assert.Equal(1L, arrayValue.EnumerateArray()[0].GetInt64());
         Assert.Equal(new byte[] { 4, 5, 6 }, bytesValue.Bytes.ToArray());
+    }
+
+    [Fact]
+    public void ImmutableCollectionInputs_RetainTheirOwnedStorage()
+    {
+        var arrayStorage = new[] { ObservationValue.FromString("retained") };
+        var immutableItems = ImmutableCollectionsMarshal.AsImmutableArray(arrayStorage);
+        var immutableFields = ImmutableDictionary.CreateRange(
+            StringComparer.Ordinal,
+            new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+            {
+                ["Name"] = ObservationValue.FromString("Contoso")
+            });
+
+        var arrayValue = ObservationValue.FromImmutableArray(immutableItems);
+        var objectValue = ObservationValue.FromObject(immutableFields);
+
+        Assert.Same(
+            arrayStorage,
+            ImmutableCollectionsMarshal.AsArray(arrayValue.Array));
+        Assert.Same(immutableFields, objectValue.Fields);
+        Assert.Equal("retained", arrayValue.Array[0].GetString());
+        Assert.Equal("Contoso", objectValue.GetProperty("Name").GetString());
+    }
+
+    [Fact]
+    public void FromImmutableArray_DefaultStorage_Throws()
+    {
+        var exception = Assert.Throws<ArgumentException>(
+            () => ObservationValue.FromImmutableArray(default));
+
+        Assert.Equal("values", exception.ParamName);
+    }
+
+    [Fact]
+    public void ImmutableObjectInput_WithNonOrdinalKeys_IsNormalizedBySnapshot()
+    {
+        var fields = ImmutableDictionary.CreateRange(
+            StringComparer.OrdinalIgnoreCase,
+            new Dictionary<string, ObservationValue>
+            {
+                ["Name"] = ObservationValue.FromString("Contoso")
+            });
+
+        var value = ObservationValue.FromObject(fields);
+
+        Assert.NotSame(fields, value.Fields);
+        Assert.True(value.TryGetProperty("Name", out _));
+        Assert.False(value.TryGetProperty("name", out _));
+    }
+
+    [Fact]
+    public void JsonObjectProjection_UsesDeterministicOrdinalPropertyOrder()
+    {
+        using var document = JsonDocument.Parse("""{"z":1,"a":2,"m":3}""");
+
+        var value = ObservationValue.FromJsonElement(document.RootElement);
+
+        Assert.IsType<ImmutableSortedDictionary<string, ObservationValue>>(value.Fields);
+        Assert.Equal("""{"a":2,"m":3,"z":1}""", value.GetRawText());
     }
 
     [Fact]

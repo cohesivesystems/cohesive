@@ -45,6 +45,50 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
     }
 
     [Fact]
+    public void ExecutionResult_CanonicalDiagnostics_RetainsImmutableStorage()
+    {
+        var fixture = ArtifactFixture.Row();
+        var request = fixture.Request(maximumRows: 5);
+        ImmutableArray<CosmosRelationQueryArtifactExecutionDiagnostic> diagnostics =
+        [
+            Diagnostic("REL2270", "first", request, rowOrdinal: null),
+            Diagnostic("REL2271", "second", request, rowOrdinal: 1)
+        ];
+
+        CosmosRelationQueryArtifactExecutionResult result = new(
+            request,
+            RelationQueryExecutionStatus.Failed,
+            [],
+            diagnostics,
+            providerEvidenceReference: null);
+
+        Assert.True(diagnostics == result.Diagnostics);
+    }
+
+    [Fact]
+    public void ExecutionResult_UnorderedDiagnostics_RestoresCanonicalOrdering()
+    {
+        var fixture = ArtifactFixture.Row();
+        var request = fixture.Request(maximumRows: 5);
+        var first = Diagnostic("REL2270", "first", request, rowOrdinal: null);
+        var second = Diagnostic("REL2271", "second", request, rowOrdinal: null);
+        var third = Diagnostic("REL2270", "third", request, rowOrdinal: 1);
+
+        CosmosRelationQueryArtifactExecutionResult result = new(
+            request,
+            RelationQueryExecutionStatus.Failed,
+            [],
+            [third, second, first],
+            providerEvidenceReference: null);
+
+        Assert.Collection(
+            result.Diagnostics,
+            diagnostic => Assert.Same(first, diagnostic),
+            diagnostic => Assert.Same(second, diagnostic),
+            diagnostic => Assert.Same(third, diagnostic));
+    }
+
+    [Fact]
     public async Task ExecuteAsync_CompilerArtifact_BindsSdkQueryAndDecodesCanonicalRow()
     {
         var compilerFixture = CosmosRelationQueryCompilerTests.Fixture.Row();
@@ -275,10 +319,35 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
         Assert.Equal(ObservationValueKind.Null, explicitNull.Kind);
         Assert.Equal("Acme", FieldString(result.Rows[1].Value, CustomerNamePath));
         Assert.Equal("shipper", FieldString(result.Rows[1].Value, CustomerTypePath));
+        Assert.False(result.Diagnostics.IsDefault);
+        Assert.Empty(result.Diagnostics);
         Assert.Equal(fixture.Artifact.Statement.Text, observedQuery?.QueryText);
         Assert.Equal(10, observedOptions?.MaxItemCount);
         Assert.True(iterator.Disposed);
         Assert.NotNull(result.ProviderEvidenceReference);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RowBranch_ReconstructsSharedNestedObjectOnce()
+    {
+        var fixture = ArtifactFixture.Row();
+        TrackingFeedIterator iterator = new(
+        [
+            Page(JsonObject(
+                (fixture.Alias(CustomerTypePath), "shipper"),
+                (fixture.Alias(IdPath), "load-1"),
+                (fixture.Alias(CustomerNamePath), "Acme")))
+        ]);
+        var executor = Executor(fixture, (_, _) => iterator);
+
+        var result = await executor.ExecuteAsync(fixture.Request(maximumRows: 5));
+
+        var row = Assert.Single(result.Rows);
+        Assert.True(row.Value.TryGetField(FieldPath.FromField("Customer"), out var customer));
+        Assert.Equal(ObservationValueKind.Object, customer.Kind);
+        Assert.Equal(["Name", "Type"], customer.Fields!.Keys);
+        Assert.Equal("Acme", FieldString(row.Value, CustomerNamePath));
+        Assert.Equal("shipper", FieldString(row.Value, CustomerTypePath));
     }
 
     [Fact]
@@ -843,6 +912,24 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_DuplicateBatchBranch_RejectsBeforeIteratorCreation()
+    {
+        var fixture = ArtifactFixture.Row();
+        var iteratorCreations = 0;
+        var executor = Executor(fixture, (_, _) =>
+        {
+            iteratorCreations++;
+            return new TrackingFeedIterator([]);
+        });
+        var request = fixture.Request(maximumRows: 5);
+
+        await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await executor.ExecuteAsync([request, request]));
+
+        Assert.Equal(0, iteratorCreations);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_RowAndAggregationBatch_PreservesRequestAndBranchOrder()
     {
         var rows = ArtifactFixture.Row();
@@ -1107,6 +1194,18 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
             databaseName ?? fixture.Artifact.StorageBinding.DatabaseName,
             containerName ?? fixture.Artifact.StorageBinding.ContainerName,
             factory), options);
+
+    static CosmosRelationQueryArtifactExecutionDiagnostic Diagnostic(
+        string code,
+        string message,
+        CosmosRelationQueryArtifactExecutionRequest request,
+        long? rowOrdinal) =>
+        new(
+            code,
+            DiagnosticSeverity.Error,
+            message,
+            request.Artifact.Branch.Id,
+            rowOrdinal);
 
     static Func<CancellationToken, Task<FeedResponse<JsonElement>>> Page(params JsonElement[] rows) =>
         _ => Task.FromResult<FeedResponse<JsonElement>>(new TrackingFeedResponse(rows, requestCharge: 1.25));

@@ -202,6 +202,10 @@ public sealed record CosmosRelationQueryArtifactExecutionDiagnostic
 /// <summary>Immutable result of executing one canonical Cosmos compiled artifact.</summary>
 public sealed class CosmosRelationQueryArtifactExecutionResult
 {
+    static readonly IComparer<CosmosRelationQueryArtifactExecutionDiagnostic> DiagnosticOrdering =
+        Comparer<CosmosRelationQueryArtifactExecutionDiagnostic>.Create(
+            static (left, right) => CompareDiagnostics(left, right));
+
     internal CosmosRelationQueryArtifactExecutionResult(
         CosmosRelationQueryArtifactExecutionRequest request,
         RelationQueryExecutionStatus status,
@@ -216,30 +220,70 @@ public sealed class CosmosRelationQueryArtifactExecutionResult
 
         var normalizedRows = rows.IsDefault ? [] : rows;
         var normalizedDiagnostics = diagnostics.IsDefault ? [] : diagnostics;
-        if (normalizedRows.Any(static row => row is null))
+        var containsNullRow = false;
+        var containsMismatchedShape = false;
+        for (var index = 0; index < normalizedRows.Length; index++)
+        {
+            var row = normalizedRows[index];
+            if (row is null)
+            {
+                containsNullRow = true;
+                continue;
+            }
+
+            if (row.Shape != request.Artifact.Branch.Shape)
+                containsMismatchedShape = true;
+        }
+
+        var containsNullDiagnostic = false;
+        var containsMismatchedBranch = false;
+        var containsError = false;
+        var containsWarning = false;
+        var diagnosticsAreCanonical = true;
+        CosmosRelationQueryArtifactExecutionDiagnostic? previousDiagnostic = null;
+        for (var index = 0; index < normalizedDiagnostics.Length; index++)
+        {
+            var diagnostic = normalizedDiagnostics[index];
+            if (diagnostic is null)
+            {
+                containsNullDiagnostic = true;
+                continue;
+            }
+
+            if (diagnostic.Branch != request.Artifact.Branch.Id)
+                containsMismatchedBranch = true;
+            containsError |= diagnostic.Severity == DiagnosticSeverity.Error;
+            containsWarning |= diagnostic.Severity == DiagnosticSeverity.Warning;
+            if (previousDiagnostic is not null
+                && DiagnosticOrdering.Compare(previousDiagnostic, diagnostic) > 0)
+            {
+                diagnosticsAreCanonical = false;
+            }
+            previousDiagnostic = diagnostic;
+        }
+
+        if (containsNullRow)
             throw new ArgumentException("Execution rows cannot contain null entries.", nameof(rows));
-        if (normalizedRows.Any(row => row.Shape != request.Artifact.Branch.Shape))
+        if (containsMismatchedShape)
             throw new ArgumentException("Execution rows must match the artifact branch shape.", nameof(rows));
-        if (normalizedDiagnostics.Any(static diagnostic => diagnostic is null))
+        if (containsNullDiagnostic)
             throw new ArgumentException("Execution diagnostics cannot contain null entries.", nameof(diagnostics));
-        if (normalizedDiagnostics.Any(diagnostic => diagnostic.Branch != request.Artifact.Branch.Id))
+        if (containsMismatchedBranch)
             throw new ArgumentException("Execution diagnostics must identify the artifact branch.", nameof(diagnostics));
-        if (status == RelationQueryExecutionStatus.Succeeded
-            && normalizedDiagnostics.Any(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
+        if (status == RelationQueryExecutionStatus.Succeeded && containsError)
         {
             throw new ArgumentException("Successful execution cannot contain error diagnostics.", nameof(diagnostics));
         }
         if (status == RelationQueryExecutionStatus.Failed && !normalizedRows.IsDefaultOrEmpty)
             throw new ArgumentException("Failed execution cannot expose untrustworthy partial rows.", nameof(rows));
-        if (status == RelationQueryExecutionStatus.Failed
-            && normalizedDiagnostics.All(static diagnostic => diagnostic.Severity != DiagnosticSeverity.Error))
+        if (status == RelationQueryExecutionStatus.Failed && !containsError)
         {
             throw new ArgumentException("Failed execution requires an error diagnostic.", nameof(diagnostics));
         }
         if (status == RelationQueryExecutionStatus.Incomplete
             && (normalizedRows.IsDefaultOrEmpty
-                || normalizedDiagnostics.Any(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
-                || normalizedDiagnostics.All(static diagnostic => diagnostic.Severity != DiagnosticSeverity.Warning)))
+                || containsError
+                || !containsWarning))
         {
             throw new ArgumentException(
                 "Incomplete execution requires attributable prefix rows and a warning diagnostic.",
@@ -250,16 +294,31 @@ public sealed class CosmosRelationQueryArtifactExecutionResult
 
         Status = status;
         Rows = normalizedRows;
-        Diagnostics =
-        [
-            .. normalizedDiagnostics
-                .OrderBy(static diagnostic => diagnostic.RowOrdinal ?? -1L)
-                .ThenBy(static diagnostic => diagnostic.Code, StringComparer.Ordinal)
-                .ThenBy(static diagnostic => (int)diagnostic.Severity)
-                .ThenBy(static diagnostic => diagnostic.EvidenceReference ?? string.Empty, StringComparer.Ordinal)
-                .ThenBy(static diagnostic => diagnostic.Message, StringComparer.Ordinal)
-        ];
+        Diagnostics = normalizedDiagnostics.IsDefaultOrEmpty || diagnosticsAreCanonical
+            ? normalizedDiagnostics
+            : [.. normalizedDiagnostics.Order(DiagnosticOrdering)];
         ProviderEvidenceReference = providerEvidenceReference;
+    }
+
+    static int CompareDiagnostics(
+        CosmosRelationQueryArtifactExecutionDiagnostic left,
+        CosmosRelationQueryArtifactExecutionDiagnostic right)
+    {
+        var comparison = (left.RowOrdinal ?? -1L).CompareTo(right.RowOrdinal ?? -1L);
+        if (comparison != 0)
+            return comparison;
+        comparison = StringComparer.Ordinal.Compare(left.Code, right.Code);
+        if (comparison != 0)
+            return comparison;
+        comparison = ((int)left.Severity).CompareTo((int)right.Severity);
+        if (comparison != 0)
+            return comparison;
+        comparison = StringComparer.Ordinal.Compare(
+            left.EvidenceReference ?? string.Empty,
+            right.EvidenceReference ?? string.Empty);
+        return comparison != 0
+            ? comparison
+            : StringComparer.Ordinal.Compare(left.Message, right.Message);
     }
 
     /// <summary>Exact invocation represented by this result.</summary>
@@ -349,14 +408,16 @@ public sealed class CosmosRelationQueryArtifactExecutor
     {
         ArgumentNullException.ThrowIfNull(requests);
         var normalizedRequests = new CosmosRelationQueryArtifactExecutionRequest[requests.Count];
+        HashSet<RelationQueryNativeResultBranchId> branchIds = new(requests.Count);
+        var containsDuplicateBranch = false;
         for (var index = 0; index < requests.Count; index++)
         {
-            normalizedRequests[index] = requests[index]
+            var request = requests[index]
                 ?? throw new ArgumentNullException(nameof(requests), "Artifact execution requests cannot contain null entries.");
+            normalizedRequests[index] = request;
+            containsDuplicateBranch |= !branchIds.Add(request.Artifact.Branch.Id);
         }
-        if (normalizedRequests
-            .GroupBy(static request => request.Artifact.Branch.Id)
-            .Any(static group => group.Count() > 1))
+        if (containsDuplicateBranch)
         {
             throw new ArgumentException("A Cosmos artifact execution batch cannot repeat a native branch identity.", nameof(requests));
         }
@@ -718,7 +779,7 @@ public sealed class CosmosRelationQueryArtifactExecutor
         }
 
         return diagnostics.Count == 0
-            ? (rows.ToImmutable(), [])
+            ? (rows.MoveToImmutable(), [])
             : ([], diagnostics.ToImmutable());
     }
 
@@ -761,7 +822,7 @@ public sealed class CosmosRelationQueryArtifactExecutor
             }
         }
 
-        var value = ObservationValue.EmptyObject;
+        MutableObservationObject? valueBuilder = null;
         foreach (var field in artifact.ResultFields)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -794,7 +855,7 @@ public sealed class CosmosRelationQueryArtifactExecutor
             {
                 try
                 {
-                    value = value.WithField(field.Field.Path, decoded);
+                    (valueBuilder ??= new(artifact.ResultFields.Length)).Set(field.Field.Path, decoded);
                 }
                 catch (Exception exception) when (IsRecoverable(exception))
                 {
@@ -803,6 +864,7 @@ public sealed class CosmosRelationQueryArtifactExecutor
                 }
             }
         }
+        var value = valueBuilder?.Freeze() ?? ObservationValue.EmptyObject;
 
         ObservationValue? identity = null;
         if (artifact.ResultIdentity is { } identityBinding)
@@ -835,6 +897,79 @@ public sealed class CosmosRelationQueryArtifactExecutor
             unresolvedGaps: []);
         error = null;
         return true;
+    }
+
+    sealed class MutableObservationObject
+    {
+        readonly Dictionary<string, Member> members;
+
+        public MutableObservationObject(int capacity = 0) =>
+            members = new(capacity, StringComparer.Ordinal);
+
+        public void Set(FieldPath path, ObservationValue value)
+        {
+            if (path.Segments.IsDefaultOrEmpty)
+                throw new ArgumentException("An object assignment requires a non-empty field path.", nameof(path));
+
+            Set(path, segmentIndex: 0, value);
+        }
+
+        public ObservationValue Freeze()
+        {
+            if (members.Count == 0)
+                return ObservationValue.EmptyObject;
+
+            var fields = ImmutableSortedDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
+            foreach (var (name, member) in members)
+            {
+                fields.Add(
+                    name,
+                    member.Object is null
+                        ? member.Value
+                        : member.Object.Freeze());
+            }
+            return ObservationValue.FromObject(fields.ToImmutable());
+        }
+
+        void Set(FieldPath path, int segmentIndex, ObservationValue value)
+        {
+            var segment = path.Segments[segmentIndex];
+            if (segment.Kind != SegmentKind.Field || string.IsNullOrWhiteSpace(segment.Segment))
+            {
+                throw new NotSupportedException(
+                    $"Observation value assignment does not support collection-element path '{path}'.");
+            }
+
+            var name = segment.Segment;
+            if (segmentIndex == path.Segments.Length - 1)
+            {
+                if (members.TryGetValue(name, out var existing) && existing.Object is not null)
+                {
+                    throw new InvalidOperationException(
+                        $"Field path '{path}' cannot replace a reconstructed object with value kind '{value.Kind}'.");
+                }
+                members[name] = new(value, Object: null);
+                return;
+            }
+
+            MutableObservationObject child;
+            if (members.TryGetValue(name, out var member))
+            {
+                child = member.Object
+                    ?? throw new InvalidOperationException(
+                        $"Field path '{path}' cannot be assigned through value kind '{member.Value.Kind}'.");
+            }
+            else
+            {
+                child = new();
+                members.Add(name, new(default, child));
+            }
+            child.Set(path, segmentIndex + 1, value);
+        }
+
+        readonly record struct Member(
+            ObservationValue Value,
+            MutableObservationObject? Object);
     }
 
     static bool IsFieldOnlyPath(FieldPath path) =>

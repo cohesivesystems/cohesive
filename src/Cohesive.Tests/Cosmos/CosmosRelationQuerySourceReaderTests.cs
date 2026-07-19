@@ -210,8 +210,8 @@ public sealed class CosmosRelationQuerySourceReaderTests
 
         RecordingFeedFactory completeFeed = new();
         completeFeed.Enqueue(
-            Json("""{"_identity":"load-a","_field0":"Alpha"}"""),
             Json("""{"_identity":"load-b","_field0":null}"""),
+            Json("""{"_identity":"load-a","_field0":"Alpha"}"""),
             Json("""{"_identity":"load-c"}"""));
         var completeFixture = CreateFixture(completeFeed, FixedPolicy());
         var complete = await completeFixture.Reader.ReadAsync(Request(
@@ -221,6 +221,7 @@ public sealed class CosmosRelationQuerySourceReaderTests
         Assert.True(
             complete.State == RelationQuerySourceReadState.Complete,
             complete.EvidenceReference);
+        Assert.Equal(["load-a", "load-b", "load-c"], complete.Observations.Select(static row => row.Identity));
         Assert.Equal(RelationQuerySourceReadFieldState.Missing, complete.Observations[2].Fields.Single().State);
     }
 

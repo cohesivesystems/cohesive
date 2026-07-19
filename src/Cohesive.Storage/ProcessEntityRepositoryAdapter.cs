@@ -286,7 +286,7 @@ public sealed class ProcessEntityRepositoryAdapter : IProcessEntityRepository
         if (effect.Snapshot is not null)
         {
             fields["SnapshotToken"] = ObservationValue.FromString(effect.Snapshot.Token);
-            fields["SnapshotFieldNames"] = ObservationValue.FromArray(
+            fields["SnapshotFieldNames"] = ObservationValue.FromImmutableArray(
                 [.. effect.Snapshot.FieldNames.Select(ObservationValue.FromString)]);
         }
 

@@ -57,6 +57,116 @@ public sealed class RelationQueryPhysicalContractTests
     }
 
     [Fact]
+    public void Source_read_contracts_retain_canonical_immutable_arrays_and_normalize_otherwise()
+    {
+        var shape = new QualifiedShapeId(new("graph"), new("Load"));
+        var firstField = new RelationQuerySourceReadField(
+            new("field/load/a"),
+            FieldPath.FromField("A"),
+            "a",
+            RelationQuerySourceReadFieldPurpose.SemanticInput);
+        var secondField = new RelationQuerySourceReadField(
+            new("field/load/b"),
+            FieldPath.FromField("B"),
+            "b",
+            RelationQuerySourceReadFieldPurpose.SemanticInput);
+        var firstResult = new RelationQuerySourceReadFieldResult(
+            firstField,
+            RelationQuerySourceReadFieldState.Value,
+            ObservationValue.FromString("a"));
+        var secondResult = new RelationQuerySourceReadFieldResult(
+            secondField,
+            RelationQuerySourceReadFieldState.Value,
+            ObservationValue.FromString("b"));
+        var canonicalFields = ImmutableArray.Create(firstResult, secondResult);
+        var reversedFields = ImmutableArray.Create(secondResult, firstResult);
+
+        var first = new RelationQuerySourceReadObservation("load-a", shape, canonicalFields);
+        var second = new RelationQuerySourceReadObservation("load-b", shape, reversedFields);
+
+        Assert.True(canonicalFields.Equals(first.Fields));
+        Assert.False(reversedFields.Equals(second.Fields));
+        Assert.Collection(
+            second.Fields,
+            field => Assert.Same(firstResult, field),
+            field => Assert.Same(secondResult, field));
+
+        var canonicalObservations = ImmutableArray.Create(first, second);
+        var reversedObservations = ImmutableArray.Create(second, first);
+        var canonical = new RelationQuerySourceReadResult(
+            RelationQuerySourceReadState.Complete,
+            canonicalObservations);
+        var normalized = new RelationQuerySourceReadResult(
+            RelationQuerySourceReadState.Complete,
+            reversedObservations);
+
+        Assert.True(canonicalObservations.Equals(canonical.Observations));
+        Assert.False(reversedObservations.Equals(normalized.Observations));
+        Assert.Collection(
+            normalized.Observations,
+            observation => Assert.Same(first, observation),
+            observation => Assert.Same(second, observation));
+        Assert.Throws<ArgumentException>(() => new RelationQuerySourceReadResult(
+            RelationQuerySourceReadState.Complete,
+            [first, second, first]));
+
+        var formattedField = new RelationQuerySourceReadField(
+            new("field/load/collision"),
+            FieldPath.FromField("[]"),
+            "formatted",
+            RelationQuerySourceReadFieldPurpose.SemanticInput);
+        var elementField = new RelationQuerySourceReadField(
+            new("field/load/collision"),
+            new([FieldPathSegment.Element()]),
+            "element",
+            RelationQuerySourceReadFieldPurpose.SemanticInput);
+        var formattedResult = new RelationQuerySourceReadFieldResult(
+            formattedField,
+            RelationQuerySourceReadFieldState.Missing);
+        var elementResult = new RelationQuerySourceReadFieldResult(
+            elementField,
+            RelationQuerySourceReadFieldState.Missing);
+
+        var canonicalCollisionFields = ImmutableArray.Create(formattedResult, elementResult);
+        var reversedCollisionFields = ImmutableArray.Create(elementResult, formattedResult);
+        var canonicalCollision = new RelationQuerySourceReadObservation(
+            "load-canonical",
+            shape,
+            canonicalCollisionFields);
+        var normalizedCollision = new RelationQuerySourceReadObservation(
+            "load-normalized",
+            shape,
+            reversedCollisionFields);
+
+        Assert.True(canonicalCollisionFields.Equals(canonicalCollision.Fields));
+        Assert.False(reversedCollisionFields.Equals(normalizedCollision.Fields));
+        Assert.Collection(
+            normalizedCollision.Fields,
+            field => Assert.Same(formattedResult, field),
+            field => Assert.Same(elementResult, field));
+
+        var request = new RelationQuerySourceReadRequest(
+            new("sha256", "test/v1", "physical-plan"),
+            new("stage"),
+            new("placement"),
+            new("source"),
+            shape,
+            "identity",
+            [elementField, formattedField],
+            new RelationQueryBoundedEnumeration(maximumRows: 1),
+            maximumBufferedRows: 1);
+        Assert.Collection(
+            request.Fields,
+            field => Assert.Same(formattedField, field),
+            field => Assert.Same(elementField, field));
+
+        Assert.Throws<ArgumentException>(() => new RelationQuerySourceReadObservation(
+            "load-c",
+            shape,
+            [formattedResult, elementResult, formattedResult]));
+    }
+
+    [Fact]
     public void Placement_fingerprint_is_declaration_order_independent()
     {
         var first = CreatePlacement(reverse: false);

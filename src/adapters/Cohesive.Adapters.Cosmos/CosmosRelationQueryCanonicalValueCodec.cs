@@ -246,8 +246,25 @@ internal static class CosmosRelationQueryCanonicalValueCodec
         long maximum,
         out long value)
     {
-        if (element.ValueKind == JsonValueKind.Number
-            && TryParseExactJsonInteger(element.GetRawText().AsSpan(), out var parsed)
+        if (element.ValueKind != JsonValueKind.Number)
+        {
+            value = default;
+            return false;
+        }
+
+        if (element.TryGetInt64(out var integer))
+        {
+            if (integer >= minimum && integer <= maximum)
+            {
+                value = integer;
+                return true;
+            }
+
+            value = default;
+            return false;
+        }
+
+        if (TryParseExactJsonInteger(element.GetRawText().AsSpan(), out var parsed)
             && parsed >= minimum
             && parsed <= maximum)
         {

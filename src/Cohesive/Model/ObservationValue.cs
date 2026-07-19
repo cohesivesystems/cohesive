@@ -26,8 +26,9 @@ namespace Cohesive.Model;
 /// <param name="bytes">The binary payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Bytes"/>.</param>
 /// <param name="dec">The exact base-10 payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Decimal"/>.</param>
 /// <remarks>
-/// Caller-owned object dictionaries, arrays, and byte buffers are snapshotted during construction. Subsequent
-/// mutation of the supplied storage does not change the observation value.
+/// Caller-owned mutable object dictionaries, arrays, and byte buffers are snapshotted during construction.
+/// Subsequent mutation of the supplied storage does not change the observation value. Immutable collection
+/// storage may be retained directly because its ownership contract prevents subsequent mutation.
 /// </remarks>
 [JsonConverter(typeof(ObservationValueJsonConverter))]
 public readonly struct ObservationValue(
@@ -42,6 +43,12 @@ public readonly struct ObservationValue(
     decimal dec = 0m
     ) : IEquatable<ObservationValue>
 {
+    ObservationValue(ImmutableArray<ObservationValue> array)
+        : this(ObservationValueKind.Array)
+    {
+        Array = array;
+    }
+
     /// <summary>
     /// Value shape kind.
     /// </summary>
@@ -212,6 +219,16 @@ public readonly struct ObservationValue(
             return null;
         if (fields.Count == 0)
             return EmptyObjectValues;
+        if (fields is ImmutableDictionary<string, ObservationValue> immutable
+            && ReferenceEquals(immutable.KeyComparer, StringComparer.Ordinal))
+        {
+            return fields;
+        }
+        if (fields is ImmutableSortedDictionary<string, ObservationValue> sorted
+            && ReferenceEquals(sorted.KeyComparer, StringComparer.Ordinal))
+        {
+            return fields;
+        }
 
         Dictionary<string, ObservationValue> snapshot = new(fields.Count, StringComparer.Ordinal);
         foreach (var (name, value) in fields)
@@ -243,7 +260,7 @@ public readonly struct ObservationValue(
         }
 
         var name = segment.Segment;
-        Dictionary<string, ObservationValue> fields = new(StringComparer.Ordinal);
+        var fields = ImmutableSortedDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
         if (current.Kind == ObservationValueKind.Object && current.Fields is not null)
         {
             foreach (var (key, existing) in current.Fields)
@@ -272,10 +289,7 @@ public readonly struct ObservationValue(
                 fields[name] = updated;
         }
 
-        var ordered = fields
-            .OrderBy(static pair => pair.Key, StringComparer.Ordinal)
-            .ToDictionary(static pair => pair.Key, static pair => pair.Value, StringComparer.Ordinal);
-        return FromObject(ordered);
+        return FromObject(fields.ToImmutable());
     }
 
     static readonly ObservationValue[] EmptyArrayValues = [];
@@ -360,10 +374,13 @@ public readonly struct ObservationValue(
         new(ObservationValueKind.Bytes, bytes: value);
 
     /// <summary>
-    /// Creates an object observation value and copies the provided properties.
+    /// Creates an object observation value, snapshotting mutable properties when necessary.
     /// </summary>
-    /// <param name="values">Caller-owned properties to snapshot.</param>
-    /// <returns>An object observation value backed by an ordinal, read-only property snapshot.</returns>
+    /// <param name="values">
+    /// Properties that may be retained when they use built-in immutable storage with ordinal key semantics;
+    /// otherwise caller-owned properties to snapshot.
+    /// </param>
+    /// <returns>An object observation value backed by ordinal, immutable or read-only property storage.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="values"/> is <see langword="null"/>.</exception>
     public static ObservationValue FromObject(IReadOnlyDictionary<string, ObservationValue> values)
     {
@@ -384,6 +401,25 @@ public readonly struct ObservationValue(
     }
 
     /// <summary>
+    /// Creates an array observation value backed directly by immutable item storage.
+    /// </summary>
+    /// <param name="values">Immutable array items whose backing storage is retained without copying.</param>
+    /// <returns>An array observation value backed by <paramref name="values"/>.</returns>
+    /// <exception cref="ArgumentException"><paramref name="values"/> is the default immutable array.</exception>
+    /// <remarks>
+    /// Unlike <see cref="FromArray(ObservationValue[])"/>, this factory does not copy the supplied storage because
+    /// <see cref="ImmutableArray{T}"/> carries an immutable ownership contract. Callers must not mutate its backing
+    /// storage through unsafe or interop APIs after construction.
+    /// </remarks>
+    public static ObservationValue FromImmutableArray(ImmutableArray<ObservationValue> values)
+    {
+        if (values.IsDefault)
+            throw new ArgumentException("Observation array items must be initialized.", nameof(values));
+
+        return new(values);
+    }
+
+    /// <summary>
     /// Converts a <see cref="JsonElement"/> into an <see cref="ObservationValue"/>.
     /// </summary>
     /// <exception cref="InvalidOperationException">Unsupported JsonValueKind.</exception>
@@ -399,7 +435,7 @@ public readonly struct ObservationValue(
         JsonValueKind.Number when element.TryGetDouble(out var dbl) => FromDouble(dbl),
         JsonValueKind.Number => FromDouble(double.Parse(element.GetRawText(), NumberStyles.Float, CultureInfo.InvariantCulture)),
         JsonValueKind.Object => FromObject(ReadObject(element)),
-        JsonValueKind.Array => FromArray(ReadArray(element)),
+        JsonValueKind.Array => FromImmutableArray(ReadArray(element)),
         _ => throw new InvalidOperationException($"Unsupported JsonValueKind '{element.ValueKind}'.")
     };
 
@@ -438,24 +474,24 @@ public readonly struct ObservationValue(
         return node switch
         {
             JsonObject obj => FromObject(ReadJsonObject(obj)),
-            JsonArray arr => FromArray(ReadAJsonArray(arr)),
+            JsonArray arr => FromImmutableArray(ReadJsonArray(arr)),
             _ => throw new NotSupportedException($"Unknown JsonNode type '{node.GetType().Name}'.")
         };
         
-        static IReadOnlyDictionary<string, ObservationValue> ReadJsonObject(JsonObject obj)
+        static IImmutableDictionary<string, ObservationValue> ReadJsonObject(JsonObject obj)
         {
-            Dictionary<string, ObservationValue> values = new(StringComparer.Ordinal);
+            var values = ImmutableSortedDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
             foreach (var (key, value) in obj)
                 values[key] = FromJsonNode(value);
-            return new ReadOnlyDictionary<string, ObservationValue>(values);
+            return values.ToImmutable();
         }
         
-        static ObservationValue[] ReadAJsonArray(JsonArray arr)
+        static ImmutableArray<ObservationValue> ReadJsonArray(JsonArray arr)
         {
-            List<ObservationValue> values = [];
+            var values = ImmutableArray.CreateBuilder<ObservationValue>(arr.Count);
             foreach (var item in arr)
                 values.Add(FromJsonNode(item));
-            return [.. values];
+            return values.MoveToImmutable();
         }
     }
 
@@ -655,7 +691,7 @@ public readonly struct ObservationValue(
             if (dictionary.Count == 0)
                 return FromObject(EmptyObjectValues);
 
-            Dictionary<string, ObservationValue> values = new(dictionary.Count, StringComparer.Ordinal);
+            var values = ImmutableSortedDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
             foreach (DictionaryEntry entry in dictionary)
             {
                 if (!TryProjectDictionaryKey(entry.Key, out var key))
@@ -663,7 +699,7 @@ public readonly struct ObservationValue(
                 values[key] = FromObjectCore(entry.Value, ref visited);
             }
 
-            return FromObject(values);
+            return FromObject(values.ToImmutable());
         }
         finally
         {
@@ -703,13 +739,15 @@ public readonly struct ObservationValue(
         var entered = TryEnterReference(enumerable, ref visited);
         try
         {
-            List<ObservationValue> values = [];
+            var capacity = enumerable is ICollection collection ? collection.Count : 0;
+            var values = ImmutableArray.CreateBuilder<ObservationValue>(capacity);
             foreach (var item in enumerable)
                 values.Add(FromObjectCore(item, ref visited));
 
-            return values.Count == 0
-                ? new(ObservationValueKind.Array, array: EmptyArrayValues)
-                : FromArray([.. values]);
+            var immutableValues = values.Count == values.Capacity
+                ? values.MoveToImmutable()
+                : values.ToImmutable();
+            return FromImmutableArray(immutableValues);
         }
         finally
         {
@@ -726,7 +764,7 @@ public readonly struct ObservationValue(
             if (properties.Length == 0)
                 return FromObject(EmptyObjectValues);
 
-            Dictionary<string, ObservationValue> values = new(properties.Length, StringComparer.Ordinal);
+            var values = ImmutableSortedDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
             foreach (var property in properties)
             {
                 if (ShouldIgnoreProperty(property))
@@ -738,7 +776,7 @@ public readonly struct ObservationValue(
 
             return values.Count == 0
                 ? FromObject(EmptyObjectValues)
-                : FromObject(values);
+                : FromObject(values.ToImmutable());
         }
         finally
         {
@@ -1545,20 +1583,20 @@ public readonly struct ObservationValue(
         }
     }
     
-    static IReadOnlyDictionary<string, ObservationValue> ReadObject(JsonElement element)
+    static IImmutableDictionary<string, ObservationValue> ReadObject(JsonElement element)
     {
-        Dictionary<string, ObservationValue> values = new(StringComparer.Ordinal);
+        var values = ImmutableSortedDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
         foreach (var property in element.EnumerateObject())
             values[property.Name] = FromJsonElement(property.Value);
-        return values;
+        return values.ToImmutable();
     }
 
-    static ObservationValue[] ReadArray(JsonElement element)
+    static ImmutableArray<ObservationValue> ReadArray(JsonElement element)
     {
-        List<ObservationValue> values = [];
+        var values = ImmutableArray.CreateBuilder<ObservationValue>(element.GetArrayLength());
         foreach (var item in element.EnumerateArray())
             values.Add(FromJsonElement(item));
-        return [.. values];
+        return values.MoveToImmutable();
     }
 
     static bool TryParseExactJsonDecimal(ReadOnlySpan<char> text, out decimal result)

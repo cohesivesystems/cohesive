@@ -437,21 +437,102 @@ public abstract record CosmosSqlExpression
 
     /// <summary>Creates a call to an allow-listed Cosmos SQL scalar function.</summary>
     /// <param name="function">Function to emit.</param>
-    /// <param name="arguments">Arguments in semantic call order.</param>
+    /// <param name="argument">The function argument.</param>
+    /// <returns>A scalar function-call expression.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="argument"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">The function does not accept one argument.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="function"/> is unsupported.</exception>
+    public static CosmosSqlExpression Function(
+        CosmosSqlFunction function,
+        CosmosSqlExpression argument)
+    {
+        ArgumentNullException.ThrowIfNull(argument);
+        ImmutableArray<CosmosSqlExpression> arguments = [argument];
+        ValidateFunction(function, arguments.AsSpan(), nameof(argument));
+        return new FunctionExpression(function, arguments);
+    }
+
+    /// <summary>Creates a call to an allow-listed Cosmos SQL scalar function.</summary>
+    /// <param name="function">Function to emit.</param>
+    /// <param name="firstArgument">The first function argument.</param>
+    /// <param name="secondArgument">The second function argument.</param>
+    /// <returns>A scalar function-call expression.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="firstArgument"/> or <paramref name="secondArgument"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">The function does not accept two arguments.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="function"/> is unsupported.</exception>
+    public static CosmosSqlExpression Function(
+        CosmosSqlFunction function,
+        CosmosSqlExpression firstArgument,
+        CosmosSqlExpression secondArgument)
+    {
+        ArgumentNullException.ThrowIfNull(firstArgument);
+        ArgumentNullException.ThrowIfNull(secondArgument);
+        ImmutableArray<CosmosSqlExpression> arguments = [firstArgument, secondArgument];
+        ValidateFunction(function, arguments.AsSpan(), nameof(firstArgument));
+        return new FunctionExpression(function, arguments);
+    }
+
+    /// <summary>Creates a call to an allow-listed Cosmos SQL scalar function.</summary>
+    /// <param name="function">Function to emit.</param>
+    /// <param name="firstArgument">The first function argument.</param>
+    /// <param name="secondArgument">The second function argument.</param>
+    /// <param name="thirdArgument">The third function argument.</param>
+    /// <returns>A scalar function-call expression.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="firstArgument"/>, <paramref name="secondArgument"/>, or <paramref name="thirdArgument"/>
+    /// is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">The function does not accept three arguments.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="function"/> is unsupported.</exception>
+    public static CosmosSqlExpression Function(
+        CosmosSqlFunction function,
+        CosmosSqlExpression firstArgument,
+        CosmosSqlExpression secondArgument,
+        CosmosSqlExpression thirdArgument)
+    {
+        ArgumentNullException.ThrowIfNull(firstArgument);
+        ArgumentNullException.ThrowIfNull(secondArgument);
+        ArgumentNullException.ThrowIfNull(thirdArgument);
+        ImmutableArray<CosmosSqlExpression> arguments = [firstArgument, secondArgument, thirdArgument];
+        ValidateFunction(function, arguments.AsSpan(), nameof(firstArgument));
+        return new FunctionExpression(function, arguments);
+    }
+
+    /// <summary>Creates a call to an allow-listed Cosmos SQL scalar function.</summary>
+    /// <param name="function">Function to emit.</param>
+    /// <param name="arguments">Immutable arguments in semantic call order; their storage is retained without copying.</param>
+    /// <returns>A scalar function-call expression.</returns>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="arguments"/> is default, contains a <see langword="null"/> entry, or has invalid function arity.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="function"/> is unsupported.</exception>
+    public static CosmosSqlExpression FunctionFromImmutable(
+        CosmosSqlFunction function,
+        ImmutableArray<CosmosSqlExpression> arguments)
+    {
+        if (arguments.IsDefault)
+            throw new ArgumentException("Cosmos SQL function arguments cannot be default.", nameof(arguments));
+        ValidateFunction(function, arguments.AsSpan(), nameof(arguments));
+        return new FunctionExpression(function, arguments);
+    }
+
+    /// <summary>Creates a call to an allow-listed Cosmos SQL scalar function.</summary>
+    /// <param name="function">Function to emit.</param>
+    /// <param name="arguments">
+    /// Mutable arguments in semantic call order. The array is defensively copied before this method returns.
+    /// </param>
     /// <returns>A scalar function-call expression.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="arguments"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">An argument is <see langword="null"/> or the function arity is invalid.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="function"/> is unsupported.</exception>
-    public static CosmosSqlExpression Function(
+    public static CosmosSqlExpression FunctionFromMutable(
         CosmosSqlFunction function,
-        params CosmosSqlExpression[] arguments)
+        CosmosSqlExpression[] arguments)
     {
         ArgumentNullException.ThrowIfNull(arguments);
-        if (!Enum.IsDefined(function))
-            throw new ArgumentOutOfRangeException(nameof(function), function, "Unsupported Cosmos SQL scalar function.");
-        if (arguments.Any(static argument => argument is null))
-            throw new ArgumentException("Cosmos SQL function arguments cannot contain null entries.", nameof(arguments));
-        CosmosSqlFunctions.ValidateArity(function, arguments.Length, nameof(arguments));
+        ValidateFunction(function, arguments.AsSpan(), nameof(arguments));
         return new FunctionExpression(function, [.. arguments]);
     }
 
@@ -475,23 +556,133 @@ public abstract record CosmosSqlExpression
     }
 
     /// <summary>Creates an object expression with safely escaped JSON property names.</summary>
-    /// <param name="properties">Object properties in emitted order.</param>
+    /// <param name="property">The single object property.</param>
+    /// <returns>A Cosmos SQL object-construction expression.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="property"/> is <see langword="null"/>.</exception>
+    public static CosmosSqlExpression Object(CosmosSqlObjectProperty property)
+    {
+        ArgumentNullException.ThrowIfNull(property);
+        return new ObjectExpression([property]);
+    }
+
+    /// <summary>Creates an object expression with safely escaped JSON property names.</summary>
+    /// <param name="firstProperty">The first object property.</param>
+    /// <param name="secondProperty">The second object property.</param>
+    /// <returns>A Cosmos SQL object-construction expression.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="firstProperty"/> or <paramref name="secondProperty"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">The properties repeat a property name.</exception>
+    public static CosmosSqlExpression Object(
+        CosmosSqlObjectProperty firstProperty,
+        CosmosSqlObjectProperty secondProperty)
+    {
+        ArgumentNullException.ThrowIfNull(firstProperty);
+        ArgumentNullException.ThrowIfNull(secondProperty);
+        if (string.Equals(firstProperty.Name, secondProperty.Name, StringComparison.Ordinal))
+            throw DuplicateObjectProperty(nameof(secondProperty));
+        ImmutableArray<CosmosSqlObjectProperty> properties = [firstProperty, secondProperty];
+        return new ObjectExpression(properties);
+    }
+
+    /// <summary>Creates an object expression with safely escaped JSON property names.</summary>
+    /// <param name="firstProperty">The first object property.</param>
+    /// <param name="secondProperty">The second object property.</param>
+    /// <param name="thirdProperty">The third object property.</param>
+    /// <returns>A Cosmos SQL object-construction expression.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="firstProperty"/>, <paramref name="secondProperty"/>, or <paramref name="thirdProperty"/>
+    /// is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">The properties repeat a property name.</exception>
+    public static CosmosSqlExpression Object(
+        CosmosSqlObjectProperty firstProperty,
+        CosmosSqlObjectProperty secondProperty,
+        CosmosSqlObjectProperty thirdProperty)
+    {
+        ArgumentNullException.ThrowIfNull(firstProperty);
+        ArgumentNullException.ThrowIfNull(secondProperty);
+        ArgumentNullException.ThrowIfNull(thirdProperty);
+        if (string.Equals(firstProperty.Name, secondProperty.Name, StringComparison.Ordinal))
+            throw DuplicateObjectProperty(nameof(secondProperty));
+        if (string.Equals(firstProperty.Name, thirdProperty.Name, StringComparison.Ordinal)
+            || string.Equals(secondProperty.Name, thirdProperty.Name, StringComparison.Ordinal))
+        {
+            throw DuplicateObjectProperty(nameof(thirdProperty));
+        }
+        ImmutableArray<CosmosSqlObjectProperty> properties = [firstProperty, secondProperty, thirdProperty];
+        return new ObjectExpression(properties);
+    }
+
+    /// <summary>Creates an object expression with safely escaped JSON property names.</summary>
+    /// <param name="properties">Immutable object properties in emitted order; their storage is retained without copying.</param>
+    /// <returns>A Cosmos SQL object-construction expression.</returns>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="properties"/> is default or empty, contains a <see langword="null"/> entry, or repeats a property name.
+    /// </exception>
+    public static CosmosSqlExpression ObjectFromImmutable(ImmutableArray<CosmosSqlObjectProperty> properties)
+    {
+        if (properties.IsDefault)
+            throw new ArgumentException("Cosmos SQL object properties cannot be default.", nameof(properties));
+        ValidateObjectProperties(properties.AsSpan(), nameof(properties));
+        return new ObjectExpression(properties);
+    }
+
+    /// <summary>Creates an object expression with safely escaped JSON property names.</summary>
+    /// <param name="properties">
+    /// Mutable object properties in emitted order. The array is defensively copied before this method returns.
+    /// </param>
     /// <returns>A Cosmos SQL object-construction expression.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="properties"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
     /// <paramref name="properties"/> is empty, contains a <see langword="null"/> entry, or repeats a property name.
     /// </exception>
-    public static CosmosSqlExpression Object(params CosmosSqlObjectProperty[] properties)
+    public static CosmosSqlExpression ObjectFromMutable(CosmosSqlObjectProperty[] properties)
     {
         ArgumentNullException.ThrowIfNull(properties);
-        if (properties.Length == 0)
-            throw new ArgumentException("A Cosmos SQL object expression requires at least one property.", nameof(properties));
-        if (properties.Any(static property => property is null))
-            throw new ArgumentException("Cosmos SQL object properties cannot contain null entries.", nameof(properties));
-        if (properties.GroupBy(static property => property.Name, StringComparer.Ordinal).Any(static group => group.Count() > 1))
-            throw new ArgumentException("A Cosmos SQL object expression cannot repeat a property name.", nameof(properties));
+        ValidateObjectProperties(properties.AsSpan(), nameof(properties));
         return new ObjectExpression([.. properties]);
     }
+
+    static void ValidateFunction(
+        CosmosSqlFunction function,
+        ReadOnlySpan<CosmosSqlExpression> arguments,
+        string argumentsParameterName)
+    {
+        if (!Enum.IsDefined(function))
+            throw new ArgumentOutOfRangeException(nameof(function), function, "Unsupported Cosmos SQL scalar function.");
+        foreach (var argument in arguments)
+        {
+            if (argument is null)
+                throw new ArgumentException(
+                    "Cosmos SQL function arguments cannot contain null entries.",
+                    argumentsParameterName);
+        }
+        CosmosSqlFunctions.ValidateArity(function, arguments.Length, nameof(function));
+    }
+
+    static void ValidateObjectProperties(
+        ReadOnlySpan<CosmosSqlObjectProperty> properties,
+        string parameterName)
+    {
+        if (properties.IsEmpty)
+            throw new ArgumentException("A Cosmos SQL object expression requires at least one property.", parameterName);
+        for (var index = 0; index < properties.Length; index++)
+        {
+            var property = properties[index];
+            if (property is null)
+                throw new ArgumentException("Cosmos SQL object properties cannot contain null entries.", parameterName);
+            for (var priorIndex = 0; priorIndex < index; priorIndex++)
+            {
+                if (string.Equals(properties[priorIndex].Name, property.Name, StringComparison.Ordinal))
+                    throw DuplicateObjectProperty(parameterName);
+            }
+        }
+    }
+
+    static ArgumentException DuplicateObjectProperty(string parameterName) => new(
+        "A Cosmos SQL object expression cannot repeat a property name.",
+        parameterName);
 
     internal abstract void WriteTo(CosmosSqlRenderContext context, StringBuilder builder);
 
