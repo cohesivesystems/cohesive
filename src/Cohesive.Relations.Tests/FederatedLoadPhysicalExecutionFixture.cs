@@ -38,15 +38,10 @@ static class FederatedLoadPhysicalExecutionFixture
         var plan = compilation.Plan;
         var realization = RelationQueryInMemoryInterpreter.Default.Realize(plan);
         var placement = CreatePlacement(plan, maximumBatchSize, customerMaximumBufferedRows);
-        var policy = new RelationQueryPhysicalPlanningPolicy(
-            new($"tests/federated-execution-policy/batch-{maximumBatchSize}/v1"),
-            conventionSetVersion: "tests/federated-execution-conventions/v1",
+        var policy = CreatePolicy(
             maximumBatchSize,
-            maximumBufferedRows: 100,
             maximumLocalRows,
-            maximumFanOut: 100,
-            maximumReferenceKeysPerObservation,
-            maximumConcurrency: 4);
+            maximumReferenceKeysPerObservation);
         var physicalResult = RelationQueryPhysicalPlanner.Compile(
             plan,
             realization,
@@ -62,6 +57,20 @@ static class FederatedLoadPhysicalExecutionFixture
 
         return new(plan, realization, placement, physicalResult.Plan);
     }
+
+    public static RelationQueryPhysicalPlanningPolicy CreatePolicy(
+        long maximumBatchSize = 2,
+        long maximumLocalRows = 100,
+        long maximumReferenceKeysPerObservation = 100) =>
+        new(
+            new($"tests/federated-execution-policy/batch-{maximumBatchSize}/v1"),
+            conventionSetVersion: "tests/federated-execution-conventions/v1",
+            maximumBatchSize,
+            maximumBufferedRows: 100,
+            maximumLocalRows,
+            maximumFanOut: 100,
+            maximumReferenceKeysPerObservation,
+            maximumConcurrency: 4);
 
     public static RelationQuerySourceInstance Source(
         Compilation compilation,
@@ -79,10 +88,10 @@ static class FederatedLoadPhysicalExecutionFixture
                 "tests/in-memory-capability"))
     ];
 
-    static RelationQuerySourcePlacement CreatePlacement(
+    public static RelationQuerySourcePlacement CreatePlacement(
         CompiledRelationQueryPlan plan,
-        long maximumBatchSize,
-        long customerMaximumBufferedRows)
+        long maximumBatchSize = 2,
+        long customerMaximumBufferedRows = 100)
     {
         List<RelationQuerySourcePlacementBinding> bindings = [];
         foreach (var source in plan.InputContract.Sources)
@@ -187,8 +196,10 @@ static class FederatedLoadPhysicalExecutionFixture
 
     static RelationQuerySourceInstanceId SourceForShape(QualifiedShapeId shape) =>
         shape == FederatedLoadRelationFixture.LoadShapeId
+            || shape == LoadCustomerRelationFixture.LoadShapeId
             ? LoadsSource
             : shape == FederatedLoadRelationFixture.CustomerShapeId
+                || shape == LoadCustomerRelationFixture.CustomerShapeId
                 ? CustomersSource
                 : shape == FederatedLoadRelationFixture.EquipmentShapeId
                     ? EquipmentSource

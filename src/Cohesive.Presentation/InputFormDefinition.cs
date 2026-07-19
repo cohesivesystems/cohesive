@@ -1,6 +1,5 @@
 using System.Text.Json.Serialization;
 using Cohesive.Model;
-using Cohesive.Relations.Queries;
 
 namespace Cohesive.Presentation;
 
@@ -776,12 +775,12 @@ public sealed record QueryFormHistoryPolicyDefinition(
 );
 
 /// <summary>
-/// Binds one query-form field to a Relations-style entity predicate.
+/// Binds one query-form field to a canonical relation-query predicate intent.
 /// </summary>
 /// <remarks>
-/// The binding identifies the target <see cref="FieldPredicate"/> and the
-/// predicate family. Target renderers combine this template with runtime field
-/// values to build a concrete <see cref="EntityPredicate"/>.
+/// The binding identifies a semantic field path and predicate family. Target
+/// lowerers combine this template with runtime field values to build canonical
+/// <see cref="Expr"/> nodes subject to the selected target's declared capabilities.
 /// </remarks>
 /// <param name="Id">Stable predicate binding identifier scoped to the query form.</param>
 /// <param name="FieldId">Input-form field that supplies the runtime value.</param>
@@ -801,7 +800,7 @@ public sealed record QueryFormPredicateBindingDefinition(
 );
 
 /// <summary>
-/// Classifies the <see cref="ValuePredicate"/> family produced by a query-form field.
+/// Classifies the predicate intent produced by a query-form field.
 /// </summary>
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum QueryFormPredicateKind

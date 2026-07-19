@@ -2,6 +2,8 @@ using System.Collections.Immutable;
 using System.Linq.Expressions;
 using System.Reflection;
 using Cohesive.Model.Serialization;
+using Cohesive.Relations.Compilation;
+using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.Serialization;
@@ -29,7 +31,9 @@ public sealed partial class RelationQueryExpressionAuthoring
     readonly RelationQueryExpressionLowerer lowerer;
     readonly Dictionary<Type, ClrPathRegistration> clrPaths = [];
     readonly Dictionary<RelationshipId, RelationshipDefinition> relationships = [];
-    readonly HashSet<RelationQueryDefinitionFingerprint> builtQueryFingerprints = [];
+    readonly HashSet<RelationQueryDefinitionFingerprint> builtDefinitionFingerprints = [];
+    readonly Dictionary<object, AuthoredEvaluationSnapshot> authoredEvaluationSnapshots =
+        new(ReferenceEqualityComparer.Instance);
 
     /// <summary>Creates a CLR expression-authoring session.</summary>
     /// <param name="clr">
@@ -85,6 +89,51 @@ public sealed partial class RelationQueryExpressionAuthoring
     public RelationshipCatalogDocument CreateRelationshipCatalogDocument(
         RelationshipCatalogDocumentMetadata? metadata = null) =>
         RelationshipCatalogDocument.FromCatalog(RelationshipCatalog, metadata);
+
+    /// <summary>
+    /// Begins an evaluation using the exact definition and semantic context captured when this session built the
+    /// supplied terminal result.
+    /// </summary>
+    /// <typeparam name="TDefinition">Canonical relation or query definition type.</typeparam>
+    /// <param name="authored">Exact validated terminal result instance produced by this expression-authoring session.</param>
+    /// <param name="evaluation">Caller-assigned runtime evaluation identity.</param>
+    /// <param name="planReference">Optional exact compiled-plan attribution.</param>
+    /// <returns>
+    /// An evaluation builder carrying the shape snapshots and relationship catalog captured at terminal-build time.
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="authored"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="authored"/> was not successfully produced by this authoring session or
+    /// <paramref name="planReference"/> identifies another definition.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// An authored semantic snapshot cannot be represented by canonical serialization.
+    /// </exception>
+    /// <exception cref="NotSupportedException">
+    /// An authored semantic snapshot contains a runtime type unsupported by canonical serialization.
+    /// </exception>
+    public RelationQueryEvaluationBuilder Evaluate<TDefinition>(
+        RelationQueryAuthoringResult<TDefinition> authored,
+        RelationQueryEvaluationId evaluation,
+        RelationQueryCompiledPlanReference? planReference = null)
+        where TDefinition : RelationQueryDefinition
+    {
+        ArgumentNullException.ThrowIfNull(authored);
+        if (!authored.Validation.IsValid
+            || !authoredEvaluationSnapshots.TryGetValue(authored, out var snapshot))
+        {
+            throw new ArgumentException(
+                "The authored definition was not successfully produced by this expression-authoring session.",
+                nameof(authored));
+        }
+
+        return new(
+            authored.CreateDocument(),
+            evaluation,
+            snapshot.ShapeDocuments,
+            RelationshipCatalogDocument.FromCatalog(snapshot.RelationshipCatalog),
+            planReference);
+    }
 
     internal RelationQueryExpressionLowerer ExpressionLowerer => lowerer;
 
@@ -836,12 +885,7 @@ public sealed partial class RelationQueryExpressionAuthoring
             name,
             [.. materialized.Select(static result => result.Structural)],
             Source(reference, $"Expression-authored query '{name.Value}'."));
-        if (builtQuery.Validation.IsValid)
-        {
-            builtQueryFingerprints.Add(RelationQueryDefinitionFingerprinter.Compute(builtQuery.Definition));
-        }
-
-        return builtQuery;
+        return CaptureSuccessfulBuild(builtQuery);
     }
 
     /// <summary>Builds and validates a canonical query from typed named results.</summary>
@@ -909,7 +953,8 @@ public sealed partial class RelationQueryExpressionAuthoring
             key: null,
             invariants: invariants,
             sourceReference: terminal.Reference);
-        return WithConventionRelationRoot(WithRelationTerminalProvenance(result, terminal), root, terminal.Source);
+        return CaptureSuccessfulBuild(
+            WithConventionRelationRoot(WithRelationTerminalProvenance(result, terminal), root, terminal.Source));
     }
 
     /// <summary>Builds a convention-identified relation without an output key.</summary>
@@ -964,7 +1009,7 @@ public sealed partial class RelationQueryExpressionAuthoring
             key: null,
             invariants: invariants,
             sourceReference: terminal.Reference);
-        return WithRelationTerminalProvenance(result, terminal);
+        return CaptureSuccessfulBuild(WithRelationTerminalProvenance(result, terminal));
     }
 
     /// <summary>
@@ -1007,16 +1052,17 @@ public sealed partial class RelationQueryExpressionAuthoring
         where TOutput : notnull
     {
         ArgumentNullException.ThrowIfNull(root);
-        return BuildRelationCore(
-            id,
-            name,
-            root,
-            output,
-            outputBinding,
-            mode,
-            key,
-            invariants,
-            sourceReference);
+        return CaptureSuccessfulBuild(
+            BuildRelationCore(
+                id,
+                name,
+                root,
+                output,
+                outputBinding,
+                mode,
+                key,
+                invariants,
+                sourceReference));
     }
 
     RelationQueryAuthoringResult<RelationDefinition> BuildRelationCore<TOutputNode, TOutput>(
@@ -1049,6 +1095,22 @@ public sealed partial class RelationQueryExpressionAuthoring
             invariants,
             Source(reference, $"Expression-authored relation '{name.Value}'."),
             key is null ? null : Source(reference + "/key", "Relation output key."));
+    }
+
+    internal RelationQueryAuthoringResult<TDefinition> CaptureSuccessfulBuild<TDefinition>(
+        RelationQueryAuthoringResult<TDefinition> authored)
+        where TDefinition : RelationQueryDefinition
+    {
+        if (!authored.Validation.IsValid)
+            return authored;
+
+        builtDefinitionFingerprints.Add(RelationQueryDefinitionFingerprinter.Compute(authored.Definition));
+        authoredEvaluationSnapshots.Add(
+            authored,
+            new(
+                ShapeDocuments,
+                RelationshipCatalog));
+        return authored;
     }
 
     ResolvedRelationTerminal ResolveRelationTerminal(
@@ -1314,16 +1376,16 @@ public sealed partial class RelationQueryExpressionAuthoring
         }
     }
 
-    internal void RequireInvocationDefinition(
-        RelationQueryInvocationBuilder builder,
+    internal void RequireEvaluationDefinition(
+        RelationQueryEvaluationBuilder builder,
         string parameterName)
     {
         ArgumentNullException.ThrowIfNull(builder);
-        if (!builtQueryFingerprints.Contains(builder.DefinitionFingerprint))
+        if (!builtDefinitionFingerprints.Contains(builder.DefinitionFingerprint))
         {
             throw new ArgumentException(
                 "The typed declaration belongs to an expression-authoring session that did not produce "
-                + "the exact canonical query definition being invoked.",
+                + "the exact canonical query definition being evaluated.",
                 parameterName);
         }
     }
@@ -1336,6 +1398,10 @@ public sealed partial class RelationQueryExpressionAuthoring
     sealed record ClrPathRegistration(
         QualifiedShapeId Id,
         Func<IReadOnlyList<PropertyInfo>, FieldPath> Resolve);
+
+    sealed record AuthoredEvaluationSnapshot(
+        ImmutableArray<ShapeGraphDocument> ShapeDocuments,
+        RelationshipCatalog RelationshipCatalog);
 
     sealed record ResolvedRelationTerminal(
         RelationId Id,

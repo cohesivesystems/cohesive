@@ -2367,7 +2367,7 @@ sealed class RelationQueryRequirementGraphBuilder
         new($"input/identity/{Encode(producer.Value)}/{Encode(binding.Value)}/{ShapeKey(shape)}");
 
     static RelationQueryInputId CreateSourceSetInputId(QueryNodeId source) =>
-        new($"input/source-set/{Encode(source.Value)}");
+        RelationQueryInputIds.ForSource(source);
 
     static RelationQueryInputId CreateRelationshipInputId(QueryNodeId traversal) =>
         new($"input/relationship/{Encode(traversal.Value)}");

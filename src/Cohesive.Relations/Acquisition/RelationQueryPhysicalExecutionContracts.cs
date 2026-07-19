@@ -325,20 +325,6 @@ public static class RelationQueryPhysicalExecutionDiagnosticCodes
     public const string StageInvalid = "REL2207";
 }
 
-/// <summary>Overall outcome of composed physical acquisition and canonical interpretation.</summary>
-[JsonConverter(typeof(JsonStringEnumConverter))]
-public enum RelationQueryPhysicalExecutionStatus
-{
-    /// <summary>Acquisition and canonical interpretation completed conclusively.</summary>
-    Succeeded = 0,
-
-    /// <summary>Attributable partial or inconclusive evidence produced an incomplete interpretation.</summary>
-    Incomplete = 1,
-
-    /// <summary>A physical contract violation or canonical execution failure prevented success.</summary>
-    Failed = 2
-}
-
 /// <summary>Immutable in-process result of bounded acquisition followed by canonical interpretation.</summary>
 /// <remarks>
 /// This composite runtime result is not a persisted JSON wire contract. When interpretation ran, <see cref="Evidence"/>
@@ -348,7 +334,8 @@ public enum RelationQueryPhysicalExecutionStatus
 public sealed class RelationQueryPhysicalExecutionResult
 {
     /// <summary>Creates a physical execution result.</summary>
-    /// <param name="status">Overall physical execution status.</param>
+    /// <param name="request">Exact physical execution request represented by this result.</param>
+    /// <param name="status">Canonical status spanning physical acquisition and interpretation.</param>
     /// <param name="evidence">
     /// Exact assembled runtime evidence instance, or <see langword="null"/> when preflight failed.
     /// </param>
@@ -360,23 +347,40 @@ public sealed class RelationQueryPhysicalExecutionResult
     /// <param name="diagnostics">Physical preflight or acquisition-contract diagnostics.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="status"/> is unsupported.</exception>
     /// <exception cref="ArgumentException">
-    /// Result components conflict, interpretation does not share the exact <paramref name="evidence"/> instance,
-    /// a collection contains <see langword="null"/>, or diagnostics contain duplicates.
+    /// Result components conflict, evidence does not belong to <paramref name="request"/>, interpretation does not
+    /// share the exact <paramref name="evidence"/> instance,
+    /// <paramref name="status"/> differs from the canonical interpretation status, a collection contains
+    /// <see langword="null"/>, or diagnostics contain duplicates.
     /// </exception>
     public RelationQueryPhysicalExecutionResult(
-        RelationQueryPhysicalExecutionStatus status,
+        RelationQueryPhysicalExecutionRequest request,
+        RelationQueryExecutionStatus status,
         RelationQueryRuntimeEvidence? evidence,
         RelationQueryExecutionResult? interpretation,
         ImmutableArray<RelationQuerySourceReadTrace> sourceReads = default,
-        ImmutableArray<RelationQueryPhysicalExecutionDiagnostic> diagnostics = default)
+        ImmutableArray<RelationQueryPhysicalExecutionDiagnostic> diagnostics = default
+        )
     {
+        Request = Guard.RequireNotNull(request);
         if (!Enum.IsDefined(status))
             throw new ArgumentOutOfRangeException(nameof(status), status, "Unsupported physical execution status.");
-        if ((status is RelationQueryPhysicalExecutionStatus.Succeeded or RelationQueryPhysicalExecutionStatus.Incomplete)
+        if ((status is RelationQueryExecutionStatus.Succeeded or RelationQueryExecutionStatus.Incomplete)
             && (evidence is null || interpretation is null))
             throw new ArgumentException("A non-failed physical result requires evidence and canonical interpretation.", nameof(evidence));
         if (interpretation is not null && !ReferenceEquals(evidence, interpretation.Evidence))
             throw new ArgumentException("Physical result evidence must be the exact snapshot interpreted canonically.", nameof(interpretation));
+        if (evidence is not null
+            && (evidence.Evaluation != Request.Evaluation
+                || !evidence.PlanReference.GetMismatchedComponents(Request.Plan).IsDefaultOrEmpty))
+        {
+            throw new ArgumentException(
+                "Physical result evidence must belong to the exact execution request evaluation and semantic plan.",
+                nameof(evidence));
+        }
+        if (interpretation is not null && status != interpretation.Status)
+            throw new ArgumentException(
+                "Physical result status must equal the canonical interpretation status.",
+                nameof(status));
         var reads = sourceReads.IsDefault ? [] : sourceReads;
         var normalizedDiagnostics = diagnostics.IsDefault ? [] : diagnostics;
         if (reads.Any(static trace => trace is null))
@@ -403,8 +407,11 @@ public sealed class RelationQueryPhysicalExecutionResult
         ];
     }
 
-    /// <summary>Overall physical execution status.</summary>
-    public RelationQueryPhysicalExecutionStatus Status { get; }
+    /// <summary>Exact physical execution request represented by this result.</summary>
+    public RelationQueryPhysicalExecutionRequest Request { get; }
+
+    /// <summary>Canonical status spanning physical acquisition and interpretation.</summary>
+    public RelationQueryExecutionStatus Status { get; }
 
     /// <summary>
     /// Exact assembled runtime evidence shared with <see cref="RelationQueryExecutionResult.Evidence"/>, or
@@ -423,5 +430,5 @@ public sealed class RelationQueryPhysicalExecutionResult
 
     /// <summary>Whether acquisition and canonical interpretation succeeded conclusively.</summary>
     [JsonIgnore]
-    public bool IsSuccessful => Status == RelationQueryPhysicalExecutionStatus.Succeeded;
+    public bool IsSuccessful => Status == RelationQueryExecutionStatus.Succeeded;
 }

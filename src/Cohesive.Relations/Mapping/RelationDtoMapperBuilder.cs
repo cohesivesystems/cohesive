@@ -18,22 +18,25 @@ static class RelationDtoMapperBuilder
     internal static RelationDtoMapperCompilationResult<TOutput> Compile<TOutput>(
         CompiledRelationQueryPlan plan,
         RelationDtoMapperProfile profile,
-        RelationDtoMapperCompilationOptions options)
+        RelationDtoMapperCompilationOptions options
+        )
     {
         var diagnostics = ImmutableArray.CreateBuilder<RelationDtoMapperDiagnostic>();
         var outputType = typeof(TOutput);
         var planReference = RelationQueryCompiledPlanReference.From(plan);
         var compilation = new RelationDtoMapperCompilationDescriptor(
-            planReference,
-            outputType,
-            profile.Id,
-            profile.Fingerprint,
-            options.Fingerprint,
-            RelationDtoMapperFingerprint.ComputeCompilation(
+            planReference: planReference,
+            outputType: outputType,
+            profileId: profile.Id,
+            profileFingerprint: profile.Fingerprint,
+            optionsFingerprint: options.Fingerprint,
+            compilationIdentity: RelationDtoMapperFingerprint.ComputeCompilation(
                 planReference,
                 outputType,
                 profile.Fingerprint,
-                options.Fingerprint));
+                options.Fingerprint
+                )
+            );
         var terminal = plan.ExecutionSlice.RelationOutput;
         if (terminal is null)
         {
@@ -174,7 +177,8 @@ static class RelationDtoMapperBuilder
                 $"CLR member '{duplicate.Key.Name}' is selected by more than one demanded output field.",
                 terminal.Relation,
                 outputShapeId,
-                targetMember: duplicate.Key.Name));
+                targetMember: duplicate.Key.Name
+                ));
         }
 
         var mappedProperties = preliminary.Select(static binding => binding.Property).ToHashSet();
@@ -335,7 +339,8 @@ static class RelationDtoMapperBuilder
                 constructorParameters,
                 parameterProperties,
                 preliminary,
-                compiledBindings);
+                compiledBindings
+                );
         }
         catch (Exception exception) when (exception is not OutOfMemoryException
                                           and not StackOverflowException
@@ -356,14 +361,17 @@ static class RelationDtoMapperBuilder
                 binding.TargetMember,
                 binding.TargetType,
                 binding.BindingSource,
-                binding.OutputReference))
+                binding.OutputReference
+                )
+            )
             .ToImmutableArray();
         var descriptor = new RelationDtoMapperDescriptor(
             compilation,
             terminal.Relation,
             terminal.Definition.Shape,
             terminal.Definition.Mode,
-            memberDescriptors);
+            memberDescriptors
+            );
         return new(compilation, new(descriptor, kernel), Sort(diagnostics));
     }
 
@@ -372,7 +380,8 @@ static class RelationDtoMapperBuilder
         IReadOnlyList<ParameterInfo> constructorParameters,
         IReadOnlyDictionary<ParameterInfo, PropertyInfo> parameterProperties,
         IReadOnlyList<PreliminaryBinding> preliminary,
-        IReadOnlyList<RelationDtoCompiledBinding> compiledBindings)
+        IReadOnlyList<RelationDtoCompiledBinding> compiledBindings
+        )
     {
         var value = Expression.Parameter(typeof(ObservationValue), "value");
         var bindingByProperty = preliminary
@@ -399,7 +408,8 @@ static class RelationDtoMapperBuilder
                 {
                     arguments[index] = Expression.Constant(
                         NormalizeDefault(parameter, parameter.ParameterType),
-                        parameter.ParameterType);
+                        parameter.ParameterType
+                        );
                 }
             }
             created = Expression.New(constructor, arguments);
@@ -421,7 +431,8 @@ static class RelationDtoMapperBuilder
     static MethodCallExpression Read(
         ParameterExpression value,
         RelationDtoCompiledBinding binding,
-        Type destinationType) =>
+        Type destinationType
+        ) =>
         Expression.Call(
             ReadMethod.MakeGenericMethod(
                 destinationType,
@@ -490,8 +501,8 @@ static class RelationDtoMapperBuilder
                 .Where(candidate => string.Equals(
                     candidate.Property.Name,
                     explicitBinding.TargetMember,
-                    StringComparison.Ordinal))
-                .ToArray();
+                    StringComparison.Ordinal
+                )).ToArray();
             if (matches.Length == 1)
             {
                 property = matches[0].Property;
@@ -825,8 +836,7 @@ static class RelationDtoMapperBuilder
         string? targetMember = null,
         QueryNodeId? node = null,
         QueryAssignmentId? assignment = null) =>
-        new(
-            code,
+        new(code,
             DiagnosticSeverity.Error,
             RelationDtoMapperDiagnosticPhase.Compilation,
             message,

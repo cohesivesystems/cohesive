@@ -364,7 +364,7 @@ public sealed class RelationQueryExpressionAuthoringTests
     }
 
     [Fact]
-    public void EnrichedRelationQueryAggregationAndInvocation_LowerThroughOneTypedSession()
+    public void EnrichedRelationQueryAggregationAndEvaluation_LowerThroughOneTypedSession()
     {
         var author = RelationQuery.Expression();
         var loadCustomer = author.Relationship<Load, Customer>(
@@ -471,16 +471,27 @@ public sealed class RelationQueryExpressionAuthoringTests
             Descendants(any.Arguments[1]).OfType<ParameterExpr>(),
             parameter => parameter.Parameter == location.Id.Value);
 
-        var invocation = query.CreateDocument()
-            .Invoke(new RelationQueryEvaluationId("request/42"))
+        var evaluation = author.Evaluate(
+                query,
+                new RelationQueryEvaluationId("request/42"))
             .Set(location, "Seattle")
             .Select(rows, document => document.Id, document => document.CustomerName)
             .Select(aggregation)
             .Select(totalAggregation)
             .Build();
 
-        Assert.Equal(ObservationValue.FromString("Seattle"), Assert.Single(invocation.Parameters).Value);
-        Assert.Equal(3, invocation.Demand.QueryResults.Length);
+        Assert.Equal(ObservationValue.FromString("Seattle"), Assert.Single(evaluation.Parameters).Value);
+        Assert.Equal(3, evaluation.Demand.QueryResults.Length);
+        Assert.Equal(author.ShapeDocuments.Length, evaluation.Compilation.ShapeDocuments.Length);
+        Assert.Equal(author.RelationshipCatalog.Count, evaluation.Compilation.RelationshipCatalogDocument?.Catalog.Count);
+        var relationEvaluation = author.Evaluate(
+                relation,
+                new RelationQueryEvaluationId("request/relation/42"))
+            .Supply(
+                [new Load { Id = "load-42", CustomerId = "customer-7", EquipmentId = "equipment-3" }],
+                static load => load.Id)
+            .Build();
+        Assert.Equal("load-42", Assert.Single(relationEvaluation.SuppliedRoots!.Observations).Id);
         Assert.DoesNotContain(
             EnumerateObjectGraph(query.Definition),
             static value => value is Expression or MemberInfo or Type or Delegate);

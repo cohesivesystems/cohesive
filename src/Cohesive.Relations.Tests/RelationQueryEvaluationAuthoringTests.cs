@@ -5,8 +5,8 @@ using IRQueryDefinition = Cohesive.Relations.IR.QueryDefinition;
 
 namespace Cohesive.Relations.Tests;
 
-/// <summary>Tests target-neutral canonical query invocation authoring.</summary>
-public sealed class RelationQueryInvocationAuthoringTests
+/// <summary>Tests target-neutral canonical query evaluation authoring.</summary>
+public sealed class RelationQueryEvaluationAuthoringTests
 {
     static readonly QueryParameterId CustomerName = new("customer/name");
     static readonly QueryParameterId Count = new("count");
@@ -21,25 +21,27 @@ public sealed class RelationQueryInvocationAuthoringTests
     public void Build_PreservesExactDocumentEvaluationAndOmittedDefaultProvenance()
     {
         var document = CreateDocument();
-        var evaluation = new RelationQueryEvaluationId("evaluation/42");
+        var evaluationId = new RelationQueryEvaluationId("evaluation/42");
 
-        var invocation = document.Invoke(evaluation).Build();
+        var evaluation = document.Evaluate(evaluationId).Build();
 
-        Assert.Same(document, invocation.Document);
-        Assert.Same(document.Definition, invocation.Query);
-        Assert.Equal(evaluation, invocation.Evaluation);
-        Assert.Same(RelationQueryCompilationDemand.AllDeclaredOutputs, invocation.Demand);
-        Assert.Equal(RelationQueryCompilationDemandOrigin.Convention, invocation.DemandOrigin);
-        Assert.Null(invocation.PlanReference);
+        Assert.Same(document, evaluation.Document);
+        var query = Assert.IsType<QueryDefinition>(evaluation.Definition);
+        Assert.Same(document.Definition, query);
+        Assert.Same(document, evaluation.Compilation.DefinitionDocument);
+        Assert.Equal(evaluationId, evaluation.Evaluation);
+        Assert.Same(RelationQueryCompilationDemand.AllDeclaredOutputs, evaluation.Demand);
+        Assert.Equal(RelationQueryCompilationDemandOrigin.Convention, evaluation.DemandOrigin);
+        Assert.Null(evaluation.PlanReference);
         Assert.All(
-            invocation.Parameters,
+            evaluation.Parameters,
             static parameter => Assert.Equal(
                 RelationQueryParameterEvidenceState.NotProvided,
                 parameter.State));
 
-        var defaultEvidence = Evidence(invocation, Defaulted);
+        var defaultEvidence = Evidence(evaluation, Defaulted);
         var defaultDeclaration = Assert.Single(
-            invocation.Query.Body.Parameters,
+            query.Body.Parameters,
             parameter => parameter.Id == Defaulted);
         Assert.Equal(RelationQueryParameterEvidenceState.NotProvided, defaultEvidence.State);
         Assert.Equal(QueryParameterDefaultKind.Value, defaultDeclaration.DefaultKind);
@@ -49,53 +51,59 @@ public sealed class RelationQueryInvocationAuthoringTests
     [Fact]
     public void Set_OmitNullAndMissing_PreserveDistinctEvidenceStates()
     {
-        var invocation = CreateDocument()
-            .Invoke(new("evaluation/states"))
-            .Set(CustomerName, ObservationValue.FromString("Acme"))
+        var evaluation = CreateDocument()
+            .Evaluate(new("evaluation/states"))
+            .Set(CustomerName, ObservationValue.FromString("Acme"), "request/query/customer-name")
             .SetNull(Nullable)
             .Set(Optional, ObservationValue.Undefined)
             .Omit(Defaulted)
+            .SetFailed(Count, "request/query/count-decode")
             .Build();
 
-        var provided = Evidence(invocation, CustomerName);
+        var provided = Evidence(evaluation, CustomerName);
         Assert.Equal(RelationQueryParameterEvidenceState.Provided, provided.State);
         Assert.Equal(ObservationValue.FromString("Acme"), provided.Value);
-        Assert.Equal(RelationQueryParameterEvidenceState.Null, Evidence(invocation, Nullable).State);
-        Assert.Equal(RelationQueryParameterEvidenceState.Missing, Evidence(invocation, Optional).State);
-        Assert.Equal(RelationQueryParameterEvidenceState.NotProvided, Evidence(invocation, Defaulted).State);
-        Assert.Equal(RelationQueryParameterEvidenceState.NotProvided, Evidence(invocation, Count).State);
+        Assert.Equal("request/query/customer-name", provided.EvidenceReference);
+        Assert.Equal(RelationQueryParameterEvidenceState.Null, Evidence(evaluation, Nullable).State);
+        Assert.Equal(RelationQueryParameterEvidenceState.Missing, Evidence(evaluation, Optional).State);
+        Assert.Equal(RelationQueryParameterEvidenceState.NotProvided, Evidence(evaluation, Defaulted).State);
+        Assert.Equal(RelationQueryParameterEvidenceState.Failed, Evidence(evaluation, Count).State);
+        Assert.Equal("request/query/count-decode", Evidence(evaluation, Count).EvidenceReference);
         Assert.Equal("input/parameter/customer%2Fname", provided.Input.Value);
     }
 
     [Fact]
     public void Set_RejectsLocallyIncompatibleConcreteAndNullValues()
     {
-        var concrete = CreateDocument().Invoke(new("evaluation/concrete-type"));
+        var concrete = CreateDocument().Evaluate(new("evaluation/concrete-type"));
         var concreteException = Assert.Throws<ArgumentException>(() =>
             concrete.Set(Count, ObservationValue.FromString("not-an-integer")));
         Assert.Equal("value", concreteException.ParamName);
 
-        var nullBuilder = CreateDocument().Invoke(new("evaluation/nullability"));
+        var nullBuilder = CreateDocument().Evaluate(new("evaluation/nullability"));
         var nullException = Assert.Throws<ArgumentException>(() => nullBuilder.SetNull(Optional));
         Assert.Equal("parameter", nullException.ParamName);
 
-        var invocation = concrete
+        var evaluation = concrete
             .Set(Count, ObservationValue.FromInt64(12))
             .Build();
-        Assert.Equal(RelationQueryParameterEvidenceState.Provided, Evidence(invocation, Count).State);
+        Assert.Equal(RelationQueryParameterEvidenceState.Provided, Evidence(evaluation, Count).State);
     }
 
     [Fact]
     public void ParameterAuthoring_RejectsUnknownAndDuplicateAssignments()
     {
         var builder = CreateDocument()
-            .Invoke(new("evaluation/duplicate"))
+            .Evaluate(new("evaluation/duplicate"))
             .Set(CustomerName, ObservationValue.FromString("Acme"));
 
         Assert.Throws<InvalidOperationException>(() =>
             builder.Set(CustomerName, ObservationValue.FromString("Other")));
         Assert.Throws<ArgumentException>(() =>
             builder.Set(new QueryParameterId("undeclared"), ObservationValue.FromString("value")));
+        Assert.Throws<ArgumentException>(() => CreateDocument()
+            .Evaluate(new("evaluation/invalid-provenance"))
+            .Omit(Optional, " "));
     }
 
     [Fact]
@@ -108,16 +116,16 @@ public sealed class RelationQueryInvocationAuthoringTests
             LoadShape,
             FieldPath.FromField("Id"));
 
-        var invocation = CreateDocument()
-            .Invoke(new("evaluation/demand"))
+        var evaluation = CreateDocument()
+            .Evaluate(new("evaluation/demand"))
             .Select(Summary)
             .Select(Rows, [customerName, id, customerName])
             .Build();
 
-        Assert.Equal(RelationQueryCompilationDemandOrigin.Explicit, invocation.DemandOrigin);
-        Assert.Equal(RelationQueryCompilationDemandKind.QueryResults, invocation.Demand.Kind);
+        Assert.Equal(RelationQueryCompilationDemandOrigin.Explicit, evaluation.DemandOrigin);
+        Assert.Equal(RelationQueryCompilationDemandKind.QueryResults, evaluation.Demand.Kind);
         Assert.Collection(
-            invocation.Demand.QueryResults,
+            evaluation.Demand.QueryResults,
             rows =>
             {
                 Assert.Equal(Rows, rows.Result);
@@ -137,13 +145,13 @@ public sealed class RelationQueryInvocationAuthoringTests
     public void Select_RejectsUnknownEmptyAndDuplicateResults()
     {
         var builder = CreateDocument()
-            .Invoke(new("evaluation/invalid-demand"))
+            .Evaluate(new("evaluation/invalid-demand"))
             .Select(Rows);
 
         Assert.Throws<InvalidOperationException>(() => builder.Select(Rows));
         Assert.Throws<ArgumentException>(() => builder.Select(new QueryResultId("undeclared")));
         Assert.Throws<ArgumentException>(() => CreateDocument()
-            .Invoke(new("evaluation/empty-fields"))
+            .Evaluate(new("evaluation/empty-fields"))
             .Select(Summary, []));
     }
 
@@ -151,7 +159,7 @@ public sealed class RelationQueryInvocationAuthoringTests
     public void Builder_RejectsDefaultEvaluationIdentity()
     {
         var exception = Assert.Throws<ArgumentException>(() =>
-            CreateDocument().Invoke(default(RelationQueryEvaluationId)));
+            CreateDocument().Evaluate(default(RelationQueryEvaluationId)));
 
         Assert.Equal("evaluation", exception.ParamName);
     }
@@ -168,7 +176,7 @@ public sealed class RelationQueryInvocationAuthoringTests
         var reference = RelationQueryCompiledPlanReference.From(plan);
 
         var matching = document
-            .Invoke(new("evaluation/plan"), reference)
+            .Evaluate(new("evaluation/plan"), planReference: reference)
             .Build();
         Assert.Same(reference, matching.PlanReference);
         Assert.All(
@@ -176,13 +184,13 @@ public sealed class RelationQueryInvocationAuthoringTests
             input => Assert.Contains(matching.Parameters, evidence => evidence.Input == input.Id));
 
         var mismatchedDemand = document
-            .Invoke(new("evaluation/plan-demand-mismatch"), reference)
+            .Evaluate(new("evaluation/plan-demand-mismatch"), planReference: reference)
             .Select(LoadCustomerRelationFixture.RowsResultId);
         Assert.Throws<InvalidOperationException>(() => mismatchedDemand.Build());
     }
 
     [Fact]
-    public void PlanBoundBuild_PreservesUnusedAssignmentsOutsideRuntimeReadyEvidence()
+    public void PlanBoundBuild_PreservesOneAuthoritativeDeclaredParameterEvidenceSet()
     {
         var document = LoadCustomerRelationFixture.RepresentativeQueryDocument;
         var demand = RelationQueryCompilationDemand.ForQueryResults(
@@ -198,30 +206,28 @@ public sealed class RelationQueryInvocationAuthoringTests
         var cursorInput = RelationQueryInputIds.ForParameter(LoadCustomerRelationFixture.CursorParameterId);
         Assert.DoesNotContain(plan.RequirementGraph.Inputs, input => input.Id == cursorInput);
 
-        var invocation = document
-            .Invoke(
+        var evaluation = document
+            .Evaluate(
                 new RelationQueryEvaluationId("evaluation/aggregation-only"),
-                RelationQueryCompiledPlanReference.From(plan))
+                planReference: RelationQueryCompiledPlanReference.From(plan))
             .Set(
                 LoadCustomerRelationFixture.CursorParameterId,
                 ObservationValue.FromString("unused-cursor"))
             .Select(LoadCustomerRelationFixture.AggregationResultId)
             .Build();
 
-        var authoredCursor = Assert.Single(
-            invocation.DeclaredParameters,
-            parameter => parameter.Input == cursorInput);
+        var authoredCursor = Assert.Single(evaluation.Parameters, parameter => parameter.Input == cursorInput);
         Assert.Equal(RelationQueryParameterEvidenceState.Provided, authoredCursor.State);
         Assert.Equal(ObservationValue.FromString("unused-cursor"), authoredCursor.Value);
-        Assert.DoesNotContain(invocation.Parameters, parameter => parameter.Input == cursorInput);
-        Assert.All(
-            invocation.Parameters,
-            parameter => Assert.Contains(parameter.Input, plan.RequirementGraph.Inputs.Select(static input => input.Id)));
 
         var runtimeEvidence = new RelationQueryRuntimeEvidence(
-            invocation.Evaluation,
+            evaluation.Evaluation,
             plan,
-            parameters: invocation.Parameters);
+            parameters:
+            [
+                .. evaluation.Parameters.Where(parameter =>
+                    plan.RequirementGraph.Inputs.Any(input => input.Id == parameter.Input))
+            ]);
         var analysis = RelationRequirementGapAnalyzer.Analyze(plan, runtimeEvidence);
         Assert.DoesNotContain(
             analysis.Diagnostics,
@@ -232,8 +238,8 @@ public sealed class RelationQueryInvocationAuthoringTests
     {
         var source = new QueryNodeId("source");
         var query = new IRQueryDefinition(
-            new QueryId("invocation-tests"),
-            new QueryName("Invocation tests"),
+            new QueryId("evaluation-tests"),
+            new QueryName("Evaluation tests"),
             new LogicalQueryDefinition(
                 nodes:
                 [
@@ -264,9 +270,9 @@ public sealed class RelationQueryInvocationAuthoringTests
     }
 
     static RelationQueryParameterEvidence Evidence(
-        RelationQueryInvocation invocation,
+        RelationQueryEvaluation evaluation,
         QueryParameterId parameter) =>
         Assert.Single(
-            invocation.Parameters,
+            evaluation.Parameters,
             evidence => evidence.Input == RelationQueryInputIds.ForParameter(parameter));
 }

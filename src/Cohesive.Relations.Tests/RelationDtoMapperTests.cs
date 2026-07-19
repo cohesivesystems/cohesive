@@ -412,12 +412,13 @@ public sealed class RelationDtoMapperTests
     }
 
     [Fact]
-    public void Map_PhysicalFailureWithoutInterpretation_RemainsAttributable()
+    public async Task Map_PhysicalFailureWithoutInterpretation_RemainsAttributable()
     {
-        var scenario = RelationDtoBenchmarkFixture.CreateSimpleScenario(rowCount: 1);
-        var mapper = Compile<LoadSummaryDto>(scenario.Plan);
+        var scenario = await RelationDtoMapperTestFixture.ExecuteFederatedAsync();
+        var mapper = Compile<FederatedLoadSearchDto>(scenario.Plan);
         var physical = new Cohesive.Relations.Acquisition.RelationQueryPhysicalExecutionResult(
-            Cohesive.Relations.Acquisition.RelationQueryPhysicalExecutionStatus.Failed,
+            scenario.Result.Request,
+            RelationQueryExecutionStatus.Failed,
             evidence: null,
             interpretation: null,
             diagnostics:

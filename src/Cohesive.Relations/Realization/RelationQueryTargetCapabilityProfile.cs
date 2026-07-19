@@ -161,7 +161,8 @@ public sealed record RelationQueryTargetCapabilityEvidence
         RelationQueryTargetCapabilityEvidenceId id,
         RelationQueryCapability capability,
         ImmutableArray<RelationQueryOperatingBoundaryId> operatingBoundaries = default,
-        string? description = null)
+        string? description = null
+        )
     {
         if (string.IsNullOrWhiteSpace(id.Value))
             throw new ArgumentException("Target capability evidence requires a stable identity.", nameof(id));
@@ -228,7 +229,8 @@ public sealed class RelationQueryTargetCapabilityProfile
         ImmutableArray<string> supportedCompilerProfiles,
         ImmutableArray<RelationQueryTargetCapabilityEvidence> capabilities = default,
         ImmutableArray<RelationQueryOperatingBoundary> operatingBoundaries = default,
-        string? description = null)
+        string? description = null
+        )
     {
         if (string.IsNullOrWhiteSpace(target.Value))
             throw new ArgumentException("A target capability profile requires a target identity.", nameof(target));

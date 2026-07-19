@@ -173,7 +173,7 @@ public sealed class RelationQueryCompiledPlanReference
     internal ImmutableArray<string> GetMismatchedComponents(CompiledRelationQueryPlan plan)
     {
         var candidate = From(plan);
-        ImmutableArray<string>.Builder mismatches = ImmutableArray.CreateBuilder<string>();
+        var mismatches = ImmutableArray.CreateBuilder<string>();
         if (!string.Equals(CompilerProfile, candidate.CompilerProfile, StringComparison.Ordinal))
         {
             mismatches.Add(CompilerProfileComponent);

@@ -443,7 +443,7 @@ var documents = author.Project(
 
 Branches assembled through joins or the structural escape hatch do not guess a relation root; pass the intended root
 to the existing explicit `BuildRelation` overload. The same session can consequently author multiple enrichments,
-correlated collection semantics, a row result, an aggregation, and a target-neutral typed invocation:
+correlated collection semantics, a row result, an aggregation, and a target-neutral typed evaluation:
 
 ```csharp
 var author = RelationQuery.Expression();
@@ -498,8 +498,9 @@ var query = author.BuildQuery(
     rows,
     aggregation);
 
-var invocation = query.CreateDocument()
-    .Invoke(new RelationQueryEvaluationId("request/42"))
+var evaluation = author.Evaluate(
+        query,
+        new RelationQueryEvaluationId("request/42"))
     .Set(location, "Seattle")
     .Select(rows, document => document.Id, document => document.CustomerName)
     .Select(aggregation)
@@ -510,7 +511,7 @@ var shapeDocuments = author.ShapeDocuments;
 
 The `Any` predicate preserves same-element correlation through canonical current-item scope; it is not
 flattened into independent collection tests. Typed parameters become declarations in the canonical query
-and only receive values in the invocation. Captured application state is rejected with a
+and only receive values in the evaluation. Captured application state is rejected with a
 `RelationQueryExpressionAuthoringException` containing stable diagnostics, expression paths, source
 references, and suggested alternatives; arbitrary captured getters are never evaluated.
 
@@ -545,8 +546,8 @@ var documents = author.Project(
     loads.Binding);
 ```
 
-Expression and structural authoring stop at canonical definitions. An invocation supplies parameters and
-selects named results; it still does not choose storage. Placement and adapter bindings attach physical
+Expression and structural authoring stop at canonical definitions. An evaluation supplies parameters, relation
+roots, and output demand; it still does not choose storage. Placement and adapter bindings attach physical
 sources and target capabilities to a compiled plan, and an execution integration performs I/O. Those are
 separate interpretations of the persisted canonical IR.
 
@@ -556,10 +557,10 @@ separate interpretations of the persisted canonical IR.
 bindings, parameters, and named results; uses deterministic identities when an override is omitted; records
 the origin of every identity and producer-attributed decision; and runs the canonical validator at relation
 or query terminals. A terminal snapshots the current core, so the same derivation can first produce a rooted
-relation and then be extended into an independently invoked query without changing the earlier result.
+relation and then be extended into an independently evaluated query without changing the earlier result.
 
 The following example flattens customer and equipment data into a load search DTO, exposes the derivation as
-a rooted relation, and then adds a status-filtered query and target-neutral invocation:
+a rooted relation, and then adds a status-filtered query and target-neutral evaluation:
 
 ```csharp
 var domain = new GraphId("example/domain/v1");
@@ -613,17 +614,73 @@ var query = author.BuildQuery(
     new QueryName("LoadsByStatus"),
     [rows]);
 
-var invocation = query.CreateDocument()
-    .Invoke(new RelationQueryEvaluationId("request/42"))
+var evaluation = query.CreateDocument()
+    .Evaluate(new RelationQueryEvaluationId("request/42"))
     .Set(status.Id, ObservationValue.FromString("InTransit"))
     .Select(rows.Id)
     .Build();
 ```
 
 `relation.Validation` and `query.Validation` contain the authoritative structured diagnostics. The
-invocation retains the exact query document, evaluation identity, parameter evidence, selected result/field
-demand, and optional compiled-plan attribution; it does not select an adapter, placement, or execution engine.
+evaluation retains the exact definition, shape and relationship snapshots, evaluation identity, parameter evidence,
+supplied roots, output demand, and optional compiled-plan attribution; it does not select an adapter, placement, or
+execution engine. Pass persisted shape and relationship documents to `Evaluate` when using the structural frontend
+directly; `RelationQueryExpressionAuthoring.Evaluate` supplies its session snapshots by convention.
 The complete executable version is in `RelationQueryStructuralAuthoringExampleTests`.
+
+### Canonical evaluation and host execution
+
+`RelationQueryEvaluation` is the common runtime request for relations and queries. Its canonical definition
+determines whether the request evaluates a rooted correspondence or independently acquires query inputs; there is no
+second kind enum or parallel execution model. The request carries the exact `RelationQueryCompilationRequest`,
+parameter evidence, optional supplied roots, output demand, and optional compiled-plan attribution.
+The normalized request is a portable `relation-query-evaluation/v1` document with a deterministic fingerprint over
+the complete compilation snapshots, demand and its origin, evaluation identity, parameter and root evidence,
+provenance references, and optional plan attribution. Use `RelationQueryEvaluationJsonSerializer` for strict
+round trips and `HasSameSemantics` when a host must compare independently reconstructed requests.
+
+For expression-authored relations, the common DTO-enrichment case is concise:
+
+```csharp
+var evaluation = author.Evaluate(
+        loadSearchRelation,
+        new RelationQueryEvaluationId("index/load/load-42"))
+    .Supply(
+        new[] { load },
+        static value => value.Id,
+        evidenceReference: "change-feed/9381")
+    .Build();
+```
+
+`Supply` accepts existing `Observation` values or maps CLR values through the shared `ShapeMappingContext` cache.
+Omitted roots mean no root evidence was supplied. `Supply([])` is intentionally different: it is an explicitly known
+empty root set, with complete or partial evidence selected by the caller.
+
+Hosts depend on one boundary:
+
+```csharp
+IRelationQueryEvaluator evaluator = new RelationQueryEvaluator(
+    plan => placementCatalog.Resolve(plan),
+    physicalPlanningPolicy,
+    sourceReaders);
+
+RelationQueryEvaluationOutcome outcome = await evaluator.EvaluateAsync(
+    evaluation,
+    cancellationToken);
+```
+
+The reference evaluator performs static compilation, capability realization, physical planning, bounded source
+acquisition, and canonical interpretation. `RelationQueryEvaluationOutcome` retains those exact phase artifacts and
+exposes the existing `RelationQueryExecutionResult`; it does not copy rows, aggregations, requirement gaps,
+diagnostics, provenance, or source-read traces into another hierarchy. Compilation, realization, and planning
+failures remain inspectable in their respective artifacts. Missing related observations appear through
+`outcome.Result.RequirementGapAnalysis` when interpretation runs.
+
+The outcome and physical execution result are in-process composites, not durable wire contracts. API endpoints map
+an outcome explicitly to their response contract. Durable process definitions use the `Evaluate(evaluation,
+projectResult)` overload, which projects canonical rows, aggregations, gaps, and diagnostics to a declared application
+DTO in the same node before checkpoint capture; Process authoring intentionally has no overload that checkpoints the
+complete outcome. In-memory host code may inspect the outcome directly at the evaluator boundary.
 
 ### Compiled mapper
 
@@ -726,7 +783,7 @@ Compiled input contract
 ```
 
 These stages remain separate. The input contract says what the demanded semantics require.
-Evidence says what one invocation knows. A requirement gap identifies the causal boundary and retains every
+Evidence says what one evaluation knows. A requirement gap identifies the causal boundary and retains every
 affected output, effect, and requirement trace. Policy decides whether an impact remains
 unresolved, is suppressed, receives null, or receives an explicit semantic default. Reporting
 policy independently decides whether that impact becomes a diagnostic.
@@ -1223,7 +1280,7 @@ var plan = result.Plan!;
 The plan exposes several immutable views of one canonical requirement graph:
 
 - `InputContract` describes the source sets, selected fields, observation identities,
-  relationship traversals, invocation parameters, expression capabilities that must be supplied,
+  relationship traversals, runtime parameters, expression capabilities that must be supplied,
   and target temporal capabilities that must be preserved.
 - `Lineage` has one entry per demanded output. Its `Contributions` contain only value-, identity-,
   and aggregate-producing provenance, while `Influences` retain non-value effects such as
@@ -1457,9 +1514,10 @@ The composed physical executor validates the semantic plan, realization, physica
 instance, execution domain, and capability profile before I/O. It deduplicates keys, chunks them to the
 smaller of placement and policy bounds, restores a distinct occurrence for every semantic participation,
 assembles `RelationQueryRuntimeEvidence`, and then delegates filters, joins, projections, aggregations,
-ordering, paging, gap policy, and output shaping to the canonical
-`RelationQueryInMemoryInterpreter.Default`. Acquisition therefore does not become a second semantic evaluator,
-and the physical proof target cannot drift from the interpreter that executes the terminal stage. The v1
+ordering, paging, gap policy, and output shaping to the evaluator's configured canonical interpreter (the shared
+`RelationQueryInMemoryInterpreter.Default` when none is supplied). Realization and terminal execution therefore use
+the same interpreter instance; acquisition does not become a second semantic evaluator, and the physical proof
+target cannot drift from the interpreter that executes the terminal stage. The v1
 reference executor uses a deterministic serial stage schedule, which obeys every positive source and policy
 concurrency limit; target runtimes may introduce bounded parallel scheduling without changing stage or evidence
 semantics.
@@ -1551,19 +1609,20 @@ expressions then read fields from the traversal's visible binding.
 
 ## Legacy Query API Migration Boundary
 
-The `Cohesive.Relations.Queries` namespace remains temporarily because `Cohesive.Storage`,
-`Cohesive.Processes`, ASP.NET integrations, Identity, Presentation, and the Cosmos entity repository
-still consume types such as `EntityQuery`, `EntityPredicate`, `QueryBuilder`, `IExecutableQuery`, and
-`IReadRepository`. These types predate the canonical relation/query IR and are not a second source of
-semantic truth. New query semantics must be added to canonical IR, capability profiles, and adapters,
-not to this compatibility surface.
+The `Cohesive.Relations.Queries` namespace remains temporarily because `Cohesive.Storage`, Identity,
+ASP.NET entity integrations, and the Cosmos entity repository still consume types such as `EntityQuery`,
+`EntityPredicate`, `QueryBuilder`, `IExecutableQuery`, and `IReadRepository`. Canonical relation/query API
+endpoints and `Cohesive.Processes` now use `RelationQueryEvaluation` and `IRelationQueryEvaluator`; they no
+longer depend on this compatibility surface. The legacy types predate the canonical relation/query IR and
+are not a second source of semantic truth. New query semantics must be added to canonical IR, capability
+profiles, and adapters, not to this compatibility surface.
 
 The migration sequence is:
 
-1. Introduce structural and expression-based C# authoring that emits canonical IR.
-2. Introduce typed placement and adapter-binding authoring over canonical physical contracts.
-3. Move Processes and API invocation onto canonical definition, parameter, plan, and result contracts.
-4. Retarget Storage query integrations and Cosmos execution to canonical compilation or explicit
+1. Introduce structural and expression-based C# authoring that emits canonical IR. (Complete.)
+2. Introduce typed placement and adapter-binding authoring over canonical physical contracts. (Complete.)
+3. Move Processes and relation/query API execution onto canonical evaluation and outcome contracts. (Complete.)
+4. Retarget Storage query integrations, ASP.NET entity queries, Identity, and Cosmos execution to canonical compilation or explicit
    source-reader contracts.
 5. Delete `Cohesive.Relations.Queries` and its legacy target compilers once no consumers remain.
 
@@ -1589,6 +1648,7 @@ Relations artifacts; their operational state and policies do not belong in canon
 The current foundation includes:
 
 - A shared canonical relation/query IR.
+- A portable, fingerprinted canonical evaluation document and one target-neutral host evaluator.
 - Explicit value bindings and directional relationship traversal.
 - Canonical relationship catalogs and deterministic relationship IDs.
 - Standalone typed/semantic relationship authoring and entity-reference compilation.

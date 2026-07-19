@@ -16,12 +16,28 @@ public sealed class ProcessRuntimeServices
     /// <summary>
     /// Creates runtime services from fully supplied dependencies.
     /// </summary>
+    /// <param name="transitionHost">Host used to decide and execute entity transitions.</param>
+    /// <param name="entityRepository">Repository used for process-native entity state.</param>
+    /// <param name="deadLetterSink">Sink receiving effect requests that exhaust their retry policy.</param>
+    /// <param name="checkpointRepository">Optional durable process-checkpoint repository.</param>
+    /// <param name="relationQueryEvaluator">Optional canonical relation/query evaluator.</param>
+    /// <param name="transactionGateway">Optional gateway for transaction-node execution.</param>
+    /// <param name="waitAdapter">Optional adapter for durable waits.</param>
+    /// <param name="signalSink">Optional sink for external process signals.</param>
+    /// <param name="operationContextScopeFactory">Optional operation-context scope factory.</param>
+    /// <param name="loggerFactory">Optional logging factory; the null logger factory is used when omitted.</param>
+    /// <param name="options">Optional process-engine policy.</param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="transitionHost"/>, <paramref name="entityRepository"/>, or
+    /// <paramref name="deadLetterSink"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">The supplied engine options contain an invalid effect-attempt limit.</exception>
     public ProcessRuntimeServices(
         IProcessTransitionHost transitionHost,
         IProcessEntityRepository entityRepository,
         IProcessDeadLetterSink deadLetterSink,
         IProcessCheckpointRepository? checkpointRepository = null,
-        IReadRepositoryRegistry? entityReadRepositoryRegistry = null,
+        IRelationQueryEvaluator? relationQueryEvaluator = null,
         IProcessTransactionGateway? transactionGateway = null,
         IProcessWaitAdapter? waitAdapter = null,
         IProcessSignalSink? signalSink = null,
@@ -37,7 +53,7 @@ public sealed class ProcessRuntimeServices
         TransitionHost = transitionHost;
         EntityRepository = entityRepository;
         CheckpointRepository = checkpointRepository;
-        EntityReadRepositoryRegistry = entityReadRepositoryRegistry;
+        RelationQueryEvaluator = relationQueryEvaluator;
         TransactionGateway = transactionGateway;
         WaitAdapter = waitAdapter;
         DeadLetterSink = deadLetterSink;
@@ -68,9 +84,9 @@ public sealed class ProcessRuntimeServices
     public IProcessCheckpointRepository? CheckpointRepository { get; }
 
     /// <summary>
-    /// Optional batch-capable read repositories used by process-native queries.
+    /// Optional canonical relation/query evaluator used by evaluation nodes.
     /// </summary>
-    public IReadRepositoryRegistry? EntityReadRepositoryRegistry { get; }
+    public IRelationQueryEvaluator? RelationQueryEvaluator { get; }
 
     /// <summary>
     /// Optional transaction gateway used by transaction nodes.
@@ -202,12 +218,12 @@ public sealed class ProcessRuntimeServices
                 $"Process runtime requires '{nameof(IProcessSignalSink)}' to {operation}, but none was configured.");
     }
 
-    internal IReadRepositoryRegistry RequireEntityReadRepositoryRegistry(string operation)
+    internal IRelationQueryEvaluator RequireRelationQueryEvaluator(string operation)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(operation);
-        return EntityReadRepositoryRegistry
+        return RelationQueryEvaluator
             ?? throw new InvalidOperationException(
-                $"Process runtime requires '{nameof(IReadRepositoryRegistry)}' to {operation}, but none was configured.");
+                $"Process runtime requires '{nameof(IRelationQueryEvaluator)}' to {operation}, but none was configured.");
     }
 
 }

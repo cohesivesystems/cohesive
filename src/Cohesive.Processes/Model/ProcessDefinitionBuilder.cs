@@ -133,18 +133,39 @@ public sealed class ProcessDefinitionBuilder
     }
 
     /// <summary>
-    /// Adds a process-native entity query node.
+    /// Adds a canonical relation/query evaluation node.
     /// </summary>
-    public ProcessDefinitionBuilder AddEntityQueryNode(
+    /// <param name="name">Stable process-node name.</param>
+    /// <param name="evaluationExpression">Expression producing the exact evaluation descriptor.</param>
+    /// <param name="resultExpression">
+    /// Required immediate projection from the non-wire evaluation outcome to an application-owned checkpoint value.
+    /// </param>
+    /// <param name="resultVariable">Optional variable receiving the projected value.</param>
+    /// <param name="nextNode">Optional next-node name.</param>
+    /// <returns>This builder for continued process authoring.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="name"/>, <paramref name="evaluationExpression"/>, or <paramref name="resultExpression"/> is
+    /// <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="name"/> is empty or white space.
+    /// </exception>
+    /// <exception cref="SemanticRuleViolationException">
+    /// <paramref name="name"/> duplicates another node name in this builder.
+    /// </exception>
+    public ProcessDefinitionBuilder AddRelationQueryEvaluationNode(
         string name,
-        Func<ProcessExecutionContext, object?> queryExpression,
+        Func<ProcessExecutionContext, RelationQueryEvaluation> evaluationExpression,
+        Func<RelationQueryEvaluationOutcome, object?> resultExpression,
         string? resultVariable = null,
         string? nextNode = null)
     {
-        ArgumentNullException.ThrowIfNull(queryExpression);
-        return AddNode(new ExecuteEntityQueryNode(
+        ArgumentNullException.ThrowIfNull(evaluationExpression);
+        ArgumentNullException.ThrowIfNull(resultExpression);
+        return AddNode(new EvaluateRelationQueryNode(
             name: name,
-            queryExpression: queryExpression,
+            evaluationExpression: evaluationExpression,
+            resultExpression: resultExpression,
             resultVariable: resultVariable,
             nextNode: nextNode));
     }

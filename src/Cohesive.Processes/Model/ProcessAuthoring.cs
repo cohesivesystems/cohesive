@@ -160,9 +160,25 @@ public sealed class ProcessAuthoringContext<TInput, TResult>
             resultName: resultName);
 
     /// <summary>
-    /// Declares a query whose response becomes the next bound value.
+    /// Declares canonical relation/query evaluation and projects its in-process outcome before checkpoint capture.
     /// </summary>
-    public ProcessAwaitable<TResultStep> Query<TResultStep>(ExecutableQuery<TResultStep> query, string? nodeName = null, string? resultName = null) => default;
+    /// <typeparam name="TResultStep">Projected process value type.</typeparam>
+    /// <param name="evaluation">Exact relation/query definition snapshots, inputs, demand, and evaluation identity.</param>
+    /// <param name="projectResult">
+    /// Required pure projection from the non-wire evaluation outcome to an application-owned checkpoint value.
+    /// </param>
+    /// <param name="nodeName">Optional stable process-node name.</param>
+    /// <param name="resultName">Optional variable name receiving the projected result.</param>
+    /// <returns>An authoring-only awaitable representing the projected checkpoint value.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="evaluation"/> or <paramref name="projectResult"/> is <see langword="null"/> when the
+    /// generated process definition is constructed.
+    /// </exception>
+    public ProcessAwaitable<TResultStep> Evaluate<TResultStep>(
+        RelationQueryEvaluation evaluation,
+        Func<RelationQueryEvaluationOutcome, TResultStep> projectResult,
+        string? nodeName = null,
+        string? resultName = null) => default;
 
     /// <summary>
     /// Declares a pure computation whose result becomes the next bound value.

@@ -198,31 +198,53 @@ public sealed class ExecuteEntityCreateNode : ProcessNodeWithNext
 }
 
 /// <summary>
-/// Executes a process-native projection query.
+/// Evaluates one canonical relation or query through the configured host evaluator.
 /// </summary>
-public sealed class ExecuteEntityQueryNode : ProcessNodeWithNext
+public sealed class EvaluateRelationQueryNode : ProcessNodeWithNext
 {
     /// <summary>
-    /// Creates an entity-query node.
+    /// Creates a canonical relation/query evaluation node.
     /// </summary>
-    public ExecuteEntityQueryNode(
+    /// <param name="name">Stable process-node name.</param>
+    /// <param name="evaluationExpression">Expression producing the exact evaluation descriptor.</param>
+    /// <param name="resultExpression">
+    /// Required immediate projection from the non-wire outcome to an application-owned checkpoint value.
+    /// </param>
+    /// <param name="resultVariable">Optional variable receiving the projected value.</param>
+    /// <param name="nextNode">Optional next-node name.</param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="name"/>, <paramref name="evaluationExpression"/>, or <paramref name="resultExpression"/> is
+    /// <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="name"/> is empty or white space.
+    /// </exception>
+    public EvaluateRelationQueryNode(
         string name,
-        Func<ProcessExecutionContext, object?> queryExpression,
+        Func<ProcessExecutionContext, RelationQueryEvaluation> evaluationExpression,
+        Func<RelationQueryEvaluationOutcome, object?> resultExpression,
         string? resultVariable = null,
         string? nextNode = null
         ) : base(name, nextNode)
     {
-        QueryExpression = Guard.RequireNotNull(queryExpression);
+        EvaluationExpression = Guard.RequireNotNull(evaluationExpression);
+        ResultExpression = Guard.RequireNotNull(resultExpression);
         ResultVariable = resultVariable;
     }
 
     /// <summary>
-    /// Query expression returning a <see cref="IExecutableQuery"/>.
+    /// Expression returning the exact canonical evaluation descriptor.
     /// </summary>
-    public Func<ProcessExecutionContext, object?> QueryExpression { get; }
+    public Func<ProcessExecutionContext, RelationQueryEvaluation> EvaluationExpression { get; }
 
     /// <summary>
-    /// Optional captured variable name receiving the query result.
+    /// Required projection applied before checkpoint capture so the non-wire compiler outcome cannot become a
+    /// process variable directly.
+    /// </summary>
+    public Func<RelationQueryEvaluationOutcome, object?> ResultExpression { get; }
+
+    /// <summary>
+    /// Optional captured variable name receiving the projected value.
     /// </summary>
     public string? ResultVariable { get; }
 }

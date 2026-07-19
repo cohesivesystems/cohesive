@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json.Serialization;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
@@ -38,8 +39,43 @@ public sealed class RelationQueryCompilationRequest
         ImmutableArray<ShapeGraphDocument> shapeDocuments = default,
         RelationshipCatalogDocument? relationshipCatalogDocument = null,
         RelationQueryCompilationDemand? demand = null)
+        : this(
+            definitionDocument,
+            shapeDocuments,
+            relationshipCatalogDocument,
+            demand ?? RelationQueryCompilationDemand.AllDeclaredOutputs,
+            demand is null
+                ? RelationQueryCompilationDemandOrigin.Convention
+                : RelationQueryCompilationDemandOrigin.Explicit)
+    {
+    }
+
+    /// <summary>Restores a static compilation request with its explicit convention attribution.</summary>
+    /// <param name="definitionDocument">Exact persisted relation/query definition document to compile.</param>
+    /// <param name="shapeDocuments">Exact persisted shape-graph snapshots available to compilation.</param>
+    /// <param name="relationshipCatalogDocument">
+    /// Exact persisted relationship catalog snapshot, or <see langword="null"/> when no catalog is supplied.
+    /// </param>
+    /// <param name="demand">Effective persisted output demand.</param>
+    /// <param name="demandOrigin">Persisted origin of the effective demand.</param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="definitionDocument"/> or <paramref name="demand"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="shapeDocuments"/> contains a <see langword="null"/> entry, or a convention-origin demand is
+    /// not <see cref="RelationQueryCompilationDemand.AllDeclaredOutputs"/>.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="demandOrigin"/> is unsupported.</exception>
+    [JsonConstructor]
+    public RelationQueryCompilationRequest(
+        RelationQueryDocument definitionDocument,
+        ImmutableArray<ShapeGraphDocument> shapeDocuments,
+        RelationshipCatalogDocument? relationshipCatalogDocument,
+        RelationQueryCompilationDemand demand,
+        RelationQueryCompilationDemandOrigin demandOrigin)
     {
         DefinitionDocument = Guard.RequireNotNull(definitionDocument);
+        Demand = Guard.RequireNotNull(demand);
         var snapshots = shapeDocuments.IsDefault ? [] : shapeDocuments;
         if (snapshots.Any(static document => document is null))
             throw new ArgumentException("Shape documents cannot contain null entries.", nameof(shapeDocuments));
@@ -51,10 +87,17 @@ public sealed class RelationQueryCompilationRequest
                 .ThenBy(static document => document.SchemaVersion, StringComparer.Ordinal)
         ];
         RelationshipCatalogDocument = relationshipCatalogDocument;
-        DemandOrigin = demand is null
-            ? RelationQueryCompilationDemandOrigin.Convention
-            : RelationQueryCompilationDemandOrigin.Explicit;
-        Demand = demand ?? RelationQueryCompilationDemand.AllDeclaredOutputs;
+        if (!Enum.IsDefined(demandOrigin))
+            throw new ArgumentOutOfRangeException(nameof(demandOrigin), demandOrigin, "Unsupported compilation-demand origin.");
+        if (demandOrigin == RelationQueryCompilationDemandOrigin.Convention
+            && Demand.Kind != RelationQueryCompilationDemandKind.AllDeclaredOutputs)
+        {
+            throw new ArgumentException(
+                "A convention-origin compilation demand must be the all-declared-outputs convention.",
+                nameof(demandOrigin));
+        }
+
+        DemandOrigin = demandOrigin;
     }
 
     /// <summary>Exact persisted relation/query definition document to compile.</summary>
@@ -667,10 +710,12 @@ public sealed class CompiledRelationQueryPlan
 public sealed class RelationQueryCompilationResult
 {
     internal RelationQueryCompilationResult(
+        RelationQueryCompilationRequest request,
         CompiledRelationQueryPlan? plan,
         RelationQueryExpressionAnalysisResult? expressionAnalysis,
         DocumentValidationResult validation)
     {
+        Request = Guard.RequireNotNull(request);
         Plan = plan;
         ExpressionAnalysis = expressionAnalysis;
         Validation = Guard.RequireNotNull(validation);
@@ -688,6 +733,9 @@ public sealed class RelationQueryCompilationResult
                 nameof(validation));
         }
     }
+
+    /// <summary>Exact immutable compilation request that produced this result.</summary>
+    public RelationQueryCompilationRequest Request { get; }
 
     /// <summary>Compiled plan, or <see langword="null"/> when compilation produced error diagnostics.</summary>
     public CompiledRelationQueryPlan? Plan { get; }

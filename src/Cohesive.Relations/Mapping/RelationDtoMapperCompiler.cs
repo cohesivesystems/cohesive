@@ -23,7 +23,7 @@ namespace Cohesive.Relations.Mapping;
 /// </remarks>
 public sealed class RelationDtoMapperCompiler
 {
-    readonly ConditionalWeakTable<CompiledRelationQueryPlan, ConcurrentDictionary<CacheKey, Lazy<object>>> cache = new();
+    readonly ConditionalWeakTable<CompiledRelationQueryPlan, ConcurrentDictionary<CacheKey, Lazy<object>>> cache = [];
 
     /// <summary>Shared compiler whose cache does not extend the lifetime of compiled relation plans.</summary>
     public static RelationDtoMapperCompiler Default { get; } = new();
@@ -62,7 +62,7 @@ public sealed class RelationDtoMapperCompiler
         profile ??= RelationDtoMapperProfile.Conventional;
         options ??= RelationDtoMapperCompilationOptions.Conventional;
 
-        var key = new CacheKey(typeof(TOutput), profile.Fingerprint, options.Fingerprint);
+        var key = new CacheKey(typeof(TOutput), ProfileFingerprint: profile.Fingerprint, OptionsFingerprint: options.Fingerprint);
         var planCache = cache.GetValue(plan, static _ => new());
         var lazy = planCache.GetOrAdd(
             key,
@@ -155,17 +155,17 @@ public sealed class CompiledRelationDtoMapper<TOutput>
         }
 
         var mapped = MapCore(execution.Interpretation, execution, failurePolicy, cancellationToken);
-        if (execution.Status == RelationQueryPhysicalExecutionStatus.Succeeded)
+        if (execution.Status == RelationQueryExecutionStatus.Succeeded)
             return mapped;
 
         return new(
-            execution.Status == RelationQueryPhysicalExecutionStatus.Incomplete
+            execution.Status == RelationQueryExecutionStatus.Incomplete
                 && mapped.Status != RelationDtoMappingStatus.Failed
                     ? RelationDtoMappingStatus.Incomplete
                     : RelationDtoMappingStatus.Failed,
             mapped.Execution,
             execution,
-            execution.Status == RelationQueryPhysicalExecutionStatus.Failed ? [] : mapped.Rows,
+            execution.Status == RelationQueryExecutionStatus.Failed ? [] : mapped.Rows,
             mapped.FailedRows,
             mapped.Diagnostics);
     }

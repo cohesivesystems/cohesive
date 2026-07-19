@@ -456,7 +456,8 @@ public sealed class RelationDtoMapperCompilationResult<TOutput>
     internal RelationDtoMapperCompilationResult(
         RelationDtoMapperCompilationDescriptor descriptor,
         CompiledRelationDtoMapper<TOutput>? mapper,
-        ImmutableArray<RelationDtoMapperDiagnostic> diagnostics)
+        ImmutableArray<RelationDtoMapperDiagnostic> diagnostics
+        )
     {
         Descriptor = descriptor;
         Mapper = mapper;
@@ -499,7 +500,8 @@ public sealed class RelationDtoRowFailure
     internal RelationDtoRowFailure(
         int rowIndex,
         RelationQueryOutputRow source,
-        ImmutableArray<RelationDtoMapperDiagnostic> diagnostics)
+        ImmutableArray<RelationDtoMapperDiagnostic> diagnostics
+        )
     {
         RowIndex = rowIndex;
         Source = source;
@@ -563,10 +565,7 @@ public sealed class RelationDtoMappingResult<TOutput>
 
 static class RelationDtoMapperFingerprint
 {
-    internal static string ComputeProfile(
-        string id,
-        RelationDtoMemberConvention convention,
-        ImmutableArray<RelationDtoMemberBinding> bindings)
+    internal static string ComputeProfile(string id, RelationDtoMemberConvention convention, ImmutableArray<RelationDtoMemberBinding> bindings)
     {
         StringBuilder canonical = new("relation-dto-profile/v1\n");
         AppendToken(canonical, "profile-id");
