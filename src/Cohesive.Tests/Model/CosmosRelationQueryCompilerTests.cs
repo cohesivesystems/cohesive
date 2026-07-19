@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Globalization;
 using Cohesive.Adapters.Cosmos;
+using Cohesive.Model.Expressions;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.IR;
@@ -687,7 +688,7 @@ public sealed class CosmosRelationQueryCompilerTests
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
         var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
             diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.ParameterUnsupported);
-        Assert.Contains("does not have a Cosmos SQL v1 parameter encoding", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Contains("does not have a Cosmos SQL v2 parameter encoding", diagnostic.Message, StringComparison.Ordinal);
         Assert.NotNull(diagnostic.Input);
         Assert.DoesNotContain(result.Diagnostics, static diagnostic =>
             diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.ArtifactInvalid);
@@ -835,7 +836,415 @@ public sealed class CosmosRelationQueryCompilerTests
         Assert.Empty(result.Artifacts);
     }
 
+    [Fact]
+    public void Compile_StructuredCollectionAny_EmitsOneCorrelatedExistsWithoutMultiplyingRoots()
+    {
+        var fixture = Fixture.StructuredCollectionAny(includeCount: true);
+
+        var result = fixture.Compile();
+
+        Assert.True(result.IsSuccessful, Diagnostics(result));
+        Assert.Equal(2, result.Artifacts.Length);
+        var rows = Assert.Single(result.Artifacts, static artifact =>
+            artifact.Branch.Kind == RelationQueryNativeResultKind.QueryRows);
+        var count = Assert.Single(result.Artifacts, static artifact =>
+            artifact.Branch.Kind == RelationQueryNativeResultKind.QueryAggregation);
+        const string predicate =
+            "EXISTS (SELECT VALUE e0 FROM e0 IN c[\"Stops\"] WHERE ((e0[\"Location\"] = @p0) AND (e0[\"Type\"] = @p1)))";
+        Assert.Equal(
+            $"SELECT c[\"Id\"] AS f0, c[\"Status\"] AS f1 FROM c WHERE {predicate} "
+            + "ORDER BY c[\"Id\"] ASC OFFSET 0 LIMIT 25",
+            rows.Statement.Text);
+        Assert.Equal($"SELECT COUNT(1) AS f0 FROM c WHERE {predicate}", count.Statement.Text);
+        Assert.DoesNotContain(" JOIN ", rows.Statement.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("ARRAY_CONTAINS", rows.Statement.Text, StringComparison.Ordinal);
+        Assert.Equal(
+            new string?[] { "location", null },
+            rows.Statement.Parameters.Select(static parameter => parameter.Binding).ToArray());
+        Assert.Equal(
+            [Fixture.IdPath, Fixture.StatusPath, Fixture.StopsPath],
+            rows.SelectedFields.Select(static field => field.Field.Path).OrderBy(static path => path.ToString()).ToArray());
+        Assert.Equal(
+            [Fixture.StopsPath],
+            count.SelectedFields.Select(static field => field.Field.Path).ToArray());
+        var stopsInput = fixture.InputFor(Fixture.StopsPath);
+        Assert.All([rows, count], artifact =>
+        {
+            Assert.Contains(Fixture.Filter, artifact.Provenance.CoveredNodes);
+            Assert.Contains(stopsInput, artifact.Provenance.InputFields);
+            Assert.Equal(
+                CosmosRelationQueryCompilerOptions.CurrentCompilerProfile,
+                artifact.Provenance.CompilerProfile);
+        });
+    }
+
+    [Fact]
+    public void Compile_StructuredCollectionAny_IsDeterministicAcrossReorderedChildEvidence()
+    {
+        var fixture = Fixture.StructuredCollectionAny();
+        var first = Assert.Single(fixture.Compile().Artifacts);
+        var reordered = fixture.StorageBindingWithCollectionScope(new(
+            fixture.StopsCollectionScope.SemanticProfile,
+            fixture.StopsCollectionScope.ElementScope,
+            fixture.StopsCollectionScope.CorrelationGuarantee,
+            fixture.StopsCollectionScope.CollectionMissingValueBehavior,
+            fixture.StopsCollectionScope.CollectionNullValueBehavior,
+            fixture.StopsCollectionScope.NullElementBehavior,
+            fixture.StopsCollectionScope.EmptyCollectionBehavior,
+            [.. fixture.StopsCollectionScope.ChildFields.Reverse()]));
+
+        var second = Assert.Single(fixture.Compile(reordered).Artifacts);
+
+        Assert.Equal(first.Statement.Text, second.Statement.Text);
+        Assert.Equal(first.Statement.Parameters.ToArray(), second.Statement.Parameters.ToArray());
+        Assert.Equal(first.StorageBinding.Fingerprint, second.StorageBinding.Fingerprint);
+        Assert.Equal(first.Fingerprint, second.Fingerprint);
+    }
+
+    [Fact]
+    public void Compile_StructuredCollectionAny_FailsClosedWithoutCollectionEvidence()
+    {
+        var fixture = Fixture.StructuredCollectionAny();
+
+        var result = fixture.Compile(fixture.StorageBindingWithCollectionScope(collectionScope: null));
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.CollectionElementEvidenceUnavailable);
+        Assert.Contains("does not provide explicit", diagnostic.Message, StringComparison.Ordinal);
+        Assert.NotNull(diagnostic.Input);
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
+    public void Compile_StructuredCollectionAny_FailsClosedWithoutSameElementGuarantee()
+    {
+        var fixture = Fixture.StructuredCollectionAny();
+        var current = fixture.StopsCollectionScope;
+        var weak = new CosmosRelationQueryCollectionScopeEvidence(
+            current.SemanticProfile,
+            current.ElementScope,
+            CosmosRelationQueryCollectionCorrelationGuarantee.Unproven,
+            current.CollectionMissingValueBehavior,
+            current.CollectionNullValueBehavior,
+            current.NullElementBehavior,
+            current.EmptyCollectionBehavior,
+            current.ChildFields);
+
+        var result = fixture.Compile(fixture.StorageBindingWithCollectionScope(weak));
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.CollectionElementEvidenceUnavailable);
+        Assert.Contains("same-array-element", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
+    public void Compile_StructuredCollectionAny_FailsClosedWhenChildAbsenceIsUnproven()
+    {
+        var fixture = Fixture.StructuredCollectionAny();
+        var current = fixture.StopsCollectionScope;
+        var location = current.ResolveChild(Fixture.StopLocationPath);
+        var weakLocation = new CosmosRelationQueryCollectionElementFieldBinding(
+            location.ElementPath,
+            location.DocumentPath,
+            location.ValueDomain,
+            location.SemanticCapabilities,
+            location.SemanticProfile,
+            CosmosRelationQueryStructuredCollectionAbsenceBehavior.Unproven,
+            location.NullValueBehavior);
+        var weak = new CosmosRelationQueryCollectionScopeEvidence(
+            current.SemanticProfile,
+            current.ElementScope,
+            current.CorrelationGuarantee,
+            current.CollectionMissingValueBehavior,
+            current.CollectionNullValueBehavior,
+            current.NullElementBehavior,
+            current.EmptyCollectionBehavior,
+            [
+                .. current.ChildFields.Select(child =>
+                    child.ElementPath == Fixture.StopLocationPath ? weakLocation : child)
+            ]);
+
+        var result = fixture.Compile(fixture.StorageBindingWithCollectionScope(weak));
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.CollectionElementEvidenceUnavailable);
+        Assert.Contains("prohibits missing and null", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Theory]
+    [InlineData(StructuredAnyPredicate.Inequality, " != @p0")]
+    [InlineData(StructuredAnyPredicate.NegatedEquality, "(NOT (e0[\"Location\"] = @p0))")]
+    [InlineData(StructuredAnyPredicate.Disjunction, " OR ")]
+    public void Compile_StructuredCollectionAny_SupportsTheDeclaredPredicateClosure(
+        StructuredAnyPredicate predicate,
+        string expectedSql)
+    {
+        var result = Fixture.StructuredCollectionAny(predicate: predicate).Compile();
+
+        Assert.True(result.IsSuccessful, Diagnostics(result));
+        var artifact = Assert.Single(result.Artifacts);
+        Assert.Contains(expectedSql, artifact.Statement.Text, StringComparison.Ordinal);
+        Assert.Contains("EXISTS (SELECT VALUE e0", artifact.Statement.Text, StringComparison.Ordinal);
+    }
+
+    public static TheoryData<StructuredAnyPredicate, string, object> StructuredCollectionConstantCases => new()
+    {
+        { StructuredAnyPredicate.BoolConstant, "IsRequired", true },
+        { StructuredAnyPredicate.Int32Constant, "Sequence", 7L },
+        { StructuredAnyPredicate.StringConstant, "Location", "SEA" },
+        {
+            StructuredAnyPredicate.GuidConstant,
+            "ExternalId",
+            "01234567-89ab-cdef-0123-456789abcdef"
+        },
+        { StructuredAnyPredicate.DateConstant, "ServiceDate", "2026-07-19" }
+    };
+
+    [Theory]
+    [MemberData(nameof(StructuredCollectionConstantCases))]
+    public void Compile_StructuredCollectionAny_ConstantEqualitySupportsAdvertisedScalarDomains(
+        StructuredAnyPredicate predicate,
+        string childField,
+        object expectedConstant)
+    {
+        var result = Fixture.StructuredCollectionAny(predicate: predicate).Compile();
+
+        Assert.True(result.IsSuccessful, Diagnostics(result));
+        var artifact = Assert.Single(result.Artifacts);
+        Assert.Equal(
+            "SELECT c[\"Id\"] AS f0, c[\"Status\"] AS f1 FROM c "
+            + $"WHERE EXISTS (SELECT VALUE e0 FROM e0 IN c[\"Stops\"] WHERE (e0[\"{childField}\"] = @p0)) "
+            + "ORDER BY c[\"Id\"] ASC OFFSET 0 LIMIT 25",
+            artifact.Statement.Text);
+        var parameter = Assert.Single(artifact.Statement.Parameters);
+        Assert.Equal("@p0", parameter.Name);
+        Assert.Equal(CosmosSqlParameterBindingKind.Constant, parameter.Kind);
+        Assert.Null(parameter.Binding);
+        Assert.Equal(expectedConstant, parameter.ConstantValue);
+    }
+
+    [Fact]
+    public void Compile_StructuredCollectionAny_FailsClosedForOutOfRangeInt32Constant()
+    {
+        var result = Fixture.StructuredCollectionAny(
+            predicate: StructuredAnyPredicate.OutOfRangeInt32Constant).Compile();
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression);
+        Assert.Contains("does not satisfy", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
+    public void Compile_StructuredCollectionInequality_FailsClosedWithoutExactInequalityEvidence()
+    {
+        var fixture = Fixture.StructuredCollectionAny(predicate: StructuredAnyPredicate.Inequality);
+        var current = fixture.StopsCollectionScope;
+        var location = current.ResolveChild(Fixture.StopLocationPath);
+        var weakLocation = new CosmosRelationQueryCollectionElementFieldBinding(
+            location.ElementPath,
+            location.DocumentPath,
+            location.ValueDomain,
+            CosmosRelationQueryCollectionElementSemanticCapabilities.ExactEquality,
+            location.SemanticProfile,
+            location.MissingValueBehavior,
+            location.NullValueBehavior);
+        var weak = new CosmosRelationQueryCollectionScopeEvidence(
+            current.SemanticProfile,
+            current.ElementScope,
+            current.CorrelationGuarantee,
+            current.CollectionMissingValueBehavior,
+            current.CollectionNullValueBehavior,
+            current.NullElementBehavior,
+            current.EmptyCollectionBehavior,
+            [
+                .. current.ChildFields.Select(child =>
+                    child.ElementPath == Fixture.StopLocationPath ? weakLocation : child)
+            ]);
+
+        var result = fixture.Compile(fixture.StorageBindingWithCollectionScope(weak));
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.CollectionElementEvidenceUnavailable);
+        Assert.Contains("ExactInequality", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
+    public void Compile_StructuredCollectionAny_FailsClosedWhenNullElementsAreNotProhibited()
+    {
+        var fixture = Fixture.StructuredCollectionAny();
+        var current = fixture.StopsCollectionScope;
+        var weak = new CosmosRelationQueryCollectionScopeEvidence(
+            current.SemanticProfile,
+            current.ElementScope,
+            current.CorrelationGuarantee,
+            current.CollectionMissingValueBehavior,
+            current.CollectionNullValueBehavior,
+            CosmosRelationQueryStructuredCollectionAbsenceBehavior.Unproven,
+            current.EmptyCollectionBehavior,
+            current.ChildFields);
+
+        var result = fixture.Compile(fixture.StorageBindingWithCollectionScope(weak));
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.CollectionElementEvidenceUnavailable);
+        Assert.Contains("explicit-null collection elements", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Theory]
+    [InlineData(StructuredCollectionScopeGap.ElementScope, "JSON-array element scope")]
+    [InlineData(StructuredCollectionScopeGap.CollectionMissing, "missing and null collections")]
+    [InlineData(StructuredCollectionScopeGap.CollectionNull, "missing and null collections")]
+    [InlineData(StructuredCollectionScopeGap.EmptyCollection, "empty JSON array")]
+    public void Compile_StructuredCollectionAny_FailsClosedForUnprovenCollectionScopeEvidence(
+        StructuredCollectionScopeGap gap,
+        string expectedDiagnostic)
+    {
+        var fixture = Fixture.StructuredCollectionAny();
+        var current = fixture.StopsCollectionScope;
+        var weak = CopyCollectionScope(
+            current,
+            elementScope: gap == StructuredCollectionScopeGap.ElementScope
+                ? CosmosRelationQueryCollectionElementScope.Unproven
+                : current.ElementScope,
+            collectionMissing: gap == StructuredCollectionScopeGap.CollectionMissing
+                ? CosmosRelationQueryStructuredCollectionAbsenceBehavior.Unproven
+                : current.CollectionMissingValueBehavior,
+            collectionNull: gap == StructuredCollectionScopeGap.CollectionNull
+                ? CosmosRelationQueryStructuredCollectionAbsenceBehavior.Unproven
+                : current.CollectionNullValueBehavior,
+            empty: gap == StructuredCollectionScopeGap.EmptyCollection
+                ? CosmosRelationQueryEmptyCollectionBehavior.Unproven
+                : current.EmptyCollectionBehavior);
+
+        var result = fixture.Compile(fixture.StorageBindingWithCollectionScope(weak));
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.CollectionElementEvidenceUnavailable);
+        Assert.Contains(expectedDiagnostic, diagnostic.Message, StringComparison.Ordinal);
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
+    public void Compile_StructuredCollectionAny_FailsClosedWithoutReferencedChildBinding()
+    {
+        var fixture = Fixture.StructuredCollectionAny();
+        var current = fixture.StopsCollectionScope;
+        var weak = CopyCollectionScope(
+            current,
+            children:
+            [
+                .. current.ChildFields.Where(static child =>
+                    child.ElementPath != Fixture.StopLocationPath)
+            ]);
+
+        var result = fixture.Compile(fixture.StorageBindingWithCollectionScope(weak));
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.CollectionElementEvidenceUnavailable);
+        Assert.Contains("no direct child mapping", diagnostic.Message, StringComparison.Ordinal);
+        Assert.NotNull(diagnostic.Input);
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
+    public void Compile_StructuredCollectionAny_FailsClosedForWrongChildValueDomain()
+    {
+        var fixture = Fixture.StructuredCollectionAny();
+        var current = fixture.StopsCollectionScope;
+        var location = current.ResolveChild(Fixture.StopLocationPath);
+        var wrongLocation = new CosmosRelationQueryCollectionElementFieldBinding(
+            location.ElementPath,
+            location.DocumentPath,
+            CosmosRelationQueryCollectionElementValueDomain.Bool,
+            location.SemanticCapabilities,
+            location.SemanticProfile,
+            location.MissingValueBehavior,
+            location.NullValueBehavior);
+        var weak = CopyCollectionScope(
+            current,
+            children:
+            [
+                .. current.ChildFields.Select(child =>
+                    child.ElementPath == Fixture.StopLocationPath ? wrongLocation : child)
+            ]);
+
+        var result = fixture.Compile(fixture.StorageBindingWithCollectionScope(weak));
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.CollectionElementEvidenceUnavailable);
+        Assert.Contains("rather than required canonical domain", diagnostic.Message, StringComparison.Ordinal);
+        Assert.NotNull(diagnostic.Input);
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
+    public void Compile_StructuredCollectionAny_FailsClosedForNestedCurrentItemPath()
+    {
+        var result = Fixture.StructuredCollectionAny(predicate: StructuredAnyPredicate.NestedChild).Compile();
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression);
+        Assert.Contains("one direct current-element child field", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
+    public void TargetProfile_AdvertisesOnlyDirectCurrentItemCollectionElementReads()
+    {
+        var capabilities = CosmosRelationQueryTargetProfile.Default.Capabilities
+            .Select(static evidence => evidence.Capability)
+            .ToArray();
+        var structural = capabilities.OfType<StructuralRelationQueryCapability>().ToArray();
+
+        Assert.Contains(capabilities, static capability => capability is ExpressionRelationQueryCapability expression
+            && expression.Capability == ExprCapabilities.ForFunction(ExprFunctionNames.Any));
+        Assert.Contains(capabilities, static capability => capability is GuaranteeRelationQueryCapability guarantee
+            && guarantee.Kind == RelationQueryGuaranteeCapabilityKind.CollectionElementCorrelation);
+        Assert.Contains(structural, static capability =>
+            capability.Role == RelationQueryStructuralCapabilityRole.CurrentItemRead
+            && capability.PathKind == RelationQueryStructuralPathKind.CollectionElement);
+        Assert.DoesNotContain(structural, static capability =>
+            capability.PathKind == RelationQueryStructuralPathKind.CollectionElement
+            && capability.Role != RelationQueryStructuralCapabilityRole.CurrentItemRead);
+        Assert.DoesNotContain(structural, static capability =>
+            capability.Role == RelationQueryStructuralCapabilityRole.CurrentItemRead
+            && capability.PathKind != RelationQueryStructuralPathKind.CollectionElement);
+        Assert.DoesNotContain(structural, static capability =>
+            capability.PathKind == RelationQueryStructuralPathKind.NestedCollectionElement);
+    }
+
     static string FieldPathText(CosmosRelationQuerySelectedField field) => field.DocumentPath.ToString();
+
+    static CosmosRelationQueryCollectionScopeEvidence CopyCollectionScope(
+        CosmosRelationQueryCollectionScopeEvidence source,
+        CosmosRelationQueryCollectionElementScope? elementScope = null,
+        CosmosRelationQueryStructuredCollectionAbsenceBehavior? collectionMissing = null,
+        CosmosRelationQueryStructuredCollectionAbsenceBehavior? collectionNull = null,
+        CosmosRelationQueryEmptyCollectionBehavior? empty = null,
+        ImmutableArray<CosmosRelationQueryCollectionElementFieldBinding> children = default) => new(
+        source.SemanticProfile,
+        elementScope ?? source.ElementScope,
+        source.CorrelationGuarantee,
+        collectionMissing ?? source.CollectionMissingValueBehavior,
+        collectionNull ?? source.CollectionNullValueBehavior,
+        source.NullElementBehavior,
+        empty ?? source.EmptyCollectionBehavior,
+        children.IsDefault ? source.ChildFields : children);
 
     static string DecisionKey(RelationQueryNativeCompilationDecisionReference decision) => string.Join(
         "|",
@@ -857,6 +1266,29 @@ public sealed class CosmosRelationQueryCompilerTests
         NestedArray,
         Int64,
         Decimal
+    }
+
+    public enum StructuredAnyPredicate
+    {
+        CompoundEquality,
+        Inequality,
+        NegatedEquality,
+        Disjunction,
+        NestedChild,
+        BoolConstant,
+        Int32Constant,
+        StringConstant,
+        GuidConstant,
+        DateConstant,
+        OutOfRangeInt32Constant
+    }
+
+    public enum StructuredCollectionScopeGap
+    {
+        ElementScope,
+        CollectionMissing,
+        CollectionNull,
+        EmptyCollection
     }
 
     internal sealed class Fixture
@@ -883,7 +1315,7 @@ public sealed class CosmosRelationQueryCompilerTests
         static readonly ValueBindingId ExpandedItemBinding = new("expanded-item");
         static readonly QueryNodeId LoadSource = new("loads");
         static readonly QueryNodeId CustomerSource = new("customers");
-        static readonly QueryNodeId Filter = new("status-filter");
+        public static readonly QueryNodeId Filter = new("status-filter");
         static readonly QueryNodeId Project = new("project-row");
         static readonly QueryNodeId Order = new("order-row");
         static readonly QueryNodeId Page = new("page-row");
@@ -895,6 +1327,7 @@ public sealed class CosmosRelationQueryCompilerTests
         public static readonly QueryParameterId NumericParameter = new("numeric-value");
         static readonly QueryParameterId BytesParameter = new("bytes-value");
         static readonly QueryParameterId ContainsValuesParameter = new("contains-values");
+        static readonly QueryParameterId LocationParameter = new("location");
 
         public static readonly FieldPath IdPath = FieldPath.FromField("Id");
         static readonly FieldPath CustomerIdPath = FieldPath.FromField("CustomerId");
@@ -906,6 +1339,13 @@ public sealed class CosmosRelationQueryCompilerTests
         static readonly FieldPath TagsPath = FieldPath.FromField("Tags");
         static readonly FieldPath ItemsPath = FieldPath.FromField("Items");
         static readonly FieldPath NamePath = FieldPath.FromField("Name");
+        public static readonly FieldPath StopsPath = FieldPath.FromField("Stops");
+        public static readonly FieldPath StopLocationPath = FieldPath.FromField("Location");
+        static readonly FieldPath StopTypePath = FieldPath.FromField("Type");
+        static readonly FieldPath StopIsRequiredPath = FieldPath.FromField("IsRequired");
+        static readonly FieldPath StopSequencePath = FieldPath.FromField("Sequence");
+        static readonly FieldPath StopExternalIdPath = FieldPath.FromField("ExternalId");
+        static readonly FieldPath StopServiceDatePath = FieldPath.FromField("ServiceDate");
         static readonly FieldPath ValuePath = FieldPath.FromField("Value");
         static readonly FieldPath PayloadPath = FieldPath.FromField("Payload");
         static readonly FieldPath ObservedInstantPath = FieldPath.FromField("ObservedInstant");
@@ -1019,6 +1459,26 @@ public sealed class CosmosRelationQueryCompilerTests
             StorageBinding.NullValueEncoding,
             StorageBinding.Origin,
             StorageBinding.ConventionSetVersion);
+
+        public CosmosRelationQueryCollectionScopeEvidence StopsCollectionScope =>
+            StorageBinding.ResolveFieldBinding(InputFor(StopsPath)).CollectionScope!;
+
+        public CosmosRelationQueryStorageBinding StorageBindingWithCollectionScope(
+            CosmosRelationQueryCollectionScopeEvidence? collectionScope)
+        {
+            var input = InputFor(StopsPath);
+            return StorageBindingWithFields(
+            [
+                .. StorageBinding.Fields.Select(field => field.Input == input
+                    ? new CosmosRelationQueryFieldBinding(field.Input, field.DocumentPath, collectionScope)
+                    : field)
+            ]);
+        }
+
+        public RelationQueryInputId InputFor(FieldPath path) => Plan.InputContract.Sources
+            .SelectMany(static source => source.Fields)
+            .Single(field => field.Input.Field.Path == path)
+            .Input.Id;
 
         public CosmosRelationQueryStorageBinding StorageBindingWithContainer(string containerName) => new(
             StorageBinding.Id,
@@ -1535,6 +1995,176 @@ public sealed class CosmosRelationQueryCompilerTests
             return Create(RelationQueryDocument.FromDefinition(definition));
         }
 
+        public static Fixture StructuredCollectionAny(
+            bool includeCount = false,
+            StructuredAnyPredicate predicate = StructuredAnyPredicate.CompoundEquality)
+        {
+            Expr elementPredicate = predicate switch
+            {
+                StructuredAnyPredicate.CompoundEquality => Expr.And(
+                    Expr.Eq(
+                        Expr.Field($"{ExprFieldRoots.CurrentItem}.Location"),
+                        Expr.Param(LocationParameter.Value)),
+                    Expr.Eq(
+                        Expr.Field($"{ExprFieldRoots.CurrentItem}.Type"),
+                        Expr.Const("Pickup"))),
+                StructuredAnyPredicate.Inequality => Expr.Ne(
+                    Expr.Field($"{ExprFieldRoots.CurrentItem}.Location"),
+                    Expr.Param(LocationParameter.Value)),
+                StructuredAnyPredicate.NegatedEquality => Expr.Not(Expr.Eq(
+                    Expr.Field($"{ExprFieldRoots.CurrentItem}.Location"),
+                    Expr.Param(LocationParameter.Value))),
+                StructuredAnyPredicate.Disjunction => Expr.Or(
+                    Expr.Eq(
+                        Expr.Field($"{ExprFieldRoots.CurrentItem}.Location"),
+                        Expr.Param(LocationParameter.Value)),
+                    Expr.Eq(
+                        Expr.Field($"{ExprFieldRoots.CurrentItem}.Type"),
+                        Expr.Const("Pickup"))),
+                StructuredAnyPredicate.NestedChild => Expr.Eq(
+                    Expr.Field($"{ExprFieldRoots.CurrentItem}.Address.City"),
+                    Expr.Param(LocationParameter.Value)),
+                StructuredAnyPredicate.BoolConstant => Expr.Eq(
+                    Expr.Field($"{ExprFieldRoots.CurrentItem}.IsRequired"),
+                    Expr.Const(true)),
+                StructuredAnyPredicate.Int32Constant => Expr.Eq(
+                    Expr.Field($"{ExprFieldRoots.CurrentItem}.Sequence"),
+                    Expr.Const(7)),
+                StructuredAnyPredicate.StringConstant => Expr.Eq(
+                    Expr.Field($"{ExprFieldRoots.CurrentItem}.Location"),
+                    Expr.Const("SEA")),
+                StructuredAnyPredicate.GuidConstant => Expr.Eq(
+                    Expr.Field($"{ExprFieldRoots.CurrentItem}.ExternalId"),
+                    Expr.Const(new Guid("01234567-89ab-cdef-0123-456789abcdef"))),
+                StructuredAnyPredicate.DateConstant => Expr.Eq(
+                    Expr.Field($"{ExprFieldRoots.CurrentItem}.ServiceDate"),
+                    Expr.Const("2026-07-19")),
+                StructuredAnyPredicate.OutOfRangeInt32Constant => Expr.Eq(
+                    Expr.Field($"{ExprFieldRoots.CurrentItem}.Sequence"),
+                    Expr.Const((long)int.MaxValue + 1L)),
+                _ => throw new ArgumentOutOfRangeException(nameof(predicate), predicate, "Unsupported structured-any predicate.")
+            };
+            List<LogicalQueryNode> nodes =
+            [
+                new SourceQueryNode(LoadSource, Load, LoadShape),
+                new FilterQueryNode(
+                    Filter,
+                    LoadSource,
+                    Expr.Any(
+                        Expr.Field(Load, StopsPath),
+                        elementPredicate)),
+                new ProjectQueryNode(
+                    Project,
+                    Filter,
+                    RowBinding,
+                    RowShape,
+                    [
+                        new(new("row-id"), IdPath, Expr.Field(Load, IdPath)),
+                        new(new("row-status"), StatusPath, Expr.Field(Load, StatusPath))
+                    ]),
+                new OrderQueryNode(Order, Project, [new(Expr.Field(RowBinding, IdPath))]),
+                new PageQueryNode(Page, Order, new OffsetPageDefinition(25, 0))
+            ];
+            List<QueryResultDefinition> results = [new RowsQueryResultDefinition(Rows, Page)];
+            if (includeCount)
+            {
+                nodes.Add(new AggregateQueryNode(
+                    Aggregate,
+                    Filter,
+                    AggregateBinding,
+                    CountAggregateShape,
+                    aggregates:
+                    [
+                        new(new("count-loads"), CountPath, AggregateOperator.Count)
+                    ]));
+                results.Add(new AggregationQueryResultDefinition(Aggregations, Aggregate));
+            }
+
+            IRQueryDefinition definition = new(
+                new("structured-collection-any-query"),
+                new("StructuredCollectionAnyQuery"),
+                new(
+                    nodes: [.. nodes],
+                    parameters:
+                    [
+                        new(LocationParameter, new ScalarTypeRef(ScalarTypeKind.String))
+                    ]),
+                [.. results]);
+            var fixture = Create(
+                RelationQueryDocument.FromDefinition(definition),
+                overrideUnavailableRequirements: predicate == StructuredAnyPredicate.NestedChild);
+            CosmosRelationQueryCollectionScopeEvidence scope = new(
+                "tests/cosmos-json-array/v1",
+                CosmosRelationQueryCollectionElementScope.JsonArrayElement,
+                CosmosRelationQueryCollectionCorrelationGuarantee.SameArrayElement,
+                CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion,
+                CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion,
+                CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion,
+                CosmosRelationQueryEmptyCollectionBehavior.NoElements,
+                childFields:
+                [
+                    new CosmosRelationQueryCollectionElementFieldBinding(
+                        StopLocationPath,
+                        StopLocationPath,
+                        CosmosRelationQueryCollectionElementValueDomain.String,
+                        CosmosRelationQueryCollectionElementSemanticCapabilities.ExactEquality
+                        | CosmosRelationQueryCollectionElementSemanticCapabilities.ExactInequality,
+                        "tests/cosmos-json-string/v1",
+                        CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion,
+                        CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion),
+                    new CosmosRelationQueryCollectionElementFieldBinding(
+                        StopTypePath,
+                        StopTypePath,
+                        CosmosRelationQueryCollectionElementValueDomain.String,
+                        CosmosRelationQueryCollectionElementSemanticCapabilities.ExactEquality
+                        | CosmosRelationQueryCollectionElementSemanticCapabilities.ExactInequality,
+                        "tests/cosmos-json-string/v1",
+                        CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion,
+                        CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion),
+                    new CosmosRelationQueryCollectionElementFieldBinding(
+                        StopIsRequiredPath,
+                        StopIsRequiredPath,
+                        CosmosRelationQueryCollectionElementValueDomain.Bool,
+                        CosmosRelationQueryCollectionElementSemanticCapabilities.ExactEquality
+                        | CosmosRelationQueryCollectionElementSemanticCapabilities.ExactInequality,
+                        "tests/cosmos-json-bool/v1",
+                        CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion,
+                        CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion),
+                    new CosmosRelationQueryCollectionElementFieldBinding(
+                        StopSequencePath,
+                        StopSequencePath,
+                        CosmosRelationQueryCollectionElementValueDomain.Int32,
+                        CosmosRelationQueryCollectionElementSemanticCapabilities.ExactEquality
+                        | CosmosRelationQueryCollectionElementSemanticCapabilities.ExactInequality,
+                        "tests/cosmos-json-int32/v1",
+                        CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion,
+                        CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion),
+                    new CosmosRelationQueryCollectionElementFieldBinding(
+                        StopExternalIdPath,
+                        StopExternalIdPath,
+                        CosmosRelationQueryCollectionElementValueDomain.Guid,
+                        CosmosRelationQueryCollectionElementSemanticCapabilities.ExactEquality
+                        | CosmosRelationQueryCollectionElementSemanticCapabilities.ExactInequality,
+                        "tests/cosmos-json-guid/v1",
+                        CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion,
+                        CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion),
+                    new CosmosRelationQueryCollectionElementFieldBinding(
+                        StopServiceDatePath,
+                        StopServiceDatePath,
+                        CosmosRelationQueryCollectionElementValueDomain.Date,
+                        CosmosRelationQueryCollectionElementSemanticCapabilities.ExactEquality
+                        | CosmosRelationQueryCollectionElementSemanticCapabilities.ExactInequality,
+                        "tests/cosmos-json-date/v1",
+                        CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion,
+                        CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion)
+                ]);
+            return new(
+                fixture.Plan,
+                fixture.Realization,
+                fixture.Placement,
+                fixture.StorageBindingWithCollectionScope(scope));
+        }
+
         static (FieldPath Path, ScalarTypeRef Type) PrecisionUnsafeNumeric(ScalarTypeKind numericKind) =>
             numericKind switch
             {
@@ -1878,6 +2508,20 @@ public sealed class CosmosRelationQueryCompilerTests
             [
                 new ObjectFieldTypeDef("Name", stringType)
             ]);
+            var stopAddressType = new ObjectTypeRef(
+            [
+                new ObjectFieldTypeDef("City", stringType)
+            ]);
+            var stopType = new ObjectTypeRef(
+            [
+                new ObjectFieldTypeDef("Location", stringType),
+                new ObjectFieldTypeDef("Type", stringType),
+                new ObjectFieldTypeDef("IsRequired", new ScalarTypeRef(ScalarTypeKind.Bool)),
+                new ObjectFieldTypeDef("Sequence", new ScalarTypeRef(ScalarTypeKind.Int32)),
+                new ObjectFieldTypeDef("ExternalId", new ScalarTypeRef(ScalarTypeKind.Guid)),
+                new ObjectFieldTypeDef("ServiceDate", new ScalarTypeRef(ScalarTypeKind.Date)),
+                new ObjectFieldTypeDef("Address", stopAddressType)
+            ]);
             var load = new Shape(
                 LoadShape.ShapeId,
                 [
@@ -1889,6 +2533,7 @@ public sealed class CosmosRelationQueryCompilerTests
                     new(new("DecimalValue"), new ScalarTypeRef(ScalarTypeKind.Decimal)),
                     new(new("Tags"), new ArrayTypeRef(stringType)),
                     new(new("Items"), new ArrayTypeRef(itemType)),
+                    new(new("Stops"), new ArrayTypeRef(stopType)),
                     new(new("ObservedInstant"), new ScalarTypeRef(ScalarTypeKind.Instant)),
                     new(new("ObservedDateTime"), new ScalarTypeRef(ScalarTypeKind.DateTime)),
                     new(

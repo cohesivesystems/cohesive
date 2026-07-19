@@ -435,6 +435,42 @@ public abstract record CosmosSqlExpression
             Guard.RequireNotNull(ifTrue),
             Guard.RequireNotNull(ifFalse));
 
+    /// <summary>Creates a correlated existential expression over one in-document collection.</summary>
+    /// <param name="collection">Expression producing the collection enumerated by the correlated subquery.</param>
+    /// <param name="predicate">
+    /// Factory invoked exactly once with an expression bound to the current collection item. The supplied item
+    /// expression is valid only within the returned predicate.
+    /// </param>
+    /// <returns>
+    /// An <c>EXISTS</c> expression whose collection-item alias is allocated deterministically when the containing
+    /// statement is rendered.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="collection"/> or <paramref name="predicate"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="predicate"/> returns <see langword="null"/>.</exception>
+    /// <exception cref="Exception">
+    /// <paramref name="predicate"/> throws; the delegate's exception is propagated unchanged.
+    /// </exception>
+    public static CosmosSqlExpression CollectionExists(
+        CosmosSqlExpression collection,
+        Func<CosmosSqlExpression, CosmosSqlExpression> predicate)
+    {
+        ArgumentNullException.ThrowIfNull(collection);
+        ArgumentNullException.ThrowIfNull(predicate);
+
+        CollectionItemExpression item = new();
+        var itemPredicate = predicate(item);
+        if (itemPredicate is null)
+        {
+            throw new ArgumentException(
+                "A Cosmos SQL collection existential predicate cannot be null.",
+                nameof(predicate));
+        }
+
+        return new CollectionExistsExpression(collection, item, itemPredicate);
+    }
+
     /// <summary>Creates a call to an allow-listed Cosmos SQL scalar function.</summary>
     /// <param name="function">Function to emit.</param>
     /// <param name="argument">The function argument.</param>
@@ -763,6 +799,39 @@ public abstract record CosmosSqlExpression
         }
     }
 
+    sealed record CollectionItemExpression : CosmosSqlExpression
+    {
+        internal override void WriteTo(CosmosSqlRenderContext context, StringBuilder builder) =>
+            builder.Append(context.RequireCollectionItemAlias(this));
+    }
+
+    sealed record CollectionExistsExpression(
+        CosmosSqlExpression Collection,
+        CollectionItemExpression Item,
+        CosmosSqlExpression Predicate) : CosmosSqlExpression
+    {
+        internal override void WriteTo(CosmosSqlRenderContext context, StringBuilder builder)
+        {
+            context.EnterCollectionItem(Item);
+            try
+            {
+                builder.Append("EXISTS (SELECT VALUE ");
+                Item.WriteTo(context, builder);
+                builder.Append(" FROM ");
+                Item.WriteTo(context, builder);
+                builder.Append(" IN ");
+                Collection.WriteTo(context, builder);
+                builder.Append(" WHERE ");
+                Predicate.WriteTo(context, builder);
+                builder.Append(')');
+            }
+            finally
+            {
+                context.ExitCollectionItem(Item);
+            }
+        }
+    }
+
     sealed record FunctionExpression(
         CosmosSqlFunction FunctionKind,
         ImmutableArray<CosmosSqlExpression> Arguments) : CosmosSqlExpression
@@ -952,7 +1021,7 @@ public sealed class CosmosSqlBuilder
     /// <returns>Immutable normalized SQL and its deterministic parameter slots.</returns>
     /// <exception cref="InvalidOperationException">
     /// No projection was configured, only one of offset and limit is configured, or the query combines
-    /// <c>GROUP BY</c> with <c>ORDER BY</c>.
+    /// <c>GROUP BY</c> with <c>ORDER BY</c>, or a collection-item expression escaped its defining existential scope.
     /// </exception>
     public CosmosSqlCommandTemplate BuildTemplate()
     {
@@ -967,6 +1036,9 @@ public sealed class CosmosSqlBuilder
         }
 
         CosmosSqlRenderContext context = new();
+        context.ReserveAlias(rootAlias);
+        foreach (var join in joins)
+            context.ReserveAlias(join.Alias);
         StringBuilder builder = new("SELECT ");
         if (distinct)
             builder.Append("DISTINCT ");
@@ -1039,7 +1111,7 @@ public sealed class CosmosSqlBuilder
     /// <exception cref="ArgumentException">The query contains a runtime parameter binding that cannot be bound without a value.</exception>
     /// <exception cref="InvalidOperationException">
     /// No projection was configured, only one of offset and limit is configured, or the query combines
-    /// <c>GROUP BY</c> with <c>ORDER BY</c>.
+    /// <c>GROUP BY</c> with <c>ORDER BY</c>, or a collection-item expression escaped its defining existential scope.
     /// </exception>
     public CosmosSqlStatement Build() => BuildTemplate().Bind();
 
@@ -1065,8 +1137,49 @@ sealed class CosmosSqlRenderContext
 {
     readonly ImmutableArray<CosmosSqlParameterSlot>.Builder parameters = ImmutableArray.CreateBuilder<CosmosSqlParameterSlot>();
     readonly Dictionary<string, string> runtimeNames = new(StringComparer.Ordinal);
+    readonly HashSet<string> usedAliases = new(StringComparer.Ordinal);
+    readonly Dictionary<CosmosSqlExpression, string> activeCollectionItemAliases = new(
+        ReferenceEqualityComparer.Instance);
+    int nextCollectionAlias;
 
     public ImmutableArray<CosmosSqlParameterSlot> Parameters => parameters.ToImmutable();
+
+    public void ReserveAlias(string alias)
+    {
+        if (!usedAliases.Add(alias))
+            throw new InvalidOperationException($"Cosmos SQL alias '{alias}' is already reserved.");
+    }
+
+    public void EnterCollectionItem(CosmosSqlExpression item)
+    {
+        if (activeCollectionItemAliases.ContainsKey(item))
+            throw new InvalidOperationException("A Cosmos SQL collection item is already active in this render scope.");
+
+        string alias;
+        do
+        {
+            alias = $"e{nextCollectionAlias.ToString(CultureInfo.InvariantCulture)}";
+            nextCollectionAlias++;
+        }
+        while (!usedAliases.Add(alias));
+
+        activeCollectionItemAliases.Add(item, alias);
+    }
+
+    public string RequireCollectionItemAlias(CosmosSqlExpression item)
+    {
+        if (activeCollectionItemAliases.TryGetValue(item, out var alias))
+            return alias;
+
+        throw new InvalidOperationException(
+            "A Cosmos SQL collection-item expression cannot be rendered outside its existential predicate scope.");
+    }
+
+    public void ExitCollectionItem(CosmosSqlExpression item)
+    {
+        if (!activeCollectionItemAliases.Remove(item))
+            throw new InvalidOperationException("A Cosmos SQL collection item is not active in this render scope.");
+    }
 
     public string AddConstant(object? value)
     {

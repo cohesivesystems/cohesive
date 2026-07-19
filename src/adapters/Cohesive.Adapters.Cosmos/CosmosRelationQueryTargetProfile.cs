@@ -13,9 +13,9 @@ public static class CosmosRelationQueryTargetProfile
     /// <summary>Stable Cosmos SQL interpretation-target identity.</summary>
     public static RelationQueryTargetId Target { get; } = new("cohesive.adapters.cosmos.sql");
 
-    /// <summary>Stable v1 capability-profile identity.</summary>
+    /// <summary>Stable v2 capability-profile identity.</summary>
     public static RelationQueryTargetProfileId ProfileId { get; } = new(
-        "cohesive.adapters.cosmos.sql/canonical-v1");
+        "cohesive.adapters.cosmos.sql/canonical-v2");
 
     /// <summary>Operating boundary requiring one physical source/container.</summary>
     public static RelationQueryOperatingBoundaryId SingleSourceBoundary { get; } = new(
@@ -33,7 +33,7 @@ public static class CosmosRelationQueryTargetProfile
     public static RelationQueryOperatingBoundaryId StableOrderingBoundary { get; } = new(
         "cosmos/boundary/stable-unique-ordering");
 
-    /// <summary>Maximum offset-page size supported by the v1 compiler profile.</summary>
+    /// <summary>Maximum offset-page size supported by the v2 compiler profile.</summary>
     public const int MaximumPageSize = 1_000;
 
     /// <summary>
@@ -50,7 +50,7 @@ public static class CosmosRelationQueryTargetProfile
         "cosmos/boundary/exact-count-input-rows");
 
     /// <summary>
-    /// Default Cosmos target profile. It advertises operation families interpreted by the canonical v1 compiler;
+    /// Default Cosmos target profile. It advertises operation families interpreted by the canonical v2 compiler;
     /// demand-scoped structural and value-contract checks further constrain their exact supported variants.
     /// </summary>
     public static RelationQueryTargetCapabilityProfile Default { get; } = CreateProfile();
@@ -60,7 +60,7 @@ public static class CosmosRelationQueryTargetProfile
     /// attributable boundary validation.
     /// </summary>
     public static RelationQueryRealizationPolicy Policy { get; } = new(
-        new("cohesive.adapters.cosmos.sql/realization-policy-v1"),
+        new("cohesive.adapters.cosmos.sql/realization-policy-v2"),
         conventionSetVersion: CosmosRelationQueryStorageBinding.SemanticPathConventionSet,
         constrainedRealizations: RelationQueryConstrainedRealizationPolicy.AllowValidated);
 
@@ -130,12 +130,21 @@ public static class CosmosRelationQueryTargetProfile
             }
         }
 
+        declarations.Add((
+            $"structural/{(int)RelationQueryStructuralCapabilityRole.CurrentItemRead}/{(int)RelationQueryStructuralPathKind.CollectionElement}",
+            new StructuralRelationQueryCapability(
+                RelationQueryStructuralCapabilityRole.CurrentItemRead,
+                RelationQueryStructuralPathKind.CollectionElement),
+            [SingleSourceBoundary, NonNullOperandsBoundary]));
+
         foreach (var guarantee in GuaranteeCapabilities)
         {
             declarations.Add((
                 $"guarantee/{(int)guarantee}",
                 new GuaranteeRelationQueryCapability(guarantee),
-                []));
+                guarantee == RelationQueryGuaranteeCapabilityKind.CollectionElementCorrelation
+                    ? [SingleSourceBoundary, NonNullOperandsBoundary]
+                    : []));
         }
 
         foreach (var boundary in boundaries)
@@ -159,7 +168,7 @@ public static class CosmosRelationQueryTargetProfile
             [RelationQueryCompilationProvenance.CurrentCompilerProfile],
             evidence,
             boundaries,
-            "Canonical Cosmos SQL v1: exact single-container row and aggregation compilation within declared boundaries.");
+            "Canonical Cosmos SQL v2: exact single-container rows, correlated structured JSON-array existential predicates, and aggregations within declared boundaries.");
     }
 
     static IEnumerable<ExprCapabilityId> ExpressionCapabilities()
@@ -176,12 +185,15 @@ public static class CosmosRelationQueryTargetProfile
         foreach (var @operator in SupportedBinaryOperators)
             yield return ExprCapabilities.ForBinary(@operator);
         yield return ExprCapabilities.ForFunction(ExprFunctionNames.Contains);
+        yield return ExprCapabilities.ForFunction(ExprFunctionNames.Any);
     }
 
     static ImmutableArray<RelationQueryOperatingBoundaryId> ExpressionBoundaries(
         ExprCapabilityId expression)
     {
-        if (expression == ExprCapabilities.ForFunction(ExprFunctionNames.Contains))
+        if (expression == ExprCapabilities.ForFunction(ExprFunctionNames.Contains)
+            || expression == ExprCapabilities.ForFunction(ExprFunctionNames.Any)
+            || expression == ExprCapabilities.CurrentItem)
             return [SingleSourceBoundary, NonNullOperandsBoundary];
         if (expression == ExprCapabilities.ForUnary(UnaryOperator.Not)
             || SupportedBinaryOperators.Any(@operator =>
@@ -220,7 +232,6 @@ public static class CosmosRelationQueryTargetProfile
     static ImmutableArray<RelationQueryStructuralCapabilityRole> StructuralRoles =>
     [
         RelationQueryStructuralCapabilityRole.BindingRead,
-        RelationQueryStructuralCapabilityRole.CurrentItemRead,
         RelationQueryStructuralCapabilityRole.ProjectionTarget,
         RelationQueryStructuralCapabilityRole.GroupingTarget,
         RelationQueryStructuralCapabilityRole.AggregateTarget,
@@ -238,6 +249,7 @@ public static class CosmosRelationQueryTargetProfile
     static ImmutableArray<RelationQueryGuaranteeCapabilityKind> GuaranteeCapabilities =>
     [
         RelationQueryGuaranteeCapabilityKind.MissingNullDistinction,
+        RelationQueryGuaranteeCapabilityKind.CollectionElementCorrelation,
         RelationQueryGuaranteeCapabilityKind.AbsenceAvailabilityFailureDistinction,
         RelationQueryGuaranteeCapabilityKind.Ordering,
         RelationQueryGuaranteeCapabilityKind.NullPlacement,

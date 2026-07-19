@@ -262,6 +262,67 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_StructuredCollectionAny_MatchesReferenceForSameSplitAndEmptyEvidence()
+    {
+        var compilerFixture = CosmosRelationQueryCompilerTests.Fixture.StructuredCollectionAny();
+        var compilation = compilerFixture.Compile(compilerFixture.StorageBindingWithAffinity());
+        Assert.True(compilation.IsSuccessful);
+        var artifact = Assert.Single(compilation.Artifacts);
+        var evidence = CreateStructuredAnyEvidence(compilerFixture.Plan);
+        var reference = RelationQueryInMemoryInterpreter.Default.Execute(new(compilerFixture.Plan, evidence));
+        Assert.True(reference.IsSuccessful, string.Join(
+            Environment.NewLine,
+            reference.Diagnostics.Select(static diagnostic => $"{diagnostic.Code}: {diagnostic.Message}")));
+        var referenceRows = Assert.Single(reference.QueryResults).Rows;
+        var idAlias = Assert.Single(artifact.ResultFields, static field =>
+            field.Field.Path == CosmosRelationQueryCompilerTests.Fixture.IdPath).Alias;
+        var statusAlias = Assert.Single(artifact.ResultFields, static field =>
+            field.Field.Path == StatusPath).Alias;
+        TrackingFeedIterator iterator = new(
+        [
+            Page(
+                JsonObject((idAlias, "load-1"), (statusAlias, "active")),
+                JsonObject((idAlias, "load-4"), (statusAlias, "active")))
+        ]);
+        Microsoft.Azure.Cosmos.QueryDefinition? observedQuery = null;
+        CosmosRelationQueryArtifactExecutor executor = new(
+            new CosmosJsonQueryFeedReader(
+                artifact.StorageBinding.AccountEndpoint,
+                artifact.StorageBinding.DatabaseName,
+                artifact.StorageBinding.ContainerName,
+                (query, _) =>
+                {
+                    observedQuery = query;
+                    return iterator;
+                }));
+        CosmosRelationQueryArtifactExecutionRequest request = new(
+            compilerFixture.PlanReference,
+            compilerFixture.Realization.Fingerprint,
+            compilerFixture.Placement.Fingerprint,
+            artifact.StorageBinding.Fingerprint,
+            artifact,
+            maximumRows: 25,
+            parameters: new Dictionary<QueryParameterId, ObservationValue>
+            {
+                [Assert.Single(artifact.Parameters).Parameter] = ObservationValue.FromString("SEA")
+            });
+
+        var result = await executor.ExecuteAsync(request);
+
+        Assert.Equal(RelationQueryExecutionStatus.Succeeded, result.Status);
+        Assert.Equal(
+            ["load-1", "load-4"],
+            referenceRows.Select(row => FieldString(row.Value, IdPath)).ToArray());
+        Assert.Equal(
+            referenceRows.Select(static row => row.Value.GetRawText()),
+            result.Rows.Select(static row => row.Value.GetRawText()));
+        Assert.NotNull(observedQuery);
+        Assert.Contains("EXISTS (SELECT VALUE e0", observedQuery.QueryText, StringComparison.Ordinal);
+        Assert.DoesNotContain(" JOIN ", observedQuery.QueryText, StringComparison.Ordinal);
+        Assert.True(iterator.Disposed);
+    }
+
+    [Fact]
     public void ExecutionOptions_RejectsUnbufferableMaximumRows()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() =>
@@ -1299,6 +1360,85 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
                         RelationQueryCapabilityEvidenceState.Available))
             ]);
     }
+
+    static RelationQueryRuntimeEvidence CreateStructuredAnyEvidence(CompiledRelationQueryPlan plan)
+    {
+        var source = Assert.Single(plan.InputContract.Sources);
+        ImmutableArray<RelationQueryObservationOccurrence> occurrences =
+        [
+            new(new("load/1"), source.Binding, source.Shape, "load-1"),
+            new(new("load/2"), source.Binding, source.Shape, "load-2"),
+            new(new("load/3"), source.Binding, source.Shape, "load-3"),
+            new(new("load/4"), source.Binding, source.Shape, "load-4")
+        ];
+        ObservationValue[] stops =
+        [
+            Stops(Stop("SEA", "Pickup")),
+            Stops(Stop("SEA", "Delivery"), Stop("PDX", "Pickup")),
+            Stops(),
+            Stops(Stop("PDX", "Delivery"), Stop("SEA", "Pickup"))
+        ];
+        ImmutableArray<RelationQueryFieldEvidence>.Builder fields =
+            ImmutableArray.CreateBuilder<RelationQueryFieldEvidence>(source.Fields.Length * occurrences.Length);
+        for (var index = 0; index < occurrences.Length; index++)
+        {
+            foreach (var field in source.Fields)
+            {
+                var value = field.Input.Field.Path == CosmosRelationQueryCompilerTests.Fixture.IdPath
+                    ? ObservationValue.FromString($"load-{index + 1}")
+                    : field.Input.Field.Path == CosmosRelationQueryCompilerTests.Fixture.StatusPath
+                        ? ObservationValue.FromString("active")
+                        : field.Input.Field.Path == CosmosRelationQueryCompilerTests.Fixture.StopsPath
+                            ? stops[index]
+                            : throw new InvalidOperationException(
+                                $"Unexpected structured-any differential field '{field.Input.Field.Path}'.");
+                fields.Add(new(
+                    field.Input.Id,
+                    occurrences[index].Id,
+                    RelationQueryFieldEvidenceState.Value,
+                    value));
+            }
+        }
+
+        return new(
+            new("tests/cosmos-structured-any-differential"),
+            plan,
+            sources: [new(source.Input.Id, RelationQuerySourceEvidenceState.Provided, occurrences)],
+            fields: fields.MoveToImmutable(),
+            parameters:
+            [
+                .. plan.InputContract.Parameters.Select(static parameter => new RelationQueryParameterEvidence(
+                    parameter.Input.Id,
+                    RelationQueryParameterEvidenceState.Provided,
+                    ObservationValue.FromString("SEA")))
+            ],
+            capabilities:
+            [
+                .. plan.RequirementGraph.Inputs
+                    .OfType<RelationQueryCapabilityInput>()
+                    .Select(static input => new RelationQueryCapabilityEvidence(
+                        input.Id,
+                        RelationQueryCapabilityEvidenceState.Available))
+            ]);
+    }
+
+    static ObservationValue Stops(params ObservationValue[] stops) => ObservationValue.FromArray(stops);
+
+    static ObservationValue Stop(string location, string type) => ObservationValue.FromObject(
+        new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+        {
+            ["Location"] = ObservationValue.FromString(location),
+            ["Type"] = ObservationValue.FromString(type),
+            ["IsRequired"] = ObservationValue.FromBool(true),
+            ["Sequence"] = ObservationValue.FromInt64(1),
+            ["ExternalId"] = ObservationValue.FromString("01234567-89ab-cdef-0123-456789abcdef"),
+            ["ServiceDate"] = ObservationValue.FromString("2026-07-19"),
+            ["Address"] = ObservationValue.FromObject(
+                new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+                {
+                    ["City"] = ObservationValue.FromString(location)
+                })
+        });
 
     sealed class ArtifactFixture
     {

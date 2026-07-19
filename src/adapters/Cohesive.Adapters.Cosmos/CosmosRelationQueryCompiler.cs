@@ -173,7 +173,7 @@ public sealed class CosmosRelationQueryCompiler
                 || request.Plan.InputContract.Sources[0].Binding != placement.Binding)
             {
                 diagnostics.Add(BindingDiagnostic(
-                    "Canonical Cosmos SQL v1 requires exactly one source contract and no relationship traversal contracts."));
+                    "Canonical Cosmos SQL v2 requires exactly one source contract and no relationship traversal contracts."));
             }
         }
 
@@ -252,7 +252,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.RelationTerminalUnsupported,
-                    "Cosmos SQL v1 does not lower relation terminals until root correlation, cardinality, key, and invariant evidence are represented by the native artifact contract.",
+                    "Cosmos SQL v2 does not lower relation terminals until root correlation, cardinality, key, and invariant evidence are represented by the native artifact contract.",
                     branch.Node);
             }
             if (request.Realization.Observability.OccurrenceProvenance
@@ -260,7 +260,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.ResultObservabilityUnsupported,
-                    "Cosmos SQL v1 compiles value results only and cannot provide exact contributor-occurrence lineage.",
+                    "Cosmos SQL v2 compiles value results only and cannot provide exact contributor-occurrence lineage.",
                     branch.Node);
             }
             ValidatePipeline();
@@ -325,7 +325,7 @@ public sealed class CosmosRelationQueryCompiler
                 {
                     throw Fail(
                         CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedBranchTopology,
-                        "Canonical Cosmos SQL v1 supports only a linear single-source branch.",
+                        "Canonical Cosmos SQL v2 supports only a linear single-source branch.",
                         execution.Id);
                 }
                 if (execution.LogicalPlan.Inputs.Any(static input => !input.Bypasses.IsDefaultOrEmpty))
@@ -396,7 +396,7 @@ public sealed class CosmosRelationQueryCompiler
                         {
                             throw Fail(
                                 CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedLogicalOperator,
-                                "Canonical Cosmos SQL v1 supports offset paging only.",
+                                "Canonical Cosmos SQL v2 supports offset paging only.",
                                 execution.Id);
                         }
                         sawPage = true;
@@ -428,7 +428,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedLogicalOperator,
-                    "Cosmos SQL v1 does not claim ordered or paged aggregate-result equivalence; grouped queries cannot combine GROUP BY and ORDER BY.",
+                    "Cosmos SQL v2 does not claim ordered or paged aggregate-result equivalence; grouped queries cannot combine GROUP BY and ORDER BY.",
                     branch.Node);
             }
         }
@@ -499,7 +499,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedLogicalOperator,
-                    "Keyed DISTINCT retains arbitrary source rows and is not equivalent to Cosmos whole-projection DISTINCT in v1.",
+                    "Keyed DISTINCT retains arbitrary source rows and is not equivalent to Cosmos whole-projection DISTINCT in v2.",
                     distinct.Id);
             }
 
@@ -510,7 +510,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                    "Whole-row DISTINCT requires one complete projected binding in Cosmos SQL v1.",
+                    "Whole-row DISTINCT requires one complete projected binding in Cosmos SQL v2.",
                     distinct.Id);
             }
 
@@ -703,11 +703,11 @@ public sealed class CosmosRelationQueryCompiler
                     CompileRowCount(),
                 AggregateOperator.Count => throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.AggregateUnsupported,
-                    "Value-count semantics are not equivalent to Cosmos COUNT for missing and null values in v1.",
+                    "Value-count semantics are not equivalent to Cosmos COUNT for missing and null values in v2.",
                     branch.Node),
                 AggregateOperator.Sum => throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.AggregateUnsupported,
-                    "Canonical decimal SUM accumulation is not equivalent to Cosmos binary-number aggregation in v1.",
+                    "Canonical decimal SUM accumulation is not equivalent to Cosmos binary-number aggregation in v2.",
                     branch.Node),
                 AggregateOperator.Min or AggregateOperator.Max when !aggregate.Grouped => throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.AggregateUnsupported,
@@ -716,7 +716,7 @@ public sealed class CosmosRelationQueryCompiler
                 AggregateOperator.Min or AggregateOperator.Max => CompileNumericMinimumOrMaximum(aggregate),
                 _ => throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.AggregateUnsupported,
-                    $"Aggregate operation '{definition.Operation}' is not in the exact Cosmos SQL v1 closure.",
+                    $"Aggregate operation '{definition.Operation}' is not in the exact Cosmos SQL v2 closure.",
                     branch.Node)
             };
         }
@@ -742,7 +742,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.AggregateUnsupported,
-                    $"Cosmos SQL v1 requires a known Int32 value for exact '{aggregate.Execution.Definition.Operation}' semantics.",
+                    $"Cosmos SQL v2 requires a known Int32 value for exact '{aggregate.Execution.Definition.Operation}' semantics.",
                     valueSite.Node ?? branch.Node);
             }
 
@@ -855,7 +855,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.PagingUnstable,
-                    $"Page size {page.Limit} exceeds the Cosmos v1 boundary of {CosmosRelationQueryTargetProfile.MaximumPageSize}.",
+                    $"Page size {page.Limit} exceeds the Cosmos v2 boundary of {CosmosRelationQueryTargetProfile.MaximumPageSize}.",
                     pageExecution.Id);
             }
             if (orderExecution?.CanonicalNode is not OrderQueryNode ordered)
@@ -944,9 +944,11 @@ public sealed class CosmosRelationQueryCompiler
                     CompileExpression(conditional.IfFalse, site, requireNonNullInputs)),
                 CallExpr call when string.Equals(call.Function, ExprFunctionNames.Contains, StringComparison.Ordinal)
                                    && call.Arguments.Length == 2 => CompileContains(call, site),
+                CallExpr call when string.Equals(call.Function, ExprFunctionNames.Any, StringComparison.Ordinal)
+                                   && call.Arguments.Length == 2 => CompileCollectionAny(call, site),
                 CallExpr call => throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                    $"Function '{call.Function}' is not in the exact canonical Cosmos SQL v1 expression closure.",
+                    $"Function '{call.Function}' is not in the exact canonical Cosmos SQL v2 expression closure.",
                     site?.Node ?? branch.Node),
                 AggregateExpr => throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
@@ -954,7 +956,7 @@ public sealed class CosmosRelationQueryCompiler
                     site?.Node ?? branch.Node),
                 _ => throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                    $"Expression node '{expression.GetType().Name}' is not in the exact canonical Cosmos SQL v1 closure.",
+                    $"Expression node '{expression.GetType().Name}' is not in the exact canonical Cosmos SQL v2 closure.",
                     site?.Node ?? branch.Node)
             };
         }
@@ -976,7 +978,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                    $"Constant value kind '{value.Kind}' has no exact Cosmos SQL v1 parameter encoding.",
+                    $"Constant value kind '{value.Kind}' has no exact Cosmos SQL v2 parameter encoding.",
                     node);
             }
             if (value.Kind != ObservationValueKind.Null
@@ -1046,7 +1048,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                    $"Binary operator '{binary.Operator}' does not have a proven exact Cosmos JSON value domain in v1.",
+                    $"Binary operator '{binary.Operator}' does not have a proven exact Cosmos JSON value domain in v2.",
                     site.Node ?? branch.Node);
             }
 
@@ -1111,17 +1113,337 @@ public sealed class CosmosRelationQueryCompiler
                 candidateExpression);
         }
 
+        CosmosSqlExpression CompileCollectionAny(
+            CallExpr call,
+            RelationQueryExpressionSiteAnalysis? site)
+        {
+            if (site is null)
+            {
+                throw Fail(
+                    CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
+                    "The any function has no analyzed canonical expression site.",
+                    branch.Node);
+            }
+
+            var node = site.Node ?? branch.Node;
+            var collectionContract = AnalyzeSubexpression(
+                call.Arguments[0],
+                site,
+                "collection-any-collection");
+            if (!IsRequiredNonNull(collectionContract))
+            {
+                throw CollectionEvidenceFailure(
+                    "Canonical any requires a required, non-null collection; Cosmos SQL cannot silently treat a missing or null collection as empty.",
+                    node);
+            }
+
+            var elementContract = GetCollectionElementContract(collectionContract);
+            if (elementContract is null
+                || elementContract.GetEffectiveType() is not ObjectTypeRef
+                    && elementContract.ShapeDefinition is null)
+            {
+                throw Fail(
+                    CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
+                    "Canonical any requires a structured object collection in the Cosmos SQL v2 closure.",
+                    node);
+            }
+
+            if (!TryResolveSourceField(call.Arguments[0], site, out var collectionField))
+            {
+                throw Fail(
+                    CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
+                    "Canonical any requires one direct physical structured collection field in Cosmos SQL v2.",
+                    node);
+            }
+
+            CosmosRelationQueryFieldBinding physical;
+            try
+            {
+                physical = storageBinding.ResolveFieldBinding(collectionField.Input.Id);
+            }
+            catch (KeyNotFoundException)
+            {
+                throw Fail(
+                    CosmosRelationQueryCompilationDiagnosticCodes.FieldBindingMissing,
+                    $"Compiled collection input '{collectionField.Input.Id.Value}' has no Cosmos document selector.",
+                    node,
+                    collectionField.Input.Id);
+            }
+
+            var evidence = physical.CollectionScope;
+            if (evidence is null)
+            {
+                throw CollectionEvidenceFailure(
+                    "The structured collection binding does not provide explicit JSON-array element scope, child-field, absence, and correlation evidence.",
+                    node,
+                    collectionField.Input.Id);
+            }
+            RequireExactCollectionScope(evidence, collectionField, node);
+
+            var predicateScope = site.Analysis.Site.Scope.WithCurrentItem(elementContract);
+            var predicateAnalysis = ExprAnalyzer.Analyze(
+                new ExprSite(
+                    new($"{site.Analysis.Site.Id.Value}/cosmos/collection-any-predicate"),
+                    call.Arguments[1],
+                    predicateScope,
+                    ExprExpectation.Boolean,
+                    site.Analysis.Site.CapabilityProfile,
+                    site.Analysis.Site.DiagnosticLocation),
+                site.Analysis.Semantics);
+            if (!predicateAnalysis.IsValid
+                || !IsBooleanScalar(predicateAnalysis.KnownResult?.GetEffectiveType())
+                || !IsRequiredNonNull(predicateAnalysis.KnownResult))
+            {
+                throw Fail(
+                    CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
+                    "The canonical any predicate does not have one valid, required, non-null Boolean contract in its collection-element scope.",
+                    node,
+                    collectionField.Input.Id);
+            }
+
+            var collection = CosmosSqlExpression.Property(
+                storageBinding.RootAlias,
+                FullDocumentPath(physical.DocumentPath));
+            return CosmosSqlExpression.CollectionExists(
+                collection,
+                item => CompileCollectionPredicate(
+                    call.Arguments[1],
+                    site,
+                    predicateScope,
+                    collectionField,
+                    evidence,
+                    item));
+        }
+
+        CosmosSqlExpression CompileCollectionPredicate(
+            Expr expression,
+            RelationQueryExpressionSiteAnalysis site,
+            ExprScope predicateScope,
+            RelationQueryFieldInputContract collectionField,
+            CosmosRelationQueryCollectionScopeEvidence evidence,
+            CosmosSqlExpression item)
+        {
+            return expression switch
+            {
+                BinaryExpr { Operator: BinaryOperator.And or BinaryOperator.Or } binary =>
+                    CosmosSqlExpression.Binary(
+                        Convert(binary.Operator),
+                        CompileCollectionPredicate(
+                            binary.Left,
+                            site,
+                            predicateScope,
+                            collectionField,
+                            evidence,
+                            item),
+                        CompileCollectionPredicate(
+                            binary.Right,
+                            site,
+                            predicateScope,
+                            collectionField,
+                            evidence,
+                            item)),
+                UnaryExpr { Operator: UnaryOperator.Not } unary => CosmosSqlExpression.Unary(
+                    CosmosSqlUnaryOperator.Not,
+                    CompileCollectionPredicate(
+                        unary.Operand,
+                        site,
+                        predicateScope,
+                        collectionField,
+                        evidence,
+                        item)),
+                BinaryExpr { Operator: BinaryOperator.Eq or BinaryOperator.Ne } comparison =>
+                    CompileCollectionComparison(
+                        comparison,
+                        site,
+                        predicateScope,
+                        collectionField,
+                        evidence,
+                        item),
+                _ => throw Fail(
+                    CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
+                    $"Expression node '{expression.GetType().Name}' is outside the direct-child Cosmos SQL v2 collection predicate closure.",
+                    site.Node ?? branch.Node,
+                    collectionField.Input.Id)
+            };
+        }
+
+        CosmosSqlExpression CompileCollectionComparison(
+            BinaryExpr binary,
+            RelationQueryExpressionSiteAnalysis site,
+            ExprScope predicateScope,
+            RelationQueryFieldInputContract collectionField,
+            CosmosRelationQueryCollectionScopeEvidence evidence,
+            CosmosSqlExpression item)
+        {
+            var node = site.Node ?? branch.Node;
+            FieldPath elementPath;
+            Expr childExpression;
+            Expr valueExpression;
+            if (TryResolveCurrentItemChildPath(binary.Left, out var leftPath))
+            {
+                elementPath = leftPath;
+                childExpression = binary.Left;
+                valueExpression = binary.Right;
+            }
+            else if (TryResolveCurrentItemChildPath(binary.Right, out var rightPath))
+            {
+                elementPath = rightPath;
+                childExpression = binary.Right;
+                valueExpression = binary.Left;
+            }
+            else
+            {
+                throw Fail(
+                    CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
+                    "A Cosmos collection-element comparison requires one direct current-element child field and one constant or parameter.",
+                    node,
+                    collectionField.Input.Id);
+            }
+
+            var childContract = AnalyzeSubexpression(
+                childExpression,
+                site,
+                "collection-any-child",
+                predicateScope);
+            var valueContract = AnalyzeCollectionComparisonValue(
+                valueExpression,
+                site,
+                predicateScope,
+                childContract,
+                node,
+                collectionField.Input.Id);
+            if (!IsRequiredNonNull(childContract) || !IsRequiredNonNull(valueContract))
+            {
+                throw CollectionEvidenceFailure(
+                    "A collection-element comparison requires canonical child and value operands to be required and non-null.",
+                    node,
+                    collectionField.Input.Id);
+            }
+
+            var valueType = childContract.GetEffectiveType();
+            if (valueType != valueContract.GetEffectiveType() || !IsCosmosEqualityScalar(valueType))
+            {
+                throw Fail(
+                    CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
+                    "A collection-element comparison requires operands in one exact Cosmos scalar equality domain.",
+                    node,
+                    collectionField.Input.Id);
+            }
+
+            CosmosRelationQueryCollectionElementFieldBinding child;
+            try
+            {
+                child = evidence.ResolveChild(elementPath);
+            }
+            catch (KeyNotFoundException)
+            {
+                throw CollectionEvidenceFailure(
+                    $"The collection binding has no direct child mapping for current-element path '{elementPath}'.",
+                    node,
+                    collectionField.Input.Id);
+            }
+
+            if (child.MissingValueBehavior
+                    != CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion
+                || child.NullValueBehavior
+                    != CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion)
+            {
+                throw CollectionEvidenceFailure(
+                    $"Collection child path '{elementPath}' does not prove that ingestion prohibits missing and null values.",
+                    node,
+                    collectionField.Input.Id);
+            }
+
+            var requiredCapability = binary.Operator == BinaryOperator.Eq
+                ? CosmosRelationQueryCollectionElementSemanticCapabilities.ExactEquality
+                : CosmosRelationQueryCollectionElementSemanticCapabilities.ExactInequality;
+            if (!child.SemanticCapabilities.HasFlag(requiredCapability))
+            {
+                throw CollectionEvidenceFailure(
+                    $"Collection child path '{elementPath}' does not attest '{requiredCapability}'.",
+                    node,
+                    collectionField.Input.Id);
+            }
+            RequireCollectionValueDomain(child, valueType, node, collectionField.Input.Id);
+
+            return CosmosSqlExpression.Binary(
+                Convert(binary.Operator),
+                CosmosSqlExpression.Property(item, child.DocumentPath),
+                CompileCollectionComparisonValue(valueExpression, valueType, node));
+        }
+
+        static ExprValueContract AnalyzeCollectionComparisonValue(
+            Expr expression,
+            RelationQueryExpressionSiteAnalysis site,
+            ExprScope predicateScope,
+            ExprValueContract childContract,
+            QueryNodeId node,
+            RelationQueryInputId input)
+        {
+            if (expression is ConstantExpr constant)
+            {
+                if (!childContract.IsSatisfiedByConstant(constant.Value))
+                {
+                    throw Fail(
+                        CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
+                        "The collection-element constant does not satisfy the compared child's canonical value contract.",
+                        node,
+                        input);
+                }
+
+                return childContract;
+            }
+
+            if (expression is ParameterExpr or LiteralExpr)
+            {
+                return AnalyzeSubexpression(
+                    expression,
+                    site,
+                    "collection-any-value",
+                    predicateScope);
+            }
+
+            throw Fail(
+                CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
+                "A Cosmos collection-element comparison value must be a constant or invocation parameter.",
+                node,
+                input);
+        }
+
+        CosmosSqlExpression CompileCollectionComparisonValue(
+            Expr expression,
+            TypeRef? expectedType,
+            QueryNodeId node) => expression switch
+        {
+            ParameterExpr parameter => CompileParameter(parameter, requireNonNull: true),
+            ConstantExpr constant => CompileConstant(
+                constant.Value,
+                expectedType,
+                requireNonNull: true,
+                node),
+            LiteralExpr literal => CompileConstant(
+                literal.Value,
+                literal.Type,
+                requireNonNull: true,
+                node),
+            _ => throw Fail(
+                CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
+                "A Cosmos collection-element comparison value must be a constant or invocation parameter.",
+                node)
+        };
+
         static ExprValueContract AnalyzeSubexpression(
             Expr expression,
             RelationQueryExpressionSiteAnalysis site,
-            string operand)
+            string operand,
+            ExprScope? scope = null)
         {
             var parent = site.Analysis.Site;
             var analysis = ExprAnalyzer.Analyze(
                 new ExprSite(
                     new($"{parent.Id.Value}/cosmos/{operand}"),
                     expression,
-                    parent.Scope,
+                    scope ?? parent.Scope,
                     ExprExpectation.Any,
                     parent.CapabilityProfile,
                     parent.DiagnosticLocation),
@@ -1134,7 +1456,155 @@ public sealed class CosmosRelationQueryCompiler
             throw Fail(
                 CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
                 $"The {operand} operand does not have one valid, known value contract for exact Cosmos lowering.",
-                site.Node);
+                    site.Node);
+        }
+
+        bool TryResolveSourceField(
+            Expr expression,
+            RelationQueryExpressionSiteAnalysis site,
+            out RelationQueryFieldInputContract field)
+        {
+            FieldPath path;
+            ValueBindingId? explicitBinding;
+            switch (expression)
+            {
+                case FieldExpr fieldExpression:
+                    path = fieldExpression.Path;
+                    explicitBinding = fieldExpression.Binding;
+                    break;
+                case FieldRefExpr fieldReference:
+                    path = fieldReference.Path;
+                    explicitBinding = null;
+                    break;
+                default:
+                    field = default!;
+                    return false;
+            }
+
+            var resolved = ResolveFieldRoot(path, explicitBinding, site);
+            if (resolved.Root != FieldRoot.Binding
+                || resolved.Binding is not { } binding
+                || !sourceFields.TryGetValue((binding, resolved.Path), out field!))
+            {
+                field = default!;
+                return false;
+            }
+            return true;
+        }
+
+        static void RequireExactCollectionScope(
+            CosmosRelationQueryCollectionScopeEvidence evidence,
+            RelationQueryFieldInputContract field,
+            QueryNodeId node)
+        {
+            if (evidence.ElementScope != CosmosRelationQueryCollectionElementScope.JsonArrayElement)
+            {
+                throw CollectionEvidenceFailure(
+                    "The Cosmos collection binding does not attest JSON-array element scope.",
+                    node,
+                    field.Input.Id);
+            }
+            if (evidence.CorrelationGuarantee
+                != CosmosRelationQueryCollectionCorrelationGuarantee.SameArrayElement)
+            {
+                throw CollectionEvidenceFailure(
+                    "The Cosmos collection binding does not attest same-array-element correlation.",
+                    node,
+                    field.Input.Id);
+            }
+            if (evidence.CollectionMissingValueBehavior
+                    != CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion
+                || evidence.CollectionNullValueBehavior
+                    != CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion)
+            {
+                throw CollectionEvidenceFailure(
+                    "The Cosmos collection binding must attest that ingestion prohibits missing and null collections; treating them as empty would weaken canonical any semantics.",
+                    node,
+                    field.Input.Id);
+            }
+            if (evidence.NullElementBehavior
+                != CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion)
+            {
+                throw CollectionEvidenceFailure(
+                    "The Cosmos collection binding must attest that ingestion prohibits explicit-null collection elements.",
+                    node,
+                    field.Input.Id);
+            }
+            if (evidence.EmptyCollectionBehavior != CosmosRelationQueryEmptyCollectionBehavior.NoElements)
+            {
+                throw CollectionEvidenceFailure(
+                    "The Cosmos collection binding does not prove that an empty JSON array contributes no existential subquery rows.",
+                    node,
+                    field.Input.Id);
+            }
+        }
+
+        static void RequireCollectionValueDomain(
+            CosmosRelationQueryCollectionElementFieldBinding child,
+            TypeRef? type,
+            QueryNodeId node,
+            RelationQueryInputId input)
+        {
+            var expected = type switch
+            {
+                ScalarTypeRef { Kind: ScalarTypeKind.Bool } =>
+                    CosmosRelationQueryCollectionElementValueDomain.Bool,
+                ScalarTypeRef { Kind: ScalarTypeKind.Int32 } =>
+                    CosmosRelationQueryCollectionElementValueDomain.Int32,
+                ScalarTypeRef { Kind: ScalarTypeKind.String } =>
+                    CosmosRelationQueryCollectionElementValueDomain.String,
+                ScalarTypeRef { Kind: ScalarTypeKind.Guid } =>
+                    CosmosRelationQueryCollectionElementValueDomain.Guid,
+                ScalarTypeRef { Kind: ScalarTypeKind.Date } =>
+                    CosmosRelationQueryCollectionElementValueDomain.Date,
+                _ => throw Fail(
+                    CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
+                    "The current collection child is outside the exact Cosmos SQL v2 scalar equality domains.",
+                    node,
+                    input)
+            };
+            if (child.ValueDomain != expected)
+            {
+                throw CollectionEvidenceFailure(
+                    $"Collection child path '{child.ElementPath}' attests value domain '{child.ValueDomain}' rather than required canonical domain '{expected}'.",
+                    node,
+                    input);
+            }
+        }
+
+        static bool TryResolveCurrentItemChildPath(Expr expression, out FieldPath path)
+        {
+            if (expression is FieldExpr
+                {
+                    Binding: null,
+                    Path.Segments: [{ Kind: SegmentKind.Field, Segment: ExprFieldRoots.CurrentItem }, .. var remainder]
+                }
+                && remainder.Length == 1
+                && remainder[0] is { Kind: SegmentKind.Field, Segment: not null })
+            {
+                path = new([remainder[0]]);
+                return true;
+            }
+
+            path = default;
+            return false;
+        }
+
+        static ExprValueContract? GetCollectionElementContract(ExprValueContract collection)
+        {
+            if (collection.Cardinality == FieldCardinality.Many)
+            {
+                return new(
+                    collection.Type,
+                    collection.Shape,
+                    shapeDefinition: collection.ShapeDefinition);
+            }
+            return collection.GetEffectiveType() is ArrayTypeRef array
+                ? new(
+                    array.ElementType,
+                    collection.Shape,
+                    shapeDefinition: collection.ShapeDefinition)
+                : null;
         }
 
         CosmosSqlExpression CompileField(
@@ -1279,7 +1749,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                    "A current-item expression requires exactly one visible collection expansion in Cosmos SQL v1.",
+                    "A current-item expression requires exactly one visible collection expansion in Cosmos SQL v2.",
                     branch.Node);
             }
             return CosmosSqlExpression.Alias(collectionAliases.Values.Single());
@@ -1300,7 +1770,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.ParameterUnsupported,
-                    $"Canonical parameter '{parameter.Parameter}' does not have a Cosmos SQL v1 parameter encoding with exact value semantics.",
+                    $"Canonical parameter '{parameter.Parameter}' does not have a Cosmos SQL v2 parameter encoding with exact value semantics.",
                     branch.Node,
                     contract.Input.Id);
             }
@@ -1499,7 +1969,7 @@ public sealed class CosmosRelationQueryCompiler
 
             throw Fail(
                 CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                $"Canonical {operation} semantics for missing or null values are not proven exact by Cosmos SQL v1.",
+                $"Canonical {operation} semantics for missing or null values are not proven exact by Cosmos SQL v2.",
                 node);
         }
 
@@ -1527,7 +1997,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                    "Cosmos SQL v1 result fields require a single-valued semantic contract.",
+                    "Cosmos SQL v2 result fields require a single-valued semantic contract.",
                     node);
             }
 
@@ -1536,7 +2006,7 @@ public sealed class CosmosRelationQueryCompiler
 
             throw Fail(
                 CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                "Cosmos SQL v1 cannot prove a canonical physical result encoding for this value contract.",
+                "Cosmos SQL v2 cannot prove a canonical physical result encoding for this value contract.",
                 node);
         }
 
@@ -1552,7 +2022,7 @@ public sealed class CosmosRelationQueryCompiler
 
             throw Fail(
                 CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                $"Canonical {operation} requires one proven exact scalar equality domain in Cosmos SQL v1.",
+                $"Canonical {operation} requires one proven exact scalar equality domain in Cosmos SQL v2.",
                 node);
         }
 
@@ -1576,7 +2046,7 @@ public sealed class CosmosRelationQueryCompiler
 
             throw Fail(
                 CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                "Canonical ordering requires Int32 values or an explicitly proven string/date source path; wider numeric and temporal ordering is not exact in Cosmos SQL v1.",
+                "Canonical ordering requires Int32 values or an explicitly proven string/date source path; wider numeric and temporal ordering is not exact in Cosmos SQL v2.",
                 node);
         }
 
@@ -1620,7 +2090,7 @@ public sealed class CosmosRelationQueryCompiler
             BinaryOperator.Or => CosmosSqlBinaryOperator.Or,
             _ => throw Fail(
                 CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                $"Binary operator '{@operator}' is not in the Cosmos SQL v1 closure.")
+                $"Binary operator '{@operator}' is not in the Cosmos SQL v2 closure.")
         };
 
         static FieldPath RemoveCurrentItemRoot(FieldPath path)
@@ -1640,6 +2110,16 @@ public sealed class CosmosRelationQueryCompiler
             QueryNodeId? node = null,
             RelationQueryInputId? input = null) =>
             new(code, message, node, input);
+
+        static BranchCompilationException CollectionEvidenceFailure(
+            string message,
+            QueryNodeId? node = null,
+            RelationQueryInputId? input = null) =>
+            Fail(
+                CosmosRelationQueryCompilationDiagnosticCodes.CollectionElementEvidenceUnavailable,
+                message,
+                node,
+                input);
 
         enum PipelineStage
         {
