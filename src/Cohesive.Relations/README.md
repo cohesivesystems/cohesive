@@ -1398,13 +1398,55 @@ runtime gap analysis first, then consumes this same shared realization contract 
 Compiled DTO mappers, composed acquisition runtimes, SQL/document/graph/search adapters, explain
 tools, and deployment gates can consume the same report contract.
 
+### Profile feasibility and bound realization
+
+Profile feasibility and contextual realization are deliberately separate interpretations. A
+`RelationQueryRealizationReport` proves that a target family advertises an exact strategy for the
+demanded semantic requirements. It does not claim that a particular table, container, index,
+field mapping, source placement, or adapter configuration supplies the evidence needed by that
+strategy.
+
+An adapter's `Realize(...)` operation binds that family-level report to the exact plan, selected
+result branches, source placement, and persisted adapter binding. The resulting
+`RelationQueryBoundRealizationReport` records the exact configuration decisions, adapter evidence,
+validated operating boundaries, preserved guarantees, failed settings, and any prerequisite-blocked
+requirements. Only a realizable bound report can authorize target-native artifacts:
+
+```csharp
+var profileFeasibility = RelationQueryRealizationCompiler.Compile(
+    plan,
+    targetProfile,
+    policy,
+    RelationQueryResultObservability.NotRequested);
+
+var contextualRequest = new RelationQueryBoundRealizationRequest(
+    plan,
+    profileFeasibility,
+    placement);
+var boundRealization = adapterCompiler.Realize(contextualRequest, adapterBinding);
+
+if (!boundRealization.IsRealizable)
+    throw new InvalidOperationException(string.Join(Environment.NewLine, boundRealization.Diagnostics));
+
+var nativeRequest = new RelationQueryNativeCompilationRequest(
+    plan,
+    boundRealization,
+    placement);
+var nativeCompilation = adapterCompiler.Compile(nativeRequest, adapterBinding);
+```
+
+This split makes planning predictive: a host can inspect exactly which branch, physical fact,
+configuration authority, capability, or boundary would prevent execution before the adapter emits
+SQL, SDK objects, or another native artifact. Fingerprints connect the profile report, binding,
+placement, contextual proof, and generated artifact without turning any of them into canonical
+relation/query semantics.
+
 ### Target-native compilation boundary
 
 `RelationQueryNativeCompilationRequest` is the target-neutral handoff from semantic planning to a backend
-compiler. It carries one exact `CompiledRelationQueryPlan`, its realization report, its plan-scoped source
-placement, and a deterministic selection of demanded terminal branches. `ValidateInputs()` rejects stale plan
-references and a realization that does not prove every demanded requirement before an adapter interprets
-storage-specific facts.
+compiler. It carries one exact `CompiledRelationQueryPlan`, its exact bound realization report, its plan-scoped
+source placement, and the demanded terminal branches authorized by that report. `ValidateInputs()` rejects stale
+plan, profile-feasibility, placement, binding, branch-selection, or bound-realization affinity before lowering.
 
 Each selected branch identifies whether it produces relation rows, named query rows, or named query
 aggregation rows, together with its retained logical node, result binding and shape, demanded outputs, and
@@ -1413,9 +1455,10 @@ semantic inputs to physical selectors, validating target-specific operating boun
 when exact lowering is unavailable.
 
 A successful backend artifact carries `RelationQueryNativeCompilationProvenance`: the exact compiled-plan,
-realization, placement, target-profile, compiler-profile, and convention identities; covered nodes and
-assignments; physical input fields; and the final realization decisions, capability evidence, and validated
-boundaries that authorized lowering. This is derived interpretation metadata, not canonical relation/query IR.
+profile-feasibility, bound-realization, placement, adapter-binding, target-profile, compiler-profile, and
+convention identities; covered nodes and assignments; physical input fields; contextual evidence; and the final
+realization decisions, capability evidence, and validated boundaries that authorized lowering. This is derived
+interpretation metadata, not canonical relation/query IR.
 It lets execution, diagnostics, explain tooling, and artifact fingerprints attribute target SQL or another
 native representation to the semantic requirements that produced it without rescanning or redefining those
 semantics.

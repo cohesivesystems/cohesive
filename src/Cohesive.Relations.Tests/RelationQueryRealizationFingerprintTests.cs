@@ -130,7 +130,7 @@ public sealed class RelationQueryRealizationFingerprintTests
         Assert.Equal(RelationQueryRealizationFingerprinter.Algorithm, report.Fingerprint.Algorithm);
         Assert.Equal(RelationQueryRealizationFingerprinter.Canonicalization, report.Fingerprint.Canonicalization);
         Assert.Equal(
-            "acc742e1d795a8dfc31c28eb968b289c4945fe5eb166042e2f0b48c766968305",
+            "05be34ff4e5488ff0291c75e82443c786675d304fc0b451c0bbcf7eac5a1f0a9",
             report.Fingerprint.Value);
     }
 

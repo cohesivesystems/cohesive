@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Globalization;
+using System.Linq.Expressions;
 using System.Security.Cryptography;
 using System.Text;
 using Cohesive.Model;
@@ -214,6 +215,222 @@ public static class CosmosRelationQueryBinding
         new(placedInput, options, explicitAuthority);
 }
 
+/// <summary>Configures exact Cosmos JSON-array scope and direct collection-element child evidence.</summary>
+public sealed class CosmosRelationQueryCollectionScopeBuilder
+{
+    readonly CosmosCollectionDeclaration declaration;
+    readonly string authority;
+
+    internal CosmosRelationQueryCollectionScopeBuilder(
+        CosmosCollectionDeclaration declaration,
+        string authority)
+    {
+        this.declaration = declaration;
+        this.authority = authority;
+    }
+
+    /// <summary>Attests all physical facts required by canonical structured-collection existential semantics.</summary>
+    /// <param name="semanticProfile">Stable JSON-array storage, ingestion, and iteration profile.</param>
+    /// <returns>This collection-scope builder.</returns>
+    public CosmosRelationQueryCollectionScopeBuilder AttestCanonicalAnyRepresentation(
+        string semanticProfile) =>
+        Attest(
+            semanticProfile,
+            CosmosRelationQueryCollectionElementScope.JsonArrayElement,
+            CosmosRelationQueryCollectionCorrelationGuarantee.SameArrayElement,
+            CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion,
+            CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion,
+            CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion,
+            CosmosRelationQueryEmptyCollectionBehavior.NoElements);
+
+    /// <summary>Attests an explicit physical structured-collection representation.</summary>
+    /// <param name="semanticProfile">Stable JSON-array storage, ingestion, and iteration profile.</param>
+    /// <param name="elementScope">Physical scope represented by one canonical current item.</param>
+    /// <param name="correlationGuarantee">Physical same-element correlation guarantee.</param>
+    /// <param name="collectionMissingValueBehavior">Physical treatment of a missing collection property.</param>
+    /// <param name="collectionNullValueBehavior">Physical treatment of an explicit-null collection property.</param>
+    /// <param name="nullElementBehavior">Physical treatment of an explicit-null collection element.</param>
+    /// <param name="emptyCollectionBehavior">Physical representation of an empty collection.</param>
+    /// <returns>This collection-scope builder.</returns>
+    public CosmosRelationQueryCollectionScopeBuilder Attest(
+        string semanticProfile,
+        CosmosRelationQueryCollectionElementScope elementScope,
+        CosmosRelationQueryCollectionCorrelationGuarantee correlationGuarantee,
+        CosmosRelationQueryStructuredCollectionAbsenceBehavior collectionMissingValueBehavior,
+        CosmosRelationQueryStructuredCollectionAbsenceBehavior collectionNullValueBehavior,
+        CosmosRelationQueryStructuredCollectionAbsenceBehavior nullElementBehavior,
+        CosmosRelationQueryEmptyCollectionBehavior emptyCollectionBehavior)
+    {
+        if (declaration.TrySet("semanticProfile"))
+            declaration.SemanticProfile = Explicit<string?>(semanticProfile);
+        if (declaration.TrySet("elementScope"))
+            declaration.ElementScope = Explicit(elementScope);
+        if (declaration.TrySet("correlationGuarantee"))
+            declaration.Correlation = Explicit(correlationGuarantee);
+        if (declaration.TrySet("collectionMissingValueBehavior"))
+            declaration.CollectionMissing = Explicit(collectionMissingValueBehavior);
+        if (declaration.TrySet("collectionNullValueBehavior"))
+            declaration.CollectionNull = Explicit(collectionNullValueBehavior);
+        if (declaration.TrySet("nullElementBehavior"))
+            declaration.NullElements = Explicit(nullElementBehavior);
+        if (declaration.TrySet("emptyCollectionBehavior"))
+            declaration.EmptyCollections = Explicit(emptyCollectionBehavior);
+        return this;
+    }
+
+    /// <summary>Adds one direct canonical collection-element child mapping and its exact scalar evidence.</summary>
+    /// <param name="elementPath">Direct semantic field path relative to one collection element.</param>
+    /// <param name="documentPath">Direct physical JSON property path relative to one collection element.</param>
+    /// <param name="valueDomain">Exact canonical scalar domain stored by the physical child property.</param>
+    /// <param name="semanticCapabilities">Exact comparison facilities supplied by the physical representation.</param>
+    /// <param name="semanticProfile">
+    /// Stable child encoding and comparison profile, or <see langword="null"/> when no exact capability is asserted.
+    /// </param>
+    /// <param name="missingValueBehavior">Physical treatment of a missing child property.</param>
+    /// <param name="nullValueBehavior">Physical treatment of an explicit-null child property.</param>
+    /// <returns>This collection-scope builder.</returns>
+    public CosmosRelationQueryCollectionScopeBuilder Child(
+        FieldPath elementPath,
+        FieldPath documentPath,
+        CosmosRelationQueryCollectionElementValueDomain valueDomain,
+        CosmosRelationQueryCollectionElementSemanticCapabilities semanticCapabilities,
+        string? semanticProfile,
+        CosmosRelationQueryStructuredCollectionAbsenceBehavior missingValueBehavior,
+        CosmosRelationQueryStructuredCollectionAbsenceBehavior nullValueBehavior)
+    {
+        var key = CosmosRelationQueryStorageBindingBuilder.SafePathKey(elementPath);
+        if (declaration.Children.Any(child => string.Equals(
+                CosmosRelationQueryStorageBindingBuilder.SafePathKey(child.ElementPath),
+                key,
+                StringComparison.Ordinal)))
+        {
+            declaration.ReportDuplicate("child/" + key);
+            return this;
+        }
+
+        declaration.Children.Add(new(
+            elementPath,
+            documentPath,
+            valueDomain,
+            semanticCapabilities,
+            semanticProfile,
+            missingValueBehavior,
+            nullValueBehavior,
+            RelationQueryConfigurationValueOrigin.Explicit,
+            authority));
+        return this;
+    }
+
+    internal void ReportInvalidElementSelector(string message) =>
+        declaration.ReportInvalidSelector("child/typed", message);
+
+    CosmosCollectionAuthoringValue<T> Explicit<T>(T value) =>
+        new(value, RelationQueryConfigurationValueOrigin.Explicit, authority);
+}
+
+/// <summary>Typed facade for one Cosmos structured-collection evidence declaration.</summary>
+/// <typeparam name="TRoot">CLR type represented by the selected placed input.</typeparam>
+/// <typeparam name="TElement">CLR type represented by one collection element.</typeparam>
+public sealed class CosmosRelationQueryCollectionScopeBuilder<TRoot, TElement>
+    where TRoot : notnull
+    where TElement : notnull
+{
+    readonly CosmosRelationQueryCollectionScopeBuilder inner;
+    readonly RelationQueryPlacedInput<TRoot> placedInput;
+    readonly Expression<Func<TRoot, IEnumerable<TElement>>> collectionSelector;
+
+    internal CosmosRelationQueryCollectionScopeBuilder(
+        CosmosRelationQueryCollectionScopeBuilder inner,
+        RelationQueryPlacedInput<TRoot> placedInput,
+        Expression<Func<TRoot, IEnumerable<TElement>>> collectionSelector)
+    {
+        this.inner = inner;
+        this.placedInput = placedInput;
+        this.collectionSelector = collectionSelector;
+    }
+
+    /// <summary>Attests all physical facts required by canonical structured-collection existential semantics.</summary>
+    /// <param name="semanticProfile">Stable JSON-array storage, ingestion, and iteration profile.</param>
+    /// <returns>This typed collection-scope builder.</returns>
+    public CosmosRelationQueryCollectionScopeBuilder<TRoot, TElement> AttestCanonicalAnyRepresentation(
+        string semanticProfile)
+    {
+        inner.AttestCanonicalAnyRepresentation(semanticProfile);
+        return this;
+    }
+
+    /// <summary>Attests an explicit physical structured-collection representation.</summary>
+    /// <param name="semanticProfile">Stable JSON-array storage, ingestion, and iteration profile.</param>
+    /// <param name="elementScope">Physical scope represented by one canonical current item.</param>
+    /// <param name="correlationGuarantee">Physical same-element correlation guarantee.</param>
+    /// <param name="collectionMissingValueBehavior">Physical treatment of a missing collection property.</param>
+    /// <param name="collectionNullValueBehavior">Physical treatment of an explicit-null collection property.</param>
+    /// <param name="nullElementBehavior">Physical treatment of an explicit-null collection element.</param>
+    /// <param name="emptyCollectionBehavior">Physical representation of an empty collection.</param>
+    /// <returns>This typed collection-scope builder.</returns>
+    public CosmosRelationQueryCollectionScopeBuilder<TRoot, TElement> Attest(
+        string semanticProfile,
+        CosmosRelationQueryCollectionElementScope elementScope,
+        CosmosRelationQueryCollectionCorrelationGuarantee correlationGuarantee,
+        CosmosRelationQueryStructuredCollectionAbsenceBehavior collectionMissingValueBehavior,
+        CosmosRelationQueryStructuredCollectionAbsenceBehavior collectionNullValueBehavior,
+        CosmosRelationQueryStructuredCollectionAbsenceBehavior nullElementBehavior,
+        CosmosRelationQueryEmptyCollectionBehavior emptyCollectionBehavior)
+    {
+        inner.Attest(
+            semanticProfile,
+            elementScope,
+            correlationGuarantee,
+            collectionMissingValueBehavior,
+            collectionNullValueBehavior,
+            nullElementBehavior,
+            emptyCollectionBehavior);
+        return this;
+    }
+
+    /// <summary>Adds one typed direct element-child mapping and its exact scalar evidence.</summary>
+    /// <typeparam name="TValue">CLR value selected from one collection element.</typeparam>
+    /// <param name="selector">Readable CLR property chain rooted at one collection element.</param>
+    /// <param name="documentPath">Direct physical JSON property path relative to one collection element.</param>
+    /// <param name="valueDomain">Exact canonical scalar domain stored by the physical child property.</param>
+    /// <param name="semanticCapabilities">Exact comparison facilities supplied by the physical representation.</param>
+    /// <param name="semanticProfile">
+    /// Stable child encoding and comparison profile, or <see langword="null"/> when no exact capability is asserted.
+    /// </param>
+    /// <param name="missingValueBehavior">Physical treatment of a missing child property.</param>
+    /// <param name="nullValueBehavior">Physical treatment of an explicit-null child property.</param>
+    /// <returns>This typed collection-scope builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="selector"/> is <see langword="null"/>.</exception>
+    public CosmosRelationQueryCollectionScopeBuilder<TRoot, TElement> Child<TValue>(
+        Expression<Func<TElement, TValue>> selector,
+        FieldPath documentPath,
+        CosmosRelationQueryCollectionElementValueDomain valueDomain,
+        CosmosRelationQueryCollectionElementSemanticCapabilities semanticCapabilities,
+        string? semanticProfile,
+        CosmosRelationQueryStructuredCollectionAbsenceBehavior missingValueBehavior,
+        CosmosRelationQueryStructuredCollectionAbsenceBehavior nullValueBehavior)
+    {
+        ArgumentNullException.ThrowIfNull(selector);
+        try
+        {
+            var elementPath = placedInput.ResolveCollectionElementFieldPath(collectionSelector, selector);
+            inner.Child(
+                elementPath,
+                documentPath,
+                valueDomain,
+                semanticCapabilities,
+                semanticProfile,
+                missingValueBehavior,
+                nullValueBehavior);
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or KeyNotFoundException)
+        {
+            inner.ReportInvalidElementSelector(exception.Message);
+        }
+        return this;
+    }
+}
+
 /// <summary>Typed fluent facade over one Cosmos storage-binding authoring session.</summary>
 /// <typeparam name="T">CLR type represented by the selected placed semantic input.</typeparam>
 public sealed class CosmosRelationQueryStorageBindingBuilder<T>
@@ -389,6 +606,50 @@ public sealed class CosmosRelationQueryStorageBindingBuilder<T>
         return this;
     }
 
+    /// <summary>Declares one typed structured collection as a physical Cosmos JSON array.</summary>
+    /// <typeparam name="TElement">CLR type represented by one collection element.</typeparam>
+    /// <param name="selector">Readable CLR property chain selecting the semantic collection field.</param>
+    /// <param name="documentPath">Physical JSON-array path relative to the effective document root.</param>
+    /// <param name="configure">Configures exact scope, correlation, absence, and direct child evidence.</param>
+    /// <returns>This typed builder.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="selector"/> or <paramref name="configure"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="documentPath"/> is empty.</exception>
+    /// <exception cref="Exception">
+    /// The <paramref name="configure"/> callback throws; the same exception is propagated.
+    /// </exception>
+    public CosmosRelationQueryStorageBindingBuilder<T> StructuredCollection<TElement>(
+        Expression<Func<T, IEnumerable<TElement>>> selector,
+        FieldPath documentPath,
+        Action<CosmosRelationQueryCollectionScopeBuilder<T, TElement>> configure)
+        where TElement : notnull
+    {
+        ArgumentNullException.ThrowIfNull(selector);
+        ArgumentNullException.ThrowIfNull(configure);
+        inner.StructuredCollection(placedInput, selector, documentPath, configure);
+        return this;
+    }
+
+    /// <summary>Declares one structurally selected collection as a physical Cosmos JSON array.</summary>
+    /// <param name="semanticPath">Demanded semantic collection path on the selected placed input.</param>
+    /// <param name="documentPath">Physical JSON-array path relative to the effective document root.</param>
+    /// <param name="configure">Configures exact scope, correlation, absence, and direct child evidence.</param>
+    /// <returns>This typed builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="configure"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">A path is empty.</exception>
+    /// <exception cref="Exception">
+    /// The <paramref name="configure"/> callback throws; the same exception is propagated.
+    /// </exception>
+    public CosmosRelationQueryStorageBindingBuilder<T> StructuredCollection(
+        FieldPath semanticPath,
+        FieldPath documentPath,
+        Action<CosmosRelationQueryCollectionScopeBuilder> configure)
+    {
+        inner.StructuredCollection(semanticPath, documentPath, configure);
+        return this;
+    }
+
     /// <summary>Declares one typed field's effective physical mapping as a stable unique ordering key.</summary>
     /// <typeparam name="TValue">CLR value selected by the semantic property chain.</typeparam>
     /// <param name="selector">Readable CLR property chain selecting the semantic field.</param>
@@ -493,7 +754,7 @@ public sealed class CosmosRelationQueryStorageBindingBuilder<T>
 /// </remarks>
 public sealed class CosmosRelationQueryStorageBindingBuilder
 {
-    const string DerivedIdAuthority = "cohesive.relations.cosmos/binding-id-convention/v4";
+    const string DerivedIdAuthority = "cohesive.relations.cosmos/binding-id-convention/v5";
     const string TargetSetting = "target";
     const string TargetProfileSetting = "targetProfile";
     const string AccountEndpointSetting = "accountEndpoint";
@@ -802,7 +1063,14 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
 
         if (!explicitFields.TryAdd(
                 field.Input.Id,
-                new(field, documentPath, Decision(FieldSetting(field.Input.Id), RelationQueryConfigurationValueOrigin.Explicit, explicitAuthority))))
+                new(
+                    field,
+                    documentPath,
+                    Collection: null,
+                    Decision(
+                        FieldSetting(field.Input.Id),
+                        RelationQueryConfigurationValueOrigin.Explicit,
+                        explicitAuthority))))
         {
             Error(
                 CosmosRelationQueryBindingAuthoringDiagnosticCodes.BindingDuplicate,
@@ -810,6 +1078,110 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
                 field.Input.Id,
                 field.Input.Field.Path,
                 FieldSetting(field.Input.Id));
+        }
+        return this;
+    }
+
+    /// <summary>Declares one exact demanded structured collection as a physical Cosmos JSON array.</summary>
+    /// <param name="field">Exact demanded collection field owned by the selected placed input.</param>
+    /// <param name="documentPath">Physical JSON-array path relative to the effective document root.</param>
+    /// <param name="configure">Configures exact scope, correlation, absence, and direct child evidence.</param>
+    /// <returns>This builder.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="field"/> or <paramref name="configure"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="documentPath"/> is empty.</exception>
+    /// <exception cref="Exception">
+    /// The <paramref name="configure"/> callback throws; the same exception is propagated.
+    /// </exception>
+    public CosmosRelationQueryStorageBindingBuilder StructuredCollection(
+        RelationQueryFieldInputContract field,
+        FieldPath documentPath,
+        Action<CosmosRelationQueryCollectionScopeBuilder> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        ArgumentNullException.ThrowIfNull(field);
+        RequireNonEmpty(documentPath, nameof(documentPath));
+        if (!TryOwnField(field, FieldSetting(field.Input.Id)))
+            return this;
+
+        if (explicitFields.ContainsKey(field.Input.Id))
+        {
+            Error(
+                CosmosRelationQueryBindingAuthoringDiagnosticCodes.BindingDuplicate,
+                $"Compiled field input '{field.Input.Id.Value}' has more than one explicit Cosmos mapping.",
+                field.Input.Id,
+                field.Input.Field.Path,
+                FieldSetting(field.Input.Id));
+            return this;
+        }
+
+        var collection = new CosmosCollectionDeclaration(
+            setting => Error(
+                CosmosRelationQueryBindingAuthoringDiagnosticCodes.BindingDuplicate,
+                $"Structured collection '{field.Input.Field.Path}' repeats the explicit Cosmos setting '{setting}'.",
+                field.Input.Id,
+                field.Input.Field.Path,
+                CollectionSetting(field.Input.Id, setting)),
+            (setting, message) => Error(
+                CosmosRelationQueryBindingAuthoringDiagnosticCodes.SelectorInvalid,
+                $"The typed collection-element selector is invalid: {message}",
+                field.Input.Id,
+                field.Input.Field.Path,
+                CollectionSetting(field.Input.Id, setting)));
+        explicitFields.Add(
+            field.Input.Id,
+            new(
+                field,
+                documentPath,
+                collection,
+                Decision(
+                    FieldSetting(field.Input.Id),
+                    RelationQueryConfigurationValueOrigin.Explicit,
+                    explicitAuthority)));
+        configure(new(collection, explicitAuthority));
+        return this;
+    }
+
+    /// <summary>Declares one structurally selected collection as a physical Cosmos JSON array.</summary>
+    /// <param name="semanticPath">Demanded semantic collection path on the selected placed input.</param>
+    /// <param name="documentPath">Physical JSON-array path relative to the effective document root.</param>
+    /// <param name="configure">Configures exact scope, correlation, absence, and direct child evidence.</param>
+    /// <returns>This builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="configure"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">A path is empty.</exception>
+    /// <exception cref="Exception">
+    /// The <paramref name="configure"/> callback throws; the same exception is propagated.
+    /// </exception>
+    public CosmosRelationQueryStorageBindingBuilder StructuredCollection(
+        FieldPath semanticPath,
+        FieldPath documentPath,
+        Action<CosmosRelationQueryCollectionScopeBuilder> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        RequireNonEmpty(semanticPath, nameof(semanticPath));
+        RequireNonEmpty(documentPath, nameof(documentPath));
+        if (TryGetField(semanticPath, FieldSetting(semanticPath), out var field))
+            StructuredCollection(field, documentPath, configure);
+        return this;
+    }
+
+    internal CosmosRelationQueryStorageBindingBuilder StructuredCollection<T, TElement>(
+        RelationQueryPlacedInput<T> input,
+        Expression<Func<T, IEnumerable<TElement>>> selector,
+        FieldPath documentPath,
+        Action<CosmosRelationQueryCollectionScopeBuilder<T, TElement>> configure)
+        where T : notnull
+        where TElement : notnull
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        RequireNonEmpty(documentPath, nameof(documentPath));
+        if (TryResolveTypedField(input, selector, "structuredCollection", out var field))
+        {
+            StructuredCollection(
+                field,
+                documentPath,
+                collection => configure(new(collection, input, selector)));
         }
         return this;
     }
@@ -1044,7 +1416,12 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
                 effective.ContainerName.Value,
                 effective.RootAlias.Value,
                 effective.IdentityPath.Value,
-                [.. effective.Fields.Select(static field => new CosmosRelationQueryFieldBinding(field.Field.Input.Id, field.Path))],
+                [
+                    .. effective.Fields.Select(static field => new CosmosRelationQueryFieldBinding(
+                        field.Field.Input.Id,
+                        field.Path,
+                        field.CollectionScope))
+                ],
                 effective.DocumentRoot.Value,
                 effective.PartitionPath.Value,
                 effective.StableUniqueOrderingPaths,
@@ -1210,7 +1587,11 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
             Configuration(NullEncodingSetting, effectiveNull),
             Configuration(ConventionSetting, effectiveConvention)
         ];
-        decisions.AddRange(fields.Select(static field => field.Decision));
+        foreach (var field in fields)
+        {
+            decisions.Add(field.Decision);
+            decisions.AddRange(field.CollectionDecisions);
+        }
         decisions.AddRange(stable.Decisions);
         decisions.AddRange(exact.Decisions);
 
@@ -1269,6 +1650,8 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
                 fields[field.Input.Id] = new(
                     field,
                     field.Input.Field.Path,
+                    CollectionScope: null,
+                    CollectionDecisions: [],
                     Decision(
                         FieldSetting(field.Input.Id),
                         RelationQueryConfigurationValueOrigin.AdapterConvention,
@@ -1288,13 +1671,21 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
                 fields[field.Input.Id] = new(
                     field,
                     mapping.Value,
+                    CollectionScope: null,
+                    CollectionDecisions: [],
                     Decision(FieldSetting(field.Input.Id), RelationQueryConfigurationValueOrigin.ScopedProfile, options.Authority));
             }
         }
 
         foreach (var (input, field) in explicitFields)
         {
-            fields[input] = new(field.Field, field.Path, field.Decision);
+            var collection = ResolveCollection(field.Field, field.Collection);
+            fields[input] = new(
+                field.Field,
+                field.Path,
+                collection.Scope,
+                collection.Decisions,
+                field.Decision);
         }
 
         foreach (var expected in placedInput.Fields)
@@ -1313,8 +1704,150 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
         foreach (var field in fields.Values)
         {
             ValidateDocumentSelector(field.Path, field.Field.Input.Id, field.Field.Input.Field.Path, field.Decision.Setting);
+            if (field.CollectionScope is not null)
+            {
+                ValidatePropertyPath(
+                    field.Path,
+                    field.Field.Input.Id,
+                    field.Field.Input.Field.Path,
+                    field.Decision.Setting);
+            }
         }
         return [.. fields.Values.OrderBy(static field => field.Field.Input.Id.Value, StringComparer.Ordinal)];
+    }
+
+    ResolvedCollection ResolveCollection(
+        RelationQueryFieldInputContract field,
+        CosmosCollectionDeclaration? declaration)
+    {
+        if (declaration is null)
+            return new(null, []);
+
+        var prefix = CollectionSetting(field.Input.Id, string.Empty);
+        var missingSettings = new List<string>();
+        if (declaration.SemanticProfile is null)
+            missingSettings.Add("semanticProfile");
+        if (declaration.ElementScope is null)
+            missingSettings.Add("elementScope");
+        if (declaration.Correlation is null)
+            missingSettings.Add("correlationGuarantee");
+        if (declaration.CollectionMissing is null)
+            missingSettings.Add("collectionMissingValueBehavior");
+        if (declaration.CollectionNull is null)
+            missingSettings.Add("collectionNullValueBehavior");
+        if (declaration.NullElements is null)
+            missingSettings.Add("nullElementBehavior");
+        if (declaration.EmptyCollections is null)
+            missingSettings.Add("emptyCollectionBehavior");
+        foreach (var setting in missingSettings)
+        {
+            Error(
+                CosmosRelationQueryBindingAuthoringDiagnosticCodes.BindingMissing,
+                $"Structured collection '{field.Input.Field.Path}' requires explicit '{setting}' evidence.",
+                field.Input.Id,
+                field.Input.Field.Path,
+                prefix + setting);
+        }
+        if (declaration.Children.Count == 0)
+        {
+            Error(
+                CosmosRelationQueryBindingAuthoringDiagnosticCodes.BindingMissing,
+                $"Structured collection '{field.Input.Field.Path}' requires at least one direct child mapping.",
+                field.Input.Id,
+                field.Input.Field.Path,
+                prefix + "child");
+        }
+        if (missingSettings.Count != 0 || declaration.Children.Count == 0)
+            return new(null, []);
+
+        var semanticProfile = declaration.SemanticProfile.GetValueOrDefault();
+        var elementScope = declaration.ElementScope.GetValueOrDefault();
+        var correlation = declaration.Correlation.GetValueOrDefault();
+        var collectionMissing = declaration.CollectionMissing.GetValueOrDefault();
+        var collectionNull = declaration.CollectionNull.GetValueOrDefault();
+        var nullElements = declaration.NullElements.GetValueOrDefault();
+        var emptyCollections = declaration.EmptyCollections.GetValueOrDefault();
+        var children = ImmutableArray.CreateBuilder<CosmosRelationQueryCollectionElementFieldBinding>(
+            declaration.Children.Count);
+        List<RelationQueryConfigurationDecision> decisions =
+        [
+            Decision(
+                FieldSetting(field.Input.Id) + "/collectionScope",
+                RelationQueryConfigurationValueOrigin.Explicit,
+                explicitAuthority),
+            Configuration(prefix + "semanticProfile", semanticProfile),
+            Configuration(prefix + "elementScope", elementScope),
+            Configuration(prefix + "correlationGuarantee", correlation),
+            Configuration(prefix + "collectionMissingValueBehavior", collectionMissing),
+            Configuration(prefix + "collectionNullValueBehavior", collectionNull),
+            Configuration(prefix + "nullElementBehavior", nullElements),
+            Configuration(prefix + "emptyCollectionBehavior", emptyCollections)
+        ];
+        var valid = true;
+        foreach (var child in declaration.Children.OrderBy(
+                     static child => SafePathKey(child.ElementPath),
+                     StringComparer.Ordinal))
+        {
+            var childPrefix = prefix + "child/" + SafePathKey(child.ElementPath) + "/";
+            try
+            {
+                children.Add(new(
+                    child.ElementPath,
+                    child.DocumentPath,
+                    child.ValueDomain,
+                    child.SemanticCapabilities,
+                    child.SemanticProfile,
+                    child.MissingValueBehavior,
+                    child.NullValueBehavior));
+                decisions.Add(Decision(childPrefix + "elementPath", child.Origin, child.Authority));
+                decisions.Add(Decision(childPrefix + "documentPath", child.Origin, child.Authority));
+                decisions.Add(Decision(childPrefix + "valueDomain", child.Origin, child.Authority));
+                decisions.Add(Decision(childPrefix + "semanticCapabilities", child.Origin, child.Authority));
+                decisions.Add(Decision(childPrefix + "semanticProfile", child.Origin, child.Authority));
+                decisions.Add(Decision(childPrefix + "missingValueBehavior", child.Origin, child.Authority));
+                decisions.Add(Decision(childPrefix + "nullValueBehavior", child.Origin, child.Authority));
+            }
+            catch (ArgumentException exception)
+            {
+                valid = false;
+                Error(
+                    CosmosRelationQueryBindingAuthoringDiagnosticCodes.ConfigurationConflict,
+                    $"Structured collection child mapping is inconsistent: {exception.Message}",
+                    field.Input.Id,
+                    field.Input.Field.Path,
+                    childPrefix.TrimEnd('/'));
+            }
+        }
+        if (!valid)
+            return new(null, []);
+
+        try
+        {
+            var normalizedChildren = children.Count == children.Capacity
+                ? children.MoveToImmutable()
+                : children.ToImmutable();
+            return new(
+                new(
+                    semanticProfile.Value!,
+                    elementScope.Value,
+                    correlation.Value,
+                    collectionMissing.Value,
+                    collectionNull.Value,
+                    nullElements.Value,
+                    emptyCollections.Value,
+                    normalizedChildren),
+                [.. decisions]);
+        }
+        catch (ArgumentException exception)
+        {
+            Error(
+                CosmosRelationQueryBindingAuthoringDiagnosticCodes.ConfigurationConflict,
+                $"Structured collection scope evidence is inconsistent: {exception.Message}",
+                field.Input.Id,
+                field.Input.Field.Path,
+                FieldSetting(field.Input.Id) + "/collectionScope");
+            return new(null, []);
+        }
     }
 
     Effective<FieldPath> ResolveIdentity(
@@ -1515,8 +2048,7 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
             || placedInput.Binding.Kind != RelationQuerySourcePlacementBindingKind.SourceSet
             || placedInput.Source.TargetProfile.Target != CosmosRelationQueryTargetProfile.Target
             || placedInput.Source.TargetProfile.Id != CosmosRelationQueryTargetProfile.ProfileId
-            || !CosmosRelationQueryCompiler.ProfilesEquivalent(
-                placedInput.Source.TargetProfile,
+            || !placedInput.Source.TargetProfile.HasSameSemantics(
                 CosmosRelationQueryTargetProfile.Default)
             || !ReferencesPlan(placedInput.Placement.Plan, placedInput.Plan))
         {
@@ -1812,6 +2344,28 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
         {
             Append(canonical, field.Field.Input.Id.Value);
             Append(canonical, field.Path);
+            Append(canonical, field.CollectionScope is null ? "0" : "1");
+            if (field.CollectionScope is { } collection)
+            {
+                Append(canonical, collection.SemanticProfile);
+                Append(canonical, ((int)collection.ElementScope).ToString(CultureInfo.InvariantCulture));
+                Append(canonical, ((int)collection.CorrelationGuarantee).ToString(CultureInfo.InvariantCulture));
+                Append(canonical, ((int)collection.CollectionMissingValueBehavior).ToString(CultureInfo.InvariantCulture));
+                Append(canonical, ((int)collection.CollectionNullValueBehavior).ToString(CultureInfo.InvariantCulture));
+                Append(canonical, ((int)collection.NullElementBehavior).ToString(CultureInfo.InvariantCulture));
+                Append(canonical, ((int)collection.EmptyCollectionBehavior).ToString(CultureInfo.InvariantCulture));
+                Append(canonical, collection.ChildFields.Length.ToString(CultureInfo.InvariantCulture));
+                foreach (var child in collection.ChildFields)
+                {
+                    Append(canonical, child.ElementPath);
+                    Append(canonical, child.DocumentPath);
+                    Append(canonical, ((int)child.ValueDomain).ToString(CultureInfo.InvariantCulture));
+                    Append(canonical, ((int)child.SemanticCapabilities).ToString(CultureInfo.InvariantCulture));
+                    Append(canonical, child.SemanticProfile);
+                    Append(canonical, ((int)child.MissingValueBehavior).ToString(CultureInfo.InvariantCulture));
+                    Append(canonical, ((int)child.NullValueBehavior).ToString(CultureInfo.InvariantCulture));
+                }
+            }
         }
         foreach (var path in effective.StableUniqueOrderingPaths)
         {
@@ -1854,12 +2408,20 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
 
     static string FieldSetting(FieldPath path) => "field/semantic/" + SafePathKey(path);
 
+    static string CollectionSetting(RelationQueryInputId input, string setting) =>
+        FieldSetting(input) + "/collection/" + setting;
+
     static string PathKey(FieldPath path) => CosmosRelationQueryStorageBinding.FieldPathKey(path);
 
-    static string SafePathKey(FieldPath path) =>
+    internal static string SafePathKey(FieldPath path) =>
         path.Segments.IsDefaultOrEmpty ? "invalid" : PathKey(path);
 
     static RelationQueryConfigurationDecision Configuration<T>(string setting, Effective<T> effective) =>
+        Decision(setting, effective.Origin, effective.Authority);
+
+    static RelationQueryConfigurationDecision Configuration<T>(
+        string setting,
+        CosmosCollectionAuthoringValue<T> effective) =>
         Decision(setting, effective.Origin, effective.Authority);
 
     static RelationQueryConfigurationDecision Decision(
@@ -1918,15 +2480,22 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
     sealed record FieldOverride(
         RelationQueryFieldInputContract Field,
         FieldPath Path,
+        CosmosCollectionDeclaration? Collection,
         RelationQueryConfigurationDecision Decision);
 
     sealed record EffectiveField(
         RelationQueryFieldInputContract Field,
         FieldPath Path,
+        CosmosRelationQueryCollectionScopeEvidence? CollectionScope,
+        ImmutableArray<RelationQueryConfigurationDecision> CollectionDecisions,
         RelationQueryConfigurationDecision Decision);
 
     sealed record ResolvedEvidence(
         ImmutableArray<FieldPath> Paths,
+        ImmutableArray<RelationQueryConfigurationDecision> Decisions);
+
+    sealed record ResolvedCollection(
+        CosmosRelationQueryCollectionScopeEvidence? Scope,
         ImmutableArray<RelationQueryConfigurationDecision> Decisions);
 
     sealed record EffectiveConfiguration(
@@ -1947,3 +2516,48 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
         Effective<string> ConventionSetVersion,
         List<RelationQueryConfigurationDecision> Decisions);
 }
+
+readonly record struct CosmosCollectionAuthoringValue<T>(
+    T Value,
+    RelationQueryConfigurationValueOrigin Origin,
+    string Authority);
+
+sealed class CosmosCollectionDeclaration(
+    Action<string> reportDuplicate,
+    Action<string, string> reportInvalidSelector)
+{
+    readonly HashSet<string> explicitSettings = new(StringComparer.Ordinal);
+
+    public CosmosCollectionAuthoringValue<string?>? SemanticProfile { get; set; }
+    public CosmosCollectionAuthoringValue<CosmosRelationQueryCollectionElementScope>? ElementScope { get; set; }
+    public CosmosCollectionAuthoringValue<CosmosRelationQueryCollectionCorrelationGuarantee>? Correlation { get; set; }
+    public CosmosCollectionAuthoringValue<CosmosRelationQueryStructuredCollectionAbsenceBehavior>? CollectionMissing { get; set; }
+    public CosmosCollectionAuthoringValue<CosmosRelationQueryStructuredCollectionAbsenceBehavior>? CollectionNull { get; set; }
+    public CosmosCollectionAuthoringValue<CosmosRelationQueryStructuredCollectionAbsenceBehavior>? NullElements { get; set; }
+    public CosmosCollectionAuthoringValue<CosmosRelationQueryEmptyCollectionBehavior>? EmptyCollections { get; set; }
+    public List<CosmosCollectionChildDeclaration> Children { get; } = [];
+
+    public bool TrySet(string setting)
+    {
+        if (explicitSettings.Add(setting))
+            return true;
+        reportDuplicate(setting);
+        return false;
+    }
+
+    public void ReportDuplicate(string setting) => reportDuplicate(setting);
+
+    public void ReportInvalidSelector(string setting, string message) =>
+        reportInvalidSelector(setting, message);
+}
+
+sealed record CosmosCollectionChildDeclaration(
+    FieldPath ElementPath,
+    FieldPath DocumentPath,
+    CosmosRelationQueryCollectionElementValueDomain ValueDomain,
+    CosmosRelationQueryCollectionElementSemanticCapabilities SemanticCapabilities,
+    string? SemanticProfile,
+    CosmosRelationQueryStructuredCollectionAbsenceBehavior MissingValueBehavior,
+    CosmosRelationQueryStructuredCollectionAbsenceBehavior NullValueBehavior,
+    RelationQueryConfigurationValueOrigin Origin,
+    string Authority);

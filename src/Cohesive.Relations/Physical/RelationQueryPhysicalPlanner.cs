@@ -821,7 +821,7 @@ public static class RelationQueryPhysicalPlanner
                 .Select(requirement => decisions[requirement])
                 .ToArray();
             var compositionRules = includeRealizationRules
-                ? relevantDecisions.SelectMany(static decision => CompositionRules(decision)).Distinct()
+                ? relevantDecisions.SelectMany(static decision => decision.GetCompositionRules()).Distinct()
                     .OrderBy(static rule => rule.Value, StringComparer.Ordinal).ToImmutableArray()
                 : [];
             foreach (var rule in compositionRules)
@@ -835,7 +835,9 @@ public static class RelationQueryPhysicalPlanner
                 }
             }
             var realizationBoundaries = includeRealizationRules
-                ? relevantDecisions.SelectMany(static decision => Boundaries(decision)).Distinct()
+                ? relevantDecisions.SelectMany(static decision => decision.GetBoundaryValidations())
+                    .Select(static validation => validation.Boundary)
+                    .Distinct()
                     .OrderBy(static boundary => boundary.Value, StringComparer.Ordinal).ToImmutableArray()
                 : [];
             ImmutableArray<RelationQueryTargetCapabilityEvidence> selectedEvidence = source is null
@@ -902,24 +904,6 @@ public static class RelationQueryPhysicalPlanner
                 && field.Cardinality == FieldCardinality.Single
                 && field.Type is ScalarTypeRef { Kind: ScalarTypeKind.String };
         }
-
-        static IEnumerable<RelationQueryCompositionRuleId> CompositionRules(RelationQueryRealizationDecision decision) =>
-            decision switch
-            {
-                ComposedRelationQueryRealizationDecision composed => composed.CompositionRules,
-                ConstrainedRelationQueryRealizationDecision constrained => constrained.CompositionRules,
-                _ => []
-            };
-
-        static IEnumerable<RelationQueryOperatingBoundaryId> Boundaries(RelationQueryRealizationDecision decision) =>
-            decision switch
-            {
-                ConstrainedRelationQueryRealizationDecision constrained =>
-                    [.. constrained.BoundaryValidations.Select(static validation => validation.Boundary)],
-                OverrideRelationQueryRealizationDecision @override =>
-                    [.. @override.BoundaryValidations.Select(static validation => validation.Boundary)],
-                _ => []
-            };
 
         static bool TryGetEquijoin(JoinQueryNode join, out FieldExpr left, out FieldExpr right)
         {

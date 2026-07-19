@@ -18,12 +18,66 @@ namespace Cohesive.Adapters.Postgres;
 /// </summary>
 public sealed class PostgresRelationQueryCompiler
 {
+    const string CompilerProfileSetting = "compilerProfile";
+
     /// <summary>Versioned identity of this concrete compiler implementation and semantic profile.</summary>
     public const string CompilerProfile = "cohesive.adapters.postgres.sql/compiler-v1";
 
     /// <summary>Creates a canonical PostgreSQL relation/query compiler.</summary>
     public PostgresRelationQueryCompiler()
     {
+    }
+
+    /// <summary>
+    /// Qualifies profile-level feasibility using the exact PostgreSQL placement and storage-binding evidence.
+    /// </summary>
+    /// <param name="request">Plan, profile feasibility, placement, and selected branches to qualify.</param>
+    /// <param name="storageBinding">Exact PostgreSQL storage binding whose physical evidence is examined.</param>
+    /// <returns>A deterministic contextual realization report predicting native PostgreSQL compilation.</returns>
+    /// <exception cref="ArgumentNullException">A parameter is <see langword="null"/>.</exception>
+    public RelationQueryBoundRealizationReport Realize(
+        RelationQueryBoundRealizationRequest request,
+        PostgresRelationQueryStorageBinding storageBinding)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(storageBinding);
+        return EvaluateContext(request, storageBinding).Report;
+    }
+
+    /// <summary>
+    /// Qualifies the exact PostgreSQL context and compiles every selected branch when that context is realizable.
+    /// </summary>
+    /// <param name="request">Plan, profile feasibility, placement, and selected branches to qualify and compile.</param>
+    /// <param name="storageBinding">Exact PostgreSQL storage binding to qualify and lower.</param>
+    /// <returns>Exact compiled artifacts or structured contextual and native diagnostics.</returns>
+    /// <exception cref="ArgumentNullException">A parameter is <see langword="null"/>.</exception>
+    public PostgresRelationQueryCompilationResult Compile(
+        RelationQueryBoundRealizationRequest request,
+        PostgresRelationQueryStorageBinding storageBinding)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(storageBinding);
+
+        var evaluation = EvaluateContext(request, storageBinding);
+        if (!evaluation.Report.IsRealizable)
+        {
+            ImmutableArray<RelationQueryNativeCompilationDiagnostic> diagnostics =
+            [
+                .. evaluation.Diagnostics,
+                .. RelationQueryNativeCompilationDiagnostic.FromBoundRealizationFailure(evaluation.Report)
+            ];
+
+            return new(
+                evaluation.Report.Status == RelationQueryRealizationStatus.Invalid
+                    ? RelationQueryNativeCompilationStatus.Invalid
+                    : RelationQueryNativeCompilationStatus.Unsupported,
+                [],
+                diagnostics);
+        }
+
+        return Compile(
+            new RelationQueryNativeCompilationRequest(request.Plan, evaluation.Report, request.Placement),
+            storageBinding);
     }
 
     /// <summary>Compiles every selected canonical result branch independently and fails closed on uncertainty.</summary>
@@ -36,9 +90,13 @@ public sealed class PostgresRelationQueryCompiler
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(storageBinding);
 
+        var context = new CompilationContext(request);
         var diagnostics = ImmutableArray.CreateBuilder<RelationQueryNativeCompilationDiagnostic>();
         var inputDiagnostics = request.ValidateInputs();
-        var bindingDiagnostics = ValidateBinding(request, storageBinding);
+        var bindingDiagnostics = ValidateBinding(
+            context,
+            storageBinding,
+            request.BoundRealization.Evidence.Binding);
         diagnostics.AddRange(inputDiagnostics);
         diagnostics.AddRange(bindingDiagnostics);
         if (diagnostics.Any(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
@@ -57,7 +115,7 @@ public sealed class PostgresRelationQueryCompiler
         {
             try
             {
-                artifacts.Add(new BranchCompiler(request, storageBinding, branch).Compile());
+                artifacts.Add(new BranchCompiler(context, storageBinding, branch).Compile(request));
             }
             catch (BranchCompilationException exception)
             {
@@ -91,9 +149,335 @@ public sealed class PostgresRelationQueryCompiler
             normalizedDiagnostics);
     }
 
-    static ImmutableArray<RelationQueryNativeCompilationDiagnostic> ValidateBinding(
-        RelationQueryNativeCompilationRequest request,
+    static ContextualEvaluation EvaluateContext(
+        RelationQueryBoundRealizationRequest request,
         PostgresRelationQueryStorageBinding storageBinding)
+    {
+        var context = new CompilationContext(request);
+        var diagnostics = ImmutableArray.CreateBuilder<RelationQueryNativeCompilationDiagnostic>();
+        List<ContextualFailure> failures = [];
+
+        var inputDiagnostics = request.ValidateInputs();
+        diagnostics.AddRange(inputDiagnostics);
+        foreach (var diagnostic in inputDiagnostics.Where(static item => item.Severity == DiagnosticSeverity.Error))
+        {
+            failures.Add(new(
+                RelationQueryBoundAssessmentStatus.Invalid,
+                PostgresRelationQueryCompilationDiagnosticCodes.ArtifactInvalid,
+                diagnostic.Message,
+                diagnostic.Branch,
+                diagnostic.Node,
+                diagnostic.Input));
+        }
+
+        if (failures.Count == 0)
+        {
+            var bindingDiagnostics = ValidateBinding(context, storageBinding);
+            diagnostics.AddRange(bindingDiagnostics);
+            foreach (var diagnostic in bindingDiagnostics.Where(static item => item.Severity == DiagnosticSeverity.Error))
+            {
+                failures.Add(new(
+                    RelationQueryBoundAssessmentStatus.Invalid,
+                    diagnostic.Code,
+                    diagnostic.Message,
+                    diagnostic.Branch,
+                    diagnostic.Node,
+                    diagnostic.Input));
+            }
+        }
+
+        if (failures.Count == 0 && request.ProfileFeasibility.IsRealizable)
+        {
+            foreach (var branch in request.Branches)
+            {
+                try
+                {
+                    new BranchCompiler(context, storageBinding, branch).Validate();
+                }
+                catch (BranchCompilationException exception)
+                {
+                    diagnostics.Add(new(
+                        exception.Code,
+                        DiagnosticSeverity.Error,
+                        exception.Message,
+                        branch.Id,
+                        exception.Node,
+                        exception.Input));
+                    failures.Add(new(
+                        RelationQueryBoundAssessmentStatus.Unavailable,
+                        exception.Code,
+                        exception.Message,
+                        branch.Id,
+                        exception.Node,
+                        exception.Input));
+                }
+                catch (Exception exception) when (exception is ArgumentException
+                                                  or InvalidOperationException
+                                                  or KeyNotFoundException
+                                                  or NotSupportedException)
+                {
+                    var message = $"PostgreSQL contextual validation failed closed: {exception.Message}";
+                    diagnostics.Add(new(
+                        PostgresRelationQueryCompilationDiagnosticCodes.ArtifactInvalid,
+                        DiagnosticSeverity.Error,
+                        message,
+                        branch.Id));
+                    failures.Add(new(
+                        RelationQueryBoundAssessmentStatus.Invalid,
+                        PostgresRelationQueryCompilationDiagnosticCodes.ArtifactInvalid,
+                        message,
+                        branch.Id));
+                }
+            }
+        }
+
+        var evidence = new RelationQueryContextualEvidenceProjection(
+            CreateBindingReference(context, storageBinding),
+            request.ProfileFeasibility.IsRealizable
+                ? CreateContextualAssessments(request, context, storageBinding, failures)
+                : []);
+        var report = RelationQueryBoundRealizationCompiler.Compile(request, evidence);
+        return new(report, diagnostics.ToImmutable());
+    }
+
+    static RelationQueryAdapterBindingReference CreateBindingReference(
+        CompilationContext request,
+        PostgresRelationQueryStorageBinding storageBinding)
+    {
+        var selectedInputs = request.SelectedInputs;
+        var selectedTables = storageBinding.Tables
+            .Where(table => selectedInputs.Contains(table.Input))
+            .ToArray();
+        var configuration = ImmutableArray.CreateBuilder<RelationQueryConfigurationDecision>(
+            storageBinding.ConfigurationDecisions.Length + 1);
+        configuration.AddRange(storageBinding.ConfigurationDecisions);
+        configuration.Add(new(
+            CompilerProfileSetting,
+            RelationQueryConfigurationValueOrigin.AdapterConvention,
+            CompilerProfile));
+        return new(
+            storageBinding.SchemaVersion,
+            storageBinding.Id.Value,
+            storageBinding.Target,
+            storageBinding.TargetProfile,
+            new(
+                storageBinding.Fingerprint.Algorithm,
+                storageBinding.Fingerprint.Canonicalization,
+                storageBinding.Fingerprint.Value),
+            storageBinding.CompiledPlanFingerprint,
+            storageBinding.PlacementFingerprint,
+            [.. selectedTables.Select(static table => table.Source).Distinct()],
+            [.. selectedTables.Select(static table => table.PlacementBinding)],
+            configuration.MoveToImmutable());
+    }
+
+    static ImmutableArray<RelationQueryBoundRequirementAssessment> CreateContextualAssessments(
+        RelationQueryBoundRealizationRequest boundRequest,
+        CompilationContext request,
+        PostgresRelationQueryStorageBinding storageBinding,
+        IReadOnlyList<ContextualFailure> failures)
+    {
+        var projectedPlacements = storageBinding.Tables
+            .Select(static table => table.PlacementBinding)
+            .ToHashSet();
+        return RelationQueryContextualAssessmentProjector.Project(
+            boundRequest,
+            "postgres/context",
+            branch =>
+            {
+                var branchFailures = failures
+                    .Where(failure => failure.Branch is null || failure.Branch == branch.Id)
+                    .OrderByDescending(static failure => failure.Status == RelationQueryBoundAssessmentStatus.Invalid)
+                    .ThenBy(static failure => failure.Code, StringComparer.Ordinal)
+                    .ThenBy(static failure => failure.Message, StringComparer.Ordinal)
+                    .ToArray();
+                if (branchFailures.Length == 0)
+                    return null;
+
+                var primary = branchFailures[0];
+                var failedBoundary = FailedBoundary(primary.Code);
+                return new(
+                    primary.Status,
+                    FailureReason(primary.Status, primary.Code, failedBoundary),
+                    new(primary.Code),
+                    string.Join(
+                        "; ",
+                        branchFailures.Select(static failure => $"[{failure.Code}] {failure.Message}")),
+                    "Correct the attributed PostgreSQL binding evidence or choose a supported placement and lowering strategy.",
+                    primary.Node,
+                    primary.Input,
+                    failedOperatingBoundary: failedBoundary,
+                    failedConfigurationSetting: FailedConfigurationSetting(request, storageBinding, primary));
+            },
+            (_, requirement, failure) => ResolveAssessmentAttribution(
+                request,
+                storageBinding,
+                projectedPlacements,
+                requirement,
+                failure));
+    }
+
+    static (RelationQueryConfigurationValueOrigin Origin, string Authority) AssessmentAuthority(
+        PostgresRelationQueryStorageBinding storageBinding)
+    {
+        var (origin, bindingAuthority) = storageBinding.Origin switch
+        {
+            PostgresRelationQueryBindingOrigin.Explicit =>
+                (RelationQueryConfigurationValueOrigin.Explicit, storageBinding.Id.Value),
+            PostgresRelationQueryBindingOrigin.Convention =>
+                (RelationQueryConfigurationValueOrigin.AdapterConvention, storageBinding.ConventionSetVersion!),
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(storageBinding),
+                storageBinding.Origin,
+                "Unsupported PostgreSQL binding origin.")
+        };
+        return (origin, bindingAuthority);
+    }
+
+    static RelationQueryContextualAssessmentAttribution ResolveAssessmentAttribution(
+        CompilationContext request,
+        PostgresRelationQueryStorageBinding storageBinding,
+        IReadOnlySet<RelationQuerySourcePlacementBindingId> projectedPlacements,
+        RelationQueryRealizationRequirement requirement,
+        RelationQueryContextualBranchFailure? failure)
+    {
+        var site = ResolveAssessmentSite(
+            request,
+            projectedPlacements,
+            requirement,
+            failure?.Node,
+            failure?.Input);
+        if (failure?.FailedConfigurationSetting is { } failedSetting)
+        {
+            if (string.Equals(failedSetting, CompilerProfileSetting, StringComparison.Ordinal))
+            {
+                return new(
+                    RelationQueryConfigurationValueOrigin.AdapterConvention,
+                    CompilerProfile,
+                    site.Node,
+                    site.Input,
+                    site.Field,
+                    site.Placement,
+                    CompilerProfileSetting);
+            }
+
+            var decision = storageBinding.ConfigurationDecisions.FirstOrDefault(candidate =>
+                string.Equals(candidate.Setting, failedSetting, StringComparison.Ordinal));
+            if (decision is not null)
+            {
+                return new(
+                    decision.Origin,
+                    decision.Authority,
+                    site.Node,
+                    site.Input,
+                    site.Field,
+                    site.Placement,
+                    decision.Setting);
+            }
+        }
+
+        var (origin, authority) = AssessmentAuthority(storageBinding);
+        return new(origin, authority, site.Node, site.Input, site.Field, site.Placement);
+    }
+
+    static AssessmentSite ResolveAssessmentSite(
+        CompilationContext request,
+        IReadOnlySet<RelationQuerySourcePlacementBindingId> projectedPlacements,
+        RelationQueryRealizationRequirement requirement,
+        QueryNodeId? failedNode,
+        RelationQueryInputId? failedInput)
+    {
+        var input = failedInput is { } candidateInput && requirement.Origin?.Input == candidateInput
+            ? candidateInput
+            : requirement.Origin?.Input;
+        if (input is { } candidate && !request.PlanReference.Inputs.Contains(candidate))
+            input = null;
+        var field = input is { } inputId
+            ? request.Plan.InputContract.Requirements.Inputs
+                .OfType<RelationQueryFieldInput>()
+                .SingleOrDefault(candidate => candidate.Id == inputId)
+                ?.Field.Path
+                ?? request.SelectedFields.SingleOrDefault(candidate => candidate.Input.Id == inputId)
+                    ?.Input.Field.Path
+                ?? request.SelectedPlacements.SelectMany(static placement => placement.Fields)
+                    .SingleOrDefault(candidate => candidate.Input == inputId)
+                    ?.SemanticPath
+            : null;
+        var placement = input is { } placedInput
+            ? request.SelectedPlacements.SingleOrDefault(candidate =>
+                projectedPlacements.Contains(candidate.Id)
+                && (candidate.Input == placedInput
+                    || candidate.Fields.Any(fieldBinding => fieldBinding.Input == placedInput)))?.Id
+            : null;
+        var node = input is not null && requirement.Origin?.Input == input
+            ? requirement.Origin.Node
+            : failedNode ?? requirement.Origin?.Node;
+        return new(node, input, field, placement);
+    }
+
+    static RelationQueryUnavailableReason FailureReason(
+        RelationQueryBoundAssessmentStatus status,
+        string code,
+        RelationQueryOperatingBoundaryId? failedBoundary) => status == RelationQueryBoundAssessmentStatus.Invalid
+        ? RelationQueryUnavailableReason.CapabilityEvidenceInvalid
+        : code is PostgresRelationQueryCompilationDiagnosticCodes.FieldBindingMissing
+            or PostgresRelationQueryCompilationDiagnosticCodes.RelationshipEndpointMissing
+            ? RelationQueryUnavailableReason.CapabilityEvidenceInvalid
+        : failedBoundary is null
+            ? RelationQueryUnavailableReason.PolicyRejected
+            : RelationQueryUnavailableReason.OperatingBoundaryInvalid;
+
+    static RelationQueryOperatingBoundaryId? FailedBoundary(string code) => code switch
+    {
+        PostgresRelationQueryCompilationDiagnosticCodes.StorageBindingMismatch =>
+            PostgresRelationQueryTargetProfile.CompleteInputEvidenceBoundary,
+        PostgresRelationQueryCompilationDiagnosticCodes.CrossSourceJoin =>
+            PostgresRelationQueryTargetProfile.SingleDatabaseBoundary,
+        PostgresRelationQueryCompilationDiagnosticCodes.PagingUnstable =>
+            PostgresRelationQueryTargetProfile.StableOrderingBoundary,
+        PostgresRelationQueryCompilationDiagnosticCodes.TemporalJoinUnsupported =>
+            PostgresRelationQueryTargetProfile.ExactTemporalDomainBoundary,
+        _ => null
+    };
+
+    static string? FailedConfigurationSetting(
+        CompilationContext request,
+        PostgresRelationQueryStorageBinding storageBinding,
+        ContextualFailure failure)
+    {
+        if (failure.Input is { } input)
+        {
+            var placement = request.SelectedPlacements.SingleOrDefault(candidate =>
+                candidate.Input == input
+                || candidate.Fields.Any(field => field.Input == input));
+            if (placement is not null)
+            {
+                var prefix = $"table/{Uri.EscapeDataString(placement.Id.Value)}/";
+                var inputSegment = Uri.EscapeDataString(input.Value);
+                if (failure.Code == PostgresRelationQueryCompilationDiagnosticCodes.FieldBindingMissing)
+                    return $"{prefix}field/{inputSegment}/columnName";
+                if (failure.Code == PostgresRelationQueryCompilationDiagnosticCodes.RelationshipEndpointMissing)
+                    return $"{prefix}relationship/{inputSegment}/columnName";
+
+                var inputMarker = $"/{inputSegment}/";
+                var decision = storageBinding.ConfigurationDecisions.FirstOrDefault(candidate =>
+                    candidate.Setting.StartsWith(prefix, StringComparison.Ordinal)
+                    && candidate.Setting.Contains(inputMarker, StringComparison.Ordinal));
+                if (decision is not null)
+                    return decision.Setting;
+            }
+        }
+
+        return failure.Code is PostgresRelationQueryCompilationDiagnosticCodes.StorageBindingMismatch
+            or PostgresRelationQueryCompilationDiagnosticCodes.CrossSourceJoin
+            ? null
+            : CompilerProfileSetting;
+    }
+
+    static ImmutableArray<RelationQueryNativeCompilationDiagnostic> ValidateBinding(
+        CompilationContext request,
+        PostgresRelationQueryStorageBinding storageBinding,
+        RelationQueryAdapterBindingReference? expectedBinding = null)
     {
         var diagnostics = ImmutableArray.CreateBuilder<RelationQueryNativeCompilationDiagnostic>();
 
@@ -101,6 +485,13 @@ public sealed class PostgresRelationQueryCompiler
             PostgresRelationQueryCompilationDiagnosticCodes.StorageBindingMismatch,
             DiagnosticSeverity.Error,
             message));
+
+        if (expectedBinding is not null
+            && !ReferencesExactBinding(expectedBinding, request, storageBinding))
+        {
+            Error(
+                "The exact PostgreSQL storage binding does not match the adapter-binding fingerprint retained by contextual realization.");
+        }
 
         List<string> affinityMismatches = [];
         if (storageBinding.CompiledPlanFingerprint is null
@@ -127,33 +518,29 @@ public sealed class PostgresRelationQueryCompiler
             Error($"The PostgreSQL storage binding's {string.Join(" and ", affinityMismatches)} affinity does not match the request.");
         }
 
-        var profile = request.Realization.TargetProfile;
+        var profile = request.ProfileFeasibility.TargetProfile;
         if (storageBinding.Target != PostgresRelationQueryTargetProfile.Target
             || storageBinding.TargetProfile != PostgresRelationQueryTargetProfile.ProfileId
             || storageBinding.Target != profile.Target
             || storageBinding.TargetProfile != profile.Id
-            || !ProfilesEquivalent(profile, PostgresRelationQueryTargetProfile.Default))
+            || !profile.HasSameSemantics(PostgresRelationQueryTargetProfile.Default))
         {
             Error("The binding, realization report, and canonical PostgreSQL target profile are not the same snapshot.");
         }
 
-        var placements = request.Placement.Bindings.ToDictionary(static binding => binding.Input);
-        if (request.Placement.Bindings.Any(static placement => placement.Partition is not null))
+        var placements = request.SelectedPlacements.ToDictionary(static binding => binding.Input);
+        if (request.SelectedPlacements.Any(static placement => placement.Partition is not null))
         {
             Error(
                 "PostgreSQL SQL v1 does not lower source-partition selectors; issuing an unscoped scan would weaken placement semantics.");
         }
-        var knownInputs = request.Plan.InputContract.Sources.Select(static source => source.Input.Id)
-            .Concat(request.Plan.InputContract.Traversals.Select(static traversal => traversal.Input.Id))
-            .ToHashSet();
-        if (storageBinding.Tables.Any(table => !knownInputs.Contains(table.Input)))
-        {
-            Error("The PostgreSQL storage binding contains a table for an input absent from the compiled plan.");
-        }
+        var selectedTables = storageBinding.Tables
+            .Where(table => request.SelectedInputs.Contains(table.Input))
+            .ToArray();
 
-        foreach (var placement in request.Placement.Bindings)
+        foreach (var placement in request.SelectedPlacements)
         {
-            var tables = storageBinding.Tables.Where(table => table.Input == placement.Input).ToArray();
+            var tables = selectedTables.Where(table => table.Input == placement.Input).ToArray();
             if (placement.Acquisition == RelationQuerySourceAcquisitionKind.Supplied)
             {
                 if (tables.Length != 0)
@@ -177,7 +564,7 @@ public sealed class PostgresRelationQueryCompiler
             }
         }
 
-        foreach (var table in storageBinding.Tables)
+        foreach (var table in selectedTables)
         {
             if (!placements.TryGetValue(table.Input, out var placement)
                 || placement.Acquisition == RelationQuerySourceAcquisitionKind.Supplied)
@@ -186,9 +573,9 @@ public sealed class PostgresRelationQueryCompiler
             }
         }
 
-        ValidateTableSemantics(request, storageBinding, placements, Error);
+        ValidateTableSemantics(request, selectedTables, placements, Error);
 
-        var tableSources = storageBinding.Tables.Select(static table => table.Source).Distinct().ToArray();
+        var tableSources = selectedTables.Select(static table => table.Source).Distinct().ToArray();
         var sourceInstances = request.Placement.SourceInstances
             .Where(source => tableSources.Contains(source.Id))
             .ToArray();
@@ -200,21 +587,52 @@ public sealed class PostgresRelationQueryCompiler
         return diagnostics.ToImmutable();
     }
 
+    static bool ReferencesExactBinding(
+        RelationQueryAdapterBindingReference reference,
+        CompilationContext request,
+        PostgresRelationQueryStorageBinding storageBinding)
+    {
+        var actual = CreateBindingReference(request, storageBinding);
+        if (!reference.HasSameSemantics(actual))
+            return false;
+
+        var configuration = actual.ConfigurationDecisions.ToDictionary(
+            static decision => decision.Setting,
+            StringComparer.Ordinal);
+        var (bindingOrigin, bindingAuthority) = AssessmentAuthority(storageBinding);
+        return request.BoundAssessments.All(assessment =>
+        {
+            if (assessment.ConfigurationSetting is not { } setting)
+            {
+                return assessment.Origin == bindingOrigin
+                       && string.Equals(assessment.Authority, bindingAuthority, StringComparison.Ordinal);
+            }
+
+            return configuration.TryGetValue(setting, out var decision)
+                   && assessment.Origin == decision.Origin
+                   && string.Equals(assessment.Authority, decision.Authority, StringComparison.Ordinal);
+        });
+    }
+
     static void ValidateTableSemantics(
-        RelationQueryNativeCompilationRequest request,
-        PostgresRelationQueryStorageBinding storageBinding,
+        CompilationContext request,
+        IReadOnlyList<PostgresRelationQueryTableBinding> selectedTables,
         IReadOnlyDictionary<RelationQueryInputId, RelationQuerySourcePlacementBinding> placements,
         Action<string> error)
     {
-        var fields = request.Plan.InputContract.Sources.SelectMany(static source => source.Fields)
-            .Concat(request.Plan.InputContract.Traversals.SelectMany(static traversal => traversal.Fields))
+        var fields = request.SelectedFields
             .ToDictionary(static field => field.Input.Id);
-        var traversals = request.Plan.InputContract.Traversals
+        var traversals = request.SelectedTraversals
             .ToDictionary(static traversal => traversal.Input.Id);
+        var requiredIdentityBindings = request.SelectedTraversals
+            .Select(static traversal => traversal.Input.Direction == RelationshipTraversalDirection.Forward
+                ? traversal.Result
+                : traversal.From)
+            .ToHashSet();
 
-        foreach (var table in storageBinding.Tables)
+        foreach (var table in selectedTables)
         {
-            foreach (var field in table.Fields)
+            foreach (var field in table.Fields.Where(field => fields.ContainsKey(field.Input)))
             {
                 if (!fields.TryGetValue(field.Input, out var contract)
                     || contract.Input.Field.Path != field.SemanticPath
@@ -227,7 +645,8 @@ public sealed class PostgresRelationQueryCompiler
                 }
             }
 
-            foreach (var reference in table.RelationshipReferences)
+            foreach (var reference in table.RelationshipReferences.Where(reference =>
+                         traversals.ContainsKey(reference.Input)))
             {
                 if (!traversals.TryGetValue(reference.Input, out var traversal)
                     || reference.SemanticPath != traversal.Definition.SourceReference
@@ -267,7 +686,9 @@ public sealed class PostgresRelationQueryCompiler
                     error);
             }
 
-            if (table.Identity is not { } identity)
+            if (!placements.TryGetValue(table.Input, out var tablePlacement)
+                || !requiredIdentityBindings.Contains(tablePlacement.Binding)
+                || table.Identity is not { } identity)
             {
                 continue;
             }
@@ -319,7 +740,7 @@ public sealed class PostgresRelationQueryCompiler
     }
 
     static void ValidateRelationshipKeyDomain(
-        RelationQueryNativeCompilationRequest request,
+        CompilationContext request,
         QualifiedShapeId shape,
         FieldPath path,
         PostgresRelationQueryScalarType scalarType,
@@ -379,14 +800,63 @@ public sealed class PostgresRelationQueryCompiler
         return type is ScalarTypeRef or EntityReferenceTypeRef or EnumTypeRef;
     }
 
-    static bool ProfilesEquivalent(
-        RelationQueryTargetCapabilityProfile left,
-        RelationQueryTargetCapabilityProfile right)
+    sealed class CompilationContext
     {
-        var serializerOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
-        return JsonSerializer.SerializeToUtf8Bytes(left, serializerOptions)
-            .AsSpan()
-            .SequenceEqual(JsonSerializer.SerializeToUtf8Bytes(right, serializerOptions));
+        public CompilationContext(RelationQueryBoundRealizationRequest request)
+        {
+            Plan = request.Plan;
+            PlanReference = request.PlanReference;
+            ProfileFeasibility = request.ProfileFeasibility;
+            Placement = request.Placement;
+            Branches = request.Branches;
+            Selection = request.Selection;
+            BoundAssessments = [];
+            SelectedSources = Selection.Sources;
+            SelectedTraversals = Selection.Traversals;
+            SelectedFields = Selection.Fields;
+            SelectedPlacements = Selection.PlacementBindings;
+            SelectedInputs = Selection.InputIds.ToHashSet();
+        }
+
+        public CompilationContext(RelationQueryNativeCompilationRequest request)
+        {
+            Plan = request.Plan;
+            PlanReference = request.PlanReference;
+            ProfileFeasibility = request.ProfileFeasibility;
+            Placement = request.Placement;
+            Branches = request.Branches;
+            Selection = request.Selection;
+            BoundAssessments = request.BoundRealization.Evidence.Assessments;
+            SelectedSources = Selection.Sources;
+            SelectedTraversals = Selection.Traversals;
+            SelectedFields = Selection.Fields;
+            SelectedPlacements = Selection.PlacementBindings;
+            SelectedInputs = Selection.InputIds.ToHashSet();
+        }
+
+        public CompiledRelationQueryPlan Plan { get; }
+
+        public RelationQueryCompiledPlanReference PlanReference { get; }
+
+        public RelationQueryRealizationReport ProfileFeasibility { get; }
+
+        public RelationQuerySourcePlacement Placement { get; }
+
+        public ImmutableArray<RelationQueryNativeResultBranch> Branches { get; }
+
+        public RelationQueryCompilationSelection Selection { get; }
+
+        public ImmutableArray<RelationQueryBoundRequirementAssessment> BoundAssessments { get; }
+
+        public ImmutableArray<RelationQuerySourceInputContract> SelectedSources { get; }
+
+        public ImmutableArray<RelationQueryTraversalInputContract> SelectedTraversals { get; }
+
+        public ImmutableArray<RelationQueryFieldInputContract> SelectedFields { get; }
+
+        public ImmutableArray<RelationQuerySourcePlacementBinding> SelectedPlacements { get; }
+
+        public IReadOnlySet<RelationQueryInputId> SelectedInputs { get; }
     }
 
     sealed class BranchCompiler
@@ -394,9 +864,10 @@ public sealed class PostgresRelationQueryCompiler
         const string SuppliedPrefix = "supplied:";
         const string ParameterPrefix = "parameter:";
 
-        readonly RelationQueryNativeCompilationRequest request;
+        readonly CompilationContext request;
         readonly PostgresRelationQueryStorageBinding storageBinding;
         readonly RelationQueryNativeResultBranch branch;
+        readonly RelationQueryBranchSelection branchSelection;
         readonly IReadOnlyDictionary<QueryNodeId, RelationQueryExecutionNode> nodes;
         readonly IReadOnlyDictionary<QueryNodeId, RelationQuerySourceInputContract> sourcesByNode;
         readonly IReadOnlyDictionary<QueryNodeId, RelationQueryTraversalInputContract> traversalsByNode;
@@ -420,21 +891,22 @@ public sealed class PostgresRelationQueryCompiler
         PostgresRelationQueryPagingContract? paging;
 
         public BranchCompiler(
-            RelationQueryNativeCompilationRequest request,
+            CompilationContext request,
             PostgresRelationQueryStorageBinding storageBinding,
             RelationQueryNativeResultBranch branch)
         {
             this.request = request;
             this.storageBinding = storageBinding;
             this.branch = branch;
+            branchSelection = request.Selection.GetBranch(branch.Id);
             nodes = request.Plan.ExecutionSlice.Nodes.ToDictionary(static node => node.Id);
             sourcesByNode = request.Plan.InputContract.Sources.ToDictionary(static source => source.Node);
             traversalsByNode = request.Plan.InputContract.Traversals.ToDictionary(static traversal => traversal.Input.Traversal);
-            branchNodes = FindReachableNodes(branch.Node, nodes);
+            branchNodes = branchSelection.ReachableNodes.ToHashSet();
             parameters = request.Plan.InputContract.Parameters.ToDictionary(static parameter => parameter.Definition.Id);
-            placements = request.Placement.Bindings.ToDictionary(static placement => placement.Input);
+            placements = branchSelection.PlacementBindings.ToDictionary(static placement => placement.Input);
             bindingAliases = CreateBindingAliases();
-            selectedFieldContracts = SelectBranchFields();
+            selectedFieldContracts = branchSelection.Fields;
             (requiredIdentityBindings, requiredRelationshipReferences) = SelectBranchRelationshipInternals();
         }
 
@@ -468,9 +940,63 @@ public sealed class PostgresRelationQueryCompiler
             return aliases;
         }
 
-        public PostgresRelationQueryCompiledArtifact Compile()
+        public PostgresRelationQueryCompiledArtifact Compile(RelationQueryNativeCompilationRequest nativeRequest)
         {
+            var prepared = Prepare();
+            var provenance = RelationQueryNativeCompilationProvenanceFactory.Create(
+                nativeRequest,
+                branch.Id,
+                CompilerProfile,
+                storageBinding.ConventionSetVersion
+                ?? PostgresRelationQueryTargetProfile.DefaultConventionSetVersion,
+                [.. coveredNodes.OrderBy(static node => node.Value, StringComparer.Ordinal)],
+                [.. coveredAssignments.OrderBy(static assignment => assignment.Value, StringComparer.Ordinal)],
+                [.. selectedFieldContracts.Select(static field => field.Input.Id)
+                    .OrderBy(static input => input.Value, StringComparer.Ordinal)]);
+            var fingerprint = PostgresRelationQueryArtifactFingerprinter.Compute(
+                PostgresRelationQueryCompiledArtifact.CurrentSchemaVersion,
+                branch,
+                prepared.Statement,
+                storageBinding,
+                prepared.SelectedFields,
+                prepared.Terminal.ResultFields,
+                prepared.Terminal.Presence,
+                prepared.SuppliedFields,
+                prepared.Parameters,
+                paging,
+                prepared.Terminal.RelationKey,
+                prepared.Terminal.Invariants,
+                [.. decisions],
+                provenance);
+            return new(
+                PostgresRelationQueryCompiledArtifact.CurrentSchemaVersion,
+                branch,
+                prepared.Statement,
+                storageBinding,
+                prepared.SelectedFields,
+                prepared.Terminal.ResultFields,
+                prepared.Terminal.Presence,
+                prepared.SuppliedFields,
+                prepared.Parameters,
+                paging,
+                prepared.Terminal.RelationKey,
+                prepared.Terminal.Invariants,
+                [.. decisions],
+                provenance,
+                fingerprint);
+        }
+
+        public void Validate() => _ = Prepare();
+
+        PreparedBranch Prepare()
+        {
+            HashSet<RelationQueryInputId> branchInputs =
+            [
+                .. branchSelection.Sources.Select(static source => source.Input.Id),
+                .. branchSelection.Traversals.Select(static traversal => traversal.Input.Id)
+            ];
             var executionDomains = storageBinding.Tables
+                .Where(table => branchInputs.Contains(table.Input))
                 .Select(table => request.Placement.SourceInstances.Single(source => source.Id == table.Source).ExecutionDomain)
                 .Distinct()
                 .ToArray();
@@ -481,7 +1007,7 @@ public sealed class PostgresRelationQueryCompiler
                     "A native PostgreSQL statement cannot cross declared source execution domains.",
                     branch.Node);
             }
-            if (request.Realization.Observability.OccurrenceProvenance
+            if (request.ProfileFeasibility.Observability.OccurrenceProvenance
                 != RelationQueryOccurrenceProvenanceMode.NotRequested)
             {
                 throw Fail(
@@ -498,52 +1024,13 @@ public sealed class PostgresRelationQueryCompiler
             var supplied = CreateSuppliedBindings(statement);
             var parameterBindings = CreateParameterBindings(statement);
             var selected = CreateSelectedFields();
-            var provenance = RelationQueryNativeCompilationProvenanceFactory.Create(
-                request,
-                branch.Id,
-                CompilerProfile,
-                storageBinding.ConventionSetVersion
-                ?? PostgresRelationQueryTargetProfile.DefaultConventionSetVersion,
-                [.. coveredNodes.OrderBy(static node => node.Value, StringComparer.Ordinal)],
-                [.. coveredAssignments.OrderBy(static assignment => assignment.Value, StringComparer.Ordinal)],
-                [.. selectedFieldContracts.Select(static field => field.Input.Id)
-                    .OrderBy(static input => input.Value, StringComparer.Ordinal)]);
-            var fingerprint = PostgresRelationQueryArtifactFingerprinter.Compute(
-                PostgresRelationQueryCompiledArtifact.CurrentSchemaVersion,
-                branch,
-                statement,
-                storageBinding,
-                selected,
-                terminal.ResultFields,
-                terminal.Presence,
-                supplied,
-                parameterBindings,
-                paging,
-                terminal.RelationKey,
-                terminal.Invariants,
-                [.. decisions],
-                provenance);
-            return new(
-                PostgresRelationQueryCompiledArtifact.CurrentSchemaVersion,
-                branch,
-                statement,
-                storageBinding,
-                selected,
-                terminal.ResultFields,
-                terminal.Presence,
-                supplied,
-                parameterBindings,
-                paging,
-                terminal.RelationKey,
-                terminal.Invariants,
-                [.. decisions],
-                provenance,
-                fingerprint);
+            return new(statement, selected, terminal, supplied, parameterBindings);
         }
 
         void ValidateRelationRootCorrelation()
         {
-            if (request.Plan.ExecutionSlice.RelationOutput is not { } relation
+            if (branch.Kind != RelationQueryNativeResultKind.RelationRows
+                || request.Plan.ExecutionSlice.RelationOutput is not { } relation
                 || relation.Definition.Mode == RelationOutputMode.Set)
             {
                 return;
@@ -2750,9 +3237,8 @@ public sealed class PostgresRelationQueryCompiler
             IReadOnlyDictionary<FieldKey, ScopedValue> values,
             Dictionary<RelationshipKey, ScopedValue> references)
         {
-            foreach (var traversal in request.Plan.InputContract.Traversals.Where(candidate =>
-                         branchNodes.Contains(candidate.Input.Traversal)
-                         && requiredRelationshipReferences.Contains(new(source.Binding, candidate.Input.Id))
+            foreach (var traversal in branchSelection.Traversals.Where(candidate =>
+                         requiredRelationshipReferences.Contains(new(source.Binding, candidate.Input.Id))
                          &&
                          candidate.Input.Direction == RelationshipTraversalDirection.Forward
                          && candidate.From == source.Binding))
@@ -2886,27 +3372,6 @@ public sealed class PostgresRelationQueryCompiler
                     && requirement.Path == path)) == true;
         }
 
-        static IReadOnlySet<QueryNodeId> FindReachableNodes(
-            QueryNodeId terminal,
-            IReadOnlyDictionary<QueryNodeId, RelationQueryExecutionNode> nodes)
-        {
-            HashSet<QueryNodeId> result = [];
-            Stack<QueryNodeId> pending = new([terminal]);
-            while (pending.TryPop(out var current) && result.Add(current))
-            {
-                if (!nodes.TryGetValue(current, out var node))
-                {
-                    continue;
-                }
-
-                foreach (var input in node.LogicalPlan.EffectiveInputs)
-                {
-                    pending.Push(input);
-                }
-            }
-            return result;
-        }
-
         static PostgresRelationQueryFieldBinding ResolveField(
             PostgresRelationQueryTableBinding table,
             RelationQueryInputId input,
@@ -2923,26 +3388,12 @@ public sealed class PostgresRelationQueryCompiler
             }
         }
 
-        ImmutableArray<RelationQueryFieldInputContract> SelectBranchFields()
-        {
-            var outputs = branch.Outputs.Select(static output => output.Id).ToHashSet();
-            return
-            [
-                .. request.Plan.InputContract.Sources.SelectMany(static source => source.Fields)
-                    .Concat(request.Plan.InputContract.Traversals.SelectMany(static traversal => traversal.Fields))
-                    .Where(field => field.Uses.Any(use => outputs.Contains(use.Output.Id)))
-                    .OrderBy(static field => field.Input.Id.Value, StringComparer.Ordinal)
-            ];
-        }
-
         (IReadOnlySet<ValueBindingId> Identities, IReadOnlySet<RelationshipKey> References)
             SelectBranchRelationshipInternals()
         {
             HashSet<ValueBindingId> identities = [];
             HashSet<RelationshipKey> references = [];
-            foreach (var traversal in traversalsByNode
-                         .Where(pair => branchNodes.Contains(pair.Key))
-                         .Select(static pair => pair.Value))
+            foreach (var traversal in branchSelection.Traversals)
             {
                 if (traversal.Input.Direction == RelationshipTraversalDirection.Forward)
                 {
@@ -3271,6 +3722,24 @@ public sealed class PostgresRelationQueryCompiler
             Fail(PostgresRelationQueryCompilationDiagnosticCodes.UnsupportedBranchTopology, message, node);
     }
 
+    readonly record struct ContextualEvaluation(
+        RelationQueryBoundRealizationReport Report,
+        ImmutableArray<RelationQueryNativeCompilationDiagnostic> Diagnostics);
+
+    readonly record struct ContextualFailure(
+        RelationQueryBoundAssessmentStatus Status,
+        string Code,
+        string Message,
+        RelationQueryNativeResultBranchId? Branch = null,
+        QueryNodeId? Node = null,
+        RelationQueryInputId? Input = null);
+
+    readonly record struct AssessmentSite(
+        QueryNodeId? Node,
+        RelationQueryInputId? Input,
+        FieldPath? Field,
+        RelationQuerySourcePlacementBindingId? Placement);
+
     sealed class BranchCompilationException(
         string code,
         string message,
@@ -3506,12 +3975,19 @@ public sealed class PostgresRelationQueryCompiler
         ImmutableArray<PostgresRelationQueryPresenceBinding> Presence,
         PostgresRelationQueryRelationKeyBinding? RelationKey,
         ImmutableArray<PostgresRelationQueryInvariantBinding> Invariants);
+
+    readonly record struct PreparedBranch(
+        PostgresSqlCommandTemplate Statement,
+        ImmutableArray<PostgresRelationQuerySelectedField> SelectedFields,
+        TerminalResult Terminal,
+        ImmutableArray<PostgresRelationQuerySuppliedFieldBinding> SuppliedFields,
+        ImmutableArray<PostgresRelationQueryParameterBinding> Parameters);
 }
 
 static class PostgresRelationQueryArtifactFingerprinter
 {
     const string Algorithm = "sha256";
-    const string Canonicalization = "cohesive.relations.postgres-artifact/v1-c14n/v1";
+    const string Canonicalization = "cohesive.relations.postgres-artifact/v2-c14n/v1";
 
     public static PostgresRelationQueryArtifactFingerprint Compute(
         string schemaVersion,

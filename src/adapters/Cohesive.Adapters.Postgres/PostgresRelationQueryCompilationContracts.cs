@@ -640,7 +640,7 @@ public sealed record PostgresRelationQueryLoweringDecision
 public sealed class PostgresRelationQueryCompiledArtifact
 {
     /// <summary>Current persisted PostgreSQL native-artifact schema version.</summary>
-    public const string CurrentSchemaVersion = "cohesive.relations.postgres-artifact/v1";
+    public const string CurrentSchemaVersion = "cohesive.relations.postgres-artifact/v2";
 
     /// <summary>Creates or rehydrates one validated PostgreSQL native artifact.</summary>
     /// <param name="schemaVersion">Persisted artifact schema version.</param>

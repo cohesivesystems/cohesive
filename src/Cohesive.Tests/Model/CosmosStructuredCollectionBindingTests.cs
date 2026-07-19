@@ -19,10 +19,14 @@ public sealed class CosmosStructuredCollectionBindingTests
     {
         var first = Scope(children: [Child(TypePath), Child(LocationPath)]);
         var second = Scope(children: [Child(LocationPath), Child(TypePath)]);
+        ImmutableArray<CosmosRelationQueryCollectionElementFieldBinding> canonical =
+            [Child(TypePath), Child(LocationPath)];
+        var alreadyCanonical = Scope(children: canonical);
 
         Assert.Equal(first, second);
         Assert.Equal(first.GetHashCode(), second.GetHashCode());
         Assert.Equal([TypePath, LocationPath], first.ChildFields.Select(static child => child.ElementPath).ToArray());
+        Assert.True(alreadyCanonical.ChildFields.Equals(canonical));
         Assert.Equal(LocationPath, first.ResolveChild(LocationPath).DocumentPath);
         Assert.Throws<KeyNotFoundException>(() => first.ResolveChild(FieldPath.Parse("Unknown")));
     }

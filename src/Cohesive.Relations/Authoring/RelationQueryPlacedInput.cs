@@ -119,7 +119,7 @@ public sealed class RelationQueryPlacedInput<T> : RelationQueryPlacedInput
     /// <exception cref="ArgumentException"><paramref name="selector"/> is not a rooted readable-property chain.</exception>
     /// <exception cref="InvalidOperationException">The CLR metadata profile cannot resolve the selected path.</exception>
     public FieldPath ResolveFieldPath<TValue>(Expression<Func<T, TValue>> selector) =>
-        ClrShape.ResolveMemberPath(ReadProperties(selector, nameof(selector)));
+        ClrShape.ResolveMemberPath(ReadProperties<TValue>(selector, nameof(selector)));
 
     /// <summary>Resolves a typed CLR property selector to its exact demanded field contract.</summary>
     /// <typeparam name="TValue">CLR value selected by the property chain.</typeparam>
@@ -132,8 +132,46 @@ public sealed class RelationQueryPlacedInput<T> : RelationQueryPlacedInput
     public RelationQueryFieldInputContract GetField<TValue>(Expression<Func<T, TValue>> selector) =>
         GetField(ResolveFieldPath(selector));
 
+    /// <summary>
+    /// Resolves a CLR collection-element selector to its authoritative semantic path relative to one element.
+    /// </summary>
+    /// <typeparam name="TElement">CLR type of one selected collection element.</typeparam>
+    /// <typeparam name="TValue">CLR value selected from one collection element.</typeparam>
+    /// <param name="collectionSelector">
+    /// Readable CLR property chain selecting an enumerable field on this placed input.
+    /// </param>
+    /// <param name="elementSelector">
+    /// Readable CLR property chain rooted at one element of the selected collection.
+    /// </param>
+    /// <returns>
+    /// The profile-derived or explicitly overridden semantic field path relative to one collection element.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">A selector is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">A selector is not a rooted readable-property chain.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The CLR metadata profile cannot resolve the selected collection or element path.
+    /// </exception>
+    /// <exception cref="KeyNotFoundException">
+    /// The selected outer collection is not a demanded field on this placed input.
+    /// </exception>
+    public FieldPath ResolveCollectionElementFieldPath<TElement, TValue>(
+        Expression<Func<T, IEnumerable<TElement>>> collectionSelector,
+        Expression<Func<TElement, TValue>> elementSelector)
+        where TElement : notnull
+    {
+        _ = GetField(ResolveFieldPath(collectionSelector));
+        return ClrShape.ResolveMemberPath(
+            typeof(TElement),
+            ReadProperties<TElement, TValue>(elementSelector, nameof(elementSelector)));
+    }
+
     internal static IReadOnlyList<PropertyInfo> ReadProperties<TValue>(
         Expression<Func<T, TValue>> selector,
+        string parameterName) =>
+        ReadProperties<T, TValue>(selector, parameterName);
+
+    static IReadOnlyList<PropertyInfo> ReadProperties<TRoot, TValue>(
+        Expression<Func<TRoot, TValue>> selector,
         string parameterName)
     {
         ArgumentNullException.ThrowIfNull(selector);
@@ -142,7 +180,9 @@ public sealed class RelationQueryPlacedInput<T> : RelationQueryPlacedInput
             {
                 NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked
             } conversion
-               && (conversion.Type == typeof(object) || conversion.Type == conversion.Operand.Type))
+               && (conversion.Type == typeof(object)
+                   || conversion.Type == conversion.Operand.Type
+                   || conversion.Type.IsAssignableFrom(conversion.Operand.Type)))
         {
             current = conversion.Operand;
         }

@@ -9,6 +9,7 @@ using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.Physical;
 using Cohesive.Relations.Realization;
+using Cohesive.Tests.Relations;
 
 namespace Cohesive.Tests.Postgres;
 
@@ -50,6 +51,58 @@ public sealed class PostgresRelationQueryCompilerTests
         temporalDomain: new(
             validatedConstraintName: "ck_test_finite_microsecond_timestamp",
             authority: "tests/postgres/exact-temporal-domain/v1"));
+
+    internal static RelationQueryAdapterConformanceCase CreateBoundRealizationConformanceCase() => new(
+        "PostgreSQL",
+        ObserveSupported,
+        ObserveRejected);
+
+    static RelationQuerySupportedContextObservation ObserveSupported()
+    {
+        var fixture = CreateLoadSearchRelationFixture();
+        var request = new RelationQueryBoundRealizationRequest(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement.Placement);
+        PostgresRelationQueryCompiler compiler = new();
+        var bound = compiler.Realize(request, fixture.Storage);
+        var repeated = compiler.Realize(request, fixture.Storage);
+        var compilation = compiler.Compile(
+            new RelationQueryNativeCompilationRequest(
+                fixture.Plan,
+                bound,
+                fixture.Placement.Placement),
+            fixture.Storage);
+        return new(
+            bound,
+            repeated,
+            compilation.Status,
+            [.. compilation.Artifacts.Select(static artifact => artifact.Provenance.BoundRealization)]);
+    }
+
+    static RelationQueryRejectedContextObservation ObserveRejected()
+    {
+        var fixture = CreateLoadSearchRelationFixture();
+        var binding = CopyStorage(
+            fixture.Storage,
+            tables:
+            [
+                .. fixture.Storage.Tables.Select(table => CopyTable(
+                    table,
+                    fields:
+                    [
+                        .. table.Fields.Where(static field => !field.SemanticPath.Matches("name"))
+                    ]))
+            ]);
+        var request = new RelationQueryBoundRealizationRequest(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement.Placement);
+        PostgresRelationQueryCompiler compiler = new();
+        var bound = compiler.Realize(request, binding);
+        var compilation = compiler.Compile(request, binding);
+        return new(bound, compilation.Status, compilation.Artifacts.Length);
+    }
 
     [Fact]
     public void Compile_ExpressionAuthoredSuppliedLoadRelationTraversesCustomerAndBindsRootFields()
@@ -111,6 +164,304 @@ public sealed class PostgresRelationQueryCompilerTests
         Assert.Equal(json, PostgresRelationQueryArtifactJsonSerializer.Serialize(rehydrated, indented: false));
         Assert.Equal(statement.Parameters.Select(static parameter => parameter.Value),
             rebound.Parameters.Select(static parameter => parameter.Value));
+    }
+
+    [Fact]
+    public void Realize_ExactBindingPredictsNativeCompilationAndRetainsContextualProof()
+    {
+        var fixture = CreateLoadSearchRelationFixture();
+        var compiler = new PostgresRelationQueryCompiler();
+        var request = new RelationQueryBoundRealizationRequest(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement.Placement);
+
+        var bound = compiler.Realize(request, fixture.Storage);
+
+        Assert.True(bound.IsRealizable, Format(bound.Diagnostics));
+        Assert.Equal(fixture.Storage.Id.Value, bound.Evidence.Binding.BindingId);
+        Assert.Equal(fixture.Storage.Fingerprint.Value, bound.Evidence.Binding.Fingerprint.Value);
+        Assert.NotEmpty(bound.Evidence.Assessments);
+        Assert.All(bound.Evidence.Assessments, static assessment =>
+            Assert.Equal(RelationQueryBoundAssessmentStatus.Available, assessment.Status));
+        var expectedTargetBoundaries = fixture.Realization.Decisions
+            .SelectMany(static decision => decision switch
+            {
+                ConstrainedRelationQueryRealizationDecision constrained => constrained.BoundaryValidations,
+                OverrideRelationQueryRealizationDecision overridden => overridden.BoundaryValidations,
+                _ => []
+            })
+            .Where(static validation =>
+                validation.Kind == RelationQueryOperatingBoundaryValidationKind.TargetEnforced)
+            .Select(static validation => validation.Boundary)
+            .ToHashSet();
+        Assert.NotEmpty(expectedTargetBoundaries);
+        Assert.True(expectedTargetBoundaries.SetEquals(
+            bound.Evidence.Assessments.SelectMany(static assessment => assessment.OperatingBoundaries)));
+
+        var convenience = compiler.Compile(request, fixture.Storage);
+        var exact = compiler.Compile(
+            new RelationQueryNativeCompilationRequest(
+                fixture.Plan,
+                bound,
+                fixture.Placement.Placement),
+            fixture.Storage);
+
+        Assert.True(convenience.IsSuccessful, Format(convenience.Diagnostics));
+        Assert.True(exact.IsSuccessful, Format(exact.Diagnostics));
+        Assert.All(exact.Artifacts, artifact =>
+        {
+            Assert.Equal(bound.Fingerprint, artifact.Provenance.BoundRealization);
+            Assert.Equal(bound.Evidence.Binding.Fingerprint, artifact.Provenance.AdapterBinding.Fingerprint);
+            Assert.NotEmpty(artifact.Provenance.ContextEvidence);
+        });
+        Assert.Equal(
+            convenience.Artifacts.Select(static artifact => artifact.Fingerprint),
+            exact.Artifacts.Select(static artifact => artifact.Fingerprint));
+    }
+
+    [Fact]
+    public void Realize_MissingDemandedFieldPredictsNativeRejection()
+    {
+        var fixture = CreateLoadSearchRelationFixture();
+        var missingField = CopyStorage(
+            fixture.Storage,
+            tables:
+            [
+                .. fixture.Storage.Tables.Select(table => CopyTable(
+                    table,
+                    fields:
+                    [
+                        .. table.Fields.Where(static field => !field.SemanticPath.Matches("name"))
+                    ]))
+            ]);
+        var compiler = new PostgresRelationQueryCompiler();
+        var request = new RelationQueryBoundRealizationRequest(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement.Placement);
+
+        var bound = compiler.Realize(request, missingField);
+        var compilation = compiler.Compile(request, missingField);
+
+        Assert.True(
+            bound.Status == RelationQueryRealizationStatus.NotRealizable,
+            Format(bound.Diagnostics));
+        var primary = Assert.Single(
+            bound.Evidence.Assessments,
+            assessment => assessment.Status == RelationQueryBoundAssessmentStatus.Unavailable
+                          && assessment.Message.Contains(
+                              PostgresRelationQueryCompilationDiagnosticCodes.FieldBindingMissing,
+                              StringComparison.Ordinal));
+        Assert.Equal(
+            new RelationQueryAdapterDecisionCode(PostgresRelationQueryCompilationDiagnosticCodes.FieldBindingMissing),
+            primary.AdapterDecisionCode);
+        Assert.NotNull(primary.Input);
+        Assert.NotNull(primary.Field);
+        Assert.NotNull(primary.PlacementBinding);
+        Assert.Contains(
+            "/columnName",
+            Assert.IsType<string>(primary.FailedConfigurationSetting),
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            bound.Evidence.Assessments,
+            static assessment => assessment.Status == RelationQueryBoundAssessmentStatus.Available);
+        Assert.All(
+            bound.Evidence.Assessments.Where(assessment => assessment.Id != primary.Id),
+            assessment =>
+            {
+                Assert.Equal(RelationQueryBoundAssessmentStatus.Blocked, assessment.Status);
+                Assert.Equal(primary.Id, assessment.BlockedBy);
+                Assert.Empty(assessment.CapabilityEvidence);
+                Assert.Empty(assessment.OperatingBoundaries);
+                Assert.Empty(assessment.PreservedGuarantees);
+            });
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, compilation.Status);
+        AssertDiagnostic(compilation, PostgresRelationQueryCompilationDiagnosticCodes.FieldBindingMissing);
+        Assert.Contains(
+            compilation.Diagnostics,
+            diagnostic => diagnostic.AdapterDecisionCode == primary.AdapterDecisionCode);
+        Assert.Empty(compilation.Artifacts);
+    }
+
+    [Fact]
+    public void Realize_SelectedRowsBranchIgnoresUnrelatedAggregateBindingGap()
+    {
+        var fixture = CreateRowsAndAggregatesFixture();
+        var incompleteAggregateBinding = ReplaceFields(
+            fixture.Storage,
+            static field => field.SemanticPath.Matches("amount")
+                ? CopyFieldEvidence(
+                    field,
+                    field.NumericDomain,
+                    decimalAggregates: null,
+                    field.TemporalDomain)
+                : field);
+        var allBranches = new RelationQueryBoundRealizationRequest(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement.Placement);
+        var rows = Assert.Single(
+            allBranches.Branches,
+            static branch => branch.Kind == RelationQueryNativeResultKind.QueryRows);
+        var rowsOnly = new RelationQueryBoundRealizationRequest(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement.Placement,
+            [rows.Id]);
+        var compiler = new PostgresRelationQueryCompiler();
+
+        var completeReport = compiler.Realize(allBranches, incompleteAggregateBinding);
+        var selectedReport = compiler.Realize(rowsOnly, incompleteAggregateBinding);
+        var selectedCompilation = compiler.Compile(rowsOnly, incompleteAggregateBinding);
+
+        Assert.Equal(RelationQueryRealizationStatus.NotRealizable, completeReport.Status);
+        Assert.True(selectedReport.IsRealizable, Format(selectedReport.Diagnostics));
+        Assert.All(selectedReport.Evidence.Assessments, assessment => Assert.Equal(rows.Id, assessment.Branch));
+        Assert.True(selectedCompilation.IsSuccessful, Format(selectedCompilation.Diagnostics));
+        Assert.Equal(RelationQueryNativeResultKind.QueryRows, Assert.Single(selectedCompilation.Artifacts).Branch.Kind);
+    }
+
+    [Fact]
+    public void Realize_ProfileInfeasibilityDoesNotInvokeContextualSuccessProjection()
+    {
+        var fixture = CreateRowsAndAggregatesFixture();
+        var planReference = RelationQueryCompiledPlanReference.From(fixture.Plan);
+        var unavailableProfile = new RelationQueryTargetCapabilityProfile(
+            PostgresRelationQueryTargetProfile.Target,
+            PostgresRelationQueryTargetProfile.ProfileId,
+            [planReference.DefinitionSchemaVersion],
+            [planReference.CompilerProfile]);
+        var infeasible = RelationQueryRealizationCompiler.Compile(
+            fixture.Plan,
+            unavailableProfile,
+            PostgresRelationQueryTargetProfile.Policy);
+        Assert.Equal(RelationQueryRealizationStatus.NotRealizable, infeasible.Status);
+        RelationQueryBoundRealizationRequest request = new(
+            fixture.Plan,
+            infeasible,
+            fixture.Placement.Placement);
+        PostgresRelationQueryCompiler compiler = new();
+
+        var bound = compiler.Realize(request, fixture.Storage);
+        var compilation = compiler.Compile(request, fixture.Storage);
+
+        Assert.Equal(RelationQueryRealizationStatus.NotRealizable, bound.Status);
+        Assert.Empty(bound.Evidence.Assessments);
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, compilation.Status);
+        Assert.Empty(compilation.Artifacts);
+    }
+
+    [Fact]
+    public void Realize_SelectedIndependentSourceBranchDoesNotRequireUnselectedTable()
+    {
+        var fixture = CreateIndependentSourcesFixture();
+        var allBranches = new RelationQueryBoundRealizationRequest(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement.Placement);
+        var loads = Assert.Single(
+            allBranches.Branches,
+            static branch => branch.QueryResult == new QueryResultId("load-rows"));
+        var selected = new RelationQueryBoundRealizationRequest(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement.Placement,
+            [loads.Id]);
+        PostgresRelationQueryCompiler compiler = new();
+
+        var allReport = compiler.Realize(allBranches, fixture.Storage);
+        var selectedReport = compiler.Realize(selected, fixture.Storage);
+        var selectedCompilation = compiler.Compile(selected, fixture.Storage);
+
+        Assert.Equal(RelationQueryRealizationStatus.Invalid, allReport.Status);
+        Assert.True(selectedReport.IsRealizable, Format(selectedReport.Diagnostics));
+        Assert.All(selectedReport.Evidence.Assessments, assessment => Assert.Equal(loads.Id, assessment.Branch));
+        Assert.True(selectedCompilation.IsSuccessful, Format(selectedCompilation.Diagnostics));
+        var artifact = Assert.Single(selectedCompilation.Artifacts);
+        Assert.Equal(loads.Id, artifact.Branch.Id);
+        Assert.Contains("\"transport\".\"loads\"", artifact.Statement.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("text_loads", artifact.Statement.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Compile_ExactNativeRequestRejectsDifferentBindingFingerprint()
+    {
+        var fixture = CreateLoadSearchRelationFixture();
+        var compiler = new PostgresRelationQueryCompiler();
+        var request = new RelationQueryBoundRealizationRequest(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement.Placement);
+        var bound = compiler.Realize(request, fixture.Storage);
+        Assert.True(bound.IsRealizable, Format(bound.Diagnostics));
+        var differentBinding = ReplaceFields(
+            fixture.Storage,
+            static field => field.SemanticPath.Matches("name")
+                ? CopyFieldColumn(field, "customer_display_name")
+                : field);
+
+        var result = compiler.Compile(
+            new RelationQueryNativeCompilationRequest(
+                fixture.Plan,
+                bound,
+                fixture.Placement.Placement),
+            differentBinding);
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Invalid, result.Status);
+        var diagnostic = Assert.Single(
+            result.Diagnostics,
+            static candidate => candidate.Code
+                == PostgresRelationQueryCompilationDiagnosticCodes.StorageBindingMismatch);
+        Assert.Contains("fingerprint", diagnostic.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
+    public void Compile_ExactNativeRequestRejectsStaleCompilerProfileEvidence()
+    {
+        var fixture = CreateLoadSearchRelationFixture();
+        var compiler = new PostgresRelationQueryCompiler();
+        var request = new RelationQueryBoundRealizationRequest(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement.Placement);
+        var bound = compiler.Realize(request, fixture.Storage);
+        var original = bound.Evidence.Assessments[0];
+        RelationQueryBoundRequirementAssessment stale = new(
+            original.Id,
+            original.Branch,
+            original.Requirement,
+            original.Status,
+            original.Origin,
+            original.Authority + "/stale-compiler",
+            original.CapabilityEvidence,
+            original.OperatingBoundaries,
+            original.PreservedGuarantees,
+            original.UnavailableReason,
+            original.Node,
+            original.Input,
+            original.Field,
+            original.PlacementBinding,
+            original.ConfigurationSetting,
+            original.Message,
+            original.Resolution);
+        RelationQueryContextualEvidenceProjection evidence = new(
+            bound.Evidence.Binding,
+            [stale, .. bound.Evidence.Assessments.Skip(1)]);
+        var staleBound = RelationQueryBoundRealizationCompiler.Compile(request, evidence);
+
+        Assert.True(staleBound.IsRealizable, Format(staleBound.Diagnostics));
+        var result = compiler.Compile(
+            new RelationQueryNativeCompilationRequest(
+                fixture.Plan,
+                staleBound,
+                fixture.Placement.Placement),
+            fixture.Storage);
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Invalid, result.Status);
+        AssertDiagnostic(result, PostgresRelationQueryCompilationDiagnosticCodes.StorageBindingMismatch);
+        Assert.Empty(result.Artifacts);
     }
 
     [Fact]
@@ -194,7 +545,9 @@ public sealed class PostgresRelationQueryCompilerTests
 
         var result = Compile(fixture.Plan, fixture.Realization, acquiredPlacement, storage);
 
-        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        Assert.True(
+            result.Status == RelationQueryNativeCompilationStatus.Unsupported,
+            Format(result.Diagnostics));
         var diagnostic = Assert.Single(
             result.Diagnostics,
             static candidate => candidate.Code == PostgresRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable);
@@ -457,7 +810,9 @@ public sealed class PostgresRelationQueryCompilerTests
             fixture.Placement.Placement,
             unstableOrdering);
 
-        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        Assert.True(
+            result.Status == RelationQueryNativeCompilationStatus.Unsupported,
+            Format(result.Diagnostics));
         AssertDiagnostic(result, PostgresRelationQueryCompilationDiagnosticCodes.PagingUnstable);
     }
 
@@ -779,7 +1134,9 @@ public sealed class PostgresRelationQueryCompilerTests
                 : field);
         var ordering = Compile(current.Plan, current.Realization, current.Placement.Placement, unstableOrdering);
 
-        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, ordering.Status);
+        Assert.True(
+            ordering.Status == RelationQueryNativeCompilationStatus.Unsupported,
+            Format(ordering.Diagnostics));
         AssertDiagnostic(ordering, PostgresRelationQueryCompilationDiagnosticCodes.PagingUnstable);
 
         var inverse = CreateInverseTraversalFixture();
@@ -882,7 +1239,7 @@ public sealed class PostgresRelationQueryCompilerTests
         RelationQuerySourcePlacement placement,
         PostgresRelationQueryStorageBinding storage) =>
         new PostgresRelationQueryCompiler().Compile(
-            new(plan, realization, placement),
+            new RelationQueryBoundRealizationRequest(plan, realization, placement),
             storage);
 
     static string CreatePersistedArtifactJson()
@@ -1167,6 +1524,99 @@ public sealed class PostgresRelationQueryCompilerTests
         return new(plan, realization, placement, storage);
     }
 
+    static RowsAndAggregatesFixture CreateIndependentSourcesFixture()
+    {
+        var author = RelationQuery.Expression();
+        var loadShape = author.Clr.Shape<QueryLoad>();
+        var textShape = author.Clr.Shape<TextLoad>();
+        var loads = author.Source(loadShape, "source/independent-loads");
+        var textLoads = author.Source(textShape, "source/independent-text-loads");
+        var orderedLoads = author.Order(
+            loads.Node,
+            (QueryLoad load) => load.Id,
+            loads.Binding);
+        var orderedTextLoads = author.Order(
+            textLoads.Node,
+            (TextLoad load) => load.Id,
+            textLoads.Binding);
+        var loadRows = author.Rows(
+            author.Page(orderedLoads, new OffsetPageDefinition(limit: 25, offset: 0)),
+            loads.Binding,
+            id: "load-rows");
+        var textRows = author.Rows(
+            author.Page(orderedTextLoads, new OffsetPageDefinition(limit: 25, offset: 0)),
+            textLoads.Binding,
+            id: "text-rows");
+        var query = author.BuildQuery(
+            new("postgres-independent-sources"),
+            new("PostgresIndependentSources"),
+            loadRows,
+            textRows);
+        Assert.True(query.Validation.IsValid, Format(query.Validation.Diagnostics));
+
+        var compilation = RelationQueryStaticCompiler.Compile(new(
+            query.CreateDocument(),
+            author.ShapeDocuments));
+        Assert.True(compilation.IsSuccessful, Format(compilation.Diagnostics));
+        var plan = Assert.IsType<CompiledRelationQueryPlan>(compilation.Plan);
+        var realization = Realize(plan);
+
+        var placementBuilder = RelationQueryPlacement.For(plan);
+        var executionDomain = new RelationQueryExecutionDomainId("tests/postgres/primary");
+        var loadSource = placementBuilder.Source(
+            "tests/postgres/independent-loads",
+            PostgresRelationQueryTargetProfile.Default,
+            executionDomain);
+        var textSource = placementBuilder.Source(
+            "tests/postgres/independent-text-loads",
+            PostgresRelationQueryTargetProfile.Default,
+            executionDomain);
+        var loadContract = plan.InputContract.Sources.Single(source => source.Shape == loadShape.Id);
+        var textContract = plan.InputContract.Sources.Single(source => source.Shape == textShape.Id);
+        var loadHandle = placementBuilder.Place(loadContract, loadSource, loadShape)
+            .Identity(load => load.Id)
+            .FieldsBySemanticPath();
+        var textHandle = placementBuilder.Place(textContract, textSource, textShape)
+            .Identity(load => load.Id)
+            .FieldsBySemanticPath();
+        var placement = placementBuilder.Build().RequireValue();
+        var loadInput = placement.GetInput(loadHandle);
+        var textInput = placement.GetInput(textHandle);
+        var completeStorage = PostgresRelationQueryBinding.For(
+                placement,
+                explicitAuthority: "tests/postgres/independent-source-binding/v1")
+            .Database(new("tests/postgres/primary"))
+            .Table(
+                loadInput,
+                "loads",
+                table => table
+                    .Schema("transport")
+                    .ColumnsExplicitly()
+                    .Column(load => load.Id, "load_id", StableOrdinalTextOptions)
+                    .Column(load => load.Status, "status", OrdinalTextOptions)
+                    .Column(load => load.Amount, "amount", ExactDecimalOptions)
+                    .Column(load => load.Unused, "unused", OrdinalTextOptions)
+                    .Identity(load => load.Id, "load_id", StableOrdinalTextOptions))
+            .Table(
+                textInput,
+                "text_loads",
+                table => table
+                    .Schema("transport")
+                    .ColumnsExplicitly()
+                    .Column(load => load.Id, "text_load_id", StableOrdinalTextOptions)
+                    .Column(load => load.Name, "name", OrdinalTextOptions)
+                    .Identity(load => load.Id, "text_load_id", StableOrdinalTextOptions))
+            .Build()
+            .RequireValue();
+        var storage = CopyStorage(
+            completeStorage,
+            tables:
+            [
+                completeStorage.Tables.Single(table => table.Input == loadInput.Binding.Input)
+            ]);
+        return new(plan, realization, placement, storage);
+    }
+
     static RowsAndAggregatesFixture CreateNestedCountAggregateFixture()
     {
         var author = RelationQuery.Expression();
@@ -1273,6 +1723,22 @@ public sealed class PostgresRelationQueryCompilerTests
         PostgresRelationQueryFieldBinding field,
         PostgresRelationQueryOrderingCapability ordering) =>
         CopyField(field, field.TextSemantics, ordering);
+
+    static PostgresRelationQueryFieldBinding CopyFieldColumn(
+        PostgresRelationQueryFieldBinding field,
+        string columnName) =>
+        new(
+            field.Input,
+            field.SemanticPath,
+            columnName,
+            field.ScalarType,
+            field.MissingValueEncoding,
+            field.NullValueEncoding,
+            field.TextSemantics,
+            field.Ordering,
+            field.NumericDomain,
+            field.DecimalAggregates,
+            field.TemporalDomain);
 
     static PostgresRelationQueryTableBinding CopyTable(
         PostgresRelationQueryTableBinding table,

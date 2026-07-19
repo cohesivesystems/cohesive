@@ -19,7 +19,7 @@ public static class RelationQueryRealizationFingerprinter
     public const string Algorithm = "sha256";
 
     /// <summary>Canonicalization profile identifier.</summary>
-    public const string Canonicalization = "relation-query-realization/v1-c14n/v2";
+    public const string Canonicalization = "relation-query-realization/v1-c14n/v4";
 
     /// <summary>Computes the deterministic derived-artifact fingerprint of a realization report.</summary>
     /// <param name="report">Normalized realization report to fingerprint.</param>
@@ -358,6 +358,19 @@ public static class RelationQueryRealizationFingerprinter
             AppendOptional(buffer, diagnostic.Override?.Value);
             AppendOptional(buffer, diagnostic.Node?.Value);
             AppendOptional(buffer, diagnostic.SemanticSite);
+            AppendOptional(buffer, diagnostic.ContextEvidence?.Value);
+            AppendOptional(buffer, diagnostic.Branch?.Value);
+            AppendOptional(buffer, diagnostic.Input?.Value);
+            Append(buffer, diagnostic.Field is not null);
+            if (diagnostic.Field is { } field)
+                AppendFieldPath(buffer, field);
+            AppendOptional(buffer, diagnostic.PlacementBinding?.Value);
+            AppendOptional(buffer, diagnostic.BindingSetting);
+            AppendNullableInt32(
+                buffer,
+                diagnostic.ConfigurationOrigin is { } origin ? (int)origin : null);
+            AppendOptional(buffer, diagnostic.ConfigurationAuthority);
+            AppendOptional(buffer, diagnostic.AdapterDecisionCode?.Value);
         }
     }
 
@@ -429,7 +442,7 @@ public static class RelationQueryRealizationFingerprinter
 
         HashSet<RelationQueryTargetCapabilityEvidenceId> evidenceIds =
         [
-            .. decisions.SelectMany(DecisionEvidence),
+            .. decisions.SelectMany(static decision => decision.GetCapabilityEvidence()),
             .. diagnostics.Where(static diagnostic => diagnostic.CapabilityEvidence is not null)
                 .Select(static diagnostic => diagnostic.CapabilityEvidence!.Value),
             .. relevantOverrides.SelectMany(static item => item.CapabilityEvidence)
@@ -449,7 +462,8 @@ public static class RelationQueryRealizationFingerprinter
 
         HashSet<RelationQueryOperatingBoundaryId> boundaryIds =
         [
-            .. decisions.SelectMany(DecisionBoundaries),
+            .. decisions.SelectMany(static decision => decision.GetBoundaryValidations())
+                .Select(static validation => validation.Boundary),
             .. diagnostics.Where(static diagnostic => diagnostic.OperatingBoundary is not null)
                 .Select(static diagnostic => diagnostic.OperatingBoundary!.Value),
             .. relevantEvidence.SelectMany(static evidence => evidence.OperatingBoundaries),
@@ -485,27 +499,6 @@ public static class RelationQueryRealizationFingerprinter
             relevantRuleSelections,
             relevantOverrides);
     }
-
-    static IEnumerable<RelationQueryTargetCapabilityEvidenceId> DecisionEvidence(
-        RelationQueryRealizationDecision decision) => decision switch
-        {
-            NativeRelationQueryRealizationDecision native => native.CapabilityEvidence,
-            ComposedRelationQueryRealizationDecision composed => composed.CapabilityEvidence,
-            ConstrainedRelationQueryRealizationDecision constrained => constrained.CapabilityEvidence,
-            OverrideRelationQueryRealizationDecision overridden => overridden.CapabilityEvidence,
-            UnavailableRelationQueryRealizationDecision => [],
-            _ => throw new ArgumentOutOfRangeException(nameof(decision), decision, "Unsupported realization decision variant.")
-        };
-
-    static IEnumerable<RelationQueryOperatingBoundaryId> DecisionBoundaries(
-        RelationQueryRealizationDecision decision) => decision switch
-        {
-            ConstrainedRelationQueryRealizationDecision constrained =>
-                constrained.BoundaryValidations.Select(static validation => validation.Boundary),
-            OverrideRelationQueryRealizationDecision overridden =>
-                overridden.BoundaryValidations.Select(static validation => validation.Boundary),
-            _ => []
-        };
 
     static void AppendCapabilities(
         ArrayBufferWriter<byte> buffer,
@@ -629,6 +622,15 @@ public static class RelationQueryRealizationFingerprinter
                 .ThenBy(static diagnostic => diagnostic.Override?.Value ?? string.Empty, StringComparer.Ordinal)
                 .ThenBy(static diagnostic => diagnostic.Node?.Value ?? string.Empty, StringComparer.Ordinal)
                 .ThenBy(static diagnostic => diagnostic.SemanticSite ?? string.Empty, StringComparer.Ordinal)
+                .ThenBy(static diagnostic => diagnostic.Branch?.Value ?? string.Empty, StringComparer.Ordinal)
+                .ThenBy(static diagnostic => diagnostic.Input?.Value ?? string.Empty, StringComparer.Ordinal)
+                .ThenBy(static diagnostic => diagnostic.Field?.ToString() ?? string.Empty, StringComparer.Ordinal)
+                .ThenBy(static diagnostic => diagnostic.PlacementBinding?.Value ?? string.Empty, StringComparer.Ordinal)
+                .ThenBy(static diagnostic => diagnostic.BindingSetting ?? string.Empty, StringComparer.Ordinal)
+                .ThenBy(static diagnostic => diagnostic.ConfigurationOrigin is { } origin ? (int)origin : -1)
+                .ThenBy(static diagnostic => diagnostic.ConfigurationAuthority ?? string.Empty, StringComparer.Ordinal)
+                .ThenBy(static diagnostic => diagnostic.AdapterDecisionCode?.Value ?? string.Empty, StringComparer.Ordinal)
+                .ThenBy(static diagnostic => diagnostic.ContextEvidence?.Value ?? string.Empty, StringComparer.Ordinal)
                 .ThenBy(static diagnostic => diagnostic.Code, StringComparer.Ordinal)
                 .ThenBy(static diagnostic => (int)diagnostic.Severity)
         ];

@@ -28,6 +28,8 @@ public sealed class RelationsContractProjectionTests
         Assert.Contains(graph.Shapes, shape =>
             shape.Id.Value.EndsWith(nameof(RelationQueryRealizationReport), StringComparison.Ordinal));
         Assert.Contains(graph.Shapes, shape =>
+            shape.Id.Value.EndsWith(nameof(RelationQueryBoundRealizationReport), StringComparison.Ordinal));
+        Assert.Contains(graph.Shapes, shape =>
             shape.Id.Value.EndsWith(nameof(RelationQuerySourcePlacement), StringComparison.Ordinal));
         Assert.Contains(graph.Shapes, shape =>
             shape.Id.Value.EndsWith(nameof(CompiledRelationQueryPhysicalPlan), StringComparison.Ordinal));
@@ -77,6 +79,7 @@ public sealed class RelationsContractProjectionTests
         Assert.Contains("export interface RelationDraftDocument", text, StringComparison.Ordinal);
         Assert.Contains("export interface RelationQueryTargetCapabilityProfile", text, StringComparison.Ordinal);
         Assert.Contains("export interface RelationQueryRealizationReport", text, StringComparison.Ordinal);
+        Assert.Contains("export interface RelationQueryBoundRealizationReport", text, StringComparison.Ordinal);
         Assert.Contains("export interface RelationQuerySourcePlacement", text, StringComparison.Ordinal);
         Assert.Contains("export interface CompiledRelationQueryPhysicalPlan", text, StringComparison.Ordinal);
         Assert.Contains("export type RelationQueryPhysicalStageKind", text, StringComparison.Ordinal);

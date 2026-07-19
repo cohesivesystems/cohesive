@@ -148,9 +148,34 @@ public sealed record RelationQueryNativeCompilationDiagnostic
     /// <param name="node">Affected logical node, or <see langword="null"/>.</param>
     /// <param name="input">Affected compiled input, or <see langword="null"/>.</param>
     /// <param name="requirement">Affected realization requirement, or <see langword="null"/>.</param>
+    /// <param name="capabilityEvidence">Affected target capability evidence, or <see langword="null"/>.</param>
+    /// <param name="operatingBoundary">Affected operating boundary, or <see langword="null"/>.</param>
+    /// <param name="override">Affected explicit realization override, or <see langword="null"/>.</param>
+    /// <param name="semanticSite">Affected semantic expression or assignment site, or <see langword="null"/>.</param>
+    /// <param name="contextEvidence">Affected contextual adapter evidence, or <see langword="null"/>.</param>
+    /// <param name="field">Affected semantic field path, or <see langword="null"/>.</param>
+    /// <param name="placementBinding">Affected source-placement binding, or <see langword="null"/>.</param>
+    /// <param name="bindingSetting">Affected adapter-binding setting, or <see langword="null"/>.</param>
+    /// <param name="resolution">Actionable resolution guidance, or <see langword="null"/>.</param>
+    /// <param name="configurationOrigin">
+    /// Configuration-precedence tier that supplied the attributed setting, or <see langword="null"/>.
+    /// </param>
+    /// <param name="configurationAuthority">
+    /// Stable declaration, profile, convention, or adapter authority paired with
+    /// <paramref name="configurationOrigin"/>, or <see langword="null"/>.
+    /// </param>
+    /// <param name="adapterDecisionCode">
+    /// Stable adapter-owned decision code explaining a contextual failure, or <see langword="null"/>.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="code"/> or <paramref name="message"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException">A required string or supplied identity is empty.</exception>
-    /// <exception cref="ArgumentOutOfRangeException"><paramref name="severity"/> is unsupported.</exception>
+    /// <exception cref="ArgumentException">
+    /// A required string, supplied identity, field path, semantic site, binding setting, configuration authority,
+    /// or resolution is empty, configuration origin and authority are not supplied together, or
+    /// <paramref name="adapterDecisionCode"/> is default.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="severity"/> or <paramref name="configurationOrigin"/> is unsupported.
+    /// </exception>
     public RelationQueryNativeCompilationDiagnostic(
         string code,
         DiagnosticSeverity severity,
@@ -158,7 +183,19 @@ public sealed record RelationQueryNativeCompilationDiagnostic
         RelationQueryNativeResultBranchId? branch = null,
         QueryNodeId? node = null,
         RelationQueryInputId? input = null,
-        RelationQueryRealizationRequirementId? requirement = null)
+        RelationQueryRealizationRequirementId? requirement = null,
+        RelationQueryTargetCapabilityEvidenceId? capabilityEvidence = null,
+        RelationQueryOperatingBoundaryId? operatingBoundary = null,
+        RelationQueryRealizationOverrideId? @override = null,
+        string? semanticSite = null,
+        RelationQueryContextEvidenceId? contextEvidence = null,
+        FieldPath? field = null,
+        RelationQuerySourcePlacementBindingId? placementBinding = null,
+        string? bindingSetting = null,
+        string? resolution = null,
+        RelationQueryConfigurationValueOrigin? configurationOrigin = null,
+        string? configurationAuthority = null,
+        RelationQueryAdapterDecisionCode? adapterDecisionCode = null)
     {
         Code = Guard.RequireNotNullOrWhiteSpace(code);
         if (!Enum.IsDefined(severity))
@@ -172,12 +209,59 @@ public sealed record RelationQueryNativeCompilationDiagnostic
             throw new ArgumentException("A diagnostic input identity cannot be empty.", nameof(input));
         if (requirement is { } requirementId && string.IsNullOrWhiteSpace(requirementId.Value))
             throw new ArgumentException("A diagnostic requirement identity cannot be empty.", nameof(requirement));
+        if (capabilityEvidence is { } capabilityId && string.IsNullOrWhiteSpace(capabilityId.Value))
+            throw new ArgumentException("A diagnostic capability-evidence identity cannot be empty.", nameof(capabilityEvidence));
+        if (operatingBoundary is { } boundaryId && string.IsNullOrWhiteSpace(boundaryId.Value))
+            throw new ArgumentException("A diagnostic operating-boundary identity cannot be empty.", nameof(operatingBoundary));
+        if (@override is { } overrideId && string.IsNullOrWhiteSpace(overrideId.Value))
+            throw new ArgumentException("A diagnostic override identity cannot be empty.", nameof(@override));
+        if (semanticSite is not null && string.IsNullOrWhiteSpace(semanticSite))
+            throw new ArgumentException("A diagnostic semantic site cannot be empty.", nameof(semanticSite));
+        if (contextEvidence is { } contextId && string.IsNullOrWhiteSpace(contextId.Value))
+            throw new ArgumentException("A diagnostic contextual-evidence identity cannot be empty.", nameof(contextEvidence));
+        if (field is { Segments.IsDefaultOrEmpty: true })
+            throw new ArgumentException("A diagnostic field path cannot be empty.", nameof(field));
+        if (placementBinding is { } placementId && string.IsNullOrWhiteSpace(placementId.Value))
+            throw new ArgumentException("A diagnostic placement-binding identity cannot be empty.", nameof(placementBinding));
+        if (bindingSetting is not null && string.IsNullOrWhiteSpace(bindingSetting))
+            throw new ArgumentException("A diagnostic binding setting cannot be empty.", nameof(bindingSetting));
+        if (resolution is not null && string.IsNullOrWhiteSpace(resolution))
+            throw new ArgumentException("A diagnostic resolution cannot be empty.", nameof(resolution));
+        if (configurationOrigin is { } origin && !Enum.IsDefined(origin))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(configurationOrigin),
+                configurationOrigin,
+                "Unsupported diagnostic configuration origin.");
+        }
+        if (configurationAuthority is not null && string.IsNullOrWhiteSpace(configurationAuthority))
+            throw new ArgumentException("A diagnostic configuration authority cannot be empty.", nameof(configurationAuthority));
+        if ((configurationOrigin is null) != (configurationAuthority is null))
+        {
+            throw new ArgumentException(
+                "Diagnostic configuration origin and authority must be supplied together.",
+                nameof(configurationOrigin));
+        }
+        if (adapterDecisionCode is { } decisionCode && string.IsNullOrWhiteSpace(decisionCode.Value))
+            throw new ArgumentException("A diagnostic adapter decision code cannot be default.", nameof(adapterDecisionCode));
 
         Severity = severity;
         Branch = branch;
         Node = node;
         Input = input;
         Requirement = requirement;
+        CapabilityEvidence = capabilityEvidence;
+        OperatingBoundary = operatingBoundary;
+        Override = @override;
+        SemanticSite = semanticSite;
+        ContextEvidence = contextEvidence;
+        Field = field;
+        PlacementBinding = placementBinding;
+        BindingSetting = bindingSetting;
+        Resolution = resolution;
+        ConfigurationOrigin = configurationOrigin;
+        ConfigurationAuthority = configurationAuthority;
+        AdapterDecisionCode = adapterDecisionCode;
     }
 
     /// <summary>Stable machine-readable diagnostic code.</summary>
@@ -200,19 +284,114 @@ public sealed record RelationQueryNativeCompilationDiagnostic
 
     /// <summary>Affected realization requirement, or <see langword="null"/>.</summary>
     public RelationQueryRealizationRequirementId? Requirement { get; }
+
+    /// <summary>Affected target capability evidence, or <see langword="null"/>.</summary>
+    public RelationQueryTargetCapabilityEvidenceId? CapabilityEvidence { get; }
+
+    /// <summary>Affected operating boundary, or <see langword="null"/>.</summary>
+    public RelationQueryOperatingBoundaryId? OperatingBoundary { get; }
+
+    /// <summary>Affected explicit realization override, or <see langword="null"/>.</summary>
+    public RelationQueryRealizationOverrideId? Override { get; }
+
+    /// <summary>Affected semantic expression or assignment site, or <see langword="null"/>.</summary>
+    public string? SemanticSite { get; }
+
+    /// <summary>Affected contextual adapter evidence, or <see langword="null"/>.</summary>
+    public RelationQueryContextEvidenceId? ContextEvidence { get; }
+
+    /// <summary>Affected semantic field path, or <see langword="null"/>.</summary>
+    public FieldPath? Field { get; }
+
+    /// <summary>Affected source-placement binding, or <see langword="null"/>.</summary>
+    public RelationQuerySourcePlacementBindingId? PlacementBinding { get; }
+
+    /// <summary>Affected adapter-binding setting, or <see langword="null"/>.</summary>
+    public string? BindingSetting { get; }
+
+    /// <summary>Actionable resolution guidance, or <see langword="null"/>.</summary>
+    public string? Resolution { get; }
+
+    /// <summary>Configuration-precedence tier that supplied the attributed setting, or <see langword="null"/>.</summary>
+    public RelationQueryConfigurationValueOrigin? ConfigurationOrigin { get; }
+
+    /// <summary>Stable declaration, profile, convention, or adapter authority, or <see langword="null"/>.</summary>
+    public string? ConfigurationAuthority { get; }
+
+    /// <summary>Stable adapter-owned decision code explaining a contextual failure, or <see langword="null"/>.</summary>
+    public RelationQueryAdapterDecisionCode? AdapterDecisionCode { get; }
+
+    /// <summary>Projects an unsuccessful bound-realization report into native-compilation diagnostics.</summary>
+    /// <param name="report">Unavailable or invalid bound-realization report.</param>
+    /// <returns>
+    /// Context-attributed diagnostics with at least one error, suitable for an unsuccessful native-compilation result.
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="report"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="report"/> is realizable.</exception>
+    public static ImmutableArray<RelationQueryNativeCompilationDiagnostic> FromBoundRealizationFailure(
+        RelationQueryBoundRealizationReport report)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        if (report.IsRealizable)
+            throw new ArgumentException("A realizable bound report has no native-compilation failure.", nameof(report));
+
+        var diagnostics = ImmutableArray.CreateBuilder<RelationQueryNativeCompilationDiagnostic>();
+        foreach (var diagnostic in report.ProfileFeasibility.Diagnostics
+                     .Concat(report.Diagnostics)
+                     .Distinct())
+        {
+            diagnostics.Add(new(
+                diagnostic.Code,
+                diagnostic.Severity,
+                diagnostic.Message,
+                diagnostic.Branch,
+                diagnostic.Node,
+                diagnostic.Input,
+                diagnostic.Requirement,
+                diagnostic.CapabilityEvidence,
+                diagnostic.OperatingBoundary,
+                diagnostic.Override,
+                diagnostic.SemanticSite,
+                diagnostic.ContextEvidence,
+                diagnostic.Field,
+                diagnostic.PlacementBinding,
+                diagnostic.BindingSetting,
+                diagnostic.Resolution,
+                diagnostic.ConfigurationOrigin,
+                diagnostic.ConfigurationAuthority,
+                diagnostic.AdapterDecisionCode));
+        }
+        if (!diagnostics.Any(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
+        {
+            diagnostics.Add(new(
+                RelationQueryNativeCompilationDiagnosticCodes.BoundRealizationUnavailable,
+                DiagnosticSeverity.Error,
+                $"The bound-realization status is '{report.Status}' and does not authorize native compilation."));
+        }
+        return diagnostics.ToImmutable();
+    }
 }
 
 /// <summary>Stable shared diagnostic codes for target-native compilation inputs.</summary>
 public static class RelationQueryNativeCompilationDiagnosticCodes
 {
     /// <summary>The realization report does not describe the exact compiled plan.</summary>
-    public const string RealizationPlanMismatch = "REL2200";
+    public const string RealizationPlanMismatch = "REL2280";
 
     /// <summary>The source placement does not describe the exact compiled plan.</summary>
-    public const string PlacementPlanMismatch = "REL2201";
+    public const string PlacementPlanMismatch = "REL2281";
 
     /// <summary>The realization report does not prove every demanded requirement.</summary>
-    public const string RealizationUnavailable = "REL2202";
+    public const string RealizationUnavailable = "REL2282";
+
+    /// <summary>The bound-realization report does not describe the exact source placement.</summary>
+    public const string BoundRealizationPlacementMismatch = "REL2283";
+
+    /// <summary>The exact bound-realization report is unavailable or invalid.</summary>
+    public const string BoundRealizationUnavailable = "REL2284";
+
+    /// <summary>The supplied bound-realization proof cannot be reproduced from its exact contextual inputs.</summary>
+    public const string BoundRealizationProofInvalid = "REL2285";
 }
 
 /// <summary>
@@ -220,25 +399,24 @@ public static class RelationQueryNativeCompilationDiagnosticCodes
 /// </summary>
 public sealed class RelationQueryNativeCompilationRequest
 {
+    readonly ImmutableArray<RelationQueryNativeCompilationDiagnostic> validationDiagnostics;
+
     /// <summary>Creates a target-native compilation request.</summary>
     /// <param name="plan">Successful demand-scoped static plan.</param>
-    /// <param name="realization">
-    /// Realization report intended to justify target lowering; exact plan alignment and availability are checked by
-    /// <see cref="ValidateInputs"/>.
+    /// <param name="boundRealization">
+    /// Exact contextual realization report authorizing target lowering; plan, placement, and availability are checked
+    /// by <see cref="ValidateInputs"/>.
     /// </param>
     /// <param name="placement">
     /// Physical source placement intended for target lowering; exact plan alignment is checked by
     /// <see cref="ValidateInputs"/>.
     /// </param>
-    /// <param name="branches">
-    /// Selected branch identities, or a default array to select every branch in the static plan.
-    /// </param>
     /// <exception cref="ArgumentNullException">
-    /// <paramref name="plan"/>, <paramref name="realization"/>, or <paramref name="placement"/> is <see langword="null"/>.
+    /// <paramref name="plan"/>, <paramref name="boundRealization"/>, or <paramref name="placement"/> is
+    /// <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// <paramref name="branches"/> is explicitly empty, contains a default or repeated identity, or names a branch
-    /// absent from the compiled execution slice.
+    /// The bound report selects a branch absent from the compiled execution slice.
     /// </exception>
     /// <exception cref="InvalidOperationException">
     /// A shape snapshot from <paramref name="plan"/> cannot be represented by the compiled-plan canonicalization
@@ -252,35 +430,36 @@ public sealed class RelationQueryNativeCompilationRequest
     /// </exception>
     public RelationQueryNativeCompilationRequest(
         CompiledRelationQueryPlan plan,
-        RelationQueryRealizationReport realization,
-        RelationQuerySourcePlacement placement,
-        ImmutableArray<RelationQueryNativeResultBranchId> branches = default)
+        RelationQueryBoundRealizationReport boundRealization,
+        RelationQuerySourcePlacement placement)
     {
         Plan = Guard.RequireNotNull(plan);
-        Realization = Guard.RequireNotNull(realization);
+        BoundRealization = Guard.RequireNotNull(boundRealization);
         Placement = Guard.RequireNotNull(placement);
         PlanReference = RelationQueryCompiledPlanReference.From(plan);
         var available = CreateBranches(plan.ExecutionSlice);
-        if (branches.IsDefault)
-        {
-            Branches = available;
-            return;
-        }
-        if (branches.IsDefaultOrEmpty)
-            throw new ArgumentException("An explicit native-compilation branch selection cannot be empty.", nameof(branches));
-        if (branches.Any(static branch => string.IsNullOrWhiteSpace(branch.Value)))
-            throw new ArgumentException("Native-compilation branch identities cannot be default.", nameof(branches));
-        if (branches.GroupBy(static branch => branch).Any(static group => group.Count() > 1))
-            throw new ArgumentException("Native-compilation branch identities cannot be repeated.", nameof(branches));
         var availableById = available.ToDictionary(static branch => branch.Id);
-        var unknown = branches.Where(branch => !availableById.ContainsKey(branch)).ToArray();
-        if (unknown.Length != 0)
-            throw new ArgumentException("Native compilation selected a branch absent from the compiled plan.", nameof(branches));
+        RelationQueryNativeResultBranchId? unknown = null;
+        foreach (var branch in BoundRealization.Branches)
+        {
+            if (availableById.ContainsKey(branch))
+                continue;
+            unknown = branch;
+            break;
+        }
+        if (unknown is not null)
+        {
+            throw new ArgumentException(
+                "Bound realization selected a native branch absent from the compiled plan.",
+                nameof(boundRealization));
+        }
         Branches =
         [
-            .. branches.OrderBy(static branch => branch.Value, StringComparer.Ordinal)
+            .. BoundRealization.Branches.OrderBy(static branch => branch.Value, StringComparer.Ordinal)
                 .Select(branch => availableById[branch])
         ];
+        Selection = RelationQueryCompilationSelection.Create(Plan, ProfileFeasibility, Placement, Branches);
+        validationDiagnostics = ValidateInputsCore();
     }
 
     /// <summary>Successful target-independent static plan.</summary>
@@ -289,8 +468,11 @@ public sealed class RelationQueryNativeCompilationRequest
     /// <summary>Exact portable reference computed from <see cref="Plan"/>.</summary>
     public RelationQueryCompiledPlanReference PlanReference { get; }
 
-    /// <summary>Realization report intended to prove target support.</summary>
-    public RelationQueryRealizationReport Realization { get; }
+    /// <summary>Exact contextual realization proof authorizing native lowering.</summary>
+    public RelationQueryBoundRealizationReport BoundRealization { get; }
+
+    /// <summary>Profile-level target feasibility qualified by <see cref="BoundRealization"/>.</summary>
+    public RelationQueryRealizationReport ProfileFeasibility => BoundRealization.ProfileFeasibility;
 
     /// <summary>Physical source placement interpreted by the target adapter.</summary>
     public RelationQuerySourcePlacement Placement { get; }
@@ -298,39 +480,57 @@ public sealed class RelationQueryNativeCompilationRequest
     /// <summary>Selected demanded branches in stable branch-identity order.</summary>
     public ImmutableArray<RelationQueryNativeResultBranch> Branches { get; }
 
+    /// <summary>
+    /// Deterministic per-branch and union scope selected from the exact plan, profile requirements, and placement.
+    /// </summary>
+    public RelationQueryCompilationSelection Selection { get; }
+
     /// <summary>Validates exact plan alignment and realization availability without invoking a target compiler.</summary>
     /// <returns>Structured error diagnostics; an empty array means the shared inputs are valid.</returns>
-    public ImmutableArray<RelationQueryNativeCompilationDiagnostic> ValidateInputs()
+    public ImmutableArray<RelationQueryNativeCompilationDiagnostic> ValidateInputs() => validationDiagnostics;
+
+    ImmutableArray<RelationQueryNativeCompilationDiagnostic> ValidateInputsCore()
     {
-        ImmutableArray<RelationQueryNativeCompilationDiagnostic>.Builder diagnostics =
-            ImmutableArray.CreateBuilder<RelationQueryNativeCompilationDiagnostic>();
-        var realizationMismatches = Realization.Plan.GetMismatchedComponents(Plan);
-        if (!realizationMismatches.IsDefaultOrEmpty)
+        var diagnostics = ImmutableArray.CreateBuilder<RelationQueryNativeCompilationDiagnostic>();
+        diagnostics.AddRange(RelationQueryNativeCompilationInputValidator.Validate(
+            Plan,
+            ProfileFeasibility,
+            Placement,
+            requireRealizable: true));
+        if (!Equals(BoundRealization.Placement, Placement.Fingerprint))
         {
             diagnostics.Add(new(
-                RelationQueryNativeCompilationDiagnosticCodes.RealizationPlanMismatch,
+                RelationQueryNativeCompilationDiagnosticCodes.BoundRealizationPlacementMismatch,
                 DiagnosticSeverity.Error,
-                $"The realization report differs from the compiled plan in: {string.Join(", ", realizationMismatches)}."));
+                "The bound-realization report does not describe the exact source placement."));
         }
-        var placementMismatches = Placement.Plan.GetMismatchedComponents(Plan);
-        if (!placementMismatches.IsDefaultOrEmpty)
+        if (!BoundRealization.IsRealizable)
         {
             diagnostics.Add(new(
-                RelationQueryNativeCompilationDiagnosticCodes.PlacementPlanMismatch,
+                RelationQueryNativeCompilationDiagnosticCodes.BoundRealizationUnavailable,
                 DiagnosticSeverity.Error,
-                $"The source placement differs from the compiled plan in: {string.Join(", ", placementMismatches)}."));
+                $"The bound-realization report status is '{BoundRealization.Status}' and cannot authorize native compilation."));
         }
-        if (!Realization.IsRealizable)
+        var reproduced = RelationQueryBoundRealizationCompiler.Compile(
+            new(
+                Plan,
+                ProfileFeasibility,
+                Placement,
+                BoundRealization.Branches),
+            BoundRealization.Evidence);
+        if (!Equals(reproduced.Fingerprint, BoundRealization.Fingerprint))
         {
             diagnostics.Add(new(
-                RelationQueryNativeCompilationDiagnosticCodes.RealizationUnavailable,
+                RelationQueryNativeCompilationDiagnosticCodes.BoundRealizationProofInvalid,
                 DiagnosticSeverity.Error,
-                $"The realization report status is '{Realization.Status}' and cannot justify exact native compilation."));
+                "The supplied bound-realization proof cannot be reproduced from its exact plan, profile, "
+                + "placement, branch selection, and adapter evidence.",
+                resolution: "Re-run contextual realization and use the resulting immutable report without modification."));
         }
         return diagnostics.ToImmutable();
     }
 
-    static ImmutableArray<RelationQueryNativeResultBranch> CreateBranches(RelationQueryExecutionSlice slice)
+    internal static ImmutableArray<RelationQueryNativeResultBranch> CreateBranches(RelationQueryExecutionSlice slice)
     {
         if (slice.RelationOutput is { } relation)
         {
@@ -419,10 +619,19 @@ public sealed record RelationQueryNativeCompilationDecisionReference
 
         Requirement = requirement;
         Kind = kind;
-        CapabilityEvidence = Normalize(capabilityEvidence, static value => value.Value, nameof(capabilityEvidence));
-        CompositionRules = Normalize(compositionRules, static value => value.Value, nameof(compositionRules));
+        CapabilityEvidence = RelationQueryRealizationOrdering.NormalizeIdentityValues(
+            capabilityEvidence,
+            static value => value.Value,
+            nameof(capabilityEvidence));
+        CompositionRules = RelationQueryRealizationOrdering.NormalizeIdentityValues(
+            compositionRules,
+            static value => value.Value,
+            nameof(compositionRules));
         Override = @override;
-        OperatingBoundaries = Normalize(operatingBoundaries, static value => value.Value, nameof(operatingBoundaries));
+        OperatingBoundaries = RelationQueryRealizationOrdering.NormalizeIdentityValues(
+            operatingBoundaries,
+            static value => value.Value,
+            nameof(operatingBoundaries));
         PreservedGuarantees = NormalizeGuarantees(preservedGuarantees);
 
         if (kind is not RelationQueryRealizationDecisionKind.Override && CapabilityEvidence.IsDefaultOrEmpty)
@@ -460,20 +669,6 @@ public sealed record RelationQueryNativeCompilationDecisionReference
     /// <summary>Guarantees explicitly preserved by the decision.</summary>
     public ImmutableArray<RelationQueryGuaranteeCapabilityKind> PreservedGuarantees { get; }
 
-    static ImmutableArray<T> Normalize<T>(
-        ImmutableArray<T> values,
-        Func<T, string> key,
-        string parameterName)
-        where T : struct
-    {
-        var normalized = values.IsDefault ? [] : values;
-        if (normalized.Any(value => string.IsNullOrWhiteSpace(key(value))))
-            throw new ArgumentException("Decision-provenance identities cannot be default.", parameterName);
-        if (normalized.GroupBy(key, StringComparer.Ordinal).Any(static group => group.Count() > 1))
-            throw new ArgumentException("Decision-provenance identities cannot be repeated.", parameterName);
-        return [.. normalized.OrderBy(key, StringComparer.Ordinal)];
-    }
-
     static ImmutableArray<RelationQueryGuaranteeCapabilityKind> NormalizeGuarantees(
         ImmutableArray<RelationQueryGuaranteeCapabilityKind> guarantees)
     {
@@ -493,7 +688,10 @@ public sealed record RelationQueryNativeCompilationProvenance
     /// <param name="target">Interpretation target identity.</param>
     /// <param name="targetProfile">Exact target capability-profile identity.</param>
     /// <param name="realization">Exact realization-report fingerprint.</param>
+    /// <param name="boundRealization">Exact bound-realization report fingerprint.</param>
     /// <param name="placement">Exact source-placement fingerprint.</param>
+    /// <param name="adapterBinding">Exact target-neutral adapter-binding reference.</param>
+    /// <param name="contextEvidence">Contextual assessment evidence used by this branch.</param>
     /// <param name="compilerProfile">Target compiler profile identity.</param>
     /// <param name="conventionSetVersion">Convention set applied during lowering.</param>
     /// <param name="coveredNodes">One or more logical nodes covered by the artifact.</param>
@@ -503,14 +701,16 @@ public sealed record RelationQueryNativeCompilationProvenance
     /// </param>
     /// <param name="realizationDecisions">Exact final realization decisions used by the artifact.</param>
     /// <exception cref="ArgumentNullException">
-    /// <paramref name="plan"/>, <paramref name="realization"/>, <paramref name="placement"/>,
-    /// <paramref name="compilerProfile"/>, or <paramref name="conventionSetVersion"/> is <see langword="null"/>.
+    /// <paramref name="plan"/>, <paramref name="realization"/>, <paramref name="boundRealization"/>,
+    /// <paramref name="placement"/>, <paramref name="adapterBinding"/>, <paramref name="compilerProfile"/>, or
+    /// <paramref name="conventionSetVersion"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
     /// A required string or identity is empty; <paramref name="coveredNodes"/> or
-    /// <paramref name="realizationDecisions"/> is empty; a collection contains a <see langword="null"/> entry or a
-    /// default or repeated identity; or <paramref name="inputFields"/> contains an identity absent from
-    /// <paramref name="plan"/>.
+    /// <paramref name="contextEvidence"/> or <paramref name="realizationDecisions"/> is empty; a collection contains
+    /// a <see langword="null"/> entry or a default or repeated identity; <paramref name="adapterBinding"/> does not
+    /// have exact target, profile, plan, and placement affinity; or <paramref name="inputFields"/> contains an
+    /// identity absent from <paramref name="plan"/>.
     /// </exception>
     public RelationQueryNativeCompilationProvenance(
         RelationQueryCompiledPlanReference plan,
@@ -518,7 +718,10 @@ public sealed record RelationQueryNativeCompilationProvenance
         RelationQueryTargetId target,
         RelationQueryTargetProfileId targetProfile,
         RelationQueryRealizationFingerprint realization,
+        RelationQueryBoundRealizationFingerprint boundRealization,
         RelationQuerySourcePlacementFingerprint placement,
+        RelationQueryAdapterBindingReference adapterBinding,
+        ImmutableArray<RelationQueryContextEvidenceId> contextEvidence,
         string compilerProfile,
         string conventionSetVersion,
         ImmutableArray<QueryNodeId> coveredNodes,
@@ -537,14 +740,50 @@ public sealed record RelationQueryNativeCompilationProvenance
         Target = target;
         TargetProfile = targetProfile;
         Realization = Guard.RequireNotNull(realization);
+        BoundRealization = Guard.RequireNotNull(boundRealization);
         Placement = Guard.RequireNotNull(placement);
+        AdapterBinding = Guard.RequireNotNull(adapterBinding);
+        if (Target != AdapterBinding.Target)
+            throw new ArgumentException("Native compilation target must match the adapter-binding target.", nameof(target));
+        if (TargetProfile != AdapterBinding.TargetProfile)
+        {
+            throw new ArgumentException(
+                "Native compilation target profile must match the adapter-binding target profile.",
+                nameof(targetProfile));
+        }
+        var expectedPlanFingerprint = RelationQueryCompiledPlanReferenceFingerprinter.Compute(Plan);
+        if (!Equals(AdapterBinding.CompiledPlanFingerprint, expectedPlanFingerprint))
+        {
+            throw new ArgumentException(
+                "Native compilation adapter binding must have exact compiled-plan affinity.",
+                nameof(adapterBinding));
+        }
+        if (!Equals(AdapterBinding.PlacementFingerprint, Placement))
+        {
+            throw new ArgumentException(
+                "Native compilation adapter binding must have exact source-placement affinity.",
+                nameof(adapterBinding));
+        }
+        ContextEvidence = RelationQueryRealizationOrdering.NormalizeIdentityValues(
+            contextEvidence,
+            static item => item.Value,
+            nameof(contextEvidence),
+            requireNonEmpty: true);
         CompilerProfile = Guard.RequireNotNullOrWhiteSpace(compilerProfile);
         ConventionSetVersion = Guard.RequireNotNullOrWhiteSpace(conventionSetVersion);
-        CoveredNodes = Normalize(coveredNodes, static item => item.Value, nameof(coveredNodes));
-        if (CoveredNodes.IsDefaultOrEmpty)
-            throw new ArgumentException("Native compilation provenance requires at least one covered node.", nameof(coveredNodes));
-        CoveredAssignments = Normalize(coveredAssignments, static item => item.Value, nameof(coveredAssignments));
-        InputFields = Normalize(inputFields, static item => item.Value, nameof(inputFields));
+        CoveredNodes = RelationQueryRealizationOrdering.NormalizeIdentityValues(
+            coveredNodes,
+            static item => item.Value,
+            nameof(coveredNodes),
+            requireNonEmpty: true);
+        CoveredAssignments = RelationQueryRealizationOrdering.NormalizeIdentityValues(
+            coveredAssignments,
+            static item => item.Value,
+            nameof(coveredAssignments));
+        InputFields = RelationQueryRealizationOrdering.NormalizeIdentityValues(
+            inputFields,
+            static item => item.Value,
+            nameof(inputFields));
         var planInputs = Plan.Inputs.ToHashSet();
         if (InputFields.Any(input => !planInputs.Contains(input)))
             throw new ArgumentException("Native compilation provenance inputs must belong to the compiled plan.", nameof(inputFields));
@@ -580,8 +819,17 @@ public sealed record RelationQueryNativeCompilationProvenance
     /// <summary>Exact realization-report fingerprint.</summary>
     public RelationQueryRealizationFingerprint Realization { get; }
 
+    /// <summary>Exact bound-realization report fingerprint.</summary>
+    public RelationQueryBoundRealizationFingerprint BoundRealization { get; }
+
     /// <summary>Exact source-placement fingerprint.</summary>
     public RelationQuerySourcePlacementFingerprint Placement { get; }
+
+    /// <summary>Exact target-neutral adapter-binding reference.</summary>
+    public RelationQueryAdapterBindingReference AdapterBinding { get; }
+
+    /// <summary>Contextual assessment evidence used by this branch in stable identity order.</summary>
+    public ImmutableArray<RelationQueryContextEvidenceId> ContextEvidence { get; }
 
     /// <summary>Target compiler profile identity.</summary>
     public string CompilerProfile { get; }
@@ -610,20 +858,6 @@ public sealed record RelationQueryNativeCompilationProvenance
     /// Distinct operating boundaries derived from <see cref="RealizationDecisions"/> in stable identity order.
     /// </summary>
     public ImmutableArray<RelationQueryOperatingBoundaryId> OperatingBoundaries { get; }
-
-    static ImmutableArray<T> Normalize<T>(
-        ImmutableArray<T> values,
-        Func<T, string> key,
-        string parameterName)
-        where T : struct
-    {
-        var normalized = values.IsDefault ? [] : values;
-        if (normalized.Any(value => string.IsNullOrWhiteSpace(key(value))))
-            throw new ArgumentException("Provenance identities cannot be default.", parameterName);
-        if (normalized.GroupBy(key, StringComparer.Ordinal).Any(static group => group.Count() > 1))
-            throw new ArgumentException("Provenance identities cannot be repeated.", parameterName);
-        return [.. normalized.OrderBy(key, StringComparer.Ordinal)];
-    }
 
     static ImmutableArray<RelationQueryNativeCompilationDecisionReference> NormalizeDecisions(
         ImmutableArray<RelationQueryNativeCompilationDecisionReference> decisions)
@@ -686,6 +920,7 @@ public static class RelationQueryNativeCompilationProvenanceFactory
             ?? throw new ArgumentException(
                 "Native compilation provenance requires a branch selected by the request.",
                 nameof(branch));
+        var branchSelection = request.Selection.GetBranch(branch);
         var inputDiagnostics = request.ValidateInputs();
         if (!inputDiagnostics.IsDefaultOrEmpty)
         {
@@ -695,25 +930,8 @@ public static class RelationQueryNativeCompilationProvenanceFactory
                     inputDiagnostics.Select(static diagnostic => $"{diagnostic.Code}: {diagnostic.Message}"))}");
         }
 
-        var nodesById = request.Plan.ExecutionSlice.LogicalPlan.Nodes
-            .ToDictionary(static node => node.Node);
-        HashSet<QueryNodeId> reachableNodes = [];
-        Stack<QueryNodeId> pendingNodes = new([selectedBranch.Node]);
-        while (pendingNodes.TryPop(out var node))
-        {
-            if (!reachableNodes.Add(node))
-                continue;
-            if (!nodesById.TryGetValue(node, out var logicalNode))
-            {
-                throw new InvalidOperationException(
-                    $"Selected native branch '{selectedBranch.Id.Value}' references a node absent from its compiled logical plan.");
-            }
-            foreach (var input in logicalNode.EffectiveInputs)
-                pendingNodes.Push(input);
-        }
-
         var normalizedCoveredNodes = coveredNodes.IsDefault ? [] : coveredNodes;
-        if (normalizedCoveredNodes.Any(node => !reachableNodes.Contains(node)))
+        if (normalizedCoveredNodes.Any(node => !branchSelection.ContainsNode(node)))
         {
             throw new ArgumentException(
                 "Native compilation provenance can cover only nodes reachable by the selected branch.",
@@ -735,13 +953,7 @@ public static class RelationQueryNativeCompilationProvenanceFactory
                 nameof(coveredAssignments));
         }
 
-        var outputIds = selectedBranch.Outputs.Select(static output => output.Id).ToHashSet();
-        var branchInputFields = request.Plan.InputContract.Sources
-            .SelectMany(static source => source.Fields)
-            .Concat(request.Plan.InputContract.Traversals.SelectMany(static traversal => traversal.Fields))
-            .Where(field => field.Uses.Any(use => outputIds.Contains(use.Output.Id)))
-            .Select(static field => field.Input.Id)
-            .ToHashSet();
+        var branchInputFields = branchSelection.Fields.Select(static field => field.Input.Id).ToHashSet();
         var normalizedInputFields = inputFields.IsDefault ? [] : inputFields;
         if (normalizedInputFields.Any(input => !branchInputFields.Contains(input)))
         {
@@ -749,21 +961,25 @@ public static class RelationQueryNativeCompilationProvenanceFactory
                 "Native compilation provenance can retain only compiled field inputs read by the selected branch.",
                 nameof(inputFields));
         }
-        var relevantRequirements = request.Realization.Requirements
-            .Where(requirement => requirement.Uses.Any(use => outputIds.Contains(use.Output.Id)))
-            .Select(static requirement => requirement.Id)
-            .ToHashSet();
-        var decisionReferences = request.Realization.Decisions
-            .Where(decision => relevantRequirements.Contains(decision.Requirement))
+        var decisionReferences = request.ProfileFeasibility.Decisions
+            .Where(decision => branchSelection.ContainsRequirement(decision.Requirement))
             .Select(CreateDecisionReference)
             .ToImmutableArray();
         return new(
             request.PlanReference,
             selectedBranch.Id,
-            request.Realization.TargetProfile.Target,
-            request.Realization.TargetProfile.Id,
-            request.Realization.Fingerprint,
+            request.ProfileFeasibility.TargetProfile.Target,
+            request.ProfileFeasibility.TargetProfile.Id,
+            request.ProfileFeasibility.Fingerprint,
+            request.BoundRealization.Fingerprint,
             request.Placement.Fingerprint,
+            request.BoundRealization.Evidence.Binding,
+            [
+                .. request.BoundRealization.Evidence.Assessments
+                    .Where(assessment => assessment.Branch == selectedBranch.Id
+                                         && branchSelection.ContainsRequirement(assessment.Requirement))
+                    .Select(static assessment => assessment.Id)
+            ],
             compilerProfile,
             conventionSetVersion,
             coveredNodes,
@@ -788,34 +1004,30 @@ public static class RelationQueryNativeCompilationProvenanceFactory
             NativeRelationQueryRealizationDecision native => new(
                 native.Requirement,
                 native.Kind,
-                native.CapabilityEvidence,
-                preservedGuarantees: native.PreservedGuarantees),
+                native.GetCapabilityEvidence(),
+                preservedGuarantees: native.GetPreservedGuarantees()),
             ComposedRelationQueryRealizationDecision composed => new(
                 composed.Requirement,
                 composed.Kind,
-                composed.CapabilityEvidence,
-                composed.CompositionRules,
-                preservedGuarantees: composed.PreservedGuarantees),
+                composed.GetCapabilityEvidence(),
+                composed.GetCompositionRules(),
+                preservedGuarantees: composed.GetPreservedGuarantees()),
             ConstrainedRelationQueryRealizationDecision constrained => new(
                 constrained.Requirement,
                 constrained.Kind,
-                constrained.CapabilityEvidence,
-                constrained.CompositionRules,
+                constrained.GetCapabilityEvidence(),
+                constrained.GetCompositionRules(),
                 operatingBoundaries:
-                [
-                    .. constrained.BoundaryValidations.Select(static validation => validation.Boundary)
-                ],
-                preservedGuarantees: constrained.PreservedGuarantees),
+                [.. constrained.GetBoundaryValidations().Select(static validation => validation.Boundary)],
+                preservedGuarantees: constrained.GetPreservedGuarantees()),
             OverrideRelationQueryRealizationDecision overridden => new(
                 overridden.Requirement,
                 overridden.Kind,
-                overridden.CapabilityEvidence,
+                overridden.GetCapabilityEvidence(),
                 @override: overridden.Override,
                 operatingBoundaries:
-                [
-                    .. overridden.BoundaryValidations.Select(static validation => validation.Boundary)
-                ],
-                preservedGuarantees: overridden.PreservedGuarantees),
+                [.. overridden.GetBoundaryValidations().Select(static validation => validation.Boundary)],
+                preservedGuarantees: overridden.GetPreservedGuarantees()),
             UnavailableRelationQueryRealizationDecision => throw new InvalidOperationException(
                 "An unavailable realization decision cannot prove target-native artifact provenance."),
             _ => throw new InvalidOperationException(

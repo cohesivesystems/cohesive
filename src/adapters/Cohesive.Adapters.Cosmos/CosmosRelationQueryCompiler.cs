@@ -18,15 +18,83 @@ namespace Cohesive.Adapters.Cosmos;
 /// </summary>
 public sealed class CosmosRelationQueryCompiler
 {
+    /// <summary>Configuration-evidence setting for the exact compiler implementation profile.</summary>
+    public const string CompilerProfileSetting = "compilerProfile";
+
+    /// <summary>Configuration-evidence setting for the compiler convention set.</summary>
+    public const string CompilerConventionSetting = "compilerConventionSet";
+
     readonly CosmosRelationQueryCompilerOptions options;
+    readonly RelationQueryConfigurationValueOrigin optionsOrigin;
 
     /// <summary>Creates a canonical Cosmos SQL compiler.</summary>
     /// <param name="options">
     /// Options participating in compilation provenance and artifact identity, or <see langword="null"/> to use the
     /// current compiler and convention profiles.
     /// </param>
-    public CosmosRelationQueryCompiler(CosmosRelationQueryCompilerOptions? options = null) =>
+    public CosmosRelationQueryCompiler(CosmosRelationQueryCompilerOptions? options = null)
+    {
         this.options = options ?? new();
+        optionsOrigin = options is null
+            ? RelationQueryConfigurationValueOrigin.AdapterConvention
+            : RelationQueryConfigurationValueOrigin.Explicit;
+    }
+
+    /// <summary>Predicts exact Cosmos realizability from placement and immutable storage-binding evidence.</summary>
+    /// <param name="request">Plan, profile feasibility, placement, and selected result branches.</param>
+    /// <param name="storageBinding">Versioned Cosmos container and document-shape binding.</param>
+    /// <returns>A deterministic exact bound-realization report.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="request"/> or <paramref name="storageBinding"/> is <see langword="null"/>.
+    /// </exception>
+    public RelationQueryBoundRealizationReport Realize(
+        RelationQueryBoundRealizationRequest request,
+        CosmosRelationQueryStorageBinding storageBinding)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(storageBinding);
+        var bindingDiagnostics = ValidateBinding(
+            request.Plan,
+            request.PlanReference,
+            request.ProfileFeasibility,
+            request.Placement,
+            request.Selection,
+            storageBinding);
+        var projection = new RelationQueryContextualEvidenceProjection(
+            CreateBindingReference(storageBinding),
+            request.ProfileFeasibility.IsRealizable
+                ? CreateContextualAssessments(request, storageBinding, bindingDiagnostics)
+                : []);
+        return RelationQueryBoundRealizationCompiler.Compile(request, projection);
+    }
+
+    /// <summary>Realizes and compiles every selected branch, failing before artifact construction on contextual gaps.</summary>
+    /// <param name="request">Plan, profile feasibility, placement, and selected result branches.</param>
+    /// <param name="storageBinding">Versioned Cosmos container and document-shape binding.</param>
+    /// <returns>Exact artifacts or structured invalid/unsupported diagnostics.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="request"/> or <paramref name="storageBinding"/> is <see langword="null"/>.
+    /// </exception>
+    public CosmosRelationQueryCompilationResult Compile(
+        RelationQueryBoundRealizationRequest request,
+        CosmosRelationQueryStorageBinding storageBinding)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(storageBinding);
+        var bound = Realize(request, storageBinding);
+        if (!bound.IsRealizable)
+        {
+            return new(
+                bound.Status == RelationQueryRealizationStatus.Invalid
+                    ? RelationQueryNativeCompilationStatus.Invalid
+                    : RelationQueryNativeCompilationStatus.Unsupported,
+                [],
+                RelationQueryNativeCompilationDiagnostic.FromBoundRealizationFailure(bound));
+        }
+        return Compile(
+            new RelationQueryNativeCompilationRequest(request.Plan, bound, request.Placement),
+            storageBinding);
+    }
 
     /// <summary>Compiles every selected request branch independently and fails closed on semantic uncertainty.</summary>
     /// <param name="request">Exact static-plan, realization, placement, and branch-selection context.</param>
@@ -45,12 +113,21 @@ public sealed class CosmosRelationQueryCompiler
         ImmutableArray<RelationQueryNativeCompilationDiagnostic>.Builder diagnostics =
             ImmutableArray.CreateBuilder<RelationQueryNativeCompilationDiagnostic>();
         var inputDiagnostics = request.ValidateInputs();
-        var bindingDiagnostics = ValidateBinding(request, storageBinding);
+        var bindingDiagnostics = ValidateBinding(
+            request.Plan,
+            request.PlanReference,
+            request.ProfileFeasibility,
+            request.Placement,
+            request.Selection,
+            storageBinding);
+        var exactBindingDiagnostics = ValidateExactBinding(request, storageBinding);
         diagnostics.AddRange(inputDiagnostics);
         diagnostics.AddRange(bindingDiagnostics);
+        diagnostics.AddRange(exactBindingDiagnostics);
         if (diagnostics.Any(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
         {
             var invalid = !bindingDiagnostics.IsDefaultOrEmpty
+                || !exactBindingDiagnostics.IsDefaultOrEmpty
                 || inputDiagnostics.Any(static diagnostic =>
                     diagnostic.Code != RelationQueryNativeCompilationDiagnosticCodes.RealizationUnavailable);
             return new(
@@ -102,23 +179,27 @@ public sealed class CosmosRelationQueryCompiler
     }
 
     static ImmutableArray<RelationQueryNativeCompilationDiagnostic> ValidateBinding(
-        RelationQueryNativeCompilationRequest request,
+        CompiledRelationQueryPlan plan,
+        RelationQueryCompiledPlanReference planReference,
+        RelationQueryRealizationReport realization,
+        RelationQuerySourcePlacement sourcePlacement,
+        RelationQueryCompilationSelection selection,
         CosmosRelationQueryStorageBinding storageBinding)
     {
         ImmutableArray<RelationQueryNativeCompilationDiagnostic>.Builder diagnostics =
             ImmutableArray.CreateBuilder<RelationQueryNativeCompilationDiagnostic>();
-        var reportProfile = request.Realization.TargetProfile;
+        var reportProfile = realization.TargetProfile;
         if (storageBinding.CompiledPlanFingerprint is { } compiledPlanFingerprint
             && !Equals(
                 compiledPlanFingerprint,
-                RelationQueryCompiledPlanReferenceFingerprinter.Compute(request.PlanReference)))
+                RelationQueryCompiledPlanReferenceFingerprinter.Compute(planReference)))
         {
             diagnostics.Add(BindingDiagnostic(
                 "The Cosmos storage binding's exact compiled-plan affinity does not match the native-compilation request."));
         }
 
         if (storageBinding.PlacementFingerprint is { } placementFingerprint
-            && !Equals(placementFingerprint, request.Placement.Fingerprint))
+            && !Equals(placementFingerprint, sourcePlacement.Fingerprint))
         {
             diagnostics.Add(BindingDiagnostic(
                 "The Cosmos storage binding's exact source-placement affinity does not match the native-compilation request."));
@@ -128,13 +209,13 @@ public sealed class CosmosRelationQueryCompiler
             || storageBinding.TargetProfile != reportProfile.Id
             || storageBinding.Target != CosmosRelationQueryTargetProfile.Target
             || storageBinding.TargetProfile != CosmosRelationQueryTargetProfile.ProfileId
-            || !ProfilesEquivalent(reportProfile, CosmosRelationQueryTargetProfile.Default))
+            || !reportProfile.HasSameSemantics(CosmosRelationQueryTargetProfile.Default))
         {
             diagnostics.Add(BindingDiagnostic(
                 "The Cosmos binding, realization report, and canonical Cosmos target profile do not identify the same exact target snapshot."));
         }
 
-        var sources = request.Placement.SourceInstances
+        var sources = sourcePlacement.SourceInstances
             .Where(source => source.Id == storageBinding.Source)
             .ToArray();
         if (sources.Length != 1)
@@ -144,13 +225,13 @@ public sealed class CosmosRelationQueryCompiler
         }
         else if (sources[0].TargetProfile.Target != storageBinding.Target
                  || sources[0].TargetProfile.Id != storageBinding.TargetProfile
-                 || !ProfilesEquivalent(sources[0].TargetProfile, reportProfile))
+                 || !sources[0].TargetProfile.HasSameSemantics(reportProfile))
         {
             diagnostics.Add(BindingDiagnostic(
                 "The placed source capability snapshot does not match the realization report and Cosmos binding."));
         }
 
-        var placements = request.Placement.Bindings
+        var placements = sourcePlacement.Bindings
             .Where(binding => binding.Id == storageBinding.PlacementBinding)
             .ToArray();
         if (placements.Length != 1)
@@ -167,17 +248,21 @@ public sealed class CosmosRelationQueryCompiler
                 diagnostics.Add(BindingDiagnostic(
                     "The Cosmos storage binding must identify one source-set placement on its declared source instance."));
             }
-            if (request.Plan.InputContract.Sources.Length != 1
-                || request.Plan.InputContract.Traversals.Length != 0
-                || request.Plan.InputContract.Sources[0].Node != placement.Node
-                || request.Plan.InputContract.Sources[0].Binding != placement.Binding)
+            if (selection.Sources.Length != 1
+                || selection.PlacementBindings.Length != 1
+                || selection.SourceInstances.Length != 1
+                || selection.Sources[0].Input.Id != placement.Input
+                || selection.Sources[0].Node != placement.Node
+                || selection.Sources[0].Binding != placement.Binding
+                || selection.PlacementBindings[0].Id != placement.Id
+                || selection.SourceInstances[0].Id != placement.Source)
             {
                 diagnostics.Add(BindingDiagnostic(
-                    "Canonical Cosmos SQL v2 requires exactly one source contract and no relationship traversal contracts."));
+                    "The selected Cosmos branches must reach exactly the one source contract identified by the storage placement."));
             }
         }
 
-        var planFields = request.Plan.InputContract.Sources
+        var planFields = plan.InputContract.Sources
             .SelectMany(static source => source.Fields)
             .Select(static field => field.Input.Id)
             .ToHashSet();
@@ -197,19 +282,445 @@ public sealed class CosmosRelationQueryCompiler
             message);
     }
 
-    internal static bool ProfilesEquivalent(
-        RelationQueryTargetCapabilityProfile left,
-        RelationQueryTargetCapabilityProfile right)
+    ImmutableArray<RelationQueryNativeCompilationDiagnostic> ValidateExactBinding(
+        RelationQueryNativeCompilationRequest request,
+        CosmosRelationQueryStorageBinding storageBinding)
     {
-        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
-        return JsonSerializer.SerializeToUtf8Bytes(left, options)
-            .AsSpan()
-            .SequenceEqual(JsonSerializer.SerializeToUtf8Bytes(right, options));
+        var expected = request.BoundRealization.Evidence.Binding;
+        var actual = CreateBindingReference(storageBinding);
+        var expectedAuthority = ContextAuthority(storageBinding);
+        var expectedOrigin = storageBinding.Origin == CosmosRelationQueryBindingOrigin.Convention
+            ? RelationQueryConfigurationValueOrigin.AdapterConvention
+            : RelationQueryConfigurationValueOrigin.Explicit;
+        var configuration = actual.ConfigurationDecisions.ToDictionary(
+            static decision => decision.Setting,
+            StringComparer.Ordinal);
+        var attributionMatches = request.BoundRealization.Evidence.Assessments.All(assessment =>
+            assessment.ConfigurationSetting is { } setting
+                ? configuration.TryGetValue(setting, out var decision)
+                  && decision.Origin == assessment.Origin
+                  && string.Equals(decision.Authority, assessment.Authority, StringComparison.Ordinal)
+                : assessment.Origin == expectedOrigin
+                  && string.Equals(assessment.Authority, expectedAuthority, StringComparison.Ordinal));
+        if (expected.HasSameSemantics(actual) && attributionMatches)
+        {
+            return [];
+        }
+
+        return
+        [
+            new(
+                CosmosRelationQueryCompilationDiagnosticCodes.StorageBindingMismatch,
+                DiagnosticSeverity.Error,
+                "The Cosmos storage-binding fingerprint or compiler-policy evidence does not match the exact context qualified by the bound-realization report.")
+        ];
     }
+
+    string ContextAuthority(CosmosRelationQueryStorageBinding storageBinding)
+    {
+        var bindingAuthority = storageBinding.Origin == CosmosRelationQueryBindingOrigin.Convention
+            ? storageBinding.ConventionSetVersion!
+            : storageBinding.Id.Value;
+        return bindingAuthority;
+    }
+
+    RelationQueryAdapterBindingReference CreateBindingReference(
+        CosmosRelationQueryStorageBinding storageBinding)
+    {
+        var configuration = ImmutableArray.CreateBuilder<RelationQueryConfigurationDecision>(
+            storageBinding.ConfigurationDecisions.Length + 2);
+        configuration.AddRange(storageBinding.ConfigurationDecisions);
+        configuration.Add(new(
+            CompilerProfileSetting,
+            optionsOrigin,
+            options.CompilerProfile));
+        configuration.Add(new(
+            CompilerConventionSetting,
+            optionsOrigin,
+            options.ConventionSetVersion));
+        return new(
+            storageBinding.SchemaVersion,
+            storageBinding.Id.Value,
+            storageBinding.Target,
+            storageBinding.TargetProfile,
+            new(
+                storageBinding.Fingerprint.Algorithm,
+                storageBinding.Fingerprint.Canonicalization,
+                storageBinding.Fingerprint.Value),
+            storageBinding.CompiledPlanFingerprint,
+            storageBinding.PlacementFingerprint,
+            [storageBinding.Source],
+            [storageBinding.PlacementBinding],
+            configuration.MoveToImmutable());
+    }
+
+    ImmutableArray<RelationQueryBoundRequirementAssessment> CreateContextualAssessments(
+        RelationQueryBoundRealizationRequest request,
+        CosmosRelationQueryStorageBinding storageBinding,
+        ImmutableArray<RelationQueryNativeCompilationDiagnostic> bindingDiagnostics) =>
+        RelationQueryContextualAssessmentProjector.Project(
+            request,
+            "cosmos/context",
+            branch => bindingDiagnostics.IsDefaultOrEmpty
+                ? AnalyzeBranch(request, branch, storageBinding)
+                : CreateBindingFailure(bindingDiagnostics[0]),
+            (branch, requirement, failure) => ResolveAttribution(
+                request,
+                storageBinding,
+                branch,
+                requirement,
+                failure));
+
+    static RelationQueryContextualBranchFailure CreateBindingFailure(
+        RelationQueryNativeCompilationDiagnostic diagnostic) => new(
+        RelationQueryBoundAssessmentStatus.Invalid,
+        RelationQueryUnavailableReason.CapabilityEvidenceInvalid,
+        new(diagnostic.Code),
+        diagnostic.Message,
+        "Re-author the Cosmos binding from the exact plan-bound placed input.",
+        diagnostic.Node,
+        diagnostic.Input);
+
+    static FieldPath? ResolveAssessmentField(
+        RelationQueryBoundRealizationRequest request,
+        RelationQueryInputId? input)
+    {
+        if (input is null)
+            return null;
+        return request.Plan.InputContract.Requirements.Inputs
+            .OfType<RelationQueryFieldInput>()
+            .SingleOrDefault(candidate => candidate.Id == input.Value)?
+            .Field.Path;
+    }
+
+    static RelationQuerySourcePlacementBindingId? ResolveAssessmentPlacement(
+        RelationQueryBoundRealizationRequest request,
+        CosmosRelationQueryStorageBinding storageBinding,
+        RelationQueryInputId? input)
+    {
+        if (input is null
+            || storageBinding.Fields.Any(field => field.Input == input.Value))
+        {
+            return storageBinding.PlacementBinding;
+        }
+
+        var placement = request.Placement.Bindings.Single(binding =>
+            binding.Id == storageBinding.PlacementBinding);
+        return placement.Input == input.Value ? placement.Id : null;
+    }
+
+    RelationQueryContextualBranchFailure? AnalyzeBranch(
+        RelationQueryBoundRealizationRequest request,
+        RelationQueryNativeResultBranch branch,
+        CosmosRelationQueryStorageBinding storageBinding)
+    {
+        try
+        {
+            new BranchCompiler(request, storageBinding, options, branch).Validate();
+            return null;
+        }
+        catch (BranchCompilationException exception)
+        {
+            var invalid = exception.Code is CosmosRelationQueryCompilationDiagnosticCodes.ArtifactInvalid
+                or CosmosRelationQueryCompilationDiagnosticCodes.StorageBindingMismatch;
+            return CreateBranchFailure(
+                request,
+                branch,
+                invalid ? RelationQueryBoundAssessmentStatus.Invalid : RelationQueryBoundAssessmentStatus.Unavailable,
+                invalid
+                    ? RelationQueryUnavailableReason.CapabilityEvidenceInvalid
+                    : RelationQueryUnavailableReason.OperatingBoundaryInvalid,
+                exception.Code,
+                exception.Message,
+                ResolutionFor(exception.Code),
+                exception.Node,
+                exception.Input);
+        }
+        catch (Exception exception) when (exception is ArgumentException
+                                          or InvalidOperationException
+                                          or KeyNotFoundException
+                                          or NotSupportedException)
+        {
+            return CreateBranchFailure(
+                request,
+                branch,
+                RelationQueryBoundAssessmentStatus.Invalid,
+                RelationQueryUnavailableReason.CapabilityEvidenceInvalid,
+                CosmosRelationQueryCompilationDiagnosticCodes.ArtifactInvalid,
+                $"Cosmos contextual branch analysis failed closed: {exception.Message}",
+                "Recompile the canonical plan and re-author the exact Cosmos binding before retrying realization.",
+                branch.Node);
+        }
+    }
+
+    static RelationQueryContextualBranchFailure CreateBranchFailure(
+        RelationQueryBoundRealizationRequest request,
+        RelationQueryNativeResultBranch branch,
+        RelationQueryBoundAssessmentStatus status,
+        RelationQueryUnavailableReason reason,
+        string diagnosticCode,
+        string message,
+        string resolution,
+        QueryNodeId? node = null,
+        RelationQueryInputId? input = null) => new(
+        status,
+        reason,
+        new(diagnosticCode),
+        message,
+        resolution,
+        node,
+        input,
+        failedOperatingBoundary: FailedOperatingBoundary(request, branch, diagnosticCode, message),
+        failedConfigurationSetting: FailedConfigurationSetting(request, diagnosticCode, message, input));
+
+    RelationQueryContextualAssessmentAttribution ResolveAttribution(
+        RelationQueryBoundRealizationRequest request,
+        CosmosRelationQueryStorageBinding storageBinding,
+        RelationQueryNativeResultBranch branch,
+        RelationQueryRealizationRequirement requirement,
+        RelationQueryContextualBranchFailure? failure)
+    {
+        var node = failure?.Node ?? requirement.Origin?.Node ?? branch.Node;
+        var input = failure?.Input ?? requirement.Origin?.Input;
+        if (IsCompilerPolicyDecision(failure?.AdapterDecisionCode.Value))
+        {
+            return new(
+                optionsOrigin,
+                options.CompilerProfile,
+                node,
+                input,
+                ResolveAssessmentField(request, input),
+                ResolveAssessmentPlacement(request, storageBinding, input),
+                CompilerProfileSetting);
+        }
+        if (TryResolveBindingDecision(storageBinding, requirement, failure, out var decision))
+        {
+            return new(
+                decision.Origin,
+                decision.Authority,
+                node,
+                input,
+                ResolveAssessmentField(request, input),
+                ResolveAssessmentPlacement(request, storageBinding, input),
+                decision.Setting);
+        }
+        return new(
+            storageBinding.Origin == CosmosRelationQueryBindingOrigin.Convention
+                ? RelationQueryConfigurationValueOrigin.AdapterConvention
+                : RelationQueryConfigurationValueOrigin.Explicit,
+            ContextAuthority(storageBinding),
+            node,
+            input,
+            ResolveAssessmentField(request, input),
+            ResolveAssessmentPlacement(request, storageBinding, input));
+    }
+
+    static bool TryResolveBindingDecision(
+        CosmosRelationQueryStorageBinding storageBinding,
+        RelationQueryRealizationRequirement requirement,
+        RelationQueryContextualBranchFailure? failure,
+        out RelationQueryConfigurationDecision decision)
+    {
+        var input = failure?.Input ?? requirement.Origin?.Input;
+        if (input is { } inputId)
+        {
+            var prefix = $"field/{inputId.Value}";
+            decision = storageBinding.ConfigurationDecisions.FirstOrDefault(candidate =>
+                string.Equals(candidate.Setting, prefix, StringComparison.Ordinal))
+                ?? storageBinding.ConfigurationDecisions.FirstOrDefault(candidate =>
+                    candidate.Setting.StartsWith(prefix + "/", StringComparison.Ordinal))!;
+            if (decision is not null)
+                return true;
+        }
+
+        var preferredSetting = failure?.AdapterDecisionCode.Value switch
+        {
+            CosmosRelationQueryCompilationDiagnosticCodes.AggregateUnsupported
+                when ContainsAny(failure.Message, "maximumInputRows", "exact integer", "COUNT") =>
+                "maximumInputRows",
+            CosmosRelationQueryCompilationDiagnosticCodes.PagingUnstable
+                when !failure.Message.Contains("Page size", StringComparison.OrdinalIgnoreCase) =>
+                "exactOrderingPath/",
+            CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable
+                when ContainsAny(failure.Message, "order", "ordering", "stable", "first-seen") =>
+                "exactOrderingPath/",
+            _ => null
+        };
+        if (preferredSetting is not null)
+        {
+            decision = storageBinding.ConfigurationDecisions.FirstOrDefault(candidate =>
+                candidate.Setting.StartsWith(preferredSetting, StringComparison.Ordinal))!;
+            if (decision is not null)
+                return true;
+        }
+
+        decision = null!;
+        return false;
+    }
+
+    static bool IsCompilerPolicyDecision(string? diagnosticCode) => diagnosticCode is
+        CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedBranchTopology
+        or CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedLogicalOperator
+        or CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression
+        or CosmosRelationQueryCompilationDiagnosticCodes.ParameterUnsupported
+        or CosmosRelationQueryCompilationDiagnosticCodes.ArtifactInvalid
+        or CosmosRelationQueryCompilationDiagnosticCodes.ResultObservabilityUnsupported
+        or CosmosRelationQueryCompilationDiagnosticCodes.RelationTerminalUnsupported;
+
+    static RelationQueryOperatingBoundaryId? FailedOperatingBoundary(
+        RelationQueryBoundRealizationRequest request,
+        RelationQueryNativeResultBranch branch,
+        string diagnosticCode,
+        string message)
+    {
+        RelationQueryOperatingBoundaryId? candidate = diagnosticCode switch
+        {
+            CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedBranchTopology
+                when ContainsAny(message, "single-source", "one demand-scoped placed source") =>
+                CosmosRelationQueryTargetProfile.SingleSourceBoundary,
+            CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable
+                when ContainsAny(message, "missing", "null", "non-null") =>
+                CosmosRelationQueryTargetProfile.NonNullOperandsBoundary,
+            CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable
+                when ContainsAny(message, "scalar", "value domain") =>
+                CosmosRelationQueryTargetProfile.ScalarOperandsBoundary,
+            CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable
+                when ContainsAny(message, "order", "ordering", "stable", "first-seen") =>
+                CosmosRelationQueryTargetProfile.StableOrderingBoundary,
+            CosmosRelationQueryCompilationDiagnosticCodes.AggregateUnsupported
+                when ContainsAny(message, "maximumInputRows", "exact integer", "COUNT") =>
+                CosmosRelationQueryTargetProfile.ExactCountInputRowsBoundary,
+            CosmosRelationQueryCompilationDiagnosticCodes.AggregateUnsupported
+                when ContainsAny(message, "order", "ordering", "deterministic") =>
+                CosmosRelationQueryTargetProfile.StableOrderingBoundary,
+            CosmosRelationQueryCompilationDiagnosticCodes.PagingUnstable
+                when message.Contains("Page size", StringComparison.OrdinalIgnoreCase) =>
+                CosmosRelationQueryTargetProfile.PageSizeBoundary,
+            CosmosRelationQueryCompilationDiagnosticCodes.PagingUnstable =>
+                CosmosRelationQueryTargetProfile.StableOrderingBoundary,
+            CosmosRelationQueryCompilationDiagnosticCodes.CollectionElementEvidenceUnavailable
+                when ContainsAny(message, "missing", "null", "non-null") =>
+                CosmosRelationQueryTargetProfile.NonNullOperandsBoundary,
+            _ => null
+        };
+        if (candidate is not { } boundary)
+            return null;
+
+        var decisions = request.ProfileFeasibility.Decisions.ToDictionary(static decision => decision.Requirement);
+        return request.Selection.GetBranch(branch.Id).Requirements.Any(requirement =>
+            decisions.TryGetValue(requirement.Id, out var decision)
+            && decision.GetBoundaryValidations().Any(validation => validation.Boundary == boundary))
+            ? boundary
+            : null;
+    }
+
+    static string? FailedConfigurationSetting(
+        RelationQueryBoundRealizationRequest request,
+        string diagnosticCode,
+        string message,
+        RelationQueryInputId? input)
+    {
+        if (diagnosticCode == CosmosRelationQueryCompilationDiagnosticCodes.FieldBindingMissing
+            && input is { } fieldInput)
+        {
+            return $"field/{fieldInput.Value}";
+        }
+        if (diagnosticCode == CosmosRelationQueryCompilationDiagnosticCodes.AggregateUnsupported
+            && ContainsAny(message, "maximumInputRows", "exact integer", "COUNT"))
+        {
+            return "maximumInputRows";
+        }
+        if (diagnosticCode == CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable
+            && ContainsAny(message, "exact physical ordering", "exact ordering")
+            && ResolveAssessmentField(request, input) is { } exactOrderingPath)
+        {
+            return "exactOrderingPath/" + CosmosRelationQueryStorageBinding.FieldPathKey(exactOrderingPath);
+        }
+        if (diagnosticCode == CosmosRelationQueryCompilationDiagnosticCodes.CollectionElementEvidenceUnavailable
+            && input is { } collectionInput)
+        {
+            return $"field/{collectionInput.Value}/collectionScope";
+        }
+        return null;
+    }
+
+    static bool ContainsAny(string value, params ReadOnlySpan<string> candidates)
+    {
+        foreach (var candidate in candidates)
+        {
+            if (value.Contains(candidate, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
+    static string ResolutionFor(string code) => code switch
+    {
+        CosmosRelationQueryCompilationDiagnosticCodes.FieldBindingMissing =>
+            "Map every demanded input used by the selected branch in the Cosmos binding.",
+        CosmosRelationQueryCompilationDiagnosticCodes.CollectionElementEvidenceUnavailable =>
+            "Author exact structured-collection scope and child-field evidence for the referenced input.",
+        CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable =>
+            "Supply exact missing/null, ordering, value-domain, or visibility evidence for this operation.",
+        CosmosRelationQueryCompilationDiagnosticCodes.AggregateUnsupported =>
+            "Supply the required aggregate boundary evidence or select an exact target-independent aggregate strategy.",
+        CosmosRelationQueryCompilationDiagnosticCodes.PagingUnstable =>
+            "Supply an exact stable unique ordering strategy within the Cosmos paging boundary.",
+        CosmosRelationQueryCompilationDiagnosticCodes.ResultObservabilityUnsupported =>
+            "Request value-only observability or select an interpretation preserving contributor provenance.",
+        CosmosRelationQueryCompilationDiagnosticCodes.RelationTerminalUnsupported =>
+            "Select a query result branch or an adapter with exact relation-terminal support.",
+        _ => "Select a supported canonical construct or provide an attributable exact lowering strategy."
+    };
+
+    static CollectionScopeGap? GetCollectionScopeGap(
+        CosmosRelationQueryCollectionScopeEvidence scope)
+    {
+        if (scope.ElementScope != CosmosRelationQueryCollectionElementScope.JsonArrayElement)
+        {
+            return new(
+                "The Cosmos collection binding does not attest JSON-array element scope.",
+                "Attest JsonArrayElement scope for the structured collection.");
+        }
+        if (scope.CorrelationGuarantee
+            != CosmosRelationQueryCollectionCorrelationGuarantee.SameArrayElement)
+        {
+            return new(
+                "The Cosmos collection binding does not attest same-array-element correlation.",
+                "Attest SameArrayElement correlation for the structured collection.");
+        }
+        if (scope.CollectionMissingValueBehavior
+                != CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion
+            || scope.CollectionNullValueBehavior
+                != CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion)
+        {
+            return new(
+                "The Cosmos collection binding must attest that ingestion prohibits missing and null collections; treating them as empty would weaken canonical any semantics.",
+                "Prohibit missing and explicit-null collection values during ingestion.");
+        }
+        if (scope.NullElementBehavior
+            != CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion)
+        {
+            return new(
+                "The Cosmos collection binding must attest that ingestion prohibits explicit-null collection elements.",
+                "Prohibit explicit-null elements during ingestion.");
+        }
+        if (scope.EmptyCollectionBehavior != CosmosRelationQueryEmptyCollectionBehavior.NoElements)
+        {
+            return new(
+                "The Cosmos collection binding does not prove that an empty JSON array contributes no existential subquery rows.",
+                "Attest NoElements behavior for an empty JSON array.");
+        }
+        return null;
+    }
+
+    sealed record CollectionScopeGap(string Message, string Resolution);
 
     sealed class BranchCompiler
     {
-        readonly RelationQueryNativeCompilationRequest request;
+        readonly CompiledRelationQueryPlan plan;
+        readonly RelationQueryRealizationReport realization;
+        readonly RelationQueryNativeCompilationRequest? nativeRequest;
         readonly CosmosRelationQueryStorageBinding storageBinding;
         readonly CosmosRelationQueryCompilerOptions options;
         readonly RelationQueryNativeResultBranch branch;
@@ -231,22 +742,90 @@ public sealed class CosmosRelationQueryCompiler
             CosmosRelationQueryStorageBinding storageBinding,
             CosmosRelationQueryCompilerOptions options,
             RelationQueryNativeResultBranch branch)
+            : this(
+                request.Plan,
+                request.ProfileFeasibility,
+                request,
+                storageBinding,
+                options,
+                branch)
         {
-            this.request = request;
+        }
+
+        public BranchCompiler(
+            RelationQueryBoundRealizationRequest request,
+            CosmosRelationQueryStorageBinding storageBinding,
+            CosmosRelationQueryCompilerOptions options,
+            RelationQueryNativeResultBranch branch)
+            : this(
+                request.Plan,
+                request.ProfileFeasibility,
+                nativeRequest: null,
+                storageBinding,
+                options,
+                branch)
+        {
+        }
+
+        BranchCompiler(
+            CompiledRelationQueryPlan plan,
+            RelationQueryRealizationReport realization,
+            RelationQueryNativeCompilationRequest? nativeRequest,
+            CosmosRelationQueryStorageBinding storageBinding,
+            CosmosRelationQueryCompilerOptions options,
+            RelationQueryNativeResultBranch branch)
+        {
+            this.plan = plan;
+            this.realization = realization;
+            this.nativeRequest = nativeRequest;
             this.storageBinding = storageBinding;
             this.options = options;
             this.branch = branch;
-            nodes = request.Plan.ExecutionSlice.Nodes.ToDictionary(static node => node.Id);
-            sourceFields = request.Plan.InputContract.Sources
+            nodes = plan.ExecutionSlice.Nodes.ToDictionary(static node => node.Id);
+            sourceFields = plan.InputContract.Sources
                 .SelectMany(static source => source.Fields)
                 .ToDictionary(static field => (field.Input.Binding, field.Input.Field.Path));
-            parameters = request.Plan.InputContract.Parameters.ToDictionary(static parameter => parameter.Definition.Id);
+            parameters = plan.InputContract.Parameters.ToDictionary(static parameter => parameter.Definition.Id);
             selectedInputIds = SelectBranchFields().Select(static field => field.Input.Id).ToHashSet();
             builder = new(storageBinding.RootAlias);
             pipeline = CreatePipeline();
         }
 
         public CosmosRelationQueryCompiledArtifact Compile()
+        {
+            var request = nativeRequest ?? throw new InvalidOperationException(
+                "A native-compilation request is required to construct a Cosmos artifact.");
+            var prepared = Prepare();
+            var provenance = CreateProvenance(request, prepared.SelectedFields);
+            var fingerprint = CosmosRelationQueryArtifactFingerprinter.Compute(
+                branch,
+                prepared.Statement,
+                storageBinding,
+                prepared.SelectedFields,
+                prepared.ResultFields,
+                prepared.ResultIdentity,
+                prepared.AuxiliaryResultAliases,
+                prepared.ParameterBindings,
+                paging,
+                provenance);
+            return new(
+                branch,
+                prepared.Statement,
+                storageBinding,
+                prepared.SelectedFields,
+                prepared.ResultFields,
+                prepared.ResultIdentity,
+                prepared.AuxiliaryResultAliases,
+                prepared.ParameterBindings,
+                paging,
+                provenance,
+                fingerprint);
+        }
+
+        /// <summary>Runs the same complete branch analysis used by native compilation without constructing an artifact.</summary>
+        public void Validate() => _ = Prepare();
+
+        PreparedBranch Prepare()
         {
             if (branch.Kind == RelationQueryNativeResultKind.RelationRows)
             {
@@ -255,7 +834,7 @@ public sealed class CosmosRelationQueryCompiler
                     "Cosmos SQL v2 does not lower relation terminals until root correlation, cardinality, key, and invariant evidence are represented by the native artifact contract.",
                     branch.Node);
             }
-            if (request.Realization.Observability.OccurrenceProvenance
+            if (realization.Observability.OccurrenceProvenance
                 != RelationQueryOccurrenceProvenanceMode.NotRequested)
             {
                 throw Fail(
@@ -270,30 +849,13 @@ public sealed class CosmosRelationQueryCompiler
             var statement = builder.BuildTemplate();
             var parameterBindings = CreateParameterBindings(statement);
             var selectedFields = CreateSelectedFields();
-            var provenance = CreateProvenance(selectedFields);
-            var fingerprint = CosmosRelationQueryArtifactFingerprinter.Compute(
-                branch,
-                statement,
-                storageBinding,
-                selectedFields,
-                resultFields,
-                resultIdentity,
-                auxiliaryResultAliases,
-                parameterBindings,
-                paging,
-                provenance);
             return new(
-                branch,
                 statement,
-                storageBinding,
                 selectedFields,
                 resultFields,
                 resultIdentity,
                 auxiliaryResultAliases,
-                parameterBindings,
-                paging,
-                provenance,
-                fingerprint);
+                parameterBindings);
         }
 
         ImmutableArray<RelationQueryExecutionNode> CreatePipeline()
@@ -344,12 +906,12 @@ public sealed class CosmosRelationQueryCompiler
         void ValidatePipeline()
         {
             if (pipeline[0].CanonicalNode is not SourceQueryNode source
-                || request.Plan.InputContract.Sources.Length != 1
-                || source.Binding != request.Plan.InputContract.Sources[0].Binding)
+                || !plan.InputContract.Sources.Any(contract =>
+                    contract.Node == pipeline[0].Id && contract.Binding == source.Binding))
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedBranchTopology,
-                    "A native Cosmos branch must begin at the one placed source binding.",
+                    "A native Cosmos branch must begin at its one demand-scoped placed source binding.",
                     pipeline[0].Id);
             }
 
@@ -537,7 +1099,7 @@ public sealed class CosmosRelationQueryCompiler
             ImmutableArray<string>.Builder auxiliaryAliases = ImmutableArray.CreateBuilder<string>();
             CosmosRelationQueryResultIdentityBinding? identity = null;
             if (branch.Kind == RelationQueryNativeResultKind.RelationRows
-                && request.Plan.ExecutionSlice.RelationOutput is { } relation
+                && plan.ExecutionSlice.RelationOutput is { } relation
                 && relation.KeySite is { } keySite)
             {
                 RequireNonNullResult(
@@ -1497,46 +2059,8 @@ public sealed class CosmosRelationQueryCompiler
             RelationQueryFieldInputContract field,
             QueryNodeId node)
         {
-            if (evidence.ElementScope != CosmosRelationQueryCollectionElementScope.JsonArrayElement)
-            {
-                throw CollectionEvidenceFailure(
-                    "The Cosmos collection binding does not attest JSON-array element scope.",
-                    node,
-                    field.Input.Id);
-            }
-            if (evidence.CorrelationGuarantee
-                != CosmosRelationQueryCollectionCorrelationGuarantee.SameArrayElement)
-            {
-                throw CollectionEvidenceFailure(
-                    "The Cosmos collection binding does not attest same-array-element correlation.",
-                    node,
-                    field.Input.Id);
-            }
-            if (evidence.CollectionMissingValueBehavior
-                    != CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion
-                || evidence.CollectionNullValueBehavior
-                    != CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion)
-            {
-                throw CollectionEvidenceFailure(
-                    "The Cosmos collection binding must attest that ingestion prohibits missing and null collections; treating them as empty would weaken canonical any semantics.",
-                    node,
-                    field.Input.Id);
-            }
-            if (evidence.NullElementBehavior
-                != CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion)
-            {
-                throw CollectionEvidenceFailure(
-                    "The Cosmos collection binding must attest that ingestion prohibits explicit-null collection elements.",
-                    node,
-                    field.Input.Id);
-            }
-            if (evidence.EmptyCollectionBehavior != CosmosRelationQueryEmptyCollectionBehavior.NoElements)
-            {
-                throw CollectionEvidenceFailure(
-                    "The Cosmos collection binding does not prove that an empty JSON array contributes no existential subquery rows.",
-                    node,
-                    field.Input.Id);
-            }
+            if (GetCollectionScopeGap(evidence) is { } gap)
+                throw CollectionEvidenceFailure(gap.Message, node, field.Input.Id);
         }
 
         static void RequireCollectionValueDomain(
@@ -1877,7 +2401,7 @@ public sealed class CosmosRelationQueryCompiler
             var outputs = branch.Outputs.Select(static output => output.Id).ToHashSet();
             return
             [
-                .. request.Plan.InputContract.Sources
+                .. plan.InputContract.Sources
                     .SelectMany(static source => source.Fields)
                     .Where(field => field.Uses.Any(use => outputs.Contains(use.Output.Id)))
                     .OrderBy(static field => field.Input.Id.Value, StringComparer.Ordinal)
@@ -1930,6 +2454,7 @@ public sealed class CosmosRelationQueryCompiler
         }
 
         RelationQueryNativeCompilationProvenance CreateProvenance(
+            RelationQueryNativeCompilationRequest request,
             ImmutableArray<CosmosRelationQuerySelectedField> selectedFields)
         {
             var assignments = pipeline.SelectMany(static execution =>
@@ -1947,6 +2472,14 @@ public sealed class CosmosRelationQueryCompiler
                 assignments,
                 [.. selectedFields.Select(static field => field.Input)]);
         }
+
+        readonly record struct PreparedBranch(
+            CosmosSqlCommandTemplate Statement,
+            ImmutableArray<CosmosRelationQuerySelectedField> SelectedFields,
+            ImmutableArray<CosmosRelationQueryResultFieldBinding> ResultFields,
+            CosmosRelationQueryResultIdentityBinding? ResultIdentity,
+            ImmutableArray<string> AuxiliaryResultAliases,
+            ImmutableArray<CosmosRelationQueryParameterBinding> ParameterBindings);
 
         FieldPath FullDocumentPath(FieldPath relative) => storageBinding.DocumentRoot is { } root
             ? new([.. root.Segments, .. relative.Segments])
@@ -2168,7 +2701,7 @@ public sealed class CosmosRelationQueryCompiler
 static class CosmosRelationQueryArtifactFingerprinter
 {
     const string Algorithm = "sha256";
-    const string Canonicalization = "cohesive.relations.cosmos-artifact/v1-c14n/v3";
+    const string Canonicalization = "cohesive.relations.cosmos-artifact/v1-c14n/v4";
 
     public static CosmosRelationQueryArtifactFingerprint Compute(
         RelationQueryNativeResultBranch branch,

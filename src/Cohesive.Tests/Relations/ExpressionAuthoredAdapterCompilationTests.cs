@@ -53,7 +53,10 @@ public sealed class ExpressionAuthoredAdapterCompilationTests
             .RequireValue();
 
         var result = new CosmosRelationQueryCompiler().Compile(
-            new(fixture.Plan, realization, authoredPlacement.Placement),
+            new RelationQueryBoundRealizationRequest(
+                fixture.Plan,
+                realization,
+                authoredPlacement.Placement),
             storage);
 
         Assert.True(result.IsSuccessful, Format(result.Diagnostics));
@@ -130,9 +133,11 @@ public sealed class ExpressionAuthoredAdapterCompilationTests
             .Build()
             .RequireValue();
 
-        var result = new ElasticRelationQueryCompiler().Compile(
-            new(fixture.Plan, realization, authoredPlacement.Placement),
-            storage);
+        RelationQueryBoundRealizationRequest request = new(
+            fixture.Plan,
+            realization,
+            authoredPlacement.Placement);
+        var result = new ElasticRelationQueryCompiler().Compile(request, storage);
 
         Assert.True(result.IsSuccessful, Format(result.Diagnostics));
         Assert.Equal(2, result.Artifacts.Length);
