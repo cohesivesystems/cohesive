@@ -1251,7 +1251,7 @@ public static partial class RelationQueryDefinitionValidator
                 foreach (var (property, child) in value.Fields)
                     ValidatePortableObservationValue(child, $"{location}/{property}");
             }
-            else if (value.Kind == ObservationValueKind.Array && value.Array is not null)
+            else if (value.Kind == ObservationValueKind.Array && !value.Array.IsDefault)
             {
                 for (var index = 0; index < value.Array.Length; index++)
                     ValidatePortableObservationValue(value.Array[index], $"{location}/{index}");

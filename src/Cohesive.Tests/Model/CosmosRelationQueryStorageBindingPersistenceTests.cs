@@ -9,6 +9,8 @@ namespace Cohesive.Tests.Model;
 
 public sealed class CosmosRelationQueryStorageBindingPersistenceTests
 {
+    static readonly Uri AccountEndpoint = new("https://localhost:8081/");
+    const string DatabaseName = "operations";
     static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     static readonly RelationQueryPlanComponentFingerprint CompiledPlanFingerprint = new(
         "sha256",
@@ -35,6 +37,8 @@ public sealed class CosmosRelationQueryStorageBindingPersistenceTests
         Assert.Equal(binding.PlacementBinding, rehydrated.PlacementBinding);
         Assert.Equal(binding.Target, rehydrated.Target);
         Assert.Equal(binding.TargetProfile, rehydrated.TargetProfile);
+        Assert.Equal(binding.AccountEndpoint, rehydrated.AccountEndpoint);
+        Assert.Equal(binding.DatabaseName, rehydrated.DatabaseName);
         Assert.Equal(binding.ContainerName, rehydrated.ContainerName);
         Assert.Equal(binding.RootAlias, rehydrated.RootAlias);
         Assert.Equal(binding.DocumentRoot, rehydrated.DocumentRoot);
@@ -63,6 +67,7 @@ public sealed class CosmosRelationQueryStorageBindingPersistenceTests
         Reverse(document["stableUniqueOrderingPaths"]!.AsArray());
         Reverse(document["exactOrderingPaths"]!.AsArray());
         Reverse(document["configurationDecisions"]!.AsArray());
+        document["accountEndpoint"] = "HTTPS://LOCALHOST:8081";
 
         var rehydrated = Deserialize(document);
 
@@ -126,15 +131,43 @@ public sealed class CosmosRelationQueryStorageBindingPersistenceTests
         Assert.Contains("Unsupported Cosmos relation/query storage-binding schema version", exception.ToString(), StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void JsonRehydration_RejectsFactsTamperedAfterFingerprinting()
+    [Theory]
+    [InlineData("accountEndpoint")]
+    [InlineData("databaseName")]
+    [InlineData("containerName")]
+    public void JsonRehydration_RequiresCompletePhysicalAffinity(string setting)
     {
         var document = SerializeToObject(CreateBinding());
-        document["containerName"] = "tampered-loads";
+        document.Remove(setting);
+
+        Assert.ThrowsAny<ArgumentException>(() => Deserialize(document));
+    }
+
+    [Theory]
+    [InlineData("accountEndpoint", "https://other.documents.azure.com/")]
+    [InlineData("databaseName", "tampered-operations")]
+    [InlineData("containerName", "tampered-loads")]
+    public void JsonRehydration_RejectsPhysicalAffinityTamperedAfterFingerprinting(string setting, string value)
+    {
+        var document = SerializeToObject(CreateBinding());
+        document[setting] = value;
 
         var exception = Assert.Throws<ArgumentException>(() => Deserialize(document));
 
         Assert.Contains("fingerprint does not match normalized content", exception.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("file:///tmp/cosmos")]
+    [InlineData("urn:cosmos:account")]
+    public void JsonRehydration_RejectsUnsupportedAccountEndpoint(string endpoint)
+    {
+        var document = SerializeToObject(CreateBinding());
+        document["accountEndpoint"] = endpoint;
+
+        var exception = Assert.Throws<ArgumentException>(() => Deserialize(document));
+
+        Assert.Contains("HTTP or HTTPS", exception.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -156,6 +189,8 @@ public sealed class CosmosRelationQueryStorageBindingPersistenceTests
         placementBinding: new RelationQuerySourcePlacementBindingId("loads-placement"),
         target: new RelationQueryTargetId("cosmos"),
         targetProfile: new RelationQueryTargetProfileId("cosmos-query/v1"),
+        accountEndpoint: AccountEndpoint,
+        databaseName: DatabaseName,
         containerName: "loads",
         rootAlias: "c",
         identityPath: FieldPath.Parse("id"),
@@ -191,6 +226,8 @@ public sealed class CosmosRelationQueryStorageBindingPersistenceTests
         [
             new("field/field:id", fieldOrigin, "tests/cosmos-fields/v1"),
             new("rootAlias", RelationQueryConfigurationValueOrigin.AdapterConvention, CosmosRelationQueryStorageBinding.SemanticPathConventionSet),
+            new("accountEndpoint", RelationQueryConfigurationValueOrigin.Explicit, "tests"),
+            new("databaseName", RelationQueryConfigurationValueOrigin.Explicit, "tests"),
             new("containerName", RelationQueryConfigurationValueOrigin.Explicit, "tests")
         ],
         compiledPlanFingerprint: includeAffinity ? CompiledPlanFingerprint : null,

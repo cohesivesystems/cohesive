@@ -52,11 +52,12 @@ public static class RelationQueryReferenceKeyExtractor
             return RelationQueryReferenceKeyExtractionState.Success;
         }
 
-        if (value.Kind != ObservationValueKind.Array || value.Array is not { } values)
+        if (value.Kind != ObservationValueKind.Array || value.Array.IsDefault)
         {
             keys = [];
             return RelationQueryReferenceKeyExtractionState.Invalid;
         }
+        var values = value.Array;
 
         if ((long)values.Length > maximumKeys)
         {

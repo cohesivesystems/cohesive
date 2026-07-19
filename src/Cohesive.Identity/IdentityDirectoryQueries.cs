@@ -149,7 +149,7 @@ public static class IdentityDirectoryQueries
             evaluationId,
             ObservationValue.FromString(principalId),
             ObservationValue.FromString(scopeKind),
-            ObservationValue.FromArray(
+            ObservationValue.FromImmutableArray(
                 [.. candidateScopeIds.Select(ObservationValue.FromString)]));
 
     internal static RelationQueryEvaluation EvaluateActiveScopeByKindAndId(

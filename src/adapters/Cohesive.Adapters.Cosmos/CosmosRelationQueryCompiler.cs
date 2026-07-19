@@ -265,7 +265,7 @@ public sealed class CosmosRelationQueryCompiler
             }
             ValidatePipeline();
             ConfigureSourcePipeline();
-            var (resultFields, resultIdentity) = ConfigureProjection();
+            var (resultFields, resultIdentity, auxiliaryResultAliases) = ConfigureProjection();
             ConfigureOrderingAndPaging();
             var statement = builder.BuildTemplate();
             var parameterBindings = CreateParameterBindings(statement);
@@ -278,6 +278,7 @@ public sealed class CosmosRelationQueryCompiler
                 selectedFields,
                 resultFields,
                 resultIdentity,
+                auxiliaryResultAliases,
                 parameterBindings,
                 paging,
                 provenance);
@@ -288,6 +289,7 @@ public sealed class CosmosRelationQueryCompiler
                 selectedFields,
                 resultFields,
                 resultIdentity,
+                auxiliaryResultAliases,
                 parameterBindings,
                 paging,
                 provenance,
@@ -527,22 +529,38 @@ public sealed class CosmosRelationQueryCompiler
         }
 
         (ImmutableArray<CosmosRelationQueryResultFieldBinding> Fields,
-            CosmosRelationQueryResultIdentityBinding? Identity) ConfigureProjection()
+            CosmosRelationQueryResultIdentityBinding? Identity,
+            ImmutableArray<string> AuxiliaryAliases) ConfigureProjection()
         {
             ImmutableArray<CosmosRelationQueryResultFieldBinding>.Builder resultFields =
                 ImmutableArray.CreateBuilder<CosmosRelationQueryResultFieldBinding>(branch.Fields.Length);
+            ImmutableArray<string>.Builder auxiliaryAliases = ImmutableArray.CreateBuilder<string>();
             CosmosRelationQueryResultIdentityBinding? identity = null;
             if (branch.Kind == RelationQueryNativeResultKind.RelationRows
                 && request.Plan.ExecutionSlice.RelationOutput is { } relation
                 && relation.KeySite is { } keySite)
             {
+                RequireNonNullResult(
+                    keySite,
+                    keySite.Node ?? branch.Node,
+                    "relation identity");
+                var identityContract = RequireKnownResultContract(
+                    keySite,
+                    keySite.Node ?? branch.Node,
+                    "relation identity");
+                var identityEncoding = ResolveResultEncoding(
+                    identityContract,
+                    keySite.Node ?? branch.Node);
                 builder.Select(
                     CompileExpression(
                         relation.Definition.Key!,
                         keySite,
                         requireNonNullInputs: true),
                     "__identity");
-                identity = new("__identity", canonicalKey: true);
+                identity = new(
+                    "__identity",
+                    valueContract: identityContract,
+                    encoding: identityEncoding);
             }
 
             for (var index = 0; index < branch.Fields.Length; index++)
@@ -568,16 +586,18 @@ public sealed class CosmosRelationQueryCompiler
                                             && !visiblePaths.Contains(item.Key.Path))
                              .OrderBy(item => CosmosRelationQueryStorageBinding.FieldPathKey(item.Key.Path), StringComparer.Ordinal))
                 {
+                    var alias = $"__distinct{hiddenIndex.ToString(CultureInfo.InvariantCulture)}";
                     builder.Select(
                         CompileExpression(
                             projection.Value.Definition.Value,
                             projection.Value.ValueSite,
                             requireNonNullInputs: false),
-                        $"__distinct{hiddenIndex.ToString(CultureInfo.InvariantCulture)}");
+                        alias);
+                    auxiliaryAliases.Add(alias);
                     hiddenIndex++;
                 }
             }
-            return (resultFields.MoveToImmutable(), identity);
+            return (resultFields.MoveToImmutable(), identity, auxiliaryAliases.ToImmutable());
         }
 
         ResolvedOutput ResolveOutput(FieldPath path)
@@ -738,6 +758,27 @@ public sealed class CosmosRelationQueryCompiler
 
         void ConfigureOrderingAndPaging()
         {
+            var groupedAggregate = pipeline
+                .Select(static execution => execution.CanonicalNode)
+                .OfType<AggregateQueryNode>()
+                .SingleOrDefault(static aggregate => !aggregate.Groupings.IsDefaultOrEmpty);
+            if (groupedAggregate is not null)
+            {
+                throw Fail(
+                    CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
+                    "Grouped Cosmos results have no exact deterministic order until the artifact retains and executes an attributable grouping-order strategy.",
+                    groupedAggregate.Id);
+            }
+
+            if (branch.Kind == RelationQueryNativeResultKind.QueryRows
+                && pipeline.Any(static execution => execution.CanonicalNode is ExpandCollectionQueryNode))
+            {
+                throw Fail(
+                    CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
+                    "Expanded Cosmos rows have no exact deterministic order until collection-element ordering evidence is represented.",
+                    branch.Node);
+            }
+
             RelationQueryExecutionNode? orderExecution = null;
             FieldPath? stableOrderingPath = null;
             foreach (var execution in pipeline)
@@ -776,6 +817,31 @@ public sealed class CosmosRelationQueryCompiler
                         "Canonical ordering requires a final stable unique source path because input-order tie breaking is not available in Cosmos SQL.",
                         execution.Id);
                 }
+            }
+
+            if (branch.Kind == RelationQueryNativeResultKind.QueryRows && orderExecution is null)
+            {
+                if (pipeline.Any(static execution => execution.CanonicalNode is DistinctQueryNode))
+                {
+                    throw Fail(
+                        CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
+                        "Unordered Cosmos DISTINCT cannot reproduce canonical first-seen row order.",
+                        branch.Node);
+                }
+                if (!storageBinding.ExactOrderingPaths.Contains(storageBinding.IdentityPath))
+                {
+                    throw Fail(
+                        CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
+                        "Implicit deterministic Cosmos row order requires exact physical ordering evidence for the identity path.",
+                        branch.Node);
+                }
+
+                builder.OrderBy(
+                    CosmosSqlExpression.Property(
+                        storageBinding.RootAlias,
+                        FullDocumentPath(storageBinding.IdentityPath)),
+                    CosmosSqlSortDirection.Ascending);
+                stableOrderingPath = storageBinding.IdentityPath;
             }
 
             var pageExecution = pipeline.SingleOrDefault(static execution => execution.CanonicalNode is PageQueryNode);
@@ -860,10 +926,12 @@ public sealed class CosmosRelationQueryCompiler
                 ParameterExpr parameter => CompileParameter(parameter, requireNonNullInputs),
                 ConstantExpr constant => CompileConstant(
                     constant.Value,
+                    InferCanonicalConstantType(constant.Value),
                     requireNonNullInputs,
                     site?.Node),
                 LiteralExpr literal => CompileConstant(
                     literal.Value,
+                    literal.Type,
                     requireNonNullInputs,
                     site?.Node),
                 UnaryExpr unary when unary.Operator == UnaryOperator.Not => CosmosSqlExpression.Unary(
@@ -893,6 +961,7 @@ public sealed class CosmosRelationQueryCompiler
 
         static CosmosSqlExpression CompileConstant(
             ObservationValue value,
+            TypeRef? declaredType,
             bool requireNonNull,
             QueryNodeId? node)
         {
@@ -910,8 +979,28 @@ public sealed class CosmosRelationQueryCompiler
                     $"Constant value kind '{value.Kind}' has no exact Cosmos SQL v1 parameter encoding.",
                     node);
             }
+            if (value.Kind != ObservationValueKind.Null
+                && declaredType is not null
+                && CosmosRelationQueryCanonicalValueCodec.SupportsRuntimeParameterType(declaredType)
+                && !CosmosRelationQueryCanonicalValueCodec.TryEncodeRuntimeParameter(
+                    new ExprValueContract(declaredType),
+                    value,
+                    out _))
+            {
+                throw Fail(
+                    CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
+                    "A typed constant must already use the exact canonical representation retained by Cosmos execution.",
+                    node);
+            }
             return CosmosSqlExpression.Parameter(value);
         }
+
+        static TypeRef? InferCanonicalConstantType(ObservationValue value) => value.Kind switch
+        {
+            ObservationValueKind.DateOnly => new ScalarTypeRef(ScalarTypeKind.Date),
+            ObservationValueKind.DateTimeOffset => new ScalarTypeRef(ScalarTypeKind.Instant),
+            _ => null
+        };
 
         static bool IsCosmosConstantValue(ObservationValue value) => value.Kind switch
         {
@@ -924,7 +1013,7 @@ public sealed class CosmosRelationQueryCompiler
                 or ObservationValueKind.TimeSpan => true,
             ObservationValueKind.Int64 => value.Int64 is >= -9_007_199_254_740_991L and <= 9_007_199_254_740_991L,
             ObservationValueKind.Double => double.IsFinite(value.Double),
-            ObservationValueKind.Array => (value.Array ?? []).All(IsCosmosConstantValue),
+            ObservationValueKind.Array => (value.Array.IsDefault ? [] : value.Array).All(IsCosmosConstantValue),
             ObservationValueKind.Object => (value.Fields?.Values ?? []).All(IsCosmosConstantValue),
             _ => false
         };
@@ -1206,7 +1295,8 @@ public sealed class CosmosRelationQueryCompiler
                     $"Canonical parameter '{parameter.Parameter}' is absent from the demand-scoped input contract.",
                     branch.Node);
             }
-            if (!IsCosmosParameterType(contract.ValueContract.GetEffectiveType()))
+            if (!CosmosRelationQueryCanonicalValueCodec.SupportsRuntimeParameterType(
+                    contract.ValueContract.GetEffectiveType()))
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.ParameterUnsupported,
@@ -1220,6 +1310,18 @@ public sealed class CosmosRelationQueryCompiler
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.ParameterUnsupported,
                     $"Optional parameter '{parameter.Parameter}' has no default; Cosmos SQL cannot bind semantic undefined.",
+                    branch.Node,
+                    contract.Input.Id);
+            }
+            if (contract.Definition.DefaultKind == QueryParameterDefaultKind.Value
+                && !CosmosRelationQueryCanonicalValueCodec.TryEncodeRuntimeParameter(
+                    contract.ValueContract,
+                    contract.Definition.DefaultValue ?? ObservationValue.Null,
+                    out _))
+            {
+                throw Fail(
+                    CosmosRelationQueryCompilationDiagnosticCodes.ParameterUnsupported,
+                    $"Canonical parameter '{parameter.Parameter}' has a default outside its exact Cosmos representation.",
                     branch.Node,
                     contract.Input.Id);
             }
@@ -1429,25 +1531,13 @@ public sealed class CosmosRelationQueryCompiler
                     node);
             }
 
-            return contract.GetEffectiveType() switch
-            {
-                ScalarTypeRef { Kind: ScalarTypeKind.Bool } =>
-                    CosmosRelationQueryResultValueEncoding.JsonBoolean,
-                ScalarTypeRef { Kind: ScalarTypeKind.Int32 } =>
-                    CosmosRelationQueryResultValueEncoding.JsonInt32,
-                ScalarTypeRef { Kind: ScalarTypeKind.String } =>
-                    CosmosRelationQueryResultValueEncoding.JsonString,
-                ScalarTypeRef { Kind: ScalarTypeKind.Guid } =>
-                    CosmosRelationQueryResultValueEncoding.CanonicalGuidString,
-                ScalarTypeRef { Kind: ScalarTypeKind.Date } =>
-                    CosmosRelationQueryResultValueEncoding.CanonicalDateString,
-                ScalarTypeRef { Kind: ScalarTypeKind.DateTime or ScalarTypeKind.Instant } =>
-                    CosmosRelationQueryResultValueEncoding.RoundTripDateTimeOffsetString,
-                _ => throw Fail(
-                    CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                    "Cosmos SQL v1 cannot prove a canonical physical result encoding for this value contract.",
-                    node)
-            };
+            if (CosmosRelationQueryCanonicalValueCodec.TryResolveResultEncoding(contract, out var encoding))
+                return encoding;
+
+            throw Fail(
+                CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
+                "Cosmos SQL v1 cannot prove a canonical physical result encoding for this value contract.",
+                node);
         }
 
         static void RequireCosmosScalarResult(
@@ -1516,24 +1606,6 @@ public sealed class CosmosRelationQueryCompiler
                 or ScalarTypeKind.String
                 or ScalarTypeKind.Guid
                 or ScalarTypeKind.Date
-                or ScalarTypeKind.DateTime
-                or ScalarTypeKind.Instant
-        };
-
-        static bool IsCosmosParameterType(TypeRef? type) => type switch
-        {
-            ScalarTypeRef
-            {
-                Kind: ScalarTypeKind.Bool
-                    or ScalarTypeKind.Int32
-                    or ScalarTypeKind.String
-                    or ScalarTypeKind.Guid
-                    or ScalarTypeKind.Date
-                    or ScalarTypeKind.DateTime
-                    or ScalarTypeKind.Instant
-            } => true,
-            ArrayTypeRef array => IsCosmosParameterType(array.ElementType),
-            _ => false
         };
 
         static CosmosSqlBinaryOperator Convert(BinaryOperator @operator) => @operator switch
@@ -1616,7 +1688,7 @@ public sealed class CosmosRelationQueryCompiler
 static class CosmosRelationQueryArtifactFingerprinter
 {
     const string Algorithm = "sha256";
-    const string Canonicalization = "cohesive.relations.cosmos-artifact/v1-c14n/v1";
+    const string Canonicalization = "cohesive.relations.cosmos-artifact/v1-c14n/v3";
 
     public static CosmosRelationQueryArtifactFingerprint Compute(
         RelationQueryNativeResultBranch branch,
@@ -1625,6 +1697,7 @@ static class CosmosRelationQueryArtifactFingerprinter
         ImmutableArray<CosmosRelationQuerySelectedField> selectedFields,
         ImmutableArray<CosmosRelationQueryResultFieldBinding> resultFields,
         CosmosRelationQueryResultIdentityBinding? resultIdentity,
+        ImmutableArray<string> auxiliaryResultAliases,
         ImmutableArray<CosmosRelationQueryParameterBinding> parameters,
         CosmosRelationQueryPagingContract? paging,
         RelationQueryNativeCompilationProvenance provenance)
@@ -1632,8 +1705,7 @@ static class CosmosRelationQueryArtifactFingerprinter
         StringBuilder canonical = new();
         var jsonOptions = RelationQueryJsonSerializer.CreateOptions();
         Append(canonical, Canonicalization);
-        Append(canonical, branch.Id.Value);
-        Append(canonical, (int)branch.Kind);
+        Append(canonical, JsonSerializer.Serialize(branch, jsonOptions));
         Append(canonical, statement.Text);
         Append(canonical, statement.Parameters.Length);
         foreach (var parameter in statement.Parameters)
@@ -1662,12 +1734,21 @@ static class CosmosRelationQueryArtifactFingerprinter
             Append(canonical, field.Assignment?.Value);
         }
         Append(canonical, resultIdentity?.Alias);
-        Append(canonical, resultIdentity?.CanonicalKey == true ? 1 : 0);
+        Append(canonical, resultIdentity is null
+            ? null
+            : JsonSerializer.Serialize(resultIdentity.ValueContract, jsonOptions));
+        Append(canonical, resultIdentity is null ? -1 : (int)resultIdentity.Encoding);
+        Append(canonical, auxiliaryResultAliases.Length);
+        foreach (var alias in auxiliaryResultAliases)
+        {
+            Append(canonical, alias);
+        }
         Append(canonical, parameters.Length);
         foreach (var parameter in parameters)
         {
             Append(canonical, parameter.SqlName);
             Append(canonical, parameter.Parameter.Value);
+            Append(canonical, JsonSerializer.Serialize(parameter.Definition, jsonOptions));
             Append(canonical, JsonSerializer.Serialize(parameter.ValueContract, jsonOptions));
         }
         Append(canonical, paging?.Offset ?? -1);
@@ -1675,65 +1756,7 @@ static class CosmosRelationQueryArtifactFingerprinter
         Append(canonical, paging is null
             ? null
             : CosmosRelationQueryStorageBinding.FieldPathKey(paging.StableUniquePath));
-        Append(canonical, provenance.Target.Value);
-        Append(canonical, provenance.TargetProfile.Value);
-        Append(canonical, provenance.Realization.Value);
-        Append(canonical, provenance.Placement.Value);
-        Append(canonical, provenance.CompilerProfile);
-        Append(canonical, provenance.ConventionSetVersion);
-        Append(canonical, provenance.CoveredNodes.Length);
-        foreach (var node in provenance.CoveredNodes)
-        {
-            Append(canonical, node.Value);
-        }
-
-        Append(canonical, provenance.CoveredAssignments.Length);
-        foreach (var assignment in provenance.CoveredAssignments)
-        {
-            Append(canonical, assignment.Value);
-        }
-
-        Append(canonical, provenance.RealizationDecisions.Length);
-        foreach (var decision in provenance.RealizationDecisions)
-        {
-            Append(canonical, decision.Requirement.Value);
-            Append(canonical, (int)decision.Kind);
-            Append(canonical, decision.Override?.Value);
-            Append(canonical, decision.CapabilityEvidence.Length);
-            foreach (var evidence in decision.CapabilityEvidence)
-            {
-                Append(canonical, evidence.Value);
-            }
-
-            Append(canonical, decision.CompositionRules.Length);
-            foreach (var rule in decision.CompositionRules)
-            {
-                Append(canonical, rule.Value);
-            }
-
-            Append(canonical, decision.OperatingBoundaries.Length);
-            foreach (var boundary in decision.OperatingBoundaries)
-            {
-                Append(canonical, boundary.Value);
-            }
-
-            Append(canonical, decision.PreservedGuarantees.Length);
-            foreach (var guarantee in decision.PreservedGuarantees)
-            {
-                Append(canonical, (int)guarantee);
-            }
-        }
-        Append(canonical, provenance.CapabilityEvidence.Length);
-        foreach (var evidence in provenance.CapabilityEvidence)
-        {
-            Append(canonical, evidence.Value);
-        }
-
-        Append(canonical, provenance.OperatingBoundaries.Length);
-        foreach (var boundary in provenance.OperatingBoundaries)
-        {
-            Append(canonical, boundary.Value);
-        }
+        Append(canonical, JsonSerializer.Serialize(provenance, jsonOptions));
 
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString()));
         return new(Algorithm, Canonicalization, Convert.ToHexStringLower(bytes));

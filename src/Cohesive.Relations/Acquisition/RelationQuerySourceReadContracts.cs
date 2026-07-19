@@ -52,6 +52,7 @@ public sealed record RelationQuerySourceReadField
 
         Input = input;
         SemanticPath = semanticPath;
+        OrderingPathKey = semanticPath.ToString();
         SourceSelector = Guard.RequireNotNullOrWhiteSpace(sourceSelector);
         Purpose = purpose;
     }
@@ -67,6 +68,44 @@ public sealed record RelationQuerySourceReadField
 
     /// <summary>Whether the field supplies semantic evidence, physical correlation, or both.</summary>
     public RelationQuerySourceReadFieldPurpose Purpose { get; }
+
+    // Cached once because the request field is reused by every materialized source row.
+    internal string OrderingPathKey { get; }
+
+    internal static int CompareCanonical(
+        RelationQuerySourceReadField left,
+        RelationQuerySourceReadField right)
+    {
+        var inputComparison = StringComparer.Ordinal.Compare(
+            left.Input?.Value ?? string.Empty,
+            right.Input?.Value ?? string.Empty);
+        if (inputComparison != 0)
+            return inputComparison;
+
+        var formattedPathComparison = StringComparer.Ordinal.Compare(
+            left.OrderingPathKey,
+            right.OrderingPathKey);
+        if (formattedPathComparison != 0)
+            return formattedPathComparison;
+
+        var leftSegments = left.SemanticPath.Segments;
+        var rightSegments = right.SemanticPath.Segments;
+        var commonLength = Math.Min(leftSegments.Length, rightSegments.Length);
+        for (var index = 0; index < commonLength; index++)
+        {
+            var kindComparison = ((int)leftSegments[index].Kind).CompareTo((int)rightSegments[index].Kind);
+            if (kindComparison != 0)
+                return kindComparison;
+
+            var segmentComparison = StringComparer.Ordinal.Compare(
+                leftSegments[index].Segment,
+                rightSegments[index].Segment);
+            if (segmentComparison != 0)
+                return segmentComparison;
+        }
+
+        return leftSegments.Length.CompareTo(rightSegments.Length);
+    }
 }
 
 /// <summary>Shared projection from compiled semantic field contracts and placement selectors to reader fields.</summary>
@@ -232,12 +271,8 @@ public sealed class RelationQuerySourceReadRequest
         Source = source;
         Shape = shape;
         IdentitySelector = Guard.RequireNotNullOrWhiteSpace(identitySelector);
-        Fields =
-        [
-            .. normalizedFields
-                .OrderBy(static field => field.Input?.Value ?? string.Empty, StringComparer.Ordinal)
-                .ThenBy(static field => field.SemanticPath.ToString(), StringComparer.Ordinal)
-        ];
+        Fields = normalizedFields.Sort(
+            static (left, right) => RelationQuerySourceReadField.CompareCanonical(left, right));
         Constraint = Guard.RequireNotNull(constraint);
         MaximumBufferedRows = RelationQuerySourcePlacementLimits.RequireLimit(
             maximumBufferedRows,
@@ -346,7 +381,10 @@ public sealed record RelationQuerySourceReadObservation
     /// <summary>Creates a source-read observation.</summary>
     /// <param name="identity">Stable semantic observation identity.</param>
     /// <param name="shape">Graph-qualified semantic shape.</param>
-    /// <param name="fields">One outcome for every requested field.</param>
+    /// <param name="fields">
+    /// One outcome for every requested field. Canonically ordered immutable input is retained; otherwise the
+    /// outcomes are copied into canonical order.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="identity"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">The identity or shape is invalid, or field outcomes conflict.</exception>
     [JsonConstructor]
@@ -360,18 +398,31 @@ public sealed record RelationQuerySourceReadObservation
         if (string.IsNullOrWhiteSpace(shape.GraphId.Value) || string.IsNullOrWhiteSpace(shape.ShapeId.Value))
             throw new ArgumentException("A source-read observation requires a graph-qualified shape.", nameof(shape));
         var normalized = fields.IsDefault ? [] : fields;
-        if (normalized.Any(static field => field is null))
-            throw new ArgumentException("Source-read field results cannot contain null entries.", nameof(fields));
-        if (normalized.GroupBy(static field => (field.Field.Input, field.Field.SemanticPath))
-            .Any(static group => group.Count() > 1))
-            throw new ArgumentException("Source-read field results cannot repeat one selection.", nameof(fields));
+        var isCanonical = true;
+        for (var index = 0; index < normalized.Length; index++)
+        {
+            var field = normalized[index];
+            if (field is null)
+                throw new ArgumentException("Source-read field results cannot contain null entries.", nameof(fields));
+            if (index == 0)
+                continue;
+
+            var previous = normalized[index - 1];
+            var comparison = CompareFields(previous, field);
+            if (comparison == 0)
+                ThrowIfSelectionRepeated(normalized, index);
+            if (comparison > 0)
+                isCanonical = false;
+        }
+
+        if (!isCanonical)
+        {
+            normalized = normalized.Sort(static (left, right) => CompareFields(left, right));
+            for (var index = 1; index < normalized.Length; index++)
+                ThrowIfSelectionRepeated(normalized, index);
+        }
         Shape = shape;
-        Fields =
-        [
-            .. normalized
-                .OrderBy(static field => field.Field.Input?.Value ?? string.Empty, StringComparer.Ordinal)
-                .ThenBy(static field => field.Field.SemanticPath.ToString(), StringComparer.Ordinal)
-        ];
+        Fields = normalized;
     }
 
     /// <summary>Stable semantic observation identity.</summary>
@@ -382,19 +433,54 @@ public sealed record RelationQuerySourceReadObservation
 
     /// <summary>Selected-field outcomes in deterministic order.</summary>
     public ImmutableArray<RelationQuerySourceReadFieldResult> Fields { get; }
+
+    static int CompareFields(
+        RelationQuerySourceReadFieldResult left,
+        RelationQuerySourceReadFieldResult right) =>
+        RelationQuerySourceReadField.CompareCanonical(left.Field, right.Field);
+
+    static bool SameSelection(
+        RelationQuerySourceReadFieldResult left,
+        RelationQuerySourceReadFieldResult right) =>
+        left.Field.Input == right.Field.Input
+        && left.Field.SemanticPath == right.Field.SemanticPath;
+
+    static void ThrowIfSelectionRepeated(
+        ImmutableArray<RelationQuerySourceReadFieldResult> fields,
+        int index)
+    {
+        var current = fields[index];
+        for (var previousIndex = index - 1;
+             previousIndex >= 0 && CompareFields(fields[previousIndex], current) == 0;
+             previousIndex--)
+        {
+            if (SameSelection(fields[previousIndex], current))
+            {
+                throw new ArgumentException(
+                    "Source-read field results cannot repeat one selection.",
+                    nameof(fields));
+            }
+        }
+    }
 }
 
 /// <summary>Overall outcome of one bounded physical source request.</summary>
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum RelationQuerySourceReadState
 {
-    /// <summary>The request completed authoritatively, including an empty result.</summary>
+    /// <summary>
+    /// This request exhausted its declared acquisition boundary authoritatively, including an empty result. The state
+    /// does not assert temporal atomicity with separate source requests.
+    /// </summary>
     Complete = 0,
 
     /// <summary>The request returned attributable rows but cannot claim complete results.</summary>
     Partial = 1,
 
-    /// <summary>The request authoritatively proved that no matching observation exists.</summary>
+    /// <summary>
+    /// This request authoritatively proved that no matching observation existed within its acquisition boundary. The
+    /// state does not assert temporal atomicity with separate source requests.
+    /// </summary>
     NotFound = 2,
 
     /// <summary>The source request failed.</summary>
@@ -411,8 +497,11 @@ public sealed class RelationQuerySourceReadResult
 {
     /// <summary>Creates a physical source-read result.</summary>
     /// <param name="state">Overall read outcome.</param>
-    /// <param name="observations">Identity-bearing observations returned by complete or partial reads.</param>
-    /// <param name="evidenceReference">Optional opaque acquisition, snapshot, or failure reference.</param>
+    /// <param name="observations">
+    /// Identity-bearing observations returned by complete or partial reads. Canonically ordered immutable input is
+    /// retained; otherwise the observations are copied into canonical identity order.
+    /// </param>
+    /// <param name="evidenceReference">Optional opaque acquisition, provider-version, or failure reference.</param>
     /// <exception cref="ArgumentException">
     /// <paramref name="observations"/> contains a <see langword="null"/> entry or duplicate identity, observations are
     /// supplied for a state that cannot carry rows, or <paramref name="evidenceReference"/> is empty or white space.
@@ -428,8 +517,25 @@ public sealed class RelationQuerySourceReadResult
         if (!Enum.IsDefined(state))
             throw new ArgumentOutOfRangeException(nameof(state), state, "Unsupported source-read state.");
         var normalized = observations.IsDefault ? [] : observations;
-        if (normalized.Any(static observation => observation is null))
-            throw new ArgumentException("Source-read observations cannot contain null entries.", nameof(observations));
+        var isCanonical = true;
+        for (var index = 0; index < normalized.Length; index++)
+        {
+            var observation = normalized[index];
+            if (observation is null)
+            {
+                throw new ArgumentException(
+                    "Source-read observations cannot contain null entries.",
+                    nameof(observations));
+            }
+            if (index == 0)
+                continue;
+
+            var comparison = StringComparer.Ordinal.Compare(normalized[index - 1].Identity, observation.Identity);
+            if (comparison == 0)
+                throw new ArgumentException("A source read cannot repeat an observation identity.", nameof(observations));
+            if (comparison > 0)
+                isCanonical = false;
+        }
         if ((state is RelationQuerySourceReadState.NotFound
                 or RelationQuerySourceReadState.Failed
                 or RelationQuerySourceReadState.Inconclusive)
@@ -439,13 +545,27 @@ public sealed class RelationQuerySourceReadResult
                 "Not-found, failed, and inconclusive source reads cannot contain observations.",
                 nameof(observations));
         }
-        if (normalized.GroupBy(static observation => observation.Identity, StringComparer.Ordinal)
-            .Any(static group => group.Count() > 1))
-            throw new ArgumentException("A source read cannot repeat an observation identity.", nameof(observations));
+        if (!isCanonical)
+        {
+            normalized = normalized.Sort(
+                static (left, right) => StringComparer.Ordinal.Compare(left.Identity, right.Identity));
+            for (var index = 1; index < normalized.Length; index++)
+            {
+                if (string.Equals(
+                        normalized[index - 1].Identity,
+                        normalized[index].Identity,
+                        StringComparison.Ordinal))
+                {
+                    throw new ArgumentException(
+                        "A source read cannot repeat an observation identity.",
+                        nameof(observations));
+                }
+            }
+        }
         if (evidenceReference is not null)
             ArgumentException.ThrowIfNullOrWhiteSpace(evidenceReference);
         State = state;
-        Observations = [.. normalized.OrderBy(static observation => observation.Identity, StringComparer.Ordinal)];
+        Observations = normalized;
         EvidenceReference = evidenceReference;
     }
 
@@ -455,10 +575,13 @@ public sealed class RelationQuerySourceReadResult
     /// <summary>Returned observations in deterministic identity order.</summary>
     public ImmutableArray<RelationQuerySourceReadObservation> Observations { get; }
 
-    /// <summary>Opaque acquisition, snapshot, or failure reference, or <see langword="null"/>.</summary>
+    /// <summary>Opaque acquisition, provider-version, or failure reference, or <see langword="null"/>.</summary>
     public string? EvidenceReference { get; }
 
-    /// <summary>Whether absence from this result is authoritative.</summary>
+    /// <summary>
+    /// Whether absence is authoritative for this exact source request and acquisition boundary. Complete evidence
+    /// does not by itself establish a consistent snapshot across multiple requests.
+    /// </summary>
     [JsonIgnore]
     public RelationQueryEvidenceCompleteness Completeness =>
         State is RelationQuerySourceReadState.Complete or RelationQuerySourceReadState.NotFound
@@ -508,7 +631,10 @@ public interface IRelationQuerySourceReader
     /// <summary>Executes one bounded, exactly projected source request.</summary>
     /// <param name="request">Plan-attributed source request.</param>
     /// <param name="cancellationToken">Token that cancels source I/O and result materialization.</param>
-    /// <returns>The complete, partial, not-found, failed, or inconclusive source outcome.</returns>
+    /// <returns>
+    /// The complete, partial, not-found, failed, or inconclusive outcome for this exact acquisition. Completeness is
+    /// request-local unless a separate capability guarantees consistency across requests.
+    /// </returns>
     /// <exception cref="ArgumentNullException"><paramref name="request"/> is <see langword="null"/>.</exception>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> is canceled.</exception>
     /// <remarks>Expected provider failures should be returned as evidence-bearing results; cancellation propagates.</remarks>

@@ -109,7 +109,8 @@ public sealed record CosmosRelationQueryFieldBinding
 }
 
 /// <summary>
-/// Immutable, versioned binding from one exact placed semantic source to one Cosmos container and document shape.
+/// Immutable, versioned binding from one exact placed semantic source to one Cosmos account, database, container,
+/// and document shape.
 /// </summary>
 /// <remarks>
 /// Adapter authoring supplies exact compiled-plan and placement fingerprints. Direct construction may omit both
@@ -119,7 +120,7 @@ public sealed record CosmosRelationQueryFieldBinding
 public sealed class CosmosRelationQueryStorageBinding
 {
     /// <summary>Current portable Cosmos relation/query storage-binding schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive.relations.cosmos-binding/v3";
+    public const string CurrentSchemaVersion = "cohesive.relations.cosmos-binding/v4";
 
     /// <summary>Default deterministic convention set for semantic-path document bindings.</summary>
     public const string SemanticPathConventionSet = "cohesive.relations.cosmos/semantic-path-conventions/v1";
@@ -130,10 +131,17 @@ public sealed class CosmosRelationQueryStorageBinding
     /// <param name="placementBinding">Exact plan-scoped placement binding interpreted by this binding.</param>
     /// <param name="target">Expected Cosmos target identity.</param>
     /// <param name="targetProfile">Expected target capability-profile identity.</param>
+    /// <param name="accountEndpoint">
+    /// Absolute Cosmos account endpoint retained as normalized physical affinity with one trailing separator.
+    /// </param>
+    /// <param name="databaseName">Physical Cosmos database name retained for execution integration.</param>
     /// <param name="containerName">Physical Cosmos container name retained for execution integration.</param>
     /// <param name="rootAlias">Simple SQL alias emitted after <c>FROM</c>.</param>
     /// <param name="identityPath">Stable identity property path relative to the document root.</param>
-    /// <param name="fields">Exact compiled field-input selectors.</param>
+    /// <param name="fields">
+    /// Exact compiled field-input selectors. May be empty when an operation such as unfiltered row count consumes no
+    /// semantic field input.
+    /// </param>
     /// <param name="documentRoot">Optional property path below the physical document containing semantic values.</param>
     /// <param name="partitionPath">Optional physical partition-key path relative to the physical document.</param>
     /// <param name="stableUniqueOrderingPaths">
@@ -165,9 +173,13 @@ public sealed class CosmosRelationQueryStorageBinding
     /// Exact source-placement fingerprint, or <see langword="null"/> together with
     /// <paramref name="compiledPlanFingerprint"/> for an explicitly unverified low-level binding.
     /// </param>
-    /// <exception cref="ArgumentNullException"><paramref name="containerName"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="accountEndpoint"/>, <paramref name="databaseName"/>, or <paramref name="containerName"/> is
+    /// <see langword="null"/>.
+    /// </exception>
     /// <exception cref="ArgumentException">
-    /// An identity or string is empty; a path is invalid; <paramref name="fields"/> is empty, default, contains a
+    /// <paramref name="accountEndpoint"/> is relative, is not HTTP or HTTPS, has no host, or contains credentials, a
+    /// query, or a fragment; an identity or string is empty; a path is invalid; <paramref name="fields"/> contains a
     /// <see langword="null"/> entry, or repeats an input; configuration decisions contain a null entry or repeat a
     /// setting; a configuration setting does not belong to the Cosmos binding grammar; origin and configuration
     /// provenance conflict; plan and placement affinity are only partially supplied; or origin and convention
@@ -183,6 +195,8 @@ public sealed class CosmosRelationQueryStorageBinding
         RelationQuerySourcePlacementBindingId placementBinding,
         RelationQueryTargetId target,
         RelationQueryTargetProfileId targetProfile,
+        Uri accountEndpoint,
+        string databaseName,
         string containerName,
         string rootAlias,
         FieldPath identityPath,
@@ -240,9 +254,9 @@ public sealed class CosmosRelationQueryStorageBinding
         }
 
         var normalizedFields = fields.IsDefault ? [] : fields;
-        if (normalizedFields.IsDefaultOrEmpty || normalizedFields.Any(static field => field is null))
+        if (normalizedFields.Any(static field => field is null))
         {
-            throw new ArgumentException("A Cosmos storage binding requires one or more field bindings.", nameof(fields));
+            throw new ArgumentException("Cosmos storage-binding fields cannot contain null entries.", nameof(fields));
         }
 
         if (normalizedFields.GroupBy(static field => field.Input).Any(static group => group.Count() > 1))
@@ -307,6 +321,8 @@ public sealed class CosmosRelationQueryStorageBinding
         PlacementBinding = placementBinding;
         Target = target;
         TargetProfile = targetProfile;
+        AccountEndpoint = CosmosPhysicalAffinity.NormalizeAccountEndpoint(accountEndpoint);
+        DatabaseName = Guard.RequireNotNullOrWhiteSpace(databaseName);
         ContainerName = Guard.RequireNotNullOrWhiteSpace(containerName);
         RootAlias = CosmosSqlNames.RequireIdentifier(rootAlias, nameof(rootAlias));
         IdentityPath = RequirePropertyPath(identityPath, nameof(identityPath));
@@ -341,6 +357,10 @@ public sealed class CosmosRelationQueryStorageBinding
     /// <param name="placementBinding">Exact plan-scoped placement binding interpreted by this binding.</param>
     /// <param name="target">Expected Cosmos target identity.</param>
     /// <param name="targetProfile">Expected target capability-profile identity.</param>
+    /// <param name="accountEndpoint">
+    /// Absolute Cosmos account endpoint retained as normalized physical affinity with one trailing separator.
+    /// </param>
+    /// <param name="databaseName">Physical Cosmos database name retained for execution integration.</param>
     /// <param name="containerName">Physical Cosmos container name retained for execution integration.</param>
     /// <param name="rootAlias">Simple SQL alias emitted after <c>FROM</c>.</param>
     /// <param name="identityPath">Stable identity property path relative to the document root.</param>
@@ -383,6 +403,8 @@ public sealed class CosmosRelationQueryStorageBinding
         RelationQuerySourcePlacementBindingId placementBinding,
         RelationQueryTargetId target,
         RelationQueryTargetProfileId targetProfile,
+        Uri accountEndpoint,
+        string databaseName,
         string containerName,
         string rootAlias,
         FieldPath identityPath,
@@ -405,6 +427,8 @@ public sealed class CosmosRelationQueryStorageBinding
             placementBinding,
             target,
             targetProfile,
+            accountEndpoint,
+            databaseName,
             containerName,
             rootAlias,
             identityPath,
@@ -460,6 +484,12 @@ public sealed class CosmosRelationQueryStorageBinding
 
     /// <summary>Expected target capability-profile identity.</summary>
     public RelationQueryTargetProfileId TargetProfile { get; }
+
+    /// <summary>Normalized absolute Cosmos account endpoint with one trailing separator.</summary>
+    public Uri AccountEndpoint { get; }
+
+    /// <summary>Physical Cosmos database name.</summary>
+    public string DatabaseName { get; }
 
     /// <summary>Physical Cosmos container name.</summary>
     public string ContainerName { get; }
@@ -548,6 +578,8 @@ public sealed class CosmosRelationQueryStorageBinding
     /// <param name="placement">Placed source-set binding whose fields are mapped.</param>
     /// <param name="target">Expected Cosmos target identity.</param>
     /// <param name="targetProfile">Expected target capability-profile identity.</param>
+    /// <param name="accountEndpoint">Absolute Cosmos account endpoint.</param>
+    /// <param name="databaseName">Physical Cosmos database name.</param>
     /// <param name="containerName">Physical Cosmos container name.</param>
     /// <param name="identityPath">Stable identity property path relative to the document root.</param>
     /// <param name="rootAlias">Simple Cosmos SQL document alias.</param>
@@ -561,10 +593,11 @@ public sealed class CosmosRelationQueryStorageBinding
     /// The result is an explicitly unverified low-level binding.
     /// </returns>
     /// <exception cref="ArgumentNullException">
-    /// <paramref name="placement"/> or <paramref name="containerName"/> is <see langword="null"/>.
+    /// <paramref name="placement"/>, <paramref name="accountEndpoint"/>, <paramref name="databaseName"/>, or
+    /// <paramref name="containerName"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// The placement is not a source-set binding, contains no fields, or another supplied binding fact is invalid.
+    /// The placement is not a source-set binding or another supplied binding fact is invalid.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <paramref name="maximumInputRows"/> is outside the exact Cosmos numeric range.
@@ -574,6 +607,8 @@ public sealed class CosmosRelationQueryStorageBinding
         RelationQuerySourcePlacementBinding placement,
         RelationQueryTargetId target,
         RelationQueryTargetProfileId targetProfile,
+        Uri accountEndpoint,
+        string databaseName,
         string containerName,
         FieldPath identityPath,
         string rootAlias = "c",
@@ -595,6 +630,8 @@ public sealed class CosmosRelationQueryStorageBinding
             placement.Id,
             target,
             targetProfile,
+            accountEndpoint,
+            databaseName,
             containerName,
             rootAlias,
             identityPath,
@@ -656,6 +693,8 @@ public sealed class CosmosRelationQueryStorageBinding
         {
             "target",
             "targetProfile",
+            "accountEndpoint",
+            "databaseName",
             "containerName",
             "rootAlias",
             "identityPath",
@@ -695,7 +734,7 @@ public sealed class CosmosRelationQueryStorageBinding
 static class CosmosRelationQueryBindingFingerprinter
 {
     const string Algorithm = "sha256";
-    const string Canonicalization = "cohesive.relations.cosmos-binding/v3-c14n/v1";
+    const string Canonicalization = "cohesive.relations.cosmos-binding/v4-c14n/v1";
 
     public static CosmosRelationQueryBindingFingerprint Compute(CosmosRelationQueryStorageBinding binding)
     {
@@ -707,6 +746,8 @@ static class CosmosRelationQueryBindingFingerprinter
         Append(canonical, binding.PlacementBinding.Value);
         Append(canonical, binding.Target.Value);
         Append(canonical, binding.TargetProfile.Value);
+        Append(canonical, binding.AccountEndpoint.AbsoluteUri);
+        Append(canonical, binding.DatabaseName);
         Append(canonical, binding.ContainerName);
         Append(canonical, binding.RootAlias);
         Append(canonical, binding.DocumentRoot);

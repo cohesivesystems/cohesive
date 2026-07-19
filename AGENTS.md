@@ -199,6 +199,11 @@ Don't optimize prematurely but avoid design decisions that are likely to be cost
 - Use `stackalloc` for small temporary buffers.
 - Avoid boxing and hidden allocations.
 - Pre-size collections.
+- Do not materialize an intermediate array, list, or immutable collection only to immediately filter, project, sort, or copy it into another collection. Fuse the work into a single loop, span operation, or pre-sized final builder.
+- When an exact-capacity `ImmutableArray<T>.Builder` is full and ownership transfers to the result, prefer `MoveToImmutable()` over `ToImmutable()`. Retain `ToImmutable()` when the builder may be reused or its count does not equal its capacity.
+- Preserve defensive copies at caller-owned mutable boundaries, but provide explicit trusted-ownership paths for internally produced immutable storage so it is not copied again.
+- When a normalizing boundary receives already-canonical immutable input, retain it after validating canonical order instead of unconditionally sorting and rematerializing it.
+- Audit `params` calls and collection expressions on hot paths: they can allocate a temporary array that is immediately copied by the callee. Add fixed-arity, span, or immutable overloads where this pattern recurs.
 
 ### Data Layout
 - Prefer cache-friendly layouts.
@@ -209,6 +214,7 @@ Don't optimize prematurely but avoid design decisions that are likely to be cost
 
 ### Hot Paths
 - Avoid LINQ, reflection, and unnecessary delegates in hot loops.
+- Avoid materialize-then-project pipelines such as `ToArray().Select(...)`; project directly into the final destination in one pass.
 - Reduce virtual and interface dispatch.
 - Keep frequently called methods small and inlineable.
 - Use `in`, `ref`, and `out` only when measurement justifies them.

@@ -45,16 +45,18 @@ The same facilities can be registered with `IServiceCollection` through `Registe
 `RegisterEntityRelationQueryEvaluator`. Registration order does not choose a source: the v1 catalog permits exactly
 one source per graph-qualified shape and rejects duplicate shape or source identities.
 
-## Temporary Cosmos compatibility
+## Temporary legacy compatibility boundary
 
-`IEntityQueryRepository`, its typed wrapper and mapping helpers, and the old observation read adapters remain only
-for `CosmosEntityOutboxRepository` and directly related compatibility tests. New code must use canonical
-`RelationQueryEvaluation`, `IRelationQueryEvaluator`, and `IRelationQuerySourceReader`. The remaining facade will be
-deleted after the Cosmos adapter migrates to canonical SDK execution and source acquisition.
+`CosmosEntityOutboxRepository` no longer implements `IEntityQueryRepository`; production Cosmos querying now uses
+canonical artifact execution or `IRelationQuerySourceReader`. The legacy interface, its typed wrapper and mapping
+helpers, and the old observation read adapters remain isolated only until the following deletion PR so overlapping
+tests can compare old and canonical behavior. New code must use `RelationQueryEvaluation`,
+`IRelationQueryEvaluator`, and explicit canonical source registrations.
 
-Generic repository DI registration temporarily still publishes keyed and typed `IEntityQueryRepository` wrappers
-for repositories that implement that Cosmos-era contract. These resolvers are compatibility-only; canonical hosts
-should register entity sources and resolve `IRelationQueryEvaluator` instead.
+Generic repository DI registration temporarily still publishes keyed and typed `IEntityQueryRepository` wrappers.
+There is no remaining Cosmos backend implementation behind them, so resolving those wrappers for a Cosmos entity
+fails rather than selecting another query authority. Canonical hosts should register entity sources and resolve
+`IRelationQueryEvaluator`; the compatibility interfaces and registrations are removed together next.
 
 ## Related Packages
 

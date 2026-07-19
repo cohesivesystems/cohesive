@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Numerics;
 using Cohesive.Relations.IR;
 
@@ -309,15 +310,15 @@ internal static class RelationQueryValueSemantics
     }
 
     static bool ArraysEqual(
-        IReadOnlyList<ObservationValue>? left,
-        IReadOnlyList<ObservationValue>? right)
+        ImmutableArray<ObservationValue> left,
+        ImmutableArray<ObservationValue> right)
     {
-        if (ReferenceEquals(left, right))
-            return true;
-        if (left is null || right is null || left.Count != right.Count)
+        if (left.IsDefault || right.IsDefault)
+            return left.IsDefault == right.IsDefault;
+        if (left.Length != right.Length)
             return false;
 
-        for (var index = 0; index < left.Count; index++)
+        for (var index = 0; index < left.Length; index++)
         {
             if (!Equals(left[index], right[index]))
                 return false;
@@ -395,15 +396,15 @@ internal static class RelationQueryValueSemantics
         }
     }
 
-    static int HashArray(IReadOnlyList<ObservationValue>? values)
+    static int HashArray(ImmutableArray<ObservationValue> values)
     {
         var hash = unchecked((int)0x41525231);
-        if (values is null)
+        if (values.IsDefault)
             return hash;
 
         foreach (var value in values)
             hash = Combine(hash, GetHashCode(value));
-        return Combine(hash, values.Count);
+        return Combine(hash, values.Length);
     }
 
     static int HashObject(IReadOnlyDictionary<string, ObservationValue>? values)

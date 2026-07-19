@@ -1,6 +1,8 @@
 using System.Buffers;
 using System.Collections;
+using System.Collections.Immutable;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -123,6 +125,211 @@ public sealed class ObservationValueTests
         Assert.False(observed.TryGetField(FieldPath.Parse("Customer.name"), out _));
         Assert.True(observed.TryGetProperty("Customer", out _));
         Assert.False(observed.TryGetProperty("customer", out _));
+    }
+
+    [Fact]
+    public void PublicConstructor_SnapshotsCallerOwnedObjectArrayAndByteStorage()
+    {
+        var fields = new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+        {
+            ["Name"] = ObservationValue.FromString("Contoso")
+        };
+        ObservationValue[] items = [ObservationValue.FromString("original")];
+        byte[] bytes = [1, 2, 3];
+        var objectValue = new ObservationValue(ObservationValueKind.Object, fields: fields);
+        var arrayValue = new ObservationValue(ObservationValueKind.Array, array: items);
+        var bytesValue = new ObservationValue(ObservationValueKind.Bytes, bytes: bytes);
+
+        fields["Name"] = ObservationValue.FromString("Fabrikam");
+        fields["Added"] = ObservationValue.FromBool(true);
+        items[0] = ObservationValue.FromString("changed");
+        bytes[0] = 9;
+
+        Assert.Equal("Contoso", objectValue.GetProperty("Name").GetString());
+        Assert.False(objectValue.TryGetProperty("Added", out _));
+        Assert.Equal("original", arrayValue.EnumerateArray()[0].GetString());
+        Assert.Equal(new byte[] { 1, 2, 3 }, bytesValue.Bytes.ToArray());
+
+        var returnedFields = Assert.IsAssignableFrom<IDictionary<string, ObservationValue>>(objectValue.Fields);
+        Assert.Throws<NotSupportedException>(() =>
+            returnedFields["Name"] = ObservationValue.FromString("mutated through Fields"));
+        IList<ObservationValue> returnedArray = arrayValue.Array;
+        Assert.Throws<NotSupportedException>(() =>
+            returnedArray[0] = ObservationValue.FromString("mutated through Array"));
+
+        Assert.Equal("Contoso", objectValue.GetProperty("Name").GetString());
+        Assert.Equal("original", arrayValue.Array[0].GetString());
+        Assert.Equal("original", arrayValue.EnumerateArray()[0].GetString());
+    }
+
+    [Fact]
+    public void CollectionFactories_SnapshotCallerOwnedObjectArrayAndByteStorage()
+    {
+        var fields = new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+        {
+            ["Name"] = ObservationValue.FromString("Contoso")
+        };
+        ObservationValue[] items = [ObservationValue.FromInt64(1)];
+        byte[] bytes = [4, 5, 6];
+        var objectValue = ObservationValue.FromObject(fields);
+        var arrayValue = ObservationValue.FromArray(items);
+        var bytesValue = ObservationValue.FromBytes(bytes);
+
+        fields.Clear();
+        items[0] = ObservationValue.FromInt64(2);
+        bytes[2] = 9;
+
+        Assert.Equal("Contoso", objectValue.GetProperty("Name").GetString());
+        Assert.Equal(1L, arrayValue.EnumerateArray()[0].GetInt64());
+        Assert.Equal(new byte[] { 4, 5, 6 }, bytesValue.Bytes.ToArray());
+    }
+
+    [Fact]
+    public void ImmutableCollectionInputs_RetainTheirOwnedStorage()
+    {
+        var arrayStorage = new[] { ObservationValue.FromString("retained") };
+        var immutableItems = ImmutableCollectionsMarshal.AsImmutableArray(arrayStorage);
+        var immutableFields = ImmutableDictionary.CreateRange(
+            StringComparer.Ordinal,
+            new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+            {
+                ["Name"] = ObservationValue.FromString("Contoso")
+            });
+
+        var arrayValue = ObservationValue.FromImmutableArray(immutableItems);
+        var objectValue = ObservationValue.FromObject(immutableFields);
+
+        Assert.Same(
+            arrayStorage,
+            ImmutableCollectionsMarshal.AsArray(arrayValue.Array));
+        Assert.Same(immutableFields, objectValue.Fields);
+        Assert.Equal("retained", arrayValue.Array[0].GetString());
+        Assert.Equal("Contoso", objectValue.GetProperty("Name").GetString());
+    }
+
+    [Fact]
+    public void FromImmutableArray_DefaultStorage_Throws()
+    {
+        var exception = Assert.Throws<ArgumentException>(
+            () => ObservationValue.FromImmutableArray(default));
+
+        Assert.Equal("values", exception.ParamName);
+    }
+
+    [Fact]
+    public void ImmutableObjectInput_WithNonOrdinalKeys_IsNormalizedBySnapshot()
+    {
+        var fields = ImmutableDictionary.CreateRange(
+            StringComparer.OrdinalIgnoreCase,
+            new Dictionary<string, ObservationValue>
+            {
+                ["Name"] = ObservationValue.FromString("Contoso")
+            });
+
+        var value = ObservationValue.FromObject(fields);
+
+        Assert.NotSame(fields, value.Fields);
+        Assert.True(value.TryGetProperty("Name", out _));
+        Assert.False(value.TryGetProperty("name", out _));
+    }
+
+    [Fact]
+    public void JsonObjectProjection_UsesDeterministicOrdinalPropertyOrder()
+    {
+        using var document = JsonDocument.Parse("""{"z":1,"a":2,"m":3}""");
+
+        var value = ObservationValue.FromJsonElement(document.RootElement);
+
+        Assert.IsType<ImmutableSortedDictionary<string, ObservationValue>>(value.Fields);
+        Assert.Equal("""{"a":2,"m":3,"z":1}""", value.GetRawText());
+    }
+
+    [Fact]
+    public void NestedRequestValue_SnapshotsEveryCallerOwnedCollectionBoundary()
+    {
+        var predicateFields = new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+        {
+            ["Status"] = ObservationValue.FromString("active")
+        };
+        var predicate = new ObservationValue(ObservationValueKind.Object, fields: predicateFields);
+        ObservationValue[] predicates = [predicate];
+        byte[] continuation = [7, 8, 9];
+        var requestFields = new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+        {
+            ["Predicates"] = new(ObservationValueKind.Array, array: predicates),
+            ["Continuation"] = new(ObservationValueKind.Bytes, bytes: continuation)
+        };
+        var requestValue = new ObservationValue(ObservationValueKind.Object, fields: requestFields);
+
+        predicateFields["Status"] = ObservationValue.FromString("inactive");
+        predicates[0] = ObservationValue.Null;
+        continuation[0] = 0;
+        requestFields.Clear();
+
+        var retainedPredicate = requestValue
+            .GetProperty("Predicates")
+            .EnumerateArray()[0];
+        Assert.Equal("active", retainedPredicate.GetProperty("Status").GetString());
+        Assert.Equal(
+            new byte[] { 7, 8, 9 },
+            requestValue.GetProperty("Continuation").Bytes.ToArray());
+    }
+
+    [Fact]
+    public void CallerMutation_DoesNotChangeHashOrHashSetMembership()
+    {
+        ObservationValue[] items = [ObservationValue.FromString("load-1")];
+        byte[] bytes = [1, 2, 3];
+        var fields = new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+        {
+            ["Items"] = ObservationValue.FromArray(items),
+            ["Payload"] = ObservationValue.FromBytes(bytes)
+        };
+        var value = ObservationValue.FromObject(fields);
+        var originalHash = value.GetHashCode();
+        HashSet<ObservationValue> values = [value];
+
+        items[0] = ObservationValue.FromString("load-2");
+        bytes[0] = 9;
+        fields.Clear();
+
+        Assert.Equal(originalHash, value.GetHashCode());
+        Assert.Contains(value, values);
+        Assert.Equal("load-1", value.GetProperty("Items").Array[0].GetString());
+        Assert.Equal(new byte[] { 1, 2, 3 }, value.GetProperty("Payload").Bytes.ToArray());
+    }
+
+    [Fact]
+    public void WithField_AndWithoutField_ImmutablyShapeNestedObjects()
+    {
+        var original = ObservationValue.EmptyObject
+            .WithField(FieldPath.Parse("Customer.Type"), ObservationValue.FromString("Preferred"))
+            .WithField(FieldPath.Parse("Customer.Name"), ObservationValue.FromString("Contoso"));
+
+        var updated = original
+            .WithField(FieldPath.Parse("Customer.Name"), ObservationValue.FromString("Fabrikam"))
+            .WithoutField(FieldPath.Parse("Customer.Type"));
+
+        Assert.Equal("Contoso", original.GetProperty("Customer").GetProperty("Name").GetString());
+        Assert.Equal("Preferred", original.GetProperty("Customer").GetProperty("Type").GetString());
+        Assert.Equal("Fabrikam", updated.GetProperty("Customer").GetProperty("Name").GetString());
+        Assert.False(updated.GetProperty("Customer").TryGetProperty("Type", out _));
+        Assert.Equal(["Name"], updated.GetProperty("Customer").Fields!.Keys);
+    }
+
+    [Fact]
+    public void WithField_InvalidTraversal_FailsPrecisely()
+    {
+        var scalarParent = ObservationValue.EmptyObject.WithField(
+            FieldPath.FromField("Customer"),
+            ObservationValue.FromString("Contoso"));
+
+        Assert.Throws<InvalidOperationException>(() => scalarParent.WithField(
+            FieldPath.Parse("Customer.Name"),
+            ObservationValue.FromString("Fabrikam")));
+        Assert.Throws<NotSupportedException>(() => ObservationValue.EmptyObject.WithField(
+            new([FieldPathSegment.Element(), FieldPathSegment.ForField("Name")]),
+            ObservationValue.FromString("Fabrikam")));
     }
 
     [Fact]

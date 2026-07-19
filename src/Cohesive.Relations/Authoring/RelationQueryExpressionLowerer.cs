@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Cohesive.Model.Expressions;
 using Cohesive.Relations.IR;
 
@@ -985,7 +986,8 @@ public sealed class RelationQueryExpressionLowerer
             values[index] = constant.Value;
         }
 
-        return new ConstantExpr(ObservationValue.FromArray(values));
+        return new ConstantExpr(ObservationValue.FromImmutableArray(
+            ImmutableCollectionsMarshal.AsImmutableArray(values)));
     }
 
     void LowerProjectionObject(

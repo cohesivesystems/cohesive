@@ -4,11 +4,13 @@ using Cohesive.Relations.Queries;
 namespace Cohesive.Storage;
 
 /// <summary>
-/// Adapts the temporary Cosmos-compatible entity query facade to the legacy relational query-read contract.
+/// Adapts the deletion-boundary entity query facade to the legacy relational query-read contract.
 /// </summary>
 /// <remarks>
-/// Retained only until the Cosmos entity repository and its compatibility tests migrate to canonical source readers
-/// and <see cref="Cohesive.Relations.Execution.IRelationQueryEvaluator"/>.
+/// Cohesive ships no built-in production backend for <see cref="IEntityQueryRepository"/>. This adapter remains
+/// temporarily for differential tests and external compatibility code and is removed with the legacy query facade.
+/// New integrations use canonical source readers and
+/// <see cref="Cohesive.Relations.Execution.IRelationQueryEvaluator"/>.
 /// </remarks>
 public sealed class ObservationQueryReadRepositoryAdapter : IQueryRepository
 {

@@ -109,17 +109,10 @@ public enum CosmosRelationQueryResultValueEncoding
     /// <summary>An exactly representable JSON number decoded as canonical <see cref="ScalarTypeKind.Int32"/>.</summary>
     JsonInt32 = 1,
 
-    /// <summary>A JSON string decoded without further scalar normalization.</summary>
+    /// <summary>
+    /// A JSON string retained without scalar normalization and validated against the retained semantic contract.
+    /// </summary>
     JsonString = 2,
-
-    /// <summary>A canonical GUID string.</summary>
-    CanonicalGuidString = 3,
-
-    /// <summary>A canonical ISO date string.</summary>
-    CanonicalDateString = 4,
-
-    /// <summary>A round-trip date-time-offset string interpreted using the retained temporal contract.</summary>
-    RoundTripDateTimeOffsetString = 5,
 
     /// <summary>A row count proven to remain inside Cosmos's exact integer domain.</summary>
     ExactCountInteger = 6
@@ -182,19 +175,33 @@ public sealed record CosmosRelationQueryResultIdentityBinding
 {
     /// <summary>Creates relation-result identity metadata.</summary>
     /// <param name="alias">Safe hidden SQL result alias.</param>
-    /// <param name="canonicalKey">Whether the alias evaluates the relation's explicit canonical output key.</param>
-    /// <exception cref="ArgumentException"><paramref name="alias"/> is invalid.</exception>
-    public CosmosRelationQueryResultIdentityBinding(string alias, bool canonicalKey)
+    /// <param name="valueContract">Exact semantic value contract used to decode and validate the identity.</param>
+    /// <param name="encoding">Physical Cosmos JSON encoding expected for the identity value.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="valueContract"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="alias"/> is invalid.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="encoding"/> is unsupported.</exception>
+    public CosmosRelationQueryResultIdentityBinding(
+        string alias,
+        ExprValueContract valueContract,
+        CosmosRelationQueryResultValueEncoding encoding)
     {
+        if (!Enum.IsDefined(encoding))
+            throw new ArgumentOutOfRangeException(nameof(encoding), encoding, "Unsupported Cosmos result-identity encoding.");
         Alias = CosmosSqlNames.RequireIdentifier(alias, nameof(alias));
-        CanonicalKey = canonicalKey;
+        ValueContract = Guard.RequireNotNull(valueContract);
+        Encoding = encoding;
     }
 
     /// <summary>Safe hidden SQL result alias.</summary>
     public string Alias { get; }
 
-    /// <summary>Whether the alias evaluates the relation's explicit canonical output key.</summary>
-    public bool CanonicalKey { get; }
+    /// <summary>Exact semantic contract used to decode and validate the physical identity value.</summary>
+    public ExprValueContract ValueContract { get; }
+
+    /// <summary>Physical Cosmos JSON encoding expected for the identity value.</summary>
+    public CosmosRelationQueryResultValueEncoding Encoding { get; }
 }
 
 /// <summary>Binding from one command-template slot to one canonical invocation parameter.</summary>
@@ -276,6 +283,7 @@ public sealed class CosmosRelationQueryCompiledArtifact
         ImmutableArray<CosmosRelationQuerySelectedField> selectedFields,
         ImmutableArray<CosmosRelationQueryResultFieldBinding> resultFields,
         CosmosRelationQueryResultIdentityBinding? resultIdentity,
+        ImmutableArray<string> auxiliaryResultAliases,
         ImmutableArray<CosmosRelationQueryParameterBinding> parameters,
         CosmosRelationQueryPagingContract? paging,
         RelationQueryNativeCompilationProvenance provenance,
@@ -293,6 +301,15 @@ public sealed class CosmosRelationQueryCompiledArtifact
             static field => field.Alias,
             nameof(resultFields));
         ResultIdentity = resultIdentity;
+        AuxiliaryResultAliases = auxiliaryResultAliases.IsDefault ? [] : auxiliaryResultAliases;
+        foreach (var alias in AuxiliaryResultAliases)
+            CosmosSqlNames.RequireIdentifier(alias, nameof(auxiliaryResultAliases));
+        if (AuxiliaryResultAliases.Distinct(StringComparer.Ordinal).Count() != AuxiliaryResultAliases.Length)
+        {
+            throw new ArgumentException(
+                "Auxiliary Cosmos result aliases cannot be repeated.",
+                nameof(auxiliaryResultAliases));
+        }
         Parameters = NormalizePreservingOrder(
             parameters,
             static parameter => parameter.SqlName,
@@ -311,6 +328,17 @@ public sealed class CosmosRelationQueryCompiledArtifact
             && ResultFields.Any(field => string.Equals(field.Alias, identity.Alias, StringComparison.Ordinal)))
         {
             throw new ArgumentException("The hidden result identity alias cannot collide with a result field alias.", nameof(resultIdentity));
+        }
+        HashSet<string> canonicalAliases = ResultFields
+            .Select(static field => field.Alias)
+            .ToHashSet(StringComparer.Ordinal);
+        if (ResultIdentity is { } resultIdentityBinding)
+            canonicalAliases.Add(resultIdentityBinding.Alias);
+        if (AuxiliaryResultAliases.Any(canonicalAliases.Contains))
+        {
+            throw new ArgumentException(
+                "An auxiliary result alias cannot collide with a canonical result field or identity alias.",
+                nameof(auxiliaryResultAliases));
         }
         if (Branch.Id != Provenance.Branch)
             throw new ArgumentException("Artifact branch and provenance branch identities must match.", nameof(provenance));
@@ -333,6 +361,12 @@ public sealed class CosmosRelationQueryCompiledArtifact
 
     /// <summary>Hidden canonical relation identity binding, or <see langword="null"/> for a query result.</summary>
     public CosmosRelationQueryResultIdentityBinding? ResultIdentity { get; }
+
+    /// <summary>
+    /// Hidden physical result aliases that preserve query semantics such as whole-row DISTINCT but are not canonical
+    /// output fields.
+    /// </summary>
+    public ImmutableArray<string> AuxiliaryResultAliases { get; }
 
     /// <summary>Canonical invocation parameters in allocated SQL-name order.</summary>
     public ImmutableArray<CosmosRelationQueryParameterBinding> Parameters { get; }
@@ -384,13 +418,16 @@ public sealed class CosmosRelationQueryCompiledArtifact
                     $"Canonical query parameter '{binding.Parameter.Value}' is required by this artifact.",
                     nameof(parameters));
             }
-            if (!binding.ValueContract.IsSatisfiedByConstant(value))
+            if (!CosmosRelationQueryCanonicalValueCodec.TryEncodeRuntimeParameter(
+                    binding.ValueContract,
+                    value,
+                    out var encoded))
             {
                 throw new ArgumentException(
-                    $"Canonical query parameter '{binding.Parameter.Value}' does not satisfy its effective compiled value contract.",
+                    $"Canonical query parameter '{binding.Parameter.Value}' does not satisfy its effective compiled value contract or exact Cosmos representation.",
                     nameof(parameters));
             }
-            values.Add(binding.Parameter.Value, value);
+            values.Add(binding.Parameter.Value, encoded);
         }
         return Statement.Bind(values);
     }

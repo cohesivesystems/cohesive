@@ -926,7 +926,7 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
                 {
                     continue;
                 }
-                if (collection.Kind != ObservationValueKind.Array || collection.Array is null)
+                if (collection.Kind != ObservationValueKind.Array || collection.Array.IsDefault)
                 {
                     throw ExpressionFailure(
                         site,

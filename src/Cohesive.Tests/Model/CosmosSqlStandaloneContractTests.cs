@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Cohesive.Adapters.Cosmos;
 
 namespace Cohesive.Tests.Model;
@@ -44,6 +45,74 @@ public sealed class CosmosSqlStandaloneContractTests
         Assert.Equal("unknown", statement.Parameters[0].Value);
         Assert.Equal("rea", statement.Parameters[1].Value);
         Assert.Equal(true, statement.Parameters[2].Value);
+    }
+
+    [Fact]
+    public void FunctionAndObject_ImmutableAndFixedArityPaths_RenderEquivalentSql()
+    {
+        var name = CosmosSqlExpression.Property("c", FieldPath.FromField("Name"));
+        var prefix = CosmosSqlExpression.Parameter("co");
+        var caseInsensitive = CosmosSqlExpression.Parameter(true);
+        ImmutableArray<CosmosSqlExpression> immutableFunctionArguments = [name, prefix, caseInsensitive];
+        ImmutableArray<CosmosSqlObjectProperty> immutableProperties =
+        [
+            new("normalized", CosmosSqlExpression.Function(CosmosSqlFunction.Lower, name)),
+            new(
+                "matches",
+                CosmosSqlExpression.FunctionFromImmutable(
+                    CosmosSqlFunction.StartsWith,
+                    immutableFunctionArguments))
+        ];
+
+        var statement = new CosmosSqlBuilder()
+            .SelectValue(CosmosSqlExpression.ObjectFromImmutable(immutableProperties))
+            .Build();
+
+        Assert.Equal(
+            "SELECT VALUE { \"normalized\": LOWER(c[\"Name\"]), \"matches\": STARTSWITH(c[\"Name\"], @p0, @p1) } FROM c",
+            statement.Text);
+        Assert.Equal(["co", true], statement.Parameters.Select(static parameter => parameter.Value));
+    }
+
+    [Fact]
+    public void FunctionAndObject_MutableArrayEntrypoints_DefensivelySnapshotInputs()
+    {
+        CosmosSqlExpression[] arguments =
+        [
+            CosmosSqlExpression.Property("c", FieldPath.FromField("Name"))
+        ];
+        var function = CosmosSqlExpression.FunctionFromMutable(CosmosSqlFunction.Lower, arguments);
+        arguments[0] = CosmosSqlExpression.Property("c", FieldPath.FromField("Changed"));
+        CosmosSqlObjectProperty[] properties = [new("original", function)];
+        var expression = CosmosSqlExpression.ObjectFromMutable(properties);
+        properties[0] = new("changed", CosmosSqlExpression.Alias("c"));
+
+        var statement = new CosmosSqlBuilder()
+            .SelectValue(expression)
+            .Build();
+
+        Assert.Equal("SELECT VALUE { \"original\": LOWER(c[\"Name\"]) } FROM c", statement.Text);
+    }
+
+    [Fact]
+    public void FunctionAndObject_NullAndDefaultInputs_HaveUnambiguousContracts()
+    {
+        var functionNull = Assert.Throws<ArgumentNullException>(
+            () => CosmosSqlExpression.Function(CosmosSqlFunction.Lower, null!));
+        var objectNull = Assert.Throws<ArgumentNullException>(
+            () => CosmosSqlExpression.Object(null!));
+        var mutableFunctionNull = Assert.Throws<ArgumentNullException>(
+            () => CosmosSqlExpression.FunctionFromMutable(CosmosSqlFunction.Lower, null!));
+        var mutableObjectNull = Assert.Throws<ArgumentNullException>(
+            () => CosmosSqlExpression.ObjectFromMutable(null!));
+
+        Assert.Equal("argument", functionNull.ParamName);
+        Assert.Equal("property", objectNull.ParamName);
+        Assert.Equal("arguments", mutableFunctionNull.ParamName);
+        Assert.Equal("properties", mutableObjectNull.ParamName);
+        Assert.Throws<ArgumentNullException>(
+            () => CosmosSqlExpression.Function(CosmosSqlFunction.Lower, default!));
+        Assert.Throws<ArgumentNullException>(() => CosmosSqlExpression.Object(default!));
     }
 
     [Fact]
@@ -119,13 +188,51 @@ public sealed class CosmosSqlStandaloneContractTests
         Assert.Throws<ArgumentException>(() => new CosmosSqlBuilder().JoinCollection(
             "c",
             CosmosSqlExpression.Property("c", FieldPath.FromField("items"))));
-        Assert.Throws<ArgumentException>(() => CosmosSqlExpression.Function(
+        var invalidArity = Assert.Throws<ArgumentException>(() => CosmosSqlExpression.Function(
             CosmosSqlFunction.IsDefined,
             CosmosSqlExpression.Alias("c"),
             CosmosSqlExpression.Alias("c")));
+        var duplicateSecondProperty = Assert.Throws<ArgumentException>(() => CosmosSqlExpression.Object(
+            new("duplicate", CosmosSqlExpression.Alias("c")),
+            new("duplicate", CosmosSqlExpression.Alias("c"))));
+        var duplicateThirdProperty = Assert.Throws<ArgumentException>(() => CosmosSqlExpression.Object(
+            new("first", CosmosSqlExpression.Alias("c")),
+            new("duplicate", CosmosSqlExpression.Alias("c")),
+            new("duplicate", CosmosSqlExpression.Alias("c"))));
+        var invalidImmutableArity = Assert.Throws<ArgumentException>(() =>
+            CosmosSqlExpression.FunctionFromImmutable(
+                CosmosSqlFunction.IsDefined,
+                [CosmosSqlExpression.Alias("c"), CosmosSqlExpression.Alias("c")]));
+        var invalidMutableArity = Assert.Throws<ArgumentException>(() =>
+            CosmosSqlExpression.FunctionFromMutable(
+                CosmosSqlFunction.IsDefined,
+                [CosmosSqlExpression.Alias("c"), CosmosSqlExpression.Alias("c")]));
+        var duplicateImmutableProperty = Assert.Throws<ArgumentException>(() =>
+            CosmosSqlExpression.ObjectFromImmutable(
+                [
+                    new("duplicate", CosmosSqlExpression.Alias("c")),
+                    new("duplicate", CosmosSqlExpression.Alias("c"))
+                ]));
+        var duplicateMutableProperty = Assert.Throws<ArgumentException>(() =>
+            CosmosSqlExpression.ObjectFromMutable(
+                [
+                    new("duplicate", CosmosSqlExpression.Alias("c")),
+                    new("duplicate", CosmosSqlExpression.Alias("c"))
+                ]));
+        Assert.Equal("function", invalidArity.ParamName);
+        Assert.Equal("function", invalidImmutableArity.ParamName);
+        Assert.Equal("function", invalidMutableArity.ParamName);
+        Assert.Equal("secondProperty", duplicateSecondProperty.ParamName);
+        Assert.Equal("thirdProperty", duplicateThirdProperty.ParamName);
+        Assert.Equal("properties", duplicateImmutableProperty.ParamName);
+        Assert.Equal("properties", duplicateMutableProperty.ParamName);
         Assert.Throws<ArgumentException>(() => new CosmosSqlBuilder()
             .SelectValue(CosmosSqlExpression.RuntimeParameter("value"))
             .Build());
+        Assert.Throws<ArgumentException>(() => CosmosSqlExpression.FunctionFromImmutable(
+            CosmosSqlFunction.Lower,
+            default));
+        Assert.Throws<ArgumentException>(() => CosmosSqlExpression.ObjectFromImmutable(default));
     }
 
     [Fact]
@@ -142,29 +249,20 @@ public sealed class CosmosSqlStandaloneContractTests
     }
 
     [Fact]
-    public void Parameter_RejectsCyclicStructuredValues()
+    public void Parameter_RejectsCyclicClrStructuredValues()
     {
         List<object?> cyclicSequence = [];
         cyclicSequence.Add(cyclicSequence);
         Dictionary<string, object?> cyclicObject = new(StringComparer.Ordinal);
         cyclicObject.Add("self", cyclicObject);
-        Dictionary<string, ObservationValue> cyclicObservationFields = new(StringComparer.Ordinal)
-        {
-            ["self"] = ObservationValue.Null
-        };
-        var cyclicObservation = ObservationValue.FromObject(cyclicObservationFields);
-        cyclicObservationFields["self"] = cyclicObservation;
 
         var sequenceException = Assert.Throws<NotSupportedException>(
             () => CosmosSqlExpression.Parameter(cyclicSequence));
         var objectException = Assert.Throws<NotSupportedException>(
             () => CosmosSqlExpression.Parameter(cyclicObject));
-        var observationException = Assert.Throws<NotSupportedException>(
-            () => CosmosSqlExpression.Parameter(cyclicObservation));
 
         Assert.Contains("Cyclic structured values", sequenceException.Message, StringComparison.Ordinal);
         Assert.Contains("Cyclic structured values", objectException.Message, StringComparison.Ordinal);
-        Assert.Contains("Cyclic structured values", observationException.Message, StringComparison.Ordinal);
     }
 
     [Fact]
