@@ -683,16 +683,16 @@ public sealed class ElasticRelationQueryStorageBindingBuilder<T>
 public sealed class ElasticRelationQueryStorageBindingBuilder
 {
     const string DerivedIdAuthority = "cohesive.relations.elastic/binding-id-convention/v3";
-    const string TargetSetting = "target";
-    const string TargetProfileSetting = "targetProfile";
-    const string IndexSetting = "indexName";
-    const string SourceModeSetting = "sourceMode";
-    const string MaximumResultWindowSetting = "maximumResultWindow";
-    const string MaximumPageSizeSetting = "maximumPageSize";
-    const string PaginationConsistencySetting = "paginationConsistency";
-    const string ConventionSetting = "conventionSetVersion";
-    const string BindingIdSetting = "bindingId";
-    const string FieldMappingConventionSetting = "fieldMappingConvention";
+    internal const string TargetSetting = "target";
+    internal const string TargetProfileSetting = "targetProfile";
+    internal const string IndexSetting = "indexName";
+    internal const string SourceModeSetting = "sourceMode";
+    internal const string MaximumResultWindowSetting = "maximumResultWindow";
+    internal const string MaximumPageSizeSetting = "maximumPageSize";
+    internal const string PaginationConsistencySetting = "paginationConsistency";
+    internal const string ConventionSetting = "conventionSetVersion";
+    internal const string BindingIdSetting = "bindingId";
+    internal const string FieldMappingConventionSetting = "fieldMappingConvention";
 
     readonly RelationQueryPlacedInput placedInput;
     readonly ElasticRelationQueryBindingAuthoringOptions? options;
@@ -1697,9 +1697,7 @@ public sealed class ElasticRelationQueryStorageBindingBuilder
             || placedInput.Binding.Kind != RelationQuerySourcePlacementBindingKind.SourceSet
             || placedInput.Source.TargetProfile.Target != ElasticRelationQueryTargetProfile.Target
             || placedInput.Source.TargetProfile.Id != ElasticRelationQueryTargetProfile.ProfileId
-            || !ElasticRelationQueryCompiler.ProfilesEquivalent(
-                placedInput.Source.TargetProfile,
-                ElasticRelationQueryTargetProfile.Default)
+            || !placedInput.Source.TargetProfile.HasSameSemantics(ElasticRelationQueryTargetProfile.Default)
             || !ReferencesPlan(placedInput.Placement.Plan, placedInput.Plan))
         {
             Error(
@@ -2026,7 +2024,7 @@ public sealed class ElasticRelationQueryStorageBindingBuilder
         RelationQueryConfigurationValueOrigin origin,
         string authority) => new(setting, origin, authority);
 
-    static string FieldSetting(RelationQueryInputId input) => "field/" + input.Value;
+    internal static string FieldSetting(RelationQueryInputId input) => "field/" + input.Value;
 
     static string FieldSetting(FieldPath path) => "field/semantic/" + SafePathKey(path);
 

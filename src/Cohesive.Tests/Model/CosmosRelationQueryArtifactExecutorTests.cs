@@ -1099,7 +1099,10 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
             artifact.Provenance.Target,
             artifact.Provenance.TargetProfile,
             artifact.Provenance.Realization,
+            artifact.Provenance.BoundRealization,
             artifact.Provenance.Placement,
+            artifact.Provenance.AdapterBinding,
+            artifact.Provenance.ContextEvidence,
             artifact.Provenance.CompilerProfile,
             artifact.Provenance.ConventionSetVersion,
             artifact.Provenance.CoveredNodes,
@@ -1140,13 +1143,28 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
                 originalPlan.DemandFingerprint.Canonicalization,
                 new string('f', 64)),
             originalPlan.Inputs);
+        var originalAdapterBinding = artifact.Provenance.AdapterBinding;
+        RelationQueryAdapterBindingReference changedPlanAdapterBinding = new(
+            originalAdapterBinding.SchemaVersion,
+            originalAdapterBinding.BindingId,
+            originalAdapterBinding.Target,
+            originalAdapterBinding.TargetProfile,
+            originalAdapterBinding.Fingerprint,
+            RelationQueryCompiledPlanReferenceFingerprinter.Compute(changedPlan),
+            originalAdapterBinding.PlacementFingerprint,
+            originalAdapterBinding.Sources,
+            originalAdapterBinding.PlacementBindings,
+            originalAdapterBinding.ConfigurationDecisions);
         RelationQueryNativeCompilationProvenance changedPlanProvenance = new(
             changedPlan,
             artifact.Provenance.Branch,
             artifact.Provenance.Target,
             artifact.Provenance.TargetProfile,
             artifact.Provenance.Realization,
+            artifact.Provenance.BoundRealization,
             artifact.Provenance.Placement,
+            changedPlanAdapterBinding,
+            artifact.Provenance.ContextEvidence,
             artifact.Provenance.CompilerProfile,
             artifact.Provenance.ConventionSetVersion,
             artifact.Provenance.CoveredNodes,
@@ -1169,7 +1187,7 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
         Assert.NotEqual(artifact.Fingerprint, changedProvenanceFingerprint);
         Assert.NotEqual(artifact.Fingerprint, changedAuxiliaryFingerprint);
         Assert.NotEqual(artifact.Fingerprint, changedPlanFingerprint);
-        Assert.EndsWith("/v3", artifact.Fingerprint.Canonicalization, StringComparison.Ordinal);
+        Assert.EndsWith("/v4", artifact.Fingerprint.Canonicalization, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1666,6 +1684,20 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
                 maximumInputRows: 100,
                 compiledPlanFingerprint: planFingerprint,
                 placementFingerprint: placement);
+            RelationQueryAdapterBindingReference adapterBinding = new(
+                storageBinding.SchemaVersion,
+                storageBinding.Id.Value,
+                storageBinding.Target,
+                storageBinding.TargetProfile,
+                new(
+                    storageBinding.Fingerprint.Algorithm,
+                    storageBinding.Fingerprint.Canonicalization,
+                    storageBinding.Fingerprint.Value),
+                storageBinding.CompiledPlanFingerprint,
+                storageBinding.PlacementFingerprint,
+                [storageBinding.Source],
+                [storageBinding.PlacementBinding],
+                storageBinding.ConfigurationDecisions);
             var byPath = fields.ToDictionary(static spec => spec.Path);
             ImmutableArray<CosmosRelationQueryResultFieldBinding> resultFields =
             [
@@ -1702,7 +1734,10 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
                 CosmosRelationQueryTargetProfile.Target,
                 CosmosRelationQueryTargetProfile.ProfileId,
                 realization,
+                new("sha256", "tests/bound-realization-v1", Hash('f')),
                 placement,
+                adapterBinding,
+                [new($"context/{branchName}")],
                 CosmosRelationQueryCompilerOptions.CurrentCompilerProfile,
                 CosmosRelationQueryStorageBinding.SemanticPathConventionSet,
                 [node],

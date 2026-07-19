@@ -8,6 +8,7 @@ using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.Physical;
 using Cohesive.Relations.Realization;
+using Cohesive.Tests.Relations;
 using IRQueryDefinition = Cohesive.Relations.IR.QueryDefinition;
 using IRRelationDefinition = Cohesive.Relations.IR.RelationDefinition;
 
@@ -80,9 +81,10 @@ public sealed class CosmosRelationQueryCompilerTests
         var result = Fixture.Aggregation(AggregateOperator.Max).Compile();
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
-        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable);
-        Assert.Contains("deterministic order", diagnostic.Message, StringComparison.Ordinal);
+        _ = AssertContextDiagnostic(
+            result,
+            RelationQueryRealizationDiagnosticCodes.ContextUnavailable,
+            "deterministic order");
         Assert.Empty(result.Artifacts);
     }
 
@@ -94,9 +96,10 @@ public sealed class CosmosRelationQueryCompilerTests
         var result = fixture.Compile(fixture.StorageBindingWithMaximumInputRows(null));
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
-        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.AggregateUnsupported);
-        Assert.Contains("maximumInputRows", diagnostic.Message, StringComparison.Ordinal);
+        _ = AssertContextDiagnostic(
+            result,
+            RelationQueryRealizationDiagnosticCodes.ContextUnavailable,
+            "maximumInputRows proof");
         Assert.Empty(result.Artifacts);
     }
 
@@ -106,9 +109,10 @@ public sealed class CosmosRelationQueryCompilerTests
         var result = Fixture.Aggregation(AggregateOperator.Sum).Compile();
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
-        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.AggregateUnsupported);
-        Assert.Contains("decimal SUM", diagnostic.Message, StringComparison.Ordinal);
+        _ = AssertContextDiagnostic(
+            result,
+            RelationQueryRealizationDiagnosticCodes.ContextUnavailable,
+            "decimal SUM");
         Assert.Empty(result.Artifacts);
     }
 
@@ -120,9 +124,10 @@ public sealed class CosmosRelationQueryCompilerTests
         var result = fixture.Compile();
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
-        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.RelationTerminalUnsupported);
-        Assert.Contains("root correlation", diagnostic.Message, StringComparison.Ordinal);
+        var diagnostic = AssertContextDiagnostic(
+            result,
+            RelationQueryRealizationDiagnosticCodes.ContextUnavailable,
+            "root correlation");
         Assert.NotNull(diagnostic.Branch);
         Assert.Empty(result.Artifacts);
     }
@@ -158,10 +163,7 @@ public sealed class CosmosRelationQueryCompilerTests
     public void NativeCompilationProvenance_RejectsUnknownCoveredNode()
     {
         var fixture = Fixture.Row();
-        var request = new RelationQueryNativeCompilationRequest(
-            fixture.Plan,
-            fixture.Realization,
-            fixture.Placement);
+        var request = fixture.CreateNativeCompilationRequest();
         var branch = Assert.Single(request.Branches);
 
         var exception = Assert.Throws<ArgumentException>(() =>
@@ -182,10 +184,7 @@ public sealed class CosmosRelationQueryCompilerTests
     public void NativeCompilationProvenance_RejectsCoveredNodeFromAnotherBranch()
     {
         var fixture = Fixture.IndependentBranches();
-        var request = new RelationQueryNativeCompilationRequest(
-            fixture.Plan,
-            fixture.Realization,
-            fixture.Placement);
+        var request = fixture.CreateNativeCompilationRequest();
         var selectedBranch = Assert.Single(request.Branches, static branch => branch.QueryResult == new QueryResultId("rows"));
         var unrelatedBranch = Assert.Single(request.Branches, branch => branch.Id != selectedBranch.Id);
 
@@ -207,10 +206,7 @@ public sealed class CosmosRelationQueryCompilerTests
     public void NativeCompilationProvenance_RejectsAssignmentOutsideCoveredNodes()
     {
         var fixture = Fixture.Row();
-        var request = new RelationQueryNativeCompilationRequest(
-            fixture.Plan,
-            fixture.Realization,
-            fixture.Placement);
+        var request = fixture.CreateNativeCompilationRequest();
         var branch = Assert.Single(request.Branches);
         var projectionNode = Assert.Single(
             fixture.Plan.ExecutionSlice.Nodes,
@@ -238,10 +234,7 @@ public sealed class CosmosRelationQueryCompilerTests
     public void NativeCompilationProvenance_RejectsPlanInputReadOnlyByAnotherBranch()
     {
         var fixture = Fixture.IndependentBranches();
-        var request = new RelationQueryNativeCompilationRequest(
-            fixture.Plan,
-            fixture.Realization,
-            fixture.Placement);
+        var request = fixture.CreateNativeCompilationRequest();
         var selectedBranch = Assert.Single(request.Branches, static branch => branch.QueryResult == new QueryResultId("rows"));
         var selectedOutputs = selectedBranch.Outputs.Select(static output => output.Id).ToHashSet();
         var unrelatedInput = Assert.Single(
@@ -314,11 +307,13 @@ public sealed class CosmosRelationQueryCompilerTests
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Invalid, staleRealization.Status);
         Assert.Contains(staleRealization.Diagnostics, static diagnostic =>
-            diagnostic.Code == RelationQueryNativeCompilationDiagnosticCodes.RealizationPlanMismatch);
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextInvalid
+            && diagnostic.Message.Contains("realization report differs from the compiled plan", StringComparison.Ordinal));
         Assert.Empty(staleRealization.Artifacts);
         Assert.Equal(RelationQueryNativeCompilationStatus.Invalid, stalePlacement.Status);
         Assert.Contains(stalePlacement.Diagnostics, static diagnostic =>
-            diagnostic.Code == RelationQueryNativeCompilationDiagnosticCodes.PlacementPlanMismatch);
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextInvalid
+            && diagnostic.Message.Contains("source placement differs from the compiled plan", StringComparison.Ordinal));
         Assert.Empty(stalePlacement.Artifacts);
     }
 
@@ -345,11 +340,11 @@ public sealed class CosmosRelationQueryCompilerTests
         Assert.Equal(current.StorageBinding.Id, verified.Id);
         Assert.Equal(RelationQueryNativeCompilationStatus.Invalid, planReuse.Status);
         Assert.Contains(planReuse.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.StorageBindingMismatch
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextAffinityMismatch
             && diagnostic.Message.Contains("compiled-plan affinity", StringComparison.Ordinal));
         Assert.Equal(RelationQueryNativeCompilationStatus.Invalid, placementReuse.Status);
         Assert.Contains(placementReuse.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.StorageBindingMismatch
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextAffinityMismatch
             && diagnostic.Message.Contains("source-placement affinity", StringComparison.Ordinal));
         Assert.Empty(planReuse.Artifacts);
         Assert.Empty(placementReuse.Artifacts);
@@ -371,7 +366,7 @@ public sealed class CosmosRelationQueryCompilerTests
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
         Assert.Contains(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == RelationQueryNativeCompilationDiagnosticCodes.RealizationUnavailable);
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.RequirementUnavailable);
         Assert.Empty(result.Artifacts);
     }
 
@@ -385,7 +380,7 @@ public sealed class CosmosRelationQueryCompilerTests
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Invalid, result.Status);
         Assert.Contains(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.StorageBindingMismatch
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextAffinityMismatch
             && diagnostic.Severity == DiagnosticSeverity.Error);
         Assert.Empty(result.Artifacts);
     }
@@ -399,9 +394,32 @@ public sealed class CosmosRelationQueryCompilerTests
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Invalid, result.Status);
         Assert.Contains(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.StorageBindingMismatch
-            && diagnostic.Message.Contains("exactly one source contract", StringComparison.Ordinal));
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextInvalid
+            && diagnostic.Message.Contains("exactly the one source contract", StringComparison.Ordinal));
         Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
+    public void Compile_SelectedSingleSourceBranch_IgnoresIndependentUnselectedSource()
+    {
+        var fixture = Fixture.IndependentSources();
+        var allBranches = new RelationQueryBoundRealizationRequest(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement);
+        var selectedPlacement = fixture.Placement.Bindings.Single(binding =>
+            binding.Id == fixture.StorageBinding.PlacementBinding);
+        var selected = Assert.Single(allBranches.Branches, branch => branch.Node == selectedPlacement.Node);
+        var request = new RelationQueryBoundRealizationRequest(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement,
+            [selected.Id]);
+
+        var result = fixture.Compile(request: request);
+
+        Assert.True(result.IsSuccessful, Diagnostics(result));
+        Assert.Equal(selected.Id, Assert.Single(result.Artifacts).Branch.Id);
     }
 
     [Fact]
@@ -413,7 +431,7 @@ public sealed class CosmosRelationQueryCompilerTests
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
         var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedLogicalOperator);
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable);
         Assert.Contains("offset paging only", diagnostic.Message, StringComparison.Ordinal);
         Assert.NotNull(diagnostic.Branch);
         Assert.NotNull(diagnostic.Node);
@@ -429,7 +447,7 @@ public sealed class CosmosRelationQueryCompilerTests
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
         var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable);
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable);
         Assert.Contains("may be missing or null", diagnostic.Message, StringComparison.Ordinal);
         Assert.NotNull(diagnostic.Input);
         Assert.Empty(result.Artifacts);
@@ -449,9 +467,10 @@ public sealed class CosmosRelationQueryCompilerTests
             RelationQueryOccurrenceProvenanceMode.ExactContributors,
             realization.Observability.OccurrenceProvenance);
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
-        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.ResultObservabilityUnsupported);
-        Assert.Contains("contributor-occurrence lineage", diagnostic.Message, StringComparison.Ordinal);
+        _ = AssertContextDiagnostic(
+            result,
+            RelationQueryRealizationDiagnosticCodes.ContextUnavailable,
+            "contributor-occurrence lineage");
         Assert.Empty(result.Artifacts);
     }
 
@@ -477,7 +496,7 @@ public sealed class CosmosRelationQueryCompilerTests
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
         var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable);
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable);
         Assert.Contains("first-seen row order", diagnostic.Message, StringComparison.Ordinal);
         Assert.Empty(result.Artifacts);
     }
@@ -493,9 +512,10 @@ public sealed class CosmosRelationQueryCompilerTests
         var result = fixture.Compile(binding);
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
-        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable);
-        Assert.Contains("exact physical ordering evidence", diagnostic.Message, StringComparison.Ordinal);
+        _ = AssertContextDiagnostic(
+            result,
+            RelationQueryRealizationDiagnosticCodes.ContextUnavailable,
+            "exact physical ordering evidence");
         Assert.Empty(result.Artifacts);
     }
 
@@ -505,9 +525,10 @@ public sealed class CosmosRelationQueryCompilerTests
         var result = Fixture.ExpandedItemField().Compile();
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
-        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable);
-        Assert.Contains("collection-element ordering evidence", diagnostic.Message, StringComparison.Ordinal);
+        _ = AssertContextDiagnostic(
+            result,
+            RelationQueryRealizationDiagnosticCodes.ContextUnavailable,
+            "collection-element ordering evidence");
         Assert.Empty(result.Artifacts);
     }
 
@@ -521,7 +542,7 @@ public sealed class CosmosRelationQueryCompilerTests
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
         var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable);
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable);
         Assert.Contains("ordering", diagnostic.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("temporal ordering is not exact", diagnostic.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Empty(result.Artifacts);
@@ -537,7 +558,7 @@ public sealed class CosmosRelationQueryCompilerTests
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
         var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression);
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable);
         Assert.Contains("proven exact Cosmos JSON value domain", diagnostic.Message, StringComparison.Ordinal);
         Assert.Empty(result.Artifacts);
     }
@@ -550,9 +571,10 @@ public sealed class CosmosRelationQueryCompilerTests
         var result = Fixture.NonNumericAggregation(operation).Compile();
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
-        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.AggregateUnsupported);
-        Assert.Contains("known Int32 value", diagnostic.Message, StringComparison.Ordinal);
+        _ = AssertContextDiagnostic(
+            result,
+            RelationQueryRealizationDiagnosticCodes.ContextUnavailable,
+            "known Int32 value");
         Assert.Empty(result.Artifacts);
     }
 
@@ -604,6 +626,216 @@ public sealed class CosmosRelationQueryCompilerTests
     }
 
     [Fact]
+    public void NativeCompile_RejectsBoundEvidenceAuthoredUnderDifferentCompilerPolicy()
+    {
+        var fixture = Fixture.Row();
+        var boundRequest = new RelationQueryBoundRealizationRequest(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement);
+        var bound = new CosmosRelationQueryCompiler().Realize(boundRequest, fixture.StorageBinding);
+        Assert.True(bound.IsRealizable);
+        var nativeRequest = new RelationQueryNativeCompilationRequest(
+            fixture.Plan,
+            bound,
+            fixture.Placement);
+        CosmosRelationQueryCompilerOptions[] changedPolicies =
+        [
+            new(
+                compilerProfile: "tests/cosmos/compiler-v3",
+                conventionSetVersion: CosmosRelationQueryStorageBinding.SemanticPathConventionSet),
+            new(
+                compilerProfile: CosmosRelationQueryCompilerOptions.CurrentCompilerProfile,
+                conventionSetVersion: "tests/cosmos/lowering-conventions/v2")
+        ];
+
+        foreach (var changedPolicy in changedPolicies)
+        {
+            var result = new CosmosRelationQueryCompiler(changedPolicy).Compile(
+                nativeRequest,
+                fixture.StorageBinding);
+
+            Assert.Equal(RelationQueryNativeCompilationStatus.Invalid, result.Status);
+            Assert.Contains(result.Diagnostics, static diagnostic =>
+                diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.StorageBindingMismatch
+                && diagnostic.Message.Contains("compiler-policy evidence", StringComparison.Ordinal));
+            Assert.Empty(result.Artifacts);
+        }
+    }
+
+    [Fact]
+    public void Realize_BindingReferenceRetainsCompilerConfigurationAndItsOrigin()
+    {
+        var fixture = Fixture.Row();
+        RelationQueryBoundRealizationRequest request = new(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement);
+        var conventional = new CosmosRelationQueryCompiler().Realize(request, fixture.StorageBinding);
+        CosmosRelationQueryCompilerOptions explicitOptions = new(
+            compilerProfile: CosmosRelationQueryCompilerOptions.CurrentCompilerProfile,
+            conventionSetVersion: CosmosRelationQueryStorageBinding.SemanticPathConventionSet);
+        var explicitlyConfigured = new CosmosRelationQueryCompiler(explicitOptions)
+            .Realize(request, fixture.StorageBinding);
+
+        var conventionalConfiguration = conventional.Evidence.Binding.ConfigurationDecisions
+            .ToDictionary(static decision => decision.Setting, StringComparer.Ordinal);
+        var explicitConfiguration = explicitlyConfigured.Evidence.Binding.ConfigurationDecisions
+            .ToDictionary(static decision => decision.Setting, StringComparer.Ordinal);
+        Assert.Equal(
+            RelationQueryConfigurationValueOrigin.AdapterConvention,
+            conventionalConfiguration[CosmosRelationQueryCompiler.CompilerProfileSetting].Origin);
+        Assert.Equal(
+            RelationQueryConfigurationValueOrigin.Explicit,
+            explicitConfiguration[CosmosRelationQueryCompiler.CompilerProfileSetting].Origin);
+        Assert.Equal(
+            explicitOptions.CompilerProfile,
+            explicitConfiguration[CosmosRelationQueryCompiler.CompilerProfileSetting].Authority);
+        Assert.Equal(
+            explicitOptions.ConventionSetVersion,
+            explicitConfiguration[CosmosRelationQueryCompiler.CompilerConventionSetting].Authority);
+        Assert.NotEqual(conventional.Fingerprint, explicitlyConfigured.Fingerprint);
+    }
+
+    [Fact]
+    public void Realize_ProfileInfeasibilityDoesNotInvokeContextualSuccessProjection()
+    {
+        var fixture = Fixture.Row();
+        var planReference = RelationQueryCompiledPlanReference.From(fixture.Plan);
+        var unavailableProfile = new RelationQueryTargetCapabilityProfile(
+            CosmosRelationQueryTargetProfile.Target,
+            CosmosRelationQueryTargetProfile.ProfileId,
+            [planReference.DefinitionSchemaVersion],
+            [planReference.CompilerProfile]);
+        var infeasible = RelationQueryRealizationCompiler.Compile(
+            fixture.Plan,
+            unavailableProfile,
+            CosmosRelationQueryTargetProfile.Policy);
+        Assert.Equal(RelationQueryRealizationStatus.NotRealizable, infeasible.Status);
+        RelationQueryBoundRealizationRequest request = new(
+            fixture.Plan,
+            infeasible,
+            fixture.Placement);
+        CosmosRelationQueryCompiler compiler = new();
+
+        var bound = compiler.Realize(request, fixture.StorageBinding);
+        var compilation = compiler.Compile(request, fixture.StorageBinding);
+
+        Assert.Equal(RelationQueryRealizationStatus.NotRealizable, bound.Status);
+        Assert.Empty(bound.Evidence.Assessments);
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, compilation.Status);
+        Assert.Empty(compilation.Artifacts);
+    }
+
+    [Fact]
+    public void Realize_MissingFieldRecordsOnePrimaryFailureAndBlocksUnexaminedRequirements()
+    {
+        var fixture = Fixture.Row();
+        var statusInput = fixture.InputFor(Fixture.StatusPath);
+        var incomplete = fixture.StorageBindingWithFields(
+        [
+            .. fixture.StorageBinding.Fields.Where(field => field.Input != statusInput)
+        ]);
+        var compiler = new CosmosRelationQueryCompiler();
+        RelationQueryBoundRealizationRequest request = new(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement);
+
+        var bound = compiler.Realize(request, incomplete);
+
+        Assert.False(bound.IsRealizable);
+        Assert.Equal(RelationQueryRealizationStatus.NotRealizable, bound.Status);
+        var branch = Assert.Single(request.Branches);
+        var assessments = bound.Evidence.Assessments
+            .Where(assessment => assessment.Branch == branch.Id)
+            .ToArray();
+        Assert.True(assessments.Length > 1);
+        var primary = Assert.Single(assessments, static assessment =>
+            assessment.Status is RelationQueryBoundAssessmentStatus.Unavailable
+                or RelationQueryBoundAssessmentStatus.Invalid);
+        Assert.Equal(RelationQueryBoundAssessmentStatus.Unavailable, primary.Status);
+        Assert.Equal(
+            new RelationQueryAdapterDecisionCode(CosmosRelationQueryCompilationDiagnosticCodes.FieldBindingMissing),
+            primary.AdapterDecisionCode);
+        Assert.Equal(statusInput, primary.Input);
+        Assert.Equal(Fixture.StatusPath, primary.Field);
+        Assert.Equal($"field/{statusInput.Value}", primary.FailedConfigurationSetting);
+        Assert.Empty(primary.CapabilityEvidence);
+        Assert.Empty(primary.OperatingBoundaries);
+        Assert.Empty(primary.PreservedGuarantees);
+        var contextualDiagnostic = Assert.Single(bound.Diagnostics, diagnostic =>
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable
+            && diagnostic.AdapterDecisionCode == primary.AdapterDecisionCode);
+        Assert.Equal(statusInput, contextualDiagnostic.Input);
+        Assert.Equal(Fixture.StatusPath, contextualDiagnostic.Field);
+        Assert.Equal($"field/{statusInput.Value}", contextualDiagnostic.BindingSetting);
+
+        var configuration = bound.Evidence.Binding.ConfigurationDecisions.ToDictionary(
+            static decision => decision.Setting,
+            StringComparer.Ordinal);
+        var defaultOrigin = incomplete.Origin == CosmosRelationQueryBindingOrigin.Convention
+            ? RelationQueryConfigurationValueOrigin.AdapterConvention
+            : RelationQueryConfigurationValueOrigin.Explicit;
+        var defaultAuthority = incomplete.Origin == CosmosRelationQueryBindingOrigin.Convention
+            ? incomplete.ConventionSetVersion!
+            : incomplete.Id.Value;
+
+        var blocked = assessments.Where(assessment => assessment.Id != primary.Id).ToArray();
+        Assert.NotEmpty(blocked);
+        Assert.All(blocked, assessment =>
+        {
+            Assert.Equal(RelationQueryBoundAssessmentStatus.Blocked, assessment.Status);
+            Assert.Equal(RelationQueryUnavailableReason.PrerequisiteBlocked, assessment.UnavailableReason);
+            Assert.Equal(primary.AdapterDecisionCode, assessment.AdapterDecisionCode);
+            Assert.Equal(primary.Id, assessment.BlockedBy);
+            Assert.Empty(assessment.CapabilityEvidence);
+            Assert.Empty(assessment.OperatingBoundaries);
+            Assert.Empty(assessment.PreservedGuarantees);
+            Assert.Empty(assessment.MissingCapabilityEvidence);
+            Assert.Null(assessment.FailedOperatingBoundary);
+            Assert.Null(assessment.FailedConfigurationSetting);
+            if (assessment.ConfigurationSetting is { } setting)
+            {
+                Assert.Equal(configuration[setting].Origin, assessment.Origin);
+                Assert.Equal(configuration[setting].Authority, assessment.Authority);
+            }
+            else
+            {
+                Assert.Equal(defaultOrigin, assessment.Origin);
+                Assert.Equal(defaultAuthority, assessment.Authority);
+            }
+        });
+
+        var compilation = compiler.Compile(request, incomplete);
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, compilation.Status);
+        Assert.Empty(compilation.Artifacts);
+        var nativeDiagnostic = Assert.Single(compilation.Diagnostics, diagnostic =>
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable
+            && diagnostic.AdapterDecisionCode == primary.AdapterDecisionCode);
+        Assert.Equal(statusInput, nativeDiagnostic.Input);
+        Assert.Equal(Fixture.StatusPath, nativeDiagnostic.Field);
+        Assert.Equal($"field/{statusInput.Value}", nativeDiagnostic.BindingSetting);
+    }
+
+    [Fact]
+    public void NativeCompile_BindingFingerprintMismatchIsInvalid()
+    {
+        var fixture = Fixture.Row();
+        var request = fixture.CreateNativeCompilationRequest();
+
+        var result = new CosmosRelationQueryCompiler().Compile(
+            request,
+            fixture.StorageBindingWithContainer("loads-v2"));
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Invalid, result.Status);
+        Assert.Contains(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.StorageBindingMismatch
+            && diagnostic.Message.Contains("storage-binding fingerprint", StringComparison.Ordinal));
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
     public void Compile_UnpagedOrderBy_RejectsNonUniqueFinalKey()
     {
         var fixture = Fixture.OrderingByStatus();
@@ -615,7 +847,7 @@ public sealed class CosmosRelationQueryCompilerTests
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
         var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable);
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable);
         Assert.Contains("final stable unique source path", diagnostic.Message, StringComparison.Ordinal);
         Assert.Empty(result.Artifacts);
     }
@@ -647,7 +879,7 @@ public sealed class CosmosRelationQueryCompilerTests
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
         var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression);
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable);
         Assert.Contains("proven exact Cosmos JSON value domain", diagnostic.Message, StringComparison.Ordinal);
         Assert.Empty(result.Artifacts);
     }
@@ -661,7 +893,7 @@ public sealed class CosmosRelationQueryCompilerTests
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
         var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable);
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable);
         Assert.Contains("wider numeric", diagnostic.Message, StringComparison.Ordinal);
         Assert.Empty(result.Artifacts);
     }
@@ -675,7 +907,7 @@ public sealed class CosmosRelationQueryCompilerTests
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
         var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable);
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable);
         Assert.Contains("physical result encoding", diagnostic.Message, StringComparison.Ordinal);
         Assert.Empty(result.Artifacts);
     }
@@ -687,7 +919,7 @@ public sealed class CosmosRelationQueryCompilerTests
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
         var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.ParameterUnsupported);
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable);
         Assert.Contains("does not have a Cosmos SQL v2 parameter encoding", diagnostic.Message, StringComparison.Ordinal);
         Assert.NotNull(diagnostic.Input);
         Assert.DoesNotContain(result.Diagnostics, static diagnostic =>
@@ -717,7 +949,7 @@ public sealed class CosmosRelationQueryCompilerTests
         Assert.Equal(first.Status, second.Status);
         Assert.Equal(first.Diagnostics.ToArray(), second.Diagnostics.ToArray());
         var diagnostic = Assert.Single(first.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression);
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable);
         Assert.Contains("exact canonical representation", diagnostic.Message, StringComparison.Ordinal);
         Assert.Empty(first.Artifacts);
         Assert.Empty(second.Artifacts);
@@ -746,7 +978,7 @@ public sealed class CosmosRelationQueryCompilerTests
         Assert.Equal(first.Status, second.Status);
         Assert.Equal(first.Diagnostics.ToArray(), second.Diagnostics.ToArray());
         var diagnostic = Assert.Single(first.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.ParameterUnsupported);
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable);
         Assert.Contains("default outside its exact Cosmos representation", diagnostic.Message, StringComparison.Ordinal);
         Assert.NotNull(diagnostic.Input);
         Assert.Empty(first.Artifacts);
@@ -786,7 +1018,7 @@ public sealed class CosmosRelationQueryCompilerTests
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
         var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedLogicalOperator);
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable);
         Assert.Contains("explicit distinct keys are unsupported", diagnostic.Message, StringComparison.Ordinal);
         Assert.Empty(result.Artifacts);
     }
@@ -802,7 +1034,7 @@ public sealed class CosmosRelationQueryCompilerTests
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
         var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable);
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable);
         Assert.Contains("DISTINCT assignment", diagnostic.Message, StringComparison.Ordinal);
         Assert.Contains("exact scalar equality domain", diagnostic.Message, StringComparison.Ordinal);
         Assert.Empty(result.Artifacts);
@@ -831,7 +1063,7 @@ public sealed class CosmosRelationQueryCompilerTests
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
         var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression);
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable);
         Assert.Contains("proven exact scalar equality domain", diagnostic.Message, StringComparison.Ordinal);
         Assert.Empty(result.Artifacts);
     }
@@ -909,10 +1141,15 @@ public sealed class CosmosRelationQueryCompilerTests
         var result = fixture.Compile(fixture.StorageBindingWithCollectionScope(collectionScope: null));
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
-        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.CollectionElementEvidenceUnavailable);
-        Assert.Contains("does not provide explicit", diagnostic.Message, StringComparison.Ordinal);
-        Assert.NotNull(diagnostic.Input);
+        var diagnostic = AssertContextDiagnostic(
+            result,
+            RelationQueryRealizationDiagnosticCodes.ContextUnavailable,
+            "does not provide explicit");
+        Assert.NotNull(diagnostic.Node);
+        Assert.Contains(result.Diagnostics, static candidate =>
+            candidate.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable
+            && candidate.Message.Contains("does not provide explicit", StringComparison.Ordinal)
+            && candidate.Input is not null);
         Assert.Empty(result.Artifacts);
     }
 
@@ -934,9 +1171,10 @@ public sealed class CosmosRelationQueryCompilerTests
         var result = fixture.Compile(fixture.StorageBindingWithCollectionScope(weak));
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
-        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.CollectionElementEvidenceUnavailable);
-        Assert.Contains("same-array-element", diagnostic.Message, StringComparison.Ordinal);
+        _ = AssertContextDiagnostic(
+            result,
+            RelationQueryRealizationDiagnosticCodes.ContextUnavailable,
+            "same-array-element");
         Assert.Empty(result.Artifacts);
     }
 
@@ -971,7 +1209,7 @@ public sealed class CosmosRelationQueryCompilerTests
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
         var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.CollectionElementEvidenceUnavailable);
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable);
         Assert.Contains("prohibits missing and null", diagnostic.Message, StringComparison.Ordinal);
         Assert.Empty(result.Artifacts);
     }
@@ -1036,7 +1274,7 @@ public sealed class CosmosRelationQueryCompilerTests
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
         var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression);
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable);
         Assert.Contains("does not satisfy", diagnostic.Message, StringComparison.Ordinal);
         Assert.Empty(result.Artifacts);
     }
@@ -1072,7 +1310,7 @@ public sealed class CosmosRelationQueryCompilerTests
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
         var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.CollectionElementEvidenceUnavailable);
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable);
         Assert.Contains("ExactInequality", diagnostic.Message, StringComparison.Ordinal);
         Assert.Empty(result.Artifacts);
     }
@@ -1095,9 +1333,10 @@ public sealed class CosmosRelationQueryCompilerTests
         var result = fixture.Compile(fixture.StorageBindingWithCollectionScope(weak));
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
-        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.CollectionElementEvidenceUnavailable);
-        Assert.Contains("explicit-null collection elements", diagnostic.Message, StringComparison.Ordinal);
+        _ = AssertContextDiagnostic(
+            result,
+            RelationQueryRealizationDiagnosticCodes.ContextUnavailable,
+            "explicit-null collection elements");
         Assert.Empty(result.Artifacts);
     }
 
@@ -1130,9 +1369,10 @@ public sealed class CosmosRelationQueryCompilerTests
         var result = fixture.Compile(fixture.StorageBindingWithCollectionScope(weak));
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
-        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.CollectionElementEvidenceUnavailable);
-        Assert.Contains(expectedDiagnostic, diagnostic.Message, StringComparison.Ordinal);
+        _ = AssertContextDiagnostic(
+            result,
+            RelationQueryRealizationDiagnosticCodes.ContextUnavailable,
+            expectedDiagnostic);
         Assert.Empty(result.Artifacts);
     }
 
@@ -1153,7 +1393,7 @@ public sealed class CosmosRelationQueryCompilerTests
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
         var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.CollectionElementEvidenceUnavailable);
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable);
         Assert.Contains("no direct child mapping", diagnostic.Message, StringComparison.Ordinal);
         Assert.NotNull(diagnostic.Input);
         Assert.Empty(result.Artifacts);
@@ -1185,7 +1425,7 @@ public sealed class CosmosRelationQueryCompilerTests
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
         var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.CollectionElementEvidenceUnavailable);
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable);
         Assert.Contains("rather than required canonical domain", diagnostic.Message, StringComparison.Ordinal);
         Assert.NotNull(diagnostic.Input);
         Assert.Empty(result.Artifacts);
@@ -1198,7 +1438,7 @@ public sealed class CosmosRelationQueryCompilerTests
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
         var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression);
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable);
         Assert.Contains("one direct current-element child field", diagnostic.Message, StringComparison.Ordinal);
         Assert.Empty(result.Artifacts);
     }
@@ -1259,6 +1499,56 @@ public sealed class CosmosRelationQueryCompilerTests
     static string Diagnostics(CosmosRelationQueryCompilationResult result) => string.Join(
         Environment.NewLine,
         result.Diagnostics.Select(static diagnostic => $"{diagnostic.Code}: {diagnostic.Message}"));
+
+    static RelationQueryNativeCompilationDiagnostic AssertContextDiagnostic(
+        CosmosRelationQueryCompilationResult result,
+        string code,
+        string messageFragment) => Assert.Single(
+        result.Diagnostics
+            .Where(diagnostic => diagnostic.Code == code
+                                 && diagnostic.Message.Contains(messageFragment, StringComparison.OrdinalIgnoreCase))
+            .DistinctBy(static diagnostic => diagnostic.Message));
+
+    internal static RelationQueryAdapterConformanceCase CreateBoundRealizationConformanceCase() => new(
+        "Cosmos",
+        static () =>
+        {
+            var fixture = Fixture.Row();
+            var compiler = new CosmosRelationQueryCompiler();
+            var request = new RelationQueryBoundRealizationRequest(
+                fixture.Plan,
+                fixture.Realization,
+                fixture.Placement);
+            var bound = compiler.Realize(request, fixture.StorageBinding);
+            var repeated = compiler.Realize(request, fixture.StorageBinding);
+            var compilation = compiler.Compile(
+                new RelationQueryNativeCompilationRequest(fixture.Plan, bound, fixture.Placement),
+                fixture.StorageBinding);
+
+            return new(
+                bound,
+                repeated,
+                compilation.Status,
+                [.. compilation.Artifacts.Select(static artifact => artifact.Provenance.BoundRealization)]);
+        },
+        static () =>
+        {
+            var fixture = Fixture.Row();
+            var statusInput = fixture.InputFor(Fixture.StatusPath);
+            var incomplete = fixture.StorageBindingWithFields(
+            [
+                .. fixture.StorageBinding.Fields.Where(field => field.Input != statusInput)
+            ]);
+            var compiler = new CosmosRelationQueryCompiler();
+            var request = new RelationQueryBoundRealizationRequest(
+                fixture.Plan,
+                fixture.Realization,
+                fixture.Placement);
+            var bound = compiler.Realize(request, incomplete);
+            var compilation = compiler.Compile(request, incomplete);
+
+            return new(bound, compilation.Status, compilation.Artifacts.Length);
+        });
 
     public enum UnsafeDistinctDomain
     {
@@ -1379,11 +1669,23 @@ public sealed class CosmosRelationQueryCompilerTests
 
         public CosmosRelationQueryCompilationResult Compile(
             CosmosRelationQueryStorageBinding? storageBinding = null,
-            RelationQueryNativeCompilationRequest? request = null,
+            RelationQueryBoundRealizationRequest? request = null,
             CosmosRelationQueryCompilerOptions? options = null) =>
             new CosmosRelationQueryCompiler(options).Compile(
-                request ?? new(Plan, Realization, Placement),
+                request ?? new RelationQueryBoundRealizationRequest(Plan, Realization, Placement),
                 storageBinding ?? StorageBinding);
+
+        public RelationQueryNativeCompilationRequest CreateNativeCompilationRequest()
+        {
+            var compiler = new CosmosRelationQueryCompiler();
+            var bound = compiler.Realize(
+                new(Plan, Realization, Placement),
+                StorageBinding);
+            Assert.True(
+                bound.IsRealizable,
+                string.Join(Environment.NewLine, bound.Diagnostics.Select(static diagnostic => diagnostic.Message)));
+            return new(Plan, bound, Placement);
+        }
 
         public CosmosRelationQueryStorageBinding StorageBindingWithAffinity() => new(
             StorageBinding.Id,
@@ -1436,7 +1738,10 @@ public sealed class CosmosRelationQueryCompilerTests
                 StorageBinding.MissingValueEncoding,
                 StorageBinding.NullValueEncoding,
                 StorageBinding.Origin,
-                StorageBinding.ConventionSetVersion);
+                StorageBinding.ConventionSetVersion,
+                StorageBinding.ConfigurationDecisions,
+                StorageBinding.CompiledPlanFingerprint,
+                StorageBinding.PlacementFingerprint);
 
         public CosmosRelationQueryStorageBinding StorageBindingWithTarget(RelationQueryTargetId target) => new(
             StorageBinding.Id,
@@ -1458,7 +1763,10 @@ public sealed class CosmosRelationQueryCompilerTests
             StorageBinding.MissingValueEncoding,
             StorageBinding.NullValueEncoding,
             StorageBinding.Origin,
-            StorageBinding.ConventionSetVersion);
+            StorageBinding.ConventionSetVersion,
+            StorageBinding.ConfigurationDecisions,
+            StorageBinding.CompiledPlanFingerprint,
+            StorageBinding.PlacementFingerprint);
 
         public CosmosRelationQueryCollectionScopeEvidence StopsCollectionScope =>
             StorageBinding.ResolveFieldBinding(InputFor(StopsPath)).CollectionScope!;
@@ -1500,7 +1808,10 @@ public sealed class CosmosRelationQueryCompilerTests
             StorageBinding.MissingValueEncoding,
             StorageBinding.NullValueEncoding,
             StorageBinding.Origin,
-            StorageBinding.ConventionSetVersion);
+            StorageBinding.ConventionSetVersion,
+            StorageBinding.ConfigurationDecisions,
+            StorageBinding.CompiledPlanFingerprint,
+            StorageBinding.PlacementFingerprint);
 
         public CosmosRelationQueryStorageBinding StorageBindingWithOrderingProofs(
             ImmutableArray<FieldPath> stableUniqueOrderingPaths,
@@ -1524,7 +1835,10 @@ public sealed class CosmosRelationQueryCompilerTests
             StorageBinding.MissingValueEncoding,
             StorageBinding.NullValueEncoding,
             StorageBinding.Origin,
-            StorageBinding.ConventionSetVersion);
+            StorageBinding.ConventionSetVersion,
+            StorageBinding.ConfigurationDecisions,
+            StorageBinding.CompiledPlanFingerprint,
+            StorageBinding.PlacementFingerprint);
 
         public CosmosRelationQueryStorageBinding StorageBindingWithMaximumInputRows(
             long? maximumInputRows) => new(
@@ -1547,7 +1861,10 @@ public sealed class CosmosRelationQueryCompilerTests
             StorageBinding.MissingValueEncoding,
             StorageBinding.NullValueEncoding,
             StorageBinding.Origin,
-            StorageBinding.ConventionSetVersion);
+            StorageBinding.ConventionSetVersion,
+            StorageBinding.ConfigurationDecisions,
+            StorageBinding.CompiledPlanFingerprint,
+            StorageBinding.PlacementFingerprint);
 
         public static Fixture Row(
             int offset = 5,
@@ -1616,7 +1933,12 @@ public sealed class CosmosRelationQueryCompilerTests
                             new(new("row-id"), IdPath, Expr.Field(Load, IdPath)),
                             new(new("row-status"), StatusPath, Expr.Field(Load, StatusPath))
                         ]),
-                    new SourceQueryNode(CustomerSource, Customer, CustomerShape)
+                    new ProjectQueryNode(
+                        CustomerSource,
+                        LoadSource,
+                        Customer,
+                        CustomerShape,
+                        [new(new("customer-id"), IdPath, Expr.Field(Load, CustomerIdPath))])
                 ]),
                 [
                     new RowsQueryResultDefinition(Rows, Project),
@@ -2385,6 +2707,25 @@ public sealed class CosmosRelationQueryCompilerTests
                 overrideUnavailableRequirements: true);
         }
 
+        public static Fixture IndependentSources()
+        {
+            IRQueryDefinition definition = new(
+                new("independent-source-query"),
+                new("IndependentSourceQuery"),
+                new(
+                [
+                    new SourceQueryNode(LoadSource, Load, LoadShape),
+                    new SourceQueryNode(CustomerSource, Customer, CustomerShape)
+                ]),
+                [
+                    new RowsQueryResultDefinition(Rows, LoadSource),
+                    new RowsQueryResultDefinition(CustomerRows, CustomerSource)
+                ]);
+            return Create(
+                RelationQueryDocument.FromDefinition(definition),
+                overrideUnavailableRequirements: true);
+        }
+
         static Fixture Create(
             RelationQueryDocument document,
             bool overrideUnavailableRequirements = false,
@@ -2418,7 +2759,8 @@ public sealed class CosmosRelationQueryCompilerTests
                 stableUniqueOrderingPaths: [IdPath],
                 exactOrderingPaths: [IdPath],
                 maximumInputRows: 10_000);
-            return new(plan, realization, placement, storage);
+            var fixture = new Fixture(plan, realization, placement, storage);
+            return new(plan, realization, placement, fixture.StorageBindingWithAffinity());
         }
 
         static RelationQueryRealizationReport Realize(

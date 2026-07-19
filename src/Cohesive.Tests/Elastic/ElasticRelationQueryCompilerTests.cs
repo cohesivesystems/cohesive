@@ -8,6 +8,7 @@ using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.Physical;
 using Cohesive.Relations.Realization;
+using Cohesive.Tests.Relations;
 using IRQueryDefinition = Cohesive.Relations.IR.QueryDefinition;
 using IRRelationDefinition = Cohesive.Relations.IR.RelationDefinition;
 
@@ -15,6 +16,390 @@ namespace Cohesive.Tests.Elastic;
 
 public sealed class ElasticRelationQueryCompilerTests
 {
+    internal static RelationQueryAdapterConformanceCase CreateBoundRealizationConformanceCase() => new(
+        "Elasticsearch",
+        ObserveSupported,
+        ObserveRejected);
+
+    static RelationQuerySupportedContextObservation ObserveSupported()
+    {
+        var fixture = Fixture.Row();
+        RelationQueryBoundRealizationRequest request = new(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement);
+        ElasticRelationQueryCompiler compiler = new();
+        var bound = compiler.Realize(request, fixture.StorageBinding);
+        var repeated = compiler.Realize(request, fixture.StorageBinding);
+        var compilation = compiler.Compile(
+            new RelationQueryNativeCompilationRequest(fixture.Plan, bound, fixture.Placement),
+            fixture.StorageBinding);
+        return new(
+            bound,
+            repeated,
+            compilation.Status,
+            [.. compilation.Artifacts.Select(static artifact => artifact.Provenance.BoundRealization)]);
+    }
+
+    static RelationQueryRejectedContextObservation ObserveRejected()
+    {
+        var fixture = Fixture.Row();
+        var binding = fixture.StorageBindingWithoutStableUniqueOrdering();
+        RelationQueryBoundRealizationRequest request = new(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement);
+        ElasticRelationQueryCompiler compiler = new();
+        var bound = compiler.Realize(request, binding);
+        var compilation = compiler.Compile(request, binding);
+        return new(bound, compilation.Status, compilation.Artifacts.Length);
+    }
+
+    [Fact]
+    public void Realize_ExactBindingAuthorizesNativeCompilationAndFlowsIntoProvenance()
+    {
+        var fixture = Fixture.Row();
+        RelationQueryBoundRealizationRequest request = new(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement);
+        ElasticRelationQueryCompiler compiler = new();
+
+        var bound = compiler.Realize(request, fixture.StorageBinding);
+
+        Assert.True(bound.IsRealizable, string.Join(
+            Environment.NewLine,
+            bound.Diagnostics.Select(static diagnostic => $"{diagnostic.Code}: {diagnostic.Message}")));
+        Assert.Equal(fixture.Placement.Fingerprint, bound.Placement);
+        Assert.Equal(fixture.StorageBinding.Id.Value, bound.Evidence.Binding.BindingId);
+        Assert.Equal(
+            fixture.StorageBinding.Fingerprint.Value,
+            bound.Evidence.Binding.Fingerprint.Value);
+        Assert.NotEmpty(bound.Evidence.Assessments);
+        Assert.All(bound.Evidence.Assessments, static assessment =>
+            Assert.Equal(RelationQueryBoundAssessmentStatus.Available, assessment.Status));
+
+        RelationQueryNativeCompilationRequest nativeRequest = new(
+            fixture.Plan,
+            bound,
+            fixture.Placement);
+        var compilation = compiler.Compile(nativeRequest, fixture.StorageBinding);
+
+        Assert.True(compilation.IsSuccessful, Diagnostics(compilation));
+        var artifact = Assert.Single(compilation.Artifacts);
+        Assert.Equal(bound.Fingerprint, artifact.Provenance.BoundRealization);
+        Assert.Equal(bound.Evidence.Binding, artifact.Provenance.AdapterBinding);
+        Assert.NotEmpty(artifact.Provenance.ContextEvidence);
+    }
+
+    [Fact]
+    public void Realize_PredictsPhysicalScopeMappingPagingAndRetrievalFailures()
+    {
+        var collection = Fixture.CollectionMembership();
+        var nested = Fixture.StructuredCollectionAny();
+        var paging = Fixture.KeysetRow();
+        var retrieval = Fixture.Row();
+        (Fixture Fixture, ElasticRelationQueryStorageBinding Binding, string Message)[] cases =
+        [
+            (
+                collection,
+                collection.StorageBindingWithDocumentScope(
+                    Fixture.StopLocationsPath,
+                    ElasticRelationQueryFieldDocumentScope.NestedDocument),
+                "nested-query lowering is deferred"),
+            (nested, nested.StorageBindingWithFlattenedStops(), "flattened"),
+            (
+                paging,
+                paging.StorageBindingWithPaginationConsistency(
+                    ElasticRelationQueryPaginationConsistency.Unproven),
+                "unchanged search-visible view"),
+            (
+                retrieval,
+                retrieval.StorageBindingWithRetrievalEncoding(
+                    Fixture.StatusPath,
+                    ElasticRelationQueryFieldValueEncoding.JsonInt64),
+                "does not preserve")
+        ];
+
+        foreach (var item in cases)
+        {
+            RelationQueryBoundRealizationRequest request = new(
+                item.Fixture.Plan,
+                item.Fixture.Realization,
+                item.Fixture.Placement);
+            ElasticRelationQueryCompiler compiler = new();
+
+            var bound = compiler.Realize(request, item.Binding);
+            var compilation = compiler.Compile(request, item.Binding);
+
+            Assert.Equal(RelationQueryRealizationStatus.NotRealizable, bound.Status);
+            Assert.Contains(bound.Diagnostics, diagnostic =>
+                diagnostic.Message.Contains(item.Message, StringComparison.OrdinalIgnoreCase));
+            Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, compilation.Status);
+            Assert.Contains(compilation.Diagnostics, diagnostic =>
+                diagnostic.Message.Contains(item.Message, StringComparison.OrdinalIgnoreCase));
+            Assert.Empty(compilation.Artifacts);
+        }
+    }
+
+    [Fact]
+    public void Realize_FirstAdapterFailureIsPrimaryAndBlocksUnexaminedRequirements()
+    {
+        var fixture = Fixture.Row();
+        var binding = fixture.StorageBindingWithoutStableUniqueOrdering();
+        RelationQueryBoundRealizationRequest request = new(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement);
+        ElasticRelationQueryCompiler compiler = new();
+
+        var bound = compiler.Realize(request, binding);
+        var compilation = compiler.Compile(request, binding);
+
+        Assert.Equal(RelationQueryRealizationStatus.NotRealizable, bound.Status);
+        var primary = Assert.Single(bound.Evidence.Assessments, static assessment =>
+            assessment.Status == RelationQueryBoundAssessmentStatus.Unavailable);
+        Assert.Equal(
+            new RelationQueryAdapterDecisionCode(
+                ElasticRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable),
+            primary.AdapterDecisionCode);
+        Assert.Equal(ElasticRelationQueryTargetProfile.StableOrderingBoundary, primary.FailedOperatingBoundary);
+        Assert.NotNull(primary.Input);
+        Assert.NotNull(primary.Field);
+        Assert.NotNull(primary.PlacementBinding);
+        Assert.Null(primary.ConfigurationSetting);
+        Assert.NotNull(primary.FailedConfigurationSetting);
+        Assert.EndsWith("/semanticCapabilities", primary.FailedConfigurationSetting, StringComparison.Ordinal);
+        Assert.Equal(RelationQueryConfigurationValueOrigin.Explicit, primary.Origin);
+        Assert.Equal(binding.Id.Value, primary.Authority);
+
+        var blocked = bound.Evidence.Assessments.Where(static assessment =>
+            assessment.Status == RelationQueryBoundAssessmentStatus.Blocked).ToArray();
+        Assert.Equal(bound.Evidence.Assessments.Length - 1, blocked.Length);
+        Assert.DoesNotContain(bound.Evidence.Assessments, static assessment =>
+            assessment.Status == RelationQueryBoundAssessmentStatus.Available);
+        Assert.All(blocked, assessment =>
+        {
+            Assert.Equal(primary.Id, assessment.BlockedBy);
+            Assert.Equal(primary.AdapterDecisionCode, assessment.AdapterDecisionCode);
+            Assert.Equal(RelationQueryUnavailableReason.PrerequisiteBlocked, assessment.UnavailableReason);
+            Assert.Empty(assessment.CapabilityEvidence);
+            Assert.Empty(assessment.OperatingBoundaries);
+            Assert.Empty(assessment.PreservedGuarantees);
+        });
+        Assert.Contains(bound.Diagnostics, diagnostic =>
+            diagnostic.ContextEvidence == primary.Id
+            && diagnostic.AdapterDecisionCode == primary.AdapterDecisionCode
+            && diagnostic.ConfigurationOrigin == primary.Origin
+            && diagnostic.ConfigurationAuthority == primary.Authority);
+        Assert.Contains(compilation.Diagnostics, diagnostic =>
+            diagnostic.AdapterDecisionCode == primary.AdapterDecisionCode);
+        Assert.Empty(compilation.Artifacts);
+    }
+
+    [Fact]
+    public void Realize_ProfileInfeasibilityDoesNotInvokeContextualSuccessProjection()
+    {
+        var fixture = Fixture.Row();
+        var planReference = RelationQueryCompiledPlanReference.From(fixture.Plan);
+        var unavailableProfile = new RelationQueryTargetCapabilityProfile(
+            ElasticRelationQueryTargetProfile.Target,
+            ElasticRelationQueryTargetProfile.ProfileId,
+            [planReference.DefinitionSchemaVersion],
+            [planReference.CompilerProfile]);
+        var infeasible = RelationQueryRealizationCompiler.Compile(
+            fixture.Plan,
+            unavailableProfile,
+            ElasticRelationQueryTargetProfile.Policy);
+        Assert.Equal(RelationQueryRealizationStatus.NotRealizable, infeasible.Status);
+        RelationQueryBoundRealizationRequest request = new(
+            fixture.Plan,
+            infeasible,
+            fixture.Placement);
+        ElasticRelationQueryCompiler compiler = new();
+
+        var bound = compiler.Realize(request, fixture.StorageBinding);
+        var compilation = compiler.Compile(request, fixture.StorageBinding);
+
+        Assert.Equal(RelationQueryRealizationStatus.NotRealizable, bound.Status);
+        Assert.Empty(bound.Evidence.Assessments);
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, compilation.Status);
+        Assert.Empty(compilation.Artifacts);
+    }
+
+    [Fact]
+    public void Realize_SelectedIndependentSourceBranchIgnoresUnselectedSourceAndResult()
+    {
+        var fixture = Fixture.IndependentSources();
+        var allBranches = new RelationQueryBoundRealizationRequest(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement);
+        var loads = Assert.Single(
+            allBranches.Branches,
+            static branch => branch.QueryResult == new QueryResultId("load-rows"));
+        var selected = new RelationQueryBoundRealizationRequest(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement,
+            [loads.Id]);
+        ElasticRelationQueryCompiler compiler = new();
+
+        var allReport = compiler.Realize(allBranches, fixture.StorageBinding);
+        var selectedReport = compiler.Realize(selected, fixture.StorageBinding);
+        var selectedCompilation = compiler.Compile(selected, fixture.StorageBinding);
+
+        Assert.Equal(RelationQueryRealizationStatus.Invalid, allReport.Status);
+        Assert.True(selectedReport.IsRealizable, Diagnostics(selectedReport));
+        Assert.All(selectedReport.Evidence.Assessments, assessment => Assert.Equal(loads.Id, assessment.Branch));
+        Assert.True(selectedCompilation.IsSuccessful, Diagnostics(selectedCompilation));
+        var artifact = Assert.Single(selectedCompilation.Artifacts);
+        Assert.Equal(loads.Id, artifact.Branch.Id);
+        Assert.Equal("loads-read", artifact.StorageBinding.IndexName);
+    }
+
+    [Fact]
+    public void Compile_ExactNativeRequestRejectsBindingFingerprintSubstitution()
+    {
+        var fixture = Fixture.Row();
+        ElasticRelationQueryCompiler compiler = new();
+        RelationQueryBoundRealizationRequest request = new(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement);
+        var bound = compiler.Realize(request, fixture.StorageBinding);
+        RelationQueryNativeCompilationRequest nativeRequest = new(
+            fixture.Plan,
+            bound,
+            fixture.Placement);
+        var substituted = fixture.StorageBindingWithBoundaries(
+            maximumResultWindow: 20_000,
+            maximumPageSize: 1_000);
+
+        var compilation = compiler.Compile(nativeRequest, substituted);
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Invalid, compilation.Status);
+        Assert.Contains(compilation.Diagnostics, static diagnostic =>
+            diagnostic.Code == ElasticRelationQueryCompilationDiagnosticCodes.StorageBindingMismatch
+            && diagnostic.Message.Contains("fingerprint", StringComparison.Ordinal));
+        Assert.Empty(compilation.Artifacts);
+    }
+
+    [Fact]
+    public void Realize_BindingReferenceRetainsCompilerAndLoweringPolicyConfiguration()
+    {
+        var fixture = Fixture.Row();
+        ElasticRelationQueryCompiler compiler = new();
+        RelationQueryBoundRealizationRequest request = new(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement);
+
+        var bound = compiler.Realize(request, fixture.StorageBinding);
+
+        Assert.True(bound.IsRealizable, Diagnostics(bound));
+        var configuration = bound.Evidence.Binding.ConfigurationDecisions
+            .ToDictionary(static decision => decision.Setting, StringComparer.Ordinal);
+        Assert.Equal(
+            ElasticRelationQueryCompilerOptions.CurrentCompilerProfile,
+            configuration[ElasticRelationQueryCompiler.CompilerProfileSetting].Authority);
+        Assert.Equal(
+            ElasticRelationQueryCompilerOptions.DefaultConventionSetVersion,
+            configuration[ElasticRelationQueryCompiler.CompilerConventionSetting].Authority);
+        var lowering = configuration[ElasticRelationQueryCompiler.LoweringPolicySetting];
+        Assert.Equal(RelationQueryConfigurationValueOrigin.AdapterConvention, lowering.Origin);
+        Assert.Contains(ElasticQueryLoweringPolicy.Default.Fingerprint.Value, lowering.Authority, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NativeCompile_RejectsBoundEvidenceAuthoredUnderDifferentCompilerPolicy()
+    {
+        var fixture = Fixture.Row();
+        RelationQueryBoundRealizationRequest request = new(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement);
+        var bound = new ElasticRelationQueryCompiler().Realize(request, fixture.StorageBinding);
+        RelationQueryNativeCompilationRequest nativeRequest = new(
+            fixture.Plan,
+            bound,
+            fixture.Placement);
+        ElasticRelationQueryCompiler[] changedCompilers =
+        [
+            new(new(
+                compilerProfile: "tests/elastic/compiler-v3",
+                conventionSetVersion: ElasticRelationQueryCompilerOptions.DefaultConventionSetVersion)),
+            new(loweringPolicy: SuffixPolicy(
+                ElasticQueryLoweringFallbackPolicy.RequirePreferred,
+                ElasticQueryLoweringStrategies.WildcardExactKeywordId))
+        ];
+
+        foreach (var changedCompiler in changedCompilers)
+        {
+            var result = changedCompiler.Compile(nativeRequest, fixture.StorageBinding);
+
+            Assert.Equal(RelationQueryNativeCompilationStatus.Invalid, result.Status);
+            Assert.Contains(result.Diagnostics, static diagnostic =>
+                diagnostic.Code == ElasticRelationQueryCompilationDiagnosticCodes.StorageBindingMismatch
+                && diagnostic.Message.Contains("compiler-policy evidence", StringComparison.Ordinal));
+            Assert.Empty(result.Artifacts);
+        }
+    }
+
+    [Fact]
+    public void Compile_ArtifactFingerprintCoversBoundAndContextEvidenceProvenance()
+    {
+        var fixture = Fixture.Row();
+        ElasticRelationQueryCompiler compiler = new();
+        RelationQueryBoundRealizationRequest request = new(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement);
+        var baseline = compiler.Realize(request, fixture.StorageBinding);
+        var first = baseline.Evidence.Assessments[0];
+        RelationQueryBoundRequirementAssessment additional = new(
+            new($"{first.Id.Value}/additional-proof"),
+            first.Branch,
+            first.Requirement,
+            first.Status,
+            first.Origin,
+            first.Authority,
+            first.CapabilityEvidence,
+            first.OperatingBoundaries,
+            first.PreservedGuarantees,
+            first.UnavailableReason,
+            first.Node,
+            first.Input,
+            first.Field,
+            first.PlacementBinding,
+            first.ConfigurationSetting,
+            first.Message,
+            first.Resolution);
+        RelationQueryContextualEvidenceProjection extendedEvidence = new(
+            baseline.Evidence.Binding,
+            [.. baseline.Evidence.Assessments, additional]);
+        var extended = RelationQueryBoundRealizationCompiler.Compile(request, extendedEvidence);
+
+        var baselineArtifact = Assert.Single(compiler.Compile(
+            new RelationQueryNativeCompilationRequest(fixture.Plan, baseline, fixture.Placement),
+            fixture.StorageBinding).Artifacts);
+        var extendedArtifact = Assert.Single(compiler.Compile(
+            new RelationQueryNativeCompilationRequest(fixture.Plan, extended, fixture.Placement),
+            fixture.StorageBinding).Artifacts);
+        Dictionary<QueryParameterId, ObservationValue> parameters = new()
+        {
+            [new("status")] = ObservationValue.FromString("ready")
+        };
+
+        Assert.NotEqual(baseline.Fingerprint, extended.Fingerprint);
+        Assert.Equal(
+            ElasticSdkRequestTestSupport.SerializeToString(baselineArtifact.Bind(parameters)),
+            ElasticSdkRequestTestSupport.SerializeToString(extendedArtifact.Bind(parameters)));
+        Assert.NotEqual(baselineArtifact.Fingerprint, extendedArtifact.Fingerprint);
+        Assert.DoesNotContain(additional.Id, baselineArtifact.Provenance.ContextEvidence);
+        Assert.Contains(additional.Id, extendedArtifact.Provenance.ContextEvidence);
+    }
+
     [Fact]
     public void Compile_RowQuery_ProducesExactReusableArtifactAndBindsParameters()
     {
@@ -750,9 +1135,15 @@ public sealed class ElasticRelationQueryCompilerTests
 
         Assert.All(results, static result =>
         {
-            Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+            Assert.Equal(RelationQueryNativeCompilationStatus.Invalid, result.Status);
             Assert.Contains(result.Diagnostics, static diagnostic =>
-                diagnostic.Code == ElasticRelationQueryCompilationDiagnosticCodes.LoweringConfigurationInvalid);
+                diagnostic.Code == ElasticRelationQueryCompilationDiagnosticCodes.LoweringConfigurationInvalid
+                && diagnostic.AdapterDecisionCode == new RelationQueryAdapterDecisionCode(
+                    ElasticRelationQueryCompilationDiagnosticCodes.LoweringConfigurationInvalid));
+            Assert.Contains(result.Diagnostics, static diagnostic =>
+                diagnostic.BindingSetting == ElasticRelationQueryCompiler.LoweringPolicySetting
+                && diagnostic.ConfigurationOrigin == RelationQueryConfigurationValueOrigin.Explicit
+                && diagnostic.ConfigurationAuthority is not null);
             Assert.Empty(result.Artifacts);
         });
         Assert.Contains(results[0].Diagnostics, static diagnostic =>
@@ -955,7 +1346,7 @@ public sealed class ElasticRelationQueryCompilerTests
         Assert.Equal(RelationQueryNativeCompilationStatus.Invalid, crossSource.Status);
         Assert.Contains(crossSource.Diagnostics, static diagnostic =>
             diagnostic.Code == ElasticRelationQueryCompilationDiagnosticCodes.StorageBindingMismatch
-            && diagnostic.Message.Contains("exactly one source contract", StringComparison.Ordinal));
+            && diagnostic.Message.Contains("exactly one placed source contract", StringComparison.Ordinal));
         Assert.Empty(crossSource.Artifacts);
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, relation.Status);
@@ -1096,6 +1487,10 @@ public sealed class ElasticRelationQueryCompilerTests
         string.Join(Environment.NewLine, result.Diagnostics.Select(static diagnostic =>
             $"{diagnostic.Code}: {diagnostic.Message}"));
 
+    static string Diagnostics(RelationQueryBoundRealizationReport report) =>
+        string.Join(Environment.NewLine, report.Diagnostics.Select(static diagnostic =>
+            $"{diagnostic.Code}: {diagnostic.Message}"));
+
     static JsonElement FirstFilter(JsonElement root)
     {
         var filter = root.GetProperty("query").GetProperty("bool").GetProperty("filter");
@@ -1204,7 +1599,7 @@ public sealed class ElasticRelationQueryCompilerTests
 
         public ElasticRelationQueryCompilationResult Compile(
             ElasticRelationQueryStorageBinding? storageBinding = null,
-            RelationQueryNativeCompilationRequest? request = null,
+            RelationQueryBoundRealizationRequest? request = null,
             ElasticQueryLoweringPolicy? loweringPolicy = null) =>
             new ElasticRelationQueryCompiler(loweringPolicy: loweringPolicy).Compile(
                 request ?? new(Plan, Realization, Placement),
@@ -1221,12 +1616,12 @@ public sealed class ElasticRelationQueryCompilerTests
             StorageBinding.SourceMode,
             StorageBinding.MaximumResultWindow,
             StorageBinding.MaximumPageSize,
-            StorageBinding.PaginationConsistency,
-            StorageBinding.Origin,
-            StorageBinding.ConventionSetVersion,
-            StorageBinding.ConfigurationDecisions,
-            RelationQueryCompiledPlanReferenceFingerprinter.Compute(PlanReference),
-            Placement.Fingerprint);
+                StorageBinding.PaginationConsistency,
+                StorageBinding.Origin,
+                StorageBinding.ConventionSetVersion,
+                StorageBinding.ConfigurationDecisions,
+                StorageBinding.CompiledPlanFingerprint,
+                StorageBinding.PlacementFingerprint);
 
         public ElasticRelationQueryStorageBinding StorageBindingWithFields(
             ImmutableArray<ElasticRelationQueryFieldBinding> fields) => new(
@@ -1242,7 +1637,10 @@ public sealed class ElasticRelationQueryCompilerTests
                 StorageBinding.MaximumPageSize,
                 StorageBinding.PaginationConsistency,
                 StorageBinding.Origin,
-                StorageBinding.ConventionSetVersion);
+                StorageBinding.ConventionSetVersion,
+                StorageBinding.ConfigurationDecisions,
+                StorageBinding.CompiledPlanFingerprint,
+                StorageBinding.PlacementFingerprint);
 
         public ElasticRelationQueryStorageBinding StorageBindingWithSuffixCapabilities(
             ElasticRelationQueryFieldSemanticCapabilities suffixCapabilities)
@@ -1376,7 +1774,10 @@ public sealed class ElasticRelationQueryCompilerTests
                 maximumPageSize,
                 StorageBinding.PaginationConsistency,
                 StorageBinding.Origin,
-                StorageBinding.ConventionSetVersion);
+                StorageBinding.ConventionSetVersion,
+                StorageBinding.ConfigurationDecisions,
+                StorageBinding.CompiledPlanFingerprint,
+                StorageBinding.PlacementFingerprint);
 
         public ElasticRelationQueryStorageBinding StorageBindingWithPaginationConsistency(
             ElasticRelationQueryPaginationConsistency paginationConsistency) => new(
@@ -1392,7 +1793,10 @@ public sealed class ElasticRelationQueryCompilerTests
                 StorageBinding.MaximumPageSize,
                 paginationConsistency,
                 StorageBinding.Origin,
-                StorageBinding.ConventionSetVersion);
+                StorageBinding.ConventionSetVersion,
+                StorageBinding.ConfigurationDecisions,
+                StorageBinding.CompiledPlanFingerprint,
+                StorageBinding.PlacementFingerprint);
 
         public ElasticRelationQueryStorageBinding StorageBindingWithRetrievalEncoding(
             FieldPath path,
@@ -1518,6 +1922,42 @@ public sealed class ElasticRelationQueryCompilerTests
                     ]),
                 [new RowsQueryResultDefinition(Rows, Page)]);
             return Create(RelationQueryDocument.FromDefinition(definition));
+        }
+
+        public static Fixture IndependentSources()
+        {
+            QueryNodeId customerOrder = new("order-customers");
+            QueryNodeId customerPage = new("page-customers");
+            IRQueryDefinition definition = new(
+                new("independent-source-query"),
+                new("IndependentSourceQuery"),
+                new(
+                    nodes:
+                    [
+                        new SourceQueryNode(LoadSource, Load, LoadShape),
+                        new ProjectQueryNode(
+                            Project,
+                            LoadSource,
+                            RowBinding,
+                            RowShape,
+                            [
+                                new(new("row-id"), IdPath, Expr.Field(Load, IdPath)),
+                                new(new("row-status"), StatusPath, Expr.Field(Load, StatusPath))
+                            ]),
+                        new OrderQueryNode(Order, Project, [new(Expr.Field(RowBinding, IdPath))]),
+                        new PageQueryNode(Page, Order, new OffsetPageDefinition(limit: 25, offset: 0)),
+                        new SourceQueryNode(CustomerSource, Customer, CustomerShape),
+                        new OrderQueryNode(customerOrder, CustomerSource, [new(Expr.Field(Customer, IdPath))]),
+                        new PageQueryNode(customerPage, customerOrder, new OffsetPageDefinition(limit: 25, offset: 0))
+                    ]),
+                [
+                    new RowsQueryResultDefinition(new("load-rows"), Page),
+                    new RowsQueryResultDefinition(new("customer-rows"), customerPage)
+                ]);
+            return Create(
+                RelationQueryDocument.FromDefinition(definition),
+                overrideUnavailableRequirements: true,
+                storageBinding: Load);
         }
 
         public static Fixture Suffix()
@@ -1980,7 +2420,8 @@ public sealed class ElasticRelationQueryCompilerTests
 
         static Fixture Create(
             RelationQueryDocument document,
-            bool overrideUnavailableRequirements = false)
+            bool overrideUnavailableRequirements = false,
+            ValueBindingId? storageBinding = null)
         {
             var compilation = RelationQueryStaticCompiler.Compile(new(
                 document,
@@ -1995,8 +2436,12 @@ public sealed class ElasticRelationQueryCompilerTests
                 Environment.NewLine,
                 realization.Diagnostics.Select(static diagnostic => $"{diagnostic.Code}: {diagnostic.Message}")));
             var placement = CreatePlacement(plan);
-            var sourcePlacement = placement.Bindings.First(static binding =>
-                binding.Kind == RelationQuerySourcePlacementBindingKind.SourceSet);
+            var sourcePlacement = storageBinding is { } selectedBinding
+                ? placement.Bindings.Single(binding =>
+                    binding.Kind == RelationQuerySourcePlacementBindingKind.SourceSet
+                    && binding.Binding == selectedBinding)
+                : placement.Bindings.First(static binding =>
+                    binding.Kind == RelationQuerySourcePlacementBindingKind.SourceSet);
             var sourceContract = plan.InputContract.Sources.Single(source => source.Node == sourcePlacement.Node);
             var storage = new ElasticRelationQueryStorageBinding(
                 new("tests/elastic-binding/v1"),
@@ -2007,7 +2452,10 @@ public sealed class ElasticRelationQueryCompilerTests
                 "loads-read",
                 [.. sourceContract.Fields.Select(CreateFieldBinding)],
                 paginationConsistency: ElasticRelationQueryPaginationConsistency.StableSearchView,
-                conventionSetVersion: ElasticRelationQueryStorageBinding.SemanticPathConventionSet);
+                conventionSetVersion: ElasticRelationQueryStorageBinding.SemanticPathConventionSet,
+                compiledPlanFingerprint: RelationQueryCompiledPlanReferenceFingerprinter.Compute(
+                    RelationQueryCompiledPlanReference.From(plan)),
+                placementFingerprint: placement.Fingerprint);
             return new(plan, realization, placement, storage);
         }
 

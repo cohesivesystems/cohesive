@@ -31,9 +31,11 @@ public sealed class ElasticRelationQueryBindingAuthoringTests
             RelationQueryResultObservability.NotRequested);
         Assert.True(realization.IsRealizable, Format(realization.Diagnostics));
 
-        var compilation = new ElasticRelationQueryCompiler().Compile(
-            new(fixture.Plan, realization, fixture.AuthoredPlacement.Placement),
-            binding);
+        RelationQueryBoundRealizationRequest request = new(
+            fixture.Plan,
+            realization,
+            fixture.AuthoredPlacement.Placement);
+        var compilation = new ElasticRelationQueryCompiler().Compile(request, binding);
 
         Assert.True(compilation.IsSuccessful, Format(compilation.Diagnostics));
         Assert.Single(compilation.Artifacts);

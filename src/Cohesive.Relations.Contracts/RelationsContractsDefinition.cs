@@ -55,6 +55,12 @@ public static class RelationsContractsDefinition
             .Build(),
         CohesiveApi
             .Define("RelationsContracts")
+            .Action("RelationQueryBoundRealizationReport")
+            .Route("GET", "/relations/contracts/relation-query-bound-realization-report")
+            .Returns<RelationQueryBoundRealizationReport>()
+            .Build(),
+        CohesiveApi
+            .Define("RelationsContracts")
             .Action("RelationQuerySourcePlacement")
             .Route("GET", "/relations/contracts/relation-query-source-placement")
             .Returns<RelationQuerySourcePlacement>()

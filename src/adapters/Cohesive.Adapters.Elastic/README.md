@@ -205,8 +205,14 @@ var realization = RelationQueryRealizationCompiler.Compile(
 if (!realization.IsRealizable)
     throw new InvalidOperationException(string.Join(Environment.NewLine, realization.Diagnostics));
 
-var compilation = new ElasticRelationQueryCompiler().Compile(
-    new RelationQueryNativeCompilationRequest(plan, realization, placement),
+var request = new RelationQueryBoundRealizationRequest(plan, realization, placement);
+var compiler = new ElasticRelationQueryCompiler();
+var bound = compiler.Realize(request, storageBinding);
+if (!bound.IsRealizable)
+    throw new InvalidOperationException(string.Join(Environment.NewLine, bound.Diagnostics));
+
+var compilation = compiler.Compile(
+    new RelationQueryNativeCompilationRequest(plan, bound, placement),
     storageBinding);
 if (!compilation.IsSuccessful)
     throw new InvalidOperationException(string.Join(Environment.NewLine, compilation.Diagnostics));
@@ -295,9 +301,9 @@ var suffixPolicy = ElasticQueryLoweringPolicy.CreateConventional(
             [ElasticQueryLoweringStrategies.WildcardExactKeywordId])
     ]);
 
-var customized = new ElasticRelationQueryCompiler(loweringPolicy: suffixPolicy).Compile(
-    new RelationQueryNativeCompilationRequest(plan, realization, placement),
-    storageBinding);
+var customizedCompiler = new ElasticRelationQueryCompiler(loweringPolicy: suffixPolicy);
+var customizedRequest = new RelationQueryBoundRealizationRequest(plan, realization, placement);
+var customized = customizedCompiler.Compile(customizedRequest, storageBinding);
 ```
 
 The policy decision participates in artifact fingerprints and provenance. The binding must attest

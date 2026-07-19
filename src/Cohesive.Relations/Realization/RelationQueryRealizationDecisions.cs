@@ -53,7 +53,12 @@ public enum RelationQueryUnavailableReason
     OverrideInvalid = 7,
 
     /// <summary>Compiler policy rejects the otherwise available strategy.</summary>
-    PolicyRejected = 8
+    PolicyRejected = 8,
+
+    /// <summary>
+    /// The requirement was not examined because an attributable prerequisite adapter decision already failed.
+    /// </summary>
+    PrerequisiteBlocked = 9
 }
 
 /// <summary>How an operating boundary used by a constrained realization was validated.</summary>
@@ -158,6 +163,75 @@ public abstract record RelationQueryRealizationDecision
     /// <summary>Final realization classification.</summary>
     [JsonIgnore]
     public abstract RelationQueryRealizationDecisionKind Kind { get; }
+
+    /// <summary>Gets the target capability evidence retained by this final decision.</summary>
+    /// <returns>
+    /// Canonically ordered capability-evidence identities, or an empty array for an unavailable decision or an
+    /// override that does not rely on target evidence.
+    /// </returns>
+    public ImmutableArray<RelationQueryTargetCapabilityEvidenceId> GetCapabilityEvidence() => this switch
+    {
+        NativeRelationQueryRealizationDecision native => native.CapabilityEvidence,
+        ComposedRelationQueryRealizationDecision composed => composed.CapabilityEvidence,
+        ConstrainedRelationQueryRealizationDecision constrained => constrained.CapabilityEvidence,
+        OverrideRelationQueryRealizationDecision overridden => overridden.CapabilityEvidence,
+        UnavailableRelationQueryRealizationDecision => [],
+        _ => throw new InvalidOperationException(
+            $"Unsupported realization decision '{GetType().Name}'.")
+    };
+
+    /// <summary>Gets the composition-rule closure retained by this final decision.</summary>
+    /// <returns>
+    /// Canonically ordered composition-rule identities, or an empty array when the decision is not composed.
+    /// </returns>
+    public ImmutableArray<RelationQueryCompositionRuleId> GetCompositionRules() => this switch
+    {
+        ComposedRelationQueryRealizationDecision composed => composed.CompositionRules,
+        ConstrainedRelationQueryRealizationDecision constrained => constrained.CompositionRules,
+        NativeRelationQueryRealizationDecision or OverrideRelationQueryRealizationDecision
+            or UnavailableRelationQueryRealizationDecision => [],
+        _ => throw new InvalidOperationException(
+            $"Unsupported realization decision '{GetType().Name}'.")
+    };
+
+    /// <summary>Gets every attributable operating-boundary validation retained by this final decision.</summary>
+    /// <returns>
+    /// Canonically ordered boundary validations, or an empty array when the decision is not boundary-constrained.
+    /// </returns>
+    public ImmutableArray<RelationQueryOperatingBoundaryValidation> GetBoundaryValidations() => this switch
+    {
+        ConstrainedRelationQueryRealizationDecision constrained => constrained.BoundaryValidations,
+        OverrideRelationQueryRealizationDecision overridden => overridden.BoundaryValidations,
+        NativeRelationQueryRealizationDecision or ComposedRelationQueryRealizationDecision
+            or UnavailableRelationQueryRealizationDecision => [],
+        _ => throw new InvalidOperationException(
+            $"Unsupported realization decision '{GetType().Name}'.")
+    };
+
+    /// <summary>Gets operating boundaries whose exact enforcement must be re-established by a target adapter.</summary>
+    /// <returns>Target-enforced operating-boundary identities in canonical order.</returns>
+    public ImmutableArray<RelationQueryOperatingBoundaryId> GetTargetEnforcedBoundaries() =>
+    [
+        .. GetBoundaryValidations()
+            .Where(static validation =>
+                validation.Kind == RelationQueryOperatingBoundaryValidationKind.TargetEnforced)
+            .Select(static validation => validation.Boundary)
+    ];
+
+    /// <summary>Gets the guarantees retained by this final decision.</summary>
+    /// <returns>
+    /// Canonically ordered preserved guarantees, or an empty array when the decision is unavailable.
+    /// </returns>
+    public ImmutableArray<RelationQueryGuaranteeCapabilityKind> GetPreservedGuarantees() => this switch
+    {
+        NativeRelationQueryRealizationDecision native => native.PreservedGuarantees,
+        ComposedRelationQueryRealizationDecision composed => composed.PreservedGuarantees,
+        ConstrainedRelationQueryRealizationDecision constrained => constrained.PreservedGuarantees,
+        OverrideRelationQueryRealizationDecision overridden => overridden.PreservedGuarantees,
+        UnavailableRelationQueryRealizationDecision => [],
+        _ => throw new InvalidOperationException(
+            $"Unsupported realization decision '{GetType().Name}'.")
+    };
 }
 
 /// <summary>Decision proving that a target preserves a requirement directly.</summary>

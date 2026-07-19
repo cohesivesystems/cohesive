@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text.Json.Serialization;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.IR;
+using Cohesive.Relations.Physical;
 
 namespace Cohesive.Relations.Realization;
 
@@ -33,13 +34,33 @@ public sealed record RelationQueryRealizationDiagnostic
     /// <param name="override">Affected explicit override, or <see langword="null"/>.</param>
     /// <param name="node">Affected logical node, or <see langword="null"/>.</param>
     /// <param name="semanticSite">Affected semantic site, or <see langword="null"/>.</param>
+    /// <param name="contextEvidence">Affected contextual adapter evidence, or <see langword="null"/>.</param>
+    /// <param name="branch">Affected selected result branch, or <see langword="null"/>.</param>
+    /// <param name="input">Affected compiled input, or <see langword="null"/>.</param>
+    /// <param name="field">Affected semantic field path, or <see langword="null"/>.</param>
+    /// <param name="placementBinding">Affected source-placement binding, or <see langword="null"/>.</param>
+    /// <param name="bindingSetting">Affected adapter-binding configuration setting, or <see langword="null"/>.</param>
+    /// <param name="resolution">Actionable resolution guidance, or <see langword="null"/>.</param>
+    /// <param name="configurationOrigin">
+    /// Configuration-precedence tier that supplied the attributed setting, or <see langword="null"/>.
+    /// </param>
+    /// <param name="configurationAuthority">
+    /// Stable declaration, profile, convention, or adapter authority paired with
+    /// <paramref name="configurationOrigin"/>, or <see langword="null"/>.
+    /// </param>
+    /// <param name="adapterDecisionCode">
+    /// Stable adapter-owned decision code explaining a contextual failure, or <see langword="null"/>.
+    /// </param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="code"/> or <paramref name="message"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// A required string or supplied identity is empty or white space.
+    /// A required string or supplied identity is empty or white space, or configuration origin and authority are
+    /// not supplied together, or <paramref name="adapterDecisionCode"/> is default.
     /// </exception>
-    /// <exception cref="ArgumentOutOfRangeException"><paramref name="severity"/> is unsupported.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="severity"/> or <paramref name="configurationOrigin"/> is unsupported.
+    /// </exception>
     [JsonConstructor]
     public RelationQueryRealizationDiagnostic(
         string code,
@@ -51,7 +72,17 @@ public sealed record RelationQueryRealizationDiagnostic
         RelationQueryOperatingBoundaryId? operatingBoundary = null,
         RelationQueryRealizationOverrideId? @override = null,
         QueryNodeId? node = null,
-        string? semanticSite = null)
+        string? semanticSite = null,
+        RelationQueryContextEvidenceId? contextEvidence = null,
+        RelationQueryNativeResultBranchId? branch = null,
+        RelationQueryInputId? input = null,
+        FieldPath? field = null,
+        RelationQuerySourcePlacementBindingId? placementBinding = null,
+        string? bindingSetting = null,
+        string? resolution = null,
+        RelationQueryConfigurationValueOrigin? configurationOrigin = null,
+        string? configurationAuthority = null,
+        RelationQueryAdapterDecisionCode? adapterDecisionCode = null)
     {
         Code = Guard.RequireNotNullOrWhiteSpace(code);
         if (!Enum.IsDefined(severity))
@@ -64,6 +95,30 @@ public sealed record RelationQueryRealizationDiagnostic
         RequireOptional(@override?.Value, nameof(@override));
         RequireOptional(node?.Value, nameof(node));
         RequireOptional(semanticSite, nameof(semanticSite));
+        RequireOptional(contextEvidence?.Value, nameof(contextEvidence));
+        RequireOptional(branch?.Value, nameof(branch));
+        RequireOptional(input?.Value, nameof(input));
+        if (field is { Segments.IsDefaultOrEmpty: true })
+            throw new ArgumentException("An optional diagnostic field path cannot be empty.", nameof(field));
+        RequireOptional(placementBinding?.Value, nameof(placementBinding));
+        RequireOptional(bindingSetting, nameof(bindingSetting));
+        RequireOptional(resolution, nameof(resolution));
+        if (configurationOrigin is { } origin && !Enum.IsDefined(origin))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(configurationOrigin),
+                configurationOrigin,
+                "Unsupported diagnostic configuration origin.");
+        }
+        RequireOptional(configurationAuthority, nameof(configurationAuthority));
+        if ((configurationOrigin is null) != (configurationAuthority is null))
+        {
+            throw new ArgumentException(
+                "Diagnostic configuration origin and authority must be supplied together.",
+                nameof(configurationOrigin));
+        }
+        if (adapterDecisionCode is { } decisionCode && string.IsNullOrWhiteSpace(decisionCode.Value))
+            throw new ArgumentException("A diagnostic adapter decision code cannot be default.", nameof(adapterDecisionCode));
 
         Severity = severity;
         Requirement = requirement;
@@ -73,6 +128,16 @@ public sealed record RelationQueryRealizationDiagnostic
         Override = @override;
         Node = node;
         SemanticSite = semanticSite;
+        ContextEvidence = contextEvidence;
+        Branch = branch;
+        Input = input;
+        Field = field;
+        PlacementBinding = placementBinding;
+        BindingSetting = bindingSetting;
+        Resolution = resolution;
+        ConfigurationOrigin = configurationOrigin;
+        ConfigurationAuthority = configurationAuthority;
+        AdapterDecisionCode = adapterDecisionCode;
     }
 
     /// <summary>Stable machine-readable diagnostic code.</summary>
@@ -104,6 +169,36 @@ public sealed record RelationQueryRealizationDiagnostic
 
     /// <summary>Affected semantic site, or <see langword="null"/>.</summary>
     public string? SemanticSite { get; }
+
+    /// <summary>Affected contextual adapter evidence, or <see langword="null"/>.</summary>
+    public RelationQueryContextEvidenceId? ContextEvidence { get; }
+
+    /// <summary>Affected selected result branch, or <see langword="null"/>.</summary>
+    public RelationQueryNativeResultBranchId? Branch { get; }
+
+    /// <summary>Affected compiled input, or <see langword="null"/>.</summary>
+    public RelationQueryInputId? Input { get; }
+
+    /// <summary>Affected semantic field path, or <see langword="null"/>.</summary>
+    public FieldPath? Field { get; }
+
+    /// <summary>Affected source-placement binding, or <see langword="null"/>.</summary>
+    public RelationQuerySourcePlacementBindingId? PlacementBinding { get; }
+
+    /// <summary>Affected adapter-binding configuration setting, or <see langword="null"/>.</summary>
+    public string? BindingSetting { get; }
+
+    /// <summary>Actionable resolution guidance, or <see langword="null"/>.</summary>
+    public string? Resolution { get; }
+
+    /// <summary>Configuration-precedence tier that supplied the attributed setting, or <see langword="null"/>.</summary>
+    public RelationQueryConfigurationValueOrigin? ConfigurationOrigin { get; }
+
+    /// <summary>Stable declaration, profile, convention, or adapter authority, or <see langword="null"/>.</summary>
+    public string? ConfigurationAuthority { get; }
+
+    /// <summary>Stable adapter-owned decision code explaining a contextual failure, or <see langword="null"/>.</summary>
+    public RelationQueryAdapterDecisionCode? AdapterDecisionCode { get; }
 
     static void RequireOptional(string? value, string parameterName)
     {
@@ -150,6 +245,18 @@ public static class RelationQueryRealizationDiagnosticCodes
 
     /// <summary>A final decision is missing, duplicated, or inconsistent with its requirement.</summary>
     public const string DecisionInvalid = "REL2012";
+
+    /// <summary>Exact contextual evidence cannot preserve a profile-feasible requirement.</summary>
+    public const string ContextUnavailable = "REL2013";
+
+    /// <summary>Contextual placement or binding evidence is stale, malformed, or contradictory.</summary>
+    public const string ContextInvalid = "REL2014";
+
+    /// <summary>An adapter projection omits evidence required to make an exact prediction.</summary>
+    public const string ContextEvidenceIncomplete = "REL2015";
+
+    /// <summary>The contextual binding does not have exact plan, placement, target, or profile affinity.</summary>
+    public const string ContextAffinityMismatch = "REL2016";
 }
 
 /// <summary>
@@ -304,6 +411,15 @@ public sealed class RelationQueryRealizationReport
                 .ThenBy(static diagnostic => diagnostic.Override?.Value ?? string.Empty, StringComparer.Ordinal)
                 .ThenBy(static diagnostic => diagnostic.Node?.Value ?? string.Empty, StringComparer.Ordinal)
                 .ThenBy(static diagnostic => diagnostic.SemanticSite ?? string.Empty, StringComparer.Ordinal)
+                .ThenBy(static diagnostic => diagnostic.Branch?.Value ?? string.Empty, StringComparer.Ordinal)
+                .ThenBy(static diagnostic => diagnostic.Input?.Value ?? string.Empty, StringComparer.Ordinal)
+                .ThenBy(static diagnostic => diagnostic.Field?.ToString() ?? string.Empty, StringComparer.Ordinal)
+                .ThenBy(static diagnostic => diagnostic.PlacementBinding?.Value ?? string.Empty, StringComparer.Ordinal)
+                .ThenBy(static diagnostic => diagnostic.BindingSetting ?? string.Empty, StringComparer.Ordinal)
+                .ThenBy(static diagnostic => diagnostic.ConfigurationOrigin is { } origin ? (int)origin : -1)
+                .ThenBy(static diagnostic => diagnostic.ConfigurationAuthority ?? string.Empty, StringComparer.Ordinal)
+                .ThenBy(static diagnostic => diagnostic.AdapterDecisionCode?.Value ?? string.Empty, StringComparer.Ordinal)
+                .ThenBy(static diagnostic => diagnostic.ContextEvidence?.Value ?? string.Empty, StringComparer.Ordinal)
                 .ThenBy(static diagnostic => diagnostic.Code, StringComparer.Ordinal)
                 .ThenBy(static diagnostic => diagnostic.Message, StringComparer.Ordinal)
         ];

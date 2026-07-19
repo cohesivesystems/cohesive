@@ -276,7 +276,12 @@ public sealed class RelationQueryTargetCapabilityProfile
     /// <summary>Optional descriptive metadata that does not affect semantic matching or identity.</summary>
     public string? Description { get; }
 
-    /// <summary>Determines whether another profile carries the same normalized capability snapshot.</summary>
+    /// <summary>Determines whether another profile carries the same normalized semantic capability snapshot.</summary>
+    /// <remarks>
+    /// Comparison uses the normalized typed contract rather than a serialized representation. Declaration order and
+    /// descriptive metadata do not affect the result; target and profile identities, supported versions, boundary
+    /// constraints, capability assertions, and their boundary references do.
+    /// </remarks>
     /// <param name="other">Profile snapshot to compare.</param>
     /// <returns>
     /// <see langword="true"/> when target identity, supported versions, operating boundaries, and capability
@@ -622,6 +627,23 @@ public sealed record RelationQueryCompositionRule
 
 internal static class RelationQueryRealizationOrdering
 {
+    public static ImmutableArray<T> NormalizeIdentityValues<T>(
+        ImmutableArray<T> values,
+        Func<T, string> key,
+        string parameterName,
+        bool requireNonEmpty = false)
+        where T : struct
+    {
+        var normalized = values.IsDefault ? [] : values;
+        if (normalized.Any(value => string.IsNullOrWhiteSpace(key(value))))
+            throw new ArgumentException("Identity collections cannot contain default values.", parameterName);
+        if (normalized.GroupBy(key, StringComparer.Ordinal).Any(static group => group.Count() > 1))
+            throw new ArgumentException("Identity collections cannot contain repeated values.", parameterName);
+        if (requireNonEmpty && normalized.IsDefaultOrEmpty)
+            throw new ArgumentException("At least one identity is required.", parameterName);
+        return [.. normalized.OrderBy(key, StringComparer.Ordinal)];
+    }
+
     public static ImmutableArray<string> NormalizeStrings(
         ImmutableArray<string> values,
         string parameterName,

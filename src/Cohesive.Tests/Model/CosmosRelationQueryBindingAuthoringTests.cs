@@ -15,6 +15,17 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
     const string DatabaseName = "operations";
     static readonly FieldPath IdPath = FieldPath.FromField("id");
     static readonly FieldPath StatusPath = FieldPath.FromField("status");
+    static readonly FieldPath StopsPath = FieldPath.FromField("stops");
+    static readonly FieldPath StopLocationPath = FieldPath.FromField("location");
+    static readonly FieldPath StopTypePath = FieldPath.FromField("type");
+    static readonly FieldPath PhysicalStopsPath = FieldPath.FromField("routeStops");
+    static readonly FieldPath PhysicalStopLocationPath = FieldPath.FromField("site");
+    static readonly FieldPath PhysicalStopTypePath = FieldPath.FromField("stopKind");
+    const CosmosRelationQueryCollectionElementSemanticCapabilities ExactComparisons =
+        CosmosRelationQueryCollectionElementSemanticCapabilities.ExactEquality
+        | CosmosRelationQueryCollectionElementSemanticCapabilities.ExactInequality;
+    const CosmosRelationQueryStructuredCollectionAbsenceBehavior RequiredStructuredValue =
+        CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion;
 
     [Fact]
     public void Build_TypedOverridesDriveEffectiveOrderingEvidenceAndNativeCompilation()
@@ -52,11 +63,229 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
             RelationQueryResultObservability.NotRequested);
         Assert.True(realization.IsRealizable, Format(realization.Diagnostics));
         var compilation = new CosmosRelationQueryCompiler().Compile(
-            new(fixture.Plan, realization, fixture.AuthoredPlacement.Placement),
+            new RelationQueryBoundRealizationRequest(
+                fixture.Plan,
+                realization,
+                fixture.AuthoredPlacement.Placement),
             binding);
 
         Assert.True(compilation.IsSuccessful, Format(compilation.Diagnostics));
         Assert.Contains("c[\"documentId\"]", Assert.Single(compilation.Artifacts).Statement.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Build_TypedStructuredCollectionFlowsFromExpressionAuthoringToSdkQueryDefinition()
+    {
+        var fixture = CreateStructuredCollectionFixture();
+        var binding = ConfigureTypedStructuredCollection(fixture)
+            .StableUnique(load => load.Id)
+            .ExactOrdering(load => load.Id)
+            .Build()
+            .RequireValue();
+
+        var realization = RelationQueryRealizationCompiler.Compile(
+            fixture.Plan,
+            CosmosRelationQueryTargetProfile.Default,
+            CosmosRelationQueryTargetProfile.Policy,
+            RelationQueryResultObservability.NotRequested);
+        Assert.True(realization.IsRealizable, Format(realization.Diagnostics));
+        var compilation = new CosmosRelationQueryCompiler().Compile(
+            new RelationQueryBoundRealizationRequest(
+                fixture.Plan,
+                realization,
+                fixture.AuthoredPlacement.Placement),
+            binding);
+
+        Assert.True(compilation.IsSuccessful, Format(compilation.Diagnostics));
+        var artifact = Assert.Single(compilation.Artifacts);
+        var query = artifact.Bind(new Dictionary<QueryParameterId, ObservationValue>
+        {
+            [new("location")] = ObservationValue.FromString("SEA")
+        }).ToQueryDefinition();
+        Assert.Contains(
+            "EXISTS (SELECT VALUE e0 FROM e0 IN c[\"routeStops\"] WHERE "
+            + "((e0[\"site\"] = @p0) AND (e0[\"stopKind\"] = @p1)))",
+            query.QueryText,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(" JOIN ", query.QueryText, StringComparison.Ordinal);
+        Assert.DoesNotContain("ARRAY_CONTAINS", query.QueryText, StringComparison.Ordinal);
+        Assert.Equal(2, query.GetQueryParameters().Count());
+    }
+
+    [Fact]
+    public void Build_TypedAndStructuralStructuredCollectionAuthoringNormalizeToOneArtifact()
+    {
+        const string authority = "tests/cosmos-collection-local/v1";
+        var fixture = CreateStructuredCollectionFixture();
+        var typed = ConfigureTypedStructuredCollection(fixture, authority: authority)
+            .WithId(new("tests/cosmos-collection-equivalence/v1"))
+            .Build()
+            .RequireValue();
+        var structural = CosmosRelationQueryBinding.For(
+                (RelationQueryPlacedInput)fixture.Placed,
+                explicitAuthority: authority)
+            .Account(AccountEndpoint)
+            .Database(DatabaseName)
+            .Container("loads")
+            .WithId(new("tests/cosmos-collection-equivalence/v1"))
+            .Identity(fixture.Placed.GetField(IdPath))
+            .StructuredCollection(
+                StopsPath,
+                PhysicalStopsPath,
+                collection => collection
+                    .AttestCanonicalAnyRepresentation("tests/cosmos-json-array/v1")
+                    .Child(
+                        StopLocationPath,
+                        PhysicalStopLocationPath,
+                        CosmosRelationQueryCollectionElementValueDomain.String,
+                        ExactComparisons,
+                        "tests/cosmos-ordinal-string/v1",
+                        RequiredStructuredValue,
+                        RequiredStructuredValue)
+                    .Child(
+                        StopTypePath,
+                        PhysicalStopTypePath,
+                        CosmosRelationQueryCollectionElementValueDomain.String,
+                        ExactComparisons,
+                        "tests/cosmos-ordinal-string/v1",
+                        RequiredStructuredValue,
+                        RequiredStructuredValue))
+            .Build()
+            .RequireValue();
+
+        Assert.Equal(typed.Fingerprint, structural.Fingerprint);
+        Assert.Equal(
+            JsonSerializer.Serialize(typed, JsonOptions),
+            JsonSerializer.Serialize(structural, JsonOptions));
+        var collectionInput = fixture.Placed.GetField(load => load.Stops).Input.Id;
+        var collectionPrefix = $"field/{collectionInput.Value}/collection";
+        var decisions = typed.ConfigurationDecisions
+            .Where(decision => decision.Setting.StartsWith(collectionPrefix, StringComparison.Ordinal))
+            .ToArray();
+        Assert.NotEmpty(decisions);
+        Assert.All(decisions, decision =>
+        {
+            Assert.Equal(RelationQueryConfigurationValueOrigin.Explicit, decision.Origin);
+            Assert.Equal(authority, decision.Authority);
+        });
+    }
+
+    [Fact]
+    public void Build_StructuredCollectionNormalizationIsOrderIndependentAndEvidenceSensitive()
+    {
+        var fixture = CreateStructuredCollectionFixture();
+        var baseline = ConfigureTypedStructuredCollection(fixture).Build().RequireValue();
+        var reordered = ConfigureTypedStructuredCollection(fixture, reverseChildren: true).Build().RequireValue();
+        var changed = ConfigureTypedStructuredCollection(
+                fixture,
+                locationDocumentPath: FieldPath.FromField("changedSite"))
+            .Build()
+            .RequireValue();
+
+        Assert.Equal(baseline.Id, reordered.Id);
+        Assert.Equal(baseline.Fingerprint, reordered.Fingerprint);
+        Assert.Equal(
+            JsonSerializer.Serialize(baseline, JsonOptions),
+            JsonSerializer.Serialize(reordered, JsonOptions));
+        Assert.NotEqual(baseline.Id, changed.Id);
+        Assert.NotEqual(baseline.Fingerprint, changed.Fingerprint);
+    }
+
+    [Fact]
+    public void Build_StructuredCollectionDuplicatesMissingEvidenceAndInvalidTypedChildrenAreDiagnosed()
+    {
+        var fixture = CreateStructuredCollectionFixture();
+        var result = CosmosRelationQueryBinding.For(fixture.Placed)
+            .Account(AccountEndpoint)
+            .Database(DatabaseName)
+            .Container("loads")
+            .Identity(load => load.Id)
+            .StructuredCollection(
+                (LoadDocument load) => load.Stops,
+                PhysicalStopsPath,
+                collection => collection
+                    .AttestCanonicalAnyRepresentation("tests/cosmos-json-array/v1")
+                    .AttestCanonicalAnyRepresentation("tests/cosmos-json-array/v2")
+                    .Child(
+                        stop => stop.Location,
+                        PhysicalStopLocationPath,
+                        CosmosRelationQueryCollectionElementValueDomain.String,
+                        ExactComparisons,
+                        "tests/cosmos-ordinal-string/v1",
+                        RequiredStructuredValue,
+                        RequiredStructuredValue)
+                    .Child(
+                        stop => stop.Location,
+                        FieldPath.FromField("otherSite"),
+                        CosmosRelationQueryCollectionElementValueDomain.String,
+                        ExactComparisons,
+                        "tests/cosmos-ordinal-string/v1",
+                        RequiredStructuredValue,
+                        RequiredStructuredValue)
+                    .Child(
+                        stop => stop.Location.ToLowerInvariant(),
+                        PhysicalStopTypePath,
+                        CosmosRelationQueryCollectionElementValueDomain.String,
+                        ExactComparisons,
+                        "tests/cosmos-ordinal-string/v1",
+                        RequiredStructuredValue,
+                        RequiredStructuredValue))
+            .Build();
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryBindingAuthoringDiagnosticCodes.BindingDuplicate
+            && diagnostic.Setting is not null
+            && diagnostic.Setting.Contains("collection/semanticProfile", StringComparison.Ordinal));
+        Assert.Contains(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryBindingAuthoringDiagnosticCodes.BindingDuplicate
+            && diagnostic.Setting is not null
+            && diagnostic.Setting.Contains("collection/child/", StringComparison.Ordinal));
+        Assert.Contains(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryBindingAuthoringDiagnosticCodes.SelectorInvalid
+            && diagnostic.Setting is not null
+            && diagnostic.Setting.EndsWith("collection/child/typed", StringComparison.Ordinal));
+
+        var missing = CosmosRelationQueryBinding.For(fixture.Placed)
+            .Account(AccountEndpoint)
+            .Database(DatabaseName)
+            .Container("loads")
+            .Identity(load => load.Id)
+            .StructuredCollection(
+                StopsPath,
+                PhysicalStopsPath,
+                collection => collection.Child(
+                    StopLocationPath,
+                    PhysicalStopLocationPath,
+                    CosmosRelationQueryCollectionElementValueDomain.String,
+                    ExactComparisons,
+                    "tests/cosmos-ordinal-string/v1",
+                    RequiredStructuredValue,
+                    RequiredStructuredValue))
+            .Build();
+        Assert.False(missing.IsSuccess);
+        Assert.Contains(missing.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryBindingAuthoringDiagnosticCodes.BindingMissing
+            && diagnostic.Setting is not null
+            && diagnostic.Setting.EndsWith("collection/semanticProfile", StringComparison.Ordinal));
+        Assert.DoesNotContain(missing.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryBindingAuthoringDiagnosticCodes.ArtifactInvalid);
+
+        var missingChild = CosmosRelationQueryBinding.For(fixture.Placed)
+            .Account(AccountEndpoint)
+            .Database(DatabaseName)
+            .Container("loads")
+            .Identity(load => load.Id)
+            .StructuredCollection(
+                StopsPath,
+                PhysicalStopsPath,
+                collection => collection.AttestCanonicalAnyRepresentation("tests/cosmos-json-array/v1"))
+            .Build();
+        Assert.False(missingChild.IsSuccess);
+        Assert.Contains(missingChild.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryBindingAuthoringDiagnosticCodes.BindingMissing
+            && diagnostic.Setting is not null
+            && diagnostic.Setting.EndsWith("collection/child", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -79,13 +308,21 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
             RelationQueryResultObservability.NotRequested);
         Assert.True(realization.IsRealizable, Format(realization.Diagnostics));
         var compilation = new CosmosRelationQueryCompiler().Compile(
-            new(fixture.Plan, realization, fixture.AuthoredPlacement.Placement),
+            new RelationQueryBoundRealizationRequest(
+                fixture.Plan,
+                realization,
+                fixture.AuthoredPlacement.Placement),
             binding);
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, compilation.Status);
-        var diagnostic = Assert.Single(compilation.Diagnostics, static diagnostic =>
-            diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable);
-        Assert.Contains("deterministic order", diagnostic.Message, StringComparison.Ordinal);
+        _ = Assert.Single(
+            compilation.Diagnostics
+                .Where(static diagnostic =>
+                    diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable
+                    && diagnostic.Message.Contains(
+                        "deterministic order",
+                        StringComparison.Ordinal))
+                .DistinctBy(static diagnostic => diagnostic.Message));
         Assert.Empty(compilation.Artifacts);
         AssertDecision(
             binding,
@@ -698,6 +935,101 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
         return new(plan, authoredPlacement, placed);
     }
 
+    static RowFixture CreateStructuredCollectionFixture()
+    {
+        var author = RelationQuery.Expression();
+        var loadShape = author.Clr.Shape<LoadDocument>();
+        var location = author.Parameter<string>("location");
+        var loads = author.Source(loadShape);
+        var filtered = author.Filter(
+            loads.Node,
+            (LoadDocument load) => load.Stops.Any(stop =>
+                stop.Location == location.Value
+                && stop.Type == "Pickup"),
+            loads.Binding);
+        var projected = author.Project(
+            filtered,
+            (LoadDocument load) => new LoadRow
+            {
+                Id = load.Id,
+                Status = load.Status
+            },
+            loads.Binding);
+        var ordered = author.Order(
+            projected.Node,
+            (LoadRow row) => row.Id,
+            projected.Binding);
+        var paged = author.Page(ordered, new OffsetPageDefinition(limit: 25));
+        var rows = author.Rows(paged, projected.Binding, id: "rows");
+        var query = author.BuildQuery(
+            new("cosmos-binding-authoring-structured-collection"),
+            new("CosmosBindingAuthoringStructuredCollection"),
+            rows);
+        Assert.True(query.Validation.IsValid, Format(query.Validation.Diagnostics));
+
+        var compilation = RelationQueryStaticCompiler.Compile(new(query.CreateDocument(), author.ShapeDocuments));
+        Assert.True(compilation.IsSuccessful, Format(compilation.Diagnostics));
+        var plan = Assert.IsType<CompiledRelationQueryPlan>(compilation.Plan);
+        var placementBuilder = RelationQueryPlacement.For(plan);
+        var source = placementBuilder.Source(
+            sourceKey: "tests/cosmos/loads",
+            targetProfile: CosmosRelationQueryTargetProfile.Default);
+        var placedSource = placementBuilder.PlaceSource(source, loadShape)
+            .Identity(load => load.Id)
+            .FieldsBySemanticPath();
+        var authoredPlacement = placementBuilder.Build().RequireValue();
+        var placed = authoredPlacement.GetInput(placedSource);
+        return new(plan, authoredPlacement, placed);
+    }
+
+    static CosmosRelationQueryStorageBindingBuilder<LoadDocument> ConfigureTypedStructuredCollection(
+        RowFixture fixture,
+        bool reverseChildren = false,
+        FieldPath? locationDocumentPath = null,
+        string authority = CosmosRelationQueryBinding.LocalDeclarationAuthority)
+    {
+        return CosmosRelationQueryBinding.For(fixture.Placed, explicitAuthority: authority)
+            .Account(AccountEndpoint)
+            .Database(DatabaseName)
+            .Container("loads")
+            .Identity(load => load.Id)
+            .StructuredCollection(
+                (LoadDocument load) => load.Stops,
+                PhysicalStopsPath,
+                collection =>
+                {
+                    collection.AttestCanonicalAnyRepresentation("tests/cosmos-json-array/v1");
+
+                    void AddLocation() => collection.Child(
+                        stop => stop.Location,
+                        locationDocumentPath ?? PhysicalStopLocationPath,
+                        CosmosRelationQueryCollectionElementValueDomain.String,
+                        ExactComparisons,
+                        "tests/cosmos-ordinal-string/v1",
+                        RequiredStructuredValue,
+                        RequiredStructuredValue);
+                    void AddType() => collection.Child(
+                        stop => stop.Type,
+                        PhysicalStopTypePath,
+                        CosmosRelationQueryCollectionElementValueDomain.String,
+                        ExactComparisons,
+                        "tests/cosmos-ordinal-string/v1",
+                        RequiredStructuredValue,
+                        RequiredStructuredValue);
+
+                    if (reverseChildren)
+                    {
+                        AddType();
+                        AddLocation();
+                    }
+                    else
+                    {
+                        AddLocation();
+                        AddType();
+                    }
+                });
+    }
+
     static RowFixture CreateAggregationFixture()
     {
         var author = RelationQuery.Expression();
@@ -751,8 +1083,20 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
         [JsonPropertyName("status")]
         public required string Status { get; init; }
 
+        [JsonPropertyName("stops")]
+        public required IReadOnlyList<StopDocument> Stops { get; init; }
+
         [JsonPropertyName("unused")]
         public string? Unused { get; init; }
+    }
+
+    sealed class StopDocument
+    {
+        [JsonPropertyName("location")]
+        public required string Location { get; init; }
+
+        [JsonPropertyName("type")]
+        public required string Type { get; init; }
     }
 
     sealed class LoadRow

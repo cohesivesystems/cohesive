@@ -18,8 +18,19 @@ namespace Cohesive.Adapters.Elastic;
 /// </summary>
 public sealed class ElasticRelationQueryCompiler
 {
+    /// <summary>Configuration-evidence setting for the exact compiler implementation profile.</summary>
+    public const string CompilerProfileSetting = "compilerProfile";
+
+    /// <summary>Configuration-evidence setting for the compiler convention set.</summary>
+    public const string CompilerConventionSetting = "compilerConventionSet";
+
+    /// <summary>Configuration-evidence setting for the normalized lowering policy.</summary>
+    public const string LoweringPolicySetting = "loweringPolicy";
+
     readonly ElasticRelationQueryCompilerOptions options;
     readonly ElasticQueryLoweringPolicy loweringPolicy;
+    readonly RelationQueryConfigurationValueOrigin optionsOrigin;
+    readonly RelationQueryConfigurationValueOrigin loweringPolicyOrigin;
 
     /// <summary>Creates a canonical Elasticsearch compiler.</summary>
     /// <param name="options">Artifact-identity options, or <see langword="null"/> for current defaults.</param>
@@ -33,6 +44,74 @@ public sealed class ElasticRelationQueryCompiler
     {
         this.options = options ?? new();
         this.loweringPolicy = loweringPolicy ?? ElasticQueryLoweringPolicy.Default;
+        optionsOrigin = options is null
+            ? RelationQueryConfigurationValueOrigin.AdapterConvention
+            : RelationQueryConfigurationValueOrigin.Explicit;
+        loweringPolicyOrigin = loweringPolicy is null
+            ? RelationQueryConfigurationValueOrigin.AdapterConvention
+            : RelationQueryConfigurationValueOrigin.Explicit;
+    }
+
+    /// <summary>
+    /// Qualifies profile-level Elasticsearch feasibility with the exact placement and storage-binding evidence.
+    /// </summary>
+    /// <param name="request">Exact plan, profile feasibility, placement, and selected branches to qualify.</param>
+    /// <param name="storageBinding">Versioned concrete-index and field-mapping binding to examine.</param>
+    /// <returns>
+    /// A deterministic bound-realization report predicting whether native Elasticsearch compilation can preserve
+    /// every selected branch.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="request"/> or <paramref name="storageBinding"/> is <see langword="null"/>.
+    /// </exception>
+    public RelationQueryBoundRealizationReport Realize(
+        RelationQueryBoundRealizationRequest request,
+        ElasticRelationQueryStorageBinding storageBinding)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(storageBinding);
+        var projection = ProjectContextualEvidence(request, storageBinding);
+        return RelationQueryBoundRealizationCompiler.Compile(request, projection.Evidence);
+    }
+
+    /// <summary>
+    /// Contextually realizes and then compiles every selected branch using the same exact Elasticsearch binding.
+    /// </summary>
+    /// <param name="request">Exact plan, profile feasibility, placement, and selected branches to compile.</param>
+    /// <param name="storageBinding">Versioned concrete-index and field-mapping binding.</param>
+    /// <returns>Exact immutable artifacts or structured invalid/unsupported diagnostics.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="request"/> or <paramref name="storageBinding"/> is <see langword="null"/>.
+    /// </exception>
+    public ElasticRelationQueryCompilationResult Compile(
+        RelationQueryBoundRealizationRequest request,
+        ElasticRelationQueryStorageBinding storageBinding)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(storageBinding);
+
+        var projection = ProjectContextualEvidence(request, storageBinding);
+        var boundRealization = RelationQueryBoundRealizationCompiler.Compile(request, projection.Evidence);
+        if (!boundRealization.IsRealizable)
+        {
+            ImmutableArray<RelationQueryNativeCompilationDiagnostic> diagnostics =
+            [
+                .. projection.Diagnostics,
+                .. RelationQueryNativeCompilationDiagnostic.FromBoundRealizationFailure(boundRealization)
+            ];
+            return new(
+                boundRealization.Status == RelationQueryRealizationStatus.Invalid
+                    ? RelationQueryNativeCompilationStatus.Invalid
+                    : RelationQueryNativeCompilationStatus.Unsupported,
+                [],
+                diagnostics);
+        }
+
+        RelationQueryNativeCompilationRequest nativeRequest = new(
+            request.Plan,
+            boundRealization,
+            request.Placement);
+        return Compile(nativeRequest, storageBinding);
     }
 
     /// <summary>Compiles every selected request branch independently and fails closed on semantic uncertainty.</summary>
@@ -51,14 +130,24 @@ public sealed class ElasticRelationQueryCompiler
 
         var diagnostics = ImmutableArray.CreateBuilder<RelationQueryNativeCompilationDiagnostic>();
         var inputDiagnostics = request.ValidateInputs();
-        var bindingDiagnostics = ValidateBinding(request, storageBinding);
+        var bindingDiagnostics = ValidateBinding(
+            request.PlanReference,
+            request.ProfileFeasibility,
+            request.Placement,
+            request.Selection,
+            storageBinding);
+        var exactBindingDiagnostics = ValidateExactBinding(request, storageBinding);
         diagnostics.AddRange(inputDiagnostics);
         diagnostics.AddRange(bindingDiagnostics);
+        diagnostics.AddRange(exactBindingDiagnostics);
         if (diagnostics.Any(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
         {
             var invalid = !bindingDiagnostics.IsDefaultOrEmpty
+                || !exactBindingDiagnostics.IsDefaultOrEmpty
+                || request.BoundRealization.Status == RelationQueryRealizationStatus.Invalid
                 || inputDiagnostics.Any(static diagnostic =>
-                    diagnostic.Code != RelationQueryNativeCompilationDiagnosticCodes.RealizationUnavailable);
+                    diagnostic.Code != RelationQueryNativeCompilationDiagnosticCodes.RealizationUnavailable
+                    && diagnostic.Code != RelationQueryNativeCompilationDiagnosticCodes.BoundRealizationUnavailable);
             return new(
                 invalid
                     ? RelationQueryNativeCompilationStatus.Invalid
@@ -87,7 +176,8 @@ public sealed class ElasticRelationQueryCompiler
                     exception.Message,
                     branch.Id,
                     exception.Node,
-                    exception.Input));
+                    exception.Input,
+                    adapterDecisionCode: new(exception.Code)));
             }
             catch (Exception exception) when (exception is ArgumentException
                                               or InvalidOperationException
@@ -98,7 +188,8 @@ public sealed class ElasticRelationQueryCompiler
                     ElasticRelationQueryCompilationDiagnosticCodes.ArtifactInvalid,
                     DiagnosticSeverity.Error,
                     $"Elasticsearch artifact construction failed closed: {exception.Message}",
-                    branch.Id));
+                    branch.Id,
+                    adapterDecisionCode: new(ElasticRelationQueryCompilationDiagnosticCodes.ArtifactInvalid)));
             }
         }
 
@@ -112,22 +203,32 @@ public sealed class ElasticRelationQueryCompiler
     }
 
     static ImmutableArray<RelationQueryNativeCompilationDiagnostic> ValidateBinding(
-        RelationQueryNativeCompilationRequest request,
+        RelationQueryCompiledPlanReference planReference,
+        RelationQueryRealizationReport realization,
+        RelationQuerySourcePlacement placement,
+        RelationQueryCompilationSelection selection,
         ElasticRelationQueryStorageBinding storageBinding)
     {
         var diagnostics = ImmutableArray.CreateBuilder<RelationQueryNativeCompilationDiagnostic>();
-        var reportProfile = request.Realization.TargetProfile;
-        if (storageBinding.CompiledPlanFingerprint is { } compiledPlanFingerprint
-            && !Equals(
-                compiledPlanFingerprint,
-                RelationQueryCompiledPlanReferenceFingerprinter.Compute(request.PlanReference)))
+        var reportProfile = realization.TargetProfile;
+        var expectedPlanFingerprint = RelationQueryCompiledPlanReferenceFingerprinter.Compute(planReference);
+        if (storageBinding.CompiledPlanFingerprint is not { } compiledPlanFingerprint)
+        {
+            diagnostics.Add(BindingDiagnostic(
+                "Exact Elasticsearch realization requires compiled-plan affinity on the storage binding."));
+        }
+        else if (!Equals(compiledPlanFingerprint, expectedPlanFingerprint))
         {
             diagnostics.Add(BindingDiagnostic(
                 "The Elasticsearch storage binding's exact compiled-plan affinity does not match the native-compilation request."));
         }
 
-        if (storageBinding.PlacementFingerprint is { } placementFingerprint
-            && !Equals(placementFingerprint, request.Placement.Fingerprint))
+        if (storageBinding.PlacementFingerprint is not { } placementFingerprint)
+        {
+            diagnostics.Add(BindingDiagnostic(
+                "Exact Elasticsearch realization requires source-placement affinity on the storage binding."));
+        }
+        else if (!Equals(placementFingerprint, placement.Fingerprint))
         {
             diagnostics.Add(BindingDiagnostic(
                 "The Elasticsearch storage binding's exact source-placement affinity does not match the native-compilation request."));
@@ -137,13 +238,13 @@ public sealed class ElasticRelationQueryCompiler
             || storageBinding.TargetProfile != reportProfile.Id
             || storageBinding.Target != ElasticRelationQueryTargetProfile.Target
             || storageBinding.TargetProfile != ElasticRelationQueryTargetProfile.ProfileId
-            || !ProfilesEquivalent(reportProfile, ElasticRelationQueryTargetProfile.Default))
+            || !reportProfile.HasSameSemantics(ElasticRelationQueryTargetProfile.Default))
         {
             diagnostics.Add(BindingDiagnostic(
                 "The Elasticsearch binding, realization report, and canonical target profile do not identify the same exact target snapshot."));
         }
 
-        var sources = request.Placement.SourceInstances
+        var sources = placement.SourceInstances
             .Where(source => source.Id == storageBinding.Source)
             .ToArray();
         if (sources.Length != 1)
@@ -153,13 +254,13 @@ public sealed class ElasticRelationQueryCompiler
         }
         else if (sources[0].TargetProfile.Target != storageBinding.Target
                  || sources[0].TargetProfile.Id != storageBinding.TargetProfile
-                 || !ProfilesEquivalent(sources[0].TargetProfile, reportProfile))
+                 || !sources[0].TargetProfile.HasSameSemantics(reportProfile))
         {
             diagnostics.Add(BindingDiagnostic(
                 "The placed source capability snapshot does not match the realization report and Elasticsearch binding."));
         }
 
-        var placements = request.Placement.Bindings
+        var placements = placement.Bindings
             .Where(binding => binding.Id == storageBinding.PlacementBinding)
             .ToArray();
         if (placements.Length != 1)
@@ -169,31 +270,26 @@ public sealed class ElasticRelationQueryCompiler
         }
         else
         {
-            var placement = placements[0];
-            if (placement.Source != storageBinding.Source
-                || placement.Kind != RelationQuerySourcePlacementBindingKind.SourceSet)
+            var placementBinding = placements[0];
+            if (placementBinding.Source != storageBinding.Source
+                || placementBinding.Kind != RelationQuerySourcePlacementBindingKind.SourceSet)
             {
                 diagnostics.Add(BindingDiagnostic(
                     "The Elasticsearch storage binding must identify one source-set placement on its declared source instance."));
             }
-            if (request.Plan.InputContract.Sources.Length != 1
-                || request.Plan.InputContract.Traversals.Length != 0
-                || request.Plan.InputContract.Sources[0].Node != placement.Node
-                || request.Plan.InputContract.Sources[0].Binding != placement.Binding)
+            if (selection.Sources.Length != 1
+                || selection.Traversals.Length != 0
+                || selection.PlacementBindings.Length != 1
+                || selection.SourceInstances.Length != 1
+                || selection.Sources[0].Input.Id != placementBinding.Input
+                || selection.Sources[0].Node != placementBinding.Node
+                || selection.Sources[0].Binding != placementBinding.Binding
+                || selection.PlacementBindings[0].Id != placementBinding.Id
+                || selection.SourceInstances[0].Id != placementBinding.Source)
             {
                 diagnostics.Add(BindingDiagnostic(
-                    "Canonical Elasticsearch v2 requires exactly one source contract and no relationship traversal contracts."));
+                    "Canonical Elasticsearch v2 requires the selected branches to use exactly one placed source contract and no relationship traversal contracts."));
             }
-        }
-
-        var planFields = request.Plan.InputContract.Sources
-            .SelectMany(static source => source.Fields)
-            .Select(static field => field.Input.Id)
-            .ToHashSet();
-        if (storageBinding.Fields.Any(field => !planFields.Contains(field.Input)))
-        {
-            diagnostics.Add(BindingDiagnostic(
-                "The Elasticsearch storage binding contains field inputs absent from the exact compiled plan."));
         }
 
         return diagnostics.ToImmutable();
@@ -201,22 +297,446 @@ public sealed class ElasticRelationQueryCompiler
         static RelationQueryNativeCompilationDiagnostic BindingDiagnostic(string message) => new(
             ElasticRelationQueryCompilationDiagnosticCodes.StorageBindingMismatch,
             DiagnosticSeverity.Error,
-            message);
+            message,
+            adapterDecisionCode: new(ElasticRelationQueryCompilationDiagnosticCodes.StorageBindingMismatch));
     }
 
-    internal static bool ProfilesEquivalent(
-        RelationQueryTargetCapabilityProfile left,
-        RelationQueryTargetCapabilityProfile right)
+    ContextualProjectionResult ProjectContextualEvidence(
+        RelationQueryBoundRealizationRequest request,
+        ElasticRelationQueryStorageBinding storageBinding)
     {
-        var serializerOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
-        return JsonSerializer.SerializeToUtf8Bytes(left, serializerOptions)
-            .AsSpan()
-            .SequenceEqual(JsonSerializer.SerializeToUtf8Bytes(right, serializerOptions));
+        var diagnostics = ImmutableArray.CreateBuilder<RelationQueryNativeCompilationDiagnostic>();
+        var inputDiagnostics = request.ValidateInputs();
+        var bindingDiagnostics = ValidateBinding(
+            request.PlanReference,
+            request.ProfileFeasibility,
+            request.Placement,
+            request.Selection,
+            storageBinding);
+        diagnostics.AddRange(inputDiagnostics);
+        diagnostics.AddRange(bindingDiagnostics);
+
+        var bindingReference = CreateBindingReference(storageBinding);
+        if (!request.ProfileFeasibility.IsRealizable)
+        {
+            return new(
+                new(bindingReference, []),
+                diagnostics.ToImmutable());
+        }
+
+        RelationQueryContextualBranchFailure? globalFailure = null;
+        if (!inputDiagnostics.IsDefaultOrEmpty)
+        {
+            globalFailure = new(
+                RelationQueryBoundAssessmentStatus.Invalid,
+                RelationQueryUnavailableReason.CapabilityEvidenceInvalid,
+                new(ElasticRelationQueryCompilationDiagnosticCodes.ArtifactInvalid),
+                string.Join("; ", inputDiagnostics.Select(static diagnostic => diagnostic.Message)),
+                "Recompile the canonical plan, feasibility report, and placement from the same definition snapshot.",
+                failedConfigurationSetting: CompilerProfileSetting);
+        }
+        else if (!bindingDiagnostics.IsDefaultOrEmpty)
+        {
+            globalFailure = new(
+                RelationQueryBoundAssessmentStatus.Invalid,
+                RelationQueryUnavailableReason.CapabilityEvidenceInvalid,
+                new(ElasticRelationQueryCompilationDiagnosticCodes.StorageBindingMismatch),
+                string.Join("; ", bindingDiagnostics.Select(static diagnostic => diagnostic.Message)),
+                "Re-author the Elasticsearch binding from the selected plan-bound placement input.",
+                failedConfigurationSetting: BindingFailureSetting(bindingDiagnostics));
+        }
+
+        Dictionary<RelationQueryNativeResultBranchId, RelationQueryContextualBranchFailure?> failures = [];
+        foreach (var branch in request.Branches)
+        {
+            if (globalFailure is { } failure)
+            {
+                failures.Add(branch.Id, AttributeFailure(request, branch, failure));
+                continue;
+            }
+
+            try
+            {
+                new BranchCompiler(
+                    request,
+                    storageBinding,
+                    options,
+                    loweringPolicy,
+                    branch).Validate();
+                failures.Add(branch.Id, null);
+            }
+            catch (BranchCompilationException exception)
+            {
+                diagnostics.Add(new(
+                    exception.Code,
+                    DiagnosticSeverity.Error,
+                    exception.Message,
+                    branch.Id,
+                    exception.Node,
+                    exception.Input,
+                    adapterDecisionCode: new(exception.Code)));
+                failures.Add(branch.Id, CreateBranchFailure(request, branch, exception));
+            }
+            catch (Exception exception) when (exception is ArgumentException
+                                              or InvalidOperationException
+                                              or KeyNotFoundException
+                                              or NotSupportedException)
+            {
+                var message = $"Elasticsearch contextual validation failed closed: {exception.Message}";
+                diagnostics.Add(new(
+                    ElasticRelationQueryCompilationDiagnosticCodes.ArtifactInvalid,
+                    DiagnosticSeverity.Error,
+                    message,
+                    branch.Id,
+                    adapterDecisionCode: new(ElasticRelationQueryCompilationDiagnosticCodes.ArtifactInvalid)));
+                failures.Add(branch.Id, AttributeFailure(request, branch, new(
+                    RelationQueryBoundAssessmentStatus.Invalid,
+                    RelationQueryUnavailableReason.CapabilityEvidenceInvalid,
+                    new(ElasticRelationQueryCompilationDiagnosticCodes.ArtifactInvalid),
+                    message,
+                    "Correct the exact Elasticsearch binding or canonical plan before retrying contextual realization.",
+                    failedConfigurationSetting: CompilerProfileSetting)));
+            }
+        }
+
+        var assessments = RelationQueryContextualAssessmentProjector.Project(
+            request,
+            "elastic/context",
+            branch => failures[branch.Id],
+            (branch, requirement, failure) => ResolveAssessmentAttribution(
+                request,
+                storageBinding,
+                bindingReference,
+                branch,
+                requirement,
+                failure));
+
+        return new(
+            new(bindingReference, assessments),
+            diagnostics.ToImmutable());
     }
+
+    static RelationQueryContextualBranchFailure CreateBranchFailure(
+        RelationQueryBoundRealizationRequest request,
+        RelationQueryNativeResultBranch branch,
+        BranchCompilationException exception)
+    {
+        var (status, reason) = exception.Code switch
+        {
+            ElasticRelationQueryCompilationDiagnosticCodes.ArtifactInvalid
+                or ElasticRelationQueryCompilationDiagnosticCodes.LoweringConfigurationInvalid =>
+                (RelationQueryBoundAssessmentStatus.Invalid,
+                    RelationQueryUnavailableReason.CapabilityEvidenceInvalid),
+            ElasticRelationQueryCompilationDiagnosticCodes.FieldBindingMissing
+                or ElasticRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable
+                or ElasticRelationQueryCompilationDiagnosticCodes.PagingUnstable
+                or ElasticRelationQueryCompilationDiagnosticCodes.NestedCorrelationUnavailable =>
+                (RelationQueryBoundAssessmentStatus.Unavailable,
+                    RelationQueryUnavailableReason.OperatingBoundaryInvalid),
+            _ =>
+                (RelationQueryBoundAssessmentStatus.Unavailable,
+                    RelationQueryUnavailableReason.PolicyRejected)
+        };
+        var failure = new RelationQueryContextualBranchFailure(
+            status,
+            reason,
+            new(exception.Code),
+            exception.Message,
+            "Update the Elasticsearch binding or compiler policy so the canonical compiler can preserve this branch.",
+            exception.Node,
+            exception.Input,
+            failedOperatingBoundary: FailureBoundary(exception),
+            failedConfigurationSetting: FailureConfigurationSetting(exception));
+        return AttributeFailure(request, branch, failure);
+    }
+
+    static RelationQueryContextualBranchFailure AttributeFailure(
+        RelationQueryBoundRealizationRequest request,
+        RelationQueryNativeResultBranch branch,
+        RelationQueryContextualBranchFailure failure)
+    {
+        var selection = request.Selection.GetBranch(branch.Id);
+        var decisions = request.ProfileFeasibility.Decisions.ToDictionary(static decision => decision.Requirement);
+        RelationQueryOperatingBoundaryId? failedBoundary = failure.FailedOperatingBoundary is { } boundary
+                                                              && selection.Requirements.Any(requirement =>
+                                                                  decisions[requirement.Id].GetBoundaryValidations()
+                                                                      .Any(validation => validation.Boundary == boundary))
+            ? boundary
+            : null;
+        var missingEvidence = failure.MissingCapabilityEvidence
+            .Where(evidence => selection.Requirements.Any(requirement =>
+                decisions[requirement.Id].GetCapabilityEvidence().Contains(evidence)))
+            .ToImmutableArray();
+        return new(
+            failure.Status,
+            failure.Reason,
+            failure.AdapterDecisionCode,
+            failure.Message,
+            failure.Resolution,
+            failure.Node,
+            failure.Input,
+            null,
+            missingEvidence,
+            failedBoundary,
+            failure.FailedConfigurationSetting);
+    }
+
+    static RelationQueryOperatingBoundaryId? FailureBoundary(BranchCompilationException exception)
+    {
+        if (exception.Code == ElasticRelationQueryCompilationDiagnosticCodes.UnsupportedBranchTopology)
+            return ElasticRelationQueryTargetProfile.SingleIndexBoundary;
+        if (exception.Code is ElasticRelationQueryCompilationDiagnosticCodes.LoweringUnavailable
+            or ElasticRelationQueryCompilationDiagnosticCodes.LoweringConfigurationInvalid)
+        {
+            return ElasticRelationQueryTargetProfile.DeterministicProviderBoundary;
+        }
+        if (exception.Code == ElasticRelationQueryCompilationDiagnosticCodes.NestedCorrelationUnavailable)
+            return ElasticRelationQueryTargetProfile.NonNullOperandsBoundary;
+        if (exception.Code == ElasticRelationQueryCompilationDiagnosticCodes.PagingUnstable)
+        {
+            if (Contains(exception.Message, "page size") || Contains(exception.Message, "result window"))
+                return ElasticRelationQueryTargetProfile.PageSizeBoundary;
+            if (Contains(exception.Message, "stable unique")
+                || Contains(exception.Message, "StableUniqueOrdering")
+                || Contains(exception.Message, "ordering"))
+                return ElasticRelationQueryTargetProfile.StableOrderingBoundary;
+            return null;
+        }
+        if (exception.Code != ElasticRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable)
+            return null;
+        if (Contains(exception.Message, "stable unique")
+            || Contains(exception.Message, "StableUniqueOrdering")
+            || Contains(exception.Message, "ordering"))
+            return ElasticRelationQueryTargetProfile.StableOrderingBoundary;
+        if (Contains(exception.Message, "non-null")
+            || Contains(exception.Message, "missing")
+            || Contains(exception.Message, "null"))
+        {
+            return ElasticRelationQueryTargetProfile.NonNullOperandsBoundary;
+        }
+        return Contains(exception.Message, "scalar")
+            ? ElasticRelationQueryTargetProfile.ScalarOperandsBoundary
+            : null;
+    }
+
+    static string? FailureConfigurationSetting(BranchCompilationException exception)
+    {
+        if (exception.Code is ElasticRelationQueryCompilationDiagnosticCodes.LoweringUnavailable
+            or ElasticRelationQueryCompilationDiagnosticCodes.LoweringConfigurationInvalid)
+        {
+            return LoweringPolicySetting;
+        }
+        if (exception.Code == ElasticRelationQueryCompilationDiagnosticCodes.PagingUnstable)
+        {
+            if (Contains(exception.Message, "result window"))
+                return ElasticRelationQueryStorageBindingBuilder.MaximumResultWindowSetting;
+            if (Contains(exception.Message, "page size"))
+                return ElasticRelationQueryStorageBindingBuilder.MaximumPageSizeSetting;
+            if (Contains(exception.Message, "search-visible view")
+                || Contains(exception.Message, "pagination consistency"))
+            {
+                return ElasticRelationQueryStorageBindingBuilder.PaginationConsistencySetting;
+            }
+        }
+        if (exception.Input is { } input
+            && (exception.Code is ElasticRelationQueryCompilationDiagnosticCodes.FieldBindingMissing
+                or ElasticRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable
+                or ElasticRelationQueryCompilationDiagnosticCodes.NestedCorrelationUnavailable))
+        {
+            var leaf = exception.Code == ElasticRelationQueryCompilationDiagnosticCodes.NestedCorrelationUnavailable
+                ? "nestedScope"
+                : FailureFieldSettingLeaf(exception.Message);
+            return $"{ElasticRelationQueryStorageBindingBuilder.FieldSetting(input)}/{leaf}";
+        }
+        return CompilerProfileSetting;
+    }
+
+    static string FailureFieldSettingLeaf(string message)
+    {
+        if (Contains(message, "retrieval") || Contains(message, "encoding"))
+            return "retrievalEncoding";
+        if (Contains(message, "document scope") || Contains(message, "nested"))
+            return "documentScope";
+        if (Contains(message, "query field"))
+            return "queryField";
+        if (Contains(message, "source field"))
+            return "sourceField";
+        if (Contains(message, "mapping"))
+            return "mappingKind";
+        if (Contains(message, "missing"))
+            return "missingValueBehavior";
+        if (Contains(message, "null"))
+            return "nullValueBehavior";
+        return "semanticCapabilities";
+    }
+
+    static string? BindingFailureSetting(
+        ImmutableArray<RelationQueryNativeCompilationDiagnostic> diagnostics)
+    {
+        var message = string.Join(' ', diagnostics.Select(static diagnostic => diagnostic.Message));
+        if (Contains(message, "compiled-plan"))
+            return "compiledPlanFingerprint";
+        if (Contains(message, "source-placement"))
+            return "placementFingerprint";
+        if (Contains(message, "target profile") || Contains(message, "target snapshot"))
+            return ElasticRelationQueryStorageBindingBuilder.TargetProfileSetting;
+        if (Contains(message, "source instance"))
+            return "source";
+        if (Contains(message, "placement binding"))
+            return "placementBinding";
+        return CompilerProfileSetting;
+    }
+
+    static string? ResolveConfigurationSetting(
+        RelationQueryAdapterBindingReference bindingReference,
+        string? failedSetting)
+    {
+        if (failedSetting is null)
+            return null;
+        return bindingReference.ConfigurationDecisions.Any(decision =>
+            string.Equals(decision.Setting, failedSetting, StringComparison.Ordinal))
+            ? failedSetting
+            : null;
+    }
+
+    static bool Contains(string value, string fragment) =>
+        value.Contains(fragment, StringComparison.OrdinalIgnoreCase);
+
+    RelationQueryAdapterBindingReference CreateBindingReference(
+        ElasticRelationQueryStorageBinding storageBinding)
+    {
+        var configuration = ImmutableArray.CreateBuilder<RelationQueryConfigurationDecision>(
+            storageBinding.ConfigurationDecisions.Length + 3);
+        configuration.AddRange(storageBinding.ConfigurationDecisions);
+        configuration.Add(new(CompilerProfileSetting, optionsOrigin, options.CompilerProfile));
+        configuration.Add(new(CompilerConventionSetting, optionsOrigin, options.ConventionSetVersion));
+        configuration.Add(new(
+            LoweringPolicySetting,
+            loweringPolicyOrigin,
+            string.Join(
+                "|",
+                loweringPolicy.Fingerprint.Algorithm,
+                loweringPolicy.Fingerprint.Canonicalization,
+                loweringPolicy.Fingerprint.Value)));
+        return new(
+            storageBinding.SchemaVersion,
+            storageBinding.Id.Value,
+            storageBinding.Target,
+            storageBinding.TargetProfile,
+            new(
+                storageBinding.Fingerprint.Algorithm,
+                storageBinding.Fingerprint.Canonicalization,
+                storageBinding.Fingerprint.Value),
+            storageBinding.CompiledPlanFingerprint,
+            storageBinding.PlacementFingerprint,
+            [storageBinding.Source],
+            [storageBinding.PlacementBinding],
+            configuration.MoveToImmutable());
+    }
+
+    RelationQueryContextualAssessmentAttribution ResolveAssessmentAttribution(
+        RelationQueryBoundRealizationRequest request,
+        ElasticRelationQueryStorageBinding storageBinding,
+        RelationQueryAdapterBindingReference bindingReference,
+        RelationQueryNativeResultBranch branch,
+        RelationQueryRealizationRequirement requirement,
+        RelationQueryContextualBranchFailure? failure)
+    {
+        var selection = request.Selection.GetBranch(branch.Id);
+        var input = failure?.Input is { } failedInput
+                    && selection.IsInputRelevant(failedInput, failure.Node, requirement)
+            ? failedInput
+            : requirement.Origin?.Input;
+        var field = input is { } inputId
+            ? request.Plan.InputContract.Requirements.Inputs
+                .OfType<RelationQueryFieldInput>()
+                .SingleOrDefault(candidate => candidate.Id == inputId)
+                ?.Field.Path
+            : null;
+        var placement = input is { } placedInput
+            ? request.Placement.Bindings.SingleOrDefault(candidate =>
+                candidate.Id == storageBinding.PlacementBinding
+                && (candidate.Input == placedInput
+                    || candidate.Fields.Any(fieldBinding => fieldBinding.Input == placedInput)))?.Id
+            : null;
+        var configurationSetting = failure is null
+            ? null
+            : ResolveConfigurationSetting(bindingReference, failure.FailedConfigurationSetting);
+        if (configurationSetting is not null)
+        {
+            var decision = bindingReference.ConfigurationDecisions.Single(candidate =>
+                string.Equals(candidate.Setting, configurationSetting, StringComparison.Ordinal));
+            return new(
+                decision.Origin,
+                decision.Authority,
+                failure?.Node ?? requirement.Origin?.Node,
+                input,
+                field,
+                placement,
+                configurationSetting);
+        }
+
+        return new(
+            storageBinding.Origin == ElasticRelationQueryBindingOrigin.Convention
+                ? RelationQueryConfigurationValueOrigin.AdapterConvention
+                : RelationQueryConfigurationValueOrigin.Explicit,
+            ContextAuthority(storageBinding),
+            failure?.Node ?? requirement.Origin?.Node,
+            input,
+            field,
+            placement);
+    }
+
+    ImmutableArray<RelationQueryNativeCompilationDiagnostic> ValidateExactBinding(
+        RelationQueryNativeCompilationRequest request,
+        ElasticRelationQueryStorageBinding storageBinding)
+    {
+        var expected = request.BoundRealization.Evidence.Binding;
+        var actual = CreateBindingReference(storageBinding);
+        var expectedAuthority = ContextAuthority(storageBinding);
+        var expectedOrigin = storageBinding.Origin == ElasticRelationQueryBindingOrigin.Convention
+            ? RelationQueryConfigurationValueOrigin.AdapterConvention
+            : RelationQueryConfigurationValueOrigin.Explicit;
+        var configuration = actual.ConfigurationDecisions.ToDictionary(
+            static decision => decision.Setting,
+            StringComparer.Ordinal);
+        var attributionMatches = request.BoundRealization.Evidence.Assessments.All(assessment =>
+            assessment.ConfigurationSetting is { } setting
+                ? configuration.TryGetValue(setting, out var decision)
+                  && decision.Origin == assessment.Origin
+                  && string.Equals(decision.Authority, assessment.Authority, StringComparison.Ordinal)
+                : assessment.Origin == expectedOrigin
+                  && string.Equals(assessment.Authority, expectedAuthority, StringComparison.Ordinal));
+        if (expected.HasSameSemantics(actual) && attributionMatches)
+            return [];
+
+        return
+        [
+            new(
+                ElasticRelationQueryCompilationDiagnosticCodes.StorageBindingMismatch,
+                DiagnosticSeverity.Error,
+                "The Elasticsearch storage-binding fingerprint or compiler-policy evidence does not match the exact context qualified by the bound-realization report.",
+                adapterDecisionCode: new(ElasticRelationQueryCompilationDiagnosticCodes.StorageBindingMismatch))
+        ];
+    }
+
+    string ContextAuthority(ElasticRelationQueryStorageBinding storageBinding)
+    {
+        var bindingAuthority = storageBinding.Origin == ElasticRelationQueryBindingOrigin.Convention
+            ? storageBinding.ConventionSetVersion!
+            : storageBinding.Id.Value;
+        return bindingAuthority;
+    }
+
+    readonly record struct ContextualProjectionResult(
+        RelationQueryContextualEvidenceProjection Evidence,
+        ImmutableArray<RelationQueryNativeCompilationDiagnostic> Diagnostics);
 
     sealed class BranchCompiler
     {
-        readonly RelationQueryNativeCompilationRequest request;
+        readonly CompiledRelationQueryPlan plan;
+        readonly RelationQueryRealizationReport realization;
+        readonly RelationQueryNativeCompilationRequest? nativeRequest;
         readonly ElasticRelationQueryStorageBinding storageBinding;
         readonly ElasticRelationQueryCompilerOptions options;
         readonly ElasticQueryLoweringPolicy loweringPolicy;
@@ -242,21 +762,89 @@ public sealed class ElasticRelationQueryCompiler
             ElasticQueryLoweringPolicy loweringPolicy,
             RelationQueryNativeResultBranch branch
             )
+            : this(
+                request.Plan,
+                request.ProfileFeasibility,
+                request,
+                storageBinding,
+                options,
+                loweringPolicy,
+                branch)
         {
-            this.request = request;
+        }
+
+        public BranchCompiler(
+            RelationQueryBoundRealizationRequest request,
+            ElasticRelationQueryStorageBinding storageBinding,
+            ElasticRelationQueryCompilerOptions options,
+            ElasticQueryLoweringPolicy loweringPolicy,
+            RelationQueryNativeResultBranch branch)
+            : this(
+                request.Plan,
+                request.ProfileFeasibility,
+                nativeRequest: null,
+                storageBinding,
+                options,
+                loweringPolicy,
+                branch)
+        {
+        }
+
+        BranchCompiler(
+            CompiledRelationQueryPlan plan,
+            RelationQueryRealizationReport realization,
+            RelationQueryNativeCompilationRequest? nativeRequest,
+            ElasticRelationQueryStorageBinding storageBinding,
+            ElasticRelationQueryCompilerOptions options,
+            ElasticQueryLoweringPolicy loweringPolicy,
+            RelationQueryNativeResultBranch branch)
+        {
+            this.plan = plan;
+            this.realization = realization;
+            this.nativeRequest = nativeRequest;
             this.storageBinding = storageBinding;
             this.options = options;
             this.loweringPolicy = loweringPolicy;
             this.branch = branch;
-            nodes = request.Plan.ExecutionSlice.Nodes.ToDictionary(static node => node.Id);
-            sourceFields = request.Plan.InputContract.Sources
+            nodes = plan.ExecutionSlice.Nodes.ToDictionary(static node => node.Id);
+            sourceFields = plan.InputContract.Sources
                 .SelectMany(static source => source.Fields)
                 .ToDictionary(static field => (field.Input.Binding, field.Input.Field.Path));
-            parameters = request.Plan.InputContract.Parameters.ToDictionary(static parameter => parameter.Definition.Id);
+            parameters = plan.InputContract.Parameters.ToDictionary(static parameter => parameter.Definition.Id);
             pipeline = CreatePipeline();
         }
 
+        public void Validate() => _ = Analyze();
+
         public ElasticRelationQueryCompiledArtifact Compile()
+        {
+            var analysis = Analyze();
+            var provenance = CreateProvenance(analysis.SelectedFields);
+            var fingerprint = ElasticRelationQueryArtifactFingerprinter.Compute(
+                branch,
+                analysis.Body.Request,
+                storageBinding,
+                analysis.SelectedFields,
+                analysis.Body.ResultFields,
+                analysis.ParameterBindings,
+                analysis.Body.Paging,
+                [.. loweringDecisions],
+                loweringPolicy,
+                provenance);
+            return new(
+                branch,
+                analysis.Body.Request,
+                storageBinding,
+                analysis.SelectedFields,
+                analysis.Body.ResultFields,
+                analysis.ParameterBindings,
+                analysis.Body.Paging,
+                [.. loweringDecisions],
+                provenance,
+                fingerprint);
+        }
+
+        AnalyzedBranch Analyze()
         {
             if (branch.Kind == RelationQueryNativeResultKind.RelationRows)
             {
@@ -265,7 +853,7 @@ public sealed class ElasticRelationQueryCompiler
                     "Elasticsearch v2 does not lower relation terminals until root correlation, cardinality, key, and invariant evidence are represented by the artifact contract.",
                     branch.Node);
             }
-            if (request.Realization.Observability.OccurrenceProvenance
+            if (realization.Observability.OccurrenceProvenance
                 != RelationQueryOccurrenceProvenanceMode.NotRequested)
             {
                 throw Fail(
@@ -288,29 +876,7 @@ public sealed class ElasticRelationQueryCompiler
             };
             var selectedFields = CreateSelectedFields();
             var parameterBindings = CreateParameterBindings();
-            var provenance = CreateProvenance(selectedFields);
-            var fingerprint = ElasticRelationQueryArtifactFingerprinter.Compute(
-                branch,
-                body.Request,
-                storageBinding,
-                selectedFields,
-                body.ResultFields,
-                parameterBindings,
-                body.Paging,
-                [.. loweringDecisions],
-                loweringPolicy,
-                provenance);
-            return new(
-                branch,
-                body.Request,
-                storageBinding,
-                selectedFields,
-                body.ResultFields,
-                parameterBindings,
-                body.Paging,
-                [.. loweringDecisions],
-                provenance,
-                fingerprint);
+            return new(body, selectedFields, parameterBindings);
         }
 
         ImmutableArray<RelationQueryExecutionNode> CreatePipeline()
@@ -355,13 +921,21 @@ public sealed class ElasticRelationQueryCompiler
 
         void ValidatePipeline()
         {
-            if (pipeline[0].CanonicalNode is not SourceQueryNode source
-                || request.Plan.InputContract.Sources.Length != 1
-                || source.Binding != request.Plan.InputContract.Sources[0].Binding)
+            if (pipeline[0].CanonicalNode is not SourceQueryNode source)
             {
                 throw Fail(
                     ElasticRelationQueryCompilationDiagnosticCodes.UnsupportedBranchTopology,
-                    "A native Elasticsearch branch must begin at the one placed source binding.",
+                    "A native Elasticsearch branch must begin at one placed source binding.",
+                    pipeline[0].Id);
+            }
+            var sourceContracts = plan.InputContract.Sources
+                .Where(contract => contract.Node == source.Id)
+                .ToArray();
+            if (sourceContracts.Length != 1 || source.Binding != sourceContracts[0].Binding)
+            {
+                throw Fail(
+                    ElasticRelationQueryCompilationDiagnosticCodes.UnsupportedBranchTopology,
+                    "A native Elasticsearch branch must begin at its exact demand-scoped source binding.",
                     pipeline[0].Id);
             }
 
@@ -1941,7 +2515,7 @@ public sealed class ElasticRelationQueryCompiler
         {
             return
             [
-                .. request.Plan.InputContract.Sources
+                .. plan.InputContract.Sources
                     .SelectMany(static source => source.Fields)
                     .Where(field => sourceRetrievedInputs.Contains(field.Input.Id)
                                     || queriedFields.ContainsKey(field.Input.Id))
@@ -1981,7 +2555,8 @@ public sealed class ElasticRelationQueryCompiler
                 .Distinct()
                 .ToImmutableArray();
             return RelationQueryNativeCompilationProvenanceFactory.Create(
-                request,
+                nativeRequest ?? throw new InvalidOperationException(
+                    "Elasticsearch artifact provenance requires an authorized native-compilation request."),
                 branch.Id,
                 options.CompilerProfile,
                 options.ConventionSetVersion,
@@ -2157,6 +2732,11 @@ public sealed class ElasticRelationQueryCompiler
             ElasticSearchRequestTemplate Request,
             ImmutableArray<ElasticRelationQueryResultFieldBinding> ResultFields,
             ElasticRelationQueryPagingContract? Paging);
+
+        readonly record struct AnalyzedBranch(
+            CompiledBranchBody Body,
+            ImmutableArray<ElasticRelationQuerySelectedField> SelectedFields,
+            ImmutableArray<ElasticRelationQueryParameterBinding> ParameterBindings);
     }
 
     sealed class BranchCompilationException(
@@ -2174,7 +2754,7 @@ public sealed class ElasticRelationQueryCompiler
 static class ElasticRelationQueryArtifactFingerprinter
 {
     const string Algorithm = "sha256";
-    const string Canonicalization = "cohesive.relations.elastic-artifact/v2-c14n/v1";
+    const string Canonicalization = "cohesive.relations.elastic-artifact/v3-c14n/v1";
 
     public static ElasticRelationQueryArtifactFingerprint Compute(
         RelationQueryNativeResultBranch branch,
@@ -2256,13 +2836,7 @@ static class ElasticRelationQueryArtifactFingerprinter
             Append(canonical, lowering.Decision.Fingerprint.Canonicalization);
             Append(canonical, lowering.Decision.Fingerprint.Value);
         }
-        Append(canonical, provenance.Plan.DefinitionFingerprint.Value);
-        Append(canonical, provenance.Plan.ShapeSnapshotsFingerprint.Value);
-        Append(canonical, provenance.Plan.DemandFingerprint.Value);
-        Append(canonical, provenance.Realization.Value);
-        Append(canonical, provenance.Placement.Value);
-        Append(canonical, provenance.CompilerProfile);
-        Append(canonical, provenance.ConventionSetVersion);
+        Append(canonical, JsonSerializer.Serialize(provenance, jsonOptions));
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString()));
         return new(Algorithm, Canonicalization, Convert.ToHexStringLower(bytes));
     }

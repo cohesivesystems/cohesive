@@ -172,14 +172,14 @@ var staticCompilation = RelationQueryStaticCompiler.Compile(new(
 if (!staticCompilation.IsSuccessful || staticCompilation.Plan is not CompiledRelationQueryPlan plan)
     throw new InvalidOperationException(string.Join(Environment.NewLine, staticCompilation.Diagnostics));
 
-// Prove that PostgreSQL can realize every requirement in the canonical plan.
-var realization = RelationQueryRealizationCompiler.Compile(
+// Check family-level feasibility before selecting exact PostgreSQL storage facts.
+var profileFeasibility = RelationQueryRealizationCompiler.Compile(
     plan,
     PostgresRelationQueryTargetProfile.Default,
     PostgresRelationQueryTargetProfile.Policy,
     RelationQueryResultObservability.NotRequested);
-if (!realization.IsRealizable)
-    throw new InvalidOperationException(string.Join(Environment.NewLine, realization.Diagnostics));
+if (!profileFeasibility.IsRealizable)
+    throw new InvalidOperationException(string.Join(Environment.NewLine, profileFeasibility.Diagnostics));
 
 // Place the supplied root and acquired traversal in one PostgreSQL execution domain.
 var placementAuthor = RelationQueryPlacement.For(plan);
@@ -224,9 +224,19 @@ var storage = PostgresRelationQueryBinding.For(
     .Build()
     .RequireValue();
 
-// Lower the exact plan + realization + placement + storage binding to PostgreSQL SQL.
-var nativeCompilation = new PostgresRelationQueryCompiler().Compile(
-    new(plan, realization, placement.Placement),
+// Qualify family-level feasibility against the exact placement and storage evidence first.
+var compiler = new PostgresRelationQueryCompiler();
+var contextualRequest = new RelationQueryBoundRealizationRequest(
+    plan,
+    profileFeasibility,
+    placement.Placement);
+var boundRealization = compiler.Realize(contextualRequest, storage);
+if (!boundRealization.IsRealizable)
+    throw new InvalidOperationException(string.Join(Environment.NewLine, boundRealization.Diagnostics));
+
+// Only the exact bound realization can authorize PostgreSQL SQL artifacts.
+var nativeCompilation = compiler.Compile(
+    new RelationQueryNativeCompilationRequest(plan, boundRealization, placement.Placement),
     storage);
 if (!nativeCompilation.IsSuccessful)
     throw new InvalidOperationException(string.Join(Environment.NewLine, nativeCompilation.Diagnostics));

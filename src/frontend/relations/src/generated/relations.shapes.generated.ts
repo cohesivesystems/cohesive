@@ -96,6 +96,56 @@ export interface RelationQuerySourcePlacementFingerprint {
   value: string;
 }
 
+export type RelationQueryNativeResultBranchId = string;
+
+export interface RelationQueryContextualEvidenceProjection {
+  binding: RelationQueryAdapterBindingReference;
+  assessments: RelationQueryBoundRequirementAssessment[];
+}
+
+export interface RelationQueryRealizationDiagnostic {
+  code: string;
+  severity: DiagnosticSeverity;
+  message: string;
+  requirement?: RelationQueryRealizationRequirementId | null;
+  capabilityEvidence?: RelationQueryTargetCapabilityEvidenceId | null;
+  compositionRule?: RelationQueryCompositionRuleId | null;
+  operatingBoundary?: RelationQueryOperatingBoundaryId | null;
+  override?: RelationQueryRealizationOverrideId | null;
+  node?: QueryNodeId | null;
+  semanticSite?: string | null;
+  contextEvidence?: RelationQueryContextEvidenceId | null;
+  branch?: RelationQueryNativeResultBranchId | null;
+  input?: RelationQueryInputId | null;
+  field?: FieldPath | null;
+  placementBinding?: RelationQuerySourcePlacementBindingId | null;
+  bindingSetting?: string | null;
+  resolution?: string | null;
+  configurationOrigin?: RelationQueryConfigurationValueOrigin | null;
+  configurationAuthority?: string | null;
+  adapterDecisionCode?: RelationQueryAdapterDecisionCode | null;
+}
+
+export type RelationQueryRealizationStatus = 'Realizable' | 'NotRealizable' | 'Invalid';
+
+export const relationQueryRealizationStatuses = {
+  realizable: 'Realizable',
+  notRealizable: 'NotRealizable',
+  invalid: 'Invalid',
+} as const satisfies Record<string, RelationQueryRealizationStatus>;
+
+export const relationQueryRealizationStatusLabels: Record<RelationQueryRealizationStatus, string> = {
+  Realizable: 'Realizable',
+  NotRealizable: 'NotRealizable',
+  Invalid: 'Invalid',
+};
+
+export interface RelationQueryBoundRealizationFingerprint {
+  algorithm: string;
+  canonicalization: string;
+  value: string;
+}
+
 export interface RelationQueryRealizationPolicy {
   id: RelationQueryRealizationPolicyId;
   conventionSetVersion: string;
@@ -166,33 +216,6 @@ export interface UnavailableRelationQueryRealizationDecision {
   reason: RelationQueryUnavailableReason;
   missingCapabilities: RelationQueryCapability[];
 }
-
-export interface RelationQueryRealizationDiagnostic {
-  code: string;
-  severity: DiagnosticSeverity;
-  message: string;
-  requirement?: RelationQueryRealizationRequirementId | null;
-  capabilityEvidence?: RelationQueryTargetCapabilityEvidenceId | null;
-  compositionRule?: RelationQueryCompositionRuleId | null;
-  operatingBoundary?: RelationQueryOperatingBoundaryId | null;
-  override?: RelationQueryRealizationOverrideId | null;
-  node?: QueryNodeId | null;
-  semanticSite?: string | null;
-}
-
-export type RelationQueryRealizationStatus = 'Realizable' | 'NotRealizable' | 'Invalid';
-
-export const relationQueryRealizationStatuses = {
-  realizable: 'Realizable',
-  notRealizable: 'NotRealizable',
-  invalid: 'Invalid',
-} as const satisfies Record<string, RelationQueryRealizationStatus>;
-
-export const relationQueryRealizationStatusLabels: Record<RelationQueryRealizationStatus, string> = {
-  Realizable: 'Realizable',
-  NotRealizable: 'NotRealizable',
-  Invalid: 'Invalid',
-};
 
 export type RelationQueryTargetId = string;
 
@@ -469,6 +492,60 @@ export const relationQueryConfigurationValueOriginLabels: Record<RelationQueryCo
   FrameworkDefault: 'FrameworkDefault',
 };
 
+export interface RelationQueryAdapterBindingReference {
+  schemaVersion: string;
+  bindingId: string;
+  target: RelationQueryTargetId;
+  targetProfile: RelationQueryTargetProfileId;
+  fingerprint: RelationQueryAdapterBindingFingerprint;
+  compiledPlanFingerprint?: RelationQueryPlanComponentFingerprint | null;
+  placementFingerprint?: RelationQuerySourcePlacementFingerprint | null;
+  sources: RelationQuerySourceInstanceId[];
+  placementBindings: RelationQuerySourcePlacementBindingId[];
+  configurationDecisions: RelationQueryConfigurationDecision[];
+}
+
+export interface RelationQueryBoundRequirementAssessment {
+  id: RelationQueryContextEvidenceId;
+  branch: RelationQueryNativeResultBranchId;
+  requirement: RelationQueryRealizationRequirementId;
+  status: RelationQueryBoundAssessmentStatus;
+  origin: RelationQueryConfigurationValueOrigin;
+  authority: string;
+  capabilityEvidence: RelationQueryTargetCapabilityEvidenceId[];
+  operatingBoundaries: RelationQueryOperatingBoundaryId[];
+  preservedGuarantees: RelationQueryGuaranteeCapabilityKind[];
+  unavailableReason?: RelationQueryUnavailableReason | null;
+  node?: QueryNodeId | null;
+  input?: RelationQueryInputId | null;
+  field?: FieldPath | null;
+  placementBinding?: RelationQuerySourcePlacementBindingId | null;
+  configurationSetting?: string | null;
+  message: string;
+  resolution?: string | null;
+  adapterDecisionCode?: RelationQueryAdapterDecisionCode | null;
+  missingCapabilityEvidence: RelationQueryTargetCapabilityEvidenceId[];
+  failedOperatingBoundary?: RelationQueryOperatingBoundaryId | null;
+  failedConfigurationSetting?: string | null;
+  blockedBy?: RelationQueryContextEvidenceId | null;
+}
+
+export type RelationQueryTargetCapabilityEvidenceId = string;
+
+export type RelationQueryCompositionRuleId = string;
+
+export type RelationQueryOperatingBoundaryId = string;
+
+export type RelationQueryRealizationOverrideId = string;
+
+export type RelationQueryContextEvidenceId = string;
+
+export interface FieldPath {
+  segments: FieldPathSegment[];
+}
+
+export type RelationQueryAdapterDecisionCode = string;
+
 export type RelationQueryRealizationPolicyId = string;
 
 export type RelationQueryRealizationPreference = 'PreferNative' | 'PreferComposed';
@@ -661,10 +738,6 @@ export interface RelationQueryRealizationStaticFact {
   value: string;
 }
 
-export type RelationQueryTargetCapabilityEvidenceId = string;
-
-export type RelationQueryCompositionRuleId = string;
-
 export interface RelationQueryOperatingBoundaryValidation {
   boundary: RelationQueryOperatingBoundaryId;
   kind: RelationQueryOperatingBoundaryValidationKind;
@@ -672,9 +745,7 @@ export interface RelationQueryOperatingBoundaryValidation {
   measuredValue?: string | null;
 }
 
-export type RelationQueryRealizationOverrideId = string;
-
-export type RelationQueryUnavailableReason = 'CapabilityNotAdvertised' | 'ProfileVersionUnsupported' | 'OperatingBoundaryMissing' | 'OperatingBoundaryInvalid' | 'CompositionUnavailable' | 'AmbiguousStrategy' | 'CapabilityEvidenceInvalid' | 'OverrideInvalid' | 'PolicyRejected';
+export type RelationQueryUnavailableReason = 'CapabilityNotAdvertised' | 'ProfileVersionUnsupported' | 'OperatingBoundaryMissing' | 'OperatingBoundaryInvalid' | 'CompositionUnavailable' | 'AmbiguousStrategy' | 'CapabilityEvidenceInvalid' | 'OverrideInvalid' | 'PolicyRejected' | 'PrerequisiteBlocked';
 
 export const relationQueryUnavailableReasons = {
   capabilityNotAdvertised: 'CapabilityNotAdvertised',
@@ -686,6 +757,7 @@ export const relationQueryUnavailableReasons = {
   capabilityEvidenceInvalid: 'CapabilityEvidenceInvalid',
   overrideInvalid: 'OverrideInvalid',
   policyRejected: 'PolicyRejected',
+  prerequisiteBlocked: 'PrerequisiteBlocked',
 } as const satisfies Record<string, RelationQueryUnavailableReason>;
 
 export const relationQueryUnavailableReasonLabels: Record<RelationQueryUnavailableReason, string> = {
@@ -698,9 +770,8 @@ export const relationQueryUnavailableReasonLabels: Record<RelationQueryUnavailab
   CapabilityEvidenceInvalid: 'CapabilityEvidenceInvalid',
   OverrideInvalid: 'OverrideInvalid',
   PolicyRejected: 'PolicyRejected',
+  PrerequisiteBlocked: 'PrerequisiteBlocked',
 };
-
-export type RelationQueryOperatingBoundaryId = string;
 
 export type RelationQueryOperatingBoundaryKind = 'MaximumInputRows' | 'MaximumOutputRows' | 'MaximumFanOut' | 'MaximumPageSize' | 'MaximumFieldPathDepth' | 'MaximumExpressionDepth' | 'MaximumBatchSize' | 'SingleSource' | 'SinglePartition' | 'MaterializedInputs' | 'CompleteInputEvidence' | 'NonNullOperands' | 'ScalarOperands' | 'HomogeneousTemporalDomain' | 'FiniteTemporalBounds' | 'StableUniqueOrdering' | 'DeterministicProvider' | 'ExactNumericAggregateDomain' | 'ExactTemporalDomain' | 'SuppliedRelationRoot';
 
@@ -959,8 +1030,31 @@ export interface RelationQueryPhysicalCapabilityEvidenceReference {
 
 export type RelationQueryPhysicalPlanningDecisionId = string;
 
-export interface FieldPath {
-  segments: FieldPathSegment[];
+export interface RelationQueryAdapterBindingFingerprint {
+  algorithm: string;
+  canonicalization: string;
+  value: string;
+}
+
+export type RelationQueryBoundAssessmentStatus = 'Available' | 'Unavailable' | 'Invalid' | 'Blocked';
+
+export const relationQueryBoundAssessmentStatuses = {
+  available: 'Available',
+  unavailable: 'Unavailable',
+  invalid: 'Invalid',
+  blocked: 'Blocked',
+} as const satisfies Record<string, RelationQueryBoundAssessmentStatus>;
+
+export const relationQueryBoundAssessmentStatusLabels: Record<RelationQueryBoundAssessmentStatus, string> = {
+  Available: 'Available',
+  Unavailable: 'Unavailable',
+  Invalid: 'Invalid',
+  Blocked: 'Blocked',
+};
+
+export interface FieldPathSegment {
+  kind: SegmentKind;
+  segment?: string | null;
 }
 
 export type RelationQueryLogicalCapabilityKind = 'Source' | 'Filter' | 'RelationshipTraversal' | 'ForwardRelationshipTraversal' | 'InverseRelationshipTraversal' | 'AtMostOneRelationshipTraversal' | 'ManyRelationshipTraversal' | 'RequiredRelationshipTraversal' | 'OptionalRelationshipTraversal' | 'Join' | 'InnerJoin' | 'LeftOuterJoin' | 'RightOuterJoin' | 'FullOuterJoin' | 'TemporalJoin' | 'ExpandCollection' | 'Projection' | 'ProjectionAssignment' | 'DistinctRows' | 'DistinctKeys' | 'Aggregation' | 'AggregateGrouping' | 'AggregateFilter' | 'CountAggregate' | 'SumAggregate' | 'MinimumAggregate' | 'MaximumAggregate' | 'AnyAggregate' | 'AllAggregate' | 'Ordering' | 'AscendingOrdering' | 'DescendingOrdering' | 'NullsFirst' | 'NullsLast' | 'StableTieOrdering' | 'OffsetPaging' | 'KeysetPaging' | 'OnePerRootRelationOutput' | 'ZeroOrOnePerRootRelationOutput' | 'ManyPerRootRelationOutput' | 'SetRelationOutput' | 'RelationOutputIdentity' | 'RelationInvariant' | 'QueryRowsResult' | 'QueryAggregationResult' | 'AlwaysPresentBinding' | 'MayBeAbsentBinding' | 'AverageAggregate';
@@ -1575,10 +1669,17 @@ export const sourceReferenceUniquenessLabels: Record<SourceReferenceUniqueness, 
   GloballyUnique: 'GloballyUnique',
 };
 
-export interface FieldPathSegment {
-  kind: SegmentKind;
-  segment?: string | null;
-}
+export type SegmentKind = 'Field' | 'Element';
+
+export const segmentKinds = {
+  field: 'Field',
+  element: 'Element',
+} as const satisfies Record<string, SegmentKind>;
+
+export const segmentKindLabels: Record<SegmentKind, string> = {
+  Field: 'Field',
+  Element: 'Element',
+};
 
 export type RelationQueryOutputId = string;
 
@@ -1842,18 +1943,6 @@ export const jsonTypeKindLabels: Record<JsonTypeKind, string> = {
   Boolean: 'Boolean',
 };
 
-export type SegmentKind = 'Field' | 'Element';
-
-export const segmentKinds = {
-  field: 'Field',
-  element: 'Element',
-} as const satisfies Record<string, SegmentKind>;
-
-export const segmentKindLabels: Record<SegmentKind, string> = {
-  Field: 'Field',
-  Element: 'Element',
-};
-
 export type RelationQueryRealizationTraceStepKind = 'Structural' | 'ExpressionSite' | 'AggregateOperation' | 'Terminal';
 
 export const relationQueryRealizationTraceStepKinds = {
@@ -2031,6 +2120,16 @@ export interface RelationQuerySourcePlacement {
   bindings: RelationQuerySourcePlacementBinding[];
   configurationDecisions: RelationQueryConfigurationDecision[];
   fingerprint: RelationQuerySourcePlacementFingerprint;
+}
+
+export interface RelationQueryBoundRealizationReport {
+  profileFeasibility: RelationQueryRealizationReport;
+  placement: RelationQuerySourcePlacementFingerprint;
+  branches: RelationQueryNativeResultBranchId[];
+  evidence: RelationQueryContextualEvidenceProjection;
+  diagnostics: RelationQueryRealizationDiagnostic[];
+  status: RelationQueryRealizationStatus;
+  fingerprint: RelationQueryBoundRealizationFingerprint;
 }
 
 export interface RelationQueryRealizationReport {

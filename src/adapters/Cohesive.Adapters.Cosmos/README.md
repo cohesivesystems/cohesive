@@ -67,6 +67,10 @@ and the Cosmos storage binding are separate persisted interpretations of that pl
 conservative target profile and policy. The realization must explicitly request value results without
 contributor-occurrence lineage because Cosmos SQL v2 does not reconstruct source occurrence identities:
 
+Profile feasibility establishes what the Cosmos target family could support. `Realize(...)` then qualifies that
+profile against the exact placement, container binding, field evidence, and compiler policy. Only the resulting
+bound realization can authorize native compilation; the native request does not accept profile feasibility alone.
+
 ```csharp
 using Cohesive.Adapters.Cosmos;
 using Cohesive.Model;
@@ -96,18 +100,27 @@ var storageBinding = CosmosRelationQueryBinding.For(placedLoads)
     .Build()
     .RequireValue();
 
-var realization = RelationQueryRealizationCompiler.Compile(
+var profileFeasibility = RelationQueryRealizationCompiler.Compile(
     plan,
     CosmosRelationQueryTargetProfile.Default,
     CosmosRelationQueryTargetProfile.Policy,
     RelationQueryResultObservability.NotRequested);
 
-var request = new RelationQueryNativeCompilationRequest(
+var contextualRequest = new RelationQueryBoundRealizationRequest(
     plan,
-    realization,
+    profileFeasibility,
     authoredPlacement.Placement);
 
-var result = new CosmosRelationQueryCompiler().Compile(request, storageBinding);
+var compiler = new CosmosRelationQueryCompiler();
+var boundRealization = compiler.Realize(contextualRequest, storageBinding);
+if (!boundRealization.IsRealizable)
+    throw new InvalidOperationException(string.Join(Environment.NewLine, boundRealization.Diagnostics));
+
+var nativeRequest = new RelationQueryNativeCompilationRequest(
+    plan,
+    boundRealization,
+    authoredPlacement.Placement);
+var result = compiler.Compile(nativeRequest, storageBinding);
 if (!result.IsSuccessful)
     throw new InvalidOperationException(string.Join(Environment.NewLine, result.Diagnostics));
 
@@ -123,9 +136,9 @@ var executor = new CosmosRelationQueryArtifactExecutor(loadsContainer);
 var executions = await executor.ExecuteAsync(
     result.Artifacts
         .Select(artifact => new CosmosRelationQueryArtifactExecutionRequest(
-            request.PlanReference,
-            request.Realization.Fingerprint,
-            request.Placement.Fingerprint,
+            nativeRequest.PlanReference,
+            nativeRequest.ProfileFeasibility.Fingerprint,
+            nativeRequest.Placement.Fingerprint,
             artifact.StorageBinding.Fingerprint,
             artifact,
             maximumRows: 1_000,
@@ -137,10 +150,10 @@ var executions = await executor.ExecuteAsync(
 `Bind(...).ToQueryDefinition()` remains useful when an application wants to inspect the SDK command or pass it to
 its own Cosmos integration. `CosmosRelationQueryArtifactExecutor` is the explicit adapter-native execution API; the
 target-neutral `IRelationQueryEvaluator` does not implicitly compile or select this executor. Each request carries
-the exact plan, realization, placement, storage binding, artifact-embedded branch, invocation parameters, and row
-boundary. A row-and-aggregation batch is preflighted in full before the first SDK call, then executed in
-deterministic request order with an independently attributed result for each branch. Unknown, missing, or
-incompatible parameters and stale affinity facts fail before I/O.
+the exact plan, profile feasibility, bound realization, placement, storage binding, artifact-embedded branch,
+invocation parameters, and row boundary. A row-and-aggregation batch is preflighted in full before the first SDK
+call, then executed in deterministic request order with an independently attributed result for each branch.
+Unknown, missing, or incompatible parameters and stale affinity facts fail before I/O.
 
 Preflight is all-or-none validation, not an atomic data snapshot. Every artifact branch is a separate sequential
 Cosmos query and can observe a different state when writes occur between requests. A host that requires cross-branch
@@ -199,52 +212,44 @@ stop therefore does not match a request for a Seattle pickup. An empty collectio
 removing or multiplying the root row before filtering.
 
 The outer canonical `Stops` input owns the physical child mappings and correlation evidence; the compiler does not
-invent synthetic canonical inputs for `Location` or `Type`. The following fragment illustrates the explicit
-evidence attached to that outer input. `stopsInput` is the compiled field-input identity for `Stops`; physical paths
-can differ from the semantic paths shown here:
+invent synthetic canonical inputs for `Location` or `Type`. The typed binding builder derives those semantic paths
+from the placed CLR shape while leaving the physical JSON paths explicit:
 
 ```csharp
-var exactText =
+var exactComparisons =
     CosmosRelationQueryCollectionElementSemanticCapabilities.ExactEquality
     | CosmosRelationQueryCollectionElementSemanticCapabilities.ExactInequality;
+var requiredValue =
+    CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion;
 
-CosmosRelationQueryFieldBinding stopsBinding = new(
-    stopsInput,
-    stopsPath,
-    new CosmosRelationQueryCollectionScopeEvidence(
-        semanticProfile: "loads/stops-json-array-v1",
-        elementScope: CosmosRelationQueryCollectionElementScope.JsonArrayElement,
-        correlationGuarantee: CosmosRelationQueryCollectionCorrelationGuarantee.SameArrayElement,
-        collectionMissingValueBehavior:
-            CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion,
-        collectionNullValueBehavior:
-            CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion,
-        nullElementBehavior:
-            CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion,
-        emptyCollectionBehavior: CosmosRelationQueryEmptyCollectionBehavior.NoElements,
-        childFields:
-        [
-            new(
-                locationPath,
-                FieldPath.FromField("Location"),
+var storageBinding = CosmosRelationQueryBinding.For(placedLoads)
+    .Account(loadsContainer.Database.Client.Endpoint)
+    .Database(loadsContainer.Database.Id)
+    .Container(loadsContainer.Id)
+    .Identity(load => load.Id)
+    .StructuredCollection(
+        (LoadDocument load) => load.Stops,
+        FieldPath.FromField("stops"),
+        collection => collection
+            .AttestCanonicalAnyRepresentation("loads/stops-json-array-v1")
+            .Child(
+                stop => stop.Location,
+                FieldPath.FromField("location"),
                 CosmosRelationQueryCollectionElementValueDomain.String,
-                exactText,
-                semanticProfile: "loads/stops-ordinal-string-v1",
-                missingValueBehavior:
-                    CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion,
-                nullValueBehavior:
-                    CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion),
-            new(
-                typePath,
-                FieldPath.FromField("Type"),
+                exactComparisons,
+                "loads/stops-ordinal-string-v1",
+                requiredValue,
+                requiredValue)
+            .Child(
+                stop => stop.Type,
+                FieldPath.FromField("type"),
                 CosmosRelationQueryCollectionElementValueDomain.String,
-                exactText,
-                semanticProfile: "loads/stops-ordinal-string-v1",
-                missingValueBehavior:
-                    CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion,
-                nullValueBehavior:
-                    CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion)
-        ]));
+                exactComparisons,
+                "loads/stops-ordinal-string-v1",
+                requiredValue,
+                requiredValue))
+    .Build()
+    .RequireValue();
 ```
 
 Every evidence fact participates in normalized storage-binding and artifact identity. The compiler requires proof

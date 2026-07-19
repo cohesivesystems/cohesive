@@ -269,6 +269,7 @@ public sealed record CosmosRelationQueryCollectionScopeEvidence
     /// <param name="nullElementBehavior">Physical treatment of an explicit-null collection element.</param>
     /// <param name="emptyCollectionBehavior">Physical treatment of an empty collection.</param>
     /// <param name="childFields">Direct child mappings keyed by canonical element-relative paths.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="semanticProfile"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">The profile or child mapping collection is invalid or ambiguous.</exception>
     /// <exception cref="ArgumentOutOfRangeException">An enum value is unsupported.</exception>
     public CosmosRelationQueryCollectionScopeEvidence(
@@ -319,18 +320,35 @@ public sealed record CosmosRelationQueryCollectionScopeEvidence
 
         SemanticProfile = Guard.RequireNotNullOrWhiteSpace(semanticProfile);
         var normalizedChildren = childFields.IsDefault ? [] : childFields;
-        if (normalizedChildren.IsDefaultOrEmpty || normalizedChildren.Any(static child => child is null))
+        if (normalizedChildren.IsDefaultOrEmpty)
         {
             throw new ArgumentException(
                 "Cosmos collection-scope evidence requires at least one non-null child-field binding.",
                 nameof(childFields));
         }
 
-        if (normalizedChildren.GroupBy(static child => child.ElementPath).Any(static group => group.Count() > 1))
+        var seenPaths = new HashSet<FieldPath>(normalizedChildren.Length);
+        var isCanonicalOrder = true;
+        string? previousKey = null;
+        foreach (var child in normalizedChildren)
         {
-            throw new ArgumentException(
-                "Cosmos collection-scope evidence cannot repeat a canonical element-relative path.",
-                nameof(childFields));
+            if (child is null)
+            {
+                throw new ArgumentException(
+                    "Cosmos collection-scope evidence requires at least one non-null child-field binding.",
+                    nameof(childFields));
+            }
+            if (!seenPaths.Add(child.ElementPath))
+            {
+                throw new ArgumentException(
+                    "Cosmos collection-scope evidence cannot repeat a canonical element-relative path.",
+                    nameof(childFields));
+            }
+
+            var key = CosmosRelationQueryStorageBinding.FieldPathKey(child.ElementPath);
+            isCanonicalOrder &= previousKey is null
+                || string.CompareOrdinal(previousKey, key) < 0;
+            previousKey = key;
         }
 
         ElementScope = elementScope;
@@ -339,12 +357,14 @@ public sealed record CosmosRelationQueryCollectionScopeEvidence
         CollectionNullValueBehavior = collectionNullValueBehavior;
         NullElementBehavior = nullElementBehavior;
         EmptyCollectionBehavior = emptyCollectionBehavior;
-        ChildFields =
-        [
-            .. normalizedChildren.OrderBy(
-                static child => CosmosRelationQueryStorageBinding.FieldPathKey(child.ElementPath),
-                StringComparer.Ordinal)
-        ];
+        ChildFields = isCanonicalOrder
+            ? normalizedChildren
+            :
+            [
+                .. normalizedChildren.OrderBy(
+                    static child => CosmosRelationQueryStorageBinding.FieldPathKey(child.ElementPath),
+                    StringComparer.Ordinal)
+            ];
     }
 
     /// <summary>Physical scope represented by a canonical current item.</summary>
@@ -1082,7 +1102,31 @@ public sealed class CosmosRelationQueryStorageBinding
         };
         foreach (var field in binding.Fields)
         {
-            allowed.Add("field/" + field.Input.Value);
+            var fieldPrefix = "field/" + field.Input.Value;
+            allowed.Add(fieldPrefix);
+            if (field.CollectionScope is not { } collection)
+                continue;
+
+            allowed.Add(fieldPrefix + "/collectionScope");
+            var collectionPrefix = fieldPrefix + "/collection/";
+            allowed.Add(collectionPrefix + "semanticProfile");
+            allowed.Add(collectionPrefix + "elementScope");
+            allowed.Add(collectionPrefix + "correlationGuarantee");
+            allowed.Add(collectionPrefix + "collectionMissingValueBehavior");
+            allowed.Add(collectionPrefix + "collectionNullValueBehavior");
+            allowed.Add(collectionPrefix + "nullElementBehavior");
+            allowed.Add(collectionPrefix + "emptyCollectionBehavior");
+            foreach (var child in collection.ChildFields)
+            {
+                var childPrefix = collectionPrefix + "child/" + FieldPathKey(child.ElementPath) + "/";
+                allowed.Add(childPrefix + "elementPath");
+                allowed.Add(childPrefix + "documentPath");
+                allowed.Add(childPrefix + "valueDomain");
+                allowed.Add(childPrefix + "semanticCapabilities");
+                allowed.Add(childPrefix + "semanticProfile");
+                allowed.Add(childPrefix + "missingValueBehavior");
+                allowed.Add(childPrefix + "nullValueBehavior");
+            }
         }
 
         foreach (var path in binding.StableUniqueOrderingPaths)
