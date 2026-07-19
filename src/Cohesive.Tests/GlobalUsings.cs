@@ -7,7 +7,6 @@ global using Cohesive.Processes.Model;
 global using Cohesive.Processes.Runtime;
 global using Cohesive.Host.Configuration;
 global using Cohesive.Relations.Authoring;
-global using Cohesive.Relations.Queries;
 global using Cohesive.Relations.Execution;
 global using Cohesive.Relations.Mapping;
 global using Cohesive.Relations.Serialization;

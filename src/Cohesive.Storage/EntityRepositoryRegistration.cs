@@ -160,56 +160,6 @@ public static class EntityRepositoryRegistration
             sp.GetRequiredKeyedService<IEntityRepository>(serviceKey: TypeServiceKey<TEntity>());
 
         /// <summary>
-        /// Gets the deletion-boundary legacy query repository for the specified entity definition.
-        /// </summary>
-        /// <remarks>
-        /// New query consumers should resolve <see cref="IRelationQueryEvaluator"/> and execute canonical
-        /// relation/query evaluations. Cohesive ships no built-in backend for this contract; this resolver is
-        /// removed with the legacy query facade.
-        /// </remarks>
-        /// <param name="entity">Entity definition whose legacy keyed repository should be resolved.</param>
-        /// <returns>The legacy query repository registered for <paramref name="entity"/>.</returns>
-        /// <exception cref="ArgumentNullException"><paramref name="entity"/> is <see langword="null"/>.</exception>
-        /// <exception cref="InvalidOperationException">
-        /// No compatible keyed query repository is registered for <paramref name="entity"/>.
-        /// </exception>
-        public IEntityQueryRepository GetEntityQueryRepository(EntityDefinition entity) =>
-            sp.GetRequiredKeyedService<IEntityQueryRepository>(serviceKey: ShapeServiceKey(entity));
-
-        /// <summary>
-        /// Gets the deletion-boundary legacy query repository for the specified entity.
-        /// </summary>
-        /// <remarks>
-        /// New query consumers should resolve <see cref="IRelationQueryEvaluator"/> and execute canonical
-        /// relation/query evaluations. Cohesive ships no built-in backend for this contract; this resolver is
-        /// removed with the legacy query facade.
-        /// </remarks>
-        /// <param name="entity">Entity whose legacy keyed repository should be resolved.</param>
-        /// <returns>The legacy query repository registered for <paramref name="entity"/>.</returns>
-        /// <exception cref="ArgumentNullException"><paramref name="entity"/> is <see langword="null"/>.</exception>
-        /// <exception cref="InvalidOperationException">
-        /// No compatible keyed query repository is registered for <paramref name="entity"/>.
-        /// </exception>
-        public IEntityQueryRepository GetEntityQueryRepository(Entity entity) =>
-            sp.GetEntityQueryRepository(entity.Definition);
-
-        /// <summary>
-        /// Gets the deletion-boundary legacy query repository for the specified registered CLR type.
-        /// </summary>
-        /// <remarks>
-        /// New query consumers should resolve <see cref="IRelationQueryEvaluator"/> and execute canonical
-        /// relation/query evaluations. Cohesive ships no built-in backend for this contract; this resolver is
-        /// removed with the legacy query facade.
-        /// </remarks>
-        /// <typeparam name="TEntity">Registered CLR entity type.</typeparam>
-        /// <returns>The legacy query repository registered for <typeparamref name="TEntity"/>.</returns>
-        /// <exception cref="InvalidOperationException">
-        /// No compatible keyed query repository is registered for <typeparamref name="TEntity"/>.
-        /// </exception>
-        public IEntityQueryRepository GetEntityQueryRepository<TEntity>() where TEntity : notnull =>
-            sp.GetRequiredKeyedService<IEntityQueryRepository>(serviceKey: TypeServiceKey<TEntity>());
-
-        /// <summary>
         /// Gets the outbox repository for the specified entity definition.
         /// </summary>
         public IEntityOutboxRepository GetEntityOutboxRepository(EntityDefinition entity) =>
@@ -226,22 +176,6 @@ public static class EntityRepositoryRegistration
         /// </summary>
         public IEntityRepository<TEntity> GetTypedEntityRepository<TEntity>() where TEntity : notnull =>
             sp.GetRequiredService<IEntityRepository<TEntity>>();
-
-        /// <summary>
-        /// Gets the deletion-boundary strongly typed legacy query repository.
-        /// </summary>
-        /// <remarks>
-        /// New query consumers should resolve <see cref="IRelationQueryEvaluator"/> and materialize canonical
-        /// results through Relations mapping. Cohesive ships no built-in backend for this contract; this resolver
-        /// is removed with the legacy query facade.
-        /// </remarks>
-        /// <typeparam name="TEntity">Registered CLR entity type.</typeparam>
-        /// <returns>The typed legacy query repository registered for <typeparamref name="TEntity"/>.</returns>
-        /// <exception cref="InvalidOperationException">
-        /// No compatible typed query repository is registered for <typeparamref name="TEntity"/>.
-        /// </exception>
-        public IEntityQueryRepository<TEntity> GetTypedEntityQueryRepository<TEntity>() where TEntity : notnull =>
-            sp.GetRequiredService<IEntityQueryRepository<TEntity>>();
 
         /// <summary>
         /// Gets the strongly typed outbox repository for the specified CLR object type.
@@ -274,7 +208,7 @@ public static class EntityRepositoryRegistration
                 (sp, _) => sp.GetRequiredKeyedService<IEntityRepository>(shapeKey));
         }
 
-        RegisterDerivedRepositories(services, keys);
+        RegisterOutboxRepositories(services, keys);
     }
 
     static void EnsureEntityRelationQuerySourceCatalog(IServiceCollection services) =>
@@ -293,27 +227,16 @@ public static class EntityRepositoryRegistration
             configureObjectMapper: configureObjectMapper,
             mappingContext: mappingContext
             ));
-        // Deletion-boundary legacy compatibility. Canonical consumers resolve IRelationQueryEvaluator instead.
-        services.AddSingleton<IEntityQueryRepository<TEntity>>(sp => new TypedEntityQueryRepository<TEntity>(
-            repository: sp.GetRequiredService<IEntityRepository<TEntity>>(),
-            queryRepository: sp.GetRequiredKeyedService<IEntityQueryRepository>(serviceKey)
-            ));
         services.AddSingleton<IEntityOutboxRepository<TEntity>>(sp => new TypedEntityOutboxRepository<TEntity>(
             repository: sp.GetRequiredService<IEntityRepository<TEntity>>(),
             outboxRepository: sp.GetRequiredKeyedService<IEntityOutboxRepository>(serviceKey)
             ));
     }
 
-    static void RegisterDerivedRepositories(IServiceCollection services, IEnumerable<object> serviceKeys)
+    static void RegisterOutboxRepositories(IServiceCollection services, IEnumerable<object> serviceKeys)
     {
         foreach (var serviceKey in serviceKeys)
         {
-            // Deletion-boundary legacy compatibility. Remove with IEntityQueryRepository in the follow-up change.
-            services.AddKeyedSingleton<IEntityQueryRepository>(
-                serviceKey,
-                (sp, key) => sp.GetRequiredKeyedService<IEntityRepository>(key) as IEntityQueryRepository
-                    ?? throw new InvalidOperationException($"Repository registered for entity '{key}' does not implement '{nameof(IEntityQueryRepository)}'.")
-                );
             services.AddKeyedSingleton<IEntityOutboxRepository>(
                 serviceKey,
                 (sp, key) => sp.GetRequiredKeyedService<IEntityRepository>(key) as IEntityOutboxRepository

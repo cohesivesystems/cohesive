@@ -45,18 +45,16 @@ The same facilities can be registered with `IServiceCollection` through `Registe
 `RegisterEntityRelationQueryEvaluator`. Registration order does not choose a source: the v1 catalog permits exactly
 one source per graph-qualified shape and rejects duplicate shape or source identities.
 
-## Temporary legacy compatibility boundary
+## Query authority
 
-`CosmosEntityOutboxRepository` no longer implements `IEntityQueryRepository`; production Cosmos querying now uses
-canonical artifact execution or `IRelationQuerySourceReader`. The legacy interface, its typed wrapper and mapping
-helpers, and the old observation read adapters remain isolated only until the following deletion PR so overlapping
-tests can compare old and canonical behavior. New code must use `RelationQueryEvaluation`,
-`IRelationQueryEvaluator`, and explicit canonical source registrations.
+`Cohesive.Relations` canonical relation/query IR is the sole authority for predicates, joins, projections,
+aggregations, and paging. Storage repositories retain point reads, writes, typed object mapping, and atomic outbox
+behavior; they do not expose a parallel entity-query contract. Query consumers author a `RelationQueryEvaluation`,
+register explicit `IRelationQuerySourceReader` implementations through `EntityRelationQuerySourceRegistration`, and
+execute through `IRelationQueryEvaluator` or a target's canonical artifact executor.
 
-Generic repository DI registration temporarily still publishes keyed and typed `IEntityQueryRepository` wrappers.
-There is no remaining Cosmos backend implementation behind them, so resolving those wrappers for a Cosmos entity
-fails rather than selecting another query authority. Canonical hosts should register entity sources and resolve
-`IRelationQueryEvaluator`; the compatibility interfaces and registrations are removed together next.
+The former query-repository compatibility facade and observation adapters were removed intentionally. Storage does
+not provide an automatic bridge from that deleted model to canonical relation/query definitions.
 
 ## Related Packages
 

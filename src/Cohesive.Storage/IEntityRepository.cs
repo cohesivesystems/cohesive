@@ -1,6 +1,5 @@
 using Cohesive.Relations.Mapping;
 using Cohesive.Relations.Model;
-using Cohesive.Relations.Queries;
 using Cohesive.Transitions.Model;
 
 namespace Cohesive.Storage;
@@ -90,63 +89,6 @@ public interface IEntityRepository<TEntity> : IEntityRepository where TEntity : 
     async Task<IReadOnlyList<EntitySnapshot>> UpsertBatch(OperationContext context, IReadOnlyList<TEntity> writes) =>
         await Task.WhenAllThrottled(writes, w => Upsert(context, w), new(maxConcurrency: 5), context.CancellationToken);
 }
-
-/// <summary>
-/// Temporary legacy query repository retained as a deletion-boundary compatibility facade.
-/// </summary>
-/// <remarks>
-/// Cohesive ships no built-in production backend for this contract. It remains temporarily so differential tests
-/// and external compatibility code can overlap with canonical relation/query execution during deletion.
-/// New integrations register canonical source readers and execute
-/// <see cref="Cohesive.Relations.Authoring.RelationQueryEvaluation"/> through
-/// <see cref="Cohesive.Relations.Execution.IRelationQueryEvaluator"/>. This facade will be removed together with
-/// <c>Cohesive.Relations.Queries</c> in the follow-up deletion change.
-/// </remarks>
-public interface IEntityQueryRepository : IEntityRepository
-{
-    /// <summary>
-    /// Executes a structured query and returns rows, pagination metadata, and optional aggregations.
-    /// </summary>
-    /// <param name="context">Operation context carrying cancellation and host metadata.</param>
-    /// <param name="query">Legacy structured entity query to execute.</param>
-    /// <returns>The materialized legacy row, page, and aggregation response.</returns>
-    /// <exception cref="ArgumentNullException">
-    /// <paramref name="context"/> or <paramref name="query"/> is <see langword="null"/>.
-    /// </exception>
-    /// <exception cref="OperationCanceledException">
-    /// The cancellation token carried by <paramref name="context"/> is canceled.
-    /// </exception>
-    Task<EntityQueryResponse<EntitySnapshot>> Query(OperationContext context, EntityQuery query);
-
-    /// <summary>
-    /// Streams row results from a materialized query response.
-    /// </summary>
-    /// <param name="context">Operation context carrying cancellation and host metadata.</param>
-    /// <param name="query">Legacy structured entity query to execute.</param>
-    /// <returns>An asynchronous stream over the materialized response rows.</returns>
-    /// <exception cref="ArgumentNullException">
-    /// <paramref name="context"/> or <paramref name="query"/> is <see langword="null"/>.
-    /// </exception>
-    /// <exception cref="OperationCanceledException">
-    /// The cancellation token carried by <paramref name="context"/> is canceled.
-    /// </exception>
-    async IAsyncEnumerable<EntitySnapshot> QueryStream(OperationContext context, EntityQuery query)
-    {
-        var response = await Query(context, query).ConfigureAwait(false);
-        foreach (var row in response.Rows)
-            yield return row;
-    }
-}
-
-/// <summary>
-/// Strongly typed wrapper for the deletion-boundary legacy query repository.
-/// </summary>
-/// <remarks>
-/// Cohesive ships no built-in production backend for the underlying legacy contract.
-/// New typed query consumers should author canonical relation/query evaluations and materialize their canonical
-/// outputs through the Relations mapping infrastructure.
-/// </remarks>
-public interface IEntityQueryRepository<TEntity> : IEntityRepository<TEntity>, IEntityQueryRepository where TEntity : notnull;
 
 /// <summary>
 /// Entity repository that can atomically persist entity state together with outbox events.
