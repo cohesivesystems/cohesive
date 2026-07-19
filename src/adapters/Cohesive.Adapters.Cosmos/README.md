@@ -363,14 +363,18 @@ relation/query semantics over that evidence.
 each provider response finite, while a future cross-adapter materialization budget should model cumulative byte
 memory as a canonical physical capability instead of introducing unrelated adapter-only semantics.
 
-## Temporary Legacy Differential Oracle
+## Query Authority
 
-`CosmosEntityOutboxRepository` now owns persistence, point reads, concurrency, change streams, and outbox behavior;
-it no longer implements `IEntityQueryRepository` or executes `EntityQuery`. `CosmosSqlQueryCompiler` and
-`CosmosSqlAggregationCompiler` remain temporarily isolated for overlapping differential tests. They accept the
-legacy model, do not carry canonical provenance, and must not gain new semantics. The next migration PR deletes
-them together with `Cohesive.Relations.Queries` and the remaining Storage compatibility facade.
-Their remaining call sites are tests; production queries use canonical artifacts or bounded source readers.
+Canonical relation/query IR is the sole semantic query authority for this adapter. Compile supported native
+branches with `CosmosRelationQueryCompiler`, execute the resulting artifacts through the Cosmos SDK, and use
+`CosmosRelationQuerySourceReader` for bounded physical acquisition selected by the canonical planner.
+`CosmosSqlConstruction` remains available as an adapter-local construction layer for intentionally hand-crafted
+Cosmos SQL, but direct statements carry Cosmos semantics and do not provide canonical equivalence or provenance.
+`CosmosEntityOutboxRepository` is limited to persistence, point reads, concurrency, change streams, and outbox
+behavior; it is not a semantic query execution surface.
+
+The former parallel predicate and aggregation compilers were removed intentionally. The adapter provides no
+automatic translation bridge from their deleted model to canonical relation/query IR.
 
 ## Related Packages
 

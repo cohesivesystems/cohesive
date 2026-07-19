@@ -301,26 +301,6 @@ public sealed class CosmosRelationQueryCompilerTests
     }
 
     [Fact]
-    public void Compile_RequiredStringEquality_MatchesLegacyCompilerOverlapOracle()
-    {
-        var canonicalArtifact = Assert.Single(Fixture.Row().Compile().Artifacts);
-        var canonical = canonicalArtifact.Bind(new Dictionary<QueryParameterId, ObservationValue>
-        {
-            [new("status")] = ObservationValue.FromString("active")
-        });
-        var legacy = new CosmosSqlQueryCompiler().Compile(new EntityPredicate(
-            new FieldPredicate(
-                Fixture.StatusPath,
-                new ExactValuePredicate("active"))));
-        const string sharedEquality = "c[\"Status\"] = @p0";
-
-        Assert.Contains(sharedEquality, canonical.Text, StringComparison.Ordinal);
-        Assert.Contains(sharedEquality, legacy.Text, StringComparison.Ordinal);
-        Assert.Equal("active", Assert.Single(canonical.Parameters).Value);
-        Assert.Equal("active", Assert.Single(legacy.Parameters).Value);
-    }
-
-    [Fact]
     public void Compile_StaleRealizationOrPlacement_IsInvalidBeforeLowering()
     {
         var current = Fixture.Row(offset: 5);

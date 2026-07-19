@@ -1607,33 +1607,21 @@ The prototype ambient `relatedField(...)` expression has been removed. Related v
 through an explicit canonical relationship traversal that references the persisted relationship catalog;
 expressions then read fields from the traversal's visible binding.
 
-## Legacy Query API Migration Boundary
+## Canonical Query Authority
 
-The `Cohesive.Relations.Queries` namespace remains temporarily as an isolated differential-test oracle and through
-the Storage compatibility facade. No production backend implements its semantic query repository. Generic and
-in-memory Storage execution, Cosmos source acquisition and native artifact execution, Identity, ASP.NET
-entity-declared query endpoints, canonical relation/query API endpoints, and `Cohesive.Processes` use
-`RelationQueryEvaluation`, `IRelationQueryEvaluator`, explicit canonical source readers, or attributable native
-artifacts instead.
-The legacy types predate the canonical relation/query IR and are not a second source of semantic truth.
-New query semantics must be added to canonical IR, capability profiles, and adapters, not to this
-compatibility surface.
+`relation-query/v1` is the sole semantic model for relations and queries. Authoring surfaces lower into that
+canonical IR; hosts invoke it through `RelationQueryEvaluation`; and interpreters, source readers, physical
+planners, and attributable native artifacts realize it. Storage integrations, API endpoints, Identity, and
+`Cohesive.Processes` consume those canonical contracts rather than maintaining parallel query models.
 
-The migration sequence is:
+New query semantics must be introduced in the canonical IR, its capability profiles, and the adapters that
+interpret it. Backend-specific construction utilities may remain independently useful without becoming another
+semantic authority. For example, the standalone Cosmos SQL construction layer is an adapter utility whose
+statements may be hand-authored or emitted from canonical relation/query compilation.
 
-1. Introduce structural and expression-based C# authoring that emits canonical IR. (Complete.)
-2. Introduce typed placement and adapter-binding authoring over canonical physical contracts. (Complete.)
-3. Move Processes and relation/query API execution onto canonical evaluation and outcome contracts. (Complete.)
-4. Retarget generic/in-memory Storage query execution, ASP.NET entity queries, and Identity to canonical
-   evaluation and explicit source-reader contracts. (Complete.)
-5. Add canonical Cosmos SDK execution and source-reader integration, then migrate the Cosmos entity
-   repository. (Complete.)
-6. Delete `Cohesive.Relations.Queries`, the legacy Storage query facade, and legacy target compilers once
-   the Cosmos compatibility consumer is gone.
-
-The standalone Cosmos SQL construction layer is an adapter utility and is not part of that legacy query
-model. A migration must also preserve semantic distinctions rather than mechanically translate names: for
-example, legacy string `ContainsValuePredicate` and canonical collection membership are different operations.
+The former parallel query model and compatibility facade were removed as an intentional breaking change. There
+is no automatic translation shim; consumers migrate by authoring canonical definitions and invoking the canonical
+evaluation or target-compilation surfaces described above.
 
 ## Adjacent Execution Workstreams
 
@@ -1676,12 +1664,10 @@ The current foundation includes:
 - Structural and typed expression-based C# authoring with deterministic CLR shape snapshots.
 - Plan-bound typed and structural source-placement authoring with deterministic conventions, per-setting
   configuration provenance, and adapter-ready placed-input handles.
-- An explicitly temporary `Cohesive.Relations.Queries` compatibility boundary.
 - Contract projection for other host languages.
 
 Active areas of development include:
 
-- Removal of `Cohesive.Relations.Queries`, the Storage compatibility facade, and isolated legacy target compilers.
 - PostgreSQL and broader Cosmos SQL and Elasticsearch compiler coverage; Gremlin is deferred.
 - Broader nested collection traversal, additional scoped collection operators, and target lowering.
 - Cross-source batching and in-memory joins.

@@ -21,20 +21,6 @@ public sealed class CosmosRelationQuerySourceReaderTests
     static readonly FieldPath CustomerIdsPath = FieldPath.FromField("CustomerIds");
 
     [Fact]
-    public void CosmosEntityRepository_HasNoLegacySemanticQuerySurface()
-    {
-        var repository = typeof(CosmosEntityOutboxRepository);
-
-        Assert.False(typeof(IEntityQueryRepository).IsAssignableFrom(repository));
-        Assert.DoesNotContain(
-            repository.GetMethods(
-                System.Reflection.BindingFlags.Public
-                | System.Reflection.BindingFlags.Instance
-                | System.Reflection.BindingFlags.DeclaredOnly),
-            static method => method.Name is "Query" or "QueryStream");
-    }
-
-    [Fact]
     public void Registration_UsesEntityEnvelopeConventionsAndDeterministicPhysicalAffinity()
     {
         using CosmosClient client = new(
