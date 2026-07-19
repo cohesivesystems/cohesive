@@ -216,7 +216,10 @@ public abstract class RelationQueryApiOperationBinding
 }
 
 /// <summary>Request context supplied to canonical relation/query evaluation factories.</summary>
-/// <param name="OperationContext">Cohesive operation context for the HTTP request.</param>
+/// <param name="OperationContext">
+/// Cohesive operation context carrying the effective token that links operation cancellation with
+/// <see cref="HttpContext.RequestAborted"/> when both can be canceled.
+/// </param>
 /// <param name="HttpContext">Current ASP.NET HTTP context.</param>
 /// <param name="Operation">Declared API operation being evaluated.</param>
 /// <param name="EvaluationId">
@@ -229,7 +232,10 @@ public sealed record RelationQueryApiRequestContext(
     RelationQueryEvaluationId EvaluationId);
 
 /// <summary>Context supplied to explicit canonical evaluation outcome mappers.</summary>
-/// <param name="OperationContext">Cohesive operation context for the HTTP request.</param>
+/// <param name="OperationContext">
+/// Cohesive operation context carrying the effective token that links operation cancellation with
+/// <see cref="HttpContext.RequestAborted"/> when both can be canceled.
+/// </param>
 /// <param name="HttpContext">Current ASP.NET HTTP context.</param>
 /// <param name="Operation">Declared API operation that produced the outcome.</param>
 /// <param name="Request">Bound API request value, or <see langword="null"/> when no input was declared.</param>

@@ -210,6 +210,41 @@ public sealed record Observation
     }
 
     /// <summary>
+    /// Attempts to read a direct or nested object field by its canonical semantic path.
+    /// </summary>
+    /// <param name="path">Path containing only field-navigation segments. A default path is treated as absent.</param>
+    /// <param name="value">The resolved value when the complete path is present; otherwise the default value.</param>
+    /// <returns>
+    /// <see langword="true"/> when every field in <paramref name="path"/> is present using ordinal field-name
+    /// matching; otherwise <see langword="false"/>.
+    /// </returns>
+    /// <exception cref="NotSupportedException"><paramref name="path"/> contains collection-element navigation.</exception>
+    public bool TryGetField(FieldPath path, out ObservationValue value)
+    {
+        if (path.Segments.IsDefaultOrEmpty)
+        {
+            value = default;
+            return false;
+        }
+
+        var segments = path.Segments.AsSpan();
+        var first = segments[0];
+        if (first.Kind != SegmentKind.Field)
+        {
+            throw new NotSupportedException(
+                $"Observation field lookup does not support collection-element path '{path}'.");
+        }
+
+        if (!TryGetField(first.Segment!, out value))
+            return false;
+        if (segments.Length == 1)
+            return true;
+
+        var nested = value;
+        return nested.TryGetFieldSegments(segments[1..], out value);
+    }
+
+    /// <summary>
     /// Attempts to read a field value by ordinal.
     /// </summary>
     public bool TryGetField(int ordinal, out ObservationValue value)

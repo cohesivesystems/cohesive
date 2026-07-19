@@ -66,8 +66,20 @@ public static class EntityRepositoryMappingExtensions
     }
 
     /// <summary>
-    /// Streams row results from a materialized entity query response.
+    /// Streams rows from the temporary Cosmos-compatible legacy entity query response.
     /// </summary>
+    /// <remarks>New query consumers should execute canonical relation/query evaluations.</remarks>
+    /// <param name="repository">Legacy query repository to execute.</param>
+    /// <param name="context">Operation context carrying cancellation and host metadata.</param>
+    /// <param name="query">Legacy structured entity query to execute.</param>
+    /// <returns>An asynchronous stream over the materialized entity snapshots.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="repository"/>, <paramref name="context"/>, or <paramref name="query"/> is
+    /// <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="OperationCanceledException">
+    /// The cancellation token carried by <paramref name="context"/> is canceled.
+    /// </exception>
     public static async IAsyncEnumerable<EntitySnapshot> QueryStream(
         this IEntityQueryRepository repository,
         OperationContext context,
@@ -84,8 +96,29 @@ public static class EntityRepositoryMappingExtensions
     }
 
     /// <summary>
-    /// Returns entity values matching the given query.
+    /// Materializes entity values from the temporary Cosmos-compatible legacy query facade.
     /// </summary>
+    /// <remarks>New query consumers should execute canonical relation/query evaluations.</remarks>
+    /// <param name="repository">Legacy query repository to execute.</param>
+    /// <param name="context">Operation context carrying cancellation and host metadata.</param>
+    /// <param name="query">Legacy structured entity query to execute.</param>
+    /// <param name="configureObjectMapper">Optional per-call observation-to-object mapping configuration.</param>
+    /// <param name="mappingContext">
+    /// Optional mapping context, or <see langword="null"/> to use the repository mapping context.
+    /// </param>
+    /// <typeparam name="TEntity">CLR entity type to materialize.</typeparam>
+    /// <returns>An asynchronous stream of mapped entity values.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="repository"/>, <paramref name="context"/>, or <paramref name="query"/> is
+    /// <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="OperationCanceledException">
+    /// The cancellation token carried by <paramref name="context"/> is canceled.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// A returned observation cannot be mapped to <typeparamref name="TEntity"/> under the effective mapping
+    /// configuration.
+    /// </exception>
     public static async IAsyncEnumerable<TEntity> QueryEntities<TEntity>(
         this IEntityQueryRepository repository,
         OperationContext context,

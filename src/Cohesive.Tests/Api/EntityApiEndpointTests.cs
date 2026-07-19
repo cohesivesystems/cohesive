@@ -1,9 +1,14 @@
 using System.Text;
 using System.Text.Json;
 using Cohesive.Adapters.AspNet.Entities;
+using Cohesive.Adapters.AspNet.Relations;
 using Cohesive.Api;
 using Cohesive.Model;
-using Cohesive.Relations.Queries;
+using Cohesive.Relations.Authoring;
+using Cohesive.Relations.Compilation;
+using Cohesive.Relations.Diagnostics;
+using Cohesive.Relations.Execution;
+using Cohesive.Relations.IR;
 using Cohesive.Storage;
 using Cohesive.Transitions.Authoring;
 using Microsoft.AspNetCore.Builder;
@@ -16,6 +21,11 @@ namespace Cohesive.Tests.Api;
 public sealed class EntityApiEndpointTests
 {
     const string TenantPartitionContextKey = "TestTenantPartition";
+    static readonly QualifiedShapeId NoteQueryShape = new(
+        new GraphId("tests/aspnet/entities"),
+        new ShapeId("Note"));
+    static readonly QueryParameterId NotePrefixParameter = new("prefix");
+    static readonly QueryResultId NoteRowsResult = new("rows");
 
     [Fact]
     public void MapEntityApiDefinition_CanFilterSharedOperationNamesAndCustomizeEndpointNames()
@@ -120,6 +130,23 @@ public sealed class EntityApiEndpointTests
             queryString: "?prefix=alpha");
         Assert.Equal(StatusCodes.Status200OK, query.StatusCode);
         Assert.Single(ReadJson(query.Body).GetProperty(nameof(QueryNotesResponse.Items)).EnumerateArray());
+        var evaluator = Assert.IsType<CanonicalQueryRecordingEvaluator>(
+            app.Services.GetRequiredService<IRelationQueryEvaluator>());
+        var evaluation = Assert.IsType<RelationQueryEvaluation>(evaluator.Evaluation);
+        var prefixEvidence = Assert.Single(
+            evaluation.Parameters,
+            parameter => parameter.Input == RelationQueryInputIds.ForParameter(NotePrefixParameter));
+        Assert.Equal(RelationQueryParameterEvidenceState.Provided, prefixEvidence.State);
+        Assert.Equal(ObservationValue.FromString("alpha"), prefixEvidence.Value);
+
+        var mappedRoutes = ((IEndpointRouteBuilder)app)
+            .DataSources
+            .SelectMany(static source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .ToArray();
+        Assert.Single(mappedRoutes, endpoint =>
+            endpoint.RoutePattern.RawText == "/notes"
+            && endpoint.Metadata.GetMetadata<IHttpMethodMetadata>()?.HttpMethods.Contains("GET") == true);
 
         var revise = await InvokeAsync(
             app,
@@ -250,27 +277,20 @@ public sealed class EntityApiEndpointTests
         });
         builder.Services.AddSingleton(operationContext ?? OperationContext.Create());
         builder.Services.RegisterEntityRepository(entity, (_, _) => repository);
+        builder.Services.AddSingleton<IRelationQueryEvaluator, CanonicalQueryRecordingEvaluator>();
         configureServices?.Invoke(builder.Services);
 
         var app = builder.Build();
-        app.MapEntityApiDefinition(CreateApi(), new EntityApiEndpointOptions
+        var api = CreateApi();
+        var queryEndpoint = Assert.Single(api.Endpoints, static endpoint => endpoint.Name == "Query");
+        List<NoteResource> queryDocuments = [];
+        app.MapEntityApiDefinition(api, new EntityApiEndpointOptions
         {
             Entity = entity.Definition,
             PartitionKeyPolicy = partitionKeyPolicy,
             PartitionKeyPolicyResolver = partitionKeyPolicyResolver
         }
             .Bind(EntityApiOperationBinding.Get("Get", static (_, snapshot) => Results.Ok(ToResource(snapshot))))
-            .Bind(EntityApiOperationBinding.Query(
-                "Query",
-                static (_, request) =>
-                {
-                    var query = request as QueryNotesRequest;
-                    var predicate = string.IsNullOrWhiteSpace(query?.Prefix)
-                        ? new FieldPredicate(FieldPath.FromField(nameof(NoteState.Id)), new ExistsValuePredicate())
-                        : new FieldPredicate(FieldPath.FromField(nameof(NoteState.Text)), new PrefixValuePredicate(query.Prefix));
-                    return new EntityQuery(new(predicate));
-                },
-                static (_, snapshots) => Results.Ok(new QueryNotesResponse([.. snapshots.Select(ToResource)]))))
             .Bind(EntityApiOperationBinding.Create(
                 "Create",
                 static (context, request) =>
@@ -282,7 +302,14 @@ public sealed class EntityApiEndpointTests
                         Text: create.Text,
                         UpdatedAtUtc: context.OperationContext.UtcNow));
                 },
-                static (_, snapshot) => Results.Ok(ToResource(snapshot))))
+                (_, snapshot) =>
+                {
+                    var resource = ToResource(snapshot);
+                    queryDocuments.RemoveAll(document =>
+                        string.Equals(document.Id, resource.Id, StringComparison.Ordinal));
+                    queryDocuments.Add(resource);
+                    return Results.Ok(resource);
+                }))
             .Bind(EntityApiOperationBinding.Transition(
                 "Revise",
                 nameof(NoteEntity.Revise),
@@ -314,8 +341,60 @@ public sealed class EntityApiEndpointTests
                         resource.Id,
                         resource.Text.Contains(inspect.Contains, StringComparison.Ordinal)));
                 })));
+        app.MapRelationQueryApiDefinition(api, new RelationQueryApiEndpointOptions()
+            .Bind(queryEndpoint.RelationQuery(
+                static (context, request) => CreateNoteQueryEvaluation(
+                    context.EvaluationId,
+                    Assert.IsType<QueryNotesRequest>(request).Prefix),
+                (context, _) =>
+                {
+                    var query = Assert.IsType<QueryNotesRequest>(context.Request);
+                    var documents = string.IsNullOrWhiteSpace(query.Prefix)
+                        ? queryDocuments
+                        : queryDocuments
+                            .Where(document => document.Text.StartsWith(
+                                query.Prefix,
+                                StringComparison.Ordinal))
+                            .ToList();
+                    return Results.Ok(new QueryNotesResponse([.. documents]));
+                })));
 
         return app;
+    }
+
+    static RelationQueryEvaluation CreateNoteQueryEvaluation(
+        RelationQueryEvaluationId evaluationId,
+        string? prefix)
+    {
+        var author = RelationQuery.Structural();
+        var prefixParameter = author.Parameter(
+            new ScalarTypeRef(ScalarTypeKind.String),
+            presence: FieldPresence.Required,
+            id: NotePrefixParameter);
+        var notes = author.Source(
+            NoteQueryShape,
+            nodeId: new QueryNodeId("notes"),
+            bindingId: new ValueBindingId("note"));
+        var filtered = author.Filter(
+            notes.Node,
+            Expr.StartsWith(
+                notes.Binding.Field(nameof(NoteState.Text)),
+                prefixParameter.Expression),
+            nodeId: new QueryNodeId("notes-by-prefix"));
+        var rows = author.Rows(filtered, id: NoteRowsResult);
+        var evaluation = author.BuildQuery(
+                new QueryId("notes"),
+                new QueryName("Notes"),
+                [rows])
+            .CreateDocument()
+            .Evaluate(evaluationId)
+            .Select(rows.Id);
+        return evaluation
+            .Set(
+                prefixParameter.Id,
+                ObservationValue.FromString(prefix ?? string.Empty),
+                evidenceReference: "aspnet/query/prefix")
+            .Build();
     }
 
     static ApiDefinition CreateApi() => Cohesive.Api.Api.Define()
@@ -377,6 +456,32 @@ public sealed class EntityApiEndpointTests
     sealed record QueryNotesRequest(string? Prefix);
 
     sealed record QueryNotesResponse(NoteResource[] Items);
+
+    sealed class CanonicalQueryRecordingEvaluator : IRelationQueryEvaluator
+    {
+        public RelationQueryEvaluation? Evaluation { get; private set; }
+
+        public CancellationToken CancellationToken { get; private set; }
+
+        public ValueTask<RelationQueryEvaluationOutcome> EvaluateAsync(
+            RelationQueryEvaluation evaluation,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(evaluation);
+            cancellationToken.ThrowIfCancellationRequested();
+            Evaluation = evaluation;
+            CancellationToken = cancellationToken;
+            var compilation = RelationQueryStaticCompiler.Compile(evaluation.Compilation);
+            if (compilation.IsSuccessful)
+            {
+                throw new InvalidOperationException(
+                    "The ASP.NET entity-query fixture intentionally omits source shape documents so the canonical " +
+                    "outcome stops at structured compilation diagnostics.");
+            }
+
+            return ValueTask.FromResult(new RelationQueryEvaluationOutcome(evaluation, compilation));
+        }
+    }
 
     sealed class NoteEntity : Entity<NoteEntity>
     {

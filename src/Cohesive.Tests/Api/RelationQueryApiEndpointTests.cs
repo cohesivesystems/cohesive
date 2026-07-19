@@ -252,6 +252,95 @@ public sealed class RelationQueryApiEndpointTests
         Assert.Null(evaluator.Evaluation);
     }
 
+    [Fact]
+    public async Task RequestCancellationIsLinkedIntoEvaluationFactoryAndStopsBeforeEvaluator()
+    {
+        using var operationCancellation = new CancellationTokenSource();
+        using var requestCancellation = new CancellationTokenSource();
+        var evaluator = new RecordingEvaluator();
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Services.AddSingleton(OperationContext.Create(
+            cancellationToken: operationCancellation.Token));
+        builder.Services.AddSingleton<IRelationQueryEvaluator>(evaluator);
+        var app = builder.Build();
+        var api = CreateOrderSummaryApi();
+        var endpoint = Assert.Single(api.Endpoints);
+        CancellationToken factoryCancellation = default;
+        var resultMapperCalled = false;
+        app.MapRelationQueryApiDefinition(
+            api,
+            new RelationQueryApiEndpointOptions()
+                .Bind(endpoint.RelationQuery(
+                    (context, _) =>
+                    {
+                        factoryCancellation = context.OperationContext.CancellationToken;
+                        requestCancellation.Cancel();
+                        Assert.True(factoryCancellation.IsCancellationRequested);
+                        return CreateOrderSummaryEvaluation(context.EvaluationId, status: null);
+                    },
+                    (_, _) =>
+                    {
+                        resultMapperCalled = true;
+                        return Results.Ok();
+                    })));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => InvokeAsync(
+            app,
+            "/order_summaries",
+            "GET",
+            "request/linked-cancellation",
+            requestAborted: requestCancellation.Token));
+
+        Assert.True(factoryCancellation.CanBeCanceled);
+        Assert.NotEqual(operationCancellation.Token, factoryCancellation);
+        Assert.NotEqual(requestCancellation.Token, factoryCancellation);
+        Assert.False(operationCancellation.IsCancellationRequested);
+        Assert.Null(evaluator.Evaluation);
+        Assert.False(resultMapperCalled);
+    }
+
+    [Fact]
+    public async Task DistinctOperationAndRequestTokensShareOneEffectiveTokenAcrossHostPhases()
+    {
+        using var operationCancellation = new CancellationTokenSource();
+        using var requestCancellation = new CancellationTokenSource();
+        var evaluator = new RecordingEvaluator();
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Services.AddSingleton(OperationContext.Create(
+            cancellationToken: operationCancellation.Token));
+        builder.Services.AddSingleton<IRelationQueryEvaluator>(evaluator);
+        var app = builder.Build();
+        var api = CreateOrderSummaryApi();
+        var endpoint = Assert.Single(api.Endpoints);
+        CancellationToken factoryCancellation = default;
+        CancellationToken resultCancellation = default;
+        app.MapRelationQueryApiDefinition(api, new RelationQueryApiEndpointOptions()
+            .Bind(endpoint.RelationQuery(
+                (context, _) =>
+                {
+                    factoryCancellation = context.OperationContext.CancellationToken;
+                    return CreateOrderSummaryEvaluation(context.EvaluationId, status: null);
+                },
+                (context, _) =>
+                {
+                    resultCancellation = context.OperationContext.CancellationToken;
+                    return Results.Ok();
+                })));
+
+        var response = await InvokeAsync(
+            app,
+            "/order_summaries",
+            "GET",
+            "request/effective-cancellation",
+            requestAborted: requestCancellation.Token);
+
+        Assert.Equal(StatusCodes.Status200OK, response.StatusCode);
+        Assert.NotEqual(operationCancellation.Token, factoryCancellation);
+        Assert.NotEqual(requestCancellation.Token, factoryCancellation);
+        Assert.Equal(factoryCancellation, evaluator.CancellationToken);
+        Assert.Equal(factoryCancellation, resultCancellation);
+    }
+
     static ApiDefinition CreateOrderSummaryApi() => Cohesive.Api.Api.Define("Transportation")
         .Action("QueryOrderSummaries")
             .Route("GET", "/order_summaries")

@@ -1609,22 +1609,25 @@ expressions then read fields from the traversal's visible binding.
 
 ## Legacy Query API Migration Boundary
 
-The `Cohesive.Relations.Queries` namespace remains temporarily because `Cohesive.Storage`, Identity,
-ASP.NET entity integrations, and the Cosmos entity repository still consume types such as `EntityQuery`,
-`EntityPredicate`, `QueryBuilder`, `IExecutableQuery`, and `IReadRepository`. Canonical relation/query API
-endpoints and `Cohesive.Processes` now use `RelationQueryEvaluation` and `IRelationQueryEvaluator`; they no
-longer depend on this compatibility surface. The legacy types predate the canonical relation/query IR and
-are not a second source of semantic truth. New query semantics must be added to canonical IR, capability
-profiles, and adapters, not to this compatibility surface.
+The `Cohesive.Relations.Queries` namespace remains temporarily only for the Cosmos entity repository and
+its directly related compatibility adapters and tests. Generic and in-memory Storage execution, Identity,
+ASP.NET entity-declared query endpoints, canonical relation/query API endpoints, and `Cohesive.Processes`
+use `RelationQueryEvaluation`, `IRelationQueryEvaluator`, and explicit canonical source readers instead.
+The legacy types predate the canonical relation/query IR and are not a second source of semantic truth.
+New query semantics must be added to canonical IR, capability profiles, and adapters, not to this
+compatibility surface.
 
 The migration sequence is:
 
 1. Introduce structural and expression-based C# authoring that emits canonical IR. (Complete.)
 2. Introduce typed placement and adapter-binding authoring over canonical physical contracts. (Complete.)
 3. Move Processes and relation/query API execution onto canonical evaluation and outcome contracts. (Complete.)
-4. Retarget Storage query integrations, ASP.NET entity queries, Identity, and Cosmos execution to canonical compilation or explicit
-   source-reader contracts.
-5. Delete `Cohesive.Relations.Queries` and its legacy target compilers once no consumers remain.
+4. Retarget generic/in-memory Storage query execution, ASP.NET entity queries, and Identity to canonical
+   evaluation and explicit source-reader contracts. (Complete.)
+5. Add canonical Cosmos SDK execution and source-reader integration, then migrate the Cosmos entity
+   repository. (Pending.)
+6. Delete `Cohesive.Relations.Queries`, the legacy Storage query facade, and legacy target compilers once
+   the Cosmos compatibility consumer is gone.
 
 The standalone Cosmos SQL construction layer is an adapter utility and is not part of that legacy query
 model. A migration must also preserve semantic distinctions rather than mechanically translate names: for
@@ -1660,6 +1663,8 @@ The current foundation includes:
 - Capability-driven realization with explicit result observability and a target-neutral native-compilation handoff.
 - Plan-attributed runtime evidence, causal requirement-gap analysis, and explicit missing-data policy decisions.
 - A deterministic physical planner, bounded source-reader contracts, and canonical physical executor.
+- Deterministic Storage source registration and an in-memory entity source reader for production-style canonical
+  host evaluation.
 - A canonical in-memory relation/query reference interpreter over supplied evidence.
 - Same-element structured collection existentials with direct-field reference execution and exact Elasticsearch
   nested-query lowering when physical correlation evidence is available.
@@ -1672,7 +1677,7 @@ The current foundation includes:
 
 Active areas of development include:
 
-- Migration and removal of `Cohesive.Relations.Queries`.
+- Canonical Cosmos SDK execution followed by removal of `Cohesive.Relations.Queries`.
 - PostgreSQL and broader Cosmos SQL and Elasticsearch compiler coverage; Gremlin is deferred.
 - Broader nested collection traversal, additional scoped collection operators, and target lowering.
 - Cross-source batching and in-memory joins.

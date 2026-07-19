@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Cohesive\Cohesive.csproj" />
+    <ProjectReference Include="..\Cohesive.Relations\Cohesive.Relations.csproj" />
     <ProjectReference Include="..\Cohesive.Storage\Cohesive.Storage.csproj" />
     <ProjectReference Include="..\Cohesive.Transitions\Cohesive.Transitions.csproj" />
   </ItemGroup>

@@ -10,6 +10,20 @@ namespace Cohesive.Relations.Tests;
 public sealed class RelationQueryRealizationFingerprintTests
 {
     [Fact]
+    public void TargetProfileSemanticEquality_IgnoresDescriptionsAndDetectsContractChanges()
+    {
+        var first = CreateInputs(metadata: "first").TargetProfile;
+        var descriptionOnlyChange = CreateInputs(metadata: "second").TargetProfile;
+        var changedIdentity = CopyProfile(first, id: new("target/profile/v2"));
+        var changedCapabilities = CopyProfile(first, capabilities: first.Capabilities.RemoveAt(0));
+
+        Assert.True(first.HasSameSemantics(descriptionOnlyChange));
+        Assert.False(first.HasSameSemantics(changedIdentity));
+        Assert.False(first.HasSameSemantics(changedCapabilities));
+        Assert.False(first.HasSameSemantics(null));
+    }
+
+    [Fact]
     public void Compute_IsInvariantToDeclarationOrderAndCurrentCulture()
     {
         var expected = BuildReport(CreateInputs(metadata: "baseline"));

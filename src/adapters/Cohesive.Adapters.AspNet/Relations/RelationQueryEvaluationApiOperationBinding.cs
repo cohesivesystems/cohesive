@@ -45,20 +45,23 @@ sealed class RelationQueryEvaluationApiOperationBinding : RelationQueryApiOperat
                             httpContext.RequestAborted)).Token;
             using var linkedCancellationScope = linkedCancellation;
             cancellationToken.ThrowIfCancellationRequested();
+            var effectiveOperationContext = operationContext.WithCancellationToken(cancellationToken);
 
             var evaluator = options.ResolveEvaluator(httpContext.RequestServices);
             var evaluationId = options.CreateEvaluationId(httpContext, operation);
             var request = await HttpRequestBindingSupport
                 .ReadOperationRequestAsync(httpContext, operation, cancellationToken)
                 .ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             var requestContext = new RelationQueryApiRequestContext(
-                operationContext,
+                effectiveOperationContext,
                 httpContext,
                 operation,
                 evaluationId);
             var evaluation = await createEvaluation(requestContext, request).ConfigureAwait(false)
                 ?? throw new InvalidOperationException(
                     $"Relation/query binding for operation '{operation.Name}' returned a null evaluation.");
+            cancellationToken.ThrowIfCancellationRequested();
             if (evaluation.Evaluation != evaluationId)
             {
                 throw new InvalidOperationException(
@@ -75,16 +78,18 @@ sealed class RelationQueryEvaluationApiOperationBinding : RelationQueryApiOperat
                     $"Relation/query evaluator returned an outcome for a different evaluation of operation " +
                     $"'{operation.Name}'.");
             }
+            cancellationToken.ThrowIfCancellationRequested();
 
             var result = await createResult(
                     new(
-                        OperationContext: operationContext,
+                        OperationContext: effectiveOperationContext,
                         HttpContext: httpContext,
                         Operation: operation,
                         Request: request,
                         Evaluation: evaluation),
                     outcome)
                 .ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             return result ?? throw new InvalidOperationException(
                 $"Relation/query result mapper returned null for operation '{operation.Name}'.");
         };

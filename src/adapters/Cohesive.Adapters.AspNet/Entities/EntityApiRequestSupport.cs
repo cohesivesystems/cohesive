@@ -9,9 +9,6 @@ static class EntityApiRequestSupport
     public static IEntityRepository ResolveRepository(HttpContext httpContext, EntityApiEndpointOptions options) =>
         options.RepositoryResolver(httpContext.RequestServices, options.Entity);
 
-    public static IEntityQueryRepository ResolveQueryRepository(HttpContext httpContext, EntityApiEndpointOptions options) =>
-        options.QueryRepositoryResolver(httpContext.RequestServices, options.Entity);
-
     public static string GetRequiredEntityId(HttpContext httpContext, EntityApiEndpointOptions options)
     {
         if (httpContext.Request.RouteValues.TryGetValue(options.EntityIdRouteParameter, out var value)
@@ -29,9 +26,6 @@ static class EntityApiRequestSupport
         ApiOperation operation,
         CancellationToken ct) =>
         HttpRequestBindingSupport.ReadOperationBodyAsync(httpContext, operation, ct);
-
-    public static object? ReadQueryRequest(HttpContext httpContext, ApiOperation operation) =>
-        HttpRequestBindingSupport.ReadOperationQuery(httpContext, operation);
 
     public static async Task<EntitySnapshot> CommitAsync(
         EntityApiCommitContext context,

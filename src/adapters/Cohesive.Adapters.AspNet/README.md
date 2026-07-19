@@ -83,7 +83,31 @@ app.MapRelationQueryApiDefinition(api.Build(), new RelationQueryApiEndpointOptio
 
 `EvaluationIdSelector` can override the default `aspnet/request/.../operation/...` convention when an application
 already has a stable correlation identity. The endpoint verifies that the per-request factory and evaluator preserve
-the selected identity and passes the request operation cancellation token through body binding and evaluation.
+the selected identity and passes one effective token, linking operation cancellation with
+`HttpContext.RequestAborted`, through request binding, evaluation authoring, execution, and result mapping.
+
+Entity-declared query endpoints use this same canonical binding rather than a repository-specific Entity query path.
+Map point reads and writes with the Entity adapter, then map the query endpoint from the same API definition with the
+Relations adapter. Each mapper emits only its bound endpoints, so the route is created exactly once:
+
+```csharp
+var definition = api.Build();
+
+app.MapEntityApiDefinition(definition, new EntityApiEndpointOptions
+{
+    Entity = NoteEntity.Instance.Definition
+}.Bind(noteGet.Get(static (_, snapshot) => Results.Ok(ToResource(snapshot)))));
+
+app.MapRelationQueryApiDefinition(definition, new RelationQueryApiEndpointOptions()
+    .Bind(noteSearch.RelationQuery(
+        (context, request) => NoteQueries.Search(
+            context.EvaluationId,
+            (SearchNotesRequest)request!),
+        static (_, outcome) => MapSearchResponse(outcome))));
+```
+
+The required result mapper receives the complete canonical outcome, including rows, aggregations, requirement gaps,
+diagnostics, and provenance, and remains responsible for the endpoint's HTTP status policy.
 
 ## Related Packages
 

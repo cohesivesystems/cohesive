@@ -350,13 +350,7 @@ public sealed class RelationQueryPhysicalExecutor
     }
 
     static bool ProfilesMatch(RelationQueryTargetCapabilityProfile left, RelationQueryTargetCapabilityProfile right)
-    {
-        PhysicalFingerprintWriter leftWriter = new("relation-query-source-reader-profile/v1");
-        leftWriter.AppendProfile(left);
-        PhysicalFingerprintWriter rightWriter = new("relation-query-source-reader-profile/v1");
-        rightWriter.AppendProfile(right);
-        return string.Equals(leftWriter.Hash(), rightWriter.Hash(), StringComparison.Ordinal);
-    }
+        => left.HasSameSemantics(right);
 
     static RelationQueryPhysicalExecutionResult Failed(
         RelationQueryPhysicalExecutionRequest request,

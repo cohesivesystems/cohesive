@@ -23,30 +23,8 @@ static class RelationQueryObjectValues
     public static bool TryGet(
         ObservationValue value,
         FieldPath path,
-        out ObservationValue fieldValue)
-    {
-        if (path.Segments.IsDefaultOrEmpty)
-        {
-            fieldValue = default;
-            return false;
-        }
-
-        var current = value;
-        foreach (var segment in path.Segments)
-        {
-            var name = RequireField(segment, path);
-            if (current.Kind != ObservationValueKind.Object
-                || current.Fields is null
-                || !TryGetProperty(current.Fields, name, out current))
-            {
-                fieldValue = default;
-                return false;
-            }
-        }
-
-        fieldValue = current;
-        return true;
-    }
+        out ObservationValue fieldValue) =>
+        value.TryGetField(path, out fieldValue);
 
     public static ObservationValue Select(
         ObservationValue value,
@@ -118,20 +96,4 @@ static class RelationQueryObjectValues
         return segment.Segment;
     }
 
-    static bool TryGetProperty(
-        IReadOnlyDictionary<string, ObservationValue> fields,
-        string name,
-        out ObservationValue value)
-    {
-        foreach (var (key, candidate) in fields)
-        {
-            if (!string.Equals(key, name, StringComparison.Ordinal))
-                continue;
-            value = candidate;
-            return true;
-        }
-
-        value = default;
-        return false;
-    }
 }

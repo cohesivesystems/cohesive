@@ -1,4 +1,5 @@
 using Cohesive.Relations.Mapping;
+using Cohesive.Relations.Physical;
 using Cohesive.Storage;
 
 namespace Cohesive.Identity;
@@ -15,18 +16,56 @@ public sealed record InMemoryIdentityDomainRepositories(
     InMemoryEntityOutboxRepository ScopeMemberships
     )
 {
+    static readonly RelationQueryPhysicalPlanningPolicy DefaultPhysicalPlanningPolicy =
+        CreateDefaultPhysicalPlanningPolicy();
+
     /// <summary>
     /// Creates a repository-backed identity directory over these in-memory repositories.
     /// </summary>
     /// <param name="mappingContext">Optional mapping context used to materialize identity records.</param>
+    /// <param name="physicalPlanningPolicy">
+    /// Optional bounded canonical planning policy; <see langword="null"/> uses deterministic in-memory defaults.
+    /// </param>
     /// <returns>An identity directory backed by these repositories.</returns>
-    public IIdentityDirectory CreateDirectory(ShapeMappingContext? mappingContext = null) =>
-        new EntityRepositoryIdentityDirectory(
-            Scopes,
-            PrincipalAccounts,
-            ScopeMemberships,
-            mappingContext ?? Scopes.MappingContext
-            );
+    /// <exception cref="ArgumentNullException">One of the repository properties is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// A repository does not represent its expected graph-qualified Identity shape.
+    /// </exception>
+    public IIdentityDirectory CreateDirectory(
+        ShapeMappingContext? mappingContext = null,
+        RelationQueryPhysicalPlanningPolicy? physicalPlanningPolicy = null)
+    {
+        ArgumentNullException.ThrowIfNull(Scopes);
+        ArgumentNullException.ThrowIfNull(PrincipalAccounts);
+        ArgumentNullException.ThrowIfNull(ScopeMemberships);
+        EntityRelationQuerySourceCatalog sources = new(
+        [
+            EntityRelationQuerySourceRegistration.InMemory(IdentityDomainModel.ScopeShape, Scopes),
+            EntityRelationQuerySourceRegistration.InMemory(
+                IdentityDomainModel.PrincipalAccountShape,
+                PrincipalAccounts),
+            EntityRelationQuerySourceRegistration.InMemory(
+                IdentityDomainModel.ScopeMembershipShape,
+                ScopeMemberships)
+        ]);
+        return new EntityRepositoryIdentityDirectory(
+            sources.CreateEvaluator(physicalPlanningPolicy ?? DefaultPhysicalPlanningPolicy),
+            mappingContext ?? Scopes.MappingContext);
+    }
+
+    static RelationQueryPhysicalPlanningPolicy CreateDefaultPhysicalPlanningPolicy()
+    {
+        var limits = InMemoryEntityRelationQuerySourceReader.DefaultLimits;
+        return new(
+            new("cohesive.identity/in-memory-directory/v1"),
+            conventionSetVersion: "cohesive.identity/in-memory-directory-conventions/v1",
+            maximumBatchSize: limits.MaximumBatchSize,
+            maximumBufferedRows: limits.MaximumBufferedRows,
+            maximumLocalRows: limits.MaximumBufferedRows,
+            maximumFanOut: limits.MaximumFanOut,
+            maximumReferenceKeysPerObservation: limits.MaximumBatchSize,
+            maximumConcurrency: limits.MaximumConcurrency);
+    }
 }
 
 /// <summary>

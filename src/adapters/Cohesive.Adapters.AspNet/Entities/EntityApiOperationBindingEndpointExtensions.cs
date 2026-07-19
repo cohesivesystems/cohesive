@@ -1,5 +1,4 @@
 using Cohesive.Api;
-using Cohesive.Relations.Queries;
 using Cohesive.Storage;
 using Cohesive.Transitions.Model;
 using Microsoft.AspNetCore.Http;
@@ -44,24 +43,6 @@ public static class EntityApiOperationBindingEndpointExtensions
             Func<EntityApiLoadedRequestContext, EntitySnapshot, object?, ValueTask<IResult>> createResult
             ) =>
             EntityApiOperationBinding.Load(endpoint, createResult);
-
-        /// <summary>
-        /// Creates an entity query operation binding for this endpoint.
-        /// </summary>
-        public EntityApiOperationBinding Query(
-            Func<EntityApiRequestContext, object?, EntityQuery> createQuery,
-            Func<EntityApiQueryResultContext, IReadOnlyList<EntitySnapshot>, IResult> createResult
-            ) =>
-            EntityApiOperationBinding.Query(endpoint, createQuery, createResult);
-
-        /// <summary>
-        /// Creates an entity query operation binding with asynchronous response projection.
-        /// </summary>
-        public EntityApiOperationBinding Query(
-            Func<EntityApiRequestContext, object?, EntityQuery> createQuery,
-            Func<EntityApiQueryResultContext, IReadOnlyList<EntitySnapshot>, ValueTask<IResult>> createResult
-            ) =>
-            EntityApiOperationBinding.Query(endpoint, createQuery, createResult);
 
         /// <summary>
         /// Creates an entity create operation binding for this endpoint.

@@ -1,7 +1,11 @@
 using Cohesive.Relations.Mapping;
+using Cohesive.Relations.Diagnostics;
+using Cohesive.Relations.Execution;
+using Cohesive.Relations.Physical;
 using Cohesive.Transitions.Authoring;
 using Cohesive.Transitions.Model;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Cohesive.Storage;
 
@@ -18,6 +22,66 @@ public static class EntityRepositoryRegistration
 
     extension(IServiceCollection services)
     {
+        /// <summary>Registers one immutable entity-backed canonical relation/query source.</summary>
+        /// <param name="registration">Exact source, reader, shape, selector, capability, and limit registration.</param>
+        /// <exception cref="ArgumentNullException">
+        /// <paramref name="registration"/> or the target service collection is <see langword="null"/>.
+        /// </exception>
+        public void RegisterEntityRelationQuerySource(EntityRelationQuerySourceRegistration registration)
+        {
+            ArgumentNullException.ThrowIfNull(services);
+            ArgumentNullException.ThrowIfNull(registration);
+            services.AddSingleton(registration);
+            EnsureEntityRelationQuerySourceCatalog(services);
+        }
+
+        /// <summary>Registers a dependency-injection factory for one entity-backed canonical relation/query source.</summary>
+        /// <param name="registrationFactory">Factory producing the immutable source registration.</param>
+        /// <exception cref="ArgumentNullException">
+        /// <paramref name="registrationFactory"/> or the target service collection is <see langword="null"/>.
+        /// </exception>
+        public void RegisterEntityRelationQuerySource(
+            Func<IServiceProvider, EntityRelationQuerySourceRegistration> registrationFactory)
+        {
+            ArgumentNullException.ThrowIfNull(services);
+            ArgumentNullException.ThrowIfNull(registrationFactory);
+            services.AddSingleton(registrationFactory);
+            EnsureEntityRelationQuerySourceCatalog(services);
+        }
+
+        /// <summary>Registers the canonical evaluator over the immutable entity-source catalog.</summary>
+        /// <param name="physicalPlanningPolicy">Explicit bounded physical-planning policy.</param>
+        /// <param name="interpreter">Canonical interpreter, or <see langword="null"/> for the shared default.</param>
+        /// <param name="requirementGapPolicy">
+        /// Runtime requirement-gap policy, or <see langword="null"/> for the conventional policy.
+        /// </param>
+        /// <exception cref="ArgumentNullException">
+        /// <paramref name="physicalPlanningPolicy"/> or the target service collection is <see langword="null"/>.
+        /// </exception>
+        /// <exception cref="InvalidOperationException">
+        /// An <see cref="IRelationQueryEvaluator"/> registration already exists. Evaluator gateway precedence must
+        /// be selected explicitly rather than relying on container registration order.
+        /// </exception>
+        public void RegisterEntityRelationQueryEvaluator(
+            RelationQueryPhysicalPlanningPolicy physicalPlanningPolicy,
+            IRelationQueryInterpreter? interpreter = null,
+            IRelationRequirementGapPolicy? requirementGapPolicy = null)
+        {
+            ArgumentNullException.ThrowIfNull(services);
+            ArgumentNullException.ThrowIfNull(physicalPlanningPolicy);
+            if (services.Any(static descriptor => descriptor.ServiceType == typeof(IRelationQueryEvaluator)))
+            {
+                throw new InvalidOperationException(
+                    "An IRelationQueryEvaluator registration already exists; select one canonical evaluator gateway explicitly.");
+            }
+            EnsureEntityRelationQuerySourceCatalog(services);
+            services.AddSingleton<IRelationQueryEvaluator>(provider =>
+                provider.GetRequiredService<EntityRelationQuerySourceCatalog>().CreateEvaluator(
+                    physicalPlanningPolicy,
+                    interpreter,
+                    requirementGapPolicy));
+        }
+
         /// <summary>
         /// Registers an entity repository for the specified CLR object type.
         /// </summary>
@@ -66,6 +130,18 @@ public static class EntityRepositoryRegistration
 
     extension(IServiceProvider sp)
     {
+        /// <summary>Gets the immutable catalog of explicitly registered canonical entity sources.</summary>
+        /// <returns>The singleton source catalog.</returns>
+        /// <exception cref="ArgumentNullException">The service provider is <see langword="null"/>.</exception>
+        /// <exception cref="InvalidOperationException">
+        /// No catalog is registered, or registered source factories produce an invalid catalog snapshot.
+        /// </exception>
+        public EntityRelationQuerySourceCatalog GetEntityRelationQuerySourceCatalog()
+        {
+            ArgumentNullException.ThrowIfNull(sp);
+            return sp.GetRequiredService<EntityRelationQuerySourceCatalog>();
+        }
+
         /// <summary>
         /// Gets the entity repository for the specified entity.
         /// </summary>
@@ -84,20 +160,49 @@ public static class EntityRepositoryRegistration
             sp.GetRequiredKeyedService<IEntityRepository>(serviceKey: TypeServiceKey<TEntity>());
 
         /// <summary>
-        /// Gets the query repository for the specified entity definition.
+        /// Gets the temporary Cosmos-compatible legacy query repository for the specified entity definition.
         /// </summary>
+        /// <remarks>
+        /// New query consumers should resolve <see cref="IRelationQueryEvaluator"/> and execute canonical
+        /// relation/query evaluations. This resolver is removed when the Cosmos entity repository migrates.
+        /// </remarks>
+        /// <param name="entity">Entity definition whose legacy keyed repository should be resolved.</param>
+        /// <returns>The legacy query repository registered for <paramref name="entity"/>.</returns>
+        /// <exception cref="ArgumentNullException"><paramref name="entity"/> is <see langword="null"/>.</exception>
+        /// <exception cref="InvalidOperationException">
+        /// No compatible keyed query repository is registered for <paramref name="entity"/>.
+        /// </exception>
         public IEntityQueryRepository GetEntityQueryRepository(EntityDefinition entity) =>
             sp.GetRequiredKeyedService<IEntityQueryRepository>(serviceKey: ShapeServiceKey(entity));
 
         /// <summary>
-        /// Gets the query repository for the specified entity.
+        /// Gets the temporary Cosmos-compatible legacy query repository for the specified entity.
         /// </summary>
+        /// <remarks>
+        /// New query consumers should resolve <see cref="IRelationQueryEvaluator"/> and execute canonical
+        /// relation/query evaluations. This resolver is removed when the Cosmos entity repository migrates.
+        /// </remarks>
+        /// <param name="entity">Entity whose legacy keyed repository should be resolved.</param>
+        /// <returns>The legacy query repository registered for <paramref name="entity"/>.</returns>
+        /// <exception cref="ArgumentNullException"><paramref name="entity"/> is <see langword="null"/>.</exception>
+        /// <exception cref="InvalidOperationException">
+        /// No compatible keyed query repository is registered for <paramref name="entity"/>.
+        /// </exception>
         public IEntityQueryRepository GetEntityQueryRepository(Entity entity) =>
             sp.GetEntityQueryRepository(entity.Definition);
 
         /// <summary>
-        /// Gets the query repository for the specified registered CLR type.
+        /// Gets the temporary Cosmos-compatible legacy query repository for the specified registered CLR type.
         /// </summary>
+        /// <remarks>
+        /// New query consumers should resolve <see cref="IRelationQueryEvaluator"/> and execute canonical
+        /// relation/query evaluations. This resolver is removed when the Cosmos entity repository migrates.
+        /// </remarks>
+        /// <typeparam name="TEntity">Registered CLR entity type.</typeparam>
+        /// <returns>The legacy query repository registered for <typeparamref name="TEntity"/>.</returns>
+        /// <exception cref="InvalidOperationException">
+        /// No compatible keyed query repository is registered for <typeparamref name="TEntity"/>.
+        /// </exception>
         public IEntityQueryRepository GetEntityQueryRepository<TEntity>() where TEntity : notnull =>
             sp.GetRequiredKeyedService<IEntityQueryRepository>(serviceKey: TypeServiceKey<TEntity>());
 
@@ -120,8 +225,17 @@ public static class EntityRepositoryRegistration
             sp.GetRequiredService<IEntityRepository<TEntity>>();
 
         /// <summary>
-        /// Gets the strongly typed query repository for the specified CLR object type.
+        /// Gets the temporary Cosmos-compatible strongly typed legacy query repository.
         /// </summary>
+        /// <remarks>
+        /// New query consumers should resolve <see cref="IRelationQueryEvaluator"/> and materialize canonical
+        /// results through Relations mapping. This resolver is removed when the Cosmos entity repository migrates.
+        /// </remarks>
+        /// <typeparam name="TEntity">Registered CLR entity type.</typeparam>
+        /// <returns>The typed legacy query repository registered for <typeparamref name="TEntity"/>.</returns>
+        /// <exception cref="InvalidOperationException">
+        /// No compatible typed query repository is registered for <typeparamref name="TEntity"/>.
+        /// </exception>
         public IEntityQueryRepository<TEntity> GetTypedEntityQueryRepository<TEntity>() where TEntity : notnull =>
             sp.GetRequiredService<IEntityQueryRepository<TEntity>>();
 
@@ -159,6 +273,10 @@ public static class EntityRepositoryRegistration
         RegisterDerivedRepositories(services, keys);
     }
 
+    static void EnsureEntityRelationQuerySourceCatalog(IServiceCollection services) =>
+        services.TryAddSingleton(static provider => new EntityRelationQuerySourceCatalog(
+            provider.GetServices<EntityRelationQuerySourceRegistration>()));
+
     static void RegisterTypedRepositories<TEntity>(
         IServiceCollection services,
         object serviceKey,
@@ -171,6 +289,7 @@ public static class EntityRepositoryRegistration
             configureObjectMapper: configureObjectMapper,
             mappingContext: mappingContext
             ));
+        // Temporary Cosmos compatibility. Canonical consumers resolve IRelationQueryEvaluator instead.
         services.AddSingleton<IEntityQueryRepository<TEntity>>(sp => new TypedEntityQueryRepository<TEntity>(
             repository: sp.GetRequiredService<IEntityRepository<TEntity>>(),
             queryRepository: sp.GetRequiredKeyedService<IEntityQueryRepository>(serviceKey)
@@ -185,6 +304,7 @@ public static class EntityRepositoryRegistration
     {
         foreach (var serviceKey in serviceKeys)
         {
+            // Temporary Cosmos compatibility. Remove with IEntityQueryRepository after canonical Cosmos migration.
             services.AddKeyedSingleton<IEntityQueryRepository>(
                 serviceKey,
                 (sp, key) => sp.GetRequiredKeyedService<IEntityRepository>(key) as IEntityQueryRepository

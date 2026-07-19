@@ -92,18 +92,42 @@ public interface IEntityRepository<TEntity> : IEntityRepository where TEntity : 
 }
 
 /// <summary>
-/// A repository that supports queries.
+/// Temporary legacy query repository retained for the Cosmos entity-repository compatibility path.
 /// </summary>
+/// <remarks>
+/// New integrations register canonical source readers and execute
+/// <see cref="Cohesive.Relations.Authoring.RelationQueryEvaluation"/> through
+/// <see cref="Cohesive.Relations.Execution.IRelationQueryEvaluator"/>. This facade will be removed with
+/// <c>Cohesive.Relations.Queries</c> after the Cosmos repository migrates.
+/// </remarks>
 public interface IEntityQueryRepository : IEntityRepository
 {
     /// <summary>
     /// Executes a structured query and returns rows, pagination metadata, and optional aggregations.
     /// </summary>
+    /// <param name="context">Operation context carrying cancellation and host metadata.</param>
+    /// <param name="query">Legacy structured entity query to execute.</param>
+    /// <returns>The materialized legacy row, page, and aggregation response.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="context"/> or <paramref name="query"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="OperationCanceledException">
+    /// The cancellation token carried by <paramref name="context"/> is canceled.
+    /// </exception>
     Task<EntityQueryResponse<EntitySnapshot>> Query(OperationContext context, EntityQuery query);
 
     /// <summary>
     /// Streams row results from a materialized query response.
     /// </summary>
+    /// <param name="context">Operation context carrying cancellation and host metadata.</param>
+    /// <param name="query">Legacy structured entity query to execute.</param>
+    /// <returns>An asynchronous stream over the materialized response rows.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="context"/> or <paramref name="query"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="OperationCanceledException">
+    /// The cancellation token carried by <paramref name="context"/> is canceled.
+    /// </exception>
     async IAsyncEnumerable<EntitySnapshot> QueryStream(OperationContext context, EntityQuery query)
     {
         var response = await Query(context, query).ConfigureAwait(false);
@@ -113,8 +137,12 @@ public interface IEntityQueryRepository : IEntityRepository
 }
 
 /// <summary>
-/// Strongly typed query repository backed by object/observation mapping.
+/// Strongly typed wrapper for the temporary Cosmos-compatible legacy query repository.
 /// </summary>
+/// <remarks>
+/// New typed query consumers should author canonical relation/query evaluations and materialize their canonical
+/// outputs through the Relations mapping infrastructure.
+/// </remarks>
 public interface IEntityQueryRepository<TEntity> : IEntityRepository<TEntity>, IEntityQueryRepository where TEntity : notnull;
 
 /// <summary>
