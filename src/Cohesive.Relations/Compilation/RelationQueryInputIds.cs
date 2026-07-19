@@ -8,6 +8,19 @@ namespace Cohesive.Relations.Compilation;
 public static class RelationQueryInputIds
 {
     const string ParameterPrefix = "input/parameter/";
+    const string SourceSetPrefix = "input/source-set/";
+
+    /// <summary>Creates the canonical compiled-input identity for a logical source set.</summary>
+    /// <param name="source">Canonical logical source-node identity.</param>
+    /// <returns>The stable source-set input identity used by requirement graphs and supplied-root evidence.</returns>
+    /// <exception cref="ArgumentException"><paramref name="source"/> is default.</exception>
+    public static RelationQueryInputId ForSource(QueryNodeId source)
+    {
+        if (string.IsNullOrWhiteSpace(source.Value))
+            throw new ArgumentException("A source-set input requires a non-empty source node identifier.", nameof(source));
+
+        return new($"{SourceSetPrefix}{Uri.EscapeDataString(source.Value)}");
+    }
 
     /// <summary>Creates the canonical compiled-input identity for a query parameter.</summary>
     /// <param name="parameter">Canonical query-parameter identity.</param>

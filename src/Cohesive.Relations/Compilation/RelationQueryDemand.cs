@@ -86,6 +86,7 @@ public sealed record QueryResultDemand
     /// for <see cref="RelationQueryFieldSelectionKind.AllFields"/>.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="selection"/> is unsupported.</exception>
+    [JsonConstructor]
     public QueryResultDemand(
         QueryResultId result,
         RelationQueryFieldSelectionKind selection,
@@ -154,15 +155,53 @@ public sealed class RelationQueryCompilationDemand
     public static RelationQueryCompilationDemand AllDeclaredOutputs { get; } =
         new(RelationQueryCompilationDemandKind.AllDeclaredOutputs, [], []);
 
-    RelationQueryCompilationDemand(
+    /// <summary>Creates and normalizes one portable compilation demand.</summary>
+    /// <param name="kind">Kind of output demand.</param>
+    /// <param name="relationFields">Selected relation-output fields.</param>
+    /// <param name="queryResults">Selected named query results.</param>
+    /// <exception cref="ArgumentException">
+    /// The selected collections conflict with <paramref name="kind"/>, contain invalid or null entries, or repeat
+    /// a query-result identity.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="kind"/> is unsupported.</exception>
+    [JsonConstructor]
+    public RelationQueryCompilationDemand(
         RelationQueryCompilationDemandKind kind,
         ImmutableArray<RelationQueryFieldReference> relationFields,
         ImmutableArray<QueryResultDemand> queryResults
         )
     {
+        if (!Enum.IsDefined(kind))
+            throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported compilation-demand kind.");
+        var normalizedFields = relationFields.IsDefault ? [] : relationFields;
+        var normalizedResults = queryResults.IsDefault ? [] : queryResults;
+        if (normalizedFields.Any(static field => !RelationQueryContractOrdering.IsValid(field)))
+            throw new ArgumentException("Relation fields must be valid graph-qualified field references.", nameof(relationFields));
+        if (normalizedResults.Any(static result => result is null))
+            throw new ArgumentException("Query-result demands cannot contain null entries.", nameof(queryResults));
+        if (normalizedResults.GroupBy(static result => result.Result).Any(static group => group.Count() > 1))
+            throw new ArgumentException("Query-result demand cannot repeat a result identifier.", nameof(queryResults));
+
+        var valid = kind switch
+        {
+            RelationQueryCompilationDemandKind.AllDeclaredOutputs =>
+                normalizedFields.IsDefaultOrEmpty && normalizedResults.IsDefaultOrEmpty,
+            RelationQueryCompilationDemandKind.RelationFields =>
+                !normalizedFields.IsDefaultOrEmpty && normalizedResults.IsDefaultOrEmpty,
+            RelationQueryCompilationDemandKind.QueryResults =>
+                normalizedFields.IsDefaultOrEmpty && !normalizedResults.IsDefaultOrEmpty,
+            _ => false
+        };
+        if (!valid)
+        {
+            throw new ArgumentException(
+                "Compilation-demand kind conflicts with its selected relation fields or query results.",
+                nameof(kind));
+        }
+
         Kind = kind;
-        RelationFields = relationFields;
-        QueryResults = queryResults;
+        RelationFields = RelationQueryContractOrdering.NormalizeFields(normalizedFields);
+        QueryResults = [.. normalizedResults.OrderBy(static result => result.Result.Value, StringComparer.Ordinal)];
     }
 
     /// <summary>Kind of demand represented by this instance.</summary>

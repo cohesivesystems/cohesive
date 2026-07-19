@@ -69,6 +69,34 @@ public sealed record RelationQuerySourceReadField
     public RelationQuerySourceReadFieldPurpose Purpose { get; }
 }
 
+/// <summary>Shared projection from compiled semantic field contracts and placement selectors to reader fields.</summary>
+static class RelationQuerySourceReadFields
+{
+    /// <summary>Creates exact semantic source-read selections for one placed binding.</summary>
+    /// <param name="contracts">Compiled fields required from the binding.</param>
+    /// <param name="binding">Exact placement containing physical selectors for those fields.</param>
+    /// <returns>Semantic source-read fields in compiled-contract order.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// The placement does not contain exactly one selector for a compiled field.
+    /// </exception>
+    public static ImmutableArray<RelationQuerySourceReadField> CreateSemantic(
+        ImmutableArray<RelationQueryFieldInputContract> contracts,
+        RelationQuerySourcePlacementBinding binding
+        ) =>
+    [
+        .. contracts.Select(contract =>
+        {
+            var placed = binding.Fields.Single(field => field.Input == contract.Input.Id);
+            return new RelationQuerySourceReadField(
+                placed.Input,
+                placed.SemanticPath,
+                placed.SourceSelector,
+                RelationQuerySourceReadFieldPurpose.SemanticInput
+                );
+        })
+    ];
+}
+
 /// <summary>Closed constraint applied to one bounded physical source read.</summary>
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "$read")]
 [JsonDerivedType(typeof(RelationQueryBoundedEnumeration), "boundedEnumeration")]
@@ -183,7 +211,8 @@ public sealed class RelationQuerySourceReadRequest
         string identitySelector,
         ImmutableArray<RelationQuerySourceReadField> fields,
         RelationQuerySourceReadConstraint constraint,
-        long maximumBufferedRows)
+        long maximumBufferedRows
+        )
     {
         PhysicalPlan = Guard.RequireNotNull(physicalPlan);
         if (string.IsNullOrWhiteSpace(stage.Value) || string.IsNullOrWhiteSpace(placementBinding.Value)
@@ -280,7 +309,8 @@ public sealed record RelationQuerySourceReadFieldResult
         RelationQuerySourceReadField field,
         RelationQuerySourceReadFieldState state,
         ObservationValue? value = null,
-        string? evidenceReference = null)
+        string? evidenceReference = null
+        )
     {
         Field = Guard.RequireNotNull(field);
         if (!Enum.IsDefined(state))
@@ -323,7 +353,8 @@ public sealed record RelationQuerySourceReadObservation
     public RelationQuerySourceReadObservation(
         string identity,
         QualifiedShapeId shape,
-        ImmutableArray<RelationQuerySourceReadFieldResult> fields)
+        ImmutableArray<RelationQuerySourceReadFieldResult> fields
+        )
     {
         Identity = Guard.RequireNotNullOrWhiteSpace(identity);
         if (string.IsNullOrWhiteSpace(shape.GraphId.Value) || string.IsNullOrWhiteSpace(shape.ShapeId.Value))
@@ -391,7 +422,8 @@ public sealed class RelationQuerySourceReadResult
     public RelationQuerySourceReadResult(
         RelationQuerySourceReadState state,
         ImmutableArray<RelationQuerySourceReadObservation> observations = default,
-        string? evidenceReference = null)
+        string? evidenceReference = null
+        )
     {
         if (!Enum.IsDefined(state))
             throw new ArgumentOutOfRangeException(nameof(state), state, "Unsupported source-read state.");
@@ -447,7 +479,8 @@ public sealed record RelationQuerySourceReaderDescriptor
     public RelationQuerySourceReaderDescriptor(
         RelationQuerySourceInstanceId source,
         RelationQueryExecutionDomainId executionDomain,
-        RelationQueryTargetCapabilityProfile targetProfile)
+        RelationQueryTargetCapabilityProfile targetProfile
+        )
     {
         if (string.IsNullOrWhiteSpace(source.Value) || string.IsNullOrWhiteSpace(executionDomain.Value))
             throw new ArgumentException("A source-reader descriptor requires complete physical identities.", nameof(source));
@@ -479,7 +512,5 @@ public interface IRelationQuerySourceReader
     /// <exception cref="ArgumentNullException"><paramref name="request"/> is <see langword="null"/>.</exception>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> is canceled.</exception>
     /// <remarks>Expected provider failures should be returned as evidence-bearing results; cancellation propagates.</remarks>
-    ValueTask<RelationQuerySourceReadResult> ReadAsync(
-        RelationQuerySourceReadRequest request,
-        CancellationToken cancellationToken = default);
+    ValueTask<RelationQuerySourceReadResult> ReadAsync(RelationQuerySourceReadRequest request, CancellationToken cancellationToken = default);
 }

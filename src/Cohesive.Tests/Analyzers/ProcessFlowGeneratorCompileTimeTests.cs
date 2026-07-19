@@ -96,17 +96,31 @@ public sealed class ProcessFlowGeneratorCompileTimeTests
     }
 
     [Fact]
-    public void ProcessFlowGenerator_LowersReadQueryComputeAndTransitionSteps()
+    public void ProcessFlowGenerator_LowersReadEvaluateComputeAndTransitionSteps()
     {
         var projectionProcess = new CustomerProjectionProcess().Define().Definition;
         Assert.IsType<ExecuteEntityReadNode>(projectionProcess.Nodes["customer"]);
-        Assert.IsType<ExecuteEntityQueryNode>(projectionProcess.Nodes["profiles"]);
-        Assert.IsType<ComputeValueNode>(projectionProcess.Nodes["profile"]);
+        Assert.NotNull(Assert.IsType<EvaluateRelationQueryNode>(
+            projectionProcess.Nodes["segmentEvaluation"]).ResultExpression);
+        Assert.NotNull(Assert.IsType<EvaluateRelationQueryNode>(
+            projectionProcess.Nodes["orderEvaluation"]).ResultExpression);
         Assert.IsType<ComputeValueNode>(projectionProcess.Nodes["updatedName"]);
         Assert.IsType<ExecuteEntityTransitionNode>(projectionProcess.Nodes["rename"]);
 
         var batchProcess = new CounterBatchProcess().Define().Definition;
         Assert.IsType<ExecuteEntityTransitionNode>(batchProcess.Nodes["results"]);
+    }
+
+    [Fact]
+    public void ProcessAuthoringContext_ExposesOnlyProjectedRelationQueryEvaluation()
+    {
+        var evaluate = Assert.Single(
+            typeof(ProcessAuthoringContext<string, string>)
+                .GetMethods(BindingFlags.Instance | BindingFlags.Public),
+            static method => method.Name == nameof(ProcessAuthoringContext<string, string>.Evaluate));
+
+        Assert.True(evaluate.IsGenericMethodDefinition);
+        Assert.Equal("projectResult", evaluate.GetParameters()[1].Name);
     }
 
     [Fact]

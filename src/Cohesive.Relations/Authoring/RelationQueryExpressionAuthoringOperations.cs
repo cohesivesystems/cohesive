@@ -942,7 +942,8 @@ public sealed partial class RelationQueryExpressionAuthoring
             mode,
             invariants,
             terminal.Reference);
-        return WithConventionRelationRoot(WithRelationTerminalProvenance(result, terminal), root, terminal.Source);
+        return CaptureSuccessfulBuild(
+            WithConventionRelationRoot(WithRelationTerminalProvenance(result, terminal), root, terminal.Source));
     }
 
     /// <summary>Builds a convention-identified relation with an expression-authored output key and invariants.</summary>
@@ -1006,7 +1007,7 @@ public sealed partial class RelationQueryExpressionAuthoring
             mode,
             invariants,
             terminal.Reference);
-        return WithRelationTerminalProvenance(result, terminal);
+        return CaptureSuccessfulBuild(WithRelationTerminalProvenance(result, terminal));
     }
 
     /// <summary>Builds a canonical relation with an expression-authored output key and invariants.</summary>
@@ -1052,16 +1053,17 @@ public sealed partial class RelationQueryExpressionAuthoring
         where TOutput : notnull
     {
         ArgumentNullException.ThrowIfNull(root);
-        return BuildExpressionRelationCore(
-            id,
-            name,
-            root,
-            output,
-            outputBinding,
-            key,
-            mode,
-            invariants,
-            sourceReference);
+        return CaptureSuccessfulBuild(
+            BuildExpressionRelationCore(
+                id,
+                name,
+                root,
+                output,
+                outputBinding,
+                key,
+                mode,
+                invariants,
+                sourceReference));
     }
 
     RelationQueryAuthoringResult<RelationDefinition> BuildExpressionRelationCore<TOutputNode, TOutput, TKey>(

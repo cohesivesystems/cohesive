@@ -18,14 +18,21 @@ namespace Cohesive.Relations.Acquisition;
 public sealed class RelationQueryPhysicalExecutor
 {
     readonly ImmutableDictionary<RelationQuerySourceInstanceId, IRelationQuerySourceReader> readers;
+    readonly IRelationQueryInterpreter interpreter;
 
     /// <summary>Creates a physical executor over an exact set of source readers.</summary>
     /// <param name="sourceReaders">Readers keyed by the physical source identities in a placement.</param>
+    /// <param name="interpreter">
+    /// Canonical interpreter that executes the terminal semantic stage, or <see langword="null"/> for
+    /// <see cref="RelationQueryInMemoryInterpreter.Default"/>.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="sourceReaders"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
     /// <paramref name="sourceReaders"/> contains a <see langword="null"/> reader or repeats a source identity.
     /// </exception>
-    public RelationQueryPhysicalExecutor(IEnumerable<IRelationQuerySourceReader> sourceReaders)
+    public RelationQueryPhysicalExecutor(
+        IEnumerable<IRelationQuerySourceReader> sourceReaders,
+        IRelationQueryInterpreter? interpreter = null)
     {
         ArgumentNullException.ThrowIfNull(sourceReaders);
         var normalized = sourceReaders.ToArray();
@@ -35,10 +42,11 @@ public sealed class RelationQueryPhysicalExecutor
             throw new ArgumentException("Physical source readers cannot repeat a source identity.", nameof(sourceReaders));
 
         readers = normalized.ToImmutableDictionary(static reader => reader.Descriptor.Source);
+        this.interpreter = interpreter ?? RelationQueryInMemoryInterpreter.Default;
     }
 
     /// <summary>Performs bounded acquisition and then executes the exact canonical semantic plan.</summary>
-    /// <param name="request">Semantic, realization, placement, physical-plan, and invocation inputs.</param>
+    /// <param name="request">Semantic, realization, placement, physical-plan, and evaluation inputs.</param>
     /// <param name="cancellationToken">Token that cancels acquisition and canonical interpretation.</param>
     /// <returns>Physical read traces, exact runtime evidence, and the canonical interpretation result.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="request"/> is <see langword="null"/>.</exception>
@@ -69,15 +77,16 @@ public sealed class RelationQueryPhysicalExecutor
     /// </remarks>
     public async ValueTask<RelationQueryPhysicalExecutionResult> ExecuteAsync(
         RelationQueryPhysicalExecutionRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+        )
     {
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
 
         if (Preflight(request) is { } preflightFailure)
-            return Failed(preflightFailure);
+            return Failed(request, preflightFailure);
 
-        ExecutionContext context = new(request, readers);
+        ExecutionContext context = new(request, readers, interpreter);
         return await context.ExecuteAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -91,7 +100,8 @@ public sealed class RelationQueryPhysicalExecutor
             request.Plan,
             request.Realization,
             physical.Placement,
-            physical.Policy);
+            physical.Policy,
+            interpreter);
         if (!Equals(realizationFingerprint, request.Realization.Fingerprint)
             || !Equals(physical.Realization, request.Realization.Fingerprint)
             || !Equals(placementFingerprint, physical.Placement.Fingerprint)
@@ -162,8 +172,7 @@ public sealed class RelationQueryPhysicalExecutor
         return null;
     }
 
-    static RelationQueryPhysicalExecutionDiagnostic? ValidateTraversalReachabilityConversions(
-        RelationQueryPhysicalExecutionRequest request)
+    static RelationQueryPhysicalExecutionDiagnostic? ValidateTraversalReachabilityConversions(RelationQueryPhysicalExecutionRequest request)
     {
         if (request.ConversionFailures.IsDefaultOrEmpty)
             return null;
@@ -175,8 +184,7 @@ public sealed class RelationQueryPhysicalExecutor
                      .OrderBy(traversal => logicalOrder[traversal.Input.Traversal])
                      .ThenBy(static traversal => traversal.Input.Id.Value, StringComparer.Ordinal))
         {
-            var downstreamPlacement = request.PhysicalPlan.Placement.Bindings
-                .Single(binding => binding.Input == downstream.Input.Id);
+            var downstreamPlacement = request.PhysicalPlan.Placement.Bindings.Single(binding => binding.Input == downstream.Input.Id);
             HashSet<RelationQueryInputId> reachabilityInputs = [];
             if (!TryAddBindingProducerReachabilityInputs(
                     request.Plan,
@@ -276,7 +284,8 @@ public sealed class RelationQueryPhysicalExecutor
     static bool TryAddTraversalReachabilityInputs(
         CompiledRelationQueryPlan plan,
         RelationQueryTraversalInputContract traversal,
-        ISet<RelationQueryInputId> reachabilityInputs)
+        ISet<RelationQueryInputId> reachabilityInputs
+        )
     {
         if (!TryGetBindingProducerNode(plan, traversal.From, traversal.FromShape, out var producer))
             return false;
@@ -317,7 +326,8 @@ public sealed class RelationQueryPhysicalExecutor
         CompiledRelationQueryPlan plan,
         ValueBindingId binding,
         QualifiedShapeId shape,
-        out QueryNodeId producer)
+        out QueryNodeId producer
+        )
     {
         QueryNodeId[] producers =
         [
@@ -339,9 +349,7 @@ public sealed class RelationQueryPhysicalExecutor
         return true;
     }
 
-    static bool ProfilesMatch(
-        RelationQueryTargetCapabilityProfile left,
-        RelationQueryTargetCapabilityProfile right)
+    static bool ProfilesMatch(RelationQueryTargetCapabilityProfile left, RelationQueryTargetCapabilityProfile right)
     {
         PhysicalFingerprintWriter leftWriter = new("relation-query-source-reader-profile/v1");
         leftWriter.AppendProfile(left);
@@ -351,9 +359,11 @@ public sealed class RelationQueryPhysicalExecutor
     }
 
     static RelationQueryPhysicalExecutionResult Failed(
+        RelationQueryPhysicalExecutionRequest request,
         RelationQueryPhysicalExecutionDiagnostic diagnostic,
-        ImmutableArray<RelationQuerySourceReadTrace> traces = default) =>
-        new(RelationQueryPhysicalExecutionStatus.Failed, evidence: null, interpretation: null, traces, [diagnostic]);
+        ImmutableArray<RelationQuerySourceReadTrace> traces = default
+        ) =>
+        new(request, RelationQueryExecutionStatus.Failed, null, null, traces, [diagnostic]);
 
     static RelationQueryPhysicalExecutionDiagnostic Diagnostic(
         string code,
@@ -361,13 +371,15 @@ public sealed class RelationQueryPhysicalExecutor
         RelationQueryPhysicalStageId? stage = null,
         RelationQueryInputId? input = null,
         RelationQuerySourceInstanceId? source = null,
-        string? evidenceReference = null) =>
+        string? evidenceReference = null
+        ) =>
         new(code, DiagnosticSeverity.Error, message, stage, input, source, evidenceReference);
 
     sealed class ExecutionContext
     {
         readonly RelationQueryPhysicalExecutionRequest request;
         readonly IReadOnlyDictionary<RelationQuerySourceInstanceId, IRelationQuerySourceReader> readers;
+        readonly IRelationQueryInterpreter interpreter;
         readonly IReadOnlyDictionary<RelationQueryInputId, RelationQuerySourcePlacementBinding> placements;
         readonly IReadOnlyDictionary<RelationQuerySourceInstanceId, RelationQuerySourceInstance> sources;
         readonly IReadOnlyDictionary<RelationQueryInputId, RelationQueryFieldInput> fieldInputs;
@@ -383,10 +395,13 @@ public sealed class RelationQueryPhysicalExecutor
 
         public ExecutionContext(
             RelationQueryPhysicalExecutionRequest request,
-            IReadOnlyDictionary<RelationQuerySourceInstanceId, IRelationQuerySourceReader> readers)
+            IReadOnlyDictionary<RelationQuerySourceInstanceId, IRelationQuerySourceReader> readers,
+            IRelationQueryInterpreter interpreter
+            )
         {
             this.request = request;
             this.readers = readers;
+            this.interpreter = interpreter;
             placements = request.PhysicalPlan.Placement.Bindings.ToDictionary(static binding => binding.Input);
             sources = request.PhysicalPlan.Placement.SourceInstances.ToDictionary(static source => source.Id);
             fieldInputs = request.Plan.RequirementGraph.Inputs
@@ -400,22 +415,20 @@ public sealed class RelationQueryPhysicalExecutor
 
         public async ValueTask<RelationQueryPhysicalExecutionResult> ExecuteAsync(CancellationToken cancellationToken)
         {
-            foreach (var source in request.Plan.InputContract.Sources
-                         .Where(static source => source.Role == RelationQuerySourceInputRole.RelationRoot))
+            foreach (var source in request.Plan.InputContract.Sources.Where(static source => source.Role == RelationQuerySourceInputRole.RelationRoot))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var diagnostic = AcquireSupplied(source, cancellationToken);
                 if (diagnostic is not null)
-                    return Failed(diagnostic, [.. traces]);
+                    return Failed(request, diagnostic, [.. traces]);
             }
 
-            foreach (var source in request.Plan.InputContract.Sources
-                         .Where(static source => source.Role != RelationQuerySourceInputRole.RelationRoot))
+            foreach (var source in request.Plan.InputContract.Sources.Where(static source => source.Role != RelationQuerySourceInputRole.RelationRoot))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var diagnostic = await AcquireSourceAsync(source, cancellationToken).ConfigureAwait(false);
                 if (diagnostic is not null)
-                    return Failed(diagnostic, [.. traces]);
+                    return Failed(request, diagnostic, [.. traces]);
             }
 
             HashSet<ValueBindingId> readyBindings =
@@ -436,6 +449,7 @@ public sealed class RelationQueryPhysicalExecutor
                 if (ready.Length == 0)
                 {
                     return Failed(
+                        request,
                         Diagnostic(
                             RelationQueryPhysicalExecutionDiagnosticCodes.StageInvalid,
                             "The physical traversal graph contains an unavailable owner binding."),
@@ -447,7 +461,7 @@ public sealed class RelationQueryPhysicalExecutor
                     cancellationToken.ThrowIfCancellationRequested();
                     var diagnostic = await AcquireTraversalAsync(traversal, cancellationToken).ConfigureAwait(false);
                     if (diagnostic is not null)
-                        return Failed(diagnostic, [.. traces]);
+                        return Failed(request, diagnostic, [.. traces]);
                     readyBindings.Add(traversal.Result);
                     remaining.Remove(traversal);
                 }
@@ -462,31 +476,23 @@ public sealed class RelationQueryPhysicalExecutor
                 [.. traversalEvidence],
                 request.Parameters,
                 request.Capabilities,
-                request.ConversionFailures);
-            var interpretation = RelationQueryInMemoryInterpreter.Default.Execute(
+                request.ConversionFailures
+                );
+            var interpretation = interpreter.Execute(
                 new(request.Plan, evidence, request.RequirementGapPolicy),
                 cancellationToken);
-            var status = interpretation.Status switch
-            {
-                RelationQueryExecutionStatus.Succeeded => RelationQueryPhysicalExecutionStatus.Succeeded,
-                RelationQueryExecutionStatus.Incomplete => RelationQueryPhysicalExecutionStatus.Incomplete,
-                RelationQueryExecutionStatus.Failed => RelationQueryPhysicalExecutionStatus.Failed,
-                _ => throw new ArgumentOutOfRangeException(
-                    nameof(interpretation),
-                    interpretation.Status,
-                    "Unsupported canonical interpretation status.")
-            };
-            return new(status, evidence, interpretation, [.. traces]);
+            return new(request, interpretation.Status, evidence, interpretation, [.. traces]);
         }
 
         RelationQueryPhysicalExecutionDiagnostic? AcquireSupplied(
             RelationQuerySourceInputContract contract,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+            )
         {
             var binding = placements[contract.Input.Id];
             var source = sources[binding.Source];
             var stage = RequireStage(binding.Id, RelationQueryPhysicalStageKind.SuppliedInput);
-            var expectedFields = CreateSemanticFields(contract.Fields, binding);
+            var expectedFields = RelationQuerySourceReadFields.CreateSemantic(contract.Fields, binding);
             var supplied = request.SuppliedSources.SingleOrDefault(candidate => candidate.Input == contract.Input.Id);
             if (supplied is null)
             {
@@ -545,12 +551,13 @@ public sealed class RelationQueryPhysicalExecutor
 
         async ValueTask<RelationQueryPhysicalExecutionDiagnostic?> AcquireSourceAsync(
             RelationQuerySourceInputContract contract,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+            )
         {
             var binding = placements[contract.Input.Id];
             var source = sources[binding.Source];
             var stage = RequireStage(binding.Id, RelationQueryPhysicalStageKind.SourceRead);
-            var fields = CreateSemanticFields(contract.Fields, binding);
+            var fields = RelationQuerySourceReadFields.CreateSemantic(contract.Fields, binding);
             var maximumBufferedRows = RemainingReadCapacity(stage.Id, source);
             var maximumRows = MaximumEnumerationRows(stage.Id, source);
             if (maximumBufferedRows <= 0 || maximumRows <= 0)
@@ -571,7 +578,8 @@ public sealed class RelationQueryPhysicalExecutor
                 binding.Identity!.SourceSelector,
                 fields,
                 new RelationQueryBoundedEnumeration(maximumRows),
-                maximumBufferedRows);
+                maximumBufferedRows
+                );
             var result = await readers[source.Id].ReadAsync(read, cancellationToken).ConfigureAwait(false);
             if (result is null)
                 return Invalid(read, evidenceReference: null, "A source reader returned no result object.");
@@ -609,7 +617,8 @@ public sealed class RelationQueryPhysicalExecutor
 
         async ValueTask<RelationQueryPhysicalExecutionDiagnostic?> AcquireTraversalAsync(
             RelationQueryTraversalInputContract contract,
-            CancellationToken cancellationToken) =>
+            CancellationToken cancellationToken
+            ) =>
             contract.Input.Direction switch
             {
                 RelationshipTraversalDirection.Forward =>
@@ -624,12 +633,13 @@ public sealed class RelationQueryPhysicalExecutor
 
         async ValueTask<RelationQueryPhysicalExecutionDiagnostic?> AcquireForwardTraversalAsync(
             RelationQueryTraversalInputContract contract,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+            )
         {
             var binding = placements[contract.Input.Id];
             var source = sources[binding.Source];
             var stage = RequireStage(binding.Id, RelationQueryPhysicalStageKind.BatchedIdentityLookup);
-            var fields = CreateSemanticFields(contract.Fields, binding);
+            var fields = RelationQuerySourceReadFields.CreateSemantic(contract.Fields, binding);
             if (SelectReachableOwners(contract, stage, out var owners) is { } reachabilityFailure)
                 return reachabilityFailure;
             var referenceInput = request.Plan.RequirementGraph.Inputs
@@ -729,13 +739,14 @@ public sealed class RelationQueryPhysicalExecutor
                         contract.Input.Id,
                         source.Id);
                 }
-                RelationQuerySourceReadRequest read = CreateLookupRequest(
+                var read = CreateLookupRequest(
                     stage,
                     binding,
                     source,
                     fields,
                     new RelationQueryIdentityBatchLookup([.. batch]),
-                    maximumBufferedRows);
+                    maximumBufferedRows
+                    );
                 var result = await readers[source.Id].ReadAsync(read, cancellationToken).ConfigureAwait(false);
                 if (result is null)
                     return Invalid(read, evidenceReference: null, "A source reader returned no result object.");
@@ -869,7 +880,7 @@ public sealed class RelationQueryPhysicalExecutor
                         contract.Input.Id,
                         source.Id);
                 }
-                RelationQuerySourceReadRequest read = CreateLookupRequest(
+                var read = CreateLookupRequest(
                     stage,
                     binding,
                     source,
@@ -1055,9 +1066,10 @@ public sealed class RelationQueryPhysicalExecutor
         ImmutableArray<AcquiredOccurrence> MaterializeSourceRows(
             RelationQuerySourceInputContract contract,
             ImmutableArray<RelationQuerySourceReadObservation> rows,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+            )
         {
-            ImmutableArray<AcquiredOccurrence>.Builder acquired = ImmutableArray.CreateBuilder<AcquiredOccurrence>(rows.Length);
+            var acquired = ImmutableArray.CreateBuilder<AcquiredOccurrence>(rows.Length);
             foreach (var row in rows)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -1076,8 +1088,7 @@ public sealed class RelationQueryPhysicalExecutor
             IReadOnlyList<RelationQuerySourceReadObservation> rows,
             CancellationToken cancellationToken)
         {
-            ImmutableArray<RelationQueryObservationOccurrence>.Builder occurrences =
-                ImmutableArray.CreateBuilder<RelationQueryObservationOccurrence>(rows.Count);
+            var occurrences = ImmutableArray.CreateBuilder<RelationQueryObservationOccurrence>(rows.Count);
             foreach (var row in rows)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -1096,7 +1107,8 @@ public sealed class RelationQueryPhysicalExecutor
             RelationQuerySourceReadObservation row,
             ValueBindingId binding,
             RelationQueryOccurrenceId occurrenceId,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+            )
         {
             RelationQueryObservationOccurrence occurrence = new(occurrenceId, binding, row.Shape, row.Identity);
             foreach (var field in row.Fields)
@@ -1372,27 +1384,12 @@ public sealed class RelationQueryPhysicalExecutor
                 result.EvidenceReference));
         }
 
-        ImmutableArray<RelationQuerySourceReadField> CreateSemanticFields(
-            ImmutableArray<RelationQueryFieldInputContract> contracts,
-            RelationQuerySourcePlacementBinding binding) =>
-        [
-            .. contracts.Select(contract =>
-            {
-                var placed = binding.Fields.Single(field => field.Input == contract.Input.Id);
-                return new RelationQuerySourceReadField(
-                    placed.Input,
-                    placed.SemanticPath,
-                    placed.SourceSelector,
-                    RelationQuerySourceReadFieldPurpose.SemanticInput);
-            })
-        ];
-
         ImmutableArray<RelationQuerySourceReadField> CreateInverseFields(
             ImmutableArray<RelationQueryFieldInputContract> contracts,
             RelationQuerySourcePlacementBinding binding,
             RelationQueryRelationshipKeyBinding relationshipKey)
         {
-            var fields = CreateSemanticFields(contracts, binding).ToBuilder();
+            var fields = RelationQuerySourceReadFields.CreateSemantic(contracts, binding).ToBuilder();
             var combined = fields
                 .Select((field, index) => (field, index))
                 .FirstOrDefault(candidate => candidate.field.SemanticPath == relationshipKey.SemanticPath

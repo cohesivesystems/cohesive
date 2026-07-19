@@ -13,7 +13,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Cohesive\Cohesive.csproj" />
-    <ProjectReference Include="..\Cohesive.Relations\Cohesive.Relations.csproj" />
   </ItemGroup>
 
 </Project>

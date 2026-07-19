@@ -12,6 +12,23 @@ namespace Cohesive.Relations.Tests;
 public sealed class RelationQueryPhysicalExecutorTests
 {
     [Fact]
+    public async Task ExecuteAsync_UsesTheConfiguredCanonicalInterpreter()
+    {
+        var compilation = FederatedLoadPhysicalExecutionFixture.Create(
+            FederatedLoadRelationFixture.QueryDocument,
+            maximumBatchSize: 2);
+        var readers = CreateReaders(compilation);
+        var interpreter = new RecordingInterpreter();
+
+        var result = await new RelationQueryPhysicalExecutor(readers.All, interpreter).ExecuteAsync(
+            Request(compilation, "tests/configured-interpreter"));
+
+        Assert.True(interpreter.WasCalled);
+        Assert.Same(result.Evidence, interpreter.Evidence);
+        Assert.Same(result.Interpretation, interpreter.Result);
+    }
+
+    [Fact]
     public async Task Physical_execution_result_requires_the_exact_interpreted_evidence_snapshot()
     {
         var compilation = FederatedLoadPhysicalExecutionFixture.Create(
@@ -35,12 +52,69 @@ public sealed class RelationQueryPhysicalExecutorTests
 
         Assert.Same(evidence, interpretation.Evidence);
         var exception = Assert.Throws<ArgumentException>(() => new RelationQueryPhysicalExecutionResult(
+            result.Request,
             result.Status,
             equivalentEvidence,
             interpretation,
             result.SourceReads,
             result.Diagnostics));
         Assert.Contains("exact snapshot", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Physical_execution_result_rejects_evidence_from_another_evaluation()
+    {
+        var compilation = FederatedLoadPhysicalExecutionFixture.Create(
+            FederatedLoadRelationFixture.QueryDocument,
+            maximumBatchSize: 2);
+        var readers = CreateReaders(compilation);
+        var result = await new RelationQueryPhysicalExecutor(readers.All).ExecuteAsync(
+            Request(compilation, "tests/result-evaluation-affinity"));
+        var evidence = Assert.IsType<RelationQueryRuntimeEvidence>(result.Evidence);
+        var foreignEvidence = new RelationQueryRuntimeEvidence(
+            new("tests/foreign-evaluation"),
+            compilation.Plan,
+            evidence.Completeness,
+            evidence.Sources,
+            evidence.Fields,
+            evidence.Traversals,
+            evidence.Parameters,
+            evidence.Capabilities,
+            evidence.ConversionFailures);
+
+        var exception = Assert.Throws<ArgumentException>(() => new RelationQueryPhysicalExecutionResult(
+            result.Request,
+            RelationQueryExecutionStatus.Failed,
+            foreignEvidence,
+            interpretation: null));
+
+        Assert.Contains("exact execution request evaluation", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Physical_execution_result_uses_the_canonical_interpretation_status()
+    {
+        var compilation = FederatedLoadPhysicalExecutionFixture.Create(
+            FederatedLoadRelationFixture.QueryDocument,
+            maximumBatchSize: 2);
+        var readers = CreateReaders(compilation);
+        var result = await new RelationQueryPhysicalExecutor(readers.All).ExecuteAsync(
+            Request(compilation, "tests/result-canonical-status"));
+        var evidence = Assert.IsType<RelationQueryRuntimeEvidence>(result.Evidence);
+        var interpretation = Assert.IsType<RelationQueryExecutionResult>(result.Interpretation);
+        var conflictingStatus = interpretation.Status == RelationQueryExecutionStatus.Succeeded
+            ? RelationQueryExecutionStatus.Incomplete
+            : RelationQueryExecutionStatus.Succeeded;
+
+        var exception = Assert.Throws<ArgumentException>(() => new RelationQueryPhysicalExecutionResult(
+            result.Request,
+            conflictingStatus,
+            evidence,
+            interpretation,
+            result.SourceReads,
+            result.Diagnostics));
+
+        Assert.Contains("canonical interpretation status", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -54,7 +128,7 @@ public sealed class RelationQueryPhysicalExecutorTests
         var result = await new RelationQueryPhysicalExecutor(readers.All).ExecuteAsync(
             Request(compilation, "tests/federated-query-execution"));
 
-        Assert.Equal(RelationQueryPhysicalExecutionStatus.Succeeded, result.Status);
+        Assert.Equal(RelationQueryExecutionStatus.Succeeded, result.Status);
         Assert.Empty(result.Diagnostics);
         Assert.NotNull(result.Evidence);
         Assert.NotNull(result.Interpretation);
@@ -127,7 +201,7 @@ public sealed class RelationQueryPhysicalExecutorTests
         var result = await new RelationQueryPhysicalExecutor([loadReader]).ExecuteAsync(
             Request(compilation, "tests/federated-aggregation"));
 
-        Assert.Equal(RelationQueryPhysicalExecutionStatus.Succeeded, result.Status);
+        Assert.Equal(RelationQueryExecutionStatus.Succeeded, result.Status);
         Assert.Empty(result.Diagnostics);
         Assert.Single(loadReader.Requests);
         Assert.Empty(loadReader.Requests[0].Fields);
@@ -196,7 +270,7 @@ public sealed class RelationQueryPhysicalExecutorTests
                 "tests/physical-gap-policy",
                 requirementGapPolicy: policy));
 
-        Assert.Equal(RelationQueryPhysicalExecutionStatus.Succeeded, result.Status);
+        Assert.Equal(RelationQueryExecutionStatus.Succeeded, result.Status);
         Assert.Empty(result.Diagnostics);
         var evidence = Assert.IsType<RelationQueryRuntimeEvidence>(result.Evidence);
         var interpretation = Assert.IsType<RelationQueryExecutionResult>(result.Interpretation);
@@ -258,7 +332,7 @@ public sealed class RelationQueryPhysicalExecutorTests
             suppliedSources: [supplied],
             capabilities: FederatedLoadPhysicalExecutionFixture.AvailableCapabilities(compilation.Plan)));
 
-        Assert.Equal(RelationQueryPhysicalExecutionStatus.Succeeded, result.Status);
+        Assert.Equal(RelationQueryExecutionStatus.Succeeded, result.Status);
         Assert.Empty(result.SourceReads);
         Assert.Empty(result.Diagnostics);
         AssertNoIo(unusedReaders);
@@ -290,7 +364,7 @@ public sealed class RelationQueryPhysicalExecutorTests
         var result = await new RelationQueryPhysicalExecutor([customerReader, loadReader]).ExecuteAsync(
             Request(compilation, "tests/inverse-many"));
 
-        Assert.Equal(RelationQueryPhysicalExecutionStatus.Succeeded, result.Status);
+        Assert.Equal(RelationQueryExecutionStatus.Succeeded, result.Status);
         Assert.Empty(result.Diagnostics);
         Assert.Single(customerReader.Requests);
         Assert.Equal(2, loadReader.Requests.Length);
@@ -391,7 +465,7 @@ public sealed class RelationQueryPhysicalExecutorTests
         var result = await new RelationQueryPhysicalExecutor([customerReader, loadReader]).ExecuteAsync(
             Request(compilation, "tests/conflicting-inverse-reference"));
 
-        Assert.Equal(RelationQueryPhysicalExecutionStatus.Failed, result.Status);
+        Assert.Equal(RelationQueryExecutionStatus.Failed, result.Status);
         Assert.Null(result.Evidence);
         Assert.Null(result.Interpretation);
         Assert.Contains(result.Diagnostics, static diagnostic =>
@@ -459,7 +533,7 @@ public sealed class RelationQueryPhysicalExecutorTests
         var result = await new RelationQueryPhysicalExecutor(readers.All).ExecuteAsync(
             Request(compilation, "tests/reader-profile-mismatch"));
 
-        Assert.Equal(RelationQueryPhysicalExecutionStatus.Failed, result.Status);
+        Assert.Equal(RelationQueryExecutionStatus.Failed, result.Status);
         Assert.Null(result.Evidence);
         Assert.Null(result.Interpretation);
         Assert.Contains(result.Diagnostics, static diagnostic =>
@@ -480,7 +554,7 @@ public sealed class RelationQueryPhysicalExecutorTests
             [readers.Loads, readers.Customers]).ExecuteAsync(
             Request(compilation, "tests/missing-reader"));
 
-        Assert.Equal(RelationQueryPhysicalExecutionStatus.Failed, result.Status);
+        Assert.Equal(RelationQueryExecutionStatus.Failed, result.Status);
         Assert.Null(result.Evidence);
         Assert.Null(result.Interpretation);
         Assert.Contains(result.Diagnostics, static diagnostic =>
@@ -507,7 +581,7 @@ public sealed class RelationQueryPhysicalExecutorTests
             new("tests/stale-realization"),
             capabilities: FederatedLoadPhysicalExecutionFixture.AvailableCapabilities(query.Plan)));
 
-        Assert.Equal(RelationQueryPhysicalExecutionStatus.Failed, result.Status);
+        Assert.Equal(RelationQueryExecutionStatus.Failed, result.Status);
         Assert.Null(result.Evidence);
         Assert.Null(result.Interpretation);
         Assert.Contains(result.Diagnostics, static diagnostic =>
@@ -533,7 +607,7 @@ public sealed class RelationQueryPhysicalExecutorTests
             new("tests/mismatched-semantic-plan"),
             capabilities: FederatedLoadPhysicalExecutionFixture.AvailableCapabilities(relation.Plan)));
 
-        Assert.Equal(RelationQueryPhysicalExecutionStatus.Failed, result.Status);
+        Assert.Equal(RelationQueryExecutionStatus.Failed, result.Status);
         Assert.Null(result.Evidence);
         Assert.Null(result.Interpretation);
         Assert.Contains(result.Diagnostics, static diagnostic =>
@@ -563,7 +637,7 @@ public sealed class RelationQueryPhysicalExecutorTests
             suppliedSources: [supplied],
             capabilities: FederatedLoadPhysicalExecutionFixture.AvailableCapabilities(compilation.Plan)));
 
-        Assert.Equal(RelationQueryPhysicalExecutionStatus.Failed, result.Status);
+        Assert.Equal(RelationQueryExecutionStatus.Failed, result.Status);
         Assert.Null(result.Evidence);
         Assert.Null(result.Interpretation);
         Assert.Contains(result.Diagnostics, static diagnostic =>
@@ -591,7 +665,7 @@ public sealed class RelationQueryPhysicalExecutorTests
         var result = await new RelationQueryPhysicalExecutor(readers.All).ExecuteAsync(
             Request(compilation, "tests/altered-provider-projection"));
 
-        Assert.Equal(RelationQueryPhysicalExecutionStatus.Failed, result.Status);
+        Assert.Equal(RelationQueryExecutionStatus.Failed, result.Status);
         Assert.Null(result.Evidence);
         Assert.Null(result.Interpretation);
         Assert.Contains(result.Diagnostics, static diagnostic =>
@@ -615,7 +689,7 @@ public sealed class RelationQueryPhysicalExecutorTests
         var result = await new RelationQueryPhysicalExecutor(readers.All).ExecuteAsync(
             Request(compilation, "tests/null-provider-result"));
 
-        Assert.Equal(RelationQueryPhysicalExecutionStatus.Failed, result.Status);
+        Assert.Equal(RelationQueryExecutionStatus.Failed, result.Status);
         Assert.Null(result.Evidence);
         Assert.Null(result.Interpretation);
         Assert.Contains(result.Diagnostics, static diagnostic =>
@@ -638,7 +712,7 @@ public sealed class RelationQueryPhysicalExecutorTests
         var result = await new RelationQueryPhysicalExecutor(readers.All).ExecuteAsync(
             Request(compilation, "tests/cumulative-source-buffer"));
 
-        Assert.Equal(RelationQueryPhysicalExecutionStatus.Failed, result.Status);
+        Assert.Equal(RelationQueryExecutionStatus.Failed, result.Status);
         Assert.Null(result.Evidence);
         Assert.Null(result.Interpretation);
         Assert.Contains(result.Diagnostics, static diagnostic =>
@@ -663,7 +737,7 @@ public sealed class RelationQueryPhysicalExecutorTests
         var result = await new RelationQueryPhysicalExecutor(readers.All).ExecuteAsync(
             Request(compilation, "tests/exhausted-source-buffer"));
 
-        Assert.Equal(RelationQueryPhysicalExecutionStatus.Failed, result.Status);
+        Assert.Equal(RelationQueryExecutionStatus.Failed, result.Status);
         Assert.Contains(result.Diagnostics, static diagnostic =>
             diagnostic.Code == RelationQueryPhysicalExecutionDiagnosticCodes.OperatingBoundaryExceeded
             && diagnostic.Source == FederatedLoadPhysicalExecutionFixture.CustomersSource);
@@ -685,7 +759,7 @@ public sealed class RelationQueryPhysicalExecutorTests
         var result = await new RelationQueryPhysicalExecutor(readers.All).ExecuteAsync(
             Request(compilation, "tests/cumulative-local-rows"));
 
-        Assert.Equal(RelationQueryPhysicalExecutionStatus.Failed, result.Status);
+        Assert.Equal(RelationQueryExecutionStatus.Failed, result.Status);
         Assert.Null(result.Evidence);
         Assert.Null(result.Interpretation);
         Assert.Contains(result.Diagnostics, static diagnostic =>
@@ -783,7 +857,7 @@ public sealed class RelationQueryPhysicalExecutorTests
         var result = await new RelationQueryPhysicalExecutor([customerReader, loadReader]).ExecuteAsync(
             Request(compilation, "tests/bounded-explicit-equijoin"));
 
-        Assert.Equal(RelationQueryPhysicalExecutionStatus.Succeeded, result.Status);
+        Assert.Equal(RelationQueryExecutionStatus.Succeeded, result.Status);
         Assert.Empty(result.Diagnostics);
         Assert.Single(loadReader.Requests);
         Assert.Single(customerReader.Requests);
@@ -840,7 +914,7 @@ public sealed class RelationQueryPhysicalExecutorTests
         var result = await new RelationQueryPhysicalExecutor([customerReader, loadReader]).ExecuteAsync(
             Request(compilation, "tests/equijoin-identity-mismatch"));
 
-        Assert.Equal(RelationQueryPhysicalExecutionStatus.Failed, result.Status);
+        Assert.Equal(RelationQueryExecutionStatus.Failed, result.Status);
         Assert.Null(result.Interpretation);
         Assert.Contains(result.Diagnostics, static diagnostic =>
             diagnostic.Code == RelationQueryPhysicalExecutionDiagnosticCodes.SourceResultInvalid);
@@ -868,7 +942,7 @@ public sealed class RelationQueryPhysicalExecutorTests
         var result = await new RelationQueryPhysicalExecutor(readers.All).ExecuteAsync(
             Request(compilation, $"tests/customer-{readState}"));
 
-        Assert.NotEqual(RelationQueryPhysicalExecutionStatus.Failed, result.Status);
+        Assert.NotEqual(RelationQueryExecutionStatus.Failed, result.Status);
         Assert.Empty(result.Diagnostics);
         Assert.NotNull(result.Evidence);
         Assert.NotNull(result.Interpretation);
@@ -900,7 +974,7 @@ public sealed class RelationQueryPhysicalExecutorTests
         var result = await new RelationQueryPhysicalExecutor(readers.All).ExecuteAsync(
             Request(compilation, "tests/partial-empty-prior-sibling"));
 
-        Assert.NotEqual(RelationQueryPhysicalExecutionStatus.Failed, result.Status);
+        Assert.NotEqual(RelationQueryExecutionStatus.Failed, result.Status);
         Assert.Empty(result.Diagnostics);
         Assert.Empty(readers.Equipment.Requests);
         Assert.DoesNotContain(
@@ -950,7 +1024,7 @@ public sealed class RelationQueryPhysicalExecutorTests
                 "tests/separated-traversal-conversion",
                 [new(customerReference.Id, occurrence: null, "tests/customer-reference-conversion")]));
 
-        Assert.Equal(RelationQueryPhysicalExecutionStatus.Failed, result.Status);
+        Assert.Equal(RelationQueryExecutionStatus.Failed, result.Status);
         Assert.Null(result.Evidence);
         Assert.Null(result.Interpretation);
         Assert.Contains(result.Diagnostics, diagnostic =>
@@ -975,7 +1049,7 @@ public sealed class RelationQueryPhysicalExecutorTests
                 "tests/traversal-source-conversion",
                 [new(source.Input.Id, occurrence: null, "tests/load-source-conversion")]));
 
-        Assert.Equal(RelationQueryPhysicalExecutionStatus.Failed, result.Status);
+        Assert.Equal(RelationQueryExecutionStatus.Failed, result.Status);
         Assert.Null(result.Evidence);
         Assert.Null(result.Interpretation);
         Assert.Contains(result.Diagnostics, diagnostic =>
@@ -1016,7 +1090,7 @@ public sealed class RelationQueryPhysicalExecutorTests
         var result = await new RelationQueryPhysicalExecutor(readers.All).ExecuteAsync(
             Request(compilation, "tests/partial-identity-batch"));
 
-        Assert.NotEqual(RelationQueryPhysicalExecutionStatus.Failed, result.Status);
+        Assert.NotEqual(RelationQueryExecutionStatus.Failed, result.Status);
         var runtime = Assert.IsType<RelationQueryRuntimeEvidence>(result.Evidence);
         var customerTraversal = compilation.Plan.InputContract.Traversals.Single(
             traversal => traversal.Input.Traversal == FederatedLoadRelationFixture.CustomerTraversalNodeId);
@@ -1240,6 +1314,28 @@ public sealed class RelationQueryPhysicalExecutorTests
         Assert.Equal("Customer Two", projected["load-3"]);
         Assert.Equal("Customer Three", projected["load-4"]);
         Assert.Equal("Customer Four", projected["load-5"]);
+    }
+
+    sealed class RecordingInterpreter : IRelationQueryInterpreter
+    {
+        public bool WasCalled { get; private set; }
+
+        public RelationQueryRuntimeEvidence? Evidence { get; private set; }
+
+        public RelationQueryExecutionResult? Result { get; private set; }
+
+        public RelationQueryRealizationReport Realize(CompiledRelationQueryPlan plan) =>
+            RelationQueryInMemoryInterpreter.Default.Realize(plan);
+
+        public RelationQueryExecutionResult Execute(
+            RelationQueryExecutionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            WasCalled = true;
+            Evidence = request.Evidence;
+            Result = RelationQueryInMemoryInterpreter.Default.Execute(request, cancellationToken);
+            return Result;
+        }
     }
 
     static RelationQueryDocument CreateExplicitEquijoinDocument()

@@ -1,5 +1,4 @@
 using System.Globalization;
-using QueryFieldSelection = Cohesive.Relations.Queries.FieldSelection;
 
 namespace Cohesive.Processes.Runtime;
 
@@ -79,6 +78,12 @@ public sealed record ProcessEntityReadOptions
     /// <summary>
     /// Creates a projected-field read request.
     /// </summary>
+    /// <param name="fields">Field names to load.</param>
+    /// <returns>A read request containing the distinct supplied field names.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="fields"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="fields"/> contains a null, empty, or white-space name.
+    /// </exception>
     public static ProcessEntityReadOptions ForFields(params string[] fields) => new(FieldSelection.ForFields(fields));
 
     /// <summary>
@@ -105,11 +110,11 @@ public sealed record ProcessEntityWriteOptions
     /// <param name="fieldSelection">Optional field-selection request, or <see langword="null"/> to commit the full entity state.</param>
     public ProcessEntityWriteOptions(
         ProcessEntityConcurrencyToken expectedConcurrencyToken,
-        QueryFieldSelection? fieldSelection = null
+        FieldSelection? fieldSelection = null
         )
     {
         ExpectedConcurrencyToken = expectedConcurrencyToken;
-        FieldSelection = fieldSelection ?? QueryFieldSelection.Full;
+        FieldSelection = fieldSelection ?? FieldSelection.Full;
     }
 
     /// <summary>
@@ -120,7 +125,7 @@ public sealed record ProcessEntityWriteOptions
     /// <summary>
     /// Field-selection request for this write.
     /// </summary>
-    public QueryFieldSelection FieldSelection { get; }
+    public FieldSelection FieldSelection { get; }
 
     /// <summary>
     /// Optional projected field subset, or <see langword="null"/> for a full-state write.
@@ -135,14 +140,23 @@ public sealed record ProcessEntityWriteOptions
     /// <summary>
     /// Creates a full-state write request.
     /// </summary>
+    /// <param name="expectedConcurrencyToken">Expected storage concurrency token.</param>
+    /// <returns>A full-state write request constrained by <paramref name="expectedConcurrencyToken"/>.</returns>
     public static ProcessEntityWriteOptions Full(ProcessEntityConcurrencyToken expectedConcurrencyToken) =>
-        new(expectedConcurrencyToken, QueryFieldSelection.Full);
+        new(expectedConcurrencyToken, FieldSelection.Full);
 
     /// <summary>
     /// Creates a projected-field write request.
     /// </summary>
+    /// <param name="expectedConcurrencyToken">Expected storage concurrency token.</param>
+    /// <param name="fields">Field names to commit.</param>
+    /// <returns>A projected write request containing the distinct supplied field names.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="fields"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="fields"/> contains a null, empty, or white-space name.
+    /// </exception>
     public static ProcessEntityWriteOptions ForFields(ProcessEntityConcurrencyToken expectedConcurrencyToken, params string[] fields) =>
-        new(expectedConcurrencyToken, QueryFieldSelection.ForFields(fields));
+        new(expectedConcurrencyToken, FieldSelection.ForFields(fields));
 }
 
 /// <summary>

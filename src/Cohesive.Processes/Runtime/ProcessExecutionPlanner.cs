@@ -198,7 +198,7 @@ public sealed class ProcessExecutionPlanner
             case ExecuteEffectRequestNode:
             case ExecuteEntityReadNode:
             case ExecuteEntityCreateNode:
-            case ExecuteEntityQueryNode:
+            case EvaluateRelationQueryNode:
             case ComputeValueNode:
             case TransactionNode:
                 return new(

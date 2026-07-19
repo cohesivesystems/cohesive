@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Cohesive.Adapters.AspNet.Entities;
 using Cohesive.Api;
 using Microsoft.AspNetCore.Http;
 
@@ -11,11 +10,9 @@ static class ProcessApiRequestSupport
 
     public static async ValueTask<TRequest> ReadRequestAsync<TRequest>(HttpContext httpContext, ApiOperation operation, CancellationToken ct)
     {
-        var request = operation.Http.Body is not null
-            ? await EntityApiRequestSupport
-                .ReadBodyRequestAsync(httpContext, operation, ct)
-                .ConfigureAwait(false)
-            : EntityApiRequestSupport.ReadQueryRequest(httpContext, operation);
+        var request = await HttpRequestBindingSupport
+            .ReadOperationRequestAsync(httpContext, operation, ct)
+            .ConfigureAwait(false);
 
         if (request is null && operation.Http.Query is not null)
             return JsonSerializer.Deserialize<TRequest>("{}", DefaultJsonOptions) ?? default!;

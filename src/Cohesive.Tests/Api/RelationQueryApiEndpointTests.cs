@@ -3,10 +3,11 @@ using System.Text.Json;
 using Cohesive.Adapters.AspNet.Relations;
 using Cohesive.Api;
 using Cohesive.Model;
-using Cohesive.Relations.Model;
-using Cohesive.Relations.Queries;
-using Cohesive.Storage;
-using Cohesive.Transitions.Authoring;
+using Cohesive.Relations.Authoring;
+using Cohesive.Relations.Compilation;
+using Cohesive.Relations.Diagnostics;
+using Cohesive.Relations.Execution;
+using Cohesive.Relations.IR;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -16,89 +17,81 @@ namespace Cohesive.Tests.Api;
 
 public sealed class RelationQueryApiEndpointTests
 {
-    static readonly QuerySource OrderSource = QuerySource.For<OrderState>("orders");
-    static readonly QuerySource StopSource = QuerySource.For<StopState>("stops");
+    static readonly QualifiedShapeId OrderShape = new(
+        new GraphId("tests/transportation"),
+        new ShapeId("Order"));
 
     [Fact]
-    public async Task MapRelationQueryApiDefinition_BindsRequestToExecutableQueryBackedByEntityRepositoryAdapters()
+    public async Task MapRelationQueryApiDefinition_BindsRequestToFreshCanonicalEvaluationAndExplicitOutcomeMapper()
     {
-        var orderEntity = OrderEntity.Instance;
-        var stopEntity = StopEntity.Instance;
-        var orderRepository = new InMemoryEntityOutboxRepository(
-            orderEntity.Definition,
-            partitionKeyFieldName: nameof(OrderState.Tenant));
-        var stopRepository = new InMemoryEntityOutboxRepository(
-            stopEntity.Definition,
-            partitionKeyFieldName: nameof(StopState.Tenant));
-
-        await Upsert(orderEntity, orderRepository, entityId: "order-1", state: new OrderState(
-            Id: "order-1",
-            Tenant: "tenant-a",
-            Status: "Tendered",
-            OriginCity: "Chicago"));
-        await Upsert(orderEntity, orderRepository, entityId: "order-2", state: new OrderState(
-            Id: "order-2",
-            Tenant: "tenant-a",
-            Status: "Booked",
-            OriginCity: "Atlanta"));
-        await Upsert(stopEntity, stopRepository, entityId: "stop-1", state: new StopState(
-            Id: "stop-1",
-            Tenant: "tenant-a",
-            OrderId: "order-1",
-            City: "Chicago"));
-        await Upsert(stopEntity, stopRepository, entityId: "stop-2", state: new StopState(
-            Id: "stop-2",
-            Tenant: "tenant-a",
-            OrderId: "order-1",
-            City: "Detroit"));
-        await Upsert(stopEntity, stopRepository, entityId: "stop-3", state: new StopState(
-            Id: "stop-3",
-            Tenant: "tenant-a",
-            OrderId: "order-2",
-            City: "Atlanta"));
-
-        var registry = new DispatchingReadRepositoryRegistry()
-            .Register(OrderSource, new ObservationQueryReadRepositoryAdapter((IEntityQueryRepository)orderRepository))
-            .Register(StopSource, new ObservationQueryReadRepositoryAdapter((IEntityQueryRepository)stopRepository));
+        using var cancellation = new CancellationTokenSource();
+        var operationContext = OperationContext.Create(cancellationToken: cancellation.Token);
+        var evaluator = new RecordingEvaluator();
         var builder = WebApplication.CreateSlimBuilder();
         builder.Services.ConfigureHttpJsonOptions(static options =>
         {
             options.SerializerOptions.PropertyNamingPolicy = null;
             options.SerializerOptions.DictionaryKeyPolicy = null;
         });
-        builder.Services.AddSingleton(OperationContext.Create());
-        builder.Services.AddSingleton<IReadRepositoryRegistry>(registry);
+        builder.Services.AddSingleton(operationContext);
+        builder.Services.AddSingleton<IRelationQueryEvaluator>(evaluator);
         var app = builder.Build();
         var api = CreateOrderSummaryApi();
         var queryEndpoint = api.Endpoints.Single(static endpoint => endpoint.Name == "QueryOrderSummaries");
+        RelationQueryApiRequestContext? observedRequestContext = null;
+        RelationQueryApiResultContext? observedResultContext = null;
+        RelationQueryEvaluationOutcome? observedOutcome = null;
 
         app.MapRelationQueryApiDefinition(api, new RelationQueryApiEndpointOptions()
-            .Bind(queryEndpoint.RelationQuery<IReadOnlyList<OrderSummary>>(
-                static (_, request) => CreateOrderSummaryQuery((QueryOrderSummariesRequest?)request),
-                static (_, summaries) => Results.Ok(new QueryOrderSummariesResponse(Items: [.. summaries])))));
+            .Bind(queryEndpoint.RelationQuery(
+                (context, request) =>
+                {
+                    observedRequestContext = context;
+                    var query = Assert.IsType<QueryOrderSummariesRequest>(request);
+                    return CreateOrderSummaryEvaluation(context.EvaluationId, query.Status);
+                },
+                (context, outcome) =>
+                {
+                    observedResultContext = context;
+                    observedOutcome = outcome;
+                    var query = Assert.IsType<QueryOrderSummariesRequest>(context.Request);
+                    return Results.Ok(new QueryOrderSummariesResponse(
+                        EvaluationId: outcome.Evaluation.Evaluation.Value,
+                        RequestedStatus: query.Status,
+                        CompilationSucceeded: outcome.Compilation.IsSuccessful));
+                })));
 
+        const string traceIdentifier = "request/42";
         var response = await InvokeAsync(
             app,
             route: "/order_summaries",
             method: "GET",
-            queryString: "?status=Tendered");
+            traceIdentifier: traceIdentifier,
+            queryString: "?status=Tendered",
+            requestAborted: cancellation.Token);
 
         Assert.Equal(StatusCodes.Status200OK, response.StatusCode);
         var json = ReadJson(response.Body);
-        var item = Assert.Single(json.GetProperty(nameof(QueryOrderSummariesResponse.Items)).EnumerateArray());
-        Assert.Equal("order-1", item.GetProperty(nameof(OrderSummary.Id)).GetString());
-        Assert.Equal("Tendered", item.GetProperty(nameof(OrderSummary.Status)).GetString());
-        Assert.Equal("Chicago", item.GetProperty(nameof(OrderSummary.OriginCity)).GetString());
-        Assert.Equal(["Chicago", "Detroit"], item
-            .GetProperty(nameof(OrderSummary.StopCities))
-            .EnumerateArray()
-            .Select(static city => city.GetString()!)
-            .ToArray());
+        var expectedEvaluationId = RelationQueryApiEndpointOptions.CreateConventionalEvaluationId(
+            observedRequestContext!.HttpContext,
+            queryEndpoint.Operation);
+        Assert.Equal(
+            "aspnet/request/request%2F42/operation/Transportation.QueryOrderSummaries",
+            expectedEvaluationId.Value);
+        Assert.Equal(expectedEvaluationId.Value, json.GetProperty(nameof(QueryOrderSummariesResponse.EvaluationId)).GetString());
+        Assert.Equal("Tendered", json.GetProperty(nameof(QueryOrderSummariesResponse.RequestedStatus)).GetString());
+        Assert.False(json.GetProperty(nameof(QueryOrderSummariesResponse.CompilationSucceeded)).GetBoolean());
+        Assert.Equal(expectedEvaluationId, evaluator.Evaluation!.Evaluation);
+        Assert.Equal(cancellation.Token, evaluator.CancellationToken);
+        Assert.Same(evaluator.Evaluation, observedResultContext!.Evaluation);
+        Assert.Same(evaluator.Outcome, observedOutcome);
+        Assert.Equal(operationContext, observedRequestContext.OperationContext);
     }
 
     [Fact]
-    public async Task MapRelationQueryApiDefinition_CanBindFixedExecutableQueryByOperationName()
+    public async Task OperationNameBinding_UsesConfiguredEvaluationIdentityConvention()
     {
+        var evaluator = new RecordingEvaluator();
         var builder = WebApplication.CreateSlimBuilder();
         builder.Services.ConfigureHttpJsonOptions(static options =>
         {
@@ -106,39 +99,157 @@ public sealed class RelationQueryApiEndpointTests
             options.SerializerOptions.DictionaryKeyPolicy = null;
         });
         builder.Services.AddSingleton(OperationContext.Create());
-        builder.Services.AddSingleton<IReadRepositoryRegistry>(new DispatchingReadRepositoryRegistry());
         var app = builder.Build();
-        var query = new ExecutableQuery<IReadOnlyList<OrderSummary>>((_, _) => Task.FromResult<IReadOnlyList<OrderSummary>>(
-        [
-            new(
-                Id: "order-1",
-                Status: "Tendered",
-                OriginCity: "Chicago",
-                StopCities: ["Chicago", "Detroit"])
-        ]));
         var api = Cohesive.Api.Api.Define("Relations")
             .Action("FixedOrderSummaries")
                 .Route("GET", "/fixed_order_summaries")
                 .Returns<QueryOrderSummariesResponse>()
                 .Done()
             .Build();
+        var expectedEvaluation = new RelationQueryEvaluationId("host/custom-evaluation");
 
-        app.MapRelationQueryApiDefinition(api, new RelationQueryApiEndpointOptions()
-            .Bind(RelationQueryApiOperationBinding.Query(
-                operationName: "FixedOrderSummaries",
-                query,
-                static (_, result) => Results.Ok(new QueryOrderSummariesResponse(
-                    Items: [.. (IReadOnlyList<OrderSummary>)result!])))));
+        app.MapRelationQueryApiDefinition(api, new RelationQueryApiEndpointOptions
+        {
+            EvaluatorResolver = _ => evaluator,
+            EvaluationIdSelector = (_, _) => expectedEvaluation
+        }.Bind(RelationQueryApiOperationBinding.Evaluate(
+            operationName: "FixedOrderSummaries",
+            static (context, _) => ValueTask.FromResult(
+                CreateOrderSummaryEvaluation(context.EvaluationId, status: null)),
+            static (_, outcome) => ValueTask.FromResult<IResult>(Results.Ok(
+                new QueryOrderSummariesResponse(
+                    EvaluationId: outcome.Evaluation.Evaluation.Value,
+                    RequestedStatus: null,
+                    CompilationSucceeded: outcome.Compilation.IsSuccessful))))));
 
         var response = await InvokeAsync(
             app,
             route: "/fixed_order_summaries",
-            method: "GET");
+            method: "GET",
+            traceIdentifier: "ignored-by-custom-policy");
 
         Assert.Equal(StatusCodes.Status200OK, response.StatusCode);
-        var json = ReadJson(response.Body);
-        var item = Assert.Single(json.GetProperty(nameof(QueryOrderSummariesResponse.Items)).EnumerateArray());
-        Assert.Equal("order-1", item.GetProperty(nameof(OrderSummary.Id)).GetString());
+        Assert.Equal(
+            expectedEvaluation.Value,
+            ReadJson(response.Body).GetProperty(nameof(QueryOrderSummariesResponse.EvaluationId)).GetString());
+        Assert.Equal(expectedEvaluation, evaluator.Evaluation!.Evaluation);
+    }
+
+    [Fact]
+    public async Task EvaluationFactory_RejectsIdentityThatDoesNotBelongToRequest()
+    {
+        var evaluator = new RecordingEvaluator();
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Services.AddSingleton(OperationContext.Create());
+        builder.Services.AddSingleton<IRelationQueryEvaluator>(evaluator);
+        var app = builder.Build();
+        var api = CreateOrderSummaryApi();
+        var queryEndpoint = Assert.Single(api.Endpoints);
+
+        app.MapRelationQueryApiDefinition(api, new RelationQueryApiEndpointOptions()
+            .Bind(queryEndpoint.RelationQuery(
+                static (_, _) => CreateOrderSummaryEvaluation(
+                    new RelationQueryEvaluationId("foreign/evaluation"),
+                    status: null),
+                static (_, _) => Results.Ok())));
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => InvokeAsync(
+            app,
+            route: "/order_summaries",
+            method: "GET",
+            traceIdentifier: "request/foreign"));
+
+        Assert.Contains("instead of the request-scoped identity", exception.Message, StringComparison.Ordinal);
+        Assert.Null(evaluator.Evaluation);
+    }
+
+    [Fact]
+    public async Task HostAcceptsSemanticallyEquivalentReconstructedEvaluatorOutcome()
+    {
+        var evaluator = new ReconstructingEvaluator(changeParameter: false);
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Services.AddSingleton(OperationContext.Create());
+        builder.Services.AddSingleton<IRelationQueryEvaluator>(evaluator);
+        var app = builder.Build();
+        var api = CreateOrderSummaryApi();
+        var endpoint = Assert.Single(api.Endpoints);
+        app.MapRelationQueryApiDefinition(api, new RelationQueryApiEndpointOptions()
+            .Bind(endpoint.RelationQuery(
+                static (context, request) => CreateOrderSummaryEvaluation(
+                    context.EvaluationId,
+                    Assert.IsType<QueryOrderSummariesRequest>(request).Status),
+                static (_, _) => Results.Ok())));
+
+        var response = await InvokeAsync(
+            app,
+            "/order_summaries",
+            "GET",
+            "request/reconstructed",
+            queryString: "?status=Tendered");
+
+        Assert.Equal(StatusCodes.Status200OK, response.StatusCode);
+        Assert.NotSame(evaluator.Request, evaluator.Outcome!.Evaluation);
+        Assert.True(evaluator.Request!.HasSameSemantics(evaluator.Outcome.Evaluation));
+    }
+
+    [Fact]
+    public async Task HostRejectsEvaluatorOutcomeForSemanticallyDifferentEvaluation()
+    {
+        var evaluator = new ReconstructingEvaluator(changeParameter: true);
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Services.AddSingleton(OperationContext.Create());
+        builder.Services.AddSingleton<IRelationQueryEvaluator>(evaluator);
+        var app = builder.Build();
+        var api = CreateOrderSummaryApi();
+        var endpoint = Assert.Single(api.Endpoints);
+        app.MapRelationQueryApiDefinition(api, new RelationQueryApiEndpointOptions()
+            .Bind(endpoint.RelationQuery(
+                static (context, request) => CreateOrderSummaryEvaluation(
+                    context.EvaluationId,
+                    Assert.IsType<QueryOrderSummariesRequest>(request).Status),
+                static (_, _) => Results.Ok())));
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => InvokeAsync(
+            app,
+            "/order_summaries",
+            "GET",
+            "request/foreign-outcome",
+            queryString: "?status=Tendered"));
+
+        Assert.Contains("different evaluation", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CanceledRequestStopsBeforeEvaluationFactoryAndEvaluator()
+    {
+        var evaluator = new RecordingEvaluator();
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Services.AddSingleton(OperationContext.Create());
+        builder.Services.AddSingleton<IRelationQueryEvaluator>(evaluator);
+        var app = builder.Build();
+        var api = CreateOrderSummaryApi();
+        var endpoint = Assert.Single(api.Endpoints);
+        var factoryCalled = false;
+        app.MapRelationQueryApiDefinition(api, new RelationQueryApiEndpointOptions()
+            .Bind(endpoint.RelationQuery(
+                (context, _) =>
+                {
+                    factoryCalled = true;
+                    return CreateOrderSummaryEvaluation(context.EvaluationId, status: null);
+                },
+                static (_, _) => Results.Ok())));
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => InvokeAsync(
+            app,
+            "/order_summaries",
+            "GET",
+            "request/canceled",
+            requestAborted: cancellation.Token));
+
+        Assert.False(factoryCalled);
+        Assert.Null(evaluator.Evaluation);
     }
 
     static ApiDefinition CreateOrderSummaryApi() => Cohesive.Api.Api.Define("Transportation")
@@ -149,49 +260,34 @@ public sealed class RelationQueryApiEndpointTests
             .Done()
         .Build();
 
-    static ExecutableQuery<IReadOnlyList<OrderSummary>> CreateOrderSummaryQuery(QueryOrderSummariesRequest? request)
+    static RelationQueryEvaluation CreateOrderSummaryEvaluation(
+        RelationQueryEvaluationId evaluationId,
+        string? status)
     {
-        var fieldPredicate = string.IsNullOrWhiteSpace(request?.Status)
-            ? new FieldPredicate(
-                Field: FieldPath.FromField(nameof(OrderState.Id)),
-                Predicate: new ExistsValuePredicate())
-            : new FieldPredicate(
-                Field: FieldPath.FromField(nameof(OrderState.Status)),
-                Predicate: new ExactValuePredicate(request.Status));
-        EntityPredicate predicate = new(fieldPredicate);
-
-        return Query
-            .From(OrderSource, predicate)
-            .JoinMany<OrderState, StopState, string>(
-                alias: "stops",
-                source: StopSource,
-                rootKey: static order => order.Id,
-                foreignKey: static stop => stop.OrderId)
-            .Select(static join =>
-            {
-                var root = join.Root;
-                return new OrderSummary(
-                    Id: root.GetField(nameof(OrderState.Id)).GetString() ?? throw new InvalidOperationException("Order id is required."),
-                    Status: root.GetField(nameof(OrderState.Status)).GetString() ?? throw new InvalidOperationException("Order status is required."),
-                    OriginCity: root.GetField(nameof(OrderState.OriginCity)).GetString() ?? throw new InvalidOperationException("Order origin city is required."),
-                    StopCities: [.. join
-                        .Many("stops")
-                        .Select(static stop => stop.GetField(nameof(StopState.City)).GetString() ?? throw new InvalidOperationException("Stop city is required."))]);
-            });
-    }
-
-    static async Task Upsert<TState>(
-        Entity entity,
-        InMemoryEntityOutboxRepository repository,
-        string entityId,
-        TState state
-        ) where TState : notnull
-    {
-        var observation = entity.Definition.CreateState(
-            entityId: entityId,
-            state)
-            .Observation;
-        await repository.Upsert(OperationContext.Create(), new(Entity: observation));
+        var author = RelationQuery.Structural();
+        var statusParameter = author.Parameter(
+            new ScalarTypeRef(ScalarTypeKind.String),
+            presence: FieldPresence.Optional,
+            id: new QueryParameterId("status"));
+        var orders = author.Source(
+            OrderShape,
+            nodeId: new QueryNodeId("orders"),
+            bindingId: new ValueBindingId("order"));
+        var filtered = author.Filter(
+            orders.Node,
+            Expr.Eq(orders.Binding.Field("Status"), statusParameter.Expression),
+            nodeId: new QueryNodeId("orders-by-status"));
+        var rows = author.Rows(filtered, id: new QueryResultId("rows"));
+        var query = author.BuildQuery(
+            new QueryId("order-summaries"),
+            new QueryName("OrderSummaries"),
+            [rows]);
+        var evaluation = query.CreateDocument()
+            .Evaluate(evaluationId)
+            .Select(rows.Id);
+        return status is null
+            ? evaluation.Omit(statusParameter.Id).Build()
+            : evaluation.Set(statusParameter.Id, ObservationValue.FromString(status)).Build();
     }
 
     static JsonElement ReadJson(string json) => JsonDocument.Parse(json).RootElement.Clone();
@@ -200,59 +296,68 @@ public sealed class RelationQueryApiEndpointTests
 
     sealed record QueryOrderSummariesRequest(string? Status);
 
-    sealed record QueryOrderSummariesResponse(OrderSummary[] Items);
+    sealed record QueryOrderSummariesResponse(
+        string EvaluationId,
+        string? RequestedStatus,
+        bool CompilationSucceeded);
 
-    sealed record OrderSummary(string Id, string Status, string OriginCity, string[] StopCities);
-
-    sealed record OrderState(string Id, string Tenant, string Status, string OriginCity);
-
-    sealed record StopState(string Id, string Tenant, string OrderId, string City);
-
-    sealed class OrderEntity : Entity<OrderEntity>
+    sealed class RecordingEvaluator : IRelationQueryEvaluator
     {
-        public OrderEntity()
+        public RelationQueryEvaluation? Evaluation { get; private set; }
+
+        public RelationQueryEvaluationOutcome? Outcome { get; private set; }
+
+        public CancellationToken CancellationToken { get; private set; }
+
+        public ValueTask<RelationQueryEvaluationOutcome> EvaluateAsync(
+            RelationQueryEvaluation evaluation,
+            CancellationToken cancellationToken = default)
         {
-            Id = WriteOnceField<string>(nameof(Id));
-            Tenant = WriteOnceField<string>(nameof(Tenant));
-            Status = MutableField<string>(nameof(Status));
-            OriginCity = MutableField<string>(nameof(OriginCity));
+            Evaluation = evaluation;
+            CancellationToken = cancellationToken;
+            var compilation = RelationQueryStaticCompiler.Compile(evaluation.Compilation);
+            if (compilation.IsSuccessful)
+            {
+                throw new InvalidOperationException(
+                    "The API boundary fixture intentionally omits source shape documents so it can retain a " +
+                    "structured compilation-failure outcome without constructing physical test infrastructure.");
+            }
+
+            Outcome = new(evaluation, compilation);
+            return ValueTask.FromResult(Outcome);
         }
-
-        public Field<string> Id { get; }
-
-        public Field<string> Tenant { get; }
-
-        public Field<string> Status { get; }
-
-        public Field<string> OriginCity { get; }
     }
 
-    sealed class StopEntity : Entity<StopEntity>
+    sealed class ReconstructingEvaluator(bool changeParameter) : IRelationQueryEvaluator
     {
-        public StopEntity()
+        public RelationQueryEvaluation? Request { get; private set; }
+
+        public RelationQueryEvaluationOutcome? Outcome { get; private set; }
+
+        public ValueTask<RelationQueryEvaluationOutcome> EvaluateAsync(
+            RelationQueryEvaluation evaluation,
+            CancellationToken cancellationToken = default)
         {
-            Id = WriteOnceField<string>(nameof(Id));
-            Tenant = WriteOnceField<string>(nameof(Tenant));
-            OrderId = MutableField<string>(nameof(OrderId));
-            City = MutableField<string>(nameof(City));
+            cancellationToken.ThrowIfCancellationRequested();
+            Request = evaluation;
+            var reconstructed = changeParameter
+                ? CreateOrderSummaryEvaluation(evaluation.Evaluation, "ChangedByEvaluator")
+                : Cohesive.Relations.Serialization.RelationQueryEvaluationJsonSerializer.Deserialize(
+                    Cohesive.Relations.Serialization.RelationQueryEvaluationJsonSerializer.Serialize(evaluation));
+            var compilation = RelationQueryStaticCompiler.Compile(reconstructed.Compilation);
+            Outcome = new(reconstructed, compilation);
+            return ValueTask.FromResult(Outcome);
         }
-
-        public Field<string> Id { get; }
-
-        public Field<string> Tenant { get; }
-
-        public Field<string> OrderId { get; }
-
-        public Field<string> City { get; }
     }
 
     static async Task<InvocationResult> InvokeAsync(
         WebApplication app,
         string route,
         string method,
+        string traceIdentifier,
         object? body = null,
-        string? queryString = null
-        )
+        string? queryString = null,
+        CancellationToken requestAborted = default)
     {
         var endpoint = ((IEndpointRouteBuilder)app)
             .DataSources
@@ -260,11 +365,15 @@ public sealed class RelationQueryApiEndpointTests
             .OfType<RouteEndpoint>()
             .Single(x =>
                 string.Equals(x.RoutePattern.RawText, route, StringComparison.Ordinal)
-                && x.Metadata.GetMetadata<IHttpMethodMetadata>()?.HttpMethods.Contains(method, StringComparer.OrdinalIgnoreCase) == true);
+                && x.Metadata.GetMetadata<IHttpMethodMetadata>()?.HttpMethods.Contains(
+                    method,
+                    StringComparer.OrdinalIgnoreCase) == true);
 
         var context = new DefaultHttpContext
         {
+            TraceIdentifier = traceIdentifier,
             RequestServices = app.Services,
+            RequestAborted = requestAborted,
             Response =
             {
                 Body = new MemoryStream()

@@ -6,24 +6,6 @@ namespace Cohesive.Tests.Model;
 public sealed class ProcessEntityRepositoryAdapterTests
 {
     [Fact]
-    public async Task ProcessEntityReadRepositoryAdapter_GetByIdsAsync_LoadsObservationsFromProcessStorage()
-    {
-        var storage = new InMemoryProcessStorageAdapter();
-        storage.SeedEntity(
-            new("Counter", "counter-1"),
-            CounterEntity.Instance.CreateState("counter-1", new { Value = 5 }, version: 7),
-            version: 7
-            );
-
-        var repository = new ProcessEntityReadRepositoryAdapter(storage, "Counter");
-
-        var result = await repository.GetByIds(OperationContext.Create(), ["counter-1", "missing"]);
-
-        Assert.Single(result);
-        Assert.Equal(5, result["counter-1"].GetField("Value").GetInt32());
-    }
-
-    [Fact]
     public async Task DispatchingProcessEntityRepository_RoutesLoadAndCommitByEntityType()
     {
         var context = OperationContext.Create();

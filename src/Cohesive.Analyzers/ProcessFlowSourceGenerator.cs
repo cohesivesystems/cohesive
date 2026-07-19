@@ -626,7 +626,53 @@ public sealed class ProcessFlowSourceGenerator : IIncrementalGenerator
                     );
                 return true;
 
-            case "Query":
+            case "Evaluate":
+                var evaluationArgument = GetArgument(invocation, "evaluation", position: 0);
+                if (evaluationArgument?.Expression is not { } evaluationExpression)
+                {
+                    Report(productionContext, UnsupportedAuthoringStatement, methodSymbol, methodSymbol.Name, statement.NormalizeWhitespace().ToFullString());
+                    return false;
+                }
+
+                var loweredEvaluationExpressionText = RewriteExpression(
+                    evaluationExpression,
+                    semanticModel,
+                    boundBindings);
+                var projectPosition = GetParameterPosition(invocation, "projectResult");
+                var projectionArgument = GetArgument(invocation, "projectResult", projectPosition);
+                if (projectPosition < 0 || projectionArgument?.Expression is not { } projectionExpression)
+                {
+                    Report(productionContext, UnsupportedAuthoringStatement, methodSymbol, methodSymbol.Name, statement.NormalizeWhitespace().ToFullString());
+                    return false;
+                }
+                var loweredProjectionExpressionText = RewriteExpression(
+                    projectionExpression,
+                    semanticModel,
+                    boundBindings);
+                var loweredEvaluationNodeNameText = GetOptionalArgument(
+                    invocation,
+                    "nodeName",
+                    GetParameterPosition(invocation, "nodeName")) ?? Literal(localBindingName);
+                var loweredEvaluationResultNameText = GetOptionalArgument(
+                    invocation,
+                    "resultName",
+                    GetParameterPosition(invocation, "resultName")) ?? Literal(localBindingName);
+
+                boundBindings[localSymbol] = new(
+                    Kind: BoundBindingKind.Variable,
+                    TypeName: FormatType(localSymbol.Type),
+                    NameExpressionText: loweredEvaluationResultNameText,
+                    NeedsNullSuppression: NeedsNullSuppression(localSymbol.Type));
+
+                awaitStep = new(
+                    Kind: AwaitStepKind.Evaluate,
+                    ResultTypeName: FormatType(localSymbol.Type),
+                    NodeNameText: loweredEvaluationNodeNameText,
+                    ResultNameText: loweredEvaluationResultNameText,
+                    ExpressionText: loweredEvaluationExpressionText,
+                    ContinuationExpressionText: loweredProjectionExpressionText);
+                return true;
+
             case "Compute":
             case "TransitionMany":
                 var valueArgument = GetArgument(invocation, invocation.TargetMethod.Parameters[0].Name ?? "value", position: 0);
@@ -650,7 +696,6 @@ public sealed class ProcessFlowSourceGenerator : IIncrementalGenerator
                 awaitStep = new(
                     Kind: invocation.TargetMethod.Name switch
                     {
-                        "Query" => AwaitStepKind.Query,
                         "Compute" => AwaitStepKind.Compute,
                         "TransitionMany" => AwaitStepKind.TransitionMany,
                         _ => throw new InvalidOperationException($"Unsupported await step '{invocation.TargetMethod.Name}'.")
@@ -1124,11 +1169,13 @@ public sealed class ProcessFlowSourceGenerator : IIncrementalGenerator
                     builder.Append(");");
                     break;
 
-                case AwaitStepKind.Query:
-                    builder.Append("__builder.AddEntityQueryNode(name: ");
+                case AwaitStepKind.Evaluate:
+                    builder.Append("__builder.AddRelationQueryEvaluationNode(name: ");
                     builder.Append(step.NodeNameText);
-                    builder.Append(", queryExpression: context => ");
+                    builder.Append(", evaluationExpression: context => ");
                     builder.Append(step.ExpressionText);
+                    builder.Append(", resultExpression: ");
+                    builder.Append(step.ContinuationExpressionText);
                     builder.Append(", resultVariable: ");
                     builder.Append(step.ResultNameText);
                     builder.Append(", nextNode: ");
@@ -1770,7 +1817,7 @@ public sealed class ProcessFlowSourceGenerator : IIncrementalGenerator
         Request = 0,
         Read = 1,
         Create = 2,
-        Query = 3,
+        Evaluate = 3,
         Compute = 4,
         Transition = 5,
         TransitionMany = 6,

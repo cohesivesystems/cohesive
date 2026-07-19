@@ -12,6 +12,12 @@ public static class RelationQueryApiEndpointRouteBuilderExtensions
     /// <summary>
     /// Maps the operations in <paramref name="definition"/> that have corresponding relation-query bindings.
     /// </summary>
+    /// <param name="endpoints">ASP.NET endpoint route builder to update.</param>
+    /// <param name="definition">Declared API surface whose bound operations are mapped.</param>
+    /// <param name="options">Canonical relation/query endpoint bindings and request-scoped policies.</param>
+    /// <param name="configure">Optional callback applied to each mapped endpoint.</param>
+    /// <returns>Mapped route-handler builders in declared endpoint order.</returns>
+    /// <exception cref="ArgumentNullException">A required argument is <see langword="null"/>.</exception>
     public static IReadOnlyList<RouteHandlerBuilder> MapRelationQueryApiDefinition(
         this IEndpointRouteBuilder endpoints,
         ApiDefinition definition,

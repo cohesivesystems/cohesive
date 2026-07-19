@@ -16,7 +16,8 @@ static class RelationQueryReferenceKeyExtractor
         ObservationValue value,
         long maximumKeys,
         CancellationToken cancellationToken,
-        out ImmutableArray<string> keys)
+        out ImmutableArray<string> keys
+        )
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (maximumKeys <= 0)

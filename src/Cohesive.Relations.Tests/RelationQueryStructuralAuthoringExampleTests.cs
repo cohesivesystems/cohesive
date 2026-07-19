@@ -17,7 +17,7 @@ public sealed class RelationQueryStructuralAuthoringExampleTests
     static readonly RelationshipId LoadEquipment = new("load/equipment");
 
     [Fact]
-    public void LoadCustomerEquipment_AuthorsDtoRelationQueryAndInvocationFromOneStructuralCore()
+    public void LoadCustomerEquipment_AuthorsDtoRelationQueryAndEvaluationFromOneStructuralCore()
     {
         var loadCustomer = Relationship
             .From(LoadShape)
@@ -112,14 +112,14 @@ public sealed class RelationQueryStructuralAuthoringExampleTests
                 .Assignments
                 .Select(static assignment => assignment.Target.ToString()));
 
-        var invocation = query.CreateDocument()
-            .Invoke(new RelationQueryEvaluationId("example/evaluation/1"))
+        var evaluation = query.CreateDocument()
+            .Evaluate(new RelationQueryEvaluationId("example/evaluation/1"))
             .Set(status.Id, ObservationValue.FromString("InTransit"))
             .Select(rows.Id)
             .Build();
 
-        Assert.Equal(RelationQueryCompilationDemandKind.QueryResults, invocation.Demand.Kind);
-        var parameter = Assert.Single(invocation.Parameters);
+        Assert.Equal(RelationQueryCompilationDemandKind.QueryResults, evaluation.Demand.Kind);
+        var parameter = Assert.Single(evaluation.Parameters);
         Assert.Equal(RelationQueryParameterEvidenceState.Provided, parameter.State);
         Assert.Equal(ObservationValue.FromString("InTransit"), parameter.Value);
     }

@@ -102,6 +102,7 @@ public static class RelationQueryStaticCompiler
         if (expressionAnalysis is null || !validation.IsValid)
         {
             return new(
+                request,
                 plan: null,
                 expressionAnalysis,
                 EnsureFailureDiagnostic(validation, expressionAnalysis));
@@ -120,6 +121,7 @@ public static class RelationQueryStaticCompiler
         if (!validation.IsValid || build.Graph is null)
         {
             return new(
+                request,
                 plan: null,
                 expressionAnalysis,
                 EnsureFailureDiagnostic(validation, expressionAnalysis));
@@ -142,13 +144,14 @@ public static class RelationQueryStaticCompiler
             build.DemandedExpressionSites,
             build.DemandedAggregateAssignments,
             provenance);
-        return new(plan, expressionAnalysis, validation);
+        return new(request, plan, expressionAnalysis, validation);
     }
 
     static RelationQueryLogicalPlan CreateLogicalPlan(
         RelationQueryDefinition definition,
         ImmutableArray<QueryNodeId> retainedNodes,
-        ImmutableArray<RelationQueryLogicalBypass> bypasses)
+        ImmutableArray<RelationQueryLogicalBypass> bypasses
+        )
     {
         var retained = retainedNodes.ToHashSet();
         var nodes = definition.Body.Nodes.ToDictionary(static node => node.Id);

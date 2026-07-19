@@ -30,11 +30,14 @@ public static class RelationQueryPhysicalPlanner
     /// <summary>Compiles one exact bounded physical realization.</summary>
     /// <param name="plan">Successful target-independent semantic plan.</param>
     /// <param name="realization">
-    /// Exact realizable report produced by <see cref="RelationQueryInMemoryInterpreter.Default"/> for
-    /// <paramref name="plan"/>.
+    /// Exact realizable report produced by <paramref name="interpreter"/> for <paramref name="plan"/>.
     /// </param>
     /// <param name="placement">Plan-scoped physical source placement.</param>
     /// <param name="policy">Explicit bounded physical-planning policy.</param>
+    /// <param name="interpreter">
+    /// Exact canonical interpreter that produced <paramref name="realization"/> and will execute the physical
+    /// terminal, or <see langword="null"/> to use <see cref="RelationQueryInMemoryInterpreter.Default"/>.
+    /// </param>
     /// <returns>A compiled physical plan or structured invalid/unavailable diagnostics.</returns>
     /// <exception cref="ArgumentNullException">A parameter is <see langword="null"/>.</exception>
     /// <exception cref="InvalidOperationException">A semantic snapshot cannot be fingerprinted deterministically.</exception>
@@ -44,14 +47,20 @@ public static class RelationQueryPhysicalPlanner
         CompiledRelationQueryPlan plan,
         RelationQueryRealizationReport realization,
         RelationQuerySourcePlacement placement,
-        RelationQueryPhysicalPlanningPolicy policy)
+        RelationQueryPhysicalPlanningPolicy policy,
+        IRelationQueryInterpreter? interpreter = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(realization);
         ArgumentNullException.ThrowIfNull(placement);
         ArgumentNullException.ThrowIfNull(policy);
 
-        var context = new PlanningContext(plan, realization, placement, policy);
+        var context = new PlanningContext(
+            plan,
+            realization,
+            placement,
+            policy,
+            interpreter ?? RelationQueryInMemoryInterpreter.Default);
         return context.Compile();
     }
 
@@ -61,6 +70,7 @@ public static class RelationQueryPhysicalPlanner
         readonly RelationQueryRealizationReport realization;
         readonly RelationQuerySourcePlacement placement;
         readonly RelationQueryPhysicalPlanningPolicy policy;
+        readonly IRelationQueryInterpreter interpreter;
         readonly Dictionary<RelationQueryInputId, RelationQuerySourcePlacementBinding> placements;
         readonly Dictionary<RelationQuerySourceInstanceId, RelationQuerySourceInstance> sources;
         readonly Dictionary<RelationQueryRealizationRequirementId, RelationQueryRealizationDecision> decisions;
@@ -74,12 +84,14 @@ public static class RelationQueryPhysicalPlanner
             CompiledRelationQueryPlan plan,
             RelationQueryRealizationReport realization,
             RelationQuerySourcePlacement placement,
-            RelationQueryPhysicalPlanningPolicy policy)
+            RelationQueryPhysicalPlanningPolicy policy,
+            IRelationQueryInterpreter interpreter)
         {
             this.plan = plan;
             this.realization = realization;
             this.placement = placement;
             this.policy = policy;
+            this.interpreter = interpreter;
             placements = placement.Bindings.ToDictionary(static binding => binding.Input);
             sources = placement.SourceInstances.ToDictionary(static source => source.Id);
             decisions = realization.Decisions.ToDictionary(static decision => decision.Requirement);
@@ -193,7 +205,7 @@ public static class RelationQueryPhysicalPlanner
         bool ValidateGlobalInputs()
         {
             var reportFingerprint = RelationQueryRealizationFingerprinter.Compute(realization);
-            var terminalRealization = RelationQueryInMemoryInterpreter.Default.Realize(plan);
+            var terminalRealization = interpreter.Realize(plan);
             if (!Equals(reportFingerprint, realization.Fingerprint)
                 || realization.Status != RelationQueryRealizationStatus.Realizable
                 || !realization.IsRealizable
@@ -202,7 +214,7 @@ public static class RelationQueryPhysicalPlanner
             {
                 Error(
                     RelationQueryPhysicalPlanningDiagnosticCodes.RealizationInvalid,
-                    "Physical planning requires the canonical reference interpreter's realizable report for the exact compiled plan.");
+                    "Physical planning requires the configured reference interpreter's realizable report for the exact compiled plan.");
             }
 
             if (!placement.Plan.GetMismatchedComponents(plan).IsDefaultOrEmpty)

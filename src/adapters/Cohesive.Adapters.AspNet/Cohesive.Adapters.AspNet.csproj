@@ -13,6 +13,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\Cohesive.Api\Cohesive.Api.csproj" />
     <ProjectReference Include="..\..\Cohesive.Identity\Cohesive.Identity.csproj" />
+    <ProjectReference Include="..\..\Cohesive.Relations\Cohesive.Relations.csproj" />
     <ProjectReference Include="..\..\Cohesive\Cohesive.csproj" />
     <ProjectReference Include="..\..\Cohesive.Host\Cohesive.Host.csproj" />
     <ProjectReference Include="..\..\Cohesive.Storage\Cohesive.Storage.csproj" />

@@ -17,6 +17,9 @@ public sealed class ProcessNodeExecutor
     /// <summary>
     /// Creates a node executor over shared runtime services.
     /// </summary>
+    /// <param name="services">Runtime services and policies used by activity-backed nodes.</param>
+    /// <param name="planner">Optional shared execution planner; a planner is created from <paramref name="services"/> when omitted.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="services"/> is <see langword="null"/>.</exception>
     public ProcessNodeExecutor(ProcessRuntimeServices services, ProcessExecutionPlanner? planner = null)
     {
         this.services = Guard.RequireNotNull(services);
@@ -27,8 +30,22 @@ public sealed class ProcessNodeExecutor
     /// <summary>
     /// Executes a single activity-backed node from the supplied checkpoint.
     /// </summary>
-    /// <exception cref="InvalidOperationException"></exception>
-    /// <exception cref="NotSupportedException"></exception>
+    /// <param name="context">Operation context whose cancellation, time, and correlation apply to the execution.</param>
+    /// <param name="process">Process definition identified by <paramref name="checkpoint"/>.</param>
+    /// <param name="checkpoint">Durable state and execution cursor to validate, restore, and advance.</param>
+    /// <returns>The validated checkpoint after the selected node completes.</returns>
+    /// <exception cref="ArgumentNullException">A required argument is <see langword="null"/>.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="context"/> is canceled.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The checkpoint is incompatible with the process, a required runtime collaborator is unavailable, or an
+    /// activity-backed node unexpectedly reaches a durable wait boundary.
+    /// </exception>
+    /// <exception cref="NotSupportedException">
+    /// The checkpoint selects a node kind that must be interpreted by the durable orchestrator.
+    /// </exception>
+    /// <exception cref="SemanticRuleViolationException">
+    /// A node expression or delegated evaluator returns a value that violates the node's semantic contract.
+    /// </exception>
     public async Task<ProcessCheckpoint> ExecuteNodeAsync(OperationContext context, ProcessDefinition process, ProcessCheckpoint checkpoint)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -72,7 +89,7 @@ public sealed class ProcessNodeExecutor
             );
 
         var node = process.GetNode(currentNode);
-        if (node is not (RunEntityTransitionNode or ExecuteEntityTransitionNode or ExecuteEffectRequestNode or ExecuteEntityReadNode or ExecuteEntityCreateNode or ExecuteEntityQueryNode or ComputeValueNode or TransactionNode))
+        if (node is not (RunEntityTransitionNode or ExecuteEntityTransitionNode or ExecuteEffectRequestNode or ExecuteEntityReadNode or ExecuteEntityCreateNode or EvaluateRelationQueryNode or ComputeValueNode or TransactionNode))
             throw new NotSupportedException($"Node '{currentNode}' must be executed by the durable orchestrator, not by '{nameof(ExecuteNodeAsync)}'.");
 
         try
@@ -408,23 +425,41 @@ public sealed class ProcessNodeExecutor
                     return new(executeCreate.NextNode, IsEnded: false, Result: null, Wait: null);
                 }
 
-                case ExecuteEntityQueryNode executeQuery:
+                case EvaluateRelationQueryNode evaluateRelationQuery:
                 {
                     services.EnsureCapability(
                         capability: ProcessCapability.StateRead,
                         context: state.Context,
-                        operation: $"execute entity query node '{executeQuery.Name}'"
+                        operation: $"evaluate relation/query node '{evaluateRelationQuery.Name}'"
                         );
 
-                    var rawQuery = executeQuery.QueryExpression(state.Context);
-                    if (rawQuery is not IExecutableQuery queryInvocation)
-                        throw new SemanticRuleViolationException($"Entity query node '{executeQuery.Name}' expects a '{nameof(IExecutableQuery)}' but received '{rawQuery?.GetType().FullName ?? "null"}'.");
+                    var evaluation = evaluateRelationQuery.EvaluationExpression(state.Context)
+                        ?? throw new SemanticRuleViolationException(
+                            $"Relation/query evaluation node '{evaluateRelationQuery.Name}' produced null.");
+                    var outcome = await services
+                        .RequireRelationQueryEvaluator($"evaluate relation/query node '{evaluateRelationQuery.Name}'")
+                        .EvaluateAsync(evaluation, context.CancellationToken)
+                        .ConfigureAwait(false)
+                        ?? throw new SemanticRuleViolationException(
+                            $"Relation/query evaluator returned null for node '{evaluateRelationQuery.Name}'.");
+                    if (!evaluation.HasSameSemantics(outcome.Evaluation))
+                    {
+                        throw new SemanticRuleViolationException(
+                            $"Relation/query evaluator returned an outcome for a different evaluation at node " +
+                            $"'{evaluateRelationQuery.Name}'.");
+                    }
+                    var result = evaluateRelationQuery.ResultExpression(outcome);
+                    if (result is RelationQueryEvaluationOutcome)
+                    {
+                        throw new SemanticRuleViolationException(
+                            $"Relation/query evaluation projection at node '{evaluateRelationQuery.Name}' returned " +
+                            $"the non-wire '{nameof(RelationQueryEvaluationOutcome)}'. Project evaluation results to " +
+                            "an application-owned checkpoint value.");
+                    }
+                    if (!string.IsNullOrWhiteSpace(evaluateRelationQuery.ResultVariable))
+                        state.Context.SetVariable(evaluateRelationQuery.ResultVariable, result);
 
-                    var result = await queryInvocation.ExecuteAsync(context, services.RequireEntityReadRepositoryRegistry($"execute entity query node '{executeQuery.Name}'")).ConfigureAwait(false);
-                    if (!string.IsNullOrWhiteSpace(executeQuery.ResultVariable))
-                        state.Context.SetVariable(executeQuery.ResultVariable, result);
-
-                    return new(executeQuery.NextNode, IsEnded: false, Result: null, Wait: null);
+                    return new(evaluateRelationQuery.NextNode, IsEnded: false, Result: null, Wait: null);
                 }
 
                 case ComputeValueNode compute:

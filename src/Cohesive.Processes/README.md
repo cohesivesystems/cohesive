@@ -1,6 +1,6 @@
 # Cohesive.Processes
 
-Declarative process definitions and runtime infrastructure for multistep workflows over entities, queries, waits, signals, and effects.
+Declarative process definitions and runtime infrastructure for multistep workflows over entities, canonical relations and queries, waits, signals, and effects.
 
 ## Install
 
@@ -10,7 +10,7 @@ dotnet add package Cohesive.Processes
 
 ## Use When
 
-- You need process definitions that coordinate entity transitions, repository reads, waits, requests, and effects.
+- You need process definitions that coordinate entity transitions, entity reads, canonical relation/query evaluations, waits, requests, and effects.
 - You want deterministic process planning and runtime state that can be interpreted by different storage or orchestration adapters.
 - You need a semantic process model separate from a specific queue, workflow engine, or database.
 
@@ -18,15 +18,14 @@ dotnet add package Cohesive.Processes
 
 ```csharp
 using Cohesive.Processes.Model;
-using Cohesive.Relations.Queries;
+using Cohesive.Relations.Authoring;
+using Cohesive.Relations.Execution;
 
 [GenerateProcessDefinition(nameof(Build))]
 public partial class DispatchCustomerProcess : IProcessDefinition<string, DispatchCustomerResult>
 {
     static readonly CustomerEntity Customers = CustomerEntity.Instance;
     static readonly CarrierEntity Carriers = CarrierEntity.Instance;
-    static readonly QuerySource SegmentSource = QuerySource.For<SegmentReadModel>("segments");
-    static readonly QuerySource OrderSource = QuerySource.For<OrderReadModel>("orders");
 
     async ProcessTask<DispatchCustomerResult> Build(
         ProcessAuthoringContext<string, DispatchCustomerResult> process,
@@ -38,23 +37,14 @@ public partial class DispatchCustomerProcess : IProcessDefinition<string, Dispat
                 Name: snapshot.Require(entity => entity.Name),
                 SegmentId: snapshot.Require(entity => entity.SegmentId))));
 
-        var profiles = await process.Query(Query
-            .From<CustomerReadModel>([customer], rootId: static root => root.CustomerId)
-            .JoinOne<CustomerReadModel, string>(
-                alias: "segment",
-                source: SegmentSource,
-                rootKeySelector: static root => root.SegmentId)
-            .JoinMany<CustomerReadModel, OrderReadModel, string>(
-                alias: "orders",
-                source: OrderSource,
-                rootKey: static root => root.CustomerId,
-                foreignKey: static order => order.CustomerId)
-            .Select(static join => new CustomerProfile(
-                CustomerId: join.RootAs<CustomerReadModel>().CustomerId,
-                Segment: join.RequireOne<SegmentReadModel>("segment"),
-                Orders: join.Many<OrderReadModel>("orders"))));
-
-        var profile = profiles[0];
+        // CustomerProfiles is a persisted canonical relation/query document plus its
+        // shape and relationship snapshots. The helper authors one exact evaluation.
+        var evaluation = CustomerProfiles.ForCustomer(
+            customerId,
+            evaluationId: $"dispatch/{customerId}/customer-profile");
+        var profile = await process.Evaluate(
+            evaluation,
+            outcome => CustomerProfiles.RequireSingleProfile(outcome));
         var reservation = await process.Request(new ReserveCarrierRequest(
             CustomerId: profile.CustomerId,
             OrderCount: profile.Orders.Count));
@@ -91,6 +81,18 @@ public sealed record DispatchCustomerResult(
     long CustomerVersion,
     long CarrierVersion);
 ```
+
+Configure one `IRelationQueryEvaluator` on `ProcessRuntimeServices`. The same evaluator boundary compiles,
+realizes, physically plans, acquires, and interprets both canonical relation and query definitions; process code
+does not select repositories or execution engines directly. Evaluation identifiers should be deterministic from
+the process instance and semantic operation so replay produces the same attribution.
+
+`RelationQueryEvaluationOutcome` deliberately retains in-process compiler, placement, acquisition, and execution
+artifacts rather than defining a durable wire schema. Process authoring therefore requires a projection that runs in
+the evaluation node before checkpoint capture; only the returned application value can become a process variable.
+The runtime rejects a projection that returns the non-wire outcome itself. Evaluation descriptors are portable,
+versioned, and fingerprinted; derive their evaluation identifiers deterministically from process and operation
+identity so retries and replay retain the same attribution.
 
 ## Related Packages
 

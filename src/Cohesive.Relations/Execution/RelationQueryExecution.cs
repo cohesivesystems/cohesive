@@ -3,13 +3,17 @@ using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
+using Cohesive.Relations.Realization;
 
 namespace Cohesive.Relations.Execution;
 
-/// <summary>Completion state of one canonical relation/query interpretation.</summary>
+/// <summary>Completion state of one relation/query execution or interpretation.</summary>
 public enum RelationQueryExecutionStatus
 {
-    /// <summary>Every demanded output was evaluated conclusively under the selected policy.</summary>
+    /// <summary>
+    /// Acquisition, when required, and evaluation of every demanded output completed conclusively under the
+    /// selected policy.
+    /// </summary>
     Succeeded = 0,
 
     /// <summary>
@@ -18,7 +22,10 @@ public enum RelationQueryExecutionStatus
     /// </summary>
     Incomplete = 1,
 
-    /// <summary>Invalid runtime evidence or an execution-contract violation prevented trustworthy results.</summary>
+    /// <summary>
+    /// Acquisition failed, runtime evidence was invalid, or an execution-contract violation prevented trustworthy
+    /// results.
+    /// </summary>
     Failed = 2
 }
 
@@ -357,7 +364,8 @@ public sealed class RelationQueryExecutionResult
         RelationRequirementGapAnalysisResult requirementGapAnalysis,
         RelationQueryRelationResult? relation,
         ImmutableArray<RelationQueryNamedResult> queryResults,
-        ImmutableArray<RelationRuntimeDiagnostic> diagnostics)
+        ImmutableArray<RelationRuntimeDiagnostic> diagnostics
+        )
     {
         if (!Enum.IsDefined(status))
             throw new ArgumentOutOfRangeException(nameof(status), status, "Unsupported execution status.");
@@ -443,9 +451,27 @@ public sealed class RelationQueryExecutionResult
     public bool HasErrors => Diagnostics.Any(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
 }
 
-/// <summary>Interprets a successful canonical relation/query plan over materialized runtime evidence.</summary>
+/// <summary>
+/// Declares realization capabilities and interprets successful canonical relation/query plans over materialized
+/// runtime evidence.
+/// </summary>
 public interface IRelationQueryInterpreter
 {
+    /// <summary>Reports whether and how this interpreter can preserve an exact compiled plan.</summary>
+    /// <param name="plan">Successful demand-scoped compiled relation/query plan.</param>
+    /// <returns>Deterministic capability decisions and diagnostics attributable to <paramref name="plan"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="plan"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The plan contains inconsistent realization provenance or cannot be fingerprinted deterministically.
+    /// </exception>
+    /// <exception cref="System.Text.Json.JsonException">
+    /// A plan snapshot cannot be serialized for deterministic fingerprinting.
+    /// </exception>
+    /// <exception cref="NotSupportedException">
+    /// A plan snapshot contains a runtime type unsupported by canonical serialization.
+    /// </exception>
+    RelationQueryRealizationReport Realize(CompiledRelationQueryPlan plan);
+
     /// <summary>Executes the demand-scoped compiled plan without acquiring external data.</summary>
     /// <param name="request">Compiled plan, materialized evidence, and requirement-gap policy.</param>
     /// <param name="cancellationToken">Token observed between nodes and during potentially large row operations.</param>
