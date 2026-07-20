@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Compilation;
@@ -309,12 +310,55 @@ public sealed class RelationQueryEvaluationOutcome
 public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
 {
     const string CapabilityEvidenceReferencePrefix = "relation-query-realization-target";
+    const string SuppliedOnlyConventionSetVersion = "cohesive.relations/supplied-only-conventions/v1";
+    const string SuppliedOnlySourceKey = "cohesive.relations/supplied-only";
 
     readonly Func<CompiledRelationQueryPlan, RelationQuerySourcePlacement> createPlacement;
     readonly RelationQueryPhysicalPlanningPolicy physicalPlanningPolicy;
     readonly IRelationQueryInterpreter interpreter;
     readonly RelationQueryPhysicalExecutor physicalExecutor;
     readonly IRelationRequirementGapPolicy requirementGapPolicy;
+
+    /// <summary>
+    /// Creates a convention-configured evaluator for relations whose only input is a supplied root set.
+    /// </summary>
+    /// <remarks>
+    /// This convenience path performs the full canonical compile, realize, plan, execute, and interpret pipeline,
+    /// but it performs no external I/O. Compiled plans retaining traversals or acquired source sets require the
+    /// explicit evaluator constructor with placement and source readers.
+    /// </remarks>
+    /// <param name="maximumRootRows">Maximum supplied root observations admitted to one evaluation.</param>
+    /// <param name="requirementGapPolicy">
+    /// Runtime requirement-gap policy, or <see langword="null"/> for the conventional policy.
+    /// </param>
+    /// <returns>An evaluator restricted to supplied-only relation plans.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="maximumRootRows"/> is not positive or exceeds the portable integer range.
+    /// </exception>
+    public static RelationQueryEvaluator CreateSuppliedOnly(
+        long maximumRootRows = 10_000,
+        IRelationRequirementGapPolicy? requirementGapPolicy = null)
+    {
+        RelationQuerySourcePlacementLimits limits = new(
+            maximumBatchSize: 1,
+            maximumBufferedRows: maximumRootRows,
+            maximumFanOut: 1,
+            maximumConcurrency: 1);
+        RelationQueryPhysicalPlanningPolicy policy = new(
+            new($"cohesive.relations/supplied-only/max-{maximumRootRows.ToString(CultureInfo.InvariantCulture)}/v1"),
+            SuppliedOnlyConventionSetVersion,
+            maximumBatchSize: 1,
+            maximumBufferedRows: maximumRootRows,
+            maximumLocalRows: maximumRootRows,
+            maximumFanOut: 1,
+            maximumReferenceKeysPerObservation: 1,
+            maximumConcurrency: 1);
+        return new(
+            plan => CreateSuppliedOnlyPlacement(plan, limits),
+            policy,
+            sourceReaders: [],
+            requirementGapPolicy: requirementGapPolicy);
+    }
 
     /// <summary>Creates a canonical evaluator over explicit placement policy and source readers.</summary>
     /// <param name="createPlacement">
@@ -347,6 +391,30 @@ public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
         this.interpreter = interpreter ?? RelationQueryInMemoryInterpreter.Default;
         physicalExecutor = new(sourceReaders, this.interpreter);
         this.requirementGapPolicy = requirementGapPolicy ?? RelationRequirementGapPolicy.Conventional;
+    }
+
+    static RelationQuerySourcePlacement CreateSuppliedOnlyPlacement(
+        CompiledRelationQueryPlan plan,
+        RelationQuerySourcePlacementLimits limits)
+    {
+        var sourceContract = plan.InputContract.Sources.Length == 1
+            ? plan.InputContract.Sources[0]
+            : null;
+        if (sourceContract is null
+            || sourceContract.Role != RelationQuerySourceInputRole.RelationRoot
+            || !plan.InputContract.Traversals.IsDefaultOrEmpty)
+        {
+            throw new InvalidOperationException(
+                "The supplied-only evaluator requires one relation-root source and no relationship traversals.");
+        }
+
+        var placement = RelationQueryPlacement.For(plan);
+        var source = placement.Source(
+            SuppliedOnlySourceKey,
+            RelationQueryInMemoryInterpreter.DefaultTargetProfile,
+            limits: limits);
+        placement.PlaceSource(source).FieldsBySemanticPath();
+        return placement.Build().RequireValue().Placement;
     }
 
     /// <inheritdoc />

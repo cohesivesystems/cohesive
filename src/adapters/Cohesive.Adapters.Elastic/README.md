@@ -2,6 +2,12 @@
 
 Elasticsearch query and aggregation compilers for Cohesive relation plans.
 
+Start with the [`Cohesive.Relations` quick start](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Relations/docs/GETTING_STARTED.md),
+then use this
+guide when placement reaches an Elasticsearch index and the application needs exact mapping evidence, SDK request
+inspection, nested-object correlation, or compiler overrides. The generated cross-adapter capability inventory lives
+in the [Relations capability reference](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Relations/docs/CAPABILITIES.md).
+
 ## Install
 
 ```bash
@@ -22,7 +28,7 @@ required `StopLocations` scalar collection contains a supplied location. `StopLo
 relation from the load's stops.
 
 First declare the shapes and canonical query, then run
-[Cohesive.Relations static compilation](../../Cohesive.Relations/README.md#demand-driven-static-compilation):
+[Cohesive.Relations static compilation](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Relations/README.md#demand-driven-static-compilation):
 
 ```csharp
 using System.Text.Json;

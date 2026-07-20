@@ -3,6 +3,7 @@ using Cohesive.Adapters.Cosmos;
 using Cohesive.Adapters.Elastic;
 using Cohesive.Adapters.Postgres;
 using Cohesive.Relations.Compilation;
+using Cohesive.Relations.Explain;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.Physical;
@@ -113,6 +114,83 @@ public sealed class CanonicalFederatedAdapterConformanceTests
 
         AssertUnavailableRowsProfile(cosmos);
         AssertUnavailableRowsProfile(elastic);
+    }
+
+    [Fact]
+    public void PostgresCosmosGuide_CustomerOnlyRowsUseOnePostgresJoinAndRejectNativeCosmosTraversal()
+    {
+        var context = CreatePostgresContext(
+            splitExecutionDomains: false,
+            CustomerRowsDemand());
+        var customerTraversal = Assert.Single(context.Plan.InputContract.Traversals);
+        Assert.Equal(
+            FederatedLoadRelationFixture.LoadCustomerRelationshipId,
+            customerTraversal.Definition.Id);
+        var realization = Realize(
+            context.Plan,
+            PostgresRelationQueryTargetProfile.Default,
+            PostgresRelationQueryTargetProfile.Policy);
+        var request = new RelationQueryBoundRealizationRequest(
+            context.Plan,
+            realization,
+            context.Placement.Placement);
+        PostgresRelationQueryCompiler compiler = new();
+        var bound = compiler.Realize(request, context.Storage);
+        Assert.True(bound.IsRealizable, Format(bound.Diagnostics));
+        Assert.All(bound.Evidence.Assessments, static assessment =>
+        {
+            Assert.Equal(RelationQueryBoundAssessmentStatus.Available, assessment.Status);
+            Assert.NotEmpty(assessment.CapabilityEvidence);
+        });
+        var nativeRequest = new RelationQueryNativeCompilationRequest(
+            context.Plan,
+            bound,
+            context.Placement.Placement);
+        var native = compiler.Compile(nativeRequest, context.Storage);
+        Assert.True(native.IsSuccessful, Format(native.Diagnostics));
+        var artifact = Assert.Single(native.Artifacts);
+        Assert.Equal(RowsBranch, artifact.Branch.Id);
+        Assert.Empty(artifact.Parameters);
+        var statement = artifact.Bind(new Dictionary<QueryParameterId, ObservationValue>());
+        var compilerLiteral = Assert.Single(statement.Parameters);
+        Assert.Null(compilerLiteral.Binding);
+        Assert.Equal(true, compilerLiteral.Value);
+        Assert.Equal(1, artifact.Statement.Text.Split("LEFT JOIN", StringSplitOptions.None).Length - 1);
+        Assert.DoesNotContain("equipment", artifact.Statement.Text, StringComparison.OrdinalIgnoreCase);
+        string[] expectedSelectedFields =
+        [
+            FieldKey(new(
+                FederatedLoadRelationFixture.LoadShapeId,
+                FederatedLoadRelationFixture.LoadIdPath)),
+            FieldKey(new(
+                FederatedLoadRelationFixture.LoadShapeId,
+                FederatedLoadRelationFixture.LoadCustomerIdPath)),
+            FieldKey(new(
+                FederatedLoadRelationFixture.CustomerShapeId,
+                FederatedLoadRelationFixture.CustomerNamePath))
+        ];
+        Assert.Equal(
+            expectedSelectedFields.Order(StringComparer.Ordinal),
+            artifact.SelectedFields
+                .Select(static field => FieldKey(field.Field))
+                .Order(StringComparer.Ordinal));
+
+        var cosmos = RelationQueryRealizationCompiler.Compile(
+            context.Plan,
+            CosmosRelationQueryTargetProfile.Default,
+            CosmosRelationQueryTargetProfile.Policy,
+            RelationQueryResultObservability.NotRequested);
+        Assert.Equal(RelationQueryRealizationStatus.NotRealizable, cosmos.Status);
+        var requirements = cosmos.Requirements.ToDictionary(static requirement => requirement.Id);
+        Assert.Contains(
+            cosmos.Decisions.OfType<UnavailableRelationQueryRealizationDecision>(),
+            decision => requirements[decision.Requirement].Origin?.Node
+                == FederatedLoadRelationFixture.CustomerTraversalNodeId);
+
+        var explain = PostgresRelationQueryExplainProjector.Project(nativeRequest, native);
+        Assert.Equal(RelationQueryExplainStageStatus.Complete, explain.Status);
+        Assert.Equal(bound.Fingerprint, explain.Attempt.BoundRealization);
+        Assert.Single(explain.Compilation.Artifacts);
     }
 
     static CanonicalAdapterObservation ObserveSupportedCosmosAggregation()
@@ -463,13 +541,17 @@ public sealed class CanonicalFederatedAdapterConformanceTests
         return new(plan, placement, placement.GetInput(placed));
     }
 
-    static PostgresContext CreatePostgresContext(bool splitExecutionDomains)
+    static PostgresContext CreatePostgresContext(
+        bool splitExecutionDomains,
+        RelationQueryCompilationDemand? demand = null)
     {
-        var plan = CompileAllBranchesPlan();
+        var plan = demand is null
+            ? CompileAllBranchesPlan()
+            : Compile(demand);
         var sourceContract = Assert.Single(plan.InputContract.Sources);
         var customerTraversal = plan.InputContract.Traversals.Single(traversal =>
             traversal.Definition.Id == FederatedLoadRelationFixture.LoadCustomerRelationshipId);
-        var equipmentTraversal = plan.InputContract.Traversals.Single(traversal =>
+        var equipmentTraversal = plan.InputContract.Traversals.SingleOrDefault(traversal =>
             traversal.Definition.Id == FederatedLoadRelationFixture.LoadEquipmentRelationshipId);
         RelationQueryExecutionDomainId primary = new("conformance/postgres/primary");
         RelationQueryExecutionDomainId related = splitExecutionDomains
@@ -484,69 +566,87 @@ public sealed class CanonicalFederatedAdapterConformanceTests
             "conformance/postgres/customers",
             PostgresRelationQueryTargetProfile.Default,
             related);
-        var equipmentSource = placementBuilder.Source(
-            "conformance/postgres/equipment",
-            PostgresRelationQueryTargetProfile.Default,
-            related);
         var loadHandle = placementBuilder.Place(sourceContract, loadSource)
             .Identity(FederatedLoadRelationFixture.LoadIdFieldName)
             .FieldsBySemanticPath();
         var customerHandle = placementBuilder.Place(customerTraversal, customerSource)
             .Identity(FederatedLoadRelationFixture.CustomerIdFieldName)
             .FieldsBySemanticPath();
-        var equipmentHandle = placementBuilder.Place(equipmentTraversal, equipmentSource)
-            .Identity(FederatedLoadRelationFixture.EquipmentIdFieldName)
-            .FieldsBySemanticPath();
+        RelationQueryPlacementInputBuilder? equipmentHandle = null;
+        if (equipmentTraversal is not null)
+        {
+            var equipmentSource = placementBuilder.Source(
+                "conformance/postgres/equipment",
+                PostgresRelationQueryTargetProfile.Default,
+                related);
+            equipmentHandle = placementBuilder.Place(equipmentTraversal, equipmentSource)
+                .Identity(FederatedLoadRelationFixture.EquipmentIdFieldName)
+                .FieldsBySemanticPath();
+        }
         var placement = placementBuilder.Build().RequireValue();
         PostgresRelationQueryStorageBinding storage;
         if (!splitExecutionDomains)
         {
             var load = placement.GetInput(loadHandle);
             var customer = placement.GetInput(customerHandle);
-            var equipment = placement.GetInput(equipmentHandle);
-            storage = PostgresRelationQueryBinding.For(
+            var binding = PostgresRelationQueryBinding.For(
                     placement,
                     explicitAuthority: "conformance/postgres/binding/v1")
-                .Database(new("conformance/postgres/primary"))
-                .Table(
-                    load,
-                    "loads",
-                    table => table
+                .Database(new("conformance/postgres/primary"));
+            binding.Table(
+                load,
+                "loads",
+                table =>
+                {
+                    var configured = table
                         .ColumnsExplicitly()
                         .Column(FederatedLoadRelationFixture.LoadIdPath, "load_id", OrdinalTextOptions)
                         .Column(FederatedLoadRelationFixture.LoadCustomerIdPath, "customer_id", OrdinalTextOptions)
-                        .Column(FederatedLoadRelationFixture.LoadEquipmentIdPath, "equipment_id", OrdinalTextOptions)
                         .Identity(FederatedLoadRelationFixture.LoadIdPath, "load_id", OrdinalTextOptions)
                         .RelationshipReference(
                             customerTraversal.Input.Id,
                             FederatedLoadRelationFixture.LoadCustomerIdPath,
                             "customer_id",
-                            OrdinalTextOptions)
-                        .RelationshipReference(
-                            equipmentTraversal.Input.Id,
-                            FederatedLoadRelationFixture.LoadEquipmentIdPath,
-                            "equipment_id",
-                            OrdinalTextOptions))
-                .Table(
-                    customer,
-                    "customers",
-                    table => table
-                        .ColumnsExplicitly()
-                        .Column(FederatedLoadRelationFixture.CustomerNamePath, "customer_name", OrdinalTextOptions)
-                        .Identity(FederatedLoadRelationFixture.CustomerIdPath, "customer_id", OrdinalTextOptions))
-                .Table(
+                            OrdinalTextOptions);
+                    if (equipmentTraversal is not null)
+                    {
+                        configured
+                            .Column(
+                                FederatedLoadRelationFixture.LoadEquipmentIdPath,
+                                "equipment_id",
+                                OrdinalTextOptions)
+                            .RelationshipReference(
+                                equipmentTraversal.Input.Id,
+                                FederatedLoadRelationFixture.LoadEquipmentIdPath,
+                                "equipment_id",
+                                OrdinalTextOptions);
+                    }
+                });
+            binding.Table(
+                customer,
+                "customers",
+                table => table
+                    .ColumnsExplicitly()
+                    .Column(FederatedLoadRelationFixture.CustomerNamePath, "customer_name", OrdinalTextOptions)
+                    .Identity(FederatedLoadRelationFixture.CustomerIdPath, "customer_id", OrdinalTextOptions));
+            if (equipmentHandle is not null)
+            {
+                var equipment = placement.GetInput(equipmentHandle);
+                binding.Table(
                     equipment,
                     "equipment",
                     table => table
                         .ColumnsExplicitly()
                         .Column(FederatedLoadRelationFixture.EquipmentNumberPath, "equipment_number", OrdinalTextOptions)
-                        .Identity(FederatedLoadRelationFixture.EquipmentIdPath, "equipment_id", OrdinalTextOptions))
+                        .Identity(FederatedLoadRelationFixture.EquipmentIdPath, "equipment_id", OrdinalTextOptions));
+            }
+            storage = binding
                 .Build()
                 .RequireValue();
         }
         else
         {
-            var colocated = CreatePostgresContext(splitExecutionDomains: false).Storage;
+            var colocated = CreatePostgresContext(splitExecutionDomains: false, demand).Storage;
             storage = new(
                 new("conformance/postgres/cross-domain-binding/v1"),
                 colocated.Database,
@@ -574,6 +674,21 @@ public sealed class CanonicalFederatedAdapterConformanceTests
         [
             QueryResultDemand.AllFields(FederatedLoadRelationFixture.RowsResultId)
         ]));
+
+    static RelationQueryCompilationDemand CustomerRowsDemand() =>
+        RelationQueryCompilationDemand.ForQueryResults(
+        [
+            QueryResultDemand.SelectedFields(
+                FederatedLoadRelationFixture.RowsResultId,
+                [
+                    new(
+                        FederatedLoadRelationFixture.LoadSearchShapeId,
+                        FederatedLoadRelationFixture.SearchIdPath),
+                    new(
+                        FederatedLoadRelationFixture.LoadSearchShapeId,
+                        FederatedLoadRelationFixture.SearchCustomerNamePath)
+                ])
+        ]);
 
     static CompiledRelationQueryPlan CompileAllBranchesPlan() => Compile(demand: null);
 

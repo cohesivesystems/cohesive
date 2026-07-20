@@ -2,6 +2,13 @@
 
 Azure Cosmos DB adapters for Cohesive storage, canonical relation/query compilation, aggregation, outbox records, and vector storage.
 
+Start with the [`Cohesive.Relations` quick start](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Relations/docs/GETTING_STARTED.md).
+The
+[PostgreSQL native join versus Cosmos composed reads](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Relations/docs/EXECUTION_AND_ADAPTERS.md#postgresql-native-join-versus-cosmos-composed-reads)
+comparison explains cross-document Load-to-Customer execution as one Load enumeration plus deduplicated, bounded
+Customer batches and a local hash join. Cosmos `JOIN` over nested values in one document is a separate language
+feature; it is not a cross-document join.
+
 ## Install
 
 ```bash

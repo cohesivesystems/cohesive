@@ -10,4 +10,8 @@
     <ProjectReference Include="..\Cohesive\Cohesive.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="docs\*.md" Pack="true" PackagePath="docs\%(Filename)%(Extension)" />
+  </ItemGroup>
+
 </Project>

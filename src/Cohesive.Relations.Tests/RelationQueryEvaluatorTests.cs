@@ -12,6 +12,28 @@ namespace Cohesive.Relations.Tests;
 
 public sealed class RelationQueryEvaluatorTests
 {
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(9_007_199_254_740_992)]
+    public void CreateSuppliedOnly_rejects_nonportable_root_bounds(long maximumRootRows)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            RelationQueryEvaluator.CreateSuppliedOnly(maximumRootRows));
+    }
+
+    [Fact]
+    public async Task CreateSuppliedOnly_rejects_relations_that_require_external_traversal()
+    {
+        var evaluation = RelationEvaluation("tests/supplied-only/traversal", "customer-1");
+        var evaluator = RelationQueryEvaluator.CreateSuppliedOnly();
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            evaluator.EvaluateAsync(evaluation).AsTask());
+
+        Assert.Contains("no relationship traversals", exception.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Evaluation_builder_maps_typed_roots_and_preserves_empty_root_evidence()
     {
