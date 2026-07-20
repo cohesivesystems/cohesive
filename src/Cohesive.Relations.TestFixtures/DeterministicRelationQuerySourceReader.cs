@@ -1,31 +1,37 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using Cohesive.Model;
 using Cohesive.Relations.Acquisition;
-using Cohesive.Relations.IR;
-using Cohesive.Relations.Physical;
 
-namespace Cohesive.Relations.Tests;
+namespace Cohesive.Relations.TestFixtures;
 
 /// <summary>Deterministic bounded source reader used by physical-execution acceptance tests.</summary>
 sealed class DeterministicRelationQuerySourceReader : IRelationQuerySourceReader
 {
     readonly ImmutableArray<SourceRow> rows;
+    readonly ImmutableDictionary<string, SourceRow> rowsByIdentity;
     readonly Func<RelationQuerySourceReadRequest, RelationQuerySourceReadResult>? resultFactory;
     readonly Action<RelationQuerySourceReadRequest>? afterRead;
+    readonly bool recordRequests;
     readonly ConcurrentQueue<RelationQuerySourceReadRequest> requests = new();
 
     public DeterministicRelationQuerySourceReader(
         RelationQuerySourceReaderDescriptor descriptor,
         ImmutableArray<SourceRow> rows,
         Func<RelationQuerySourceReadRequest, RelationQuerySourceReadResult>? resultFactory = null,
-        Action<RelationQuerySourceReadRequest>? afterRead = null)
+        Action<RelationQuerySourceReadRequest>? afterRead = null,
+        bool recordRequests = true)
     {
         Descriptor = descriptor;
         this.rows = rows.IsDefault
             ? []
             : [.. rows.OrderBy(static row => row.Identity, StringComparer.Ordinal)];
+        rowsByIdentity = this.rows.ToImmutableDictionary(
+            static row => row.Identity,
+            StringComparer.Ordinal);
         this.resultFactory = resultFactory;
         this.afterRead = afterRead;
+        this.recordRequests = recordRequests;
     }
 
     public RelationQuerySourceReaderDescriptor Descriptor { get; }
@@ -38,53 +44,83 @@ sealed class DeterministicRelationQuerySourceReader : IRelationQuerySourceReader
     {
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
-        requests.Enqueue(request);
+        if (recordRequests)
+            requests.Enqueue(request);
 
         var result = resultFactory is not null
             ? resultFactory(request)
             : new RelationQuerySourceReadResult(
                 RelationQuerySourceReadState.Complete,
-                [.. SelectRows(request.Constraint).Select(row => Project(request, row))],
+                SelectAndProject(request),
                 $"fake/{request.Stage.Value}");
         afterRead?.Invoke(request);
         return ValueTask.FromResult(result);
     }
 
-    ImmutableArray<SourceRow> SelectRows(RelationQuerySourceReadConstraint constraint) => constraint switch
+    ImmutableArray<RelationQuerySourceReadObservation> SelectAndProject(
+        RelationQuerySourceReadRequest request)
     {
-        RelationQueryBoundedEnumeration enumeration =>
-        [
-            .. rows.Take(checked((int)Math.Min(enumeration.MaximumRows, int.MaxValue)))
-        ],
-        RelationQueryIdentityBatchLookup lookup =>
-        [
-            .. rows.Where(row => lookup.Identities.Contains(row.Identity, StringComparer.Ordinal))
-        ],
-        RelationQueryRelationshipKeyBatchLookup lookup =>
-        [
-            .. rows.Where(row =>
-                row.Fields.TryGetValue(lookup.RelationshipReference, out var field)
-                && field.State == RelationQuerySourceReadFieldState.Value
-                && field.Value is { Kind: ObservationValueKind.String, String: { } value }
-                && lookup.Keys.Contains(value, StringComparer.Ordinal))
-        ],
-        _ => throw new NotSupportedException(
-            $"The deterministic reader does not support '{constraint.GetType().Name}'.")
-    };
+        var capacity = request.Constraint switch
+        {
+            RelationQueryBoundedEnumeration enumeration => checked((int)Math.Min(
+                Math.Min(enumeration.MaximumRows, int.MaxValue),
+                rows.Length)),
+            RelationQueryIdentityBatchLookup lookup => Math.Min(rows.Length, lookup.Identities.Length),
+            RelationQueryRelationshipKeyBatchLookup lookup => Math.Min(rows.Length, lookup.Keys.Length),
+            _ => throw new NotSupportedException(
+                $"The deterministic reader does not support '{request.Constraint.GetType().Name}'.")
+        };
+        var selected = ImmutableArray.CreateBuilder<RelationQuerySourceReadObservation>(capacity);
+        switch (request.Constraint)
+        {
+            case RelationQueryBoundedEnumeration:
+                for (var index = 0; index < capacity; index++)
+                    selected.Add(Project(request, rows[index]));
+                break;
+            case RelationQueryIdentityBatchLookup lookup:
+                foreach (var identity in lookup.Identities)
+                {
+                    if (rowsByIdentity.TryGetValue(identity, out var row))
+                        selected.Add(Project(request, row));
+                }
+                break;
+            case RelationQueryRelationshipKeyBatchLookup lookup:
+                foreach (var row in rows)
+                {
+                    if (Matches(lookup, row))
+                        selected.Add(Project(request, row));
+                }
+                break;
+        }
+
+        return selected.Count == selected.Capacity
+            ? selected.MoveToImmutable()
+            : selected.ToImmutable();
+    }
+
+    static bool Matches(RelationQueryRelationshipKeyBatchLookup lookup, SourceRow row) =>
+        row.Fields.TryGetValue(lookup.RelationshipReference, out var field)
+        && field.State == RelationQuerySourceReadFieldState.Value
+        && field.Value is { Kind: ObservationValueKind.String, String: { } value }
+        && lookup.Keys.Contains(value, StringComparer.Ordinal);
 
     static RelationQuerySourceReadObservation Project(
         RelationQuerySourceReadRequest request,
-        SourceRow row) => new(
-        row.Identity,
-        request.Shape,
-        [
-            .. request.Fields.Select(field => row.Fields.TryGetValue(field.SemanticPath, out var result)
+        SourceRow row)
+    {
+        var fields = ImmutableArray.CreateBuilder<RelationQuerySourceReadFieldResult>(request.Fields.Length);
+        foreach (var field in request.Fields)
+        {
+            fields.Add(row.Fields.TryGetValue(field.SemanticPath, out var result)
                 ? result.ToResult(field)
                 : new RelationQuerySourceReadFieldResult(
                     field,
                     RelationQuerySourceReadFieldState.Missing,
-                    evidenceReference: $"fake/missing/{field.SemanticPath}"))
-        ]);
+                    evidenceReference: $"fake/missing/{field.SemanticPath}"));
+        }
+
+        return new(row.Identity, request.Shape, fields.MoveToImmutable());
+    }
 
     public sealed record SourceRow
     {

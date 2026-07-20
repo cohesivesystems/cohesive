@@ -1,7 +1,9 @@
+using AutoMapper;
 using BenchmarkDotNet.Attributes;
-using BenchmarkDotNet.Configs;
 using BenchmarkDotNet.Columns;
+using BenchmarkDotNet.Configs;
 using Cohesive.Model;
+using Cohesive.Relations.Execution;
 using Cohesive.Relations.Mapping;
 using Cohesive.Relations.TestFixtures;
 
@@ -22,6 +24,9 @@ public class RelationDtoWarmBenchmarks
     CompiledRelationDtoMapper<LoadSearchDto> joinedCompiledMapper = null!;
     Func<ObservationValue, LoadSummaryDto> simpleKernel = null!;
     Func<ObservationValue, LoadSearchDto> joinedKernel = null!;
+    IMapper autoMapper = null!;
+    RelationQueryOutputRow[] simpleCanonicalRows = null!;
+    RelationQueryOutputRow[] joinedCanonicalRows = null!;
 
     /// <summary>Number of relation output rows materialized per benchmark operation.</summary>
     [Params(1, 32, 1024)]
@@ -43,6 +48,19 @@ public class RelationDtoWarmBenchmarks
         joinedCompiledMapper = RelationDtoBenchmarkSupport.CompileMapper<LoadSearchDto>(joined.Plan);
         simpleKernel = simpleCompiledMapper.MaterializationKernel;
         joinedKernel = joinedCompiledMapper.MaterializationKernel;
+        simpleCanonicalRows = RelationDtoBenchmarkSupport.ToRelationRows(simple.Execution);
+        joinedCanonicalRows = RelationDtoBenchmarkSupport.ToRelationRows(joined.Execution);
+
+        var autoMapperConfiguration = RelationDtoBenchmarkSupport.ConfigureAutoMapper();
+        autoMapper = autoMapperConfiguration.CreateMapper();
+        ValidateAutoMapper(
+            autoMapper.Map<LoadSummaryDto[]>(simpleCanonicalRows),
+            RelationDtoBenchmarkSupport.MapSimpleHandwritten(simple.Execution),
+            "simple");
+        ValidateAutoMapper(
+            autoMapper.Map<LoadSearchDto[]>(joinedCanonicalRows),
+            RelationDtoBenchmarkSupport.MapJoinedHandwritten(joined.Execution),
+            "joined");
     }
 
     /// <summary>Hand-written single-source materialization baseline.</summary>
@@ -73,6 +91,15 @@ public class RelationDtoWarmBenchmarks
     public LoadSummaryDto[] ExistingObservationMapperSimple() =>
         RelationDtoBenchmarkSupport.MapObservations(simple.Observations, simpleObservationMapper);
 
+    /// <summary>
+    /// Preconfigured AutoMapper member plan from the same canonical output-row representation.
+    /// </summary>
+    /// <returns>Materialized DTOs.</returns>
+    [Benchmark]
+    [BenchmarkCategory("Warm", "Simple")]
+    public LoadSummaryDto[] AutoMapperCanonicalRowsSimple() =>
+        autoMapper.Map<LoadSummaryDto[]>(simpleCanonicalRows);
+
     /// <summary>Hand-written joined materialization baseline.</summary>
     /// <returns>Materialized DTOs.</returns>
     [Benchmark(Baseline = true)]
@@ -100,4 +127,28 @@ public class RelationDtoWarmBenchmarks
     [BenchmarkCategory("Warm", "Joined")]
     public LoadSearchDto[] ExistingObservationMapperJoined() =>
         RelationDtoBenchmarkSupport.MapObservations(joined.Observations, joinedObservationMapper);
+
+    /// <summary>
+    /// Preconfigured AutoMapper member plan from the same canonical joined output-row representation.
+    /// </summary>
+    /// <returns>Materialized DTOs.</returns>
+    [Benchmark]
+    [BenchmarkCategory("Warm", "Joined")]
+    public LoadSearchDto[] AutoMapperCanonicalRowsJoined() =>
+        autoMapper.Map<LoadSearchDto[]>(joinedCanonicalRows);
+
+    static void ValidateAutoMapper<TOutput>(
+        IReadOnlyList<TOutput> actual,
+        IReadOnlyList<TOutput> expected,
+        string scenario)
+    {
+        if (actual.Count == expected.Count
+            && actual.SequenceEqual(expected))
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"The preconfigured AutoMapper {scenario} output does not match the canonical fixture.");
+    }
 }

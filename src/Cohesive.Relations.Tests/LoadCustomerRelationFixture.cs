@@ -1,6 +1,8 @@
 using System.Collections.Immutable;
 using Cohesive.Model.Serialization;
+using Cohesive.Relations.Compilation;
 using Cohesive.Relations.IR;
+using Cohesive.Relations.Physical;
 using IRQueryDefinition = Cohesive.Relations.IR.QueryDefinition;
 using IRRelationDefinition = Cohesive.Relations.IR.RelationDefinition;
 
@@ -72,6 +74,13 @@ static class LoadCustomerRelationFixture
     public static readonly QualifiedShapeId LoadSearchShapeId = new(DtoGraphId, LoadSearchShapeLocalId);
     public static readonly QualifiedShapeId LoadAggregateShapeId = new(DtoGraphId, LoadAggregateShapeLocalId);
 
+    static readonly ImmutableDictionary<QualifiedShapeId, RelationQuerySourceInstanceId> PhysicalSourceAliases =
+        new Dictionary<QualifiedShapeId, RelationQuerySourceInstanceId>
+        {
+            [LoadShapeId] = FederatedLoadPhysicalExecutionFixture.LoadsSource,
+            [CustomerShapeId] = FederatedLoadPhysicalExecutionFixture.CustomersSource
+        }.ToImmutableDictionary();
+
     public static readonly FieldPath LoadIdPath = FieldPath.FromField(LoadIdFieldName);
     public static readonly FieldPath LoadCustomerIdPath = FieldPath.FromField(LoadCustomerIdFieldName);
     public static readonly FieldPath LoadStatusPath = FieldPath.FromField(LoadStatusFieldName);
@@ -89,6 +98,11 @@ static class LoadCustomerRelationFixture
     public static readonly FieldPath AggregateLoadCountPath = FieldPath.FromField(AggregateLoadCountFieldName);
 
     public static readonly RelationshipId LoadCustomerRelationshipId = new("Load.Customer");
+
+    public static RelationQuerySourcePlacement CreatePhysicalPlacement(CompiledRelationQueryPlan plan) =>
+        FederatedLoadPhysicalExecutionFixture.CreatePlacement(
+            plan,
+            sourceAliases: PhysicalSourceAliases);
 
     public static readonly RelationId LoadSearchRelationId = new("load-search");
     public static readonly RelationName LoadSearchRelationName = new("LoadSearch");

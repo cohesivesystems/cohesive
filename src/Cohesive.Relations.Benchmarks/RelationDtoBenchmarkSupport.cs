@@ -1,16 +1,30 @@
 using System.Collections.Immutable;
 using System.Collections.ObjectModel;
+using AutoMapper;
 using Cohesive.Model;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Execution;
 using Cohesive.Relations.Mapping;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.TestFixtures;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Cohesive.Relations.Benchmarks;
 
 static class RelationDtoBenchmarkSupport
 {
+    public static MapperConfiguration ConfigureAutoMapper() => ConfigureAutoMapper(static configuration =>
+    {
+        ConfigureAutoMapperSimple(configuration);
+        ConfigureAutoMapperJoined(configuration);
+    });
+
+    public static MapperConfiguration ConfigureAutoMapperSimple() =>
+        ConfigureAutoMapper(ConfigureAutoMapperSimple);
+
+    public static MapperConfiguration ConfigureAutoMapperJoined() =>
+        ConfigureAutoMapper(ConfigureAutoMapperJoined);
+
     public static CompiledRelationDtoMapper<TOutput> CompileMapper<TOutput>(
         CompiledRelationQueryPlan plan,
         RelationDtoMapperCompiler? compiler = null)
@@ -29,13 +43,7 @@ static class RelationDtoBenchmarkSupport
         var rows = RelationRows(execution);
         var outputs = new LoadSummaryDto[rows.Length];
         for (var i = 0; i < rows.Length; i++)
-        {
-            var fields = ObjectFields(rows[i]);
-            outputs[i] = new(
-                fields[RelationDtoBenchmarkFixture.LoadIdFieldName].GetRequiredString(),
-                fields[RelationDtoBenchmarkFixture.LoadStatusFieldName].GetRequiredString(),
-                fields[RelationDtoBenchmarkFixture.LoadAmountFieldName].GetDecimal());
-        }
+            outputs[i] = MapSimpleRow(rows[i]);
         return outputs;
     }
 
@@ -44,21 +52,12 @@ static class RelationDtoBenchmarkSupport
         var rows = RelationRows(execution);
         var outputs = new LoadSearchDto[rows.Length];
         for (var i = 0; i < rows.Length; i++)
-        {
-            var fields = ObjectFields(rows[i]);
-            outputs[i] = new(
-                fields[RelationDtoBenchmarkFixture.LoadIdFieldName].GetRequiredString(),
-                fields[RelationDtoBenchmarkFixture.LoadCustomerIdFieldName].GetRequiredString(),
-                fields[RelationDtoBenchmarkFixture.SearchCustomerNameFieldName].GetRequiredString(),
-                fields[RelationDtoBenchmarkFixture.SearchCustomerTypeFieldName].GetRequiredString(),
-                fields[RelationDtoBenchmarkFixture.LoadEquipmentIdFieldName].GetRequiredString(),
-                fields[RelationDtoBenchmarkFixture.SearchEquipmentNumberFieldName].GetRequiredString(),
-                fields[RelationDtoBenchmarkFixture.SearchEquipmentTypeFieldName].GetRequiredString(),
-                fields[RelationDtoBenchmarkFixture.LoadStatusFieldName].GetRequiredString(),
-                fields[RelationDtoBenchmarkFixture.LoadAmountFieldName].GetDecimal());
-        }
+            outputs[i] = MapJoinedRow(rows[i]);
         return outputs;
     }
+
+    public static RelationQueryOutputRow[] ToRelationRows(RelationQueryExecutionResult execution) =>
+        [.. RelationRows(execution)];
 
     public static TOutput[] MapObservations<TOutput>(
         ImmutableArray<Observation> observations,
@@ -137,6 +136,113 @@ static class RelationDtoBenchmarkSupport
             queryResults: [],
             execution.Diagnostics);
     }
+
+    static MapperConfiguration ConfigureAutoMapper(
+        Action<IMapperConfigurationExpression> configure)
+    {
+        MapperConfiguration configuration = new(configure, NullLoggerFactory.Instance);
+        configuration.AssertConfigurationIsValid();
+        configuration.CompileMappings();
+        return configuration;
+    }
+
+    static void ConfigureAutoMapperSimple(IMapperConfigurationExpression configuration) =>
+        configuration
+            .CreateMap<RelationQueryOutputRow, LoadSummaryDto>()
+            .ForCtorParam(
+                nameof(LoadSummaryDto.Id),
+                options => options.MapFrom(static row => ReadString(
+                    row,
+                    RelationDtoBenchmarkFixture.LoadIdFieldName)))
+            .ForCtorParam(
+                nameof(LoadSummaryDto.Status),
+                options => options.MapFrom(static row => ReadString(
+                    row,
+                    RelationDtoBenchmarkFixture.LoadStatusFieldName)))
+            .ForCtorParam(
+                nameof(LoadSummaryDto.Amount),
+                options => options.MapFrom(static row => ReadDecimal(
+                    row,
+                    RelationDtoBenchmarkFixture.LoadAmountFieldName)));
+
+    static void ConfigureAutoMapperJoined(IMapperConfigurationExpression configuration) =>
+        configuration
+            .CreateMap<RelationQueryOutputRow, LoadSearchDto>()
+            .ForCtorParam(
+                nameof(LoadSearchDto.Id),
+                options => options.MapFrom(static row => ReadString(
+                    row,
+                    RelationDtoBenchmarkFixture.LoadIdFieldName)))
+            .ForCtorParam(
+                nameof(LoadSearchDto.CustomerId),
+                options => options.MapFrom(static row => ReadString(
+                    row,
+                    RelationDtoBenchmarkFixture.LoadCustomerIdFieldName)))
+            .ForCtorParam(
+                nameof(LoadSearchDto.CustomerName),
+                options => options.MapFrom(static row => ReadString(
+                    row,
+                    RelationDtoBenchmarkFixture.SearchCustomerNameFieldName)))
+            .ForCtorParam(
+                nameof(LoadSearchDto.CustomerType),
+                options => options.MapFrom(static row => ReadString(
+                    row,
+                    RelationDtoBenchmarkFixture.SearchCustomerTypeFieldName)))
+            .ForCtorParam(
+                nameof(LoadSearchDto.EquipmentId),
+                options => options.MapFrom(static row => ReadString(
+                    row,
+                    RelationDtoBenchmarkFixture.LoadEquipmentIdFieldName)))
+            .ForCtorParam(
+                nameof(LoadSearchDto.EquipmentNumber),
+                options => options.MapFrom(static row => ReadString(
+                    row,
+                    RelationDtoBenchmarkFixture.SearchEquipmentNumberFieldName)))
+            .ForCtorParam(
+                nameof(LoadSearchDto.EquipmentType),
+                options => options.MapFrom(static row => ReadString(
+                    row,
+                    RelationDtoBenchmarkFixture.SearchEquipmentTypeFieldName)))
+            .ForCtorParam(
+                nameof(LoadSearchDto.Status),
+                options => options.MapFrom(static row => ReadString(
+                    row,
+                    RelationDtoBenchmarkFixture.LoadStatusFieldName)))
+            .ForCtorParam(
+                nameof(LoadSearchDto.Amount),
+                options => options.MapFrom(static row => ReadDecimal(
+                    row,
+                    RelationDtoBenchmarkFixture.LoadAmountFieldName)));
+
+    static LoadSummaryDto MapSimpleRow(RelationQueryOutputRow row)
+    {
+        var fields = ObjectFields(row);
+        return new(
+            fields[RelationDtoBenchmarkFixture.LoadIdFieldName].GetRequiredString(),
+            fields[RelationDtoBenchmarkFixture.LoadStatusFieldName].GetRequiredString(),
+            fields[RelationDtoBenchmarkFixture.LoadAmountFieldName].GetDecimal());
+    }
+
+    static LoadSearchDto MapJoinedRow(RelationQueryOutputRow row)
+    {
+        var fields = ObjectFields(row);
+        return new(
+            fields[RelationDtoBenchmarkFixture.LoadIdFieldName].GetRequiredString(),
+            fields[RelationDtoBenchmarkFixture.LoadCustomerIdFieldName].GetRequiredString(),
+            fields[RelationDtoBenchmarkFixture.SearchCustomerNameFieldName].GetRequiredString(),
+            fields[RelationDtoBenchmarkFixture.SearchCustomerTypeFieldName].GetRequiredString(),
+            fields[RelationDtoBenchmarkFixture.LoadEquipmentIdFieldName].GetRequiredString(),
+            fields[RelationDtoBenchmarkFixture.SearchEquipmentNumberFieldName].GetRequiredString(),
+            fields[RelationDtoBenchmarkFixture.SearchEquipmentTypeFieldName].GetRequiredString(),
+            fields[RelationDtoBenchmarkFixture.LoadStatusFieldName].GetRequiredString(),
+            fields[RelationDtoBenchmarkFixture.LoadAmountFieldName].GetDecimal());
+    }
+
+    static string ReadString(RelationQueryOutputRow row, string fieldName) =>
+        ObjectFields(row)[fieldName].GetRequiredString();
+
+    static decimal ReadDecimal(RelationQueryOutputRow row, string fieldName) =>
+        ObjectFields(row)[fieldName].GetDecimal();
 
     static ImmutableArray<RelationQueryOutputRow> RelationRows(RelationQueryExecutionResult execution) =>
         execution.Relation?.Rows

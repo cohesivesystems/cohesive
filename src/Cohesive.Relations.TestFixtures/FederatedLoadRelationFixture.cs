@@ -1,10 +1,13 @@
 using System.Collections.Immutable;
+using Cohesive.Model;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.IR;
+using Cohesive.Relations.Model;
+using Cohesive.Relations.Serialization;
 using IRQueryDefinition = Cohesive.Relations.IR.QueryDefinition;
 using IRRelationDefinition = Cohesive.Relations.IR.RelationDefinition;
 
-namespace Cohesive.Relations.Tests;
+namespace Cohesive.Relations.TestFixtures;
 
 /// <summary>
 /// Canonical three-placement Load, Customer, and Equipment semantics used by federated physical-planning tests.
@@ -121,7 +124,13 @@ static class FederatedLoadRelationFixture
 
     public static RelationQueryDocument RelationDocument { get; } = CreateRelationDocument();
 
+    public static RelationQueryDocument RequiredRelationDocument { get; } = CreateRelationDocument(
+        QueryInputRequirement.Required,
+        QueryInputRequirement.Optional);
+
     public static RelationQueryDocument AggregationDocument { get; } = CreateAggregationDocument();
+
+    public static RelationQueryDocument ConformanceQueryDocument { get; } = CreateConformanceQueryDocument();
 
     static RelationQueryDocument CreateQueryDocument()
     {
@@ -134,12 +143,14 @@ static class FederatedLoadRelationFixture
         return RelationQueryDocument.FromDefinition(definition);
     }
 
-    static RelationQueryDocument CreateRelationDocument()
+    static RelationQueryDocument CreateRelationDocument(
+        QueryInputRequirement customerRequirement = QueryInputRequirement.Optional,
+        QueryInputRequirement equipmentRequirement = QueryInputRequirement.Optional)
     {
         IRRelationDefinition definition = new(
             LoadSearchRelationId,
             LoadSearchRelationName,
-            CreateBody(),
+            CreateBody(customerRequirement, equipmentRequirement),
             LoadBinding,
             new(
                 ProjectionNodeId,
@@ -176,7 +187,41 @@ static class FederatedLoadRelationFixture
         return RelationQueryDocument.FromDefinition(definition);
     }
 
-    static LogicalQueryDefinition CreateBody() => new(
+    static RelationQueryDocument CreateConformanceQueryDocument()
+    {
+        var rows = CreateBody(
+            QueryInputRequirement.Required,
+            QueryInputRequirement.Optional);
+        IRQueryDefinition definition = new(
+            new("federated-load-conformance-query"),
+            new("FederatedLoadConformanceQuery"),
+            new LogicalQueryDefinition(
+            [
+                .. rows.Nodes,
+                new AggregateQueryNode(
+                    AggregateNodeId,
+                    LoadSourceNodeId,
+                    AggregateBinding,
+                    LoadAggregateShapeId,
+                    aggregates:
+                    [
+                        new QueryAggregateAssignment(
+                            AggregateLoadCountAssignmentId,
+                            AggregateLoadCountPath,
+                            AggregateOperator.Count)
+                    ])
+            ]),
+            [
+                new RowsQueryResultDefinition(RowsResultId, ProjectionNodeId),
+                new AggregationQueryResultDefinition(AggregationResultId, AggregateNodeId)
+            ]);
+
+        return RelationQueryDocument.FromDefinition(definition);
+    }
+
+    static LogicalQueryDefinition CreateBody(
+        QueryInputRequirement customerRequirement = QueryInputRequirement.Optional,
+        QueryInputRequirement equipmentRequirement = QueryInputRequirement.Optional) => new(
     [
         new SourceQueryNode(LoadSourceNodeId, LoadBinding, LoadShapeId),
         new TraverseRelationshipQueryNode(
@@ -187,7 +232,7 @@ static class FederatedLoadRelationFixture
             RelationshipTraversalDirection.Forward,
             CustomerBinding,
             JoinKind.Left,
-            QueryInputRequirement.Optional),
+            customerRequirement),
         new TraverseRelationshipQueryNode(
             EquipmentTraversalNodeId,
             CustomerTraversalNodeId,
@@ -196,7 +241,7 @@ static class FederatedLoadRelationFixture
             RelationshipTraversalDirection.Forward,
             EquipmentBinding,
             JoinKind.Left,
-            QueryInputRequirement.Optional),
+            equipmentRequirement),
         new ProjectQueryNode(
             ProjectionNodeId,
             EquipmentTraversalNodeId,

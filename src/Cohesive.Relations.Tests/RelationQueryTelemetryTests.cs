@@ -437,7 +437,7 @@ public sealed class RelationQueryTelemetryTests
     {
         var compilation = RelationQueryStaticCompiler.Compile(evaluation.Compilation);
         var plan = Assert.IsType<CompiledRelationQueryPlan>(compilation.Plan);
-        var placement = FederatedLoadPhysicalExecutionFixture.CreatePlacement(plan);
+        var placement = LoadCustomerRelationFixture.CreatePhysicalPlacement(plan);
         var customerSource = placement.SourceInstances.Single(
             static source => source.Id == FederatedLoadPhysicalExecutionFixture.CustomersSource);
         DeterministicRelationQuerySourceReader reader = new(
@@ -456,7 +456,7 @@ public sealed class RelationQueryTelemetryTests
                         ObservationValue.FromString($"type/{privatePayload}")))
             ]);
         return new(
-            static compiledPlan => FederatedLoadPhysicalExecutionFixture.CreatePlacement(compiledPlan),
+            static compiledPlan => LoadCustomerRelationFixture.CreatePhysicalPlacement(compiledPlan),
             FederatedLoadPhysicalExecutionFixture.CreatePolicy(),
             [reader]);
     }

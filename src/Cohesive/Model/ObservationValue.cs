@@ -194,24 +194,6 @@ public readonly struct ObservationValue(
         return true;
     }
 
-    static bool TryGetOrdinal(
-        IReadOnlyDictionary<string, ObservationValue> fields,
-        string name,
-        out ObservationValue value)
-    {
-        foreach (var (candidateName, candidateValue) in fields)
-        {
-            if (!string.Equals(candidateName, name, StringComparison.Ordinal))
-                continue;
-
-            value = candidateValue;
-            return true;
-        }
-
-        value = default;
-        return false;
-    }
-
     static IReadOnlyDictionary<string, ObservationValue>? SnapshotFields(
         IReadOnlyDictionary<string, ObservationValue>? fields)
     {
@@ -1346,7 +1328,7 @@ public readonly struct ObservationValue(
             return false;
         }
 
-        return TryGetOrdinal(Fields, propertyName, out value);
+        return Fields.TryGetValue(propertyName, out value);
     }
 
     /// <summary>
