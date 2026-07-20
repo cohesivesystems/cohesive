@@ -110,7 +110,7 @@ public sealed class RelationQueryExplainTests
 
         var otherCompilation = Compile(LoadCustomerRelationFixture.RepresentativeQueryDocument);
         var otherPlan = Assert.IsType<CompiledRelationQueryPlan>(otherCompilation.Plan);
-        var otherPlacement = FederatedLoadPhysicalExecutionFixture.CreatePlacement(otherPlan);
+        var otherPlacement = LoadCustomerRelationFixture.CreatePhysicalPlacement(otherPlan);
         Assert.Throws<ArgumentException>(() => RelationQueryExplainProjector.Project(
             fixture.Compilation,
             fixture.Realization,
@@ -282,7 +282,7 @@ public sealed class RelationQueryExplainTests
             .Build();
         var compilation = RelationQueryStaticCompiler.Compile(evaluation.Compilation);
         var plan = Assert.IsType<CompiledRelationQueryPlan>(compilation.Plan);
-        var placement = FederatedLoadPhysicalExecutionFixture.CreatePlacement(plan);
+        var placement = LoadCustomerRelationFixture.CreatePhysicalPlacement(plan);
         var customerSource = placement.SourceInstances.Single(
             static source => source.Id == FederatedLoadPhysicalExecutionFixture.CustomersSource);
         var customerReader = new DeterministicRelationQuerySourceReader(
@@ -293,7 +293,7 @@ public sealed class RelationQueryExplainTests
                 (LoadCustomerRelationFixture.CustomerNamePath, ObservationValue.FromString("Secret Customer")),
                 (LoadCustomerRelationFixture.CustomerTypePath, ObservationValue.FromString("Secret Type")))]);
         RelationQueryEvaluator evaluator = new(
-            static compiledPlan => FederatedLoadPhysicalExecutionFixture.CreatePlacement(compiledPlan),
+            static compiledPlan => LoadCustomerRelationFixture.CreatePhysicalPlacement(compiledPlan),
             FederatedLoadPhysicalExecutionFixture.CreatePolicy(),
             [customerReader]);
 
@@ -641,7 +641,7 @@ public sealed class RelationQueryExplainTests
             static stage => Assert.Equal(RelationQueryExplainStageStatus.Failed, stage.Status));
 
         var realization = RelationQueryInMemoryInterpreter.Default.Realize(plan);
-        var placement = FederatedLoadPhysicalExecutionFixture.CreatePlacement(plan);
+        var placement = LoadCustomerRelationFixture.CreatePhysicalPlacement(plan);
         var physicalFailure = new RelationQueryPhysicalPlanningResult(
             RelationQueryPhysicalPlanningStatus.Invalid,
             plan: null,
@@ -670,7 +670,7 @@ public sealed class RelationQueryExplainTests
         var compilation = Compile(LoadCustomerRelationFixture.BaselineRelationDocument);
         var plan = Assert.IsType<CompiledRelationQueryPlan>(compilation.Plan);
         var realization = RelationQueryInMemoryInterpreter.Default.Realize(plan);
-        var placement = FederatedLoadPhysicalExecutionFixture.CreatePlacement(plan);
+        var placement = LoadCustomerRelationFixture.CreatePhysicalPlacement(plan);
         var bound = Bind(new(plan, realization, placement));
         var physical = RelationQueryPhysicalPlanner.Compile(
             plan,

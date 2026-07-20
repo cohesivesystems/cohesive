@@ -2,18 +2,161 @@
 
 ## Conclusions
 
-- At 1,024 rows, the generated kernel is approximately 2.08× the handwritten simple mapper and
-  2.24× the handwritten joined mapper while allocating exactly the same number of bytes.
-- The full canonical mapping path is approximately 2.11× handwritten for simple mapping and 2.47×
-  for joined mapping. The canonical envelope adds about 1.7% over the simple kernel and 10.4% over
-  the joined kernel, so diagnostics and provenance bookkeeping are not the primary source of the
-  remaining difference from handwritten code.
-- The full compiled mapper is approximately 7.1–7.2× faster than the existing observation mapper at
-  scale and allocates approximately 94.9–97.4% less memory.
-- Further optimization should focus first on generated field reads and checked scalar conversions,
-  and only if end-to-end profiling identifies DTO materialization as a meaningful bottleneck.
+- In the ARI-145 1,024-row DefaultJob verification run, the generated kernel is approximately 1.74×
+  handwritten for the simple DTO and 1.54× for the joined DTO. It allocates exactly the same bytes as
+  handwritten mapping.
+- AutoMapper's compiled constructor-member plan is approximately 1.32× handwritten for the simple DTO
+  and 1.25× for the joined DTO over the same canonical rows. Its mean is 24.0% lower than the Cohesive
+  simple kernel and 18.7% lower than the joined kernel at this scale; the difference is therefore
+  scenario- and scale-dependent rather than a uniform 5%. AutoMapper does not provide Cohesive's
+  requirement-gap, completeness, diagnostic, or provenance semantics.
+- The full canonical mapper is approximately 1.98× handwritten for simple mapping and 1.43× for joined
+  mapping. It adds about 8.5 KB per 1,024-row batch for typed provenance rows and result bookkeeping.
+  Kernel-only and full-canonical timings use different loop/delegate orchestration, so their means
+  should not be interpreted as a strictly additive envelope cost.
+- Fresh Cohesive kernel compilation is about 5.2–5.5× faster than fresh AutoMapper configuration,
+  validation, and eager compilation in this ShortRun, while a cached Cohesive lookup is about 63–66 ns.
+- Physical planning, federated physical execution, and diagnostic-heavy mapping are descriptive
+  allocation/performance baselines. They are not CI thresholds; optimize them only from representative
+  end-to-end profiles.
 
 ## History
+
+### 2026-07-19 (ARI-145)
+
+- Base commit: `2214f5c7172a3c75ed169b6144296f4ac1793501`
+- Branch: `eulerfx/ari-145-establish-canonical-relation-query-conformance-and`
+- Worktree: dirty; includes the uncommitted ARI-145 conformance and benchmark implementation
+- BenchmarkDotNet: 0.15.8
+- OS: macOS Tahoe 26.5.2 (25F84), Darwin 25.5.0
+- Hardware: Apple M5 Max, Arm64, 18 physical/logical cores
+- SDK/runtime: .NET SDK 10.0.201; .NET 10.0.5 Arm64 RyuJIT
+- Environment overrides: none
+
+#### DefaultJob warm verification
+
+```bash
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build -- \
+  --filter "*RelationDtoWarmBenchmarks*"
+```
+
+Representative 1,024-row results:
+
+| Scenario | Mapper | Mean | Op/s | vs handwritten | vs AutoMapper | Allocated |
+|---|---|---:|---:|---:|---:|---:|
+| Simple | Handwritten | 22.75 μs | 43,958 | 1.00× | 0.76× | 57,368 B |
+| Simple | AutoMapper member plan | 30.12 μs | 33,201 | 1.32× | 1.00× | 57,368 B |
+| Simple | Cohesive compiled kernel | 39.64 μs | 25,227 | 1.74× | 1.32× | 57,368 B |
+| Simple | Cohesive full canonical | 45.01 μs | 22,219 | 1.98× | 1.49× | 65,898 B |
+| Simple | Existing observation mapper | 301.51 μs | 3,317 | 13.25× | 10.01× | 1,660,952 B |
+| Joined | Handwritten | 81.45 μs | 12,278 | 1.00× | 0.80× | 106,520 B |
+| Joined | AutoMapper member plan | 101.92 μs | 9,812 | 1.25× | 1.00× | 106,520 B |
+| Joined | Cohesive compiled kernel | 125.39 μs | 7,975 | 1.54× | 1.23× | 106,520 B |
+| Joined | Cohesive full canonical | 116.40 μs | 8,591 | 1.43× | 1.14× | 115,051 B |
+| Joined | Existing observation mapper | 950.06 μs | 1,053 | 11.66× | 9.32× | 5,052,440 B |
+
+In this longer run, AutoMapper's mean at 1,024 rows is 24.0% lower than the Cohesive simple kernel
+and 18.7% lower than the joined kernel. Against the full canonical mapper, its mean is 33.1% lower for
+the simple case and 12.4% lower for the joined case. At one row, however, the Cohesive kernel is faster
+than AutoMapper in both scenarios, and at 32 rows AutoMapper's advantage over the kernel is 14.0% for
+simple mapping and 6.8% for joined mapping. The crossover shows why the result should be reported by
+scenario and scale rather than summarized as a single percentage. Kernel-only and AutoMapper paths
+allocate identically at each measured scale.
+
+#### ShortRun baseline
+
+Warm materialization command:
+
+```bash
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build -- \
+  --job Short --filter "*RelationDtoWarmBenchmarks*"
+```
+
+Representative 1,024-row results:
+
+| Scenario | Mapper | Mean | Op/s | vs handwritten | vs AutoMapper | Allocated |
+|---|---|---:|---:|---:|---:|---:|
+| Simple | Handwritten | 23.11 μs | 43,271 | 1.00× | 0.75× | 57,368 B |
+| Simple | AutoMapper member plan | 30.69 μs | 32,581 | 1.33× | 1.00× | 57,368 B |
+| Simple | Cohesive compiled kernel | 36.99 μs | 27,031 | 1.60× | 1.21× | 57,368 B |
+| Simple | Cohesive full canonical | 41.06 μs | 24,353 | 1.78× | 1.34× | 65,898 B |
+| Simple | Existing observation mapper | 300.59 μs | 3,327 | 13.01× | 9.79× | 1,660,952 B |
+| Joined | Handwritten | 79.57 μs | 12,568 | 1.00× | 0.79× | 106,520 B |
+| Joined | AutoMapper member plan | 100.67 μs | 9,934 | 1.27× | 1.00× | 106,520 B |
+| Joined | Cohesive compiled kernel | 129.73 μs | 7,709 | 1.63× | 1.29× | 106,520 B |
+| Joined | Cohesive full canonical | 122.17 μs | 8,185 | 1.54× | 1.21× | 115,051 B |
+| Joined | Existing observation mapper | 955.80 μs | 1,046 | 12.01× | 9.49× | 5,052,440 B |
+
+AutoMapper uses explicit constructor-member mappings over the same prebuilt canonical
+`RelationQueryOutputRow` arrays as the Cohesive kernel comparison. Configuration validation,
+`CompileMappings()`, mapper creation, input-array construction, and output correctness checks run in
+`GlobalSetup`. A custom whole-object converter is not used.
+
+Cold compilation command:
+
+```bash
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build -- \
+  --job Short --filter "*RelationDtoCompilationBenchmarks*"
+```
+
+| Scenario | Operation | Mean | Relative to fresh Cohesive | Allocated |
+|---|---|---:|---:|---:|
+| Simple | Fresh Cohesive compile | 75.70 μs | 1.00× | 30,073 B |
+| Simple | Cached Cohesive compile | 65.75 ns | 0.001× | 48 B |
+| Simple | Fresh AutoMapper configure/validate/compile | 389.94 μs | 5.15× | 102,585 B |
+| Joined | Fresh Cohesive compile | 165.90 μs | 1.00× | 59,130 B |
+| Joined | Cached Cohesive compile | 62.57 ns | &lt;0.001× | 48 B |
+| Joined | Fresh AutoMapper configure/validate/compile | 907.27 μs | 5.47× | 154,607 B |
+
+The three-sample AutoMapper cold measurements have wide confidence intervals and should be treated
+as order-of-magnitude setup observations, not precise ratios.
+
+Physical planning/execution command:
+
+```bash
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build -- \
+  --job Short --filter "*RelationQueryPhysical*"
+```
+
+| Operation | Scale | Mean | Allocated |
+|---|---:|---:|---:|
+| Physical planning | 32-row bound | 383.0 μs | 1.25 MB |
+| Physical planning | 1,024-row bound | 498.7 μs | 1.25 MB |
+| Batched acquisition/deduplication/correlation | 32 roots | 1.534 ms | 3.55 MB |
+| Batched acquisition/deduplication/correlation | 1,024 roots | 36.569 ms | 46.13 MB |
+
+The execution setup uses 50% distinct Customer keys and 25% distinct Equipment keys. At 1,024 roots,
+the validated 32-key limit produces exactly 16 Customer batches and 8 Equipment batches with no N+1
+reads. Deterministic in-memory readers use a prebuilt ordinal identity index and exclude backend and network latency.
+
+Diagnostic-scale command:
+
+```bash
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build -- \
+  --job Short --filter "*RelationDtoDiagnosticScaleBenchmarks*"
+```
+
+| Missing joined inputs | Mean | Allocated |
+|---:|---:|---:|
+| 32 rows | 60.33 μs | 32.24 KB |
+| 1,024 rows | 1.929 ms | 1,024.51 KB |
+
+An initial ARI-145 run exposed an accidental allocation and lookup-complexity regression in
+`ObservationValue.TryGetProperty`: the method enumerated the object dictionary for every field read
+even though construction already normalizes object storage to ordinal lookup semantics. Restoring direct
+`TryGetValue` and adding a zero-allocation lookup regression test reduced the generated-kernel gap from
+the interim 5–7× range to the 1.60–1.63× baseline above. This is a local lookup correction, not mapper
+fusion or a weakening of canonical validation.
 
 ### 2026-07-15 (ARI-129)
 

@@ -1,12 +1,14 @@
 using System.Collections.Immutable;
+using Cohesive.Model;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.Execution;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Physical;
 using Cohesive.Relations.Realization;
+using Cohesive.Relations.Serialization;
 
-namespace Cohesive.Relations.Tests;
+namespace Cohesive.Relations.TestFixtures;
 
 static class FederatedLoadPhysicalExecutionFixture
 {
@@ -20,7 +22,8 @@ static class FederatedLoadPhysicalExecutionFixture
         long maximumBatchSize = 2,
         long maximumLocalRows = 100,
         long maximumReferenceKeysPerObservation = 100,
-        long customerMaximumBufferedRows = 100)
+        long customerMaximumBufferedRows = 100,
+        long maximumBufferedRows = 100)
     {
         var compilation = RelationQueryStaticCompiler.Compile(new(
             document,
@@ -35,13 +38,35 @@ static class FederatedLoadPhysicalExecutionFixture
                     $"{diagnostic.Code} {diagnostic.Location}: {diagnostic.Message}")));
         }
 
-        var plan = compilation.Plan;
+        return Create(
+            compilation.Plan,
+            maximumBatchSize,
+            maximumLocalRows,
+            maximumReferenceKeysPerObservation,
+            customerMaximumBufferedRows,
+            maximumBufferedRows);
+    }
+
+    public static Compilation Create(
+        CompiledRelationQueryPlan plan,
+        long maximumBatchSize = 2,
+        long maximumLocalRows = 100,
+        long maximumReferenceKeysPerObservation = 100,
+        long customerMaximumBufferedRows = 100,
+        long maximumBufferedRows = 100)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
         var realization = RelationQueryInMemoryInterpreter.Default.Realize(plan);
-        var placement = CreatePlacement(plan, maximumBatchSize, customerMaximumBufferedRows);
+        var placement = CreatePlacement(
+            plan,
+            maximumBatchSize,
+            customerMaximumBufferedRows,
+            maximumBufferedRows);
         var policy = CreatePolicy(
             maximumBatchSize,
             maximumLocalRows,
-            maximumReferenceKeysPerObservation);
+            maximumReferenceKeysPerObservation,
+            maximumBufferedRows);
         var physicalResult = RelationQueryPhysicalPlanner.Compile(
             plan,
             realization,
@@ -61,12 +86,13 @@ static class FederatedLoadPhysicalExecutionFixture
     public static RelationQueryPhysicalPlanningPolicy CreatePolicy(
         long maximumBatchSize = 2,
         long maximumLocalRows = 100,
-        long maximumReferenceKeysPerObservation = 100) =>
+        long maximumReferenceKeysPerObservation = 100,
+        long maximumBufferedRows = 100) =>
         new(
             new($"tests/federated-execution-policy/batch-{maximumBatchSize}/v1"),
             conventionSetVersion: "tests/federated-execution-conventions/v1",
             maximumBatchSize,
-            maximumBufferedRows: 100,
+            maximumBufferedRows,
             maximumLocalRows,
             maximumFanOut: 100,
             maximumReferenceKeysPerObservation,
@@ -91,12 +117,14 @@ static class FederatedLoadPhysicalExecutionFixture
     public static RelationQuerySourcePlacement CreatePlacement(
         CompiledRelationQueryPlan plan,
         long maximumBatchSize = 2,
-        long customerMaximumBufferedRows = 100)
+        long customerMaximumBufferedRows = 100,
+        long maximumBufferedRows = 100,
+        IReadOnlyDictionary<QualifiedShapeId, RelationQuerySourceInstanceId>? sourceAliases = null)
     {
         List<RelationQuerySourcePlacementBinding> bindings = [];
         foreach (var source in plan.InputContract.Sources)
         {
-            var sourceId = SourceForShape(source.Shape);
+            var sourceId = SourceForShape(source.Shape, sourceAliases);
             bindings.Add(new(
                 new($"placement/{Uri.EscapeDataString(source.Input.Id.Value)}"),
                 source.Input.Id,
@@ -123,7 +151,7 @@ static class FederatedLoadPhysicalExecutionFixture
                 traversal.Input.Traversal,
                 traversal.Result,
                 traversal.ResultShape,
-                SourceForShape(traversal.ResultShape),
+                SourceForShape(traversal.ResultShape, sourceAliases),
                 RelationQuerySourcePlacementBindingKind.RelationshipTraversal,
                 RelationQuerySourceAcquisitionKind.BoundedLookup,
                 RelationQuerySourcePlacementOrigin.Explicit,
@@ -143,7 +171,9 @@ static class FederatedLoadPhysicalExecutionFixture
                 PrimitiveProfile(source),
                 new(
                     maximumBatchSize,
-                    maximumBufferedRows: source == CustomersSource ? customerMaximumBufferedRows : 100,
+                    maximumBufferedRows: source == CustomersSource
+                        ? customerMaximumBufferedRows
+                        : maximumBufferedRows,
                     maximumFanOut: 100,
                     maximumConcurrency: 4)))
             .ToImmutableArray();
@@ -194,17 +224,22 @@ static class FederatedLoadPhysicalExecutionFixture
             ]);
     }
 
-    static RelationQuerySourceInstanceId SourceForShape(QualifiedShapeId shape) =>
-        shape == FederatedLoadRelationFixture.LoadShapeId
-            || shape == LoadCustomerRelationFixture.LoadShapeId
-            ? LoadsSource
-            : shape == FederatedLoadRelationFixture.CustomerShapeId
-                || shape == LoadCustomerRelationFixture.CustomerShapeId
-                ? CustomersSource
-                : shape == FederatedLoadRelationFixture.EquipmentShapeId
-                    ? EquipmentSource
-                    : throw new InvalidOperationException(
-                        $"No fake physical source is configured for '{shape}'.");
+    static RelationQuerySourceInstanceId SourceForShape(
+        QualifiedShapeId shape,
+        IReadOnlyDictionary<QualifiedShapeId, RelationQuerySourceInstanceId>? sourceAliases)
+    {
+        if (sourceAliases?.TryGetValue(shape, out var source) == true)
+            return source;
+        if (shape == FederatedLoadRelationFixture.LoadShapeId)
+            return LoadsSource;
+        if (shape == FederatedLoadRelationFixture.CustomerShapeId)
+            return CustomersSource;
+        if (shape == FederatedLoadRelationFixture.EquipmentShapeId)
+            return EquipmentSource;
+
+        throw new InvalidOperationException(
+            $"No fake physical source is configured for '{shape}'.");
+    }
 
     public sealed record Compilation(
         CompiledRelationQueryPlan Plan,

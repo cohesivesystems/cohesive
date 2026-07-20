@@ -128,6 +128,34 @@ public sealed class ObservationValueTests
     }
 
     [Fact]
+    public void TryGetProperty_OrdinalLookupDoesNotAllocate()
+    {
+        var observed = ObservationValue.FromObject(
+            new Dictionary<string, ObservationValue>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Value"] = ObservationValue.FromInt64(42)
+            });
+        long checksum = 0;
+        for (var index = 0; index < 16; index++)
+        {
+            if (observed.TryGetProperty("Value", out var warmup))
+                checksum += warmup.GetInt64();
+        }
+
+        _ = GC.GetAllocatedBytesForCurrentThread();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < 10_000; index++)
+        {
+            if (observed.TryGetProperty("Value", out var value))
+                checksum += value.GetInt64();
+        }
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        GC.KeepAlive(checksum);
+        Assert.Equal(0, allocated);
+    }
+
+    [Fact]
     public void PublicConstructor_SnapshotsCallerOwnedObjectArrayAndByteStorage()
     {
         var fields = new Dictionary<string, ObservationValue>(StringComparer.Ordinal)

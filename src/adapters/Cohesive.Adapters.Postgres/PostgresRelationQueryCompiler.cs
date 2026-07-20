@@ -848,7 +848,7 @@ public sealed class PostgresRelationQueryCompiler
         {
             semanticShape?.TryGetField(fieldName, out field);
         }
-        if (field is null || !TryResolveKeyScalarType(field.Type, out var expected) || expected != scalarType)
+        if (field is null || !TryResolveScalarType(field.Type, out var expected) || expected != scalarType)
         {
             error(
                 $"PostgreSQL {description} does not preserve the canonical relationship-key scalar type for '{path}'.");
@@ -869,7 +869,7 @@ public sealed class PostgresRelationQueryCompiler
         }
     }
 
-    static bool TryResolveKeyScalarType(TypeRef type, out PostgresRelationQueryScalarType scalarType)
+    static bool TryResolveScalarType(TypeRef? type, out PostgresRelationQueryScalarType scalarType)
     {
         scalarType = type switch
         {
@@ -3638,21 +3638,13 @@ public sealed class PostgresRelationQueryCompiler
                     "PostgreSQL SQL v1 requires single-valued scalar fields.", node);
             }
 
-            return contract.GetEffectiveType() switch
-            {
-                ScalarTypeRef { Kind: ScalarTypeKind.Bool } => PostgresRelationQueryValueEncoding.Boolean,
-                ScalarTypeRef { Kind: ScalarTypeKind.Int32 } => PostgresRelationQueryValueEncoding.Int32,
-                ScalarTypeRef { Kind: ScalarTypeKind.Int64 } => PostgresRelationQueryValueEncoding.Int64,
-                ScalarTypeRef { Kind: ScalarTypeKind.Decimal } => PostgresRelationQueryValueEncoding.Numeric,
-                ScalarTypeRef { Kind: ScalarTypeKind.String } => PostgresRelationQueryValueEncoding.Text,
-                ScalarTypeRef { Kind: ScalarTypeKind.Guid } => PostgresRelationQueryValueEncoding.Uuid,
-                ScalarTypeRef { Kind: ScalarTypeKind.Date } => PostgresRelationQueryValueEncoding.Date,
-                ScalarTypeRef { Kind: ScalarTypeKind.DateTime } => PostgresRelationQueryValueEncoding.Timestamp,
-                ScalarTypeRef { Kind: ScalarTypeKind.Instant } => PostgresRelationQueryValueEncoding.TimestampWithTimeZone,
-                ScalarTypeRef { Kind: ScalarTypeKind.Bytes } => PostgresRelationQueryValueEncoding.Bytea,
-                _ => throw Fail(PostgresRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                    "Semantic value has no exact PostgreSQL SQL v1 scalar encoding.", node)
-            };
+            if (TryResolveScalarType(contract.GetEffectiveType(), out var scalarType))
+                return Convert(scalarType);
+
+            throw Fail(
+                PostgresRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
+                "Semantic value has no exact PostgreSQL SQL v1 scalar encoding.",
+                node);
         }
 
         static PostgresRelationQueryValueEncoding Convert(PostgresRelationQueryScalarType scalar) => scalar switch

@@ -387,7 +387,7 @@ public sealed class RelationQueryEvaluatorTests
         RelationQueryEvaluator evaluator = new(
             plan =>
             {
-                var conventional = FederatedLoadPhysicalExecutionFixture.CreatePlacement(plan);
+                var conventional = LoadCustomerRelationFixture.CreatePhysicalPlacement(plan);
                 var omittedTraversal = Assert.Single(plan.InputContract.Traversals).Input.Id;
                 attemptedPlacement = new(
                     RelationQuerySourcePlacement.CurrentSchemaVersion,
@@ -415,7 +415,7 @@ public sealed class RelationQueryEvaluatorTests
         RelationQueryEvaluator evaluator = new(
             plan =>
             {
-                var conventional = FederatedLoadPhysicalExecutionFixture.CreatePlacement(plan);
+                var conventional = LoadCustomerRelationFixture.CreatePhysicalPlacement(plan);
                 var reference = conventional.Plan;
                 RelationQueryCompiledPlanReference foreignReference = new(
                     reference.CompilerProfile,
@@ -576,7 +576,7 @@ public sealed class RelationQueryEvaluatorTests
     {
         var compilation = RelationQueryStaticCompiler.Compile(evaluation.Compilation);
         var plan = Assert.IsType<CompiledRelationQueryPlan>(compilation.Plan);
-        var placement = FederatedLoadPhysicalExecutionFixture.CreatePlacement(plan);
+        var placement = LoadCustomerRelationFixture.CreatePhysicalPlacement(plan);
         List<IRelationQuerySourceReader> readers = [];
         if (placement.Bindings.Any(binding => binding.Source == FederatedLoadPhysicalExecutionFixture.LoadsSource
                 && binding.Acquisition != RelationQuerySourceAcquisitionKind.Supplied))
@@ -600,7 +600,7 @@ public sealed class RelationQueryEvaluatorTests
         }
 
         return new(
-            static plan => FederatedLoadPhysicalExecutionFixture.CreatePlacement(plan),
+            static plan => LoadCustomerRelationFixture.CreatePhysicalPlacement(plan),
             FederatedLoadPhysicalExecutionFixture.CreatePolicy(),
             readers,
             interpreter);
