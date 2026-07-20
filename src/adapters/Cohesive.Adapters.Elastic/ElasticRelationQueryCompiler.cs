@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -7,6 +8,7 @@ using Cohesive.Model;
 using Cohesive.Model.Expressions;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.IR;
+using Cohesive.Relations.Observability;
 using Cohesive.Relations.Physical;
 using Cohesive.Relations.Realization;
 using Cohesive.Relations.Serialization;
@@ -70,8 +72,34 @@ public sealed class ElasticRelationQueryCompiler
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(storageBinding);
+        return ObserveContextualRealization(request, storageBinding).Report;
+    }
+
+    (RelationQueryBoundRealizationReport Report,
+        ImmutableArray<RelationQueryNativeCompilationDiagnostic> Diagnostics) ObserveContextualRealization(
+        RelationQueryBoundRealizationRequest request,
+        ElasticRelationQueryStorageBinding storageBinding) =>
+        RelationQueryCompilerTelemetry.Observe(
+            ElasticRelationQueryTelemetry.Emitter,
+            RelationQueryTelemetry.RealizationActivityName,
+            (Compiler: this, Request: request, StorageBinding: storageBinding),
+            static state => state.Compiler.RealizeCore(state.Request, state.StorageBinding),
+            static realization => RelationQueryTelemetry.GetStatusTagValue(realization.Report.Status),
+            static (activity, state, realization) => RelationQueryCompilerTelemetry.ProjectRealizationActivity(
+                activity,
+                state.Request,
+                state.StorageBinding.Fingerprint.Value,
+                realization.Report));
+
+    (RelationQueryBoundRealizationReport Report,
+        ImmutableArray<RelationQueryNativeCompilationDiagnostic> Diagnostics) RealizeCore(
+        RelationQueryBoundRealizationRequest request,
+        ElasticRelationQueryStorageBinding storageBinding)
+    {
         var projection = ProjectContextualEvidence(request, storageBinding);
-        return RelationQueryBoundRealizationCompiler.Compile(request, projection.Evidence);
+        return (
+            RelationQueryBoundRealizationCompiler.Compile(request, projection.Evidence),
+            projection.Diagnostics);
     }
 
     /// <summary>
@@ -89,29 +117,53 @@ public sealed class ElasticRelationQueryCompiler
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(storageBinding);
+        var outcome = RelationQueryCompilerTelemetry.Observe(
+            ElasticRelationQueryTelemetry.Emitter,
+            RelationQueryTelemetry.NativeCompilationActivityName,
+            (Compiler: this, Request: request, StorageBinding: storageBinding),
+            static state => state.Compiler.CompileBoundCore(state.Request, state.StorageBinding),
+            static observed => RelationQueryTelemetry.GetStatusTagValue(observed.Compilation.Status),
+            static (activity, state, observed) => ProjectCompilationActivity(
+                activity,
+                state.Request.PlanReference,
+                state.Request.Placement,
+                state.StorageBinding,
+                observed.BoundRealization.ProfileFeasibility.TargetProfile.Target.Value,
+                observed.BoundRealization.Fingerprint.Value,
+                observed.Compilation),
+            RelationQueryTelemetry.BoundRequestKind);
+        return outcome.Compilation;
+    }
 
-        var projection = ProjectContextualEvidence(request, storageBinding);
-        var boundRealization = RelationQueryBoundRealizationCompiler.Compile(request, projection.Evidence);
+    (ElasticRelationQueryCompilationResult Compilation, RelationQueryBoundRealizationReport BoundRealization)
+        CompileBoundCore(
+        RelationQueryBoundRealizationRequest request,
+        ElasticRelationQueryStorageBinding storageBinding)
+    {
+
+        var realization = ObserveContextualRealization(request, storageBinding);
+        var boundRealization = realization.Report;
         if (!boundRealization.IsRealizable)
         {
             ImmutableArray<RelationQueryNativeCompilationDiagnostic> diagnostics =
             [
-                .. projection.Diagnostics,
+                .. realization.Diagnostics,
                 .. RelationQueryNativeCompilationDiagnostic.FromBoundRealizationFailure(boundRealization)
             ];
-            return new(
+            ElasticRelationQueryCompilationResult compilation = new(
                 boundRealization.Status == RelationQueryRealizationStatus.Invalid
                     ? RelationQueryNativeCompilationStatus.Invalid
                     : RelationQueryNativeCompilationStatus.Unsupported,
                 [],
                 diagnostics);
+            return new(compilation, boundRealization);
         }
 
         RelationQueryNativeCompilationRequest nativeRequest = new(
             request.Plan,
             boundRealization,
             request.Placement);
-        return Compile(nativeRequest, storageBinding);
+        return new(CompileCore(nativeRequest, storageBinding), boundRealization);
     }
 
     /// <summary>Compiles every selected request branch independently and fails closed on semantic uncertainty.</summary>
@@ -127,6 +179,27 @@ public sealed class ElasticRelationQueryCompiler
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(storageBinding);
+        return RelationQueryCompilerTelemetry.Observe(
+            ElasticRelationQueryTelemetry.Emitter,
+            RelationQueryTelemetry.NativeCompilationActivityName,
+            (Compiler: this, Request: request, StorageBinding: storageBinding),
+            static state => state.Compiler.CompileCore(state.Request, state.StorageBinding),
+            static result => RelationQueryTelemetry.GetStatusTagValue(result.Status),
+            static (activity, state, result) => ProjectCompilationActivity(
+                activity,
+                state.Request.PlanReference,
+                state.Request.Placement,
+                state.StorageBinding,
+                state.Request.BoundRealization.ProfileFeasibility.TargetProfile.Target.Value,
+                state.Request.BoundRealization.Fingerprint.Value,
+                result),
+            RelationQueryTelemetry.NativeRequestKind);
+    }
+
+    ElasticRelationQueryCompilationResult CompileCore(
+        RelationQueryNativeCompilationRequest request,
+        ElasticRelationQueryStorageBinding storageBinding)
+    {
 
         var diagnostics = ImmutableArray.CreateBuilder<RelationQueryNativeCompilationDiagnostic>();
         var inputDiagnostics = request.ValidateInputs();
@@ -200,6 +273,34 @@ public sealed class ElasticRelationQueryCompiler
                 : RelationQueryNativeCompilationStatus.Exact,
             artifacts.ToImmutable(),
             normalizedDiagnostics);
+    }
+
+    static void ProjectCompilationActivity(
+        Activity activity,
+        RelationQueryCompiledPlanReference plan,
+        RelationQuerySourcePlacement placement,
+        ElasticRelationQueryStorageBinding storageBinding,
+        string target,
+        string boundRealizationFingerprint,
+        ElasticRelationQueryCompilationResult result)
+    {
+        RelationQueryCompilerTelemetry.ProjectNativeCompilationActivity(
+            activity,
+            plan,
+            placement,
+            target,
+            storageBinding.Fingerprint.Value,
+            boundRealizationFingerprint,
+            result.Artifacts.Length,
+            result.Diagnostics.Length,
+            result.Artifacts.Length == 1 ? result.Artifacts[0].Fingerprint.Value : null);
+        foreach (var diagnostic in result.Diagnostics)
+        {
+            RelationQueryTelemetry.AddDiagnosticEvent(
+                activity,
+                diagnostic.Code,
+                diagnostic.Severity);
+        }
     }
 
     static ImmutableArray<RelationQueryNativeCompilationDiagnostic> ValidateBinding(

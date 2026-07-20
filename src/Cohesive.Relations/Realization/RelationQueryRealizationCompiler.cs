@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using Cohesive.Relations.Compilation;
+using Cohesive.Relations.Observability;
 
 namespace Cohesive.Relations.Realization;
 
@@ -74,12 +75,76 @@ public static class RelationQueryRealizationCompiler
         RelationQueryResultObservability observability)
     {
         ArgumentNullException.ThrowIfNull(plan);
-        return MatchCore(
+        return RelationQueryTelemetryRuntime.IsOperationEnabled
+            ? CompileObserved(plan, targetProfile, policy, observability)
+            : CompileCore(plan, targetProfile, policy, observability);
+    }
+
+    static RelationQueryRealizationReport CompileCore(
+        CompiledRelationQueryPlan plan,
+        RelationQueryTargetCapabilityProfile targetProfile,
+        RelationQueryRealizationPolicy policy,
+        RelationQueryResultObservability observability) => MatchCore(
             RelationQueryCompiledPlanReference.From(plan),
             RelationQueryRealizationRequirementProjector.Project(plan, observability),
             targetProfile,
             policy,
             observability);
+
+    static RelationQueryRealizationReport CompileObserved(
+        CompiledRelationQueryPlan plan,
+        RelationQueryTargetCapabilityProfile targetProfile,
+        RelationQueryRealizationPolicy policy,
+        RelationQueryResultObservability observability)
+    {
+        var activity = RelationQueryTelemetryRuntime.StartActivity(
+            RelationQueryTelemetry.ProfileFeasibilityActivityName);
+        var started = RelationQueryTelemetryRuntime.StartTimer();
+        Exception? failure = null;
+        RelationQueryRealizationReport? result = null;
+        try
+        {
+            result = CompileCore(plan, targetProfile, policy, observability);
+            if (activity?.IsAllDataRequested == true)
+            {
+                RelationQueryTelemetry.TrySetFingerprintTag(
+                    activity,
+                    RelationQueryTelemetry.PlanFingerprintTagName,
+                    RelationQueryCompiledPlanReferenceFingerprinter.Compute(result.Plan).Value);
+                activity.SetTag(RelationQueryTelemetry.TargetTagName, targetProfile.Target.Value);
+                RelationQueryTelemetry.TrySetFingerprintTag(
+                    activity,
+                    RelationQueryTelemetry.RealizationFingerprintTagName,
+                    result.Fingerprint.Value);
+                activity.SetTag(RelationQueryTelemetry.DiagnosticCountTagName, result.Diagnostics.Length);
+                foreach (var diagnostic in result.Diagnostics)
+                {
+                    RelationQueryTelemetry.AddDiagnosticEvent(
+                        activity,
+                        diagnostic.Code,
+                        diagnostic.Severity);
+                }
+            }
+            return result;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException
+                                          and not StackOverflowException
+                                          and not AccessViolationException)
+        {
+            failure = exception;
+            throw;
+        }
+        finally
+        {
+            RelationQueryTelemetryRuntime.CompleteOperation(
+                activity,
+                started,
+                RelationQueryTelemetry.ProfileFeasibilityActivityName,
+                failure is not null || result is null
+                    ? RelationQueryTelemetry.ExceptionStatus
+                    : RelationQueryTelemetry.GetStatusTagValue(result.Status),
+                exception: failure);
+        }
     }
 
     /// <summary>Matches an already projected requirement set to one target capability profile.</summary>

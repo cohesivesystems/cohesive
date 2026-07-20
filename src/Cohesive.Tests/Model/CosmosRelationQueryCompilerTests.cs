@@ -4,6 +4,7 @@ using Cohesive.Adapters.Cosmos;
 using Cohesive.Model.Expressions;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Compilation;
+using Cohesive.Relations.Explain;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.Physical;
@@ -660,6 +661,9 @@ public sealed class CosmosRelationQueryCompilerTests
                 diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.StorageBindingMismatch
                 && diagnostic.Message.Contains("compiler-policy evidence", StringComparison.Ordinal));
             Assert.Empty(result.Artifacts);
+            var explain = CosmosRelationQueryExplainProjector.Project(nativeRequest, result);
+            Assert.Equal(bound.Fingerprint, explain.Attempt.BoundRealization);
+            Assert.Equal(RelationQueryExplainStageStatus.Invalid, explain.Status);
         }
     }
 
@@ -1511,6 +1515,7 @@ public sealed class CosmosRelationQueryCompilerTests
 
     internal static RelationQueryAdapterConformanceCase CreateBoundRealizationConformanceCase() => new(
         "Cosmos",
+        CosmosRelationQueryTelemetry.InstrumentationName,
         static () =>
         {
             var fixture = Fixture.Row();
@@ -1521,15 +1526,14 @@ public sealed class CosmosRelationQueryCompilerTests
                 fixture.Placement);
             var bound = compiler.Realize(request, fixture.StorageBinding);
             var repeated = compiler.Realize(request, fixture.StorageBinding);
-            var compilation = compiler.Compile(
-                new RelationQueryNativeCompilationRequest(fixture.Plan, bound, fixture.Placement),
-                fixture.StorageBinding);
+            var compilation = compiler.Compile(request, fixture.StorageBinding);
 
             return new(
                 bound,
                 repeated,
                 compilation.Status,
-                [.. compilation.Artifacts.Select(static artifact => artifact.Provenance.BoundRealization)]);
+                [.. compilation.Artifacts.Select(static artifact => artifact.Provenance.BoundRealization)],
+                CosmosRelationQueryExplainProjector.Project(compilation));
         },
         static () =>
         {
@@ -1547,7 +1551,11 @@ public sealed class CosmosRelationQueryCompilerTests
             var bound = compiler.Realize(request, incomplete);
             var compilation = compiler.Compile(request, incomplete);
 
-            return new(bound, compilation.Status, compilation.Artifacts.Length);
+            return new(
+                bound,
+                compilation.Status,
+                compilation.Artifacts.Length,
+                CosmosRelationQueryExplainProjector.Project(compilation));
         });
 
     public enum UnsafeDistinctDomain

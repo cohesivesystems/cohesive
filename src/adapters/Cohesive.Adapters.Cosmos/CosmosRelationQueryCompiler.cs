@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -7,6 +8,7 @@ using Cohesive.Model;
 using Cohesive.Model.Expressions;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.IR;
+using Cohesive.Relations.Observability;
 using Cohesive.Relations.Physical;
 using Cohesive.Relations.Realization;
 using Cohesive.Relations.Serialization;
@@ -53,6 +55,23 @@ public sealed class CosmosRelationQueryCompiler
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(storageBinding);
+        return RelationQueryCompilerTelemetry.Observe(
+            CosmosRelationQueryTelemetry.Emitter,
+            RelationQueryTelemetry.RealizationActivityName,
+            (Compiler: this, Request: request, StorageBinding: storageBinding),
+            static state => state.Compiler.RealizeCore(state.Request, state.StorageBinding),
+            static report => RelationQueryTelemetry.GetStatusTagValue(report.Status),
+            static (activity, state, report) => RelationQueryCompilerTelemetry.ProjectRealizationActivity(
+                activity,
+                state.Request,
+                state.StorageBinding.Fingerprint.Value,
+                report));
+    }
+
+    RelationQueryBoundRealizationReport RealizeCore(
+        RelationQueryBoundRealizationRequest request,
+        CosmosRelationQueryStorageBinding storageBinding)
+    {
         var bindingDiagnostics = ValidateBinding(
             request.Plan,
             request.PlanReference,
@@ -81,19 +100,43 @@ public sealed class CosmosRelationQueryCompiler
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(storageBinding);
+        var outcome = RelationQueryCompilerTelemetry.Observe(
+            CosmosRelationQueryTelemetry.Emitter,
+            RelationQueryTelemetry.NativeCompilationActivityName,
+            (Compiler: this, Request: request, StorageBinding: storageBinding),
+            static state => state.Compiler.CompileBoundCore(state.Request, state.StorageBinding),
+            static observed => RelationQueryTelemetry.GetStatusTagValue(observed.Compilation.Status),
+            static (activity, state, observed) => ProjectCompilationActivity(
+                activity,
+                state.Request.PlanReference,
+                state.Request.Placement,
+                state.StorageBinding,
+                observed.BoundRealization.ProfileFeasibility.TargetProfile.Target.Value,
+                observed.BoundRealization.Fingerprint.Value,
+                observed.Compilation),
+            RelationQueryTelemetry.BoundRequestKind);
+        return outcome.Compilation;
+    }
+
+    (CosmosRelationQueryCompilationResult Compilation, RelationQueryBoundRealizationReport BoundRealization)
+        CompileBoundCore(
+        RelationQueryBoundRealizationRequest request,
+        CosmosRelationQueryStorageBinding storageBinding)
+    {
         var bound = Realize(request, storageBinding);
         if (!bound.IsRealizable)
         {
-            return new(
+            CosmosRelationQueryCompilationResult compilation = new(
                 bound.Status == RelationQueryRealizationStatus.Invalid
                     ? RelationQueryNativeCompilationStatus.Invalid
                     : RelationQueryNativeCompilationStatus.Unsupported,
                 [],
                 RelationQueryNativeCompilationDiagnostic.FromBoundRealizationFailure(bound));
+            return new(compilation, bound);
         }
-        return Compile(
+        return new(CompileCore(
             new RelationQueryNativeCompilationRequest(request.Plan, bound, request.Placement),
-            storageBinding);
+            storageBinding), bound);
     }
 
     /// <summary>Compiles every selected request branch independently and fails closed on semantic uncertainty.</summary>
@@ -109,6 +152,27 @@ public sealed class CosmosRelationQueryCompiler
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(storageBinding);
+        return RelationQueryCompilerTelemetry.Observe(
+            CosmosRelationQueryTelemetry.Emitter,
+            RelationQueryTelemetry.NativeCompilationActivityName,
+            (Compiler: this, Request: request, StorageBinding: storageBinding),
+            static state => state.Compiler.CompileCore(state.Request, state.StorageBinding),
+            static result => RelationQueryTelemetry.GetStatusTagValue(result.Status),
+            static (activity, state, result) => ProjectCompilationActivity(
+                activity,
+                state.Request.PlanReference,
+                state.Request.Placement,
+                state.StorageBinding,
+                state.Request.BoundRealization.ProfileFeasibility.TargetProfile.Target.Value,
+                state.Request.BoundRealization.Fingerprint.Value,
+                result),
+            RelationQueryTelemetry.NativeRequestKind);
+    }
+
+    CosmosRelationQueryCompilationResult CompileCore(
+        RelationQueryNativeCompilationRequest request,
+        CosmosRelationQueryStorageBinding storageBinding)
+    {
 
         ImmutableArray<RelationQueryNativeCompilationDiagnostic>.Builder diagnostics =
             ImmutableArray.CreateBuilder<RelationQueryNativeCompilationDiagnostic>();
@@ -176,6 +240,34 @@ public sealed class CosmosRelationQueryCompiler
                 : RelationQueryNativeCompilationStatus.Exact,
             artifacts.ToImmutable(),
             normalizedDiagnostics);
+    }
+
+    static void ProjectCompilationActivity(
+        Activity activity,
+        RelationQueryCompiledPlanReference plan,
+        RelationQuerySourcePlacement placement,
+        CosmosRelationQueryStorageBinding storageBinding,
+        string target,
+        string boundRealizationFingerprint,
+        CosmosRelationQueryCompilationResult result)
+    {
+        RelationQueryCompilerTelemetry.ProjectNativeCompilationActivity(
+            activity,
+            plan,
+            placement,
+            target,
+            storageBinding.Fingerprint.Value,
+            boundRealizationFingerprint,
+            result.Artifacts.Length,
+            result.Diagnostics.Length,
+            result.Artifacts.Length == 1 ? result.Artifacts[0].Fingerprint.Value : null);
+        foreach (var diagnostic in result.Diagnostics)
+        {
+            RelationQueryTelemetry.AddDiagnosticEvent(
+                activity,
+                diagnostic.Code,
+                diagnostic.Severity);
+        }
     }
 
     static ImmutableArray<RelationQueryNativeCompilationDiagnostic> ValidateBinding(

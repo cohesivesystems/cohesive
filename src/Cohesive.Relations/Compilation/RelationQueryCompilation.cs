@@ -134,6 +134,7 @@ public enum RelationQueryLogicalBypassKind
 /// </summary>
 public sealed record RelationQueryLogicalBypass
 {
+    [JsonConstructor]
     internal RelationQueryLogicalBypass(
         RelationQueryLogicalBypassKind kind,
         QueryNodeId node,
@@ -197,6 +198,7 @@ public sealed record RelationQueryLogicalBypass
 /// </summary>
 public sealed record RelationQueryLogicalPlanInput
 {
+    [JsonConstructor]
     internal RelationQueryLogicalPlanInput(
         QueryNodeId canonicalInput,
         QueryNodeId effectiveInput,
@@ -236,6 +238,7 @@ public sealed record RelationQueryLogicalPlanInput
 /// </summary>
 public sealed record RelationQueryLogicalPlanNode
 {
+    [JsonConstructor]
     internal RelationQueryLogicalPlanNode(
         QueryNodeId node,
         ImmutableArray<RelationQueryLogicalPlanInput> inputs)
@@ -268,6 +271,7 @@ public sealed record RelationQueryLogicalPlanNode
 /// </summary>
 public sealed class RelationQueryLogicalPlan
 {
+    [JsonConstructor]
     internal RelationQueryLogicalPlan(ImmutableArray<RelationQueryLogicalPlanNode> nodes)
     {
         var normalized = nodes.IsDefault ? [] : nodes;

@@ -1,4 +1,8 @@
 import type {
+  RelationQueryBoundRealizationReport,
+  RelationQueryCompilationRequestReference,
+  RelationQueryExplainArtifact,
+  RelationQueryExplainStage,
   RelationDraftDocument,
   RelationQueryRealizationReport,
   RelationQueryTargetCapabilityProfile,
@@ -230,5 +234,58 @@ export type _RelationQueryRequirementOriginWireContractCheck = AssertAssignable<
     fieldPath: {
       segments: [{ kind: 'Field'; segment: 'CustomerId' }]
     }
+  }
+>
+
+export type _RelationQueryStaticCompilationExplainStageWireContractCheck = AssertAssignable<
+  RelationQueryExplainStage,
+  {
+    $stage: 'staticCompilation'
+    status: 'Invalid'
+    request: RelationQueryCompilationRequestReference
+    plan: null
+    diagnostics: []
+  }
+>
+
+export type _RelationQueryBoundRealizationExplainStageWireContractCheck = AssertAssignable<
+  RelationQueryExplainStage,
+  {
+    $stage: 'boundRealization'
+    status: 'Unavailable'
+    report: RelationQueryBoundRealizationReport
+  }
+>
+
+export type _RelationQueryCapabilitySummaryWireContractCheck = AssertAssignable<
+  NonNullable<RelationQueryExplainArtifact['capabilitySummary']>,
+  {
+    target: 'cohesive.relations.in-memory'
+    targetProfile: 'cohesive.relations.in-memory/realization-v1'
+    policy: 'policy/default'
+    profileFeasibility: {
+      algorithm: 'sha256'
+      canonicalization: 'relation-query-realization-report/v1-c14n/v1'
+      value: 'profile-example'
+    }
+    boundRealization: {
+      algorithm: 'sha256'
+      canonicalization: 'relation-query-bound-realization/v1-c14n/v1'
+      value: 'bound-example'
+    }
+    operatingBoundaries: ['boundary/max-input-rows']
+    entries: [
+      {
+        capability: {
+          $capability: 'logical'
+          kind: 'Filter'
+        }
+        requirements: ['requirement/filter']
+        missingForRequirements: []
+        capabilityEvidence: ['evidence/filter']
+        operatingBoundaries: ['boundary/max-input-rows']
+        contextEvidence: ['context/filter']
+      },
+    ]
   }
 >

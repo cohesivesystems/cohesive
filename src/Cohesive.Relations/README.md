@@ -1441,6 +1441,80 @@ SQL, SDK objects, or another native artifact. Fingerprints connect the profile r
 placement, contextual proof, and generated artifact without turning any of them into canonical
 relation/query semantics.
 
+### Explain artifacts and runtime telemetry
+
+`RelationQueryExplainArtifact` is the portable, deterministic explanation of the lifecycle evidence
+that is available for one relation/query. Its ordered, `$stage`-discriminated union keeps each phase's
+authoritative artifact intact instead of collapsing different questions into one status:
+
+- `staticCompilation` explains the target-independent plan and requirement graph, or the diagnostics
+  that prevented a valid plan.
+- `profileFeasibility` explains whether a target family advertises exact strategies for the demanded
+  capabilities. It does not prove that a concrete source is configured correctly.
+- `sourcePlacement` and `boundRealization` explain the selected sources and whether their exact adapter
+  bindings provide the evidence and operating-boundary validation required by the profile strategy.
+- `physicalPlanning` explains the deterministic acquisition and evaluation plan selected for those
+  sources.
+- `nativeCompilation` retains target-neutral provenance and fingerprint references for backend-native
+  artifacts. Backend SQL, SDK objects, and other mutable native representations remain adapter-owned.
+- `evaluation` retains result counts, evidence completeness, requirement-gap summaries, and sanitized
+  diagnostics for one runtime observation. It deliberately excludes row values, keys, exception messages,
+  and other sensitive or high-cardinality runtime data. Its observation fingerprint is separate from the
+  deterministic lifecycle fingerprint.
+
+Stages may be absent when their lifecycle phase was not attempted or its inputs were unavailable. A retained
+stage always carries a status consistent with its source artifact, and stage order, affinity, diagnostics, and
+the artifact fingerprint are validated by `RelationQueryExplainJsonSerializer`. Explain documents are derived
+interpretations; they do not replace the canonical definition, plan, profile, placement, realization report,
+or native artifact to which their IDs and fingerprints refer.
+
+When profile or bound evidence is present, the explain artifact's `RelationQueryCapabilitySummary` is a
+machine-readable index over the canonical `RelationQueryCapability` union. Each entry links a demanded or
+missing capability to requirement IDs and to resolvable target-profile evidence, operating-boundary, and
+contextual-evidence IDs. Detailed declarations and
+decisions remain authoritative in the target profile and profile/bound realization stages; the summary does not
+introduce a second capability or status model. Use it for capability matrices, missing-support views, deployment
+gates, and links from a compact overview into the full evidence trail.
+
+Runtime telemetry serves a different purpose. `RelationQueryTelemetry` exposes stable activity, metric, and tag
+names for operational monitoring, while explain artifacts are persistable, fingerprinted evidence. The core
+`ActivitySource` and `Meter` are both named `Cohesive.Relations`; each adapter owns a correspondingly named source
+and meter. The principal activity hierarchy is:
+
+```text
+cohesive.relations.evaluate
+  cohesive.relations.compile
+  cohesive.relations.profile.evaluate
+  cohesive.relations.physical.plan
+  cohesive.relations.physical.execute
+    cohesive.relations.source.read
+      adapter source acquisition
+    cohesive.relations.interpret
+
+cohesive.relations.native.compile
+  cohesive.relations.realize (when compilation performs contextual realization)
+cohesive.relations.native.execute
+cohesive.relations.dto.compile
+cohesive.relations.dto.map
+```
+
+Contextual realization may also run as a standalone `cohesive.relations.realize` activity. Compilation from an
+already-bound native request does not repeat that child phase.
+
+Operation-duration histograms use only bounded operation, status, and terminal-phase dimensions. Source-row,
+DTO-row, and requirement-gap counters likewise use bounded read-kind, row-outcome, policy, status, and gap-cause
+dimensions. Evaluation and artifact fingerprints are high-cardinality correlation attributes on traces only; they
+are never metric tags. Sampled activities retain structured diagnostic events containing only stable code and
+severity. Telemetry does not embed full explain documents, result values, source keys, physical resource names,
+diagnostic prose, resolutions, or arbitrary exception text. A trace fingerprint can therefore find separately
+retained explain evidence without making sampling, timing, or runtime identities part of deterministic explain
+identity.
+
+Instrumentation is best effort. With no listener, the shared emission path does not allocate. Synchronous listener
+failures during registration, sampling, recording, or completion are contained and cannot replace a compiler or
+evaluation result. Core physical source reads own row measurements, so nested adapter acquisition activities do not
+double-count the same work.
+
 ### Target-native compilation boundary
 
 `RelationQueryNativeCompilationRequest` is the target-neutral handoff from semantic planning to a backend

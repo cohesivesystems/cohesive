@@ -7,6 +7,31 @@ using Cohesive.Relations.Compilation;
 
 namespace Cohesive.Relations.Realization;
 
+/// <summary>
+/// Computes portable identities for the exact realization requirements and guarantees projected from a static plan.
+/// </summary>
+public static class RelationQueryRealizationRequirementSetFingerprinter
+{
+    /// <summary>Fingerprint algorithm identifier.</summary>
+    public const string Algorithm = "sha256";
+
+    /// <summary>Canonicalization profile identifier.</summary>
+    public const string Canonicalization = "relation-query-realization-requirements/v1-c14n/v1";
+
+    /// <summary>Computes an exact plan-affine fingerprint of one normalized realization-requirement set.</summary>
+    /// <param name="plan">Compiled plan reference from which the requirements were projected.</param>
+    /// <param name="observability">Result-observability contract used during projection.</param>
+    /// <param name="requirements">Projected realization requirements.</param>
+    /// <returns>A versioned SHA-256 fingerprint over the plan, observability, requirements, and guarantees.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="plan"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="requirements"/> contains a <see langword="null"/> entry.</exception>
+    public static RelationQueryPlanComponentFingerprint Compute(
+        RelationQueryCompiledPlanReference plan,
+        RelationQueryResultObservability observability,
+        ImmutableArray<RelationQueryRealizationRequirement> requirements) =>
+        RelationQueryRealizationFingerprinter.ComputeRequirements(plan, observability, requirements);
+}
+
 /// <summary>Computes deterministic content fingerprints for derived relation/query realization reports.</summary>
 /// <remarks>
 /// The current profile uses length-prefixed, big-endian binary canonicalization. It includes semantic plan,
@@ -86,6 +111,29 @@ public static class RelationQueryRealizationFingerprinter
         return new(
             Algorithm,
             Canonicalization,
+            Convert.ToHexString(hash).ToLowerInvariant());
+    }
+
+    internal static RelationQueryPlanComponentFingerprint ComputeRequirements(
+        RelationQueryCompiledPlanReference plan,
+        RelationQueryResultObservability observability,
+        ImmutableArray<RelationQueryRealizationRequirement> requirements)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        var normalized = Normalize(
+            requirements,
+            static requirement => requirement.Id.Value,
+            nameof(requirements));
+
+        ArrayBufferWriter<byte> canonical = new();
+        Append(canonical, RelationQueryRealizationRequirementSetFingerprinter.Canonicalization);
+        AppendPlan(canonical, plan);
+        Append(canonical, (int)observability.OccurrenceProvenance);
+        AppendRequirements(canonical, normalized);
+        var hash = SHA256.HashData(canonical.WrittenSpan);
+        return new(
+            RelationQueryRealizationRequirementSetFingerprinter.Algorithm,
+            RelationQueryRealizationRequirementSetFingerprinter.Canonicalization,
             Convert.ToHexString(hash).ToLowerInvariant());
     }
 

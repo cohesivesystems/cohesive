@@ -11,7 +11,7 @@ dotnet add package Cohesive.Relations.Contracts
 ## Use When
 
 - You need a contract assembly that exposes canonical relationship-catalog, relation-draft, and relation/query shapes for code generation.
-- You need portable target-capability profiles, realization reports, source placements, or physical plans for explain tooling, deployment gates, or frontend visualization.
+- You need portable target-capability profiles, realization reports, source placements, physical plans, or lifecycle explain artifacts for explain tooling, deployment gates, or frontend visualization.
 - You want relation contract definitions to be packaged separately from the relation runtime.
 - You are building generated frontend or API artifacts from Cohesive relation metadata.
 
@@ -33,6 +33,26 @@ dotnet run --project src/Cohesive.CodeGen.Cli -- \
 The generated TypeScript declarations describe the portable value shape. Strict duplicate-property,
 unknown-property, and case-sensitive input enforcement remains the responsibility of the canonical
 .NET document serializers because TypeScript uses open structural object types.
+
+`RelationQueryExplainArtifact` is the single code-generation root for relation/query explainability. Its
+`$stage`-discriminated union exposes target-independent static compilation, profile feasibility, exact source
+placement and bound realization, physical planning, target-neutral native-compilation evidence, and sanitized
+runtime evaluation summaries. Deterministic lifecycle identity excludes the runtime stage; each sanitized
+evaluation summary carries its own observation fingerprint. The artifact also exposes an optional compact
+capability summary whose canonical
+capability values and evidence IDs resolve into the retained profile and realization stages. It is an index rather
+than a parallel capability model. Consumers should tolerate stages that were not attempted while preserving the
+canonical order of stages that are present.
+
+Persisted explain JSON must still be read and written through `RelationQueryExplainJsonSerializer`. Generated
+TypeScript describes its portable shape but cannot enforce strict unknown-member rejection, stage affinity,
+status/source consistency, canonical ordering, diagnostic projection, or fingerprint verification.
+
+OpenTelemetry activities and metrics are intentionally not part of this contract projection. Runtime telemetry
+uses stable low-cardinality names, statuses, counts, and metric dimensions; high-cardinality evaluation and artifact
+fingerprints are trace-only correlation attributes. Sampled diagnostic events contain only stable code and severity.
+A durable explain document retains the detailed deterministic evidence. Do not copy result values, source keys,
+diagnostic prose, resolutions, or high-cardinality runtime identities into telemetry or into the capability summary.
 
 Realization declaration enums use canonical strings for known values. A malformed declaration's retained
 undefined 32-bit value is encoded as a JSON number, and only those diagnostic-preserving fields are projected
