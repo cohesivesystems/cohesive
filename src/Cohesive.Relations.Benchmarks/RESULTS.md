@@ -2,13 +2,15 @@
 
 ## Conclusions
 
-- In the ARI-145 1,024-row ShortRun, the generated kernel is approximately 1.60× handwritten for the
-  simple DTO and 1.63× for the joined DTO. It allocates exactly the same bytes as handwritten mapping.
-- AutoMapper's compiled constructor-member plan is approximately 1.33× handwritten for the simple DTO
-  and 1.27× for the joined DTO over the same canonical rows. The Cohesive kernel is therefore about
-  1.21× and 1.29× AutoMapper respectively. AutoMapper does not provide Cohesive's requirement-gap,
-  completeness, diagnostic, or provenance semantics.
-- The full canonical mapper is approximately 1.78× handwritten for simple mapping and 1.54× for joined
+- In the ARI-145 1,024-row DefaultJob verification run, the generated kernel is approximately 1.74×
+  handwritten for the simple DTO and 1.54× for the joined DTO. It allocates exactly the same bytes as
+  handwritten mapping.
+- AutoMapper's compiled constructor-member plan is approximately 1.32× handwritten for the simple DTO
+  and 1.25× for the joined DTO over the same canonical rows. Its mean is 24.0% lower than the Cohesive
+  simple kernel and 18.7% lower than the joined kernel at this scale; the difference is therefore
+  scenario- and scale-dependent rather than a uniform 5%. AutoMapper does not provide Cohesive's
+  requirement-gap, completeness, diagnostic, or provenance semantics.
+- The full canonical mapper is approximately 1.98× handwritten for simple mapping and 1.43× for joined
   mapping. It adds about 8.5 KB per 1,024-row batch for typed provenance rows and result bookkeeping.
   Kernel-only and full-canonical timings use different loop/delegate orchestration, so their means
   should not be interpreted as a strictly additive envelope cost.
@@ -29,7 +31,41 @@
 - OS: macOS Tahoe 26.5.2 (25F84), Darwin 25.5.0
 - Hardware: Apple M5 Max, Arm64, 18 physical/logical cores
 - SDK/runtime: .NET SDK 10.0.201; .NET 10.0.5 Arm64 RyuJIT
-- Environment overrides: none; ShortRun defaults were used
+- Environment overrides: none
+
+#### DefaultJob warm verification
+
+```bash
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build -- \
+  --filter "*RelationDtoWarmBenchmarks*"
+```
+
+Representative 1,024-row results:
+
+| Scenario | Mapper | Mean | Op/s | vs handwritten | vs AutoMapper | Allocated |
+|---|---|---:|---:|---:|---:|---:|
+| Simple | Handwritten | 22.75 μs | 43,958 | 1.00× | 0.76× | 57,368 B |
+| Simple | AutoMapper member plan | 30.12 μs | 33,201 | 1.32× | 1.00× | 57,368 B |
+| Simple | Cohesive compiled kernel | 39.64 μs | 25,227 | 1.74× | 1.32× | 57,368 B |
+| Simple | Cohesive full canonical | 45.01 μs | 22,219 | 1.98× | 1.49× | 65,898 B |
+| Simple | Existing observation mapper | 301.51 μs | 3,317 | 13.25× | 10.01× | 1,660,952 B |
+| Joined | Handwritten | 81.45 μs | 12,278 | 1.00× | 0.80× | 106,520 B |
+| Joined | AutoMapper member plan | 101.92 μs | 9,812 | 1.25× | 1.00× | 106,520 B |
+| Joined | Cohesive compiled kernel | 125.39 μs | 7,975 | 1.54× | 1.23× | 106,520 B |
+| Joined | Cohesive full canonical | 116.40 μs | 8,591 | 1.43× | 1.14× | 115,051 B |
+| Joined | Existing observation mapper | 950.06 μs | 1,053 | 11.66× | 9.32× | 5,052,440 B |
+
+In this longer run, AutoMapper's mean at 1,024 rows is 24.0% lower than the Cohesive simple kernel
+and 18.7% lower than the joined kernel. Against the full canonical mapper, its mean is 33.1% lower for
+the simple case and 12.4% lower for the joined case. At one row, however, the Cohesive kernel is faster
+than AutoMapper in both scenarios, and at 32 rows AutoMapper's advantage over the kernel is 14.0% for
+simple mapping and 6.8% for joined mapping. The crossover shows why the result should be reported by
+scenario and scale rather than summarized as a single percentage. Kernel-only and AutoMapper paths
+allocate identically at each measured scale.
+
+#### ShortRun baseline
 
 Warm materialization command:
 
