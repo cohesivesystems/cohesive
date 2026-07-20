@@ -44,13 +44,6 @@ jobs:
       - name: Test .NET
         run: dotnet test Cohesive.sln -c Release --no-build
 
-      - name: Discover and smoke-test relation benchmarks
-        run: >-
-          dotnet run
-          --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj
-          -c Release --no-build --
-          --job Dry --filter "*Relation*"
-
       - name: Install frontend dependencies
         run: corepack pnpm install --frozen-lockfile
 

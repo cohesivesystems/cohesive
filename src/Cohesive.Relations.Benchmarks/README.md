@@ -101,6 +101,18 @@ The broad `*Relation*` filter intentionally discovers DTO materialization, diagn
 physical-execution benchmark groups. Use a class-name filter such as `*RelationDtoWarmBenchmarks*` when measuring one
 concern in isolation.
 
+## GitHub Actions
+
+The automatic pull-request workflow does not execute BenchmarkDotNet. To run the benchmarks on demand, open
+**Actions**, select **relation-benchmarks**, and choose **Run workflow**. The workflow accepts:
+
+- A `Dry`, `Short`, or `Default` BenchmarkDotNet job. `Dry` is the default discovery and invocation smoke check.
+- A BenchmarkDotNet filter, defaulting to `*Relation*`.
+
+The workflow uploads `BenchmarkDotNet.Artifacts` for 14 days, including artifacts produced before a failed run. GitHub
+hosted runners are appropriate for discovery and coarse on-demand comparisons, but their shared and variable hardware
+should not be used for authoritative performance baselines. Record reviewed baselines on stable, documented hardware.
+
 ## Recording baselines
 
 Initial measurements are observations, not pass/fail thresholds. When recording a reviewed result,

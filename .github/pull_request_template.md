@@ -5,7 +5,7 @@
 ## Validation
 
 - [ ] `dotnet test Cohesive.sln -c Release --no-restore`
-- [ ] `dotnet run --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj -c Release --no-build -- --job Dry --filter "*Relation*"`
+- [ ] Relation benchmarks run locally or through the manual `relation-benchmarks` workflow when relevant
 - [ ] `corepack pnpm frontend:test`
 - [ ] `corepack pnpm frontend:build`
 - [ ] `corepack pnpm pack:local`

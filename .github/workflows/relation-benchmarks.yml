@@ -1,0 +1,73 @@
+name: relation-benchmarks
+
+run-name: Relation benchmarks (${{ inputs.benchmark_job }}, ${{ inputs.benchmark_filter }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      benchmark_job:
+        description: BenchmarkDotNet job length
+        required: true
+        default: Dry
+        type: choice
+        options:
+          - Dry
+          - Short
+          - Default
+      benchmark_filter:
+        description: BenchmarkDotNet filter
+        required: true
+        default: "*Relation*"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  run-benchmarks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore relation benchmarks
+        run: >-
+          dotnet restore
+          src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj
+
+      - name: Build relation benchmarks
+        run: >-
+          dotnet build
+          src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj
+          -c Release --no-restore -warnaserror
+
+      - name: Run relation benchmarks
+        env:
+          BENCHMARK_FILTER: ${{ inputs.benchmark_filter }}
+          BENCHMARK_JOB: ${{ inputs.benchmark_job }}
+        run: |
+          benchmark_args=(--filter "$BENCHMARK_FILTER")
+          if [[ "$BENCHMARK_JOB" != "Default" ]]; then
+            benchmark_args+=(--job "$BENCHMARK_JOB")
+          fi
+
+          dotnet run \
+            --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+            -c Release --no-build -- \
+            "${benchmark_args[@]}"
+
+      - name: Upload BenchmarkDotNet artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relation-benchmarks-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.benchmark_job }}
+          path: BenchmarkDotNet.Artifacts/**
+          if-no-files-found: ignore
+          retention-days: 14
