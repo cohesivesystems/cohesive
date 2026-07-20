@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using Cohesive.Adapters.Postgres;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Compilation;
+using Cohesive.Relations.Explain;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.Physical;
@@ -54,6 +55,7 @@ public sealed class PostgresRelationQueryCompilerTests
 
     internal static RelationQueryAdapterConformanceCase CreateBoundRealizationConformanceCase() => new(
         "PostgreSQL",
+        PostgresRelationQueryTelemetry.InstrumentationName,
         ObserveSupported,
         ObserveRejected);
 
@@ -67,17 +69,13 @@ public sealed class PostgresRelationQueryCompilerTests
         PostgresRelationQueryCompiler compiler = new();
         var bound = compiler.Realize(request, fixture.Storage);
         var repeated = compiler.Realize(request, fixture.Storage);
-        var compilation = compiler.Compile(
-            new RelationQueryNativeCompilationRequest(
-                fixture.Plan,
-                bound,
-                fixture.Placement.Placement),
-            fixture.Storage);
+        var compilation = compiler.Compile(request, fixture.Storage);
         return new(
             bound,
             repeated,
             compilation.Status,
-            [.. compilation.Artifacts.Select(static artifact => artifact.Provenance.BoundRealization)]);
+            [.. compilation.Artifacts.Select(static artifact => artifact.Provenance.BoundRealization)],
+            PostgresRelationQueryExplainProjector.Project(compilation));
     }
 
     static RelationQueryRejectedContextObservation ObserveRejected()
@@ -101,7 +99,11 @@ public sealed class PostgresRelationQueryCompilerTests
         PostgresRelationQueryCompiler compiler = new();
         var bound = compiler.Realize(request, binding);
         var compilation = compiler.Compile(request, binding);
-        return new(bound, compilation.Status, compilation.Artifacts.Length);
+        return new(
+            bound,
+            compilation.Status,
+            compilation.Artifacts.Length,
+            PostgresRelationQueryExplainProjector.Project(compilation));
     }
 
     [Fact]
@@ -200,12 +202,11 @@ public sealed class PostgresRelationQueryCompilerTests
             bound.Evidence.Assessments.SelectMany(static assessment => assessment.OperatingBoundaries)));
 
         var convenience = compiler.Compile(request, fixture.Storage);
-        var exact = compiler.Compile(
-            new RelationQueryNativeCompilationRequest(
-                fixture.Plan,
-                bound,
-                fixture.Placement.Placement),
-            fixture.Storage);
+        RelationQueryNativeCompilationRequest nativeRequest = new(
+            fixture.Plan,
+            bound,
+            fixture.Placement.Placement);
+        var exact = compiler.Compile(nativeRequest, fixture.Storage);
 
         Assert.True(convenience.IsSuccessful, Format(convenience.Diagnostics));
         Assert.True(exact.IsSuccessful, Format(exact.Diagnostics));
@@ -215,6 +216,9 @@ public sealed class PostgresRelationQueryCompilerTests
             Assert.Equal(bound.Evidence.Binding.Fingerprint, artifact.Provenance.AdapterBinding.Fingerprint);
             Assert.NotEmpty(artifact.Provenance.ContextEvidence);
         });
+        var explain = PostgresRelationQueryExplainProjector.Project(nativeRequest, exact);
+        Assert.Equal(bound.Fingerprint, explain.Attempt.BoundRealization);
+        Assert.Equal(RelationQueryExplainStageStatus.Complete, explain.Status);
         Assert.Equal(
             convenience.Artifacts.Select(static artifact => artifact.Fingerprint),
             exact.Artifacts.Select(static artifact => artifact.Fingerprint));

@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
+using Cohesive.Relations.Observability;
 using Cohesive.Relations.Serialization;
 
 namespace Cohesive.Relations.Compilation;
@@ -34,6 +35,64 @@ public static class RelationQueryStaticCompiler
     public static RelationQueryCompilationResult Compile(RelationQueryCompilationRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
+
+        return RelationQueryTelemetryRuntime.IsOperationEnabled
+            ? CompileObserved(request)
+            : CompileCore(request);
+    }
+
+    static RelationQueryCompilationResult CompileObserved(RelationQueryCompilationRequest request)
+    {
+        var activity = RelationQueryTelemetryRuntime.StartActivity(
+            RelationQueryTelemetry.StaticCompilationActivityName);
+        var started = RelationQueryTelemetryRuntime.StartTimer();
+        Exception? failure = null;
+        RelationQueryCompilationResult? result = null;
+        try
+        {
+            result = CompileCore(request);
+            if (activity?.IsAllDataRequested == true)
+            {
+                RelationQueryTelemetry.TrySetFingerprintTag(
+                    activity,
+                    RelationQueryTelemetry.DefinitionFingerprintTagName,
+                    request.DefinitionDocument.DefinitionFingerprint.Value);
+                activity.SetTag(RelationQueryTelemetry.SchemaVersionTagName, request.DefinitionDocument.SchemaVersion);
+                activity.SetTag(RelationQueryTelemetry.DiagnosticCountTagName, result.Diagnostics.Length);
+                foreach (var diagnostic in result.Diagnostics)
+                {
+                    RelationQueryTelemetry.AddDiagnosticEvent(
+                        activity,
+                        diagnostic.Code,
+                        diagnostic.Severity);
+                }
+            }
+            return result;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException
+                                          and not StackOverflowException
+                                          and not AccessViolationException)
+        {
+            failure = exception;
+            throw;
+        }
+        finally
+        {
+            RelationQueryTelemetryRuntime.CompleteOperation(
+                activity,
+                started,
+                RelationQueryTelemetry.StaticCompilationActivityName,
+                failure is not null
+                    ? RelationQueryTelemetry.ExceptionStatus
+                    : result?.IsSuccessful == true
+                        ? RelationQueryTelemetry.SucceededStatus
+                        : RelationQueryTelemetry.FailedStatus,
+                exception: failure);
+        }
+    }
+
+    static RelationQueryCompilationResult CompileCore(RelationQueryCompilationRequest request)
+    {
 
         List<DocumentValidationDiagnostic> diagnostics = [];
         AddDiagnostics(diagnostics, RelationQueryDocumentSemanticValidator.Validate(request.DefinitionDocument));

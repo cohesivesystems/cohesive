@@ -6,6 +6,7 @@ using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
+using Cohesive.Relations.Observability;
 using Cohesive.Relations.Realization;
 
 namespace Cohesive.Relations.Execution;
@@ -100,18 +101,83 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
         return realizations.GetValue(
             plan,
             candidate => new(
-                () => RelationQueryRealizationCompiler.Compile(
-                    candidate,
-                    TargetProfile,
-                    DefaultRealizationPolicy),
+                () => CompileRealization(candidate),
                 LazyThreadSafetyMode.ExecutionAndPublication)).Value;
     }
+
+    RelationQueryRealizationReport CompileRealization(CompiledRelationQueryPlan plan) =>
+        RelationQueryRealizationCompiler.Compile(plan, TargetProfile, DefaultRealizationPolicy);
 
     /// <inheritdoc />
     public RelationQueryExecutionResult Execute(RelationQueryExecutionRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
+
+        return RelationQueryTelemetryRuntime.IsInterpretationEnabled
+            ? ExecuteObserved(request, cancellationToken)
+            : ExecuteCore(request, cancellationToken);
+    }
+
+    RelationQueryExecutionResult ExecuteObserved(
+        RelationQueryExecutionRequest request,
+        CancellationToken cancellationToken)
+    {
+        var activity = RelationQueryTelemetryRuntime.StartActivity(RelationQueryTelemetry.InterpretationActivityName);
+        var started = RelationQueryTelemetryRuntime.StartTimer();
+        Exception? failure = null;
+        RelationQueryExecutionResult? result = null;
+        try
+        {
+            result = ExecuteCore(request, cancellationToken);
+            RelationQueryTelemetryRuntime.RecordRequirementGaps(result.RequirementGapAnalysis);
+            if (activity?.IsAllDataRequested == true)
+            {
+                RelationQueryTelemetry.TrySetFingerprintTag(
+                    activity,
+                    RelationQueryTelemetry.DefinitionFingerprintTagName,
+                    request.Plan.Provenance.DefinitionFingerprint.Value);
+                activity.SetTag(RelationQueryTelemetry.DiagnosticCountTagName, result.Diagnostics.Length);
+                activity.SetTag(
+                    RelationQueryTelemetry.GapCountTagName,
+                    result.RequirementGapAnalysis.Gaps.Length);
+                foreach (var diagnostic in result.Diagnostics)
+                {
+                    RelationQueryTelemetry.AddDiagnosticEvent(
+                        activity,
+                        diagnostic.Code,
+                        diagnostic.Severity);
+                }
+            }
+            return result;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException
+                                          and not StackOverflowException
+                                          and not AccessViolationException)
+        {
+            failure = exception;
+            throw;
+        }
+        finally
+        {
+            var status = failure is OperationCanceledException
+                ? RelationQueryTelemetry.CanceledStatus
+                : failure is not null || result is null
+                    ? RelationQueryTelemetry.ExceptionStatus
+                    : RelationQueryTelemetry.GetStatusTagValue(result.Status);
+            RelationQueryTelemetryRuntime.CompleteOperation(
+                activity,
+                started,
+                RelationQueryTelemetry.InterpretationActivityName,
+                status,
+                exception: failure);
+        }
+    }
+
+    RelationQueryExecutionResult ExecuteCore(
+        RelationQueryExecutionRequest request,
+        CancellationToken cancellationToken)
+    {
 
         var analysis = RelationRequirementGapAnalyzer.Analyze(
             request.Plan,

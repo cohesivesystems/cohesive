@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
 using Cohesive.Model;
 using Cohesive.Model.Expressions;
 using Cohesive.Relations.Compilation;
@@ -6,6 +7,7 @@ using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.Execution;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
+using Cohesive.Relations.Observability;
 using Cohesive.Relations.Physical;
 using Cohesive.Relations.Realization;
 
@@ -75,13 +77,79 @@ public sealed class RelationQueryPhysicalExecutor
     /// Expected provider failures must be returned as source-read states. Exceptions thrown by a source reader or
     /// canonical interpretation propagate unchanged, except cancellation is always observed directly.
     /// </remarks>
-    public async ValueTask<RelationQueryPhysicalExecutionResult> ExecuteAsync(
+    public ValueTask<RelationQueryPhysicalExecutionResult> ExecuteAsync(
         RelationQueryPhysicalExecutionRequest request,
         CancellationToken cancellationToken = default
         )
     {
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
+
+        return RelationQueryTelemetryRuntime.IsOperationEnabled
+            ? ExecuteObservedAsync(request, cancellationToken)
+            : ExecuteCoreAsync(request, cancellationToken);
+    }
+
+    async ValueTask<RelationQueryPhysicalExecutionResult> ExecuteObservedAsync(
+        RelationQueryPhysicalExecutionRequest request,
+        CancellationToken cancellationToken)
+    {
+        var activity = RelationQueryTelemetryRuntime.StartActivity(RelationQueryTelemetry.PhysicalExecutionActivityName);
+        var started = RelationQueryTelemetryRuntime.StartTimer();
+        Exception? failure = null;
+        RelationQueryPhysicalExecutionResult? result = null;
+        try
+        {
+            result = await ExecuteCoreAsync(request, cancellationToken).ConfigureAwait(false);
+            if (activity?.IsAllDataRequested == true)
+            {
+                RelationQueryTelemetry.TrySetFingerprintTag(
+                    activity,
+                    RelationQueryTelemetry.PhysicalPlanFingerprintTagName,
+                    request.PhysicalPlan.Fingerprint.Value);
+                RelationQueryTelemetry.TrySetFingerprintTag(
+                    activity,
+                    RelationQueryTelemetry.RealizationFingerprintTagName,
+                    request.Realization.Fingerprint.Value);
+                activity.SetTag(RelationQueryTelemetry.DiagnosticCountTagName, result.Diagnostics.Length);
+                activity.SetTag(RelationQueryTelemetry.RowCountTagName, result.SourceReads.Sum(static read => read.ReturnedRows));
+                foreach (var diagnostic in result.Diagnostics)
+                {
+                    RelationQueryTelemetry.AddDiagnosticEvent(
+                        activity,
+                        diagnostic.Code,
+                        diagnostic.Severity);
+                }
+            }
+            return result;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException
+                                          and not StackOverflowException
+                                          and not AccessViolationException)
+        {
+            failure = exception;
+            throw;
+        }
+        finally
+        {
+            var status = failure is OperationCanceledException
+                ? RelationQueryTelemetry.CanceledStatus
+                : failure is not null || result is null
+                    ? RelationQueryTelemetry.ExceptionStatus
+                    : RelationQueryTelemetry.GetStatusTagValue(result.Status);
+            RelationQueryTelemetryRuntime.CompleteOperation(
+                activity,
+                started,
+                RelationQueryTelemetry.PhysicalExecutionActivityName,
+                status,
+                exception: failure);
+        }
+    }
+
+    async ValueTask<RelationQueryPhysicalExecutionResult> ExecuteCoreAsync(
+        RelationQueryPhysicalExecutionRequest request,
+        CancellationToken cancellationToken)
+    {
 
         if (Preflight(request) is { } preflightFailure)
             return Failed(request, preflightFailure);
@@ -574,7 +642,11 @@ public sealed class RelationQueryPhysicalExecutor
                 new RelationQueryBoundedEnumeration(maximumRows),
                 maximumBufferedRows
                 );
-            var result = await readers[source.Id].ReadAsync(read, cancellationToken).ConfigureAwait(false);
+            var result = await ReadSourceAsync(
+                readers[source.Id],
+                read,
+                batchOrdinal: 0,
+                cancellationToken).ConfigureAwait(false);
             if (result is null)
                 return Invalid(read, evidenceReference: null, "A source reader returned no result object.");
             AddTrace(read, result, batchOrdinal: 0);
@@ -741,7 +813,11 @@ public sealed class RelationQueryPhysicalExecutor
                     new RelationQueryIdentityBatchLookup([.. batch]),
                     maximumBufferedRows
                     );
-                var result = await readers[source.Id].ReadAsync(read, cancellationToken).ConfigureAwait(false);
+                var result = await ReadSourceAsync(
+                    readers[source.Id],
+                    read,
+                    batchOrdinal,
+                    cancellationToken).ConfigureAwait(false);
                 if (result is null)
                     return Invalid(read, evidenceReference: null, "A source reader returned no result object.");
                 AddTrace(read, result, batchOrdinal++);
@@ -884,7 +960,11 @@ public sealed class RelationQueryPhysicalExecutor
                         relationshipKey.SourceSelector,
                         [.. batch]),
                     maximumBufferedRows);
-                var result = await readers[source.Id].ReadAsync(read, cancellationToken).ConfigureAwait(false);
+                var result = await ReadSourceAsync(
+                    readers[source.Id],
+                    read,
+                    batchOrdinal,
+                    cancellationToken).ConfigureAwait(false);
                 if (result is null)
                     return Invalid(read, evidenceReference: null, "A source reader returned no result object.");
                 AddTrace(read, result, batchOrdinal++);
@@ -1353,19 +1433,81 @@ public sealed class RelationQueryPhysicalExecutor
                 source.Id);
         }
 
+        static ValueTask<RelationQuerySourceReadResult> ReadSourceAsync(
+            IRelationQuerySourceReader reader,
+            RelationQuerySourceReadRequest request,
+            int batchOrdinal,
+            CancellationToken cancellationToken)
+        {
+            return RelationQueryTelemetryRuntime.IsSourceReadEnabled
+                ? ReadSourceObservedAsync(reader, request, batchOrdinal, cancellationToken)
+                : reader.ReadAsync(request, cancellationToken);
+        }
+
+        static async ValueTask<RelationQuerySourceReadResult> ReadSourceObservedAsync(
+            IRelationQuerySourceReader reader,
+            RelationQuerySourceReadRequest request,
+            int batchOrdinal,
+            CancellationToken cancellationToken)
+        {
+            var activity = RelationQueryTelemetryRuntime.StartActivity(
+                RelationQueryTelemetry.SourceReadActivityName,
+                ActivityKind.Client);
+            var started = RelationQueryTelemetryRuntime.StartTimer();
+            Exception? failure = null;
+            RelationQuerySourceReadResult? result = null;
+            var (kind, keyCount) = ReadFacts(request.Constraint);
+            try
+            {
+                result = await reader.ReadAsync(request, cancellationToken).ConfigureAwait(false);
+                if (activity?.IsAllDataRequested == true)
+                {
+                    activity.SetTag(RelationQueryTelemetry.ReadKindTagName, RelationQueryTelemetry.GetTagValue(kind));
+                    activity.SetTag(RelationQueryTelemetry.KeyCountTagName, keyCount);
+                    activity.SetTag(RelationQueryTelemetry.BatchOrdinalTagName, batchOrdinal);
+                    if (result is not null)
+                    {
+                        activity.SetTag(
+                            RelationQueryTelemetry.CompletenessTagName,
+                            RelationQueryTelemetry.GetTagValue(result.Completeness));
+                        activity.SetTag(RelationQueryTelemetry.RowCountTagName, result.Observations.Length);
+                    }
+                }
+                if (result is not null)
+                    RelationQueryTelemetryRuntime.RecordSourceRows(result.Observations.Length, kind, result.State);
+                return result!;
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException
+                                              and not StackOverflowException
+                                              and not AccessViolationException)
+            {
+                failure = exception;
+                throw;
+            }
+            finally
+            {
+                var status = failure is OperationCanceledException
+                    ? RelationQueryTelemetry.CanceledStatus
+                    : failure is not null
+                        ? RelationQueryTelemetry.ExceptionStatus
+                        : result is null
+                            ? RelationQueryTelemetry.InvalidStatus
+                            : RelationQueryTelemetry.GetStatusTagValue(result.State);
+                RelationQueryTelemetryRuntime.CompleteOperation(
+                    activity,
+                    started,
+                    RelationQueryTelemetry.SourceReadActivityName,
+                    status,
+                    exception: failure);
+            }
+        }
+
         void AddTrace(
             RelationQuerySourceReadRequest read,
             RelationQuerySourceReadResult result,
             int batchOrdinal)
         {
-            var (kind, keyCount) = read.Constraint switch
-            {
-                RelationQueryBoundedEnumeration => (RelationQuerySourceReadKind.BoundedEnumeration, 0),
-                RelationQueryIdentityBatchLookup identity => (RelationQuerySourceReadKind.IdentityBatch, identity.Identities.Length),
-                RelationQueryRelationshipKeyBatchLookup relationship =>
-                    (RelationQuerySourceReadKind.RelationshipKeyBatch, relationship.Keys.Length),
-                _ => throw new ArgumentOutOfRangeException(nameof(read), read.Constraint, "Unsupported source-read constraint.")
-            };
+            var (kind, keyCount) = ReadFacts(read.Constraint);
             traces.Add(new(
                 read.Stage,
                 read.Source,
@@ -1377,6 +1519,20 @@ public sealed class RelationQueryPhysicalExecutor
                 result.Observations.Length,
                 result.EvidenceReference));
         }
+
+        static (RelationQuerySourceReadKind Kind, int KeyCount) ReadFacts(
+            RelationQuerySourceReadConstraint constraint) => constraint switch
+            {
+                RelationQueryBoundedEnumeration => (RelationQuerySourceReadKind.BoundedEnumeration, 0),
+                RelationQueryIdentityBatchLookup identity =>
+                    (RelationQuerySourceReadKind.IdentityBatch, identity.Identities.Length),
+                RelationQueryRelationshipKeyBatchLookup relationship =>
+                    (RelationQuerySourceReadKind.RelationshipKeyBatch, relationship.Keys.Length),
+                _ => throw new ArgumentOutOfRangeException(
+                    nameof(constraint),
+                    constraint,
+                    "Unsupported source-read constraint.")
+            };
 
         ImmutableArray<RelationQuerySourceReadField> CreateInverseFields(
             ImmutableArray<RelationQueryFieldInputContract> contracts,

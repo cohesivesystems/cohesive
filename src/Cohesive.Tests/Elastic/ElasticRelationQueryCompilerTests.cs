@@ -4,6 +4,7 @@ using Cohesive.Adapters.Elastic;
 using Cohesive.Model.Expressions;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Compilation;
+using Cohesive.Relations.Explain;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.Physical;
@@ -18,6 +19,7 @@ public sealed class ElasticRelationQueryCompilerTests
 {
     internal static RelationQueryAdapterConformanceCase CreateBoundRealizationConformanceCase() => new(
         "Elasticsearch",
+        ElasticRelationQueryTelemetry.InstrumentationName,
         ObserveSupported,
         ObserveRejected);
 
@@ -31,14 +33,13 @@ public sealed class ElasticRelationQueryCompilerTests
         ElasticRelationQueryCompiler compiler = new();
         var bound = compiler.Realize(request, fixture.StorageBinding);
         var repeated = compiler.Realize(request, fixture.StorageBinding);
-        var compilation = compiler.Compile(
-            new RelationQueryNativeCompilationRequest(fixture.Plan, bound, fixture.Placement),
-            fixture.StorageBinding);
+        var compilation = compiler.Compile(request, fixture.StorageBinding);
         return new(
             bound,
             repeated,
             compilation.Status,
-            [.. compilation.Artifacts.Select(static artifact => artifact.Provenance.BoundRealization)]);
+            [.. compilation.Artifacts.Select(static artifact => artifact.Provenance.BoundRealization)],
+            ElasticRelationQueryExplainProjector.Project(compilation));
     }
 
     static RelationQueryRejectedContextObservation ObserveRejected()
@@ -52,7 +53,11 @@ public sealed class ElasticRelationQueryCompilerTests
         ElasticRelationQueryCompiler compiler = new();
         var bound = compiler.Realize(request, binding);
         var compilation = compiler.Compile(request, binding);
-        return new(bound, compilation.Status, compilation.Artifacts.Length);
+        return new(
+            bound,
+            compilation.Status,
+            compilation.Artifacts.Length,
+            ElasticRelationQueryExplainProjector.Project(compilation));
     }
 
     [Fact]
@@ -90,6 +95,9 @@ public sealed class ElasticRelationQueryCompilerTests
         Assert.Equal(bound.Fingerprint, artifact.Provenance.BoundRealization);
         Assert.Equal(bound.Evidence.Binding, artifact.Provenance.AdapterBinding);
         Assert.NotEmpty(artifact.Provenance.ContextEvidence);
+        var explain = ElasticRelationQueryExplainProjector.Project(nativeRequest, compilation);
+        Assert.Equal(bound.Fingerprint, explain.Attempt.BoundRealization);
+        Assert.Equal(RelationQueryExplainStageStatus.Complete, explain.Status);
     }
 
     [Fact]

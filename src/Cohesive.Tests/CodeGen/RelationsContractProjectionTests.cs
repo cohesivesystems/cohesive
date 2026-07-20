@@ -3,6 +3,7 @@ using Cohesive.CodeGen;
 using Cohesive.CodeGen.Cli;
 using Cohesive.Relations.Contracts;
 using Cohesive.Relations.Drafts;
+using Cohesive.Relations.Explain;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.Physical;
@@ -33,6 +34,10 @@ public sealed class RelationsContractProjectionTests
             shape.Id.Value.EndsWith(nameof(RelationQuerySourcePlacement), StringComparison.Ordinal));
         Assert.Contains(graph.Shapes, shape =>
             shape.Id.Value.EndsWith(nameof(CompiledRelationQueryPhysicalPlan), StringComparison.Ordinal));
+        Assert.Contains(graph.Shapes, shape =>
+            shape.Id.Value.EndsWith(nameof(RelationQueryExplainArtifact), StringComparison.Ordinal));
+        Assert.Contains(graph.NamedTypes, type =>
+            string.Equals(type.Name, nameof(RelationQueryCapabilitySummary), StringComparison.Ordinal));
         AssertUnion(graph, nameof(RelationQueryDefinition), RelationQueryWireNames.DefinitionDiscriminator);
         AssertUnion(graph, nameof(LogicalQueryNode), RelationQueryWireNames.NodeDiscriminator);
         AssertUnion(graph, nameof(QueryResultDefinition), RelationQueryWireNames.ResultDiscriminator);
@@ -52,6 +57,10 @@ public sealed class RelationsContractProjectionTests
             graph,
             nameof(RelationQueryRealizationDecision),
             RelationQueryRealizationWireNames.DecisionDiscriminator);
+        AssertUnion(
+            graph,
+            nameof(RelationQueryExplainStage),
+            RelationQueryExplainStageWireNames.Discriminator);
 
         var emission = new TypeScriptShapeEmitter(new TypeScriptEmitterOptions
         {
@@ -82,6 +91,17 @@ public sealed class RelationsContractProjectionTests
         Assert.Contains("export interface RelationQueryBoundRealizationReport", text, StringComparison.Ordinal);
         Assert.Contains("export interface RelationQuerySourcePlacement", text, StringComparison.Ordinal);
         Assert.Contains("export interface CompiledRelationQueryPhysicalPlan", text, StringComparison.Ordinal);
+        Assert.Contains("export interface RelationQueryExplainArtifact", text, StringComparison.Ordinal);
+        Assert.Contains("export interface RelationQueryCapabilitySummary", text, StringComparison.Ordinal);
+        Assert.Contains("export interface RelationQueryCapabilitySummaryEntry", text, StringComparison.Ordinal);
+        Assert.Contains("export type RelationQueryExplainStage =", text, StringComparison.Ordinal);
+        Assert.Contains("readonly $stage: 'staticCompilation';", text, StringComparison.Ordinal);
+        Assert.Contains("readonly $stage: 'profileFeasibility';", text, StringComparison.Ordinal);
+        Assert.Contains("readonly $stage: 'boundRealization';", text, StringComparison.Ordinal);
+        Assert.Contains("readonly $stage: 'nativeCompilation';", text, StringComparison.Ordinal);
+        Assert.Contains("readonly $stage: 'evaluation';", text, StringComparison.Ordinal);
+        Assert.Contains("capability: RelationQueryCapability;", text, StringComparison.Ordinal);
+        Assert.Contains("contextEvidence: RelationQueryContextEvidenceId[];", text, StringComparison.Ordinal);
         Assert.Contains("export type RelationQueryPhysicalStageKind", text, StringComparison.Ordinal);
         Assert.Contains("maximumBatchSize: string;", text, StringComparison.Ordinal);
         Assert.Contains("maximumReferenceKeysPerObservation: string;", text, StringComparison.Ordinal);
@@ -147,7 +167,26 @@ public sealed class RelationsContractProjectionTests
         Assert.DoesNotContain("\n  SchemaVersion:", text, StringComparison.Ordinal);
         Assert.DoesNotContain("export interface RelationshipId", text, StringComparison.Ordinal);
         Assert.DoesNotContain("Annotations: ({", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("kind: RelationQueryRealizationDecisionKind;", text, StringComparison.Ordinal);
+        AssertInterfaceDoesNotContainMember(
+            text,
+            nameof(NativeRelationQueryRealizationDecision),
+            "kind: RelationQueryRealizationDecisionKind;");
+        AssertInterfaceDoesNotContainMember(
+            text,
+            nameof(ComposedRelationQueryRealizationDecision),
+            "kind: RelationQueryRealizationDecisionKind;");
+        AssertInterfaceDoesNotContainMember(
+            text,
+            nameof(ConstrainedRelationQueryRealizationDecision),
+            "kind: RelationQueryRealizationDecisionKind;");
+        AssertInterfaceDoesNotContainMember(
+            text,
+            nameof(OverrideRelationQueryRealizationDecision),
+            "kind: RelationQueryRealizationDecisionKind;");
+        AssertInterfaceDoesNotContainMember(
+            text,
+            nameof(UnavailableRelationQueryRealizationDecision),
+            "kind: RelationQueryRealizationDecisionKind;");
         Assert.DoesNotContain("isRealizable: boolean;", text, StringComparison.Ordinal);
     }
 
@@ -186,6 +225,16 @@ public sealed class RelationsContractProjectionTests
             Assert.Single(graph.NamedTypes, type => type.Name == name));
         Assert.Equal(discriminator, union.Discriminator.FieldName);
         Assert.NotEmpty(union.Cases);
+    }
+
+    static void AssertInterfaceDoesNotContainMember(string text, string interfaceName, string member)
+    {
+        var marker = $"export interface {interfaceName} {{";
+        var start = text.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"Missing emitted TypeScript interface '{interfaceName}'.");
+        var end = text.IndexOf("\n}", start, StringComparison.Ordinal);
+        Assert.True(end >= 0, $"Unterminated emitted TypeScript interface '{interfaceName}'.");
+        Assert.DoesNotContain(member, text[start..end], StringComparison.Ordinal);
     }
 
     static string FindRepoRoot()

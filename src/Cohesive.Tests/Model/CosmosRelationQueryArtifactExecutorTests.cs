@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Net;
 using System.Text.Json;
 using Cohesive.Adapters.Cosmos;
@@ -8,6 +9,7 @@ using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.Execution;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
+using Cohesive.Relations.Observability;
 using Cohesive.Relations.Physical;
 using Cohesive.Relations.Realization;
 using Cohesive.Relations.Serialization;
@@ -687,6 +689,74 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
         Assert.Equal(0, iteratorCreations);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_EmitsNativeExecutionActivityWithoutPhysicalPayloads()
+    {
+        var fixture = ArtifactFixture.Row();
+        var executor = Executor(fixture, static (_, _) => new TrackingFeedIterator([]));
+        var request = fixture.Request(maximumRows: 10);
+        List<Activity> stopped = [];
+        using ActivityListener listener = new()
+        {
+            ShouldListenTo = static source => source.Name == CosmosRelationQueryTelemetry.InstrumentationName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = stopped.Add
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        var result = await executor.ExecuteAsync(request);
+
+        var activity = Assert.Single(stopped, item =>
+            item.OperationName == RelationQueryTelemetry.NativeExecutionActivityName);
+        Assert.Equal(ActivityKind.Client, activity.Kind);
+        Assert.Equal(RelationQueryExecutionStatus.Succeeded, result.Status);
+        Assert.Equal("succeeded", activity.GetTagItem(RelationQueryTelemetry.StatusTagName));
+        Assert.Equal(
+            fixture.Artifact.Fingerprint.Value,
+            activity.GetTagItem(RelationQueryTelemetry.ArtifactFingerprintTagName));
+        Assert.DoesNotContain(activity.TagObjects, tag =>
+            tag.Value is string text
+            && (text.Contains(fixture.Artifact.Statement.Text, StringComparison.Ordinal)
+                || text.Contains(fixture.Artifact.StorageBinding.ContainerName, StringComparison.Ordinal)
+                || text.Contains(fixture.Artifact.StorageBinding.DatabaseName, StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_AffinityFailureDoesNotEmitUnverifiedFingerprintValues()
+    {
+        const string UnverifiedFingerprint = "private-unverified-placement-fingerprint";
+        var fixture = ArtifactFixture.Row();
+        var executor = Executor(fixture, static (_, _) => new TrackingFeedIterator([]));
+        var request = fixture.Request(
+            maximumRows: 10,
+            placement: new("caller-defined", "caller-defined", UnverifiedFingerprint));
+        List<Activity> stopped = [];
+        using ActivityListener listener = new()
+        {
+            ShouldListenTo = static source => source.Name == CosmosRelationQueryTelemetry.InstrumentationName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = stopped.Add
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        var result = await executor.ExecuteAsync(request);
+
+        var activity = Assert.Single(stopped, item =>
+            item.OperationName == RelationQueryTelemetry.NativeExecutionActivityName);
+        Assert.Equal(RelationQueryExecutionStatus.Failed, result.Status);
+        Assert.Equal(RelationQueryTelemetry.FailedStatus, activity.GetTagItem(RelationQueryTelemetry.StatusTagName));
+        Assert.Null(activity.GetTagItem(RelationQueryTelemetry.PlanFingerprintTagName));
+        Assert.Null(activity.GetTagItem(RelationQueryTelemetry.RealizationFingerprintTagName));
+        Assert.Null(activity.GetTagItem(RelationQueryTelemetry.PlacementFingerprintTagName));
+        Assert.Null(activity.GetTagItem(RelationQueryTelemetry.BindingFingerprintTagName));
+        Assert.Null(activity.GetTagItem(RelationQueryTelemetry.ArtifactFingerprintTagName));
+        Assert.DoesNotContain(activity.TagObjects, tag =>
+            tag.Value is string text
+            && text.Contains(UnverifiedFingerprint, StringComparison.Ordinal));
+    }
+
     [Theory]
     [InlineData("https://different.tests.invalid", "operations")]
     [InlineData("https://tests.invalid", "analytics")]
@@ -850,10 +920,25 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
                 JsonObject((idAlias, "load-2"), (typeAlias, "broker")))
         ]);
         var executor = Executor(fixture, (_, _) => iterator);
+        List<Activity> stopped = [];
+        using ActivityListener listener = new()
+        {
+            ShouldListenTo = static source => source.Name == CosmosRelationQueryTelemetry.InstrumentationName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = stopped.Add
+        };
+        ActivitySource.AddActivityListener(listener);
+        using Activity root = new("tests.cosmos.native.incomplete");
+        root.Start();
 
         var result = await executor.ExecuteAsync(fixture.Request(maximumRows: 20));
 
+        var activity = Assert.Single(stopped, item =>
+            item.OperationName == RelationQueryTelemetry.NativeExecutionActivityName
+            && item.ParentSpanId == root.SpanId);
         Assert.Equal(RelationQueryExecutionStatus.Incomplete, result.Status);
+        Assert.Equal("incomplete", activity.GetTagItem(RelationQueryTelemetry.StatusTagName));
         Assert.Equal("load-1", FieldString(Assert.Single(result.Rows).Value, IdPath));
         var diagnostic = Assert.Single(result.Diagnostics);
         Assert.Equal(CosmosRelationQueryArtifactExecutionDiagnosticCodes.ResultBoundaryExceeded, diagnostic.Code);
@@ -938,10 +1023,25 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
             }
         ]);
         var executor = Executor(fixture, (_, _) => iterator);
+        List<Activity> stopped = [];
+        using ActivityListener listener = new()
+        {
+            ShouldListenTo = static source => source.Name == CosmosRelationQueryTelemetry.InstrumentationName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = stopped.Add
+        };
+        ActivitySource.AddActivityListener(listener);
+        using Activity root = new("tests.cosmos.native.canceled");
+        root.Start();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
             await executor.ExecuteAsync(fixture.Request(maximumRows: 5), cancellation.Token));
 
+        var activity = Assert.Single(stopped, item =>
+            item.OperationName == RelationQueryTelemetry.NativeExecutionActivityName
+            && item.ParentSpanId == root.SpanId);
+        Assert.Equal(RelationQueryTelemetry.CanceledStatus, activity.GetTagItem(RelationQueryTelemetry.StatusTagName));
         Assert.True(iterator.Disposed);
     }
 

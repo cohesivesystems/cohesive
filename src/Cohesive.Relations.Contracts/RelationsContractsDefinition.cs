@@ -1,5 +1,6 @@
 using Cohesive.Api;
 using Cohesive.Model;
+using Cohesive.Relations.Explain;
 using Cohesive.Relations.Realization;
 using Cohesive.Relations.Physical;
 using Cohesive.Relations.Serialization;
@@ -70,6 +71,12 @@ public static class RelationsContractsDefinition
             .Action("CompiledRelationQueryPhysicalPlan")
             .Route("GET", "/relations/contracts/compiled-relation-query-physical-plan")
             .Returns<CompiledRelationQueryPhysicalPlan>()
+            .Build(),
+        CohesiveApi
+            .Define("RelationsContracts")
+            .Action("RelationQueryExplainArtifact")
+            .Route("GET", "/relations/contracts/relation-query-explain-artifact")
+            .Returns<RelationQueryExplainArtifact>()
             .Build()
     );
 }

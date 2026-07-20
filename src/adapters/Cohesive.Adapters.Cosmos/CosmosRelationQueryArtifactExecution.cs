@@ -1,10 +1,12 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using Cohesive.Model;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Execution;
 using Cohesive.Relations.IR;
+using Cohesive.Relations.Observability;
 using Cohesive.Relations.Physical;
 using Cohesive.Relations.Realization;
 using Microsoft.Azure.Cosmos;
@@ -378,12 +380,21 @@ public sealed class CosmosRelationQueryArtifactExecutor
     /// </returns>
     /// <exception cref="ArgumentNullException"><paramref name="request"/> is <see langword="null"/>.</exception>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> is canceled.</exception>
-    public async ValueTask<CosmosRelationQueryArtifactExecutionResult> ExecuteAsync(
+    public ValueTask<CosmosRelationQueryArtifactExecutionResult> ExecuteAsync(
         CosmosRelationQueryArtifactExecutionRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
+        return CosmosRelationQueryTelemetry.Emitter.IsEnabled
+            ? ExecuteObservedAsync(request, cancellationToken)
+            : ExecuteCoreAsync(request, cancellationToken);
+    }
+
+    async ValueTask<CosmosRelationQueryArtifactExecutionResult> ExecuteCoreAsync(
+        CosmosRelationQueryArtifactExecutionRequest request,
+        CancellationToken cancellationToken)
+    {
         return TryPrepare(request, out var prepared, out var failure)
             ? await ExecutePreparedAsync(prepared!, cancellationToken).ConfigureAwait(false)
             : failure!;
@@ -402,7 +413,7 @@ public sealed class CosmosRelationQueryArtifactExecutor
     /// </exception>
     /// <exception cref="ArgumentException"><paramref name="requests"/> repeats a native branch identity.</exception>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> is canceled.</exception>
-    public async ValueTask<ImmutableArray<CosmosRelationQueryArtifactExecutionResult>> ExecuteAsync(
+    public ValueTask<ImmutableArray<CosmosRelationQueryArtifactExecutionResult>> ExecuteAsync(
         IReadOnlyList<CosmosRelationQueryArtifactExecutionRequest> requests,
         CancellationToken cancellationToken = default)
     {
@@ -423,6 +434,15 @@ public sealed class CosmosRelationQueryArtifactExecutor
         }
 
         cancellationToken.ThrowIfCancellationRequested();
+        return CosmosRelationQueryTelemetry.Emitter.IsEnabled
+            ? ExecuteObservedAsync(normalizedRequests, cancellationToken)
+            : ExecuteBatchCoreAsync(normalizedRequests, cancellationToken);
+    }
+
+    async ValueTask<ImmutableArray<CosmosRelationQueryArtifactExecutionResult>> ExecuteBatchCoreAsync(
+        CosmosRelationQueryArtifactExecutionRequest[] normalizedRequests,
+        CancellationToken cancellationToken)
+    {
         var prepared = new PreparedArtifactInvocation?[normalizedRequests.Length];
         var failures = new CosmosRelationQueryArtifactExecutionResult?[normalizedRequests.Length];
         var preflightFailed = false;
@@ -456,6 +476,162 @@ public sealed class CosmosRelationQueryArtifactExecutor
         }
         return results.MoveToImmutable();
     }
+
+    async ValueTask<CosmosRelationQueryArtifactExecutionResult> ExecuteObservedAsync(
+        CosmosRelationQueryArtifactExecutionRequest request,
+        CancellationToken cancellationToken)
+    {
+        Activity? activity = CosmosRelationQueryTelemetry.Emitter.StartActivity(
+            RelationQueryTelemetry.NativeExecutionActivityName,
+            ActivityKind.Client);
+        var started = CosmosRelationQueryTelemetry.Emitter.StartTimer();
+        try
+        {
+            CosmosRelationQueryArtifactExecutionResult result;
+            if (TryPrepare(request, out var prepared, out var failure))
+            {
+                SetExecutionRequestTags(activity, request);
+                result = await ExecutePreparedAsync(prepared!, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                result = failure!;
+            }
+            SetExecutionResultTags(activity, result);
+            CosmosRelationQueryTelemetry.Emitter.CompleteOperation(
+                activity,
+                started,
+                RelationQueryTelemetry.NativeExecutionActivityName,
+                RelationQueryTelemetry.GetStatusTagValue(result.Status));
+            return result;
+        }
+        catch (OperationCanceledException exception) when (cancellationToken.IsCancellationRequested)
+        {
+            CompleteExecutionException(activity, started, exception, RelationQueryTelemetry.CanceledStatus);
+            throw;
+        }
+        catch (Exception exception)
+        {
+            CompleteExecutionException(activity, started, exception, RelationQueryTelemetry.ExceptionStatus);
+            throw;
+        }
+    }
+
+    async ValueTask<ImmutableArray<CosmosRelationQueryArtifactExecutionResult>> ExecuteObservedAsync(
+        CosmosRelationQueryArtifactExecutionRequest[] requests,
+        CancellationToken cancellationToken)
+    {
+        Activity? activity = CosmosRelationQueryTelemetry.Emitter.StartActivity(
+            RelationQueryTelemetry.NativeExecutionActivityName,
+            ActivityKind.Client);
+        var started = CosmosRelationQueryTelemetry.Emitter.StartTimer();
+        if (activity?.IsAllDataRequested == true)
+            activity.SetTag(RelationQueryTelemetry.ArtifactCountTagName, requests.Length);
+        try
+        {
+            var results = await ExecuteBatchCoreAsync(requests, cancellationToken).ConfigureAwait(false);
+            var status = RelationQueryExecutionStatus.Succeeded;
+            var rowCount = 0;
+            var diagnosticCount = 0;
+            foreach (var result in results)
+            {
+                if (result.Status == RelationQueryExecutionStatus.Failed)
+                    status = RelationQueryExecutionStatus.Failed;
+                else if (result.Status == RelationQueryExecutionStatus.Incomplete
+                         && status == RelationQueryExecutionStatus.Succeeded)
+                    status = RelationQueryExecutionStatus.Incomplete;
+                rowCount += result.Rows.Length;
+                diagnosticCount += result.Diagnostics.Length;
+                if (activity?.IsAllDataRequested == true)
+                {
+                    foreach (var diagnostic in result.Diagnostics)
+                    {
+                        RelationQueryTelemetry.AddDiagnosticEvent(
+                            activity,
+                            diagnostic.Code,
+                            diagnostic.Severity);
+                    }
+                }
+            }
+            if (activity?.IsAllDataRequested == true)
+            {
+                activity.SetTag(RelationQueryTelemetry.RowCountTagName, rowCount);
+                activity.SetTag(RelationQueryTelemetry.DiagnosticCountTagName, diagnosticCount);
+            }
+            CosmosRelationQueryTelemetry.Emitter.CompleteOperation(
+                activity,
+                started,
+                RelationQueryTelemetry.NativeExecutionActivityName,
+                RelationQueryTelemetry.GetStatusTagValue(status));
+            return results;
+        }
+        catch (OperationCanceledException exception) when (cancellationToken.IsCancellationRequested)
+        {
+            CompleteExecutionException(activity, started, exception, RelationQueryTelemetry.CanceledStatus);
+            throw;
+        }
+        catch (Exception exception)
+        {
+            CompleteExecutionException(activity, started, exception, RelationQueryTelemetry.ExceptionStatus);
+            throw;
+        }
+    }
+
+    static void SetExecutionRequestTags(
+        Activity? activity,
+        CosmosRelationQueryArtifactExecutionRequest request)
+    {
+        if (activity?.IsAllDataRequested != true)
+            return;
+        RelationQueryTelemetry.TrySetFingerprintTag(
+            activity,
+            RelationQueryTelemetry.PlanFingerprintTagName,
+            RelationQueryCompiledPlanReferenceFingerprinter.Compute(request.Plan).Value);
+        RelationQueryTelemetry.TrySetFingerprintTag(
+            activity,
+            RelationQueryTelemetry.RealizationFingerprintTagName,
+            request.Realization.Value);
+        RelationQueryTelemetry.TrySetFingerprintTag(
+            activity,
+            RelationQueryTelemetry.PlacementFingerprintTagName,
+            request.Placement.Value);
+        RelationQueryTelemetry.TrySetFingerprintTag(
+            activity,
+            RelationQueryTelemetry.BindingFingerprintTagName,
+            request.StorageBindingFingerprint.Value);
+        RelationQueryTelemetry.TrySetFingerprintTag(
+            activity,
+            RelationQueryTelemetry.ArtifactFingerprintTagName,
+            request.Artifact.Fingerprint.Value);
+    }
+
+    static void SetExecutionResultTags(
+        Activity? activity,
+        CosmosRelationQueryArtifactExecutionResult result)
+    {
+        if (activity?.IsAllDataRequested != true)
+            return;
+        activity.SetTag(RelationQueryTelemetry.RowCountTagName, result.Rows.Length);
+        activity.SetTag(RelationQueryTelemetry.DiagnosticCountTagName, result.Diagnostics.Length);
+        foreach (var diagnostic in result.Diagnostics)
+        {
+            RelationQueryTelemetry.AddDiagnosticEvent(
+                activity,
+                diagnostic.Code,
+                diagnostic.Severity);
+        }
+    }
+
+    static void CompleteExecutionException(
+        Activity? activity,
+        long started,
+        Exception exception,
+        string status) => CosmosRelationQueryTelemetry.Emitter.CompleteOperation(
+            activity,
+            started,
+            RelationQueryTelemetry.NativeExecutionActivityName,
+            status,
+            exception: exception);
 
     bool TryPrepare(CosmosRelationQueryArtifactExecutionRequest request, out PreparedArtifactInvocation? prepared, out CosmosRelationQueryArtifactExecutionResult? failure)
     {

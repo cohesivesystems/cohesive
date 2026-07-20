@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -7,6 +8,7 @@ using Cohesive.Model.Expressions;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
+using Cohesive.Relations.Observability;
 using Cohesive.Relations.Physical;
 using Cohesive.Relations.Realization;
 using Cohesive.Relations.Serialization;
@@ -41,8 +43,23 @@ public sealed class PostgresRelationQueryCompiler
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(storageBinding);
-        return EvaluateContext(request, storageBinding).Report;
+        return ObserveContextualRealization(request, storageBinding).Report;
     }
+
+    ContextualEvaluation ObserveContextualRealization(
+        RelationQueryBoundRealizationRequest request,
+        PostgresRelationQueryStorageBinding storageBinding) =>
+        RelationQueryCompilerTelemetry.Observe(
+            PostgresRelationQueryTelemetry.Emitter,
+            RelationQueryTelemetry.RealizationActivityName,
+            (Compiler: this, Request: request, StorageBinding: storageBinding),
+            static state => EvaluateContext(state.Request, state.StorageBinding),
+            static evaluation => RelationQueryTelemetry.GetStatusTagValue(evaluation.Report.Status),
+            static (activity, state, evaluation) => RelationQueryCompilerTelemetry.ProjectRealizationActivity(
+                activity,
+                state.Request,
+                state.StorageBinding.Fingerprint.Value,
+                evaluation.Report));
 
     /// <summary>
     /// Qualifies the exact PostgreSQL context and compiles every selected branch when that context is realizable.
@@ -57,8 +74,31 @@ public sealed class PostgresRelationQueryCompiler
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(storageBinding);
+        var outcome = RelationQueryCompilerTelemetry.Observe(
+            PostgresRelationQueryTelemetry.Emitter,
+            RelationQueryTelemetry.NativeCompilationActivityName,
+            (Compiler: this, Request: request, StorageBinding: storageBinding),
+            static state => state.Compiler.CompileBoundCore(state.Request, state.StorageBinding),
+            static observed => RelationQueryTelemetry.GetStatusTagValue(observed.Compilation.Status),
+            static (activity, state, observed) => ProjectCompilationActivity(
+                activity,
+                state.Request.PlanReference,
+                state.Request.Placement,
+                state.StorageBinding,
+                observed.BoundRealization.ProfileFeasibility.TargetProfile.Target.Value,
+                observed.BoundRealization.Fingerprint.Value,
+                observed.Compilation),
+            RelationQueryTelemetry.BoundRequestKind);
+        return outcome.Compilation;
+    }
 
-        var evaluation = EvaluateContext(request, storageBinding);
+    (PostgresRelationQueryCompilationResult Compilation, RelationQueryBoundRealizationReport BoundRealization)
+        CompileBoundCore(
+        RelationQueryBoundRealizationRequest request,
+        PostgresRelationQueryStorageBinding storageBinding)
+    {
+
+        var evaluation = ObserveContextualRealization(request, storageBinding);
         if (!evaluation.Report.IsRealizable)
         {
             ImmutableArray<RelationQueryNativeCompilationDiagnostic> diagnostics =
@@ -67,17 +107,18 @@ public sealed class PostgresRelationQueryCompiler
                 .. RelationQueryNativeCompilationDiagnostic.FromBoundRealizationFailure(evaluation.Report)
             ];
 
-            return new(
+            PostgresRelationQueryCompilationResult compilation = new(
                 evaluation.Report.Status == RelationQueryRealizationStatus.Invalid
                     ? RelationQueryNativeCompilationStatus.Invalid
                     : RelationQueryNativeCompilationStatus.Unsupported,
                 [],
                 diagnostics);
+            return new(compilation, evaluation.Report);
         }
 
-        return Compile(
+        return new(CompileCore(
             new RelationQueryNativeCompilationRequest(request.Plan, evaluation.Report, request.Placement),
-            storageBinding);
+            storageBinding), evaluation.Report);
     }
 
     /// <summary>Compiles every selected canonical result branch independently and fails closed on uncertainty.</summary>
@@ -89,6 +130,27 @@ public sealed class PostgresRelationQueryCompiler
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(storageBinding);
+        return RelationQueryCompilerTelemetry.Observe(
+            PostgresRelationQueryTelemetry.Emitter,
+            RelationQueryTelemetry.NativeCompilationActivityName,
+            (Compiler: this, Request: request, StorageBinding: storageBinding),
+            static state => state.Compiler.CompileCore(state.Request, state.StorageBinding),
+            static result => RelationQueryTelemetry.GetStatusTagValue(result.Status),
+            static (activity, state, result) => ProjectCompilationActivity(
+                activity,
+                state.Request.PlanReference,
+                state.Request.Placement,
+                state.StorageBinding,
+                state.Request.BoundRealization.ProfileFeasibility.TargetProfile.Target.Value,
+                state.Request.BoundRealization.Fingerprint.Value,
+                result),
+            RelationQueryTelemetry.NativeRequestKind);
+    }
+
+    PostgresRelationQueryCompilationResult CompileCore(
+        RelationQueryNativeCompilationRequest request,
+        PostgresRelationQueryStorageBinding storageBinding)
+    {
 
         var context = new CompilationContext(request);
         var diagnostics = ImmutableArray.CreateBuilder<RelationQueryNativeCompilationDiagnostic>();
@@ -147,6 +209,34 @@ public sealed class PostgresRelationQueryCompiler
                 : RelationQueryNativeCompilationStatus.Exact,
             artifacts.ToImmutable(),
             normalizedDiagnostics);
+    }
+
+    static void ProjectCompilationActivity(
+        Activity activity,
+        RelationQueryCompiledPlanReference plan,
+        RelationQuerySourcePlacement placement,
+        PostgresRelationQueryStorageBinding storageBinding,
+        string target,
+        string boundRealizationFingerprint,
+        PostgresRelationQueryCompilationResult result)
+    {
+        RelationQueryCompilerTelemetry.ProjectNativeCompilationActivity(
+            activity,
+            plan,
+            placement,
+            target,
+            storageBinding.Fingerprint.Value,
+            boundRealizationFingerprint,
+            result.Artifacts.Length,
+            result.Diagnostics.Length,
+            result.Artifacts.Length == 1 ? result.Artifacts[0].Fingerprint.Value : null);
+        foreach (var diagnostic in result.Diagnostics)
+        {
+            RelationQueryTelemetry.AddDiagnosticEvent(
+                activity,
+                diagnostic.Code,
+                diagnostic.Severity);
+        }
     }
 
     static ContextualEvaluation EvaluateContext(

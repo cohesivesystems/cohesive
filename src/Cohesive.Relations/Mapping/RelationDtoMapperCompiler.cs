@@ -11,6 +11,7 @@ using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.Execution;
 using Cohesive.Relations.IR;
+using Cohesive.Relations.Observability;
 
 namespace Cohesive.Relations.Mapping;
 
@@ -67,10 +68,68 @@ public sealed class RelationDtoMapperCompiler
         var lazy = planCache.GetOrAdd(
             key,
             _ => new(
-                () => RelationDtoMapperBuilder.Compile<TOutput>(plan, profile, options),
+                () => CompileMapper<TOutput>(plan, profile, options),
                 LazyThreadSafetyMode.ExecutionAndPublication
             ));
         return (RelationDtoMapperCompilationResult<TOutput>)lazy.Value;
+    }
+
+    static RelationDtoMapperCompilationResult<TOutput> CompileMapper<TOutput>(
+        CompiledRelationQueryPlan plan,
+        RelationDtoMapperProfile profile,
+        RelationDtoMapperCompilationOptions options)
+    {
+        if (!RelationQueryTelemetryRuntime.IsOperationEnabled)
+            return RelationDtoMapperBuilder.Compile<TOutput>(plan, profile, options);
+
+        var activity = RelationQueryTelemetryRuntime.StartActivity(RelationQueryTelemetry.DtoCompilationActivityName);
+        var started = RelationQueryTelemetryRuntime.StartTimer();
+        Exception? failure = null;
+        RelationDtoMapperCompilationResult<TOutput>? result = null;
+        try
+        {
+            result = RelationDtoMapperBuilder.Compile<TOutput>(plan, profile, options);
+            if (activity?.IsAllDataRequested == true)
+            {
+                RelationQueryTelemetry.TrySetFingerprintTag(
+                    activity,
+                    RelationQueryTelemetry.DefinitionFingerprintTagName,
+                    plan.Provenance.DefinitionFingerprint.Value);
+                RelationQueryTelemetry.TrySetFingerprintTag(
+                    activity,
+                    RelationQueryTelemetry.DtoCompilationFingerprintTagName,
+                    result.Descriptor.CompilationIdentity);
+                activity.SetTag(RelationQueryTelemetry.DiagnosticCountTagName, result.Diagnostics.Length);
+                foreach (var diagnostic in result.Diagnostics)
+                {
+                    RelationQueryTelemetry.AddDiagnosticEvent(
+                        activity,
+                        diagnostic.Code,
+                        diagnostic.Severity);
+                }
+            }
+            return result;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException
+                                          and not StackOverflowException
+                                          and not AccessViolationException)
+        {
+            failure = exception;
+            throw;
+        }
+        finally
+        {
+            RelationQueryTelemetryRuntime.CompleteOperation(
+                activity,
+                started,
+                RelationQueryTelemetry.DtoCompilationActivityName,
+                failure is not null || result is null
+                    ? RelationQueryTelemetry.ExceptionStatus
+                    : result.IsSuccessful
+                        ? RelationQueryTelemetry.SucceededStatus
+                        : RelationQueryTelemetry.FailedStatus,
+                exception: failure);
+        }
     }
 
     readonly record struct CacheKey(Type OutputType, string ProfileFingerprint, string OptionsFingerprint);
@@ -116,7 +175,9 @@ public sealed class CompiledRelationDtoMapper<TOutput>
         ArgumentNullException.ThrowIfNull(execution);
         ValidatePolicy(failurePolicy);
         cancellationToken.ThrowIfCancellationRequested();
-        return MapCore(execution, physicalExecution: null, failurePolicy, cancellationToken);
+        return RelationQueryTelemetryRuntime.IsDtoMappingEnabled
+            ? MapObserved(execution, failurePolicy, cancellationToken)
+            : MapCore(execution, physicalExecution: null, failurePolicy, cancellationToken);
     }
 
     /// <summary>Materializes typed rows from the canonical interpretation inside a physical execution.</summary>
@@ -138,6 +199,129 @@ public sealed class CompiledRelationDtoMapper<TOutput>
         ArgumentNullException.ThrowIfNull(execution);
         ValidatePolicy(failurePolicy);
         cancellationToken.ThrowIfCancellationRequested();
+
+        return RelationQueryTelemetryRuntime.IsDtoMappingEnabled
+            ? MapObserved(execution, failurePolicy, cancellationToken)
+            : MapPhysicalCore(execution, failurePolicy, cancellationToken);
+    }
+
+    RelationDtoMappingResult<TOutput> MapObserved(
+        RelationQueryExecutionResult execution,
+        RelationDtoMappingFailurePolicy failurePolicy,
+        CancellationToken cancellationToken)
+    {
+        var inputRows = execution.Relation?.Rows.Length ?? 0;
+        var activity = RelationQueryTelemetryRuntime.StartActivity(RelationQueryTelemetry.DtoMappingActivityName);
+        var started = RelationQueryTelemetryRuntime.StartTimer();
+        Exception? failure = null;
+        RelationDtoMappingResult<TOutput>? result = null;
+        try
+        {
+            result = MapCore(execution, physicalExecution: null, failurePolicy, cancellationToken);
+            CompleteMappingActivity(activity, result, inputRows, failurePolicy);
+            return result;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException
+                                          and not StackOverflowException
+                                          and not AccessViolationException)
+        {
+            failure = exception;
+            throw;
+        }
+        finally
+        {
+            CompleteMappingOperation(activity, started, result, failure);
+        }
+    }
+
+    RelationDtoMappingResult<TOutput> MapObserved(
+        RelationQueryPhysicalExecutionResult execution,
+        RelationDtoMappingFailurePolicy failurePolicy,
+        CancellationToken cancellationToken)
+    {
+        var inputRows = execution.Interpretation?.Relation?.Rows.Length ?? 0;
+        var activity = RelationQueryTelemetryRuntime.StartActivity(RelationQueryTelemetry.DtoMappingActivityName);
+        var started = RelationQueryTelemetryRuntime.StartTimer();
+        Exception? failure = null;
+        RelationDtoMappingResult<TOutput>? result = null;
+        try
+        {
+            result = MapPhysicalCore(execution, failurePolicy, cancellationToken);
+            CompleteMappingActivity(activity, result, inputRows, failurePolicy);
+            return result;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException
+                                          and not StackOverflowException
+                                          and not AccessViolationException)
+        {
+            failure = exception;
+            throw;
+        }
+        finally
+        {
+            CompleteMappingOperation(activity, started, result, failure);
+        }
+    }
+
+    void CompleteMappingActivity(
+        Activity? activity,
+        RelationDtoMappingResult<TOutput> result,
+        int inputRows,
+        RelationDtoMappingFailurePolicy failurePolicy)
+    {
+        RelationQueryTelemetryRuntime.RecordDtoRows(
+            inputRows,
+            result.Rows.Length,
+            result.FailedRows.Length,
+            result.Status,
+            failurePolicy);
+        if (activity?.IsAllDataRequested != true)
+            return;
+
+        RelationQueryTelemetry.TrySetFingerprintTag(
+            activity,
+            RelationQueryTelemetry.DtoCompilationFingerprintTagName,
+            Descriptor.CompilationIdentity);
+        activity.SetTag(
+            RelationQueryTelemetry.FailurePolicyTagName,
+            RelationQueryTelemetry.GetTagValue(failurePolicy));
+        activity.SetTag(RelationQueryTelemetry.RowCountTagName, inputRows);
+        activity.SetTag(RelationQueryTelemetry.EmittedRowCountTagName, result.Rows.Length);
+        activity.SetTag(RelationQueryTelemetry.RejectedRowCountTagName, result.FailedRows.Length);
+        activity.SetTag(RelationQueryTelemetry.DiagnosticCountTagName, result.Diagnostics.Length);
+        foreach (var diagnostic in result.Diagnostics)
+        {
+            RelationQueryTelemetry.AddDiagnosticEvent(
+                activity,
+                diagnostic.Code,
+                diagnostic.Severity);
+        }
+    }
+
+    static void CompleteMappingOperation(
+        Activity? activity,
+        long started,
+        RelationDtoMappingResult<TOutput>? result,
+        Exception? failure)
+    {
+        var status = failure is OperationCanceledException
+            ? RelationQueryTelemetry.CanceledStatus
+            : failure is not null || result is null
+                ? RelationQueryTelemetry.ExceptionStatus
+                : RelationQueryTelemetry.GetStatusTagValue(result.Status);
+        RelationQueryTelemetryRuntime.CompleteOperation(
+            activity,
+            started,
+            RelationQueryTelemetry.DtoMappingActivityName,
+            status,
+            exception: failure);
+    }
+
+    RelationDtoMappingResult<TOutput> MapPhysicalCore(
+        RelationQueryPhysicalExecutionResult execution,
+        RelationDtoMappingFailurePolicy failurePolicy,
+        CancellationToken cancellationToken)
+    {
 
         if (execution.Interpretation is null)
         {

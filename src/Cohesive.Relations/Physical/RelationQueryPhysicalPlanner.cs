@@ -5,6 +5,7 @@ using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Execution;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
+using Cohesive.Relations.Observability;
 using Cohesive.Relations.Realization;
 
 namespace Cohesive.Relations.Physical;
@@ -55,6 +56,18 @@ public static class RelationQueryPhysicalPlanner
         ArgumentNullException.ThrowIfNull(placement);
         ArgumentNullException.ThrowIfNull(policy);
 
+        return RelationQueryTelemetryRuntime.IsOperationEnabled
+            ? CompileObserved(plan, realization, placement, policy, interpreter)
+            : CompileCore(plan, realization, placement, policy, interpreter);
+    }
+
+    static RelationQueryPhysicalPlanningResult CompileCore(
+        CompiledRelationQueryPlan plan,
+        RelationQueryRealizationReport realization,
+        RelationQuerySourcePlacement placement,
+        RelationQueryPhysicalPlanningPolicy policy,
+        IRelationQueryInterpreter? interpreter)
+    {
         var context = new PlanningContext(
             plan,
             realization,
@@ -62,6 +75,74 @@ public static class RelationQueryPhysicalPlanner
             policy,
             interpreter ?? RelationQueryInMemoryInterpreter.Default);
         return context.Compile();
+    }
+
+    static RelationQueryPhysicalPlanningResult CompileObserved(
+        CompiledRelationQueryPlan plan,
+        RelationQueryRealizationReport realization,
+        RelationQuerySourcePlacement placement,
+        RelationQueryPhysicalPlanningPolicy policy,
+        IRelationQueryInterpreter? interpreter)
+    {
+        var activity = RelationQueryTelemetryRuntime.StartActivity(
+            RelationQueryTelemetry.PhysicalPlanningActivityName);
+        var started = RelationQueryTelemetryRuntime.StartTimer();
+        Exception? failure = null;
+        RelationQueryPhysicalPlanningResult? result = null;
+        try
+        {
+            result = CompileCore(plan, realization, placement, policy, interpreter);
+            if (activity?.IsAllDataRequested == true)
+            {
+                RelationQueryTelemetry.TrySetFingerprintTag(
+                    activity,
+                    RelationQueryTelemetry.PlanFingerprintTagName,
+                    RelationQueryCompiledPlanReferenceFingerprinter.Compute(
+                        RelationQueryCompiledPlanReference.From(plan)).Value);
+                RelationQueryTelemetry.TrySetFingerprintTag(
+                    activity,
+                    RelationQueryTelemetry.RealizationFingerprintTagName,
+                    realization.Fingerprint.Value);
+                RelationQueryTelemetry.TrySetFingerprintTag(
+                    activity,
+                    RelationQueryTelemetry.PlacementFingerprintTagName,
+                    placement.Fingerprint.Value);
+                activity.SetTag(RelationQueryTelemetry.DiagnosticCountTagName, result.Diagnostics.Length);
+                foreach (var diagnostic in result.Diagnostics)
+                {
+                    RelationQueryTelemetry.AddDiagnosticEvent(
+                        activity,
+                        diagnostic.Code,
+                        diagnostic.Severity);
+                }
+                if (result.Plan is { } physicalPlan)
+                {
+                    RelationQueryTelemetry.TrySetFingerprintTag(
+                        activity,
+                        RelationQueryTelemetry.PhysicalPlanFingerprintTagName,
+                        physicalPlan.Fingerprint.Value);
+                }
+            }
+            return result;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException
+                                          and not StackOverflowException
+                                          and not AccessViolationException)
+        {
+            failure = exception;
+            throw;
+        }
+        finally
+        {
+            RelationQueryTelemetryRuntime.CompleteOperation(
+                activity,
+                started,
+                RelationQueryTelemetry.PhysicalPlanningActivityName,
+                failure is not null || result is null
+                    ? RelationQueryTelemetry.ExceptionStatus
+                    : RelationQueryTelemetry.GetStatusTagValue(result.Status),
+                exception: failure);
+        }
     }
 
     sealed class PlanningContext

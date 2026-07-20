@@ -5,6 +5,7 @@ using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
+using Cohesive.Relations.Observability;
 using Cohesive.Relations.Physical;
 using Cohesive.Relations.Realization;
 
@@ -349,10 +350,104 @@ public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
     }
 
     /// <inheritdoc />
-    public async ValueTask<RelationQueryEvaluationOutcome> EvaluateAsync(RelationQueryEvaluation evaluation, CancellationToken cancellationToken = default)
+    public ValueTask<RelationQueryEvaluationOutcome> EvaluateAsync(
+        RelationQueryEvaluation evaluation,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(evaluation);
         cancellationToken.ThrowIfCancellationRequested();
+
+        return RelationQueryTelemetryRuntime.IsOperationEnabled
+            ? EvaluateObservedAsync(evaluation, cancellationToken)
+            : EvaluateCoreAsync(evaluation, cancellationToken);
+    }
+
+    async ValueTask<RelationQueryEvaluationOutcome> EvaluateObservedAsync(
+        RelationQueryEvaluation evaluation,
+        CancellationToken cancellationToken)
+    {
+        var activity = RelationQueryTelemetryRuntime.StartActivity(RelationQueryTelemetry.EvaluationActivityName);
+        var started = RelationQueryTelemetryRuntime.StartTimer();
+        Exception? failure = null;
+        RelationQueryEvaluationOutcome? outcome = null;
+        try
+        {
+            outcome = await EvaluateCoreAsync(evaluation, cancellationToken).ConfigureAwait(false);
+            if (activity?.IsAllDataRequested == true)
+            {
+                RelationQueryTelemetry.TrySetFingerprintTag(
+                    activity,
+                    RelationQueryTelemetry.DefinitionFingerprintTagName,
+                    evaluation.Compilation.DefinitionDocument.DefinitionFingerprint.Value);
+                RelationQueryTelemetry.TrySetFingerprintTag(
+                    activity,
+                    RelationQueryTelemetry.EvaluationFingerprintTagName,
+                    evaluation.Fingerprint.Value);
+                activity.SetTag(
+                    RelationQueryTelemetry.SchemaVersionTagName,
+                    evaluation.Compilation.DefinitionDocument.SchemaVersion);
+                activity.SetTag(
+                    RelationQueryTelemetry.DiagnosticCountTagName,
+                    outcome.Diagnostics.Length
+                    + outcome.Compilation.Diagnostics.Length
+                    + (outcome.Realization?.Diagnostics.Length ?? 0)
+                    + (outcome.PhysicalPlanning?.Diagnostics.Length ?? 0)
+                    + (outcome.PhysicalExecution?.Diagnostics.Length ?? 0)
+                    + (outcome.Result?.Diagnostics.Length ?? 0));
+                foreach (var diagnostic in outcome.Diagnostics)
+                {
+                    RelationQueryTelemetry.AddDiagnosticEvent(
+                        activity,
+                        diagnostic.Code,
+                        diagnostic.Severity);
+                }
+                if (outcome.Realization is { } realization)
+                {
+                    RelationQueryTelemetry.TrySetFingerprintTag(
+                        activity,
+                        RelationQueryTelemetry.RealizationFingerprintTagName,
+                        realization.Fingerprint.Value);
+                }
+                if (outcome.PhysicalExecution?.Request.PhysicalPlan is { } physicalPlan)
+                {
+                    RelationQueryTelemetry.TrySetFingerprintTag(
+                        activity,
+                        RelationQueryTelemetry.PhysicalPlanFingerprintTagName,
+                        physicalPlan.Fingerprint.Value);
+                }
+            }
+            return outcome;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException
+                                          and not StackOverflowException
+                                          and not AccessViolationException)
+        {
+            failure = exception;
+            throw;
+        }
+        finally
+        {
+            var status = failure is OperationCanceledException
+                ? RelationQueryTelemetry.CanceledStatus
+                : failure is not null
+                    ? RelationQueryTelemetry.ExceptionStatus
+                    : outcome is null
+                        ? RelationQueryTelemetry.ExceptionStatus
+                        : RelationQueryTelemetry.GetStatusTagValue(outcome.Status);
+            RelationQueryTelemetryRuntime.CompleteOperation(
+                activity,
+                started,
+                RelationQueryTelemetry.EvaluationActivityName,
+                status,
+                TerminalPhase(outcome, failure),
+                failure);
+        }
+    }
+
+    async ValueTask<RelationQueryEvaluationOutcome> EvaluateCoreAsync(
+        RelationQueryEvaluation evaluation,
+        CancellationToken cancellationToken)
+    {
 
         var compilation = RelationQueryStaticCompiler.Compile(evaluation.Compilation);
         if (!compilation.IsSuccessful)
@@ -423,6 +518,23 @@ public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
             physicalPlanning,
             execution
             );
+    }
+
+    static string TerminalPhase(RelationQueryEvaluationOutcome? outcome, Exception? failure)
+    {
+        if (failure is not null)
+            return failure is OperationCanceledException
+                ? RelationQueryTelemetry.CancellationTerminalPhase
+                : RelationQueryTelemetry.ExceptionTerminalPhase;
+        if (outcome is null || !outcome.Compilation.IsSuccessful)
+            return RelationQueryTelemetry.StaticCompilationTerminalPhase;
+        if (outcome.Diagnostics.Any(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
+            return RelationQueryTelemetry.PlanAffinityTerminalPhase;
+        if (outcome.Realization is not { IsRealizable: true })
+            return RelationQueryTelemetry.RealizationTerminalPhase;
+        if (outcome.PhysicalPlanning is not { IsSuccessful: true })
+            return RelationQueryTelemetry.PhysicalPlanningTerminalPhase;
+        return RelationQueryTelemetry.PhysicalExecutionTerminalPhase;
     }
 
     static ImmutableArray<RelationQueryParameterEvidence> ProjectParameters(

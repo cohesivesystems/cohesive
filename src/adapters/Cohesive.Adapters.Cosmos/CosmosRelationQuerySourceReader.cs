@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -8,6 +9,7 @@ using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Model;
+using Cohesive.Relations.Observability;
 using Cohesive.Relations.Physical;
 using Cohesive.Relations.Realization;
 using Cohesive.Relations.Serialization;
@@ -261,13 +263,21 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
     public RelationQueryPlacementFieldSelector RelationshipKeySourceSelector { get; }
 
     /// <inheritdoc />
-    public async ValueTask<RelationQuerySourceReadResult> ReadAsync(
+    public ValueTask<RelationQuerySourceReadResult> ReadAsync(
         RelationQuerySourceReadRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
+        return CosmosRelationQueryTelemetry.Emitter.IsEnabled
+            ? ReadObservedAsync(request, cancellationToken)
+            : ReadCoreAsync(request, cancellationToken);
+    }
 
+    async ValueTask<RelationQuerySourceReadResult> ReadCoreAsync(
+        RelationQuerySourceReadRequest request,
+        CancellationToken cancellationToken)
+    {
         try
         {
             if (ValidateRequest(request, cancellationToken) is { } invalid)
@@ -306,6 +316,65 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
                 $"provider-read-failed/{Uri.EscapeDataString(exception.GetType().FullName ?? exception.GetType().Name)}");
         }
     }
+
+    async ValueTask<RelationQuerySourceReadResult> ReadObservedAsync(
+        RelationQuerySourceReadRequest request,
+        CancellationToken cancellationToken)
+    {
+        Activity? activity = CosmosRelationQueryTelemetry.Emitter.StartActivity(
+            CosmosRelationQueryTelemetry.SourceAcquisitionActivityName,
+            ActivityKind.Client);
+        var started = CosmosRelationQueryTelemetry.Emitter.StartTimer();
+        if (activity?.IsAllDataRequested == true)
+        {
+            activity.SetTag(
+                RelationQueryTelemetry.ReadKindTagName,
+                RelationQueryTelemetry.GetTagValue(GetReadKind(request.Constraint)));
+        }
+
+        try
+        {
+            var result = await ReadCoreAsync(request, cancellationToken).ConfigureAwait(false);
+            if (activity?.IsAllDataRequested == true)
+            {
+                activity.SetTag(RelationQueryTelemetry.RowCountTagName, result.Observations.Length);
+            }
+            CosmosRelationQueryTelemetry.Emitter.CompleteOperation(
+                activity,
+                started,
+                CosmosRelationQueryTelemetry.SourceAcquisitionActivityName,
+                RelationQueryTelemetry.GetStatusTagValue(result.State));
+            return result;
+        }
+        catch (OperationCanceledException exception) when (cancellationToken.IsCancellationRequested)
+        {
+            CosmosRelationQueryTelemetry.Emitter.CompleteOperation(
+                activity,
+                started,
+                CosmosRelationQueryTelemetry.SourceAcquisitionActivityName,
+                RelationQueryTelemetry.CanceledStatus,
+                exception: exception);
+            throw;
+        }
+        catch (Exception exception)
+        {
+            CosmosRelationQueryTelemetry.Emitter.CompleteOperation(
+                activity,
+                started,
+                CosmosRelationQueryTelemetry.SourceAcquisitionActivityName,
+                RelationQueryTelemetry.ExceptionStatus,
+                exception: exception);
+            throw;
+        }
+    }
+
+    static RelationQuerySourceReadKind GetReadKind(RelationQuerySourceReadConstraint constraint) => constraint switch
+    {
+        RelationQueryBoundedEnumeration => RelationQuerySourceReadKind.BoundedEnumeration,
+        RelationQueryIdentityBatchLookup => RelationQuerySourceReadKind.IdentityBatch,
+        RelationQueryRelationshipKeyBatchLookup => RelationQuerySourceReadKind.RelationshipKeyBatch,
+        _ => throw new ArgumentOutOfRangeException(nameof(constraint), constraint, "Unsupported source-read constraint.")
+    };
 
     async ValueTask<RelationQuerySourceReadResult> ReadEnumerationAsync(
         RelationQuerySourceReadRequest request,

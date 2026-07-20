@@ -47,6 +47,101 @@ public sealed record RelationQueryPlanComponentFingerprint
 }
 
 /// <summary>
+/// Sanitized portable attribution to the semantic inputs of one static relation/query compilation request.
+/// </summary>
+/// <remarks>
+/// This reference intentionally retains only versioned fingerprints. Canonical definitions, shape documents,
+/// relationship catalogs, parameter defaults, and other potentially sensitive compilation payloads are excluded.
+/// </remarks>
+public sealed record RelationQueryCompilationRequestReference
+{
+    /// <summary>Creates sanitized attribution to one static-compilation request.</summary>
+    /// <param name="compilerProfile">Static compiler profile expected to interpret the request.</param>
+    /// <param name="definitionSchemaVersion">Portable schema version of the canonical definition document.</param>
+    /// <param name="definitionFingerprint">Fingerprint computed from the canonical definition.</param>
+    /// <param name="shapeSnapshotsFingerprint">Fingerprint computed from the supplied shape snapshots.</param>
+    /// <param name="relationshipCatalogFingerprint">
+    /// Fingerprint computed from the supplied relationship catalog, or <see langword="null"/> when none was supplied.
+    /// </param>
+    /// <param name="demandFingerprint">Fingerprint computed from the effective output demand.</param>
+    /// <exception cref="ArgumentNullException">A required reference component is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="compilerProfile"/> or <paramref name="definitionSchemaVersion"/> is empty or white space.
+    /// </exception>
+    [JsonConstructor]
+    public RelationQueryCompilationRequestReference(
+        string compilerProfile,
+        string definitionSchemaVersion,
+        RelationQueryDefinitionFingerprint definitionFingerprint,
+        RelationQueryPlanComponentFingerprint shapeSnapshotsFingerprint,
+        RelationshipCatalogFingerprint? relationshipCatalogFingerprint,
+        RelationQueryPlanComponentFingerprint demandFingerprint)
+    {
+        CompilerProfile = Guard.RequireNotNullOrWhiteSpace(compilerProfile);
+        DefinitionSchemaVersion = Guard.RequireNotNullOrWhiteSpace(definitionSchemaVersion);
+        DefinitionFingerprint = Guard.RequireNotNull(definitionFingerprint);
+        ShapeSnapshotsFingerprint = Guard.RequireNotNull(shapeSnapshotsFingerprint);
+        RelationshipCatalogFingerprint = relationshipCatalogFingerprint;
+        DemandFingerprint = Guard.RequireNotNull(demandFingerprint);
+    }
+
+    /// <summary>Static compiler profile expected to interpret the request.</summary>
+    public string CompilerProfile { get; }
+
+    /// <summary>Portable schema version of the canonical definition document.</summary>
+    public string DefinitionSchemaVersion { get; }
+
+    /// <summary>Fingerprint computed from the canonical definition.</summary>
+    public RelationQueryDefinitionFingerprint DefinitionFingerprint { get; }
+
+    /// <summary>Fingerprint computed from the supplied shape snapshots.</summary>
+    public RelationQueryPlanComponentFingerprint ShapeSnapshotsFingerprint { get; }
+
+    /// <summary>Fingerprint computed from the supplied relationship catalog, or <see langword="null"/>.</summary>
+    public RelationshipCatalogFingerprint? RelationshipCatalogFingerprint { get; }
+
+    /// <summary>Fingerprint computed from the effective output demand.</summary>
+    public RelationQueryPlanComponentFingerprint DemandFingerprint { get; }
+
+    /// <summary>Creates a sanitized reference from the actual semantic content of a compilation request.</summary>
+    /// <param name="request">Static-compilation request to identify without retaining its payload.</param>
+    /// <returns>A reference containing only version and fingerprint attribution.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">A request snapshot cannot be represented as canonical JSON.</exception>
+    /// <exception cref="JsonException">A request snapshot cannot be serialized as canonical JSON.</exception>
+    /// <exception cref="NotSupportedException">A request snapshot contains an unsupported serialization type.</exception>
+    public static RelationQueryCompilationRequestReference From(RelationQueryCompilationRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return new(
+            RelationQueryCompilationProvenance.CurrentCompilerProfile,
+            request.DefinitionDocument.SchemaVersion,
+            RelationQueryDefinitionFingerprinter.Compute(request.DefinitionDocument.Definition),
+            RelationQueryCompiledPlanFingerprinter.ComputeShapeSnapshots(request.ShapeDocuments),
+            request.RelationshipCatalogDocument is { } catalog
+                ? RelationshipCatalogFingerprinter.Compute(catalog.Catalog)
+                : null,
+            RelationQueryCompiledPlanFingerprinter.ComputeDemand(request.Demand));
+    }
+
+    /// <summary>Projects the comparable request attribution from a successful compiled-plan reference.</summary>
+    /// <param name="plan">Compiled-plan reference whose semantic request inputs are projected.</param>
+    /// <returns>A sanitized request reference with the plan's semantic component fingerprints.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="plan"/> is <see langword="null"/>.</exception>
+    public static RelationQueryCompilationRequestReference From(RelationQueryCompiledPlanReference plan)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        return new(
+            plan.CompilerProfile,
+            plan.DefinitionSchemaVersion,
+            plan.DefinitionFingerprint,
+            plan.ShapeSnapshotsFingerprint,
+            plan.RelationshipCatalogFingerprint,
+            plan.DemandFingerprint);
+    }
+}
+
+/// <summary>
 /// Portable attribution to one exact demand-scoped compiled relation/query plan.
 /// </summary>
 /// <remarks>

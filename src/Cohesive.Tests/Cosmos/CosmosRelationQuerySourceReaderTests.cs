@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Net;
 using System.Text.Json;
 using Cohesive.Adapters.Cosmos;
@@ -6,6 +7,7 @@ using Cohesive.Model;
 using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
+using Cohesive.Relations.Observability;
 using Cohesive.Relations.Physical;
 using Cohesive.Storage;
 using Microsoft.Azure.Cosmos;
@@ -19,6 +21,40 @@ public sealed class CosmosRelationQuerySourceReaderTests
     static readonly QualifiedShapeId Shape = new(new("tests/cosmos-source/v1"), new("Load"));
     static readonly FieldPath NamePath = FieldPath.FromField("Name");
     static readonly FieldPath CustomerIdsPath = FieldPath.FromField("CustomerIds");
+
+    [Fact]
+    public async Task Reader_EmitsBoundedNonSensitiveAcquisitionActivity()
+    {
+        var fixture = CreateFixture(new RecordingFeedFactory(), FixedPolicy());
+        List<Activity> stopped = [];
+        using ActivityListener listener = new()
+        {
+            ShouldListenTo = static source => source.Name == CosmosRelationQueryTelemetry.InstrumentationName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = stopped.Add
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        var result = await fixture.Reader.ReadAsync(Request(
+            fixture,
+            [SemanticField(fixture, NamePath)],
+            new RelationQueryBoundedEnumeration(maximumRows: 10)));
+
+        var activity = Assert.Single(stopped, item =>
+            item.OperationName == CosmosRelationQueryTelemetry.SourceAcquisitionActivityName);
+        Assert.Equal(ActivityKind.Client, activity.Kind);
+        Assert.Equal(RelationQuerySourceReadState.Complete, result.State);
+        Assert.Equal("complete", activity.GetTagItem(RelationQueryTelemetry.StatusTagName));
+        Assert.Equal(
+            "bounded_enumeration",
+            activity.GetTagItem(RelationQueryTelemetry.ReadKindTagName));
+        Assert.DoesNotContain(activity.TagObjects, tag =>
+            tag.Value is string text
+            && (text.Contains("tests.invalid", StringComparison.OrdinalIgnoreCase)
+                || text.Contains("operations", StringComparison.OrdinalIgnoreCase)
+                || text.Contains("entities", StringComparison.OrdinalIgnoreCase)));
+    }
 
     [Fact]
     public void Registration_UsesEntityEnvelopeConventionsAndDeterministicPhysicalAffinity()

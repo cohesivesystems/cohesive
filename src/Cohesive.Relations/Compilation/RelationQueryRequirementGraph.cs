@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json.Serialization;
 using Cohesive.Model.Expressions;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.IR;
@@ -89,6 +90,13 @@ public enum RelationQueryRequirementEffect
 /// <summary>
 /// Base type for a semantic input required by a compiled relation or query.
 /// </summary>
+[JsonPolymorphic(TypeDiscriminatorPropertyName = "$input")]
+[JsonDerivedType(typeof(RelationQueryFieldInput), "field")]
+[JsonDerivedType(typeof(RelationQueryObservationIdentityInput), "observationIdentity")]
+[JsonDerivedType(typeof(RelationQuerySourceSetInput), "sourceSet")]
+[JsonDerivedType(typeof(RelationQueryRelationshipInput), "relationship")]
+[JsonDerivedType(typeof(RelationQueryParameterInput), "parameter")]
+[JsonDerivedType(typeof(RelationQueryCapabilityInput), "capability")]
 public abstract record RelationQueryRequirementInput
 {
     /// <summary>Creates a requirement input with a stable identity.</summary>
@@ -110,6 +118,7 @@ public abstract record RelationQueryRequirementInput
 /// </summary>
 public sealed record RelationQueryFieldInput : RelationQueryRequirementInput
 {
+    [JsonConstructor]
     internal RelationQueryFieldInput(
         RelationQueryInputId id,
         QueryNodeId producer,
@@ -149,6 +158,7 @@ public sealed record RelationQueryFieldInput : RelationQueryRequirementInput
 /// </summary>
 public sealed record RelationQueryObservationIdentityInput : RelationQueryRequirementInput
 {
+    [JsonConstructor]
     internal RelationQueryObservationIdentityInput(
         RelationQueryInputId id,
         QueryNodeId producer,
@@ -197,6 +207,7 @@ public sealed record RelationQueryObservationIdentityInput : RelationQueryRequir
 /// </summary>
 public sealed record RelationQuerySourceSetInput : RelationQueryRequirementInput
 {
+    [JsonConstructor]
     internal RelationQuerySourceSetInput(
         RelationQueryInputId id,
         QueryNodeId source,
@@ -245,6 +256,7 @@ public sealed record RelationQuerySourceSetInput : RelationQueryRequirementInput
 /// </summary>
 public sealed record RelationQueryRelationshipInput : RelationQueryRequirementInput
 {
+    [JsonConstructor]
     internal RelationQueryRelationshipInput(
         RelationQueryInputId id,
         QueryNodeId traversal,
@@ -338,6 +350,7 @@ public sealed record RelationQueryRelationshipInput : RelationQueryRequirementIn
 /// </summary>
 public sealed record RelationQueryParameterInput : RelationQueryRequirementInput
 {
+    [JsonConstructor]
     internal RelationQueryParameterInput(RelationQueryInputId id, QueryParameterDefinition definition)
         : base(id)
     {
@@ -356,6 +369,7 @@ public sealed record RelationQueryParameterInput : RelationQueryRequirementInput
 /// </summary>
 public sealed record RelationQueryCapabilityInput : RelationQueryRequirementInput
 {
+    [JsonConstructor]
     internal RelationQueryCapabilityInput(
         RelationQueryInputId id,
         ExprCapabilityRequirement capability)
@@ -521,7 +535,8 @@ public readonly record struct RelationQueryRequirementTraceStep
             ordinal: null,
             invariantName: null);
 
-    RelationQueryRequirementTraceStep(
+    [JsonConstructor]
+    internal RelationQueryRequirementTraceStep(
         RelationQueryRequirementTraceStepKind kind,
         QueryNodeId node,
         RelationQueryExpressionSiteKind? siteKind,
@@ -625,6 +640,7 @@ public readonly record struct RelationQueryRequirementTraceStep
 /// </summary>
 public sealed record RelationQueryRequirementTrace
 {
+    [JsonConstructor]
     internal RelationQueryRequirementTrace(ImmutableArray<RelationQueryRequirementTraceStep> steps)
     {
         Steps = steps.IsDefault ? [] : steps;
@@ -643,6 +659,7 @@ public sealed record RelationQueryRequirementTrace
 /// </summary>
 public sealed record RelationQueryRequirementEdge
 {
+    [JsonConstructor]
     internal RelationQueryRequirementEdge(
         RelationQueryRequirementInput input,
         RelationQueryOutputReference output,
@@ -684,6 +701,7 @@ public sealed record RelationQueryRequirementEdge
 /// </summary>
 public sealed class RelationQueryRequirementGraph
 {
+    [JsonConstructor]
     internal RelationQueryRequirementGraph(
         ImmutableArray<RelationQueryRequirementInput> inputs,
         ImmutableArray<RelationQueryOutputReference> outputs,

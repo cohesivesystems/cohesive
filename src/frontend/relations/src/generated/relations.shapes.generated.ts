@@ -4,6 +4,108 @@ export type GraphId = string;
 
 export type ShapeId = string;
 
+export type RelationQueryExplainStage = {
+  readonly $stage: 'staticCompilation';
+} & RelationQueryStaticCompilationExplainStage | {
+  readonly $stage: 'profileFeasibility';
+} & RelationQueryProfileFeasibilityExplainStage | {
+  readonly $stage: 'sourcePlacement';
+} & RelationQuerySourcePlacementExplainStage | {
+  readonly $stage: 'boundRealization';
+} & RelationQueryBoundRealizationExplainStage | {
+  readonly $stage: 'physicalPlanning';
+} & RelationQueryPhysicalPlanningExplainStage | {
+  readonly $stage: 'nativeCompilation';
+} & RelationQueryNativeCompilationExplainStage | {
+  readonly $stage: 'evaluation';
+} & RelationQueryEvaluationExplainStage;
+
+export interface RelationQueryStaticCompilationExplainStage {
+  status: RelationQueryExplainStageStatus;
+  request: RelationQueryCompilationRequestReference;
+  plan?: RelationQueryStaticPlanExplanation | null;
+  diagnostics: DocumentValidationDiagnostic[];
+}
+
+export interface RelationQueryProfileFeasibilityExplainStage {
+  status: RelationQueryExplainStageStatus;
+  report: RelationQueryRealizationReport;
+}
+
+export interface RelationQuerySourcePlacementExplainStage {
+  status: RelationQueryExplainStageStatus;
+  placement: RelationQuerySourcePlacement;
+}
+
+export interface RelationQueryBoundRealizationExplainStage {
+  report: RelationQueryBoundRealizationReport;
+  status: RelationQueryExplainStageStatus;
+}
+
+export interface RelationQueryPhysicalPlanningExplainStage {
+  status: RelationQueryExplainStageStatus;
+  plan: RelationQueryCompiledPlanReference;
+  realization: RelationQueryRealizationFingerprint;
+  placement: RelationQuerySourcePlacementFingerprint;
+  policy?: RelationQueryPhysicalPlanningPolicy | null;
+  result: RelationQueryPhysicalPlanningResult;
+}
+
+export interface RelationQueryNativeCompilationExplainStage {
+  status: RelationQueryExplainStageStatus;
+  attempt: RelationQueryNativeCompilationAttemptReference;
+  compilation: RelationQueryNativeCompilationExplanation;
+}
+
+export interface RelationQueryEvaluationExplainStage {
+  evaluation: RelationQueryEvaluationExplanation;
+  status: RelationQueryExplainStageStatus;
+}
+
+export interface RelationQueryCapabilitySummary {
+  target: RelationQueryTargetId;
+  targetProfile: RelationQueryTargetProfileId;
+  policy?: RelationQueryRealizationPolicyId | null;
+  profileFeasibility?: RelationQueryRealizationFingerprint | null;
+  boundRealization?: RelationQueryBoundRealizationFingerprint | null;
+  operatingBoundaries: RelationQueryOperatingBoundaryId[];
+  entries: RelationQueryCapabilitySummaryEntry[];
+}
+
+export interface RelationQueryExplainDiagnostic {
+  stage: string;
+  code: string;
+  severity: DiagnosticSeverity;
+  message: string;
+  location?: string | null;
+  branch?: RelationQueryNativeResultBranchId | null;
+  requirement?: RelationQueryRealizationRequirementId | null;
+  node?: QueryNodeId | null;
+  input?: RelationQueryInputId | null;
+  output?: RelationQueryOutputId | null;
+  placementBinding?: RelationQuerySourcePlacementBindingId | null;
+  physicalStage?: RelationQueryPhysicalStageId | null;
+  source?: RelationQuerySourceInstanceId | null;
+  capabilityEvidence?: RelationQueryTargetCapabilityEvidenceId | null;
+  operatingBoundary?: RelationQueryOperatingBoundaryId | null;
+  contextEvidence?: RelationQueryContextEvidenceId | null;
+  semanticSite?: string | null;
+  compositionRule?: RelationQueryCompositionRuleId | null;
+  override?: RelationQueryRealizationOverrideId | null;
+  field?: FieldPath | null;
+  bindingSetting?: string | null;
+  resolution?: string | null;
+  configurationOrigin?: RelationQueryConfigurationValueOrigin | null;
+  configurationAuthority?: string | null;
+  adapterDecisionCode?: RelationQueryAdapterDecisionCode | null;
+}
+
+export interface RelationQueryExplainFingerprint {
+  algorithm: string;
+  canonicalization: string;
+  value: string;
+}
+
 export interface RelationQueryCompiledPlanReference {
   compilerProfile: string;
   definitionSchemaVersion: string;
@@ -329,13 +431,156 @@ export interface RelationshipCatalogDocumentMetadata {
   annotations: Record<string, AnnotationValue>;
 }
 
+export type RelationQueryExplainStageStatus = 'Complete' | 'Unavailable' | 'Invalid' | 'Incomplete' | 'Failed';
+
+export const relationQueryExplainStageStatuses = {
+  complete: 'Complete',
+  unavailable: 'Unavailable',
+  invalid: 'Invalid',
+  incomplete: 'Incomplete',
+  failed: 'Failed',
+} as const satisfies Record<string, RelationQueryExplainStageStatus>;
+
+export const relationQueryExplainStageStatusLabels: Record<RelationQueryExplainStageStatus, string> = {
+  Complete: 'Complete',
+  Unavailable: 'Unavailable',
+  Invalid: 'Invalid',
+  Incomplete: 'Incomplete',
+  Failed: 'Failed',
+};
+
+export interface RelationQueryCompilationRequestReference {
+  compilerProfile: string;
+  definitionSchemaVersion: string;
+  definitionFingerprint: RelationQueryDefinitionFingerprint;
+  shapeSnapshotsFingerprint: RelationQueryPlanComponentFingerprint;
+  relationshipCatalogFingerprint?: RelationshipCatalogFingerprint | null;
+  demandFingerprint: RelationQueryPlanComponentFingerprint;
+}
+
+export interface RelationQueryStaticPlanExplanation {
+  reference: RelationQueryCompiledPlanReference;
+  logicalPlan: RelationQueryLogicalPlan;
+  requirementGraph: RelationQueryExplainRequirementGraph;
+  branches: RelationQueryNativeResultBranch[];
+  observability: RelationQueryResultObservability;
+  realizationRequirements: RelationQueryRealizationRequirement[];
+  realizationRequirementsFingerprint: RelationQueryPlanComponentFingerprint;
+}
+
+export interface DocumentValidationDiagnostic {
+  code: string;
+  severity: DiagnosticSeverity;
+  message: string;
+  location?: string | null;
+  schemaLocation?: string | null;
+}
+
+export interface RelationQueryPhysicalPlanningResult {
+  status: RelationQueryPhysicalPlanningStatus;
+  plan?: CompiledRelationQueryPhysicalPlan | null;
+  diagnostics: RelationQueryPhysicalPlanningDiagnostic[];
+}
+
+export interface RelationQueryNativeCompilationAttemptReference {
+  plan: RelationQueryCompiledPlanReference;
+  profileFeasibility: RelationQueryRealizationFingerprint;
+  boundRealization: RelationQueryBoundRealizationFingerprint;
+  placement: RelationQuerySourcePlacementFingerprint;
+  adapterBinding: RelationQueryAdapterBindingReference;
+  branches: RelationQueryNativeResultBranchId[];
+}
+
+export interface RelationQueryNativeCompilationExplanation {
+  status: RelationQueryNativeCompilationStatus;
+  artifacts: RelationQueryNativeArtifactReference[];
+  diagnostics: RelationQueryNativeCompilationDiagnostic[];
+}
+
+export interface RelationQueryEvaluationExplanation {
+  evaluation: RelationQueryEvaluationFingerprint;
+  plan?: RelationQueryCompiledPlanReference | null;
+  status: RelationQueryExecutionStatus;
+  results: RelationQueryExplainResultSummary[];
+  requirementGaps: RelationQueryExplainRequirementGapSummary[];
+  diagnostics: RelationQueryExplainDiagnostic[];
+  observationFingerprint: RelationQueryEvaluationObservationFingerprint;
+}
+
+export type RelationQueryRealizationPolicyId = string;
+
+export type RelationQueryOperatingBoundaryId = string;
+
+export interface RelationQueryCapabilitySummaryEntry {
+  capability: RelationQueryCapability;
+  requirements: RelationQueryRealizationRequirementId[];
+  missingForRequirements: RelationQueryRealizationRequirementId[];
+  capabilityEvidence: RelationQueryTargetCapabilityEvidenceId[];
+  operatingBoundaries: RelationQueryOperatingBoundaryId[];
+  contextEvidence: RelationQueryContextEvidenceId[];
+}
+
+export type DiagnosticSeverity = 'Info' | 'Warning' | 'Error';
+
+export const diagnosticSeverities = {
+  info: 'Info',
+  warning: 'Warning',
+  error: 'Error',
+} as const satisfies Record<string, DiagnosticSeverity>;
+
+export const diagnosticSeverityLabels: Record<DiagnosticSeverity, string> = {
+  Info: 'Info',
+  Warning: 'Warning',
+  Error: 'Error',
+};
+
+export type RelationQueryRealizationRequirementId = string;
+
+export type QueryNodeId = string;
+
+export type RelationQueryInputId = string;
+
+export type RelationQueryOutputId = string;
+
+export type RelationQuerySourcePlacementBindingId = string;
+
+export type RelationQuerySourceInstanceId = string;
+
+export type RelationQueryTargetCapabilityEvidenceId = string;
+
+export type RelationQueryContextEvidenceId = string;
+
+export type RelationQueryCompositionRuleId = string;
+
+export type RelationQueryRealizationOverrideId = string;
+
+export interface FieldPath {
+  segments: FieldPathSegment[];
+}
+
+export type RelationQueryConfigurationValueOrigin = 'Explicit' | 'ScopedProfile' | 'AdapterConvention' | 'FrameworkDefault';
+
+export const relationQueryConfigurationValueOrigins = {
+  explicit: 'Explicit',
+  scopedProfile: 'ScopedProfile',
+  adapterConvention: 'AdapterConvention',
+  frameworkDefault: 'FrameworkDefault',
+} as const satisfies Record<string, RelationQueryConfigurationValueOrigin>;
+
+export const relationQueryConfigurationValueOriginLabels: Record<RelationQueryConfigurationValueOrigin, string> = {
+  Explicit: 'Explicit',
+  ScopedProfile: 'ScopedProfile',
+  AdapterConvention: 'AdapterConvention',
+  FrameworkDefault: 'FrameworkDefault',
+};
+
+export type RelationQueryAdapterDecisionCode = string;
+
 export interface RelationQueryPlanComponentFingerprint {
   algorithm: string;
   canonicalization: string;
   value: string;
 }
-
-export type RelationQueryInputId = string;
 
 export type RelationQueryPhysicalPlanningPolicyId = string;
 
@@ -372,8 +617,6 @@ export const relationQueryPhysicalStageKindLabels: Record<RelationQueryPhysicalS
   ReferenceInterpreterTerminal: 'ReferenceInterpreterTerminal',
 };
 
-export type RelationQuerySourcePlacementBindingId = string;
-
 export interface RelationQueryPhysicalStageProvenance {
   nodes: QueryNodeId[];
   inputs: RelationQueryInputId[];
@@ -386,24 +629,6 @@ export interface RelationQueryPhysicalStageProvenance {
   policyDecisions: RelationQueryPhysicalPlanningDecisionId[];
 }
 
-export type DiagnosticSeverity = 'Info' | 'Warning' | 'Error';
-
-export const diagnosticSeverities = {
-  info: 'Info',
-  warning: 'Warning',
-  error: 'Error',
-} as const satisfies Record<string, DiagnosticSeverity>;
-
-export const diagnosticSeverityLabels: Record<DiagnosticSeverity, string> = {
-  Info: 'Info',
-  Warning: 'Warning',
-  Error: 'Error',
-};
-
-export type RelationQueryRealizationRequirementId = string;
-
-export type RelationQuerySourceInstanceId = string;
-
 export type RelationQueryExecutionDomainId = string;
 
 export interface RelationQuerySourcePlacementLimits {
@@ -412,8 +637,6 @@ export interface RelationQuerySourcePlacementLimits {
   maximumFanOut: string;
   maximumConcurrency: string;
 }
-
-export type QueryNodeId = string;
 
 export type ValueBindingId = string;
 
@@ -476,22 +699,6 @@ export interface RelationQueryPartitionBinding {
   sourceSelector: string;
 }
 
-export type RelationQueryConfigurationValueOrigin = 'Explicit' | 'ScopedProfile' | 'AdapterConvention' | 'FrameworkDefault';
-
-export const relationQueryConfigurationValueOrigins = {
-  explicit: 'Explicit',
-  scopedProfile: 'ScopedProfile',
-  adapterConvention: 'AdapterConvention',
-  frameworkDefault: 'FrameworkDefault',
-} as const satisfies Record<string, RelationQueryConfigurationValueOrigin>;
-
-export const relationQueryConfigurationValueOriginLabels: Record<RelationQueryConfigurationValueOrigin, string> = {
-  Explicit: 'Explicit',
-  ScopedProfile: 'ScopedProfile',
-  AdapterConvention: 'AdapterConvention',
-  FrameworkDefault: 'FrameworkDefault',
-};
-
 export interface RelationQueryAdapterBindingReference {
   schemaVersion: string;
   bindingId: string;
@@ -529,24 +736,6 @@ export interface RelationQueryBoundRequirementAssessment {
   failedConfigurationSetting?: string | null;
   blockedBy?: RelationQueryContextEvidenceId | null;
 }
-
-export type RelationQueryTargetCapabilityEvidenceId = string;
-
-export type RelationQueryCompositionRuleId = string;
-
-export type RelationQueryOperatingBoundaryId = string;
-
-export type RelationQueryRealizationOverrideId = string;
-
-export type RelationQueryContextEvidenceId = string;
-
-export interface FieldPath {
-  segments: FieldPathSegment[];
-}
-
-export type RelationQueryAdapterDecisionCode = string;
-
-export type RelationQueryRealizationPolicyId = string;
 
 export type RelationQueryRealizationPreference = 'PreferNative' | 'PreferComposed';
 
@@ -1019,6 +1208,134 @@ export interface RelationshipDefinition {
   sourceReferenceUniqueness: SourceReferenceUniqueness;
 }
 
+export interface RelationQueryLogicalPlan {
+  nodes: RelationQueryLogicalPlanNode[];
+  retainedNodes: QueryNodeId[];
+  evaluationOrder: QueryNodeId[];
+}
+
+export interface RelationQueryExplainRequirementGraph {
+  inputs: RelationQueryExplainRequirementInput[];
+  outputs: RelationQueryOutputReference[];
+  edges: RelationQueryExplainRequirementEdge[];
+}
+
+export interface RelationQueryNativeResultBranch {
+  id: RelationQueryNativeResultBranchId;
+  kind: RelationQueryNativeResultKind;
+  node: QueryNodeId;
+  binding: ValueBindingId;
+  shape: QualifiedShapeId;
+  relation?: RelationId | null;
+  queryResult?: QueryResultId | null;
+  outputs: RelationQueryOutputReference[];
+  fields: RelationQueryFieldReference[];
+}
+
+export type RelationQueryPhysicalPlanningStatus = 'Planned' | 'Unavailable' | 'Invalid';
+
+export const relationQueryPhysicalPlanningStatuses = {
+  planned: 'Planned',
+  unavailable: 'Unavailable',
+  invalid: 'Invalid',
+} as const satisfies Record<string, RelationQueryPhysicalPlanningStatus>;
+
+export const relationQueryPhysicalPlanningStatusLabels: Record<RelationQueryPhysicalPlanningStatus, string> = {
+  Planned: 'Planned',
+  Unavailable: 'Unavailable',
+  Invalid: 'Invalid',
+};
+
+export type RelationQueryNativeCompilationStatus = 'Exact' | 'Unsupported' | 'Invalid';
+
+export const relationQueryNativeCompilationStatuses = {
+  exact: 'Exact',
+  unsupported: 'Unsupported',
+  invalid: 'Invalid',
+} as const satisfies Record<string, RelationQueryNativeCompilationStatus>;
+
+export const relationQueryNativeCompilationStatusLabels: Record<RelationQueryNativeCompilationStatus, string> = {
+  Exact: 'Exact',
+  Unsupported: 'Unsupported',
+  Invalid: 'Invalid',
+};
+
+export interface RelationQueryNativeArtifactReference {
+  branch: RelationQueryNativeResultBranchId;
+  artifactSchemaVersion?: string | null;
+  fingerprint: RelationQueryNativeArtifactFingerprintReference;
+  provenance: RelationQueryNativeCompilationProvenance;
+}
+
+export interface RelationQueryNativeCompilationDiagnostic {
+  code: string;
+  severity: DiagnosticSeverity;
+  message: string;
+  branch?: RelationQueryNativeResultBranchId | null;
+  node?: QueryNodeId | null;
+  input?: RelationQueryInputId | null;
+  requirement?: RelationQueryRealizationRequirementId | null;
+  capabilityEvidence?: RelationQueryTargetCapabilityEvidenceId | null;
+  operatingBoundary?: RelationQueryOperatingBoundaryId | null;
+  override?: RelationQueryRealizationOverrideId | null;
+  semanticSite?: string | null;
+  contextEvidence?: RelationQueryContextEvidenceId | null;
+  field?: FieldPath | null;
+  placementBinding?: RelationQuerySourcePlacementBindingId | null;
+  bindingSetting?: string | null;
+  resolution?: string | null;
+  configurationOrigin?: RelationQueryConfigurationValueOrigin | null;
+  configurationAuthority?: string | null;
+  adapterDecisionCode?: RelationQueryAdapterDecisionCode | null;
+}
+
+export interface RelationQueryEvaluationFingerprint {
+  algorithm: string;
+  canonicalization: string;
+  value: string;
+}
+
+export type RelationQueryExecutionStatus = 'Succeeded' | 'Incomplete' | 'Failed';
+
+export const relationQueryExecutionStatuses = {
+  succeeded: 'Succeeded',
+  incomplete: 'Incomplete',
+  failed: 'Failed',
+} as const satisfies Record<string, RelationQueryExecutionStatus>;
+
+export const relationQueryExecutionStatusLabels: Record<RelationQueryExecutionStatus, string> = {
+  Succeeded: 'Succeeded',
+  Incomplete: 'Incomplete',
+  Failed: 'Failed',
+};
+
+export interface RelationQueryExplainResultSummary {
+  branch: RelationQueryNativeResultBranchId;
+  kind: RelationQueryExecutionResultKind;
+  shape: QualifiedShapeId;
+  state: RelationQueryExecutionOutputState;
+  rowCount: number;
+}
+
+export interface RelationQueryExplainRequirementGapSummary {
+  cause: RelationRequirementGapCause;
+  input: RelationQueryInputId;
+  affectedOutputs: RelationQueryOutputId[];
+  occurrenceCount: number;
+  suggestedResolutions: RelationRequirementGapResolutionKind[];
+}
+
+export interface RelationQueryEvaluationObservationFingerprint {
+  algorithm: string;
+  canonicalization: string;
+  value: string;
+}
+
+export interface FieldPathSegment {
+  kind: SegmentKind;
+  segment?: string | null;
+}
+
 export type RelationQueryPhysicalLoweringRuleId = string;
 
 export interface RelationQueryPhysicalCapabilityEvidenceReference {
@@ -1051,11 +1368,6 @@ export const relationQueryBoundAssessmentStatusLabels: Record<RelationQueryBound
   Invalid: 'Invalid',
   Blocked: 'Blocked',
 };
-
-export interface FieldPathSegment {
-  kind: SegmentKind;
-  segment?: string | null;
-}
 
 export type RelationQueryLogicalCapabilityKind = 'Source' | 'Filter' | 'RelationshipTraversal' | 'ForwardRelationshipTraversal' | 'InverseRelationshipTraversal' | 'AtMostOneRelationshipTraversal' | 'ManyRelationshipTraversal' | 'RequiredRelationshipTraversal' | 'OptionalRelationshipTraversal' | 'Join' | 'InnerJoin' | 'LeftOuterJoin' | 'RightOuterJoin' | 'FullOuterJoin' | 'TemporalJoin' | 'ExpandCollection' | 'Projection' | 'ProjectionAssignment' | 'DistinctRows' | 'DistinctKeys' | 'Aggregation' | 'AggregateGrouping' | 'AggregateFilter' | 'CountAggregate' | 'SumAggregate' | 'MinimumAggregate' | 'MaximumAggregate' | 'AnyAggregate' | 'AllAggregate' | 'Ordering' | 'AscendingOrdering' | 'DescendingOrdering' | 'NullsFirst' | 'NullsLast' | 'StableTieOrdering' | 'OffsetPaging' | 'KeysetPaging' | 'OnePerRootRelationOutput' | 'ZeroOrOnePerRootRelationOutput' | 'ManyPerRootRelationOutput' | 'SetRelationOutput' | 'RelationOutputIdentity' | 'RelationInvariant' | 'QueryRowsResult' | 'QueryAggregationResult' | 'AlwaysPresentBinding' | 'MayBeAbsentBinding' | 'AverageAggregate';
 
@@ -1669,6 +1981,175 @@ export const sourceReferenceUniquenessLabels: Record<SourceReferenceUniqueness, 
   GloballyUnique: 'GloballyUnique',
 };
 
+export interface RelationQueryLogicalPlanNode {
+  node: QueryNodeId;
+  inputs: RelationQueryLogicalPlanInput[];
+  effectiveInputs: QueryNodeId[];
+}
+
+export interface RelationQueryExplainRequirementInput {
+  id: RelationQueryInputId;
+  kind: RelationQueryExplainRequirementInputKind;
+}
+
+export interface RelationQueryOutputReference {
+  id: RelationQueryOutputId;
+  kind: RelationQueryOutputReferenceKind;
+  node: QueryNodeId;
+  shape: QualifiedShapeId;
+  relation?: RelationId | null;
+  queryResult?: QueryResultId | null;
+  field?: RelationQueryFieldReference | null;
+}
+
+export interface RelationQueryExplainRequirementEdge {
+  input: RelationQueryInputId;
+  output: RelationQueryOutputId;
+  effect: RelationQueryRequirementEffect;
+  requirement: QueryInputRequirement;
+}
+
+export type RelationQueryNativeResultKind = 'RelationRows' | 'QueryRows' | 'QueryAggregation';
+
+export const relationQueryNativeResultKinds = {
+  relationRows: 'RelationRows',
+  queryRows: 'QueryRows',
+  queryAggregation: 'QueryAggregation',
+} as const satisfies Record<string, RelationQueryNativeResultKind>;
+
+export const relationQueryNativeResultKindLabels: Record<RelationQueryNativeResultKind, string> = {
+  RelationRows: 'RelationRows',
+  QueryRows: 'QueryRows',
+  QueryAggregation: 'QueryAggregation',
+};
+
+export interface RelationQueryFieldReference {
+  shape: QualifiedShapeId;
+  path: FieldPath;
+}
+
+export interface RelationQueryNativeArtifactFingerprintReference {
+  algorithm: string;
+  canonicalization: string;
+  value: string;
+}
+
+export interface RelationQueryNativeCompilationProvenance {
+  plan: RelationQueryCompiledPlanReference;
+  branch: RelationQueryNativeResultBranchId;
+  target: RelationQueryTargetId;
+  targetProfile: RelationQueryTargetProfileId;
+  realization: RelationQueryRealizationFingerprint;
+  boundRealization: RelationQueryBoundRealizationFingerprint;
+  placement: RelationQuerySourcePlacementFingerprint;
+  adapterBinding: RelationQueryAdapterBindingReference;
+  contextEvidence: RelationQueryContextEvidenceId[];
+  compilerProfile: string;
+  conventionSetVersion: string;
+  coveredNodes: QueryNodeId[];
+  coveredAssignments: QueryAssignmentId[];
+  inputFields: RelationQueryInputId[];
+  realizationDecisions: RelationQueryNativeCompilationDecisionReference[];
+  capabilityEvidence: RelationQueryTargetCapabilityEvidenceId[];
+  operatingBoundaries: RelationQueryOperatingBoundaryId[];
+}
+
+export type RelationQueryExecutionResultKind = 'Rows' | 'Aggregation';
+
+export const relationQueryExecutionResultKinds = {
+  rows: 'Rows',
+  aggregation: 'Aggregation',
+} as const satisfies Record<string, RelationQueryExecutionResultKind>;
+
+export const relationQueryExecutionResultKindLabels: Record<RelationQueryExecutionResultKind, string> = {
+  Rows: 'Rows',
+  Aggregation: 'Aggregation',
+};
+
+export type RelationQueryExecutionOutputState = 'Complete' | 'Suppressed' | 'Incomplete';
+
+export const relationQueryExecutionOutputStates = {
+  complete: 'Complete',
+  suppressed: 'Suppressed',
+  incomplete: 'Incomplete',
+} as const satisfies Record<string, RelationQueryExecutionOutputState>;
+
+export const relationQueryExecutionOutputStateLabels: Record<RelationQueryExecutionOutputState, string> = {
+  Complete: 'Complete',
+  Suppressed: 'Suppressed',
+  Incomplete: 'Incomplete',
+};
+
+export type RelationRequirementGapCause = 'InputNotProvided' | 'InputAcquisitionFailed' | 'ObservationIdentityMissing' | 'ReferenceFieldNotLoaded' | 'ReferenceValueMissing' | 'ReferenceValueNull' | 'ResolutionNotAttempted' | 'ResolutionFailed' | 'RelatedObservationNotFound' | 'RelatedObservationRejected' | 'RequiredFieldNotLoaded' | 'RequiredValueMissing' | 'RequiredValueNull' | 'CapabilityUnavailable' | 'CardinalityViolation' | 'ConversionFailure' | 'InputAcquisitionInconclusive';
+
+export const relationRequirementGapCauses = {
+  inputNotProvided: 'InputNotProvided',
+  inputAcquisitionFailed: 'InputAcquisitionFailed',
+  observationIdentityMissing: 'ObservationIdentityMissing',
+  referenceFieldNotLoaded: 'ReferenceFieldNotLoaded',
+  referenceValueMissing: 'ReferenceValueMissing',
+  referenceValueNull: 'ReferenceValueNull',
+  resolutionNotAttempted: 'ResolutionNotAttempted',
+  resolutionFailed: 'ResolutionFailed',
+  relatedObservationNotFound: 'RelatedObservationNotFound',
+  relatedObservationRejected: 'RelatedObservationRejected',
+  requiredFieldNotLoaded: 'RequiredFieldNotLoaded',
+  requiredValueMissing: 'RequiredValueMissing',
+  requiredValueNull: 'RequiredValueNull',
+  capabilityUnavailable: 'CapabilityUnavailable',
+  cardinalityViolation: 'CardinalityViolation',
+  conversionFailure: 'ConversionFailure',
+  inputAcquisitionInconclusive: 'InputAcquisitionInconclusive',
+} as const satisfies Record<string, RelationRequirementGapCause>;
+
+export const relationRequirementGapCauseLabels: Record<RelationRequirementGapCause, string> = {
+  InputNotProvided: 'InputNotProvided',
+  InputAcquisitionFailed: 'InputAcquisitionFailed',
+  ObservationIdentityMissing: 'ObservationIdentityMissing',
+  ReferenceFieldNotLoaded: 'ReferenceFieldNotLoaded',
+  ReferenceValueMissing: 'ReferenceValueMissing',
+  ReferenceValueNull: 'ReferenceValueNull',
+  ResolutionNotAttempted: 'ResolutionNotAttempted',
+  ResolutionFailed: 'ResolutionFailed',
+  RelatedObservationNotFound: 'RelatedObservationNotFound',
+  RelatedObservationRejected: 'RelatedObservationRejected',
+  RequiredFieldNotLoaded: 'RequiredFieldNotLoaded',
+  RequiredValueMissing: 'RequiredValueMissing',
+  RequiredValueNull: 'RequiredValueNull',
+  CapabilityUnavailable: 'CapabilityUnavailable',
+  CardinalityViolation: 'CardinalityViolation',
+  ConversionFailure: 'ConversionFailure',
+  InputAcquisitionInconclusive: 'InputAcquisitionInconclusive',
+};
+
+export type RelationRequirementGapResolutionKind = 'ProvideInput' | 'LoadField' | 'ProvideReferenceValue' | 'ResolveRelationship' | 'RetryAcquisition' | 'ProvideRelatedObservation' | 'CorrectCardinality' | 'ProvideValue' | 'ProvideCapability' | 'CorrectConversion';
+
+export const relationRequirementGapResolutionKinds = {
+  provideInput: 'ProvideInput',
+  loadField: 'LoadField',
+  provideReferenceValue: 'ProvideReferenceValue',
+  resolveRelationship: 'ResolveRelationship',
+  retryAcquisition: 'RetryAcquisition',
+  provideRelatedObservation: 'ProvideRelatedObservation',
+  correctCardinality: 'CorrectCardinality',
+  provideValue: 'ProvideValue',
+  provideCapability: 'ProvideCapability',
+  correctConversion: 'CorrectConversion',
+} as const satisfies Record<string, RelationRequirementGapResolutionKind>;
+
+export const relationRequirementGapResolutionKindLabels: Record<RelationRequirementGapResolutionKind, string> = {
+  ProvideInput: 'ProvideInput',
+  LoadField: 'LoadField',
+  ProvideReferenceValue: 'ProvideReferenceValue',
+  ResolveRelationship: 'ResolveRelationship',
+  RetryAcquisition: 'RetryAcquisition',
+  ProvideRelatedObservation: 'ProvideRelatedObservation',
+  CorrectCardinality: 'CorrectCardinality',
+  ProvideValue: 'ProvideValue',
+  ProvideCapability: 'ProvideCapability',
+  CorrectConversion: 'CorrectConversion',
+};
+
 export type SegmentKind = 'Field' | 'Element';
 
 export const segmentKinds = {
@@ -1681,8 +2162,6 @@ export const segmentKindLabels: Record<SegmentKind, string> = {
   Element: 'Element',
 };
 
-export type RelationQueryOutputId = string;
-
 export type RelationQueryOutputReferenceKind = 'Relation' | 'QueryResult';
 
 export const relationQueryOutputReferenceKinds = {
@@ -1694,11 +2173,6 @@ export const relationQueryOutputReferenceKindLabels: Record<RelationQueryOutputR
   Relation: 'Relation',
   QueryResult: 'QueryResult',
 };
-
-export interface RelationQueryFieldReference {
-  shape: QualifiedShapeId;
-  path: FieldPath;
-}
 
 export interface RelationQueryRealizationTraceStep {
   kind: RelationQueryRealizationTraceStepKind;
@@ -1943,6 +2417,42 @@ export const jsonTypeKindLabels: Record<JsonTypeKind, string> = {
   Boolean: 'Boolean',
 };
 
+export interface RelationQueryLogicalPlanInput {
+  canonicalInput: QueryNodeId;
+  effectiveInput: QueryNodeId;
+  bypasses: RelationQueryLogicalBypass[];
+}
+
+export type RelationQueryExplainRequirementInputKind = 'Field' | 'ObservationIdentity' | 'SourceSet' | 'Relationship' | 'Parameter' | 'Capability';
+
+export const relationQueryExplainRequirementInputKinds = {
+  field: 'Field',
+  observationIdentity: 'ObservationIdentity',
+  sourceSet: 'SourceSet',
+  relationship: 'Relationship',
+  parameter: 'Parameter',
+  capability: 'Capability',
+} as const satisfies Record<string, RelationQueryExplainRequirementInputKind>;
+
+export const relationQueryExplainRequirementInputKindLabels: Record<RelationQueryExplainRequirementInputKind, string> = {
+  Field: 'Field',
+  ObservationIdentity: 'ObservationIdentity',
+  SourceSet: 'SourceSet',
+  Relationship: 'Relationship',
+  Parameter: 'Parameter',
+  Capability: 'Capability',
+};
+
+export interface RelationQueryNativeCompilationDecisionReference {
+  requirement: RelationQueryRealizationRequirementId;
+  kind: RelationQueryRealizationDecisionKind;
+  capabilityEvidence: RelationQueryTargetCapabilityEvidenceId[];
+  compositionRules: RelationQueryCompositionRuleId[];
+  override?: RelationQueryRealizationOverrideId | null;
+  operatingBoundaries: RelationQueryOperatingBoundaryId[];
+  preservedGuarantees: RelationQueryGuaranteeCapabilityKind[];
+}
+
 export type RelationQueryRealizationTraceStepKind = 'Structural' | 'ExpressionSite' | 'AggregateOperation' | 'Terminal';
 
 export const relationQueryRealizationTraceStepKinds = {
@@ -2056,6 +2566,34 @@ export const relationDraftUnresolvedReasonLabels: Record<RelationDraftUnresolved
   MultipleCandidates: 'MultipleCandidates',
 };
 
+export interface RelationQueryLogicalBypass {
+  kind: RelationQueryLogicalBypassKind;
+  node: QueryNodeId;
+  relationship: RelationshipDefinition;
+  direction: RelationshipTraversalDirection;
+  cardinality: RelationshipTraversalCardinality;
+  from: ValueBindingId;
+  result: ValueBindingId;
+}
+
+export type RelationQueryRealizationDecisionKind = 'Native' | 'Composed' | 'Constrained' | 'Override' | 'Unavailable';
+
+export const relationQueryRealizationDecisionKinds = {
+  native: 'Native',
+  composed: 'Composed',
+  constrained: 'Constrained',
+  override: 'Override',
+  unavailable: 'Unavailable',
+} as const satisfies Record<string, RelationQueryRealizationDecisionKind>;
+
+export const relationQueryRealizationDecisionKindLabels: Record<RelationQueryRealizationDecisionKind, string> = {
+  Native: 'Native',
+  Composed: 'Composed',
+  Constrained: 'Constrained',
+  Override: 'Override',
+  Unavailable: 'Unavailable',
+};
+
 export type TemporalIntervalBound = {
   readonly $temporalBound: 'unbounded';
 } & UnboundedTemporalIntervalBound | {
@@ -2069,6 +2607,28 @@ export interface ExpressionTemporalIntervalBound {
   inclusion: TemporalBoundaryInclusion;
   nullBehavior: TemporalNullBoundBehavior;
 }
+
+export type RelationQueryLogicalBypassKind = 'OptionalAtMostOneLeftRelationshipTraversal';
+
+export const relationQueryLogicalBypassKinds = {
+  optionalAtMostOneLeftRelationshipTraversal: 'OptionalAtMostOneLeftRelationshipTraversal',
+} as const satisfies Record<string, RelationQueryLogicalBypassKind>;
+
+export const relationQueryLogicalBypassKindLabels: Record<RelationQueryLogicalBypassKind, string> = {
+  OptionalAtMostOneLeftRelationshipTraversal: 'OptionalAtMostOneLeftRelationshipTraversal',
+};
+
+export type RelationshipTraversalCardinality = 'AtMostOne' | 'Many';
+
+export const relationshipTraversalCardinalities = {
+  atMostOne: 'AtMostOne',
+  many: 'Many',
+} as const satisfies Record<string, RelationshipTraversalCardinality>;
+
+export const relationshipTraversalCardinalityLabels: Record<RelationshipTraversalCardinality, string> = {
+  AtMostOne: 'AtMostOne',
+  Many: 'Many',
+};
 
 export type TemporalBoundaryInclusion = 'Inclusive' | 'Exclusive';
 
@@ -2097,6 +2657,14 @@ export const temporalNullBoundBehaviorLabels: Record<TemporalNullBoundBehavior, 
 export interface QualifiedShapeId {
   graphId: GraphId;
   shapeId: ShapeId;
+}
+
+export interface RelationQueryExplainArtifact {
+  schemaVersion: string;
+  stages: RelationQueryExplainStage[];
+  capabilitySummary?: RelationQueryCapabilitySummary | null;
+  diagnostics: RelationQueryExplainDiagnostic[];
+  fingerprint: RelationQueryExplainFingerprint;
 }
 
 export interface CompiledRelationQueryPhysicalPlan {
