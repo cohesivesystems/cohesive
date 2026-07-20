@@ -10,6 +10,52 @@ Cohesive separates those relational semantics from their physical realization. F
 
 The canonical relationship catalog and relation/query IR are the sources of semantic truth. Authoring DSLs, importers, and inference systems such as Ari produce these IRs; compilers and interpreters decide how to realize them.
 
+## Start Here
+
+Install the semantic core:
+
+```bash
+dotnet add package Cohesive.Relations
+```
+
+The ordinary C# entry point is the expression authoring surface. A complete `Load -> LoadDto`
+relation needs no semantic IDs, names, node or binding arguments, source references, placement, or adapter
+configuration:
+
+```csharp
+var author = RelationQuery.Expression();
+var loads = author.Source<Load>();
+
+var loadDtos = author.Project(
+    loads,
+    (Load load) => new LoadDto
+    {
+        Id = load.Id,
+        Status = load.Status
+    });
+
+var relation = loadDtos.BuildRelation(dto => dto.Id);
+```
+
+`relation` is a validated producer result for the canonical, persistable relation definition. From there, add only
+the capability your application needs:
+
+1. [Map a Load, then enrich it with Customer and Equipment](docs/GETTING_STARTED.md).
+2. [Invoke and execute the definition in memory or through an adapter](docs/EXECUTION_AND_ADAPTERS.md).
+3. [Handle missing Customer data and other structured diagnostics](docs/DIAGNOSTICS.md).
+4. [Inspect the generated adapter capability reference](docs/CAPABILITIES.md).
+5. [Migrate from the deleted legacy relation-query stack](docs/MIGRATION.md).
+
+Adapter-specific construction and override examples live with
+[`Cohesive.Adapters.Cosmos`](https://github.com/cohesivesystems/cohesive/blob/main/src/adapters/Cohesive.Adapters.Cosmos/README.md),
+[`Cohesive.Adapters.Elastic`](https://github.com/cohesivesystems/cohesive/blob/main/src/adapters/Cohesive.Adapters.Elastic/README.md), and
+[`Cohesive.Adapters.Postgres`](https://github.com/cohesivesystems/cohesive/blob/main/src/adapters/Cohesive.Adapters.Postgres/README.md).
+
+The smallest authoring, field-demand, composed-read, and missing-input examples are executable Relations
+documentation conformance tests. Longer host and adapter fragments isolate one boundary and link to the exact
+conformance coverage. The expression API is the primary application surface; structural authoring and direct
+canonical IR construction remain available later for tooling, imports, persistence, and metaprogramming.
+
 ## Mental Model
 
 Cohesive relational programs are built from several related concepts.
@@ -688,9 +734,10 @@ For a successful static relation plan, `RelationDtoMapperCompiler` compiles its 
 terminal into a fast CLR materialization kernel. Mapping consumes canonical execution rows and retains their
 status, diagnostics, gaps, and provenance; it does not acquire related data or execute a second relation model.
 
-### Planned PostgreSQL projection
+### PostgreSQL projection
 
-When both facts live in PostgreSQL, the planned PostgreSQL adapter could lower the same graph to a native query such as:
+When both facts live in one PostgreSQL execution domain, `Cohesive.Adapters.Postgres` can lower the same graph to a
+native query such as:
 
 ```sql
 SELECT
@@ -702,8 +749,10 @@ LEFT JOIN customers AS c
     ON c.id = l.customer_id;
 ```
 
-PostgreSQL compilation is an adapter interpretation and must retain capability evidence and provenance. It is
-not part of the core IR contract.
+PostgreSQL compilation is an adapter interpretation with retained capability evidence and provenance; it is not part
+of the core IR contract. See the executable
+[PostgreSQL native join versus Cosmos composed reads](docs/EXECUTION_AND_ADAPTERS.md#postgresql-native-join-versus-cosmos-composed-reads)
+comparison for the exact placement boundary.
 
 ### Federated acquisition
 
@@ -1785,9 +1834,9 @@ The current foundation includes:
 
 Active areas of development include:
 
-- PostgreSQL and broader Cosmos SQL and Elasticsearch compiler coverage; Gremlin is deferred.
+- Broader Cosmos SQL, Elasticsearch, and PostgreSQL compiler coverage; Gremlin is deferred.
 - Broader nested collection traversal, additional scoped collection operators, and target lowering.
-- Cross-source batching and in-memory joins.
+- Broader cross-source placement optimization, batching policies, and native/local join strategy selection.
 - Backend differential and reference-interpreter conformance testing.
 - JSON Schema generation and compatibility tooling.
 
@@ -1806,6 +1855,7 @@ dotnet add package Cohesive.Relations
 - `Cohesive.Adapters.CSharp` projects canonical catalogs into deterministic, collision-checked relationship identifiers.
 - `Cohesive.Adapters.Cosmos` provides Cosmos-oriented interpretations.
 - `Cohesive.Adapters.Elastic` provides search-oriented interpretations.
+- `Cohesive.Adapters.Postgres` provides provider-neutral PostgreSQL SQL compilation.
 - `Cohesive.Adapters.TypeScript` projects semantic contracts into TypeScript.
 
 ## Direction

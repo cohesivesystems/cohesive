@@ -4,6 +4,13 @@
 persistable storage bindings for Cohesive.Relations plans. The builder can be used without Cohesive.Relations query
 compilation; the storage binding records how a particular compiled plan and placement map to PostgreSQL tables.
 
+For convention-first C# authoring, begin with the
+[`Cohesive.Relations` quick start](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Relations/docs/GETTING_STARTED.md).
+The focused
+[PostgreSQL native join versus Cosmos composed reads](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Relations/docs/EXECUTION_AND_ADAPTERS.md#postgresql-native-join-versus-cosmos-composed-reads)
+example authors one Load-to-Customer query, then shows why co-located PostgreSQL tables compile to one inline
+`LEFT JOIN` while separately stored Cosmos documents require bounded composed acquisition.
+
 ## Standalone SQL construction
 
 Identifiers are always quoted, and values become positional parameters. Runtime parameters can be rebound without

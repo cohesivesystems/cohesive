@@ -10,7 +10,7 @@ Detailed package docs live beside each package under `src/*/README.md` and are i
 | --- | --- |
 | `Cohesive` | Core shape model, domain primitives, code generation abstractions, and prelude helpers. |
 | `Cohesive.Configuration` | Configuration profiles, projection, and dependency selection. |
-| `Cohesive.Relations` | Relation authoring, mapping, hydration, query, and aggregation semantics. |
+| `Cohesive.Relations` | Canonical relationship, relation/query authoring, realization, execution, mapping, and diagnostics. |
 | `Cohesive.Relations.Contracts` | Contract assembly for relation-oriented generated surfaces. |
 | `Cohesive.Transitions` | Entity fields, invariants, transitions, effects, and domain models. |
 | `Cohesive.Processes` | Declarative process definitions and runtime execution contracts. |
@@ -41,6 +41,7 @@ Detailed package docs live beside each package under `src/*/README.md` and are i
 | `Cohesive.Adapters.ONNX` | ONNX Runtime inference adapters. |
 | `Cohesive.Adapters.OpenApi` | OpenAPI document emission from Cohesive API declarations. |
 | `Cohesive.Adapters.Parquet` | Parquet row and column writing helpers. |
+| `Cohesive.Adapters.Postgres` | Provider-neutral PostgreSQL relation/query compilation and SQL construction. |
 | `Cohesive.Adapters.TypeScript` | TypeScript emitters for shapes, API clients, constants, and test mocks. |
 
 ## Frontend Packages
