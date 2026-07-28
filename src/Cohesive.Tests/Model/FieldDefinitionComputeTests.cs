@@ -90,7 +90,7 @@ public sealed class FieldDefinitionComputeTests
     public void AggregateExpr_ExplicitEquality_UsesValueSemantics_ForGroupBy()
     {
         var left = new AggregateExpr(
-            op: AggregateOperator.Count,
+            @operator: AggregateOperator.Count,
             source: Expr.Field("Stops"),
             returnType: DomainTypes.Int32(),
             groupBy:
@@ -100,7 +100,7 @@ public sealed class FieldDefinitionComputeTests
             ]);
 
         var right = new AggregateExpr(
-            op: AggregateOperator.Count,
+            @operator: AggregateOperator.Count,
             source: Expr.Field("Stops"),
             returnType: DomainTypes.Int32(),
             groupBy:
@@ -110,7 +110,7 @@ public sealed class FieldDefinitionComputeTests
             ]);
 
         var different = new AggregateExpr(
-            op: AggregateOperator.Count,
+            @operator: AggregateOperator.Count,
             source: Expr.Field("Stops"),
             returnType: DomainTypes.Int32(),
             groupBy:

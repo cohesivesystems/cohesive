@@ -8,13 +8,14 @@ Status meanings:
 - **Partial**: useful substrate or observable behavior exists, but one or more normative guarantees are missing.
 - **Absent**: the scenario's core semantic construct has no current representation.
 
-No scenario fully passes today.
+EK-01 now passes through the canonical Transition compilation and reference-interpretation path. The remaining
+scenarios retain the Partial or Absent classifications recorded below.
 
 ## Scenario matrix
 
 | Scenario | Status | Current compatibility | Missing kernel semantics |
 | --- | --- | --- | --- |
-| EK-01 — structured DQ branching | Partial | `Cohesive.Transitions.IR` now provides canonical persisted structured Transition definitions with stable nodes, typed contracts and outcomes, branching and matching, sparse patches, and exact interaction-contract emission references. The compatibility `DeclarativeEntityRuntime` still supports deterministic activation of the earlier flat model. | Static type, termination, exhaustiveness, linked interaction-contract, and path-sensitive access/effect analysis; canonical sparse and full-state interpreters; and complete decision and execution evidence. |
+| EK-01 — structured DQ branching | Pass | `Cohesive.Transitions.IR` provides canonical persisted structured definitions with stable nodes, typed contracts and outcomes, ordered branching and matching, algebraic sparse patches, exact interaction-contract emission references, and fingerprint-bound Machine-edge references. `TransitionStaticCompiler` performs target-independent type, flow, exhaustiveness, access/effect, derived-field, invariant, and Machine-link analysis. `TransitionReferenceInterpreter` executes either complete state or finite sparse observations through one deterministic core and returns typed outcomes, committable patches, emission intents, Machine movements, guarantee demands, conflicts, diagnostics, and ordered actual-execution evidence. | None within the EK-01 reference decision. Observation acquisition and authoritative commit remain explicit external interpretations of the returned demands and intents. |
 | EK-02 — durable human review | Partial | `WaitNode` produces a `Waiting` `ProcessCheckpoint` before the runtime yields. Local and DurableTask runtimes buffer early keyed signals; DurableTask also supplies durable timers. | Closed `AwaitMatch`, durable wait registration plus timer arming, signal identity, admission/claim/consume state, duplicate/late/stale policy, and typed timeout/cancel outcomes. |
 | EK-03 — vendor/manual fulfillment | Partial | Typed effect handlers, transient retry, continuation freshness checks, and dead-lettering exist. | Stable request/correlation/idempotency identity across retries and fallbacks, explicit response obligations, vendor/manual arbitration, and protection from late results. |
 | EK-04 — parallel gates and join recovery | Absent | A checkpoint has one `CurrentNode` and a LIFO locality continuation stack. Transition batches execute sequentially. | Fork tokens, parallel scheduling, join policy, durable per-branch progress, order-independent recovery, and duplicate-work prevention. |
@@ -51,6 +52,8 @@ Migration disposition: preserve old checkpoints only behind an explicit compatib
 | Area | Current types and runtime paths |
 | --- | --- |
 | Canonical transition semantics | `Cohesive.Transitions.IR` structured definitions, validation, and shared execution-definition persistence |
+| Canonical transition compilation | `TransitionStaticCompiler` → `CompiledTransitionPlan`, including path-sensitive requirements, computed-field order, and exact `TransitionMachineEdgeLink` slices |
+| Reference transition interpretation | `TransitionReferenceInterpreter.Decide`, `DecideFullState`, and `DecideSparse` → `TransitionDecision` plus `TransitionExecutionEvidence` |
 | Direct transition activation | `Transition<TEntity,TInput>.Apply` → `Entity.ApplyTransition` → `DeclarativeEntityRuntime.Apply` |
 | Flat transition compatibility | `Cohesive.Transitions.Model.TransitionDefinition`, `TransitionBuilder`, `TransitionExpressionBuilder`, `TransitionExpressionAnalyzer`, `TransitionPatchProjector`, `TransitionResult` |
 | Process planning and replay | `ProcessDefinition`, `ProcessNode`, `BranchingNode`, `ProcessExecutionPlanner`, `ProcessCheckpoint` |

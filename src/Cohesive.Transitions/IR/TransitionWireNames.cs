@@ -33,6 +33,9 @@ public static class TransitionWireNames
     /// <summary>Pure emission-intent node discriminator.</summary>
     public const string EmitNode = "emit";
 
+    /// <summary>Fingerprint-bound Cohesive.Machines edge-movement node discriminator.</summary>
+    public const string MoveMachineNode = "moveMachine";
+
     /// <summary>Terminal typed outcome node discriminator.</summary>
     public const string OutcomeNode = "outcome";
 

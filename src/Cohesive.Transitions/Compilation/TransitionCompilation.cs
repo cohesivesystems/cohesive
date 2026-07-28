@@ -63,7 +63,16 @@ public enum TransitionExpressionSiteKind
     InvariantPredicate = 8,
 
     /// <summary>A shape-owned computed-field expression.</summary>
-    ComputedField = 9
+    ComputedField = 9,
+
+    /// <summary>A linked Cohesive.Machines source-configuration predicate.</summary>
+    MachineSourceConfiguration = 10,
+
+    /// <summary>A typed outcome returned when a linked Machine edge is illegal.</summary>
+    MachineRejection = 11,
+
+    /// <summary>A linked Cohesive.Machines target-configuration predicate.</summary>
+    MachineTargetConfiguration = 12
 }
 
 /// <summary>Why an aggregate observation can influence Transition semantics.</summary>
@@ -450,6 +459,36 @@ public sealed class TransitionEmissionRequirement : TransitionSemanticRequiremen
     public ExecutionDefinitionReference Contract { get; }
 }
 
+/// <summary>A fingerprint-bound Cohesive.Machines edge movement that may execute on a Transition path.</summary>
+public sealed class TransitionMachineMovementRequirement : TransitionSemanticRequirement
+{
+    /// <summary>Creates a conditional Machine movement requirement.</summary>
+    /// <param name="machine">Exact Machine definition reference.</param>
+    /// <param name="edge">Stable edge identity within <paramref name="machine"/>.</param>
+    /// <param name="condition">Combined condition for all movement occurrences.</param>
+    /// <param name="invocationStrength">Requirement strength relative to the complete invocation domain.</param>
+    /// <param name="occurrences">Conditional provenance for every movement.</param>
+    internal TransitionMachineMovementRequirement(
+        ExecutionDefinitionReference machine,
+        ExecutionNodeId edge,
+        TransitionConditionRef condition,
+        TransitionRequirementStrength invocationStrength,
+        ImmutableArray<TransitionRequirementOccurrence> occurrences)
+        : base(condition, invocationStrength, occurrences)
+    {
+        Machine = Guard.RequireNotNull(machine);
+        if (string.IsNullOrWhiteSpace(edge.Value))
+            throw new ArgumentException("A Machine movement requires a stable edge identity.", nameof(edge));
+        Edge = edge;
+    }
+
+    /// <summary>Exact authoritative Machine definition revision and fingerprint.</summary>
+    public ExecutionDefinitionReference Machine { get; }
+
+    /// <summary>Stable edge identity within <see cref="Machine"/>.</summary>
+    public ExecutionNodeId Edge { get; }
+}
+
 /// <summary>An expression operation or ambient semantic capability required by the Transition.</summary>
 public sealed class TransitionCapabilityRequirement : TransitionSemanticRequirement
 {
@@ -632,6 +671,51 @@ public sealed class TransitionDerivedFieldAnalysis
     public bool AffectedByWrites { get; }
 }
 
+/// <summary>
+/// Executable computed-field slice retained by a compiled Transition plan.
+/// </summary>
+/// <remarks>
+/// This derived artifact preserves the exact Shape-owned expression and topological order used during compilation;
+/// it does not become an independent persisted semantic authority.
+/// </remarks>
+public sealed class CompiledTransitionDerivedField
+{
+    /// <summary>Creates one executable computed-field slice.</summary>
+    /// <param name="node">Stable compiler-derived node identity used by execution evidence.</param>
+    /// <param name="path">Aggregate-relative computed-field path.</param>
+    /// <param name="contract">Exact computed-field value contract.</param>
+    /// <param name="expression">Shape-owned canonical compute expression.</param>
+    /// <param name="directDependencies">Direct candidate-state dependencies.</param>
+    internal CompiledTransitionDerivedField(
+        ExecutionNodeId node,
+        FieldPath path,
+        ValueContract contract,
+        Expr expression,
+        ImmutableArray<FieldPath> directDependencies)
+    {
+        Node = node;
+        Path = path;
+        Contract = Guard.RequireNotNull(contract);
+        Expression = Guard.RequireNotNull(expression);
+        DirectDependencies = directDependencies.IsDefault ? [] : directDependencies;
+    }
+
+    /// <summary>Stable compiler-derived node identity used by execution evidence.</summary>
+    public ExecutionNodeId Node { get; }
+
+    /// <summary>Aggregate-relative computed-field path.</summary>
+    public FieldPath Path { get; }
+
+    /// <summary>Exact computed-field value contract.</summary>
+    public ValueContract Contract { get; }
+
+    /// <summary>Shape-owned canonical compute expression.</summary>
+    public Expr Expression { get; }
+
+    /// <summary>Direct candidate-state dependencies in deterministic path order.</summary>
+    public ImmutableArray<FieldPath> DirectDependencies { get; }
+}
+
 /// <summary>Target-independent static semantic analysis, including partial evidence retained on failure.</summary>
 public sealed class TransitionSemanticAnalysis
 {
@@ -703,11 +787,17 @@ public sealed class CompiledTransitionPlan
     internal CompiledTransitionPlan(
         ExecutionDefinitionDocument document,
         TransitionDefinition definition,
-        TransitionSemanticAnalysis analysis)
+        TransitionSemanticAnalysis analysis,
+        ShapeGraph? shapeGraph,
+        ImmutableArray<CompiledTransitionDerivedField> derivedFields,
+        ImmutableArray<TransitionMachineEdgeLink> machineEdges)
     {
         Document = document;
         Definition = definition;
         Analysis = analysis;
+        ShapeGraph = shapeGraph;
+        DerivedFields = derivedFields.IsDefault ? [] : derivedFields;
+        MachineEdges = machineEdges.IsDefault ? [] : machineEdges;
     }
 
     /// <summary>Exact fingerprinted Transition definition document.</summary>
@@ -718,6 +808,15 @@ public sealed class CompiledTransitionPlan
 
     /// <summary>Target-independent conditional semantic analysis.</summary>
     public TransitionSemanticAnalysis Analysis { get; }
+
+    /// <summary>Exact Shape graph used to resolve contracts and computed fields, when one was required.</summary>
+    public ShapeGraph? ShapeGraph { get; }
+
+    /// <summary>Executable computed fields in dependency-first topological order.</summary>
+    public ImmutableArray<CompiledTransitionDerivedField> DerivedFields { get; }
+
+    /// <summary>Machine-derived linked edge slices used by this plan in exact reference order.</summary>
+    public ImmutableArray<TransitionMachineEdgeLink> MachineEdges { get; }
 }
 
 /// <summary>Result of attempting target-independent Transition compilation.</summary>

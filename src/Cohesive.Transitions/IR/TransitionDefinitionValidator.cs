@@ -42,6 +42,9 @@ public static class TransitionDefinitionDiagnosticCodes
     /// <summary>A Match pattern does not use the node's declared value contract.</summary>
     public const string MatchPatternContractMismatch = "transitions.ir.matchPatternContractMismatch";
 
+    /// <summary>A Match pattern uses an unobservable or indeterminate portable value state.</summary>
+    public const string MatchPatternStateInvalid = "transitions.ir.matchPatternStateInvalid";
+
     /// <summary>An aggregate-relative patch path is default or empty.</summary>
     public const string PatchPathInvalid = "transitions.ir.patchPathInvalid";
 
@@ -50,6 +53,9 @@ public static class TransitionDefinitionDiagnosticCodes
 
     /// <summary>An exact emission-contract reference is missing or incomplete.</summary>
     public const string EmissionContractInvalid = "transitions.ir.emissionContractInvalid";
+
+    /// <summary>An exact Machine reference or stable edge identity is missing or incomplete.</summary>
+    public const string MachineBindingInvalid = "transitions.ir.machineBindingInvalid";
 }
 
 /// <summary>
@@ -169,6 +175,9 @@ public static class TransitionDefinitionValidator
                         break;
                     case EmitTransitionNode emit:
                         ValidateEmit(emit, location);
+                        break;
+                    case MoveMachineTransitionNode movement:
+                        ValidateMachineMovement(movement, location);
                         break;
                     case OutcomeTransitionNode outcome:
                         ValidateOutcome(outcome, location);
@@ -293,6 +302,15 @@ public static class TransitionDefinitionValidator
 
                     RegisterNodeId(matchCase.Id, Child(caseLocation, "id"));
                     ValidatePortableValue(matchCase.Pattern, Child(caseLocation, "pattern"));
+                    if (matchCase.Pattern?.State is PortableValueState.Missing
+                        or PortableValueState.Unknown
+                        or PortableValueState.Failed)
+                    {
+                        Error(
+                            TransitionDefinitionDiagnosticCodes.MatchPatternStateInvalid,
+                            "A Match pattern must be a concrete, absent, or null observed value.",
+                            Child(caseLocation, "pattern/state"));
+                    }
                     if (match.Contract is not null
                         && matchCase.Pattern is not null
                         && matchCase.Pattern.Contract != match.Contract)
@@ -411,6 +429,34 @@ public static class TransitionDefinitionValidator
             ValidateExpression(emit.Payload, Child(location, "payload"));
         }
 
+        void ValidateMachineMovement(MoveMachineTransitionNode movement, string location)
+        {
+            var machine = movement.Machine;
+            if (machine is null
+                || string.IsNullOrWhiteSpace(machine.DefinitionId.Value)
+                || string.IsNullOrWhiteSpace(machine.RevisionId.Value)
+                || machine.Fingerprint is null
+                || string.IsNullOrWhiteSpace(machine.Fingerprint.Algorithm)
+                || string.IsNullOrWhiteSpace(machine.Fingerprint.Canonicalization)
+                || string.IsNullOrWhiteSpace(machine.Fingerprint.Value))
+            {
+                Error(
+                    TransitionDefinitionDiagnosticCodes.MachineBindingInvalid,
+                    "A Machine movement requires an exact definition identity, revision, and fingerprint.",
+                    Child(location, "machine"));
+            }
+
+            if (string.IsNullOrWhiteSpace(movement.Edge.Value))
+            {
+                Error(
+                    TransitionDefinitionDiagnosticCodes.MachineBindingInvalid,
+                    "A Machine movement requires a stable edge identity.",
+                    Child(location, "edge"));
+            }
+
+            ValidateExpression(movement.Rejection, Child(location, "rejection"));
+        }
+
         void ValidateOutcome(OutcomeTransitionNode outcome, string location)
         {
             if (!IsSupportedEnum(outcome.Disposition))
@@ -503,12 +549,12 @@ public static class TransitionDefinitionValidator
             {
                 var segment = path.Segments[index];
                 if (!Enum.IsDefined(segment.Kind)
-                    || segment.Kind == SegmentKind.Field && string.IsNullOrWhiteSpace(segment.Segment)
-                    || segment.Kind == SegmentKind.Element && segment.Segment is not null)
+                    || segment.Kind != SegmentKind.Field
+                    || string.IsNullOrWhiteSpace(segment.Segment))
                 {
                     Error(
                         TransitionDefinitionDiagnosticCodes.PatchPathInvalid,
-                        "A sparse patch path contains an invalid semantic path segment.",
+                        "Transition v1 sparse patch paths support only concrete field segments.",
                         $"{location}/segments/{index}");
                 }
             }

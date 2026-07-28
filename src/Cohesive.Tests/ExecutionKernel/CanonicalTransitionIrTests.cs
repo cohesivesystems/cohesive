@@ -84,6 +84,11 @@ public sealed class CanonicalTransitionIrTests
                 new("emit"),
                 EmissionContract(),
                 Expr.Const("reviewed")),
+            new MoveMachineTransitionNode(
+                new("move-machine"),
+                MachineReference(),
+                new("edge/approve"),
+                Expr.Const("held")),
             new OutcomeTransitionNode(
                 new("outcome"),
                 TransitionOutcomeDisposition.Applied,
@@ -97,6 +102,7 @@ public sealed class CanonicalTransitionIrTests
             TransitionWireNames.MatchNode,
             TransitionWireNames.UpdateNode,
             TransitionWireNames.EmitNode,
+            TransitionWireNames.MoveMachineNode,
             TransitionWireNames.OutcomeNode
         ];
         var options = ExecutionDefinitionJsonSerializer.CreateOptions();
@@ -313,6 +319,69 @@ public sealed class CanonicalTransitionIrTests
     }
 
     [Fact]
+    public void MoveMachineNode_RoundTripsThroughSharedEnvelopeWithItsExactReference()
+    {
+        var machine = MachineReference();
+        var definition = MinimalDefinition(Sequence(
+            "root",
+            new MoveMachineTransitionNode(
+                new("move-machine"),
+                machine,
+                new("edge/approve"),
+                Expr.Const("held")),
+            new OutcomeTransitionNode(
+                new("outcome"),
+                TransitionOutcomeDisposition.Applied,
+                Expr.Const("approved"))));
+        var document = CreateDocument(definition);
+
+        var validation = TransitionDefinitionDocuments.TryDeserialize(
+            ExecutionDefinitionJsonSerializer.Serialize(document),
+            out var restoredDocument,
+            out var restoredDefinition);
+
+        Assert.True(validation.IsValid, FormatDiagnostics(validation));
+        Assert.NotNull(restoredDocument);
+        Assert.NotNull(restoredDefinition);
+        Assert.Equal(document.Metadata.Fingerprint, restoredDocument.Metadata.Fingerprint);
+        var movement = Assert.IsType<MoveMachineTransitionNode>(restoredDefinition.Body.Steps[0]);
+        Assert.Equal(machine, movement.Machine);
+        Assert.Equal(new ExecutionNodeId("edge/approve"), movement.Edge);
+        Assert.Equal(Expr.Const("held"), movement.Rejection);
+    }
+
+    [Fact]
+    public void MoveMachineReferenceEdgeAndRejection_AreFingerprintBearing()
+    {
+        var baseline = MachineMovementDefinition(
+            MachineReference(),
+            new("edge/approve"),
+            Expr.Const("held"));
+        var changedMachineFingerprint = MachineMovementDefinition(
+            MachineReference(fingerprintDigit: '2'),
+            new("edge/approve"),
+            Expr.Const("held"));
+        var changedEdge = MachineMovementDefinition(
+            MachineReference(),
+            new("edge/reject"),
+            Expr.Const("held"));
+        var changedRejection = MachineMovementDefinition(
+            MachineReference(),
+            new("edge/approve"),
+            Expr.Const("notEligible"));
+
+        ExecutionDefinitionFingerprint[] fingerprints =
+        [
+            Fingerprint(baseline),
+            Fingerprint(changedMachineFingerprint),
+            Fingerprint(changedEdge),
+            Fingerprint(changedRejection)
+        ];
+
+        Assert.Equal(fingerprints.Length, fingerprints.Distinct().Count());
+    }
+
+    [Fact]
     public void OrderedSequencesChoicesAndMatches_AreFingerprintBearing()
     {
         var firstUpdate = new UpdateTransitionNode(
@@ -470,6 +539,57 @@ public sealed class CanonicalTransitionIrTests
 
         Assert.Equal(TransitionDefinitionDiagnosticCodes.EmissionContractInvalid, diagnostic.Code);
         Assert.Equal("/body/steps/0/contract", diagnostic.Location);
+    }
+
+    [Fact]
+    public void Validator_RejectsIndeterminateMatchPatternStatesAtTheStatePath()
+    {
+        var contract = new ValueContract(
+            new ScalarTypeRef(ScalarTypeKind.String),
+            presence: FieldPresence.Optional,
+            nullability: FieldNullability.Nullable);
+        PortableValue[] invalidPatterns =
+        [
+            PortableValue.Missing(contract),
+            PortableValue.Unknown(contract),
+            PortableValue.Failed(
+                contract,
+                new(
+                    "tests.match.failed",
+                    DiagnosticSeverity.Error,
+                    "The test Match value could not be acquired."))
+        ];
+
+        foreach (var pattern in invalidPatterns)
+        {
+            var caseTerminal = Sequence(
+                "case-terminal-body",
+                new OutcomeTransitionNode(
+                    new("case-terminal"),
+                    TransitionOutcomeDisposition.NoChange,
+                    Expr.Const("held")));
+            var fallbackTerminal = Sequence(
+                "fallback-terminal-body",
+                new OutcomeTransitionNode(
+                    new("fallback-terminal"),
+                    TransitionOutcomeDisposition.NoChange,
+                    Expr.Const("held")));
+            var definition = MinimalDefinition(Sequence(
+                "root",
+                new MatchTransitionNode(
+                    new("match"),
+                    TransitionCaseSelection.OrderedFirstMatch,
+                    TransitionBranchCompleteness.Fallback,
+                    Expr.Const("held"),
+                    contract,
+                    [new(new("case"), pattern, caseTerminal)],
+                    new(new("fallback"), fallbackTerminal))));
+
+            var diagnostic = Assert.Single(TransitionDefinitionValidator.Validate(definition).Diagnostics);
+
+            Assert.Equal(TransitionDefinitionDiagnosticCodes.MatchPatternStateInvalid, diagnostic.Code);
+            Assert.Equal("/body/steps/0/cases/0/pattern/state", diagnostic.Location);
+        }
     }
 
     [Fact]
@@ -774,6 +894,7 @@ public sealed class CanonicalTransitionIrTests
                 typeof(MatchTransitionNode),
                 typeof(UpdateTransitionNode),
                 typeof(EmitTransitionNode),
+                typeof(MoveMachineTransitionNode),
                 typeof(OutcomeTransitionNode)
             ],
             nodeTypes);
@@ -935,6 +1056,21 @@ public sealed class CanonicalTransitionIrTests
                 [new(new("case"), Expr.Const(true), terminal)])));
     }
 
+    static CanonicalTransitionDefinition MachineMovementDefinition(
+        ExecutionDefinitionReference machine,
+        ExecutionNodeId edge,
+        Expr rejection) => MinimalDefinition(Sequence(
+        "root",
+        new MoveMachineTransitionNode(
+            new("move-machine"),
+            machine,
+            edge,
+            rejection),
+        new OutcomeTransitionNode(
+            new("outcome"),
+            TransitionOutcomeDisposition.Applied,
+            Expr.Const("approved"))));
+
     static ExecutionDefinitionDocument CreateDocument(CanonicalTransitionDefinition definition) =>
         TransitionDefinitionDocuments.Create(
             new("transition/review"),
@@ -988,6 +1124,16 @@ public sealed class CanonicalTransitionIrTests
                 ExecutionDefinitionFingerprinter.Algorithm,
                 ExecutionDefinitionFingerprinter.Canonicalization,
                 new string('0', 64)));
+
+    static ExecutionDefinitionReference MachineReference(
+        char fingerprintDigit = '1') =>
+        new(
+            new("machine/review-lifecycle"),
+            new("revision/1"),
+            new(
+                ExecutionDefinitionFingerprinter.Algorithm,
+                ExecutionDefinitionFingerprinter.Canonicalization,
+                new string(fingerprintDigit, 64)));
 
     static string RewriteDefinition(
         ExecutionDefinitionDocument document,

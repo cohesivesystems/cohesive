@@ -9,7 +9,7 @@ public sealed class ExecutionKernelCharacterizationTests
 {
     static readonly IReadOnlyList<KernelScenarioClassification> ScenarioClassifications =
     [
-        new("EK-01", KernelScenarioStatus.Partial, "Canonical structured Transition IR now represents stable branches, matches, sparse patches, typed outcomes, and exact interaction-contract emission references; path-sensitive compilation and canonical Transition interpretation remain missing."),
+        new("EK-01", KernelScenarioStatus.Pass, "Canonical structured Transition IR, path-sensitive static compilation, full-state and sparse non-I/O reference interpretation, actual execution evidence, conflict detection, and fingerprint-bound Machine-edge linking satisfy the EK-01 reference path."),
         new("EK-02", KernelScenarioStatus.Partial, "Wait nodes checkpoint before yielding and accept early signals; AwaitMatch, durable admission/claim/consume state, and a typed timeout race do not exist."),
         new("EK-03", KernelScenarioStatus.Partial, "Typed effect handlers, retry, continuation freshness, and dead letters exist; stable request identity and vendor/manual/late-result arbitration do not."),
         new("EK-04", KernelScenarioStatus.Absent, "The process runtime has one cursor and a locality continuation stack, with no fork, token, or join model."),
@@ -27,7 +27,10 @@ public sealed class ExecutionKernelCharacterizationTests
             ["EK-01", "EK-02", "EK-03", "EK-04", "EK-05", "EK-06", "EK-07", "EK-08", "EK-09"],
             ScenarioClassifications.Select(static scenario => scenario.Id));
         Assert.All(ScenarioClassifications, static scenario => Assert.NotEmpty(scenario.Evidence));
-        Assert.DoesNotContain(ScenarioClassifications, static scenario => scenario.Status == KernelScenarioStatus.Pass);
+        var passing = Assert.Single(
+            ScenarioClassifications,
+            static scenario => scenario.Status == KernelScenarioStatus.Pass);
+        Assert.Equal("EK-01", passing.Id);
     }
 
     [Fact]

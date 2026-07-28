@@ -75,6 +75,42 @@ var document = TransitionDefinitionDocuments.Create(
         DocumentOrigin.User));
 ```
 
+## Reference Interpretation
+
+`TransitionReferenceInterpreter` is the deterministic, non-committing interpretation of a successfully
+compiled canonical Transition plan. Its public entry points are:
+
+- `Decide(plan, activation)` for an explicit `TransitionActivation` and observation frames.
+- `DecideFullState(...)` for one concrete coherent aggregate state and optional fresh commit state.
+- `DecideSparse(...)` for exact finite `TransitionObservationEntry` values and optional fresh commit entries.
+
+Full-state and sparse evaluation are adapters over the same execution core. A sparse frame distinguishes an
+unobserved access, represented by no entry, from an observed `Absent`, `Null`, `Unknown`, or `Failed` value.
+Full-state evaluation resolves the same semantic field accesses from the supplied aggregate value, so both modes
+produce path-level actual-read evidence.
+
+The interpreter performs no I/O, invokes no services or delegates, mutates no caller-owned state, and does not
+commit its result. `TransitionDecision` instead returns the typed outcome, evaluated sparse patch, pure emission
+intents, actual Machine movements, guarantee demands, conflicts, diagnostics, and a single ordered
+`TransitionExecutionEvidence` trace. Storage or process integrations acquire observations and interpret those
+returned values through their own capability-checked commit boundary.
+
+Commit observations are optional caller-supplied fresh evidence. When a decision requires commit, freshness is
+checked only for observations actually read by the selected execution path. A changed value produces a
+`Conflict` decision with exact expected and observed evidence; omitted fresh evidence for an actual read fails
+closed with a structured diagnostic. If fresh evidence is not supplied, the decision's concurrency-observation
+demands tell an external commit interpretation what must remain coherent.
+
+### Machine link boundary
+
+`MoveMachineTransitionNode` persists only an exact fingerprint-bound Machine definition reference, an edge
+identity, and its typed rejection outcome. A linker projects the authoritative Machine edge into an immutable
+`TransitionMachineEdgeLink` containing source and target configuration predicates and edge-owned assignments;
+`TransitionStaticCompiler` resolves that slice from `TransitionMachineLinkCatalog` and pins each used link into
+the compiled plan. The reference interpreter validates the source configuration, applies the assignments to its
+candidate state, and verifies the target configuration. It does not copy an independently authored lifecycle
+graph into Transition IR or resolve Machine state through an ambient runtime service.
+
 ## Compatibility Example
 
 The following example uses the current compatibility authoring and runtime surface. Its eventual
@@ -146,4 +182,4 @@ requirements analyzer. The transition model supplies a different scope for each 
 These scopes are compiler-front-end descriptions, not serialized CLR evaluation contexts. The
 transition runtime keeps its own state and input objects, while analysis exposes portable field,
 parameter, function, operator, and ambient-capability requirements for validation, dependency
-analysis, documentation, and future interpreters.
+analysis, documentation, and reference or target interpreters.
