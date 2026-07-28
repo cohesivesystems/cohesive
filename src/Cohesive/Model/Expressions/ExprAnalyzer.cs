@@ -79,6 +79,7 @@ public static class ExprAnalyzer
 
             var result = expression switch
             {
+                BindingExpr binding => AnalyzeBinding(binding, scope, expressionPath),
                 FieldExpr field => AnalyzeField(field.Path, field.Binding, wasUnqualified: field.Binding is null, scope, expressionPath),
                 FieldRefExpr field => AnalyzeTypedField(field, scope, expressionPath),
                 CurrentItemExpr => AnalyzeCurrentItem(scope, expressionPath),
@@ -95,6 +96,37 @@ public static class ExprAnalyzer
 
             ValidateResultExpectation(result, expectation, expressionPath);
             return result;
+        }
+
+        NodeResult AnalyzeBinding(
+            BindingExpr expression,
+            ExprScope scope,
+            string expressionPath)
+        {
+            RequireOperation(ExprCapabilities.Binding, expressionPath);
+            if (string.IsNullOrWhiteSpace(expression.Binding.Value))
+            {
+                Add(
+                    ExprAnalysisDiagnosticCodes.BindingInvalid,
+                    "A binding expression requires a non-empty identifier.",
+                    expressionPath);
+                return NodeResult.Unknown;
+            }
+
+            bindings.Add(expression.Binding);
+            if (!scope.TryGetBinding(expression.Binding, out var binding))
+            {
+                Add(
+                    ExprAnalysisDiagnosticCodes.BindingNotVisible,
+                    $"Expression references binding '{expression.Binding.Value}' that is not visible at this site.",
+                    expressionPath);
+                return NodeResult.Unknown;
+            }
+
+            var value = binding.Availability == ExprBindingAvailability.MayBeAbsent
+                ? WithPresence(binding.Value, FieldPresence.Optional)
+                : binding.Value;
+            return NodeResult.FromValue(value);
         }
 
         NodeResult AnalyzeField(

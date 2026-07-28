@@ -972,6 +972,7 @@ public sealed class RelationQueryAuthoringCore
                     CollectParameters(groupBy, parameters);
                 return;
             case FieldExpr:
+            case BindingExpr:
             case CurrentItemExpr:
             case ConstantExpr:
             case FieldRefExpr:

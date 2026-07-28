@@ -496,6 +496,7 @@ public sealed class ExprSemanticsCatalog
 
         ExprCapabilityId[] capabilities =
         [
+            ExprCapabilities.Binding,
             ExprCapabilities.Field,
             ExprCapabilities.NestedFieldPath,
             ExprCapabilities.Parameter,
@@ -741,6 +742,9 @@ public sealed class ExprSemanticsCatalog
 /// <summary>Stable capability identifiers for canonical expression operations and ambient context.</summary>
 public static class ExprCapabilities
 {
+    /// <summary>Whole-value binding access.</summary>
+    public static ExprCapabilityId Binding { get; } = new("expr.node.binding");
+
     /// <summary>Field-reference evaluation.</summary>
     public static ExprCapabilityId Field { get; } = new("expr.node.field");
 

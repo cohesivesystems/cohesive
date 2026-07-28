@@ -124,6 +124,21 @@ public sealed class RelationQueryStructuralAuthoringTests
     }
 
     [Fact]
+    public void WholeBindingExpressions_FailThroughStructuredCapabilityValidation()
+    {
+        var author = RelationQuery.Structural();
+        var loads = author.Source(LoadCustomerRelationFixture.LoadShapeId);
+        var filtered = author.Filter(loads.Node, Expr.BoundValue(loads.Binding.Id));
+        var rows = author.Rows(filtered);
+
+        var result = author.BuildQuery(new("whole-binding"), new("WholeBinding"), [rows]);
+
+        Assert.Contains(
+            result.Validation.Diagnostics,
+            static diagnostic => diagnostic.Code == "relationQuery.expression.capabilityUnsupported");
+    }
+
+    [Fact]
     public void ConventionIdentities_AreDeterministicAndFingerprintEquivalentAcrossCores()
     {
         var first = BuildConventionQuery();

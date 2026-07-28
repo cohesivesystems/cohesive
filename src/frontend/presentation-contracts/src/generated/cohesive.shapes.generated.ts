@@ -1447,6 +1447,8 @@ export const presentationBindingKindLabels: Record<PresentationBindingKind, stri
 };
 
 export type Expr = {
+  readonly $expr: 'binding';
+} & BindingExpr | {
   readonly $expr: 'field';
 } & FieldExpr | {
   readonly $expr: 'currentItem';
@@ -1469,6 +1471,10 @@ export type Expr = {
 } & LiteralExpr | {
   readonly $expr: 'aggregate';
 } & AggregateExpr;
+
+export interface BindingExpr {
+  Binding: ValueBindingId;
+}
 
 export interface FieldExpr {
   Path: FieldPath;

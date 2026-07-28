@@ -1,6 +1,6 @@
 # Execution Kernel Compatibility Inventory
 
-This inventory records the pre-kernel behavior characterized by ARI-153 against the normative EK-01 through EK-09 scenarios in the [Cohesive Execution Kernel Specification](https://app.notion.com/p/3ab8cf7881f981f78ef1e34d7a907c70). It is a migration baseline, not an alternative semantic contract. Missing behavior remains required by the specification.
+This inventory records the compatibility behavior characterized by ARI-153 and the kernel substrate introduced since then against the normative EK-01 through EK-09 scenarios in the [Cohesive Execution Kernel Specification](https://app.notion.com/p/3ab8cf7881f981f78ef1e34d7a907c70). It is a migration baseline, not an alternative semantic contract. Missing behavior remains required by the specification.
 
 Status meanings:
 
@@ -14,7 +14,7 @@ No scenario fully passes today.
 
 | Scenario | Status | Current compatibility | Missing kernel semantics |
 | --- | --- | --- | --- |
-| EK-01 — structured DQ branching | Partial | `TransitionDefinition` provides normalized preconditions, field updates, effects, and read/write sets. `DeclarativeEntityRuntime` supports direct deterministic activation. `BranchingNode` provides ordered first-match process branching. | Structured transition bodies, stable branch identity, exhaustive choice, typed outcomes, branch-specific patches/emissions/requests, path-sensitive summaries, and a persisted branch decision. |
+| EK-01 — structured DQ branching | Partial | `Cohesive.Transitions.IR` now provides canonical persisted structured Transition definitions with stable nodes, typed contracts and outcomes, branching and matching, sparse patches, and exact interaction-contract emission references. The compatibility `DeclarativeEntityRuntime` still supports deterministic activation of the earlier flat model. | Static type, termination, exhaustiveness, linked interaction-contract, and path-sensitive access/effect analysis; canonical sparse and full-state interpreters; and complete decision and execution evidence. |
 | EK-02 — durable human review | Partial | `WaitNode` produces a `Waiting` `ProcessCheckpoint` before the runtime yields. Local and DurableTask runtimes buffer early keyed signals; DurableTask also supplies durable timers. | Closed `AwaitMatch`, durable wait registration plus timer arming, signal identity, admission/claim/consume state, duplicate/late/stale policy, and typed timeout/cancel outcomes. |
 | EK-03 — vendor/manual fulfillment | Partial | Typed effect handlers, transient retry, continuation freshness checks, and dead-lettering exist. | Stable request/correlation/idempotency identity across retries and fallbacks, explicit response obligations, vendor/manual arbitration, and protection from late results. |
 | EK-04 — parallel gates and join recovery | Absent | A checkpoint has one `CurrentNode` and a LIFO locality continuation stack. Transition batches execute sequentially. | Fork tokens, parallel scheduling, join policy, durable per-branch progress, order-independent recovery, and duplicate-work prevention. |
@@ -26,13 +26,13 @@ No scenario fully passes today.
 
 The executable classifications and focused behavioral baselines live in `src/Cohesive.Tests/ExecutionKernel/ExecutionKernelCharacterizationTests.cs` and run as part of the existing `Cohesive.Tests` project.
 
-## Current authority to migrate
+## Compatibility surfaces to migrate
 
 ### Flat transitions
 
-`Cohesive.Transitions.Model.TransitionDefinition` is a serialized set of parallel collections: `Inputs`, `Preconditions`, `Updates`, and `Effects`. The runtime applies preconditions, sequential assignments, computed fields, invariants, and then every declared effect. Conditional expressions exist inside those collections, but there is no structured body containing branch nodes or stable path identity. Static analysis unions referenced fields; it cannot report must/may/actual access or branch provenance.
+`Cohesive.Transitions.Model.TransitionDefinition` is a legacy serialized set of parallel collections: `Inputs`, `Preconditions`, `Updates`, and `Effects`. The runtime applies preconditions, sequential assignments, computed fields, invariants, and then every declared effect. Conditional expressions exist inside those collections, but there is no structured body containing branch nodes or stable path identity. Static analysis unions referenced fields; it cannot report must/may/actual access or branch provenance.
 
-Migration disposition: keep the current builders and `DeclarativeEntityRuntime` as compatibility producer/interpreter surfaces, but move semantic authority to the normalized structured Transition IR. Project the legacy `TransitionResult`, generic effects, and dictionary patches from the canonical decision rather than defining kernel behavior through them.
+Canonical persisted semantic authority now belongs to `Cohesive.Transitions.IR`. Keep the current builders and `DeclarativeEntityRuntime` only as temporary compatibility producer/interpreter surfaces while compilation, interpretation, and authoring lowerings migrate. Project the legacy `TransitionResult`, generic effects, and dictionary patches from the canonical decision rather than defining kernel behavior through them.
 
 ### Delegate-bearing processes
 
@@ -50,8 +50,9 @@ Migration disposition: preserve old checkpoints only behind an explicit compatib
 
 | Area | Current types and runtime paths |
 | --- | --- |
+| Canonical transition semantics | `Cohesive.Transitions.IR` structured definitions, validation, and shared execution-definition persistence |
 | Direct transition activation | `Transition<TEntity,TInput>.Apply` → `Entity.ApplyTransition` → `DeclarativeEntityRuntime.Apply` |
-| Flat transition semantics | `TransitionDefinition`, `TransitionBuilder`, `TransitionExpressionBuilder`, `TransitionExpressionAnalyzer`, `TransitionPatchProjector`, `TransitionResult` |
+| Flat transition compatibility | `Cohesive.Transitions.Model.TransitionDefinition`, `TransitionBuilder`, `TransitionExpressionBuilder`, `TransitionExpressionAnalyzer`, `TransitionPatchProjector`, `TransitionResult` |
 | Process planning and replay | `ProcessDefinition`, `ProcessNode`, `BranchingNode`, `ProcessExecutionPlanner`, `ProcessCheckpoint` |
 | Waits and signals | `WaitNode`, `IProcessWaitAdapter`, `IProcessSignalSink`, `InMemoryProcessWaitAdapter`, `DurableTaskProcessOrchestration` |
 | Effects and recovery substrate | `EffectRequest`, `ProcessPendingEffect`, `EffectExecution`, `ProcessDeadLetter`, `ProcessNodeExecutor`, `ProcessEntityRepositoryAdapter` |

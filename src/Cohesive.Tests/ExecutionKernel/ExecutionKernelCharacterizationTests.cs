@@ -9,7 +9,7 @@ public sealed class ExecutionKernelCharacterizationTests
 {
     static readonly IReadOnlyList<KernelScenarioClassification> ScenarioClassifications =
     [
-        new("EK-01", KernelScenarioStatus.Partial, "Flat transitions and ordered process branches exist; structured transition branches, stable branch identities, typed outcomes, and path-sensitive summaries do not."),
+        new("EK-01", KernelScenarioStatus.Partial, "Canonical structured Transition IR now represents stable branches, matches, sparse patches, typed outcomes, and exact interaction-contract emission references; path-sensitive compilation and canonical Transition interpretation remain missing."),
         new("EK-02", KernelScenarioStatus.Partial, "Wait nodes checkpoint before yielding and accept early signals; AwaitMatch, durable admission/claim/consume state, and a typed timeout race do not exist."),
         new("EK-03", KernelScenarioStatus.Partial, "Typed effect handlers, retry, continuation freshness, and dead letters exist; stable request identity and vendor/manual/late-result arbitration do not."),
         new("EK-04", KernelScenarioStatus.Absent, "The process runtime has one cursor and a locality continuation stack, with no fork, token, or join model."),
