@@ -1206,11 +1206,6 @@ public static partial class RelationQueryDefinitionValidator
                 case ArrayTypeRef array:
                     ValidatePortableType(array.ElementType, $"{location}/elementType");
                     break;
-                case ObjectTypeRef obj when obj.Fields.IsDefaultOrEmpty:
-                    Add(code: "relationQuery.type.objectFieldsEmpty",
-                        message: "An inline object type must declare at least one field.",
-                        location: location);
-                    break;
                 case ObjectTypeRef obj:
                     foreach (var field in obj.Fields)
                     {
@@ -1219,6 +1214,14 @@ public static partial class RelationQueryDefinitionValidator
                             Add(code: "relationQuery.type.objectFieldNameMissing",
                                 message: "An inline object field must have a non-empty name.",
                                 location: location);
+                        }
+                        if (!Enum.IsDefined(field.Cardinality)
+                            || !Enum.IsDefined(field.Presence)
+                            || !Enum.IsDefined(field.Nullability))
+                        {
+                            Add(code: "relationQuery.type.objectFieldMetadataInvalid",
+                                message: $"Inline object field '{field.Name}' has invalid cardinality, presence, or nullability metadata.",
+                                location: $"{location}/fields/{field.Name}");
                         }
                         else if (field.Type is null)
                         {

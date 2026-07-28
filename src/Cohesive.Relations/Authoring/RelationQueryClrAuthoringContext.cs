@@ -1174,8 +1174,9 @@ public sealed class RelationQueryClrAuthoringContext
                     }
 
                     currentType = objectField.Type;
-                    currentCardinality = FieldCardinality.Single;
+                    currentCardinality = objectField.Cardinality;
                     currentPresence = LeastStrict(currentPresence, objectField.Presence);
+                    currentNullability = LeastStrict(currentNullability, objectField.Nullability);
                     break;
                 default:
                     return ImportedPathResolution.Failure(
@@ -1360,9 +1361,11 @@ public sealed class RelationQueryClrAuthoringContext
             var actualField = actual.FirstOrDefault(field =>
                 string.Equals(field.Name, expectedField.Name.Value, StringComparison.Ordinal));
             if (actualField is null
-                || expectedField.Cardinality != FieldCardinality.Single
+                || expectedField.Cardinality != actualField.Cardinality
                 || expectedField.Presence == FieldPresence.Required
                 && actualField.Presence != FieldPresence.Required
+                || expectedField.Nullability == FieldNullability.NonNullable
+                && actualField.Nullability != FieldNullability.NonNullable
                 || !AreDefinitelyCompatible(
                     expectedField.Type,
                     expectedGraph,
@@ -1389,9 +1392,11 @@ public sealed class RelationQueryClrAuthoringContext
             var actualField = actual.FirstOrDefault(field =>
                 string.Equals(field.Name.Value, expectedField.Name, StringComparison.Ordinal));
             if (actualField is null
-                || actualField.Cardinality != FieldCardinality.Single
+                || expectedField.Cardinality != actualField.Cardinality
                 || expectedField.Presence == FieldPresence.Required
                 && actualField.Presence != FieldPresence.Required
+                || expectedField.Nullability == FieldNullability.NonNullable
+                && actualField.Nullability != FieldNullability.NonNullable
                 || !AreDefinitelyCompatible(
                     expectedField.Type,
                     expectedGraph,
@@ -1418,8 +1423,11 @@ public sealed class RelationQueryClrAuthoringContext
             var actualField = actual.FirstOrDefault(field =>
                 string.Equals(field.Name, expectedField.Name, StringComparison.Ordinal));
             if (actualField is null
+                || expectedField.Cardinality != actualField.Cardinality
                 || expectedField.Presence == FieldPresence.Required
                 && actualField.Presence != FieldPresence.Required
+                || expectedField.Nullability == FieldNullability.NonNullable
+                && actualField.Nullability != FieldNullability.NonNullable
                 || !AreDefinitelyCompatible(
                     expectedField.Type,
                     expectedGraph,
@@ -1597,17 +1605,15 @@ public sealed class RelationQueryClrAuthoringContext
             return inferred;
 
         var shape = imported.Document.Graph.GetShape(registration.Id);
-        if (shape.Fields.IsDefaultOrEmpty)
-            return new JsonTypeRef(JsonTypeKind.Object);
         return new ObjectTypeRef(
         [
             .. shape.Fields.Select(static field => new ObjectFieldTypeDef(
-                field.Name.Value,
-                field.Cardinality == FieldCardinality.Many
-                    ? new ArrayTypeRef(field.Type)
-                    : field.Type,
-                field.Presence,
-                field.Annotations))
+                name: field.Name.Value,
+                type: field.Type,
+                presence: field.Presence,
+                annotations: field.Annotations,
+                cardinality: field.Cardinality,
+                nullability: field.Nullability))
         ]);
     }
 

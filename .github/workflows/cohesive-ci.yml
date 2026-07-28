@@ -55,3 +55,57 @@ jobs:
 
       - name: Pack NuGet packages
         run: bash ./eng/pack-local.sh 0.1.0-ci.${{ github.run_number }}
+
+  notify-slack:
+    if: ${{ always() && github.event_name == 'pull_request' }}
+    needs: build-test-pack
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Notify Slack
+        continue-on-error: true
+        env:
+          CI_RESULT: ${{ needs.build-test-pack.result }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [[ -z "$SLACK_WEBHOOK_URL" ]]; then
+            echo "SLACK_WEBHOOK_URL is unavailable; skipping Slack notification."
+            exit 0
+          fi
+
+          case "$CI_RESULT" in
+            success)
+              status="passed"
+              icon=":white_check_mark:"
+              ;;
+            failure)
+              status="failed"
+              icon=":x:"
+              ;;
+            cancelled)
+              status="was cancelled"
+              icon=":warning:"
+              ;;
+            *)
+              status="finished with status $CI_RESULT"
+              icon=":grey_question:"
+              ;;
+          esac
+
+          payload="$(
+            jq -n \
+              --arg text "$icon CI $status for <$PR_URL|$REPOSITORY#$PR_NUMBER: $PR_TITLE>. <$RUN_URL|View workflow run>." \
+              '{text: $text}'
+          )"
+
+          curl \
+            --fail-with-body \
+            --retry 3 \
+            --header "Content-Type: application/json" \
+            --data "$payload" \
+            "$SLACK_WEBHOOK_URL"

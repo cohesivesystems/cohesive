@@ -183,7 +183,7 @@ public sealed class ExprFunctionDefinition
         ExprResultCategory variadicCategory = ExprResultCategory.Any,
         ExprResultCategory resultCategory = ExprResultCategory.Any,
         ExprFunctionResultRule resultRule = ExprFunctionResultRule.DeclaredOrFixed,
-        ExprValueContract? fixedResult = null,
+        ValueContract? fixedResult = null,
         ImmutableArray<ExprScopedFunctionArgument> scopedArguments = default,
         ImmutableArray<ExprCapabilityId> ambientCapabilities = default,
         ImmutableArray<ExprResultCategory> repeatingArgumentCategories = default)
@@ -360,7 +360,7 @@ public sealed class ExprFunctionDefinition
     public ExprFunctionResultRule ResultRule { get; }
 
     /// <summary>Fixed portable result contract when known.</summary>
-    public ExprValueContract? FixedResult { get; }
+    public ValueContract? FixedResult { get; }
 
     /// <summary>Arguments evaluated with current-item scope.</summary>
     public ImmutableArray<ExprScopedFunctionArgument> ScopedArguments { get; }
@@ -402,7 +402,7 @@ public sealed record ExprUnaryOperatorDefinition(
     UnaryOperator Operator,
     ExprResultCategory OperandCategory,
     ExprResultCategory ResultCategory,
-    ExprValueContract? FixedResult = null)
+    ValueContract? FixedResult = null)
 {
     /// <summary>Stable operation capability required by this operator.</summary>
     public ExprCapabilityId OperationCapability => ExprCapabilities.ForUnary(Operator);
@@ -419,7 +419,7 @@ public sealed record ExprBinaryOperatorDefinition(
     ExprResultCategory LeftCategory,
     ExprResultCategory RightCategory,
     ExprResultCategory ResultCategory,
-    ExprValueContract? FixedResult = null)
+    ValueContract? FixedResult = null)
 {
     /// <summary>Stable operation capability required by this operator.</summary>
     public ExprCapabilityId OperationCapability => ExprCapabilities.ForBinary(Operator);
@@ -434,7 +434,7 @@ public sealed record ExprAggregateOperatorDefinition(
     AggregateOperator Operator,
     ExprResultCategory SourceCategory,
     ExprResultCategory ResultCategory,
-    ExprValueContract? FixedResult = null)
+    ValueContract? FixedResult = null)
 {
     /// <summary>Stable operation capability required by this aggregate.</summary>
     public ExprCapabilityId OperationCapability => ExprCapabilities.ForAggregate(Operator);
@@ -571,12 +571,12 @@ public sealed class ExprSemanticsCatalog
 
     static ExprSemanticsCatalog CreateDefault()
     {
-        var boolean = new ExprValueContract(new ScalarTypeRef(ScalarTypeKind.Bool));
-        var decimalNumber = new ExprValueContract(
+        var boolean = new ValueContract(new ScalarTypeRef(ScalarTypeKind.Bool));
+        var decimalNumber = new ValueContract(
             new ScalarTypeRef(ScalarTypeKind.Decimal),
             presence: FieldPresence.Optional);
-        var int64 = new ExprValueContract(new ScalarTypeRef(ScalarTypeKind.Int64));
-        var @string = new ExprValueContract(new ScalarTypeRef(ScalarTypeKind.String));
+        var int64 = new ValueContract(new ScalarTypeRef(ScalarTypeKind.Int64));
+        var @string = new ValueContract(new ScalarTypeRef(ScalarTypeKind.String));
 
         return new(
             unaryOperators:
@@ -657,7 +657,7 @@ public sealed class ExprSemanticsCatalog
             ExprResultCategory variadicCategory = ExprResultCategory.Any,
             ExprResultCategory resultCategory = ExprResultCategory.Any,
             ExprFunctionResultRule resultRule = ExprFunctionResultRule.DeclaredOrFixed,
-            ExprValueContract? fixedResult = null,
+            ValueContract? fixedResult = null,
             ImmutableArray<ExprScopedFunctionArgument> scoped = default,
             ImmutableArray<ExprCapabilityId> ambient = default,
             int multiple = 1,

@@ -327,12 +327,61 @@ public static class ObservationShapeValidator
                 continue;
             }
 
-            if (fieldValue.Kind is ObservationValueKind.Null or ObservationValueKind.Undefined)
+            if (fieldValue.Kind == ObservationValueKind.Undefined)
             {
                 if (field.Presence == FieldPresence.Required)
                 {
-                    validationError = $"{context} property '{field.Name}' is required and cannot be null.";
+                    validationError = $"{context} is missing required property '{field.Name}'.";
                     return false;
+                }
+
+                continue;
+            }
+
+            if (fieldValue.Kind == ObservationValueKind.Null)
+            {
+                if (field.Nullability == FieldNullability.NonNullable)
+                {
+                    validationError = $"{context} property '{field.Name}' is non-nullable and cannot be null.";
+                    return false;
+                }
+
+                continue;
+            }
+
+            if (field.Cardinality == FieldCardinality.Many)
+            {
+                if (fieldValue.Kind != ObservationValueKind.Array)
+                {
+                    validationError = $"{context}.{field.Name} expects an array value.";
+                    return false;
+                }
+
+                var items = fieldValue.EnumerateArray();
+                for (var i = 0; i < items.Length; i++)
+                {
+                    var item = items[i];
+                    if (item.Kind is ObservationValueKind.Null or ObservationValueKind.Undefined)
+                    {
+                        if (field.Nullability == FieldNullability.NonNullable)
+                        {
+                            validationError = $"{context}.{field.Name} element at index {i.ToString(CultureInfo.InvariantCulture)} is null but the field is non-nullable.";
+                            return false;
+                        }
+
+                        continue;
+                    }
+
+                    if (!TryMatchType(
+                            type: field.Type,
+                            value: item,
+                            graph: graph,
+                            context: $"{context}.{field.Name} element at index {i.ToString(CultureInfo.InvariantCulture)}",
+                            maxDepth: maxDepth,
+                            out validationError))
+                    {
+                        return false;
+                    }
                 }
 
                 continue;

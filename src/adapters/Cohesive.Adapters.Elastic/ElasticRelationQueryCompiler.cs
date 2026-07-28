@@ -1351,8 +1351,7 @@ public sealed class ElasticRelationQueryCompiler
             }
             var elementContract = GetCollectionElementContract(collectionContract);
             if (elementContract is null
-                || elementContract.GetEffectiveType() is not ObjectTypeRef
-                    && elementContract.ShapeDefinition is null)
+                || elementContract.GetEffectiveType() is not ObjectTypeRef)
             {
                 throw Fail(
                     ElasticRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
@@ -1606,20 +1605,18 @@ public sealed class ElasticRelationQueryCompiler
             return false;
         }
 
-        static ExprValueContract? GetCollectionElementContract(ExprValueContract collection)
+        static ValueContract? GetCollectionElementContract(ValueContract collection)
         {
             if (collection.Cardinality == FieldCardinality.Many)
             {
                 return new(
                     collection.Type,
-                    collection.Shape,
-                    shapeDefinition: collection.ShapeDefinition);
+                    collection.Shape);
             }
             return collection.GetEffectiveType() is ArrayTypeRef array
                 ? new(
                     array.ElementType,
-                    collection.Shape,
-                    shapeDefinition: collection.ShapeDefinition)
+                    collection.Shape)
                 : null;
         }
 
@@ -2037,7 +2034,7 @@ public sealed class ElasticRelationQueryCompiler
 
         ElasticRelationQueryResultFieldBinding CreateSourceResult(
             RelationQueryFieldReference output,
-            ExprValueContract contract,
+            ValueContract contract,
             ResolvedSourceField source,
             QueryAssignmentId? assignment)
         {
@@ -2153,7 +2150,7 @@ public sealed class ElasticRelationQueryCompiler
                 }
                 resultFields.Add(new(
                     field,
-                    new ExprValueContract(new ScalarTypeRef(ScalarTypeKind.Int64)),
+                    new ValueContract(new ScalarTypeRef(ScalarTypeKind.Int64)),
                     ElasticRelationQueryResultSourceKind.ExactTotalHits,
                     ElasticRelationQueryResultValueEncoding.ExactCountInt64,
                     assignment: assignment.Definition.Id));
@@ -2332,7 +2329,7 @@ public sealed class ElasticRelationQueryCompiler
                 {
                     resultFields.Add(new(
                         field,
-                        new ExprValueContract(new ScalarTypeRef(ScalarTypeKind.Int64)),
+                        new ValueContract(new ScalarTypeRef(ScalarTypeKind.Int64)),
                         ElasticRelationQueryResultSourceKind.CompositeDocumentCount,
                         ElasticRelationQueryResultValueEncoding.ExactCountInt64,
                         assignment: count.Definition.Id));
@@ -2671,7 +2668,7 @@ public sealed class ElasticRelationQueryCompiler
             RelationQueryExpressionSiteKind kind) =>
             execution.ExpressionSites.Single(site => site.Kind == kind);
 
-        static ExprValueContract AnalyzeSubexpression(
+        static ValueContract AnalyzeSubexpression(
             Expr expression,
             RelationQueryExpressionSiteAnalysis site,
             string operand,
@@ -2698,7 +2695,7 @@ public sealed class ElasticRelationQueryCompiler
                 site.Node);
         }
 
-        static ExprValueContract RequireKnownResultContract(
+        static ValueContract RequireKnownResultContract(
             RelationQueryExpressionSiteAnalysis site,
             QueryNodeId node,
             string operation)
@@ -2715,7 +2712,7 @@ public sealed class ElasticRelationQueryCompiler
         }
 
         static ElasticRelationQueryResultValueEncoding ResolveResultEncoding(
-            ExprValueContract contract,
+            ValueContract contract,
             QueryNodeId node)
         {
             if (contract.Cardinality != FieldCardinality.Single)
@@ -2742,7 +2739,7 @@ public sealed class ElasticRelationQueryCompiler
             };
         }
 
-        static bool IsRequiredNonNull(ExprValueContract? contract) => contract is
+        static bool IsRequiredNonNull(ValueContract? contract) => contract is
         {
             Presence: FieldPresence.Required,
             Nullability: FieldNullability.NonNullable

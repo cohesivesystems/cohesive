@@ -867,7 +867,7 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
     }
 
     bool TryResolveValueSemantics(
-        ExprValueContract? contract,
+        ValueContract? contract,
         PostgresRelationQueryColumnOptions? overrides,
         RelationQueryInputId input,
         FieldPath path,
@@ -948,7 +948,7 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
         }
     }
 
-    bool TryResolveShapeFieldContract(RelationQueryPlacedInput input, FieldPath path, out ExprValueContract? contract)
+    bool TryResolveShapeFieldContract(RelationQueryPlacedInput input, FieldPath path, out ValueContract? contract)
     {
         var demanded = input.Fields.SingleOrDefault(field => field.Input.Field.Path == path);
         if (demanded is not null)

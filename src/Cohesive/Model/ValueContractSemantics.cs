@@ -1,7 +1,7 @@
-namespace Cohesive.Model.Expressions;
+namespace Cohesive.Model;
 
 /// <summary>Local compatibility of a constant with a portable value type.</summary>
-internal enum ExprConstantCompatibility
+internal enum ValueConstantCompatibility
 {
     /// <summary>External type resolution is required to decide compatibility.</summary>
     Unknown = 0,
@@ -13,29 +13,29 @@ internal enum ExprConstantCompatibility
     Incompatible = 2
 }
 
-/// <summary>Shared portable constant/type compatibility used by expression and site analysis.</summary>
-internal static class ExprValueContractSemantics
+/// <summary>Shared portable constant/type compatibility used by expression, execution, and site analysis.</summary>
+internal static class ValueContractSemantics
 {
     const double Int64InclusiveLowerBound = -9_223_372_036_854_775_808d;
     const double Int64ExclusiveUpperBound = 9_223_372_036_854_775_808d;
 
     /// <summary>Evaluates a non-null, present constant against every locally resolvable part of a portable type.</summary>
-    /// <param name="type">Portable type expected by the expression boundary.</param>
+    /// <param name="type">Portable type expected by the value contract.</param>
     /// <param name="value">Constant value to evaluate.</param>
     /// <returns>
     /// Compatible or incompatible when local semantics decide the result; otherwise unknown when external type
     /// resolution is required.
     /// </returns>
-    public static ExprConstantCompatibility Evaluate(TypeRef? type, ObservationValue value)
+    public static ValueConstantCompatibility Evaluate(TypeRef? type, ObservationValue value)
     {
         if (type is null)
-            return ExprConstantCompatibility.Unknown;
+            return ValueConstantCompatibility.Unknown;
         if (value.Kind is ObservationValueKind.Undefined or ObservationValueKind.Null)
-            return ExprConstantCompatibility.Incompatible;
+            return ValueConstantCompatibility.Incompatible;
 
         return type.Match(
-            onNamedTypeRef: static _ => ExprConstantCompatibility.Unknown,
-            onOpaqueRuntimeTypeRef: static _ => ExprConstantCompatibility.Unknown,
+            onNamedTypeRef: static _ => ValueConstantCompatibility.Unknown,
+            onOpaqueRuntimeTypeRef: static _ => ValueConstantCompatibility.Unknown,
             onScalarTypeRef: scalar => FromBoolean(MatchesScalar(scalar.Kind, value)),
             onEnumTypeRef: @enum => FromBoolean(
                 value.Kind == ObservationValueKind.String
@@ -50,59 +50,78 @@ internal static class ExprValueContractSemantics
             onJsonTypeRef: json => FromBoolean(MatchesJson(json.Kind, value)));
     }
 
-    static ExprConstantCompatibility EvaluateArray(ArrayTypeRef type, ObservationValue value)
+    static ValueConstantCompatibility EvaluateArray(ArrayTypeRef type, ObservationValue value)
     {
         if (value.Kind != ObservationValueKind.Array)
-            return ExprConstantCompatibility.Incompatible;
+            return ValueConstantCompatibility.Incompatible;
 
-        var result = ExprConstantCompatibility.Compatible;
+        var result = ValueConstantCompatibility.Compatible;
         foreach (var item in value.EnumerateArray())
         {
             var itemResult = Evaluate(type.ElementType, item);
-            if (itemResult == ExprConstantCompatibility.Incompatible)
+            if (itemResult == ValueConstantCompatibility.Incompatible)
                 return itemResult;
-            if (itemResult == ExprConstantCompatibility.Unknown)
-                result = ExprConstantCompatibility.Unknown;
+            if (itemResult == ValueConstantCompatibility.Unknown)
+                result = ValueConstantCompatibility.Unknown;
         }
 
         return result;
     }
 
-    static ExprConstantCompatibility EvaluateObject(ObjectTypeRef type, ObservationValue value)
+    static ValueConstantCompatibility EvaluateObject(ObjectTypeRef type, ObservationValue value)
     {
         if (value.Kind != ObservationValueKind.Object || value.Fields is null)
-            return ExprConstantCompatibility.Incompatible;
+            return ValueConstantCompatibility.Incompatible;
 
-        var result = ExprConstantCompatibility.Compatible;
+        var result = ValueConstantCompatibility.Compatible;
         foreach (var field in type.Fields)
         {
             if (field is null
                 || string.IsNullOrWhiteSpace(field.Name)
-                || field.Type is null)
+                || field.Type is null
+                || !Enum.IsDefined(field.Cardinality)
+                || !Enum.IsDefined(field.Presence)
+                || !Enum.IsDefined(field.Nullability))
             {
-                result = ExprConstantCompatibility.Unknown;
+                result = ValueConstantCompatibility.Unknown;
                 continue;
             }
             if (!value.Fields.TryGetValue(field.Name, out var fieldValue))
             {
                 if (field.Presence == FieldPresence.Required)
-                    return ExprConstantCompatibility.Incompatible;
+                    return ValueConstantCompatibility.Incompatible;
                 continue;
             }
 
-            var fieldResult = Evaluate(field.Type, fieldValue);
-            if (fieldResult == ExprConstantCompatibility.Incompatible)
+            if (fieldValue.Kind == ObservationValueKind.Undefined)
+            {
+                if (field.Presence == FieldPresence.Optional)
+                    continue;
+                return ValueConstantCompatibility.Incompatible;
+            }
+            if (fieldValue.Kind == ObservationValueKind.Null)
+            {
+                if (field.Nullability == FieldNullability.Nullable)
+                    continue;
+                return ValueConstantCompatibility.Incompatible;
+            }
+
+            var effectiveType = field.Cardinality == FieldCardinality.Many
+                ? new ArrayTypeRef(field.Type)
+                : field.Type;
+            var fieldResult = Evaluate(effectiveType, fieldValue);
+            if (fieldResult == ValueConstantCompatibility.Incompatible)
                 return fieldResult;
-            if (fieldResult == ExprConstantCompatibility.Unknown)
-                result = ExprConstantCompatibility.Unknown;
+            if (fieldResult == ValueConstantCompatibility.Unknown)
+                result = ValueConstantCompatibility.Unknown;
         }
 
         return result;
     }
 
-    static ExprConstantCompatibility FromBoolean(bool value) => value
-        ? ExprConstantCompatibility.Compatible
-        : ExprConstantCompatibility.Incompatible;
+    static ValueConstantCompatibility FromBoolean(bool value) => value
+        ? ValueConstantCompatibility.Compatible
+        : ValueConstantCompatibility.Incompatible;
 
     static bool MatchesScalar(ScalarTypeKind kind, ObservationValue value) => kind switch
     {

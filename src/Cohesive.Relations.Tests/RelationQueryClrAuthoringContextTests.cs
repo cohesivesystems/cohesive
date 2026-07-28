@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Reflection;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Cohesive.Model.Serialization;
 
@@ -126,6 +127,106 @@ public sealed class RelationQueryClrAuthoringContextTests
         Assert.Throws<ArgumentException>(() => context.Shape<ImportedLoad>(
             document,
             new QualifiedShapeId(graphId, new ShapeId("missing"))));
+    }
+
+    [Fact]
+    public void ImportedInlineObjectPath_PreservesManyValuedFieldCardinality()
+    {
+        var graphId = new GraphId("imported/inline-collection/v1");
+        var qualified = new QualifiedShapeId(graphId, new ShapeId("collection-root"));
+        var document = ShapeGraphDocument.FromGraph(new ShapeGraph(
+            graphId,
+            [
+                new Shape(
+                    qualified.ShapeId,
+                    [
+                        new FieldDefinition(
+                            new("container"),
+                            new ObjectTypeRef(
+                            [
+                                new ObjectFieldTypeDef(
+                                    name: "values",
+                                    type: new ScalarTypeRef(ScalarTypeKind.String),
+                                    cardinality: FieldCardinality.Many)
+                            ]))
+                    ])
+            ]));
+        var values = Property<ImportedInlineCollectionRoot>(nameof(ImportedInlineCollectionRoot.Values));
+        var context = new RelationQueryClrAuthoringContext();
+
+        var root = context.Shape<ImportedInlineCollectionRoot>(
+            document,
+            qualified,
+            new Dictionary<PropertyInfo, FieldPath>
+            {
+                [values] = FieldPath.Parse("container.values")
+            });
+
+        Assert.Equal(FieldPath.Parse("container.values"), root.ResolveMemberPath([values]));
+        var rootType = Assert.IsType<ObjectTypeRef>(root.Type);
+        var containerType = Assert.IsType<ObjectTypeRef>(Assert.Single(rootType.Fields).Type);
+        Assert.Equal(FieldCardinality.Many, Assert.Single(containerType.Fields).Cardinality);
+    }
+
+    [Fact]
+    public void ImportedInlineObjectPath_RejectsNullableFieldForNonNullableClrMember()
+    {
+        var graphId = new GraphId("imported/inline-nullability/v1");
+        var qualified = new QualifiedShapeId(graphId, new ShapeId("required-root"));
+        var document = ShapeGraphDocument.FromGraph(new ShapeGraph(
+            graphId,
+            [
+                new Shape(
+                    qualified.ShapeId,
+                    [
+                        new FieldDefinition(
+                            new("container"),
+                            new ObjectTypeRef(
+                            [
+                                new ObjectFieldTypeDef(
+                                    name: "name",
+                                    type: new ScalarTypeRef(ScalarTypeKind.String),
+                                    nullability: FieldNullability.Nullable)
+                            ]))
+                    ])
+            ]));
+        var name = Property<ImportedInlineRequiredRoot>(nameof(ImportedInlineRequiredRoot.Name));
+        var context = new RelationQueryClrAuthoringContext();
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            context.Shape<ImportedInlineRequiredRoot>(
+                document,
+                qualified,
+                new Dictionary<PropertyInfo, FieldPath>
+                {
+                    [name] = FieldPath.Parse("container.name")
+                }));
+
+        Assert.Contains("Nullable", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ImportedShape_RetainsNestedClosedEmptyObjectType()
+    {
+        var graphId = new GraphId("imported/empty-object/v1");
+        var qualified = new QualifiedShapeId(graphId, new ShapeId("empty-root"));
+        var document = ShapeGraphDocument.FromGraph(new ShapeGraph(
+            graphId,
+            [
+                new Shape(
+                    qualified.ShapeId,
+                    [
+                        new FieldDefinition(
+                            new("Payload"),
+                            new ObjectTypeRef([]))
+                    ])
+            ]));
+        var context = new RelationQueryClrAuthoringContext();
+
+        var root = context.Shape<ImportedEmptyRoot>(document, qualified);
+
+        var rootType = Assert.IsType<ObjectTypeRef>(root.Type);
+        Assert.Empty(Assert.IsType<ObjectTypeRef>(Assert.Single(rootType.Fields).Type).Fields);
     }
 
     [Fact]
@@ -323,6 +424,12 @@ public sealed class RelationQueryClrAuthoringContextTests
     sealed record ImportedLoad(ImportedCustomer Customer);
 
     sealed record ImportedCustomer(string Name);
+
+    sealed record ImportedInlineCollectionRoot(IReadOnlyList<string> Values);
+
+    sealed record ImportedInlineRequiredRoot(string Name);
+
+    sealed record ImportedEmptyRoot(JsonObject Payload);
 
     enum ImportStatus
     {

@@ -184,7 +184,7 @@ public static class ExprAnalyzer
                 if (binding.Availability == ExprBindingAvailability.MayBeAbsent)
                 {
                     unresolvedValue = WithPresence(
-                        unresolvedValue ?? new ExprValueContract(),
+                        unresolvedValue ?? new ValueContract(),
                         FieldPresence.Optional);
                 }
 
@@ -559,7 +559,7 @@ public static class ExprAnalyzer
                 var currentItem = scopedArgument.SourceArgumentIndex < argumentResults.Length
                     ? GetCollectionElement(argumentResults[scopedArgument.SourceArgumentIndex].Value)
                     : null;
-                var scoped = scope.WithCurrentItem(currentItem ?? new ExprValueContract());
+                var scoped = scope.WithCurrentItem(currentItem ?? new ValueContract());
                 argumentResults[scopedArgument.ArgumentIndex] = AnalyzeNode(
                     arguments[scopedArgument.ArgumentIndex],
                     scoped,
@@ -639,13 +639,13 @@ public static class ExprAnalyzer
             var declaredType = declaredResult.Value.GetEffectiveType();
             var constantCompatibility = semanticResult.ConstantValue is { } constant
                 && declaredType is not null
-                    ? ExprValueContractSemantics.Evaluate(declaredType, constant)
-                    : ExprConstantCompatibility.Unknown;
-            var constantMatches = constantCompatibility == ExprConstantCompatibility.Compatible;
+                    ? ValueContractSemantics.Evaluate(declaredType, constant)
+                    : ValueConstantCompatibility.Unknown;
+            var constantMatches = constantCompatibility == ValueConstantCompatibility.Compatible;
             var constantMustMatch = allowDeclaredRefinement
                 && semanticResult.ConstantValue is { Kind: not ObservationValueKind.Null and not ObservationValueKind.Undefined }
                 && declaredType is not null
-                && constantCompatibility != ExprConstantCompatibility.Unknown;
+                && constantCompatibility != ValueConstantCompatibility.Unknown;
             var categoryMatches = constantMatches
                 || ExprResultCategorySemantics.Satisfies(declaredResult.Category, semanticResult.Category);
             var typeMatches = allowDeclaredRefinement
@@ -681,7 +681,7 @@ public static class ExprAnalyzer
                 var declaredValue = declaredResult.Value;
                 return new(
                     reconciledCategory,
-                    new ExprValueContract(
+                    new ValueContract(
                         declaredValue.Type,
                         declaredValue.Shape,
                         declaredValue.Cardinality,
@@ -690,8 +690,7 @@ public static class ExprAnalyzer
                             : declaredValue.Presence,
                         semanticValue?.Nullability == FieldNullability.Nullable
                             ? FieldNullability.Nullable
-                            : declaredValue.Nullability,
-                        declaredValue.ShapeDefinition),
+                            : declaredValue.Nullability),
                     semanticResult.ConstantValue);
             }
 
@@ -706,7 +705,7 @@ public static class ExprAnalyzer
             {
                 return new(
                     reconciledCategory,
-                    new ExprValueContract(
+                    new ValueContract(
                         declaredValueWithType.Type,
                         declaredValueWithType.Shape,
                         declaredValueWithType.Cardinality,
@@ -715,8 +714,7 @@ public static class ExprAnalyzer
                             : declaredValueWithType.Presence,
                         semanticResult.Value.Nullability == FieldNullability.Nullable
                             ? FieldNullability.Nullable
-                            : declaredValueWithType.Nullability,
-                        declaredValueWithType.ShapeDefinition),
+                            : declaredValueWithType.Nullability),
                     semanticResult.ConstantValue);
             }
 
@@ -732,7 +730,7 @@ public static class ExprAnalyzer
                 declaredResult.Category == ExprResultCategory.Any
                     ? semanticResult.Category
                     : declaredResult.Category,
-                new ExprValueContract(
+                new ValueContract(
                     declaredValue.Type,
                     declaredValue.Shape ?? semanticResult.Value?.Shape,
                     declaredValue.Cardinality,
@@ -741,8 +739,7 @@ public static class ExprAnalyzer
                         : declaredValue.Presence,
                     semanticResult.Value?.Nullability == FieldNullability.Nullable
                         ? FieldNullability.Nullable
-                        : declaredValue.Nullability,
-                    declaredValue.ShapeDefinition ?? semanticResult.Value?.ShapeDefinition),
+                        : declaredValue.Nullability),
                 semanticResult.ConstantValue);
         }
 
@@ -832,12 +829,12 @@ public static class ExprAnalyzer
             var actualType = result.Value?.GetEffectiveType();
             var constantCompatibility = expectedType is not null
                 && result.ConstantValue is { } constant
-                    ? ExprValueContractSemantics.Evaluate(expectedType, constant)
-                    : (ExprConstantCompatibility?)null;
+                    ? ValueContractSemantics.Evaluate(expectedType, constant)
+                    : (ValueConstantCompatibility?)null;
             var constantSatisfiesExpectedType =
-                constantCompatibility == ExprConstantCompatibility.Compatible;
+                constantCompatibility == ValueConstantCompatibility.Compatible;
             var constantCouldSatisfyExpectedType = constantCompatibility is
-                ExprConstantCompatibility.Compatible or ExprConstantCompatibility.Unknown;
+                ValueConstantCompatibility.Compatible or ValueConstantCompatibility.Unknown;
             if (!constantSatisfiesExpectedType
                 && !ExprResultCategorySemantics.Satisfies(result.Category, expectation.Category))
             {
@@ -957,9 +954,9 @@ public static class ExprAnalyzer
         ];
 
         static bool TryResolvePath(
-            ExprValueContract root,
+            ValueContract root,
             FieldPath path,
-            out ExprValueContract? value,
+            out ValueContract? value,
             out bool definitelyMissing)
         {
             value = root;
@@ -972,18 +969,6 @@ public static class ExprAnalyzer
                 var type = value?.GetEffectiveType();
                 switch (segment.Kind)
                 {
-                    case SegmentKind.Field when value?.ShapeDefinition is { } shapeDefinition:
-                    {
-                        if (!shapeDefinition.TryGetField(segment.Segment!, out var shapeField))
-                        {
-                            value = null;
-                            definitelyMissing = true;
-                            return false;
-                        }
-
-                        value = ComposePathValue(value!, ExprValueContract.FromField(shapeField));
-                        break;
-                    }
                     case SegmentKind.Field when type is ObjectTypeRef objectType:
                     {
                         var field = objectType.Fields.FirstOrDefault(candidate =>
@@ -995,9 +980,11 @@ public static class ExprAnalyzer
                             return false;
                         }
 
-                        ExprValueContract next = field.Type is ArrayTypeRef array
-                            ? new(array.ElementType, cardinality: FieldCardinality.Many, presence: field.Presence)
-                            : new(field.Type, presence: field.Presence);
+                        ValueContract next = new(
+                            field.Type,
+                            cardinality: field.Cardinality,
+                            presence: field.Presence,
+                            nullability: field.Nullability);
                         value = ComposePathValue(value!, next);
                         break;
                     }
@@ -1024,7 +1011,7 @@ public static class ExprAnalyzer
             return value is not null;
         }
 
-        static ExprValueContract? PreserveWeakGuarantees(ExprValueContract? value)
+        static ValueContract? PreserveWeakGuarantees(ValueContract? value)
         {
             if (value is null
                 || value.Presence == FieldPresence.Required
@@ -1038,7 +1025,7 @@ public static class ExprAnalyzer
                 nullability: value.Nullability);
         }
 
-        static ExprValueContract? GetCollectionElement(ExprValueContract? collection)
+        static ValueContract? GetCollectionElement(ValueContract? collection)
         {
             if (collection is null)
                 return null;
@@ -1046,14 +1033,12 @@ public static class ExprAnalyzer
             {
                 return new(
                     collection.Type,
-                    collection.Shape,
-                    shapeDefinition: collection.ShapeDefinition);
+                    collection.Shape);
             }
             return collection.GetEffectiveType() is ArrayTypeRef array
                 ? new(
                     array.ElementType,
-                    collection.Shape,
-                    shapeDefinition: collection.ShapeDefinition)
+                    collection.Shape)
                 : null;
         }
 
@@ -1068,7 +1053,7 @@ public static class ExprAnalyzer
 
             var trueType = ifTrue.Value.GetEffectiveType();
             var falseType = ifFalse.Value.GetEffectiveType();
-            ExprValueContract basis;
+            ValueContract basis;
             if (trueType == falseType)
             {
                 basis = ifTrue.Value;
@@ -1083,7 +1068,7 @@ public static class ExprAnalyzer
             }
             else
             {
-                var unknown = new ExprValueContract(
+                var unknown = new ValueContract(
                     presence: ifTrue.Value.Presence == FieldPresence.Optional
                         || ifFalse.Value.Presence == FieldPresence.Optional
                             ? FieldPresence.Optional
@@ -1104,14 +1089,7 @@ public static class ExprAnalyzer
                     : ifTrue.Value.Shape == ifFalse.Value.Shape
                         ? ifTrue.Value.Shape
                         : null;
-            var shapeDefinition = trueIsNullish && !falseIsNullish
-                ? ifFalse.Value.ShapeDefinition
-                : falseIsNullish && !trueIsNullish
-                    ? ifTrue.Value.ShapeDefinition
-                    : ifTrue.Value.ShapeDefinition == ifFalse.Value.ShapeDefinition
-                        ? ifTrue.Value.ShapeDefinition
-                        : null;
-            var value = new ExprValueContract(
+            var value = new ValueContract(
                 basis.Type,
                 shape,
                 basis.Cardinality,
@@ -1122,8 +1100,7 @@ public static class ExprAnalyzer
                 ifTrue.Value.Nullability == FieldNullability.Nullable
                     || ifFalse.Value.Nullability == FieldNullability.Nullable
                         ? FieldNullability.Nullable
-                        : FieldNullability.NonNullable,
-                shapeDefinition);
+                        : FieldNullability.NonNullable);
             var constant = ifTrue.ConstantValue is { } trueConstant
                 && ifFalse.ConstantValue is { } falseConstant
                 && trueConstant.Equals(falseConstant)
@@ -1137,17 +1114,16 @@ public static class ExprAnalyzer
             };
         }
 
-        static ExprValueContract WithPresence(ExprValueContract value, FieldPresence presence) => new(
+        static ValueContract WithPresence(ValueContract value, FieldPresence presence) => new(
             value.Type,
             value.Shape,
             value.Cardinality,
             presence,
-            value.Nullability,
-            value.ShapeDefinition);
+            value.Nullability);
 
-        static ExprValueContract ComposePathValue(
-            ExprValueContract parent,
-            ExprValueContract child) => new(
+        static ValueContract ComposePathValue(
+            ValueContract parent,
+            ValueContract child) => new(
             child.Type,
             child.Shape,
             child.Cardinality,
@@ -1156,8 +1132,7 @@ public static class ExprAnalyzer
                 : FieldPresence.Required,
             parent.Nullability == FieldNullability.Nullable || child.Nullability == FieldNullability.Nullable
                 ? FieldNullability.Nullable
-                : FieldNullability.NonNullable,
-            child.ShapeDefinition);
+                : FieldNullability.NonNullable);
 
         static NodeResult CollectionResult(
             IReadOnlyList<NodeResult> argumentResults,
@@ -1173,8 +1148,7 @@ public static class ExprAnalyzer
             {
                 var selectorType = selector.GetEffectiveType();
                 if (selectorType is null
-                    && selector.Shape is null
-                    && selector.ShapeDefinition is null)
+                    && selector.Shape is null)
                 {
                     return new(ExprResultCategory.Collection, null);
                 }
@@ -1184,8 +1158,7 @@ public static class ExprAnalyzer
                     new(
                         selectorType,
                         selector.Shape,
-                        cardinality: FieldCardinality.Many,
-                        shapeDefinition: selector.ShapeDefinition));
+                        cardinality: FieldCardinality.Many));
             }
 
             return new(ExprResultCategory.Collection, null);
@@ -1243,13 +1216,13 @@ public static class ExprAnalyzer
 
         readonly record struct NodeResult(
             ExprResultCategory Category,
-            ExprValueContract? Value,
+            ValueContract? Value,
             ObservationValue? ConstantValue = null)
         {
             public static NodeResult Unknown { get; } = new(ExprResultCategory.Any, null);
 
             public static NodeResult FromValue(
-                ExprValueContract value,
+                ValueContract value,
                 ObservationValue? constantValue = null) =>
                 new(ExprResultCategorySemantics.Classify(value), value, constantValue);
         }

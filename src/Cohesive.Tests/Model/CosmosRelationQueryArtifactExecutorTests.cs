@@ -1327,7 +1327,7 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
         var identity = Assert.IsType<CosmosRelationQueryResultIdentityBinding>(artifact.ResultIdentity);
         CosmosRelationQueryResultIdentityBinding changedContract = new(
             identity.Alias,
-            new ExprValueContract(new ScalarTypeRef(ScalarTypeKind.Bool)),
+            new ValueContract(new ScalarTypeRef(ScalarTypeKind.Bool)),
             identity.Encoding);
         CosmosRelationQueryResultIdentityBinding changedEncoding = new(
             identity.Alias,
@@ -1919,19 +1919,19 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
             new GraphId("artifact-executor-tests/v1"),
             new ShapeId(shape));
 
-        static ExprValueContract Required(ScalarTypeKind kind) => new(new ScalarTypeRef(kind));
+        static ValueContract Required(ScalarTypeKind kind) => new(new ScalarTypeRef(kind));
 
-        static ExprValueContract Optional(ScalarTypeKind kind) => new(
+        static ValueContract Optional(ScalarTypeKind kind) => new(
             new ScalarTypeRef(kind),
             presence: FieldPresence.Optional);
 
-        static ExprValueContract Nullable(ScalarTypeKind kind) => new(
+        static ValueContract Nullable(ScalarTypeKind kind) => new(
             new ScalarTypeRef(kind),
             nullability: FieldNullability.Nullable);
 
         sealed record ResultFieldSpec(
             FieldPath Path,
-            ExprValueContract Contract,
+            ValueContract Contract,
             CosmosRelationQueryResultValueEncoding Encoding);
     }
 

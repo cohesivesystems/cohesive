@@ -1280,6 +1280,87 @@ public sealed class RelationQueryStaticCompilerTests
     }
 
     [Fact]
+    public void Compile_InlineManyObjectFieldTreatsElementAssignmentsAsCompleteCoverage()
+    {
+        var sourceGraphId = new GraphId("inline-many-source/v1");
+        var targetGraphId = new GraphId("inline-many-target/v1");
+        var sourceShapeId = new ShapeId("FlatCode");
+        var targetShapeId = new ShapeId("InlineDto");
+        var stringType = new ScalarTypeRef(ScalarTypeKind.String);
+        var sourceCodePath = FieldPath.FromField("Code");
+        var payloadPath = FieldPath.FromField("Payload");
+        var itemCodePath = new FieldPath(
+        [
+            FieldPathSegment.ForField("Payload"),
+            FieldPathSegment.ForField("Items"),
+            FieldPathSegment.Element(),
+            FieldPathSegment.ForField("Code")
+        ]);
+        var sourceShape = new QualifiedShapeId(sourceGraphId, sourceShapeId);
+        var targetShape = new QualifiedShapeId(targetGraphId, targetShapeId);
+        var sourceDocument = ShapeGraphDocument.FromGraph(new ShapeGraph(
+            sourceGraphId,
+            [
+                new Shape(
+                    sourceShapeId,
+                    [new FieldDefinition(new FieldName("Code"), stringType)])
+            ]));
+        var targetDocument = ShapeGraphDocument.FromGraph(new ShapeGraph(
+            targetGraphId,
+            [
+                new Shape(
+                    targetShapeId,
+                    [
+                        new FieldDefinition(
+                            new FieldName("Payload"),
+                            new ObjectTypeRef(
+                            [
+                                new ObjectFieldTypeDef(
+                                    name: "Items",
+                                    type: new ObjectTypeRef(
+                                    [
+                                        new ObjectFieldTypeDef("Code", stringType)
+                                    ]),
+                                    cardinality: FieldCardinality.Many)
+                            ]))
+                    ])
+            ]));
+        var sourceBinding = new ValueBindingId("flat");
+        var resultBinding = new ValueBindingId("dto");
+        var sourceNode = new QueryNodeId("flat-source");
+        var projectNode = new QueryNodeId("inline-project");
+        var definition = new Cohesive.Relations.IR.RelationDefinition(
+            new RelationId("inline-many"),
+            new RelationName("InlineMany"),
+            new LogicalQueryDefinition(
+            [
+                new SourceQueryNode(sourceNode, sourceBinding, sourceShape),
+                new ProjectQueryNode(
+                    projectNode,
+                    sourceNode,
+                    resultBinding,
+                    targetShape,
+                    [
+                        new ProjectionAssignment(
+                            new QueryAssignmentId("assign-item-code"),
+                            itemCodePath,
+                            Expr.Field(sourceBinding, sourceCodePath))
+                    ])
+            ]),
+            sourceBinding,
+            new RelationOutputDefinition(projectNode, targetShape, RelationOutputMode.OnePerRoot));
+
+        var plan = SuccessfulPlan(RelationQueryStaticCompiler.Compile(new(
+            RelationQueryDocument.FromDefinition(definition),
+            [sourceDocument, targetDocument])));
+
+        var payloadOutput = FieldOutput(plan, payloadPath);
+        Assert.Equal(
+            [(sourceShape, sourceCodePath)],
+            LineageFields(plan, payloadOutput, RelationQueryRequirementEffect.Value).ToArray());
+    }
+
+    [Fact]
     public void Compile_InvalidDemandEmitsStableDiagnosticAndNoPlan()
     {
         var result = Compile(

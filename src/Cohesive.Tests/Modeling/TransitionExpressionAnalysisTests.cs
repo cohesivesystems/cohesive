@@ -31,20 +31,20 @@ public sealed class TransitionExpressionAnalysisTests
         Assert.Empty(computed.Site.Scope.Parameters);
         Assert.Empty(invariant.Site.Scope.Parameters);
 
-        var amountContract = Assert.IsType<ExprValueContract>(amountUpdate.Site.Expectation.Value);
+        var amountContract = Assert.IsType<ValueContract>(amountUpdate.Site.Expectation.Value);
         Assert.IsType<ScalarTypeRef>(amountContract.GetEffectiveType());
         Assert.Equal(FieldCardinality.Single, amountContract.Cardinality);
         Assert.Equal(FieldPresence.Required, amountContract.Presence);
         Assert.Equal(FieldNullability.NonNullable, amountContract.Nullability);
 
-        var tagsContract = Assert.IsType<ExprValueContract>(tagsUpdate.Site.Expectation.Value);
+        var tagsContract = Assert.IsType<ValueContract>(tagsUpdate.Site.Expectation.Value);
         var tagsType = Assert.IsType<ArrayTypeRef>(tagsContract.GetEffectiveType());
         Assert.Equal(ScalarTypeKind.String, Assert.IsType<ScalarTypeRef>(tagsType.ElementType).Kind);
         Assert.Equal(FieldCardinality.Many, tagsContract.Cardinality);
         Assert.Equal(FieldPresence.Optional, tagsContract.Presence);
         Assert.Equal(FieldNullability.Nullable, tagsContract.Nullability);
 
-        var computedContract = Assert.IsType<ExprValueContract>(computed.Site.Expectation.Value);
+        var computedContract = Assert.IsType<ValueContract>(computed.Site.Expectation.Value);
         Assert.Equal(ScalarTypeKind.Decimal, Assert.IsType<ScalarTypeRef>(computedContract.Type).Kind);
         Assert.Equal(ExprResultCategory.Boolean, invariant.Site.Expectation.Category);
         Assert.True(precondition.Site.Scope.HasAmbientCapability(ExprCapabilities.EntityIdentity));

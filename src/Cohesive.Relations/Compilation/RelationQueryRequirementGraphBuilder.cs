@@ -2101,7 +2101,9 @@ sealed class RelationQueryRequirementGraphBuilder
                 [
                     .. objectType.Fields.Select(static field => (
                         field.Name,
-                        field.Type,
+                        field.Cardinality == FieldCardinality.Many
+                            ? new ArrayTypeRef(field.Type)
+                            : field.Type,
                         field.Presence))
                 ],
                 NamedTypeRef named
@@ -2230,7 +2232,7 @@ sealed class RelationQueryRequirementGraphBuilder
     bool TryResolveField(
         QualifiedShapeId shape,
         FieldPath path,
-        out ExprValueContract? contract)
+        out ValueContract? contract)
     {
         if (shapeResolver.TryGetTargetExpectation(shape, path, out var expectation)
             && expectation.Value is { } value)
@@ -2243,7 +2245,7 @@ sealed class RelationQueryRequirementGraphBuilder
         return false;
     }
 
-    ExprValueContract? GetValueContract(RelationQueryFieldReference field) =>
+    ValueContract? GetValueContract(RelationQueryFieldReference field) =>
         TryResolveField(field.Shape, field.Path, out var contract) ? contract : null;
 
     bool IsOptionalField(QualifiedShapeId shape, FieldPath path) =>

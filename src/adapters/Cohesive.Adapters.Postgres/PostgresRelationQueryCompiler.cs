@@ -1913,7 +1913,7 @@ public sealed class PostgresRelationQueryCompiler
         CompiledExpression CompileSum(
             CompiledExpression value,
             PostgresSqlExpression? filter,
-            ExprValueContract contract,
+            ValueContract contract,
             QueryAssignmentId assignment,
             QueryNodeId node)
         {
@@ -1938,7 +1938,7 @@ public sealed class PostgresRelationQueryCompiler
         CompiledExpression CompileAverage(
             CompiledExpression value,
             PostgresSqlExpression? filter,
-            ExprValueContract contract,
+            ValueContract contract,
             QueryAssignmentId assignment,
             QueryNodeId node,
             bool groupedInputIsNonEmpty)
@@ -1966,7 +1966,7 @@ public sealed class PostgresRelationQueryCompiler
             PostgresSqlAggregateFunction function,
             CompiledExpression value,
             PostgresSqlExpression? filter,
-            ExprValueContract contract,
+            ValueContract contract,
             QueryAssignmentId assignment,
             QueryNodeId node,
             bool groupedInputIsNonEmpty)
@@ -2019,7 +2019,7 @@ public sealed class PostgresRelationQueryCompiler
         }
 
         static void RequireAggregateAbsence(
-            ExprValueContract contract,
+            ValueContract contract,
             QueryNodeId node,
             string operation,
             bool groupedInputIsNonEmpty)
@@ -2036,7 +2036,7 @@ public sealed class PostgresRelationQueryCompiler
                 node);
         }
 
-        ExprValueContract RequireAggregateResultContract(
+        ValueContract RequireAggregateResultContract(
             RelationQueryAggregateAssignmentExecution assignment,
             QueryNodeId node)
         {
@@ -2058,7 +2058,7 @@ public sealed class PostgresRelationQueryCompiler
         bool TryResolveShapeFieldContract(
             QualifiedShapeId shapeId,
             FieldPath path,
-            out ExprValueContract contract)
+            out ValueContract contract)
         {
             contract = null!;
             var graph = request.Plan.Provenance.ShapeDocuments
@@ -2071,7 +2071,7 @@ public sealed class PostgresRelationQueryCompiler
                 return false;
             }
 
-            ExprValueContract? current = null;
+            ValueContract? current = null;
             for (var index = 0; index < path.Segments.Length; index++)
             {
                 var segment = path.Segments[index];
@@ -2084,7 +2084,7 @@ public sealed class PostgresRelationQueryCompiler
                         return false;
                     }
 
-                    current = ExprValueContract.FromField(field);
+                    current = ValueContract.FromField(field);
                     continue;
                 }
 
@@ -2100,9 +2100,9 @@ public sealed class PostgresRelationQueryCompiler
 
         static bool TryNavigateShapeField(
             ShapeGraph graph,
-            ExprValueContract current,
+            ValueContract current,
             FieldPathSegment segment,
-            out ExprValueContract? next)
+            out ValueContract? next)
         {
             next = null;
             var effectiveType = current.GetEffectiveType();
@@ -2133,9 +2133,11 @@ public sealed class PostgresRelationQueryCompiler
                             return false;
                         }
 
-                        ExprValueContract child = field.Type is ArrayTypeRef array
-                            ? new(array.ElementType, cardinality: FieldCardinality.Many, presence: field.Presence)
-                            : new(field.Type, presence: field.Presence);
+                        ValueContract child = new(
+                            field.Type,
+                            cardinality: field.Cardinality,
+                            presence: field.Presence,
+                            nullability: field.Nullability);
                         next = ComposeShapePathValue(current, child);
                         return true;
                     }
@@ -2156,9 +2158,9 @@ public sealed class PostgresRelationQueryCompiler
             }
         }
 
-        static ExprValueContract ComposeShapePathValue(
-            ExprValueContract parent,
-            ExprValueContract child) => new(
+        static ValueContract ComposeShapePathValue(
+            ValueContract parent,
+            ValueContract child) => new(
             child.Type,
             child.Shape,
             child.Cardinality,
@@ -2167,8 +2169,7 @@ public sealed class PostgresRelationQueryCompiler
                 : FieldPresence.Required,
             parent.Nullability == FieldNullability.Nullable || child.Nullability == FieldNullability.Nullable
                 ? FieldNullability.Nullable
-                : FieldNullability.NonNullable,
-            child.ShapeDefinition);
+                : FieldNullability.NonNullable);
 
         PostgresSqlExpression CompileTemporalPredicate(
             RelationQueryTemporalJoinExecution temporal,
@@ -3052,7 +3053,7 @@ public sealed class PostgresRelationQueryCompiler
                 $"Canonical {operation} requires an exact numeric value.", node);
         }
 
-        ExprValueContract Analyze(
+        ValueContract Analyze(
             Expr expression,
             RelationQueryExpressionSiteAnalysis site,
             string operand)
@@ -3077,7 +3078,7 @@ public sealed class PostgresRelationQueryCompiler
                 site.Node ?? branch.Node);
         }
 
-        static ExprValueContract RequireKnown(
+        static ValueContract RequireKnown(
             RelationQueryExpressionSiteAnalysis site,
             QueryNodeId node,
             string operation) =>
@@ -3579,13 +3580,13 @@ public sealed class PostgresRelationQueryCompiler
             return [.. inputs.Select(static input => input!.Value)];
         }
 
-        static ExprValueContract RequireValueContract(RelationQueryFieldInput field) =>
+        static ValueContract RequireValueContract(RelationQueryFieldInput field) =>
             field.ValueContract
             ?? throw Fail(PostgresRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
                 $"Field input '{field.Id.Value}' has no known semantic value contract.", field.Producer, field.Id);
 
         static void ValidatePhysicalValue(
-            ExprValueContract contract,
+            ValueContract contract,
             PostgresRelationQueryFieldBinding physical,
             QueryNodeId node,
             RelationQueryInputId input)
@@ -3630,7 +3631,7 @@ public sealed class PostgresRelationQueryCompiler
             }
         }
 
-        static PostgresRelationQueryValueEncoding ResolveEncoding(ExprValueContract contract, QueryNodeId node)
+        static PostgresRelationQueryValueEncoding ResolveEncoding(ValueContract contract, QueryNodeId node)
         {
             if (contract.Cardinality != FieldCardinality.Single)
             {
@@ -3756,7 +3757,7 @@ public sealed class PostgresRelationQueryCompiler
             _ => fallback
         };
 
-        static bool IsRequiredNonNull(ExprValueContract? contract) => contract is
+        static bool IsRequiredNonNull(ValueContract? contract) => contract is
         {
             Presence: FieldPresence.Required,
             Nullability: FieldNullability.NonNullable
@@ -3767,10 +3768,10 @@ public sealed class PostgresRelationQueryCompiler
             PostgresRelationQueryTextSemantics? right) =>
             Equals(left, right) ? left : null;
 
-        static ExprValueContract IdentityContract(PostgresRelationQueryIdentityBinding identity) =>
+        static ValueContract IdentityContract(PostgresRelationQueryIdentityBinding identity) =>
             new(Type(identity.ScalarType), presence: FieldPresence.Required, nullability: FieldNullability.NonNullable);
 
-        static ExprValueContract ReferenceContract(PostgresRelationQueryRelationshipReferenceBinding reference) =>
+        static ValueContract ReferenceContract(PostgresRelationQueryRelationshipReferenceBinding reference) =>
             new(
                 Type(reference.ScalarType),
                 presence: reference.MissingValueEncoding == PostgresRelationQueryMissingValueEncoding.Prohibited
@@ -3795,7 +3796,7 @@ public sealed class PostgresRelationQueryCompiler
             _ => throw new ArgumentOutOfRangeException(nameof(scalar), scalar, "Unsupported PostgreSQL scalar type.")
         });
 
-        static ExprValueContract BooleanContract { get; } = new(
+        static ValueContract BooleanContract { get; } = new(
             new ScalarTypeRef(ScalarTypeKind.Bool),
             presence: FieldPresence.Required,
             nullability: FieldNullability.NonNullable);
@@ -3877,7 +3878,7 @@ public sealed class PostgresRelationQueryCompiler
 
     readonly record struct ScopedValue(
     string Alias,
-    ExprValueContract Contract,
+    ValueContract Contract,
     PostgresRelationQueryValueEncoding Encoding,
     PostgresRelationQueryTextSemantics? Text,
     PostgresRelationQueryOrderingCapability Ordering,
@@ -3914,7 +3915,7 @@ public sealed class PostgresRelationQueryCompiler
 
     readonly record struct CompiledExpression(
         PostgresSqlExpression Expression,
-        ExprValueContract Contract,
+        ValueContract Contract,
         PostgresRelationQueryValueEncoding Encoding,
         PostgresRelationQueryTextSemantics? Text,
         PostgresRelationQueryOrderingCapability Ordering,

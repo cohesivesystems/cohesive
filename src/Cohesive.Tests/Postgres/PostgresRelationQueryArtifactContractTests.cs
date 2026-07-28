@@ -15,7 +15,7 @@ public sealed class PostgresRelationQueryArtifactContractTests
     [Fact]
     public void ResultMetadata_RequiresExactEncodingAndSafePostgresAlias()
     {
-        var contract = new ExprValueContract(new ScalarTypeRef(ScalarTypeKind.String));
+        var contract = new ValueContract(new ScalarTypeRef(ScalarTypeKind.String));
 
         _ = new PostgresRelationQueryResultFieldBinding(
             "value",
@@ -56,7 +56,7 @@ public sealed class PostgresRelationQueryArtifactContractTests
         var domain = new PostgresRelationQueryTextOrderingDomainEvidence(
             "ck_runtime_text_ascii",
             "tests/postgres/runtime-text-domain/v1");
-        var textContract = new ExprValueContract(new ScalarTypeRef(ScalarTypeKind.String));
+        var textContract = new ValueContract(new ScalarTypeRef(ScalarTypeKind.String));
         var supplied = new PostgresRelationQuerySuppliedFieldBinding(
             1,
             new("field:value"),
@@ -74,7 +74,7 @@ public sealed class PostgresRelationQueryArtifactContractTests
             1,
             new("field:value"),
             ValueField,
-            new ExprValueContract(new ScalarTypeRef(ScalarTypeKind.Int32)),
+            new ValueContract(new ScalarTypeRef(ScalarTypeKind.Int32)),
             PostgresRelationQueryValueEncoding.Int32,
             domain));
     }

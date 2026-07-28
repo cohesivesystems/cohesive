@@ -124,7 +124,7 @@ public sealed record RelationQueryFieldInput : RelationQueryRequirementInput
         QueryNodeId producer,
         ValueBindingId binding,
         RelationQueryFieldReference field,
-        ExprValueContract? valueContract = null)
+        ValueContract? valueContract = null)
         : base(id)
     {
         if (string.IsNullOrWhiteSpace(producer.Value))
@@ -150,7 +150,7 @@ public sealed record RelationQueryFieldInput : RelationQueryRequirementInput
     public RelationQueryFieldReference Field { get; }
 
     /// <summary>Resolved semantic value contract, or <see langword="null"/> when unresolved.</summary>
-    public ExprValueContract? ValueContract { get; }
+    public ValueContract? ValueContract { get; }
 }
 
 /// <summary>

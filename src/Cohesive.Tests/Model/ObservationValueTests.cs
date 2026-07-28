@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Collections;
 using System.Collections.Immutable;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -130,29 +131,42 @@ public sealed class ObservationValueTests
     [Fact]
     public void TryGetProperty_OrdinalLookupDoesNotAllocate()
     {
+        const int iterations = 10_000;
         var observed = ObservationValue.FromObject(
             new Dictionary<string, ObservationValue>(StringComparer.OrdinalIgnoreCase)
             {
                 ["Value"] = ObservationValue.FromInt64(42)
             });
         long checksum = 0;
-        for (var index = 0; index < 16; index++)
+        for (var index = 0; index < iterations; index++)
         {
             if (observed.TryGetProperty("Value", out var warmup))
                 checksum += warmup.GetInt64();
         }
 
         _ = GC.GetAllocatedBytesForCurrentThread();
+        var allocated = MeasureOrdinalLookupAllocations(observed, iterations, out var measuredChecksum);
+        checksum += measuredChecksum;
+
+        GC.KeepAlive(checksum);
+        Assert.Equal(0, allocated);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static long MeasureOrdinalLookupAllocations(
+        ObservationValue observed,
+        int iterations,
+        out long checksum)
+    {
+        checksum = 0;
         var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < 10_000; index++)
+        for (var index = 0; index < iterations; index++)
         {
             if (observed.TryGetProperty("Value", out var value))
                 checksum += value.GetInt64();
         }
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
-        GC.KeepAlive(checksum);
-        Assert.Equal(0, allocated);
+        return GC.GetAllocatedBytesForCurrentThread() - before;
     }
 
     [Fact]

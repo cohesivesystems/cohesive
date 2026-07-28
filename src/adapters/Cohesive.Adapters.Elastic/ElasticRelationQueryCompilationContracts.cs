@@ -198,7 +198,7 @@ public sealed record ElasticRelationQueryResultFieldBinding
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="sourceKind"/> or <paramref name="encoding"/> is unsupported.</exception>
     public ElasticRelationQueryResultFieldBinding(
         RelationQueryFieldReference field,
-        ExprValueContract valueContract,
+        ValueContract valueContract,
         ElasticRelationQueryResultSourceKind sourceKind,
         ElasticRelationQueryResultValueEncoding encoding,
         string? physicalName = null,
@@ -293,7 +293,7 @@ public sealed record ElasticRelationQueryResultFieldBinding
     public RelationQueryFieldReference Field { get; }
 
     /// <summary>Exact semantic result value contract.</summary>
-    public ExprValueContract ValueContract { get; }
+    public ValueContract ValueContract { get; }
 
     /// <summary>Physical result source.</summary>
     public ElasticRelationQueryResultSourceKind SourceKind { get; }
@@ -310,7 +310,7 @@ public sealed record ElasticRelationQueryResultFieldBinding
     /// <summary>Producing canonical assignment, or <see langword="null"/>.</summary>
     public QueryAssignmentId? Assignment { get; }
 
-    static ElasticRelationQueryResultValueEncoding ExpectedValueEncoding(ExprValueContract contract) =>
+    static ElasticRelationQueryResultValueEncoding ExpectedValueEncoding(ValueContract contract) =>
         contract.GetEffectiveType() switch
         {
             ScalarTypeRef { Kind: ScalarTypeKind.Bool } =>
@@ -337,7 +337,7 @@ public sealed record ElasticRelationQueryParameterBinding
     /// <exception cref="ArgumentException">The contract does not match the declaration.</exception>
     public ElasticRelationQueryParameterBinding(
         QueryParameterDefinition definition,
-        ExprValueContract valueContract)
+        ValueContract valueContract)
     {
         Definition = Guard.RequireNotNull(definition);
         ValueContract = Guard.RequireNotNull(valueContract);
@@ -351,7 +351,7 @@ public sealed record ElasticRelationQueryParameterBinding
     public QueryParameterDefinition Definition { get; }
 
     /// <summary>Exact effective value contract.</summary>
-    public ExprValueContract ValueContract { get; }
+    public ValueContract ValueContract { get; }
 
     /// <summary>Stable canonical parameter identity.</summary>
     public QueryParameterId Parameter => Definition.Id;

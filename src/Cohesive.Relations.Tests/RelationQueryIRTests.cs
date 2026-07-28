@@ -964,6 +964,38 @@ public sealed class RelationQueryIRTests
     }
 
     [Fact]
+    public void DefinitionValidator_AcceptsAndRoundTripsEmptyInlineObjectTypes()
+    {
+        var query = CreateLoadSearchQuery();
+        var definition = query with
+        {
+            Body = query.Body with
+            {
+                Parameters =
+                [
+                    .. query.Body.Parameters,
+                    new QueryParameterDefinition(
+                        new QueryParameterId("empty_options"),
+                        new ObjectTypeRef([]),
+                        FieldPresence.Optional)
+                ]
+            }
+        };
+
+        var validation = RelationQueryDefinitionValidator.Validate(definition);
+        var document = RelationQueryDocument.FromDefinition(definition);
+        var roundTrip = Assert.IsType<IRQueryDefinition>(
+            RelationQueryJsonSerializer.Deserialize(
+                RelationQueryJsonSerializer.Serialize(document, indented: false)).Definition);
+        var emptyOptions = Assert.Single(
+            roundTrip.Body.Parameters,
+            static parameter => parameter.Id == new QueryParameterId("empty_options"));
+
+        Assert.True(validation.IsValid);
+        Assert.Empty(Assert.IsType<ObjectTypeRef>(emptyOptions.Type).Fields);
+    }
+
+    [Fact]
     public void DefinitionValidator_AllowsUnspecifiedDerivedResultMetadata()
     {
         var relation = CreateLoadSearchRelation();

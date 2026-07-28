@@ -133,17 +133,34 @@ static class JsonTypeSemantics
                         continue;
                     }
 
-                    if (fieldValue.Kind is ObservationValueKind.Null or ObservationValueKind.Undefined
-                        && field.Presence == FieldPresence.Required)
+                    if (fieldValue.Kind == ObservationValueKind.Undefined)
                     {
-                        return false;
+                        if (field.Presence == FieldPresence.Required)
+                            return false;
+                        continue;
                     }
 
-                    if (fieldValue.Kind is not (ObservationValueKind.Null or ObservationValueKind.Undefined)
-                        && !MatchesType(type: field.Type, value: fieldValue))
+                    if (fieldValue.Kind == ObservationValueKind.Null)
                     {
-                        return false;
+                        if (field.Nullability == FieldNullability.NonNullable)
+                            return false;
+                        continue;
                     }
+
+                    if (field.Cardinality == FieldCardinality.Many)
+                    {
+                        if (fieldValue.Kind != ObservationValueKind.Array)
+                            return false;
+                        foreach (var item in fieldValue.EnumerateArray())
+                        {
+                            if (!MatchesType(field.Type, item))
+                                return false;
+                        }
+                        continue;
+                    }
+
+                    if (!MatchesType(type: field.Type, value: fieldValue))
+                        return false;
                 }
 
                 return true;

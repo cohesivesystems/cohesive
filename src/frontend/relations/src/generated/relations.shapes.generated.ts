@@ -2393,7 +2393,9 @@ export type EntityTypeName = string;
 export interface ObjectFieldTypeDef {
   name: string;
   type: TypeRef;
+  cardinality: FieldCardinality;
   presence: FieldPresence;
+  nullability: FieldNullability;
   annotations: Record<string, AnnotationValue>;
 }
 
@@ -2564,6 +2566,30 @@ export const relationDraftUnresolvedReasonLabels: Record<RelationDraftUnresolved
   UnsupportedStructure: 'UnsupportedStructure',
   UnsupportedTransformation: 'UnsupportedTransformation',
   MultipleCandidates: 'MultipleCandidates',
+};
+
+export type FieldCardinality = 'Single' | 'Many';
+
+export const fieldCardinalities = {
+  single: 'Single',
+  many: 'Many',
+} as const satisfies Record<string, FieldCardinality>;
+
+export const fieldCardinalityLabels: Record<FieldCardinality, string> = {
+  Single: 'Single',
+  Many: 'Many',
+};
+
+export type FieldNullability = 'NonNullable' | 'Nullable';
+
+export const fieldNullabilities = {
+  nonNullable: 'NonNullable',
+  nullable: 'Nullable',
+} as const satisfies Record<string, FieldNullability>;
+
+export const fieldNullabilityLabels: Record<FieldNullability, string> = {
+  NonNullable: 'NonNullable',
+  Nullable: 'Nullable',
 };
 
 export interface RelationQueryLogicalBypass {

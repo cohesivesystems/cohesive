@@ -119,7 +119,7 @@ public sealed record RelationRequirementGapValueContext
 {
     internal RelationRequirementGapValueContext(
         RelationQueryFieldReference field,
-        ExprValueContract? expected,
+        ValueContract? expected,
         RelationQueryFieldEvidenceState observedState,
         ObservationValue? observedValue,
         string? evidenceReference)
@@ -135,7 +135,7 @@ public sealed record RelationRequirementGapValueContext
     public RelationQueryFieldReference Field { get; }
 
     /// <summary>Compiled value contract, or <see langword="null"/> when unresolved statically.</summary>
-    public ExprValueContract? Expected { get; }
+    public ValueContract? Expected { get; }
 
     /// <summary>Observed runtime field state.</summary>
     public RelationQueryFieldEvidenceState ObservedState { get; }

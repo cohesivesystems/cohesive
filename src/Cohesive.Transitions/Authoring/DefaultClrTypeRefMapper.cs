@@ -75,11 +75,17 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
             [
                 new(name: "Key",
                     type: MapInternal(clrType: keyType, nullability: keyNullability, mapPath: mapPath),
-                    presence: IsOptional(keyType, keyNullability) ? FieldPresence.Optional : FieldPresence.Required
+                    presence: IsOptional(keyType, keyNullability) ? FieldPresence.Optional : FieldPresence.Required,
+                    nullability: IsOptional(keyType, keyNullability)
+                        ? FieldNullability.Nullable
+                        : FieldNullability.NonNullable
                     ),
                 new(name: "Value",
                     type: MapInternal(clrType: valueType, nullability: valueNullability, mapPath: mapPath),
-                    presence: IsOptional(valueType, valueNullability) ? FieldPresence.Optional : FieldPresence.Required
+                    presence: IsOptional(valueType, valueNullability) ? FieldPresence.Optional : FieldPresence.Required,
+                    nullability: IsOptional(valueType, valueNullability)
+                        ? FieldNullability.Nullable
+                        : FieldNullability.NonNullable
                     )
             ]);
         }
@@ -154,7 +160,10 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
                             ),
                         presence: IsOptional(x.PropertyType, propertyNullability)
                             ? FieldPresence.Optional
-                            : FieldPresence.Required
+                            : FieldPresence.Required,
+                        nullability: IsOptional(x.PropertyType, propertyNullability)
+                            ? FieldNullability.Nullable
+                            : FieldNullability.NonNullable
                             );
                 })]);
         }

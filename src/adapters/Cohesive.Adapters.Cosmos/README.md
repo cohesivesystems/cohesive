@@ -332,7 +332,7 @@ The compiler consumes the standalone builder but adds semantic validation. Each 
 retains selected-input and result-field bindings, canonical parameter contracts, paging evidence, its complete
 storage binding, deterministic artifact identity, and provenance back to the exact plan, realization decisions,
 placement, target evidence, operating boundaries, compiler profile, and convention set. Each result-field binding
-also retains the canonical `ExprValueContract` and its expected physical Cosmos JSON encoding, so the artifact
+also retains the canonical `ValueContract` and its expected physical Cosmos JSON encoding, so the artifact
 executor reconstructs values without guessing from SQL aliases or CLR target types.
 
 Capability realization and adapter-native compilation are deliberately separate checks. The generic capability

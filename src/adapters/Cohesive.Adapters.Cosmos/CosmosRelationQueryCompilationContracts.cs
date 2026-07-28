@@ -133,7 +133,7 @@ public sealed record CosmosRelationQueryResultFieldBinding
     public CosmosRelationQueryResultFieldBinding(
         string alias,
         RelationQueryFieldReference field,
-        ExprValueContract valueContract,
+        ValueContract valueContract,
         CosmosRelationQueryResultValueEncoding encoding,
         QueryAssignmentId? assignment = null)
     {
@@ -161,7 +161,7 @@ public sealed record CosmosRelationQueryResultFieldBinding
     public RelationQueryFieldReference Field { get; }
 
     /// <summary>Exact semantic contract used to decode and validate the physical result value.</summary>
-    public ExprValueContract ValueContract { get; }
+    public ValueContract ValueContract { get; }
 
     /// <summary>Physical Cosmos JSON encoding expected for the result value.</summary>
     public CosmosRelationQueryResultValueEncoding Encoding { get; }
@@ -184,7 +184,7 @@ public sealed record CosmosRelationQueryResultIdentityBinding
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="encoding"/> is unsupported.</exception>
     public CosmosRelationQueryResultIdentityBinding(
         string alias,
-        ExprValueContract valueContract,
+        ValueContract valueContract,
         CosmosRelationQueryResultValueEncoding encoding)
     {
         if (!Enum.IsDefined(encoding))
@@ -198,7 +198,7 @@ public sealed record CosmosRelationQueryResultIdentityBinding
     public string Alias { get; }
 
     /// <summary>Exact semantic contract used to decode and validate the physical identity value.</summary>
-    public ExprValueContract ValueContract { get; }
+    public ValueContract ValueContract { get; }
 
     /// <summary>Physical Cosmos JSON encoding expected for the identity value.</summary>
     public CosmosRelationQueryResultValueEncoding Encoding { get; }
@@ -219,7 +219,7 @@ public sealed record CosmosRelationQueryParameterBinding
     public CosmosRelationQueryParameterBinding(
         string sqlName,
         QueryParameterDefinition definition,
-        ExprValueContract valueContract)
+        ValueContract valueContract)
     {
         SqlName = CosmosSqlNames.RequireParameterName(sqlName, nameof(sqlName));
         Definition = Guard.RequireNotNull(definition);
@@ -235,7 +235,7 @@ public sealed record CosmosRelationQueryParameterBinding
     public QueryParameterDefinition Definition { get; }
 
     /// <summary>Exact effective compiled value contract after default application.</summary>
-    public ExprValueContract ValueContract { get; }
+    public ValueContract ValueContract { get; }
 
     /// <summary>Stable canonical parameter identity.</summary>
     public QueryParameterId Parameter => Definition.Id;

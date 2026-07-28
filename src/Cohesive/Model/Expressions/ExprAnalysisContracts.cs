@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using System.Globalization;
 using System.Text.Json.Serialization;
 using Cohesive.Model.Serialization;
 
@@ -130,206 +129,6 @@ public enum ExprCapabilityRequirementKind
     Ambient = 1
 }
 
-/// <summary>
-/// Portable value information known or expected at an expression boundary.
-/// </summary>
-public sealed record ExprValueContract
-{
-    /// <summary>Creates a portable expression value contract.</summary>
-    /// <param name="type">Known element or single-value type, or <see langword="null"/> when unknown.</param>
-    /// <param name="shape">Known graph-qualified shape, or <see langword="null"/> for unshaped or unresolved values.</param>
-    /// <param name="cardinality">Whether the value is single or many-valued.</param>
-    /// <param name="presence">Whether the value is required to be present.</param>
-    /// <param name="nullability">Whether an explicitly present value may be null.</param>
-    /// <param name="shapeDefinition">
-    /// Optional in-memory shape snapshot used to resolve field contracts without persisting derived scope.
-    /// </param>
-    /// <exception cref="ArgumentOutOfRangeException">
-    /// <paramref name="cardinality"/>, <paramref name="presence"/>, or <paramref name="nullability"/> is unsupported.
-    /// </exception>
-    /// <exception cref="ArgumentException">
-    /// <paramref name="shape"/> is a default or incomplete qualified identity,
-    /// <paramref name="shape"/> and <paramref name="shapeDefinition"/> identify different local shapes, or
-    /// <paramref name="shapeDefinition"/> contains a field with invalid identity or value-contract metadata.
-    /// </exception>
-    public ExprValueContract(
-        TypeRef? type = null,
-        QualifiedShapeId? shape = null,
-        FieldCardinality cardinality = FieldCardinality.Single,
-        FieldPresence presence = FieldPresence.Required,
-        FieldNullability nullability = FieldNullability.NonNullable,
-        Shape? shapeDefinition = null)
-    {
-        if (!Enum.IsDefined(cardinality))
-            throw new ArgumentOutOfRangeException(nameof(cardinality), cardinality, "Unsupported value cardinality.");
-        if (!Enum.IsDefined(presence))
-            throw new ArgumentOutOfRangeException(nameof(presence), presence, "Unsupported value presence.");
-        if (!Enum.IsDefined(nullability))
-            throw new ArgumentOutOfRangeException(nameof(nullability), nullability, "Unsupported value nullability.");
-        if (shape is { } candidateIdentity
-            && (string.IsNullOrWhiteSpace(candidateIdentity.GraphId.Value)
-                || string.IsNullOrWhiteSpace(candidateIdentity.ShapeId.Value)))
-        {
-            throw new ArgumentException(
-                "A known expression shape requires non-empty graph and shape identifiers.",
-                nameof(shape));
-        }
-        if (shapeDefinition is not null)
-            ValidateShapeDefinition(shapeDefinition, nameof(shapeDefinition));
-        if (shape is { } identity
-            && shapeDefinition is { } definition
-            && identity.ShapeId != definition.Id)
-        {
-            throw new ArgumentException(
-                $"Qualified shape identity '{identity}' does not identify shape '{definition.Id.Value}'.",
-                nameof(shapeDefinition));
-        }
-
-        Type = type;
-        Shape = shape;
-        Cardinality = cardinality;
-        Presence = presence;
-        Nullability = nullability;
-        ShapeDefinition = shapeDefinition;
-    }
-
-    /// <summary>Known element or single-value type.</summary>
-    public TypeRef? Type { get; }
-
-    /// <summary>Known graph-qualified shape.</summary>
-    public QualifiedShapeId? Shape { get; }
-
-    /// <summary>Whether the value is single or many-valued.</summary>
-    public FieldCardinality Cardinality { get; }
-
-    /// <summary>Whether the value is required to be present.</summary>
-    public FieldPresence Presence { get; }
-
-    /// <summary>Whether an explicitly present value may be null.</summary>
-    public FieldNullability Nullability { get; }
-
-    /// <summary>Optional in-memory shape snapshot used for precise field-contract resolution.</summary>
-    [JsonIgnore]
-    public Shape? ShapeDefinition { get; }
-
-    /// <summary>
-    /// Gets the expression-level type, wrapping the element type in <see cref="ArrayTypeRef"/> for a many-valued contract.
-    /// </summary>
-    /// <returns>The expression-level type, or <see langword="null"/> when the type is unknown.</returns>
-    public TypeRef? GetEffectiveType() => Type is null
-        ? null
-        : Cardinality == FieldCardinality.Many
-            ? new ArrayTypeRef(Type)
-            : Type;
-
-    /// <summary>Gets the most specific coarse result category known for this value contract.</summary>
-    /// <returns>The portable result category, or <see cref="ExprResultCategory.Any"/> when unknown.</returns>
-    public ExprResultCategory GetResultCategory() => ExprResultCategorySemantics.Classify(this);
-
-    /// <summary>Tests whether a portable constant satisfies this value contract.</summary>
-    /// <param name="value">Constant value to test.</param>
-    /// <returns>
-    /// <see langword="true"/> when presence, nullability, and every locally resolvable type constraint are satisfied;
-    /// otherwise <see langword="false"/>.
-    /// </returns>
-    public bool IsSatisfiedByConstant(ObservationValue value)
-    {
-        if (value.Kind == ObservationValueKind.Undefined)
-            return Presence == FieldPresence.Optional;
-        if (value.Kind == ObservationValueKind.Null)
-            return Nullability == FieldNullability.Nullable;
-        return GetEffectiveType() is not { } type
-            || ExprValueContractSemantics.Evaluate(type, value) != ExprConstantCompatibility.Incompatible;
-    }
-
-    /// <summary>Creates a value contract from a semantic field definition.</summary>
-    /// <param name="field">Field whose type and value guarantees are copied.</param>
-    /// <returns>A value contract preserving the field type, cardinality, presence, and nullability.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="field"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="field"/> has no semantic type.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">
-    /// <paramref name="field"/> has an unsupported cardinality, presence, or nullability value.
-    /// </exception>
-    public static ExprValueContract FromField(FieldDefinition field)
-    {
-        ArgumentNullException.ThrowIfNull(field);
-        if (field.Type is null)
-            throw new ArgumentException("A field value contract requires a semantic type.", nameof(field));
-        return new(field.Type, cardinality: field.Cardinality, presence: field.Presence, nullability: field.Nullability);
-    }
-
-    /// <summary>Creates an object-value contract from a semantic shape.</summary>
-    /// <param name="shape">Shape whose fields form the object type.</param>
-    /// <param name="qualifiedShape">Optional graph-qualified identity for <paramref name="shape"/>.</param>
-    /// <returns>An object-value contract derived from the shape.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="shape"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException">
-    /// <paramref name="qualifiedShape"/> identifies a different local shape than <paramref name="shape"/>, or
-    /// <paramref name="shape"/> contains a field with invalid identity or value-contract metadata.
-    /// </exception>
-    public static ExprValueContract FromShape(Shape shape, QualifiedShapeId? qualifiedShape = null)
-    {
-        ArgumentNullException.ThrowIfNull(shape);
-        ValidateShapeDefinition(shape, nameof(shape));
-        if (qualifiedShape is { } identity && identity.ShapeId != shape.Id)
-        {
-            throw new ArgumentException(
-                $"Qualified shape identity '{identity}' does not identify shape '{shape.Id.Value}'.",
-                nameof(qualifiedShape));
-        }
-
-        var fields = shape.Fields.IsDefault
-            ? ImmutableArray<FieldDefinition>.Empty
-            : shape.Fields;
-        if (fields.IsDefaultOrEmpty)
-            return new(shape: qualifiedShape, shapeDefinition: shape);
-
-        return new(
-            type: new ObjectTypeRef(
-            [
-                .. fields.Select(static field => new ObjectFieldTypeDef(
-                    field.Name.Value,
-                    field.Cardinality == FieldCardinality.Many
-                        ? new ArrayTypeRef(field.Type)
-                        : field.Type,
-                    field.Presence))
-            ]),
-            shape: qualifiedShape,
-            shapeDefinition: shape);
-    }
-
-    static void ValidateShapeDefinition(Shape shape, string parameterName)
-    {
-        foreach (var field in shape.Fields)
-        {
-            if (field.Type is null)
-            {
-                throw new ArgumentException(
-                    $"Shape '{shape.Id.Value}' field '{field.Name.Value}' has no semantic type.",
-                    parameterName);
-            }
-            if (!Enum.IsDefined(field.Cardinality))
-            {
-                throw new ArgumentException(
-                    $"Shape '{shape.Id.Value}' field '{field.Name.Value}' has unsupported cardinality '{((int)field.Cardinality).ToString(CultureInfo.InvariantCulture)}'.",
-                    parameterName);
-            }
-            if (!Enum.IsDefined(field.Presence))
-            {
-                throw new ArgumentException(
-                    $"Shape '{shape.Id.Value}' field '{field.Name.Value}' has unsupported presence '{((int)field.Presence).ToString(CultureInfo.InvariantCulture)}'.",
-                    parameterName);
-            }
-            if (!Enum.IsDefined(field.Nullability))
-            {
-                throw new ArgumentException(
-                    $"Shape '{shape.Id.Value}' field '{field.Name.Value}' has unsupported nullability '{((int)field.Nullability).ToString(CultureInfo.InvariantCulture)}'.",
-                    parameterName);
-            }
-        }
-    }
-}
-
 /// <summary>One named value binding visible at an expression site.</summary>
 public sealed record ExprScopeBinding
 {
@@ -342,7 +141,7 @@ public sealed record ExprScopeBinding
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="availability"/> is unsupported.</exception>
     public ExprScopeBinding(
         ValueBindingId id,
-        ExprValueContract value,
+        ValueContract value,
         ExprBindingAvailability availability = ExprBindingAvailability.AlwaysPresent)
     {
         if (string.IsNullOrWhiteSpace(id.Value))
@@ -359,7 +158,7 @@ public sealed record ExprScopeBinding
     public ValueBindingId Id { get; }
 
     /// <summary>Known semantic value contract.</summary>
-    public ExprValueContract Value { get; }
+    public ValueContract Value { get; }
 
     /// <summary>Whether the binding may be absent during evaluation.</summary>
     public ExprBindingAvailability Availability { get; }
@@ -408,7 +207,7 @@ public sealed record ExprScopeParameter
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="invocationPresence"/> is unsupported.</exception>
     public ExprScopeParameter(
         string name,
-        ExprValueContract value,
+        ValueContract value,
         FieldPresence invocationPresence)
     {
         if (!Enum.IsDefined(invocationPresence))
@@ -430,7 +229,7 @@ public sealed record ExprScopeParameter
     public string Name { get; }
 
     /// <summary>Contract of the value observed while evaluating the expression.</summary>
-    public ExprValueContract Value { get; }
+    public ValueContract Value { get; }
 
     /// <summary>Whether an invocation must explicitly supply the parameter.</summary>
     public FieldPresence InvocationPresence { get; }
@@ -463,7 +262,7 @@ public sealed class ExprScope
         IEnumerable<ExprScopeBinding>? bindings = null,
         ValueBindingId? implicitBinding = null,
         IEnumerable<ExprScopeParameter>? parameters = null,
-        ExprValueContract? currentItem = null,
+        ValueContract? currentItem = null,
         IEnumerable<ExprCapabilityId>? ambientCapabilities = null)
     {
         var normalizedBindings = NormalizeBindings(bindings);
@@ -502,7 +301,7 @@ public sealed class ExprScope
     public ImmutableArray<ExprScopeParameter> Parameters { get; }
 
     /// <summary>Current-item contract, or <see langword="null"/> when current-item access is unavailable.</summary>
-    public ExprValueContract? CurrentItem { get; }
+    public ValueContract? CurrentItem { get; }
 
     /// <summary>Ambient capabilities sorted by ordinal identifier.</summary>
     public ImmutableArray<ExprCapabilityId> AmbientCapabilities { get; }
@@ -533,11 +332,11 @@ public sealed class ExprScope
     /// <summary>Returns a scope that makes a current item available while preserving the remaining environment.</summary>
     /// <param name="currentItem">Current-item value contract, or an unknown contract when omitted.</param>
     /// <returns>A new scope with explicit current-item access.</returns>
-    public ExprScope WithCurrentItem(ExprValueContract? currentItem = null) => new(
+    public ExprScope WithCurrentItem(ValueContract? currentItem = null) => new(
         Bindings,
         ImplicitBinding,
         Parameters,
-        currentItem ?? new ExprValueContract(),
+        currentItem ?? new ValueContract(),
         AmbientCapabilities);
 
     static ImmutableArray<ExprScopeBinding> NormalizeBindings(IEnumerable<ExprScopeBinding>? bindings)
@@ -587,7 +386,7 @@ public sealed record ExprExpectation
     /// <summary>A required, non-null Boolean expression expectation.</summary>
     public static ExprExpectation Boolean { get; } = new(
         ExprResultCategory.Boolean,
-        new ExprValueContract(new ScalarTypeRef(ScalarTypeKind.Bool)));
+        new ValueContract(new ScalarTypeRef(ScalarTypeKind.Bool)));
 
     /// <summary>Creates an expression expectation.</summary>
     /// <param name="category">
@@ -604,7 +403,7 @@ public sealed record ExprExpectation
     /// </exception>
     public ExprExpectation(
         ExprResultCategory category = ExprResultCategory.Any,
-        ExprValueContract? value = null,
+        ValueContract? value = null,
         ExprDependencyKind allowedDependencies = ExprDependencyKind.All)
     {
         if (!Enum.IsDefined(category))
@@ -631,7 +430,7 @@ public sealed record ExprExpectation
     public ExprResultCategory Category { get; }
 
     /// <summary>Expected portable value contract.</summary>
-    public ExprValueContract? Value { get; }
+    public ValueContract? Value { get; }
 
     /// <summary>Context dependency kinds permitted at the site.</summary>
     public ExprDependencyKind AllowedDependencies { get; }
@@ -997,7 +796,7 @@ public sealed class ExprAnalysisResult
         ExprSite site,
         ExprSemanticsCatalog semantics,
         ExprResultCategory resultCategory,
-        ExprValueContract? knownResult,
+        ValueContract? knownResult,
         ExprRequirements requirements,
         IEnumerable<ExprCapabilityUse> capabilityUses,
         DocumentValidationResult validation)
@@ -1049,7 +848,7 @@ public sealed class ExprAnalysisResult
     public ExprResultCategory ResultCategory { get; }
 
     /// <summary>Known portable result contract.</summary>
-    public ExprValueContract? KnownResult { get; }
+    public ValueContract? KnownResult { get; }
 
     /// <summary>Requirements derived from the expression.</summary>
     public ExprRequirements Requirements { get; }
