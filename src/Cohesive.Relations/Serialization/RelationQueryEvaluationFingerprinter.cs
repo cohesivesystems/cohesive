@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Nodes;
+using Cohesive.Model.Serialization;
 using Cohesive.Relations.Authoring;
 
 namespace Cohesive.Relations.Serialization;
@@ -66,13 +67,7 @@ public static class RelationQueryEvaluationFingerprinter
         var canonical = CanonicalJsonWriter.GetCanonicalBytes(
             node,
             options,
-            static propertyName => propertyName switch
-            {
-                "nodes" or "parameters" or "results" or "assignments" or "groupings" or "aggregates" => "id",
-                "invariants" => "name",
-                "observations" => "id",
-                _ => null
-            });
+            RelationCanonicalJsonArrayOrderings.Evaluation);
         var hash = SHA256.HashData(canonical);
         return new(
             Algorithm,

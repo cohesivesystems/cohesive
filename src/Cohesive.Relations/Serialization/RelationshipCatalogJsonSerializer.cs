@@ -12,7 +12,9 @@ public static class RelationshipCatalogJsonSerializer
     /// <param name="indented">Whether serialized JSON should be indented.</param>
     /// <returns>Serializer options configured for the canonical wire contract.</returns>
     public static JsonSerializerOptions CreateOptions(bool indented = false) =>
-        StrictDocumentJson.CreateOptions(indented);
+        StrictDocumentJson.CreateOptions(indented
+            ? PortableDocumentJsonFormatting.Indented
+            : PortableDocumentJsonFormatting.Compact);
 
     /// <summary>Serializes a portable relationship catalog document.</summary>
     /// <param name="document">Document to serialize.</param>

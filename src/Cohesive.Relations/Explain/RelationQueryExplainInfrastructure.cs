@@ -41,7 +41,10 @@ public static class RelationQueryExplainFingerprinter
         root.Remove("fingerprint");
         RemoveEvaluationObservations(root);
         RemoveNonSemanticProse(root);
-        var canonical = CanonicalJsonWriter.GetCanonicalBytes(root, options, static _ => null);
+        var canonical = CanonicalJsonWriter.GetCanonicalBytes(
+            root,
+            options,
+            static _ => CanonicalJsonArrayOrdering.Sequence);
         return new(
             Algorithm,
             Canonicalization,
@@ -126,7 +129,10 @@ public static class RelationQueryEvaluationObservationFingerprinter
             ?? throw new InvalidOperationException("Failed to materialize a canonical evaluation observation.");
         root.Remove("observationFingerprint");
         RelationQueryExplainFingerprinter.RemoveNonSemanticProse(root);
-        var canonical = CanonicalJsonWriter.GetCanonicalBytes(root, options, static _ => null);
+        var canonical = CanonicalJsonWriter.GetCanonicalBytes(
+            root,
+            options,
+            static _ => CanonicalJsonArrayOrdering.Sequence);
         return new(
             Algorithm,
             Canonicalization,

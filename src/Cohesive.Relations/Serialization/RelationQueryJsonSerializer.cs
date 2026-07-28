@@ -13,7 +13,9 @@ public static class RelationQueryJsonSerializer
     /// <returns>Serializer options configured for the canonical wire contract.</returns>
     public static JsonSerializerOptions CreateOptions(bool indented = false)
     {
-        var options = StrictDocumentJson.CreateOptions(indented);
+        var options = StrictDocumentJson.CreateOptions(indented
+            ? PortableDocumentJsonFormatting.Indented
+            : PortableDocumentJsonFormatting.Compact);
         options.Converters.Insert(0, new QueryParameterDefinitionJsonConverter());
         return options;
     }

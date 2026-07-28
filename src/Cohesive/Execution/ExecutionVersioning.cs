@@ -60,7 +60,6 @@ public sealed record ExecutionIrSchemaCompatibilityDeclaration
                 nameof(supportedSchemaVersions));
         }
 
-        var normalized = ImmutableArray.CreateBuilder<ExecutionIrSchemaVersion>(supportedSchemaVersions.Length);
         var observed = new HashSet<ExecutionIrSchemaVersion>();
         foreach (var schemaVersion in supportedSchemaVersions)
         {
@@ -78,12 +77,11 @@ public sealed record ExecutionIrSchemaCompatibilityDeclaration
                     nameof(supportedSchemaVersions));
             }
 
-            normalized.Add(schemaVersion);
         }
 
-        normalized.Sort(static (left, right) =>
-            StringComparer.Ordinal.Compare(left.Value, right.Value));
-        SupportedSchemaVersions = normalized.MoveToImmutable();
+        SupportedSchemaVersions = CanonicalDocumentCollections.SortIfNeeded(
+            supportedSchemaVersions,
+            static (left, right) => StringComparer.Ordinal.Compare(left.Value, right.Value));
     }
 
     /// <summary>Exact supported schema versions in deterministic ordinal order.</summary>
@@ -198,6 +196,10 @@ public sealed record ExecutionDefinitionFingerprint
 /// Required identity, revision, schema, fingerprint, and provenance metadata for a persisted
 /// execution definition.
 /// </summary>
+/// <remarks>
+/// Retained diagnostics are producer observations for inspection. They are excluded from the semantic
+/// fingerprint and do not act as current integrity or activation evidence; validators recompute their findings.
+/// </remarks>
 public sealed record ExecutionDefinitionMetadata
 {
     /// <summary>Creates persisted execution-definition metadata.</summary>
@@ -206,9 +208,15 @@ public sealed record ExecutionDefinitionMetadata
     /// <param name="schemaVersion">Portable schema version used by this definition.</param>
     /// <param name="fingerprint">Fingerprint of canonical semantic definition content.</param>
     /// <param name="provenance">Required producer and source attribution.</param>
+    /// <param name="displayName">Optional human-facing name excluded from semantic fingerprinting.</param>
+    /// <param name="description">Optional human-facing description excluded from semantic fingerprinting.</param>
+    /// <param name="sourceMap">Optional normalized per-construct source attribution.</param>
+    /// <param name="diagnostics">Persisted validation or authoring diagnostics retained with the definition.</param>
     /// <exception cref="ArgumentException">
     /// <paramref name="definitionId"/>, <paramref name="revisionId"/>, or
-    /// <paramref name="schemaVersion"/> is a default uninitialized value.
+    /// <paramref name="schemaVersion"/> is a default uninitialized value; or
+    /// <paramref name="diagnostics"/> contains a null entry, an empty code or message, or an
+    /// unrecognized severity.
     /// </exception>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="fingerprint"/> or <paramref name="provenance"/> is <see langword="null"/>.
@@ -219,7 +227,11 @@ public sealed record ExecutionDefinitionMetadata
         ExecutionRevisionId revisionId,
         ExecutionIrSchemaVersion schemaVersion,
         ExecutionDefinitionFingerprint fingerprint,
-        ExecutionProvenance provenance)
+        ExecutionProvenance provenance,
+        string? displayName = null,
+        string? description = null,
+        ExecutionSourceMap? sourceMap = null,
+        ImmutableArray<DocumentValidationDiagnostic> diagnostics = default)
     {
         if (string.IsNullOrWhiteSpace(definitionId.Value))
             throw new ArgumentException("Definition metadata requires a non-default definition identity.", nameof(definitionId));
@@ -233,6 +245,10 @@ public sealed record ExecutionDefinitionMetadata
         SchemaVersion = schemaVersion;
         Fingerprint = Guard.RequireNotNull(fingerprint);
         Provenance = Guard.RequireNotNull(provenance);
+        DisplayName = displayName.TrimmedEmptyOrWhiteSpaceAs();
+        Description = description.TrimmedEmptyOrWhiteSpaceAs();
+        SourceMap = sourceMap ?? ExecutionSourceMap.Empty;
+        Diagnostics = NormalizeDiagnostics(diagnostics);
     }
 
     /// <summary>Stable identity shared by all revisions of the definition.</summary>
@@ -249,4 +265,110 @@ public sealed record ExecutionDefinitionMetadata
 
     /// <summary>Required producer and source attribution.</summary>
     public ExecutionProvenance Provenance { get; }
+
+    /// <summary>Optional human-facing name excluded from semantic fingerprinting.</summary>
+    public string? DisplayName { get; }
+
+    /// <summary>Optional human-facing description excluded from semantic fingerprinting.</summary>
+    public string? Description { get; }
+
+    /// <summary>Normalized per-construct source attribution excluded from semantic fingerprinting.</summary>
+    public ExecutionSourceMap SourceMap { get; }
+
+    /// <summary>Non-authoritative persisted diagnostics excluded from semantic fingerprinting.</summary>
+    public ImmutableArray<DocumentValidationDiagnostic> Diagnostics { get; }
+
+    /// <summary>Compares metadata by normalized persisted values.</summary>
+    /// <param name="other">Metadata to compare with this value.</param>
+    /// <returns>
+    /// <see langword="true"/> when identity, fingerprint, attribution, and retained diagnostics are equal;
+    /// otherwise <see langword="false"/>.
+    /// </returns>
+    public bool Equals(ExecutionDefinitionMetadata? other)
+    {
+        if (ReferenceEquals(this, other))
+            return true;
+        if (other is null
+            || DefinitionId != other.DefinitionId
+            || RevisionId != other.RevisionId
+            || SchemaVersion != other.SchemaVersion
+            || Fingerprint != other.Fingerprint
+            || Provenance != other.Provenance
+            || !string.Equals(DisplayName, other.DisplayName, StringComparison.Ordinal)
+            || !string.Equals(Description, other.Description, StringComparison.Ordinal)
+            || SourceMap != other.SourceMap
+            || Diagnostics.Length != other.Diagnostics.Length)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < Diagnostics.Length; index++)
+        {
+            if (Diagnostics[index] != other.Diagnostics[index])
+                return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>Returns a structural hash code for normalized persisted metadata.</summary>
+    /// <returns>A hash code derived from identity, fingerprint, attribution, and retained diagnostics.</returns>
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(DefinitionId);
+        hash.Add(RevisionId);
+        hash.Add(SchemaVersion);
+        hash.Add(Fingerprint);
+        hash.Add(Provenance);
+        hash.Add(DisplayName, StringComparer.Ordinal);
+        hash.Add(Description, StringComparer.Ordinal);
+        hash.Add(SourceMap);
+        foreach (var diagnostic in Diagnostics)
+            hash.Add(diagnostic);
+        return hash.ToHashCode();
+    }
+
+    static ImmutableArray<DocumentValidationDiagnostic> NormalizeDiagnostics(
+        ImmutableArray<DocumentValidationDiagnostic> diagnostics)
+    {
+        if (diagnostics.IsDefaultOrEmpty)
+            return [];
+
+        var isCanonical = true;
+        DocumentValidationDiagnostic? previous = null;
+        foreach (var diagnostic in diagnostics)
+        {
+            if (diagnostic is null)
+                throw new ArgumentException("Execution definition diagnostics cannot contain null entries.", nameof(diagnostics));
+            if (string.IsNullOrWhiteSpace(diagnostic.Code) || string.IsNullOrWhiteSpace(diagnostic.Message))
+            {
+                throw new ArgumentException(
+                    "Execution definition diagnostics require non-empty codes and messages.",
+                    nameof(diagnostics));
+            }
+            if (!Enum.IsDefined(diagnostic.Severity))
+            {
+                throw new ArgumentException(
+                    $"Execution definition diagnostic severity '{diagnostic.Severity}' is not recognized.",
+                    nameof(diagnostics));
+            }
+
+            if (previous is not null
+                && DocumentValidationDiagnosticComparer.Ordinal.Compare(previous, diagnostic) > 0)
+            {
+                isCanonical = false;
+            }
+
+            previous = diagnostic;
+        }
+
+        if (isCanonical)
+            return diagnostics;
+
+        var normalized = ImmutableArray.CreateBuilder<DocumentValidationDiagnostic>(diagnostics.Length);
+        normalized.AddRange(diagnostics);
+        normalized.Sort(DocumentValidationDiagnosticComparer.Ordinal);
+        return normalized.MoveToImmutable();
+    }
 }

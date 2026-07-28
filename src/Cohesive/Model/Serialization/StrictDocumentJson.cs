@@ -1,26 +1,41 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Cohesive.Model.Serialization;
 
-namespace Cohesive.Relations.Serialization;
+namespace Cohesive.Model.Serialization;
+
+/// <summary>Formatting modes for strict portable semantic-document JSON.</summary>
+public enum PortableDocumentJsonFormatting
+{
+    /// <summary>Compact JSON without insignificant white space.</summary>
+    Compact = 0,
+
+    /// <summary>Human-readable indented JSON.</summary>
+    Indented = 1
+}
 
 /// <summary>
-/// Shared strict JSON behavior for persisted Cohesive.Relations semantic documents.
+/// Shared strict JSON behavior for persisted portable Cohesive semantic documents.
 /// </summary>
-static class StrictDocumentJson
+public static class StrictDocumentJson
 {
     /// <summary>Creates serializer options for a closed, case-sensitive portable wire contract.</summary>
-    /// <param name="indented">Whether serialized JSON should be indented.</param>
+    /// <param name="formatting">Compact or human-readable indented output formatting.</param>
     /// <returns>Serializer options configured for strict portable document JSON.</returns>
-    public static JsonSerializerOptions CreateOptions(bool indented)
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="formatting"/> is not recognized.</exception>
+    public static JsonSerializerOptions CreateOptions(
+        PortableDocumentJsonFormatting formatting = PortableDocumentJsonFormatting.Compact)
     {
+        if (!Enum.IsDefined(formatting))
+            throw new ArgumentOutOfRangeException(nameof(formatting), formatting, "Unsupported JSON formatting mode.");
+
         JsonSerializerOptions options = new(JsonSerializerDefaults.Web)
         {
             AllowOutOfOrderMetadataProperties = true,
+            NumberHandling = JsonNumberHandling.Strict,
             PropertyNameCaseInsensitive = false,
             UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
-            WriteIndented = indented
+            WriteIndented = formatting == PortableDocumentJsonFormatting.Indented
         };
         options.Converters.Add(new StrictFieldPathSegmentJsonConverter());
         options.Converters.Add(SingleValueWrapperJsonConverter.ScalarOnly);
@@ -257,11 +272,23 @@ sealed class StrictStringEnumJsonConverterFactory : JsonConverterFactory
 /// Declared values retain the strict canonical string representation. Only undefined numeric values use a JSON
 /// number, which keeps malformed declarations inspectable without permitting numeric aliases for known values.
 /// </remarks>
-sealed class DiagnosticPreservingStringEnumJsonConverter<TEnum>
+public sealed class DiagnosticPreservingStringEnumJsonConverter<TEnum>
     : JsonConverter<TEnum>, IJsonUndefinedNumericEnumValueConverter
     where TEnum : struct, Enum
 {
-    /// <inheritdoc />
+    /// <summary>Creates a diagnostic-preserving converter for <typeparamref name="TEnum"/>.</summary>
+    public DiagnosticPreservingStringEnumJsonConverter()
+    {
+    }
+
+    /// <summary>Reads a declared string enum value or retains an unsupported 32-bit numeric value.</summary>
+    /// <param name="reader">Reader positioned at the enum value.</param>
+    /// <param name="typeToConvert">Enum type requested by the serializer.</param>
+    /// <param name="options">Serializer options for the containing document.</param>
+    /// <returns>The declared enum value or retained unsupported numeric value.</returns>
+    /// <exception cref="JsonException">
+    /// The value is not a canonical case-sensitive enum name or an unsupported 32-bit integer.
+    /// </exception>
     public override TEnum Read(
         ref Utf8JsonReader reader,
         Type typeToConvert,
@@ -296,7 +323,14 @@ sealed class DiagnosticPreservingStringEnumJsonConverter<TEnum>
             $"Enum '{typeToConvert.Name}' must be encoded as a canonical string or an undefined 32-bit integer.");
     }
 
-    /// <inheritdoc />
+    /// <summary>Writes declared values as strings and unsupported underlying values as numbers.</summary>
+    /// <param name="writer">Writer receiving the enum value.</param>
+    /// <param name="value">Enum value to write.</param>
+    /// <param name="options">Serializer options for the containing document.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="writer"/> is <see langword="null"/>.</exception>
+    /// <exception cref="OverflowException">
+    /// The enum's unsupported underlying value cannot be represented as a 32-bit integer.
+    /// </exception>
     public override void Write(
         Utf8JsonWriter writer,
         TEnum value,
