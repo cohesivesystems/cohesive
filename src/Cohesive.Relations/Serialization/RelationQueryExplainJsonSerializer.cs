@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Cohesive.Model.Serialization;
 using Cohesive.Relations.Explain;
 
 namespace Cohesive.Relations.Serialization;

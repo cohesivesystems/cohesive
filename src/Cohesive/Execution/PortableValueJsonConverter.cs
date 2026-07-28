@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
@@ -21,8 +22,40 @@ public sealed class PortableValueJsonConverter : JsonConverter<PortableValue>
     const string StateProperty = "state";
     const string ValueProperty = "value";
     const string FailureProperty = "failure";
+    const string FailureCodeProperty = "code";
     const string KindTagProperty = "$kind";
     const string TaggedValueProperty = "$value";
+
+    /// <summary>
+    /// Projects a serialized portable value onto the stable content used by semantic fingerprinting.
+    /// </summary>
+    /// <remarks>
+    /// Failed values retain their contract, state, and machine-readable failure code. Human-readable
+    /// diagnostic prose and persisted or schema locations remain durable wire attribution, not semantic
+    /// identity. Other portable-value states already contain only semantic content and remain unchanged.
+    /// </remarks>
+    /// <param name="node">Serialized portable-value object to project in place.</param>
+    /// <param name="value">Portable value represented by <paramref name="node"/>.</param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="node"/> or <paramref name="value"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// <paramref name="value"/> is failed but does not contain its required diagnostic.
+    /// </exception>
+    internal static void ProjectSemanticFingerprint(JsonObject node, PortableValue value)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        ArgumentNullException.ThrowIfNull(value);
+        if (value.State != PortableValueState.Failed)
+            return;
+
+        var failure = value.Failure
+            ?? throw new InvalidOperationException("A failed portable value has no diagnostic.");
+        node[FailureProperty] = new JsonObject
+        {
+            [FailureCodeProperty] = failure.Code
+        };
+    }
 
     /// <summary>Reads a portable value from its tagged JSON representation.</summary>
     /// <param name="reader">Reader positioned at the portable value.</param>
@@ -41,6 +74,7 @@ public sealed class PortableValueJsonConverter : JsonConverter<PortableValue>
         var root = document.RootElement;
         if (root.ValueKind != JsonValueKind.Object)
             throw new JsonException("A portable value must be encoded as a JSON object.");
+        ValidatePortableValueProperties(root);
 
         var contractElement = GetRequiredProperty(root, ContractProperty);
         var contract = contractElement.Deserialize<ValueContract>(options)
@@ -131,6 +165,27 @@ public sealed class PortableValueJsonConverter : JsonConverter<PortableValue>
         throw new JsonException($"Portable value property '{propertyName}' is required.");
     }
 
+    static void ValidatePortableValueProperties(JsonElement value)
+    {
+        var hasContract = false;
+        var hasState = false;
+        var hasValue = false;
+        var hasFailure = false;
+        foreach (var property in value.EnumerateObject())
+        {
+            var duplicate = property.Name switch
+            {
+                ContractProperty => MarkSeen(ref hasContract),
+                StateProperty => MarkSeen(ref hasState),
+                ValueProperty => MarkSeen(ref hasValue),
+                FailureProperty => MarkSeen(ref hasFailure),
+                _ => throw new JsonException($"Unknown portable value property '{property.Name}'.")
+            };
+            if (duplicate)
+                throw new JsonException($"Portable value property '{property.Name}' is declared more than once.");
+        }
+    }
+
     static PortableValueState ParseState(string? value) => value switch
     {
         "missing" => PortableValueState.Missing,
@@ -219,6 +274,7 @@ public sealed class PortableValueJsonConverter : JsonConverter<PortableValue>
     {
         if (element.ValueKind != JsonValueKind.Object)
             throw new JsonException("A tagged observation value must be a JSON object.");
+        ValidateTaggedObservationProperties(element);
 
         var kindElement = GetRequiredTaggedProperty(element, KindTagProperty);
         if (kindElement.ValueKind != JsonValueKind.String)
@@ -282,6 +338,30 @@ public sealed class PortableValueJsonConverter : JsonConverter<PortableValue>
             return property;
 
         throw new JsonException($"Tagged observation property '{propertyName}' is required.");
+    }
+
+    static void ValidateTaggedObservationProperties(JsonElement value)
+    {
+        var hasKind = false;
+        var hasValue = false;
+        foreach (var property in value.EnumerateObject())
+        {
+            var duplicate = property.Name switch
+            {
+                KindTagProperty => MarkSeen(ref hasKind),
+                TaggedValueProperty => MarkSeen(ref hasValue),
+                _ => throw new JsonException($"Unknown tagged observation property '{property.Name}'.")
+            };
+            if (duplicate)
+                throw new JsonException($"Tagged observation property '{property.Name}' is declared more than once.");
+        }
+    }
+
+    static bool MarkSeen(ref bool value)
+    {
+        var previous = value;
+        value = true;
+        return previous;
     }
 
     static string RequireString(JsonElement element, ObservationValueKind kind)

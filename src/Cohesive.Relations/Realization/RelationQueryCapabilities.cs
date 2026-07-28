@@ -1,7 +1,7 @@
 using System.Text.Json.Serialization;
 using Cohesive.Model.Expressions;
+using Cohesive.Model.Serialization;
 using Cohesive.Relations.Compilation;
-using Cohesive.Relations.Serialization;
 
 namespace Cohesive.Relations.Realization;
 

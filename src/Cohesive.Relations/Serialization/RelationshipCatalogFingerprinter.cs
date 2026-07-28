@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Cohesive.Model.Serialization;
 using Cohesive.Relations.Model;
 
 namespace Cohesive.Relations.Serialization;
@@ -66,6 +67,6 @@ public static class RelationshipCatalogFingerprinter
         return CanonicalJsonWriter.GetCanonicalBytes(
             node,
             options,
-            static propertyName => propertyName == "relationships" ? "id" : null);
+            RelationCanonicalJsonArrayOrderings.RelationshipCatalog);
     }
 }

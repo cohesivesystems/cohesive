@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
@@ -108,6 +109,74 @@ public sealed class PortableValueTests
             actualFields["bytes"].Bytes.ToArray());
         Assert.Equal(expectedFields["decimal"].Decimal, actualFields["decimal"].Decimal);
         Assert.Equal(expectedFields["dateTimeOffset"].String, actualFields["dateTimeOffset"].String);
+    }
+
+    [Fact]
+    public void TaggedJson_RejectsUnknownAndDuplicatePortableValueProperties()
+    {
+        var json = JsonSerializer.Serialize(PortableValue.Missing(OptionalNullableString), WebJsonOptions);
+        var unknown = JsonNode.Parse(json)!.AsObject();
+        unknown["unexpected"] = true;
+        var duplicate = json.Insert(
+            startIndex: json.LastIndexOf('}'),
+            value: ",\"state\":\"missing\"");
+
+        var unknownException = Assert.Throws<JsonException>(() =>
+            JsonSerializer.Deserialize<PortableValue>(unknown.ToJsonString(), WebJsonOptions));
+        var duplicateException = Assert.Throws<JsonException>(() =>
+            JsonSerializer.Deserialize<PortableValue>(duplicate, WebJsonOptions));
+
+        Assert.Contains(
+            "Unknown portable value property 'unexpected'",
+            unknownException.Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "property 'state' is declared more than once",
+            duplicateException.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TaggedJson_RejectsUnknownAndDuplicatePropertiesAtEveryObservationDepth()
+    {
+        var json = SerializeNestedObservation(ObservationValue.FromString("ready"));
+        var unknown = JsonNode.Parse(json)!.AsObject();
+        GetNestedObservation(unknown)["unexpected"] = true;
+        var duplicate = json.Replace(
+            oldValue: "\"$kind\":\"string\"",
+            newValue: "\"$kind\":\"string\",\"$kind\":\"string\"",
+            comparisonType: StringComparison.Ordinal);
+
+        var unknownException = Assert.Throws<JsonException>(() =>
+            JsonSerializer.Deserialize<PortableValue>(unknown.ToJsonString(), WebJsonOptions));
+        var duplicateException = Assert.Throws<JsonException>(() =>
+            JsonSerializer.Deserialize<PortableValue>(duplicate, WebJsonOptions));
+
+        Assert.Contains(
+            "Unknown tagged observation property 'unexpected'",
+            unknownException.Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "property '$kind' is declared more than once",
+            duplicateException.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(ObservationValueKind.Undefined)]
+    [InlineData(ObservationValueKind.Null)]
+    public void TaggedJson_RejectsValuePayloadForValuelessObservationKinds(ObservationValueKind kind)
+    {
+        var observation = kind == ObservationValueKind.Undefined
+            ? ObservationValue.Undefined
+            : ObservationValue.Null;
+        var json = JsonNode.Parse(SerializeNestedObservation(observation))!.AsObject();
+        GetNestedObservation(json)["$value"] = 42;
+
+        var exception = Assert.Throws<JsonException>(() =>
+            JsonSerializer.Deserialize<PortableValue>(json.ToJsonString(), WebJsonOptions));
+
+        Assert.Contains("cannot contain '$value'", exception.Message, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -353,6 +422,19 @@ public sealed class PortableValueTests
     }
 
     static readonly JsonSerializerOptions WebJsonOptions = new(JsonSerializerDefaults.Web);
+
+    static string SerializeNestedObservation(ObservationValue observation) =>
+        JsonSerializer.Serialize(
+            PortableValue.Concrete(
+                new ValueContract(new JsonTypeRef(JsonTypeKind.Object)),
+                ObservationValue.FromObject(
+                    ImmutableSortedDictionary<string, ObservationValue>.Empty
+                        .WithComparers(StringComparer.Ordinal)
+                        .Add("nested", observation))),
+            WebJsonOptions);
+
+    static JsonObject GetNestedObservation(JsonObject portableValue) =>
+        portableValue["value"]!["$value"]!["nested"]!.AsObject();
 
     static PortableValue RoundTrip(PortableValue value)
     {

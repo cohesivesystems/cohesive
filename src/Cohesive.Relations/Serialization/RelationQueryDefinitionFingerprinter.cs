@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Cohesive.Model.Serialization;
 using Cohesive.Relations.IR;
 
 namespace Cohesive.Relations.Serialization;
@@ -66,11 +67,6 @@ public static class RelationQueryDefinitionFingerprinter
         return CanonicalJsonWriter.GetCanonicalBytes(
             node,
             options,
-            static propertyName => propertyName switch
-            {
-                "nodes" or "parameters" or "results" or "assignments" or "groupings" or "aggregates" => "id",
-                "invariants" => "name",
-                _ => null
-            });
+            RelationCanonicalJsonArrayOrderings.Definition);
     }
 }

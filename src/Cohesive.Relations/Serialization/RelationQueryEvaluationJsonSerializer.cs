@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Cohesive.Model.Serialization;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Model;
 

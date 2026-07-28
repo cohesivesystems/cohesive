@@ -398,7 +398,7 @@ static class RelationQueryCompiledPlanFingerprinter
             var graphBytes = CanonicalJsonWriter.GetCanonicalBytes(
                 node,
                 options,
-                static propertyName => propertyName is "shapes" or "namedTypes" ? "id" : null);
+                RelationCanonicalJsonArrayOrderings.ShapeGraph);
             Append(canonical, graphBytes);
         }
 

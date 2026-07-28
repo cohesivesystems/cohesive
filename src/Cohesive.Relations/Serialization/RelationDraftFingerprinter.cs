@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Cohesive.Model.Serialization;
 using Cohesive.Relations.Drafts;
 
 namespace Cohesive.Relations.Serialization;
@@ -96,13 +97,6 @@ public static class RelationDraftFingerprinter
         return CanonicalJsonWriter.GetCanonicalBytes(
             node,
             options,
-            static propertyName => propertyName switch
-            {
-                "nodes" or "parameters" or "assignments" or "candidates"
-                    or "groupings" or "aggregates" => "id",
-                "invariants" => "name",
-                _ => null
-            },
-            static propertyName => propertyName is "candidateIds" or "reasons");
+            RelationCanonicalJsonArrayOrderings.Draft);
     }
 }

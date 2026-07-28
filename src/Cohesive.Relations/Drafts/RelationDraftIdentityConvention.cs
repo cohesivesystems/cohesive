@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Cohesive.Model.Serialization;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Serialization;
 
@@ -85,7 +86,7 @@ public static class RelationDraftIdentityConvention
         var expression = CanonicalJsonWriter.GetCanonicalBytes(
             expressionNode,
             options,
-            static _ => null);
+            static _ => CanonicalJsonArrayOrdering.Sequence);
 
         ArrayBufferWriter<byte> canonical = new();
         Append(canonical, CandidateVersion);
