@@ -146,16 +146,6 @@ public sealed record TransitionObservationAccess
     public override string ToString() => Path?.ToString() ?? "$observation";
 }
 
-/// <summary>Stable canonical binding identities supplied by the Transition compiler.</summary>
-public static class TransitionBindingIds
-{
-    /// <summary>The complete typed invocation input.</summary>
-    public static ValueBindingId Input { get; } = new("transition.input");
-
-    /// <summary>The coherent finite aggregate observation and implicit field root.</summary>
-    public static ValueBindingId Observation { get; } = new("transition.observation");
-}
-
 /// <summary>One analyzed canonical Transition expression site and its owning IR construct.</summary>
 public sealed class TransitionExpressionSiteAnalysis
 {

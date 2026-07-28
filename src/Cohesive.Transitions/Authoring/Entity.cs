@@ -3,8 +3,10 @@ using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Cohesive.Model.Serialization;
 using Cohesive.Transitions.Model;
 
 namespace Cohesive.Transitions.Authoring;
@@ -71,6 +73,43 @@ public abstract class Entity<TEntity>(string? entityName = null)
     /// <summary>Defines a transition for the entity.</summary>
     protected Transition<TEntity, TInput> Transition<TInput>(string name, Action<TransitionExpressionBuilder<TEntity, TInput>> configure) =>
         base.Transition(name, configure);
+
+    /// <summary>Produces one canonical Transition execution-definition document for this entity shape.</summary>
+    /// <typeparam name="TInput">Typed invocation input.</typeparam>
+    /// <typeparam name="TOutcome">Typed Transition outcome.</typeparam>
+    /// <param name="metadata">Stable identity, revision, root-body identity, and provenance.</param>
+    /// <param name="configure">Finite builder callback that is evaluated once and is not retained.</param>
+    /// <param name="sourceFile">Compiler-supplied source file used only for source attribution.</param>
+    /// <param name="sourceLine">Compiler-supplied source line used only for source attribution.</param>
+    /// <param name="sourceMember">Compiler-supplied source member used only for source attribution.</param>
+    /// <returns>A typed handle containing only the canonical document and its validation result.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="metadata"/> or <paramref name="configure"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="TransitionExpressionTranslationException">
+    /// An authored expression is outside the portable Transition subset.
+    /// </exception>
+    /// <exception cref="SemanticRuleViolationException">
+    /// No entity field has been declared before the Transition is authored.
+    /// </exception>
+    /// <exception cref="ArgumentException">Authored identity, shape, or canonical structure is invalid.</exception>
+    /// <exception cref="InvalidOperationException">Builder structure or canonical JSON state is contradictory.</exception>
+    /// <exception cref="NotSupportedException">An authored constant or canonical value cannot be represented portably.</exception>
+    /// <exception cref="System.Text.Json.JsonException">
+    /// Canonical content cannot be encoded by the strict execution serializer.
+    /// </exception>
+    protected Transition<TEntity, TInput, TOutcome> Transition<TInput, TOutcome>(
+        TransitionAuthoringMetadata metadata,
+        Action<TransitionBuilder<TEntity, TInput, TOutcome>> configure,
+        [CallerFilePath] string sourceFile = "",
+        [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "") =>
+        base.Transition<TEntity, TInput, TOutcome>(
+            metadata,
+            configure,
+            sourceFile,
+            sourceLine,
+            sourceMember);
 }
 
 /// <summary>
@@ -551,6 +590,58 @@ public abstract class Entity
             transitionDefinition,
             (state, input) => ApplyTransition(transitionDefinition.Name, state, input)
             );
+    }
+
+    /// <summary>Produces one canonical Transition document against this entity's declared observation shape.</summary>
+    /// <typeparam name="TEntity">Entity authoring type used by observation-field selectors.</typeparam>
+    /// <typeparam name="TInput">Typed invocation input.</typeparam>
+    /// <typeparam name="TOutcome">Typed Transition outcome.</typeparam>
+    /// <param name="metadata">Stable identity, revision, root-body identity, and provenance.</param>
+    /// <param name="configure">Finite builder callback that is evaluated once and is not retained.</param>
+    /// <param name="sourceFile">Compiler-supplied source file used only for source attribution.</param>
+    /// <param name="sourceLine">Compiler-supplied source line used only for source attribution.</param>
+    /// <param name="sourceMember">Compiler-supplied source member used only for source attribution.</param>
+    /// <returns>A typed handle containing only the canonical document and its validation result.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="metadata"/> or <paramref name="configure"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="SemanticRuleViolationException">
+    /// <typeparamref name="TEntity"/> does not match this entity instance, or no field has been declared.
+    /// </exception>
+    /// <exception cref="TransitionExpressionTranslationException">
+    /// An authored expression is outside the portable Transition subset.
+    /// </exception>
+    /// <exception cref="ArgumentException">Authored identity, shape, or canonical structure is invalid.</exception>
+    /// <exception cref="InvalidOperationException">Builder structure or canonical JSON state is contradictory.</exception>
+    /// <exception cref="NotSupportedException">An authored constant or canonical value cannot be represented portably.</exception>
+    /// <exception cref="System.Text.Json.JsonException">
+    /// Canonical content cannot be encoded by the strict execution serializer.
+    /// </exception>
+    protected Transition<TEntity, TInput, TOutcome> Transition<TEntity, TInput, TOutcome>(
+        TransitionAuthoringMetadata metadata,
+        Action<TransitionBuilder<TEntity, TInput, TOutcome>> configure,
+        [CallerFilePath] string sourceFile = "",
+        [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "")
+        where TEntity : Entity
+    {
+        ArgumentNullException.ThrowIfNull(metadata);
+        ArgumentNullException.ThrowIfNull(configure);
+        if (this is not TEntity)
+        {
+            throw new SemanticRuleViolationException(
+                $"Canonical Transition '{metadata.DefinitionId.Value}' is authored for entity type "
+                + $"'{typeof(TEntity).Name}' but actual type is '{GetType().Name}'.");
+        }
+
+        var entityShape = sharedModel?.Definition.Shape ?? BuildProvisionalDefinition().Shape;
+        return TransitionAuthoring.Create<TEntity, TInput, TOutcome>(
+            entityShape,
+            metadata,
+            configure,
+            sourceFile,
+            sourceLine,
+            sourceMember);
     }
 
     /// <summary>

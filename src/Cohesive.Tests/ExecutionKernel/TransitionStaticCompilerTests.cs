@@ -613,6 +613,35 @@ public sealed class TransitionStaticCompilerTests
     }
 
     [Fact]
+    public void Compile_CanonicalValidationDiagnosticsPreserveDetailsAndResolveAuthoredSource()
+    {
+        var definition = Definition(
+            Sequence(
+                "root",
+                Outcome("duplicate"),
+                Outcome("duplicate")));
+        ExecutionSourceMap sourceMap = new(
+        [
+            new("src/Review.cs:20", new(["body", "steps", "0"])),
+            new("src/Review.cs:30", new(["body", "steps", "1"]))
+        ]);
+
+        var result = TransitionStaticCompiler.Compile(Document(definition, sourceMap));
+
+        Assert.False(result.IsSuccessful);
+        var diagnostic = Assert.Single(
+            result.Validation.Diagnostics,
+            static value => value.Code == TransitionDefinitionDiagnosticCodes.NodeIdentityDuplicate);
+        Assert.Equal("/definition/body/steps/1/id", diagnostic.Location);
+        Assert.Equal("canonicalValidation", diagnostic.Evidence?.Stage);
+        Assert.Equal(["src/Review.cs:30"], diagnostic.Evidence?.SourceReferences);
+        Assert.Contains(
+            "/body/steps/0/id",
+            diagnostic.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Compile_DerivedFieldsBuildDependencyAndAffectedClosure_AndCyclesFail()
     {
         var graph = DerivedGraph(cycle: false);

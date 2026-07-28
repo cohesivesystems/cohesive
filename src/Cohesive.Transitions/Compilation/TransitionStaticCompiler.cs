@@ -2233,70 +2233,10 @@ public static class TransitionStaticCompiler
                     observed: diagnostic.Evidence?.Observed)
             };
 
-        ImmutableArray<string> SourcesFor(string location)
-        {
-            var segments = PointerSegments(location);
-            var candidates = document.Metadata.SourceMap.Entries
-                .Where(entry => entry.SemanticPath is { } path
-                                && IsPrefix(path.Segments, segments))
-                .ToArray();
-            if (candidates.Length == 0)
-            {
-                return [document.Metadata.Provenance.Source.Reference];
-            }
-
-            var maximum = candidates.Max(static entry => entry.SemanticPath!.Value.Segments.Length);
-            return
-            [
-                .. candidates
-                    .Where(entry => entry.SemanticPath!.Value.Segments.Length == maximum)
-                    .Select(static entry => entry.Reference)
-                    .Distinct(StringComparer.Ordinal)
-                    .Order(StringComparer.Ordinal)
-            ];
-        }
-
-        static ImmutableArray<string> PointerSegments(string pointer)
-        {
-            if (string.IsNullOrEmpty(pointer) || pointer[0] != '/')
-            {
-                return [];
-            }
-
-            var segments = pointer.Split('/', StringSplitOptions.RemoveEmptyEntries)
-                .Select(DecodePointerSegment)
-                .ToList();
-            if (segments.Count > 0 && string.Equals(segments[0], "definition", StringComparison.Ordinal))
-            {
-                segments.RemoveAt(0);
-            }
-
-            return [.. segments];
-        }
-
-        static string DecodePointerSegment(string value) =>
-            value.Replace("~1", "/", StringComparison.Ordinal)
-                .Replace("~0", "~", StringComparison.Ordinal);
-
-        static bool IsPrefix(
-            ImmutableArray<string> prefix,
-            ImmutableArray<string> path)
-        {
-            if (prefix.Length > path.Length)
-            {
-                return false;
-            }
-
-            for (var index = 0; index < prefix.Length; index++)
-            {
-                if (!string.Equals(prefix[index], path[index], StringComparison.Ordinal))
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
+        ImmutableArray<string> SourcesFor(string? location) =>
+            document.Metadata.SourceMap.ResolveReferences(
+                location,
+                document.Metadata.Provenance.Source.Reference);
 
         bool TryResolveObservationShape(out Shape shape)
         {

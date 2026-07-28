@@ -7,13 +7,22 @@ using Cohesive.Model.Serialization;
 namespace Cohesive.Transitions.Authoring;
 
 /// <summary>
-/// Default mapping from CLR types to semantic type references.
+/// Default mapping from CLR types to semantic type references using deterministic serialized property identities.
 /// </summary>
 public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
 {
     /// <summary>
     /// Maps the supplied CLR type to a semantic type reference using available nullability metadata.
     /// </summary>
+    /// <remarks>
+    /// Structural object fields use <see cref="JsonPropertyNameAttribute"/> when present and otherwise use the CLR
+    /// property name. Fields are ordered ordinally by that semantic name. Unsupported, recursive, polymorphic, or
+    /// ambiguous CLR shapes produce an <see cref="OpaqueRuntimeTypeRef"/> carrying a type-inference diagnostic.
+    /// </remarks>
+    /// <param name="clrType">CLR type to project into a portable semantic type reference.</param>
+    /// <param name="nullability">Optional reflection nullability metadata for the mapped occurrence.</param>
+    /// <returns>A portable type reference, or a diagnostic-bearing opaque reference when inference is unsafe.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="clrType"/> is <see langword="null"/>.</exception>
     public TypeRef Map(Type clrType, NullabilityInfo? nullability)
     {
         ArgumentNullException.ThrowIfNull(clrType);
@@ -133,10 +142,11 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
 
         try
         {
-            var properties = unwrapped
-                .GetProperties(BindingFlags.Public | BindingFlags.Instance)
-                .Where(x => x.GetMethod is not null && !x.GetMethod.IsStatic && x.GetIndexParameters().Length == 0)
-                .OrderBy(x => x.Name, StringComparer.Ordinal)
+            var properties = ShapeTypeInspector.GetReadableProperties(unwrapped)
+                .Select(static property => (
+                    Property: property,
+                    Name: GetSerializedMemberName(property)))
+                .OrderBy(static property => property.Name, StringComparer.Ordinal)
                 .ToArray();
 
             if (properties.Length == 0)
@@ -147,21 +157,30 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
                     "The CLR type has no readable public instance properties to infer from.");
             }
 
+            if (properties.Select(static property => property.Name).Distinct(StringComparer.Ordinal).Count()
+                != properties.Length)
+            {
+                return Opaque(
+                    unwrapped,
+                    TypeInferenceDiagnosticReasons.AmbiguousSerializedProperty,
+                    "The CLR type maps more than one readable property to the same serialized field name.");
+            }
+
             return DomainTypes.Object(
                 [.. properties.Select(x =>
                 {
-                    var propertyNullability = CreateNullabilityOrNull(x);
+                    var propertyNullability = CreateNullabilityOrNull(x.Property);
                     return new ObjectFieldTypeDef(
                         name: x.Name,
                         type: MapInternal(
-                            clrType: x.PropertyType,
+                            clrType: x.Property.PropertyType,
                             nullability: propertyNullability,
                             mapPath: mapPath
                             ),
-                        presence: IsOptional(x.PropertyType, propertyNullability)
+                        presence: IsOptional(x.Property.PropertyType, propertyNullability)
                             ? FieldPresence.Optional
                             : FieldPresence.Required,
-                        nullability: IsOptional(x.PropertyType, propertyNullability)
+                        nullability: IsOptional(x.Property.PropertyType, propertyNullability)
                             ? FieldNullability.Nullable
                             : FieldNullability.NonNullable
                             );
@@ -175,6 +194,9 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
 
     static OpaqueRuntimeTypeRef Opaque(Type type, string reason, string? message = null) =>
         new(type.FullName ?? type.Name, new TypeInferenceDiagnostic(reason: reason, message: message));
+
+    internal static string GetSerializedMemberName(MemberInfo member) =>
+        member.GetCustomAttribute<JsonPropertyNameAttribute>(inherit: true)?.Name ?? member.Name;
 
     static bool TryMapJsonType(Type type, out TypeRef typeRef)
     {

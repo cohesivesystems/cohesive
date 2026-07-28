@@ -179,7 +179,9 @@ public static class TransitionDefinitionDocuments
         ArgumentNullException.ThrowIfNull(document);
         var sharedValidation = ExecutionDefinitionDocumentValidator.Validate(document, graph);
         var transitionValidation = ValidateTransitionContent(document, graph, out _);
-        return CombineDeterministically(sharedValidation, transitionValidation);
+        return WithSourceReferences(
+            document,
+            CombineDeterministically(sharedValidation, transitionValidation));
     }
 
     static DocumentValidationResult CompleteDeserialization(
@@ -199,12 +201,33 @@ public static class TransitionDefinitionDocuments
             graph,
             out var candidateDefinition);
         var combined = CombineDeterministically(sharedValidation, transitionValidation);
+        combined = WithSourceReferences(document, combined);
         if (combined.IsValid)
         {
             definition = candidateDefinition;
         }
 
         return combined;
+    }
+
+    static DocumentValidationResult WithSourceReferences(
+        ExecutionDefinitionDocument document,
+        DocumentValidationResult validation)
+    {
+        if (validation.Diagnostics.IsDefaultOrEmpty)
+            return validation;
+
+        var diagnostics = ImmutableArray.CreateBuilder<DocumentValidationDiagnostic>(validation.Diagnostics.Length);
+        foreach (var diagnostic in validation.Diagnostics)
+        {
+            diagnostics.Add(document.Metadata.SourceMap.WithResolvedSourceReferences(
+                diagnostic,
+                document.Metadata.Provenance.Source.Reference,
+                "canonicalValidation"));
+        }
+
+        diagnostics.Sort(DocumentValidationDiagnosticComparer.Ordinal);
+        return DocumentValidationResult.FromDiagnostics(diagnostics.MoveToImmutable());
     }
 
     static DocumentValidationResult ValidateTransitionContent(

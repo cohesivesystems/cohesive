@@ -8,8 +8,9 @@ Status meanings:
 - **Partial**: useful substrate or observable behavior exists, but one or more normative guarantees are missing.
 - **Absent**: the scenario's core semantic construct has no current representation.
 
-EK-01 now passes through the canonical Transition compilation and reference-interpretation path. The remaining
-scenarios retain the Partial or Absent classifications recorded below.
+EK-01 now passes through the canonical Transition compilation and reference-interpretation path. EK-09 is Partial:
+representative Transitions have a typed C# producer that is equivalent to direct IR, while Processes still lack a
+canonical lowering. The remaining scenarios retain the Partial or Absent classifications recorded below.
 
 ## Scenario matrix
 
@@ -23,7 +24,7 @@ scenarios retain the Partial or Absent classifications recorded below.
 | EK-06 — durable effect crash matrix | Partial | Transition effects can be committed to a storage outbox; process checkpoints distinguish pending and executed effects and retain dead letters. | A durable operation ledger with stable request, attempt, acknowledgement, claim, and completion identities covering every crash boundary. |
 | EK-07 — signal arbitration | Partial | Signals can target a DurableTask process instance and are buffered FIFO by key. The local wait adapter also buffers early keyed inputs. | Signal identity, idempotent admission receipts, exclusive winner claims, duplicate prior-result behavior, observable losers, and rules preventing late signals from reopening a choice. |
 | EK-08 — index rebuild recovery | Absent | No generation-affine recovery behavior exists in Transitions or Processes. | Process attempt and activation identity; candidate generation affinity; pause/continue retaining the generation; retry policy; restart creating a fresh generation; abandoned-generation exclusion; fenced, idempotent promotion. |
-| EK-09 — C# and IR equivalence | Absent | Transition definitions have a serializable normalized subset, and existing entity authoring round-trip tests provide useful migration input. | A canonical normalized execution IR for transitions and processes, schema versioning, semantic revision, fingerprints, provenance, stable node/type identity, and equivalence between C# authoring and direct IR authoring. |
+| EK-09 — C# and IR equivalence | Partial | Representative typed C# Transition authoring lowers immediately to the same canonical `Cohesive.Transitions.IR` definitions as direct authoring, with explicit stable definition/revision/node/binding identities, typed contracts, deterministic normalization and fingerprints, strict document round trips, and fingerprint-excluded source maps that reconnect canonical diagnostics to C# call sites. The typed handle retains only the canonical document and validation result, so deserialization and interpretation do not require the producer assembly or callbacks. | `Cohesive.Processes` still persists delegate-bearing executable node objects and has no canonical C#-to-IR lowering or C#/direct-IR equivalence suite. Transition support is intentionally a restricted portable C# subset; broader representative coverage and consumer migration remain follow-on work, but unsupported CLR computation is rejected rather than persisted. |
 
 The executable classifications and focused behavioral baselines live in `src/Cohesive.Tests/ExecutionKernel/ExecutionKernelCharacterizationTests.cs` and run as part of the existing `Cohesive.Tests` project.
 
@@ -33,7 +34,7 @@ The executable classifications and focused behavioral baselines live in `src/Coh
 
 `Cohesive.Transitions.Model.TransitionDefinition` is a legacy serialized set of parallel collections: `Inputs`, `Preconditions`, `Updates`, and `Effects`. The runtime applies preconditions, sequential assignments, computed fields, invariants, and then every declared effect. Conditional expressions exist inside those collections, but there is no structured body containing branch nodes or stable path identity. Static analysis unions referenced fields; it cannot report must/may/actual access or branch provenance.
 
-Canonical persisted semantic authority now belongs to `Cohesive.Transitions.IR`. Keep the current builders and `DeclarativeEntityRuntime` only as temporary compatibility producer/interpreter surfaces while compilation, interpretation, and authoring lowerings migrate. Project the legacy `TransitionResult`, generic effects, and dictionary patches from the canonical decision rather than defining kernel behavior through them.
+Canonical persisted semantic authority now belongs to `Cohesive.Transitions.IR`. `TransitionAuthoring` and its typed canonical builders are producers of that authority and retain no executable callback. Keep the legacy `Transition<TEntity, TInput>`, `TransitionExpressionBuilder`, and `DeclarativeEntityRuntime` only as temporary compatibility producer/interpreter surfaces pending ARI-185 while consumers migrate. Project the legacy `TransitionResult`, generic effects, and dictionary patches from the canonical decision rather than defining kernel behavior through them.
 
 ### Delegate-bearing processes
 
@@ -52,9 +53,11 @@ Migration disposition: preserve old checkpoints only behind an explicit compatib
 | Area | Current types and runtime paths |
 | --- | --- |
 | Canonical transition semantics | `Cohesive.Transitions.IR` structured definitions, validation, and shared execution-definition persistence |
+| Canonical Transition C# authoring | `TransitionAuthoring.Create` + `TransitionBuilder<TEntity, TInput, TOutcome>` → canonical `ExecutionDefinitionDocument`; strict unsupported-syntax rejection and `ExecutionSourceMap` attribution |
 | Canonical transition compilation | `TransitionStaticCompiler` → `CompiledTransitionPlan`, including path-sensitive requirements, computed-field order, and exact `TransitionMachineEdgeLink` slices |
 | Reference transition interpretation | `TransitionReferenceInterpreter.Decide`, `DecideFullState`, and `DecideSparse` → `TransitionDecision` plus `TransitionExecutionEvidence` |
-| Direct transition activation | `Transition<TEntity,TInput>.Apply` → `Entity.ApplyTransition` → `DeclarativeEntityRuntime.Apply` |
+| Canonical transition activation | `ExecutionDefinitionDocument` → `TransitionStaticCompiler` → `TransitionReferenceInterpreter`; no producer assembly or authoring callback is required |
+| Legacy direct transition activation | `Transition<TEntity,TInput>.Apply` → `Entity.ApplyTransition` → `DeclarativeEntityRuntime.Apply` |
 | Flat transition compatibility | `Cohesive.Transitions.Model.TransitionDefinition`, `TransitionBuilder`, `TransitionExpressionBuilder`, `TransitionExpressionAnalyzer`, `TransitionPatchProjector`, `TransitionResult` |
 | Process planning and replay | `ProcessDefinition`, `ProcessNode`, `BranchingNode`, `ProcessExecutionPlanner`, `ProcessCheckpoint` |
 | Waits and signals | `WaitNode`, `IProcessWaitAdapter`, `IProcessSignalSink`, `InMemoryProcessWaitAdapter`, `DurableTaskProcessOrchestration` |
