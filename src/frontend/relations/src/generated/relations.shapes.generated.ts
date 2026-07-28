@@ -474,6 +474,7 @@ export interface DocumentValidationDiagnostic {
   message: string;
   location?: string | null;
   schemaLocation?: string | null;
+  evidence?: DocumentDiagnosticEvidence | null;
 }
 
 export interface RelationQueryPhysicalPlanningResult {
@@ -1236,6 +1237,16 @@ export interface RelationQueryNativeResultBranch {
   queryResult?: QueryResultId | null;
   outputs: RelationQueryOutputReference[];
   fields: RelationQueryFieldReference[];
+}
+
+export interface DocumentDiagnosticEvidence {
+  stage?: string | null;
+  subject?: string | null;
+  relatedLocations: string[];
+  sourceReferences: string[];
+  resolutionOptions: string[];
+  expected?: string | null;
+  observed?: string | null;
 }
 
 export type RelationQueryPhysicalPlanningStatus = 'Planned' | 'Unavailable' | 'Invalid';

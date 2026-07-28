@@ -2003,7 +2003,7 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
             }
             if (runtimeBinding.IsAuthoritativeValue
                 || runtimeBinding.AuthoritativeFields.Any(authoritative =>
-                    IsPrefix(authoritative, path)))
+                    authoritative.IsPrefixOf(path)))
             {
                 return true;
             }
@@ -2011,7 +2011,7 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
             if (runtimeBinding.Kind == RelationQueryRuntimeBindingKind.Computed)
             {
                 return !runtimeBinding.UnavailableFields.Any(unavailable =>
-                    PathsOverlap(unavailable, path));
+                    unavailable.Overlaps(path));
             }
 
             if (runtimeBinding.Occurrence is not { } occurrence
@@ -2064,21 +2064,6 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
                 return false;
             return capabilityEvidence.TryGetValue(input.Id, out var observed)
                 && observed.State == RelationQueryCapabilityEvidenceState.Available;
-        }
-
-        static bool PathsOverlap(FieldPath left, FieldPath right) =>
-            IsPrefix(left, right) || IsPrefix(right, left);
-
-        static bool IsPrefix(FieldPath prefix, FieldPath path)
-        {
-            if (prefix.Segments.Length > path.Segments.Length)
-                return false;
-            for (var index = 0; index < prefix.Segments.Length; index++)
-            {
-                if (prefix.Segments[index] != path.Segments[index])
-                    return false;
-            }
-            return true;
         }
 
         bool RequireBoolean(

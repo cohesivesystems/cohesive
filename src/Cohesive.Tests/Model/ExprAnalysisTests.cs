@@ -36,6 +36,33 @@ public sealed class ExprAnalysisTests
     }
 
     [Fact]
+    public void Analyze_ExposesKnownConstantsForBooleanConstantsAndTypedLiterals()
+    {
+        var constant = Analyze(Expr.Const(true), ExprScope.Empty, "constant-boolean");
+        var literal = Analyze(
+            new LiteralExpr(
+                new ScalarTypeRef(ScalarTypeKind.Bool),
+                ObservationValue.FromBool(false)),
+            ExprScope.Empty,
+            "literal-boolean");
+
+        Assert.Equal(ObservationValue.FromBool(true), constant.KnownConstant);
+        Assert.Equal(ObservationValue.FromBool(false), literal.KnownConstant);
+    }
+
+    [Fact]
+    public void Analyze_DoesNotInventAConstantForNonconstantBooleanInput()
+    {
+        var result = Analyze(
+            Expr.Param("flag"),
+            Scope(parameters: [new("flag", new ScalarTypeRef(ScalarTypeKind.Bool))]),
+            "nonconstant-boolean");
+
+        Assert.True(result.IsValid);
+        Assert.Null(result.KnownConstant);
+    }
+
+    [Fact]
     public void Analyze_UnqualifiedField_RequiresExplicitImplicitBinding()
     {
         var expression = Expr.Field("Id");
@@ -1159,6 +1186,126 @@ public sealed class ExprAnalysisTests
     }
 
     [Fact]
+    public void Analyze_RetainsEveryFieldOccurrenceAtItsDeterministicExpressionPath()
+    {
+        var fieldPath = FieldPath.FromField("Id");
+        var expression = new ConditionalExpr(
+            Expr.Eq(Expr.Field("Id"), Expr.Const("selected")),
+            Expr.Field("Id"),
+            new FieldRefExpr(fieldPath, StringType),
+            StringType);
+        var result = Analyze(
+            expression,
+            Scope(bindings: [Binding(LoadBinding)], implicitBinding: LoadBinding),
+            "field-occurrences");
+
+        Assert.True(result.IsValid);
+        var aggregate = Assert.Single(result.Requirements.Fields);
+        Assert.Equal(LoadBinding, aggregate.Binding);
+        Assert.True(aggregate.WasUnqualified);
+        Assert.Collection(
+            result.FieldUses,
+            use =>
+            {
+                Assert.Equal("/ifFalse", use.ExpressionPath);
+                Assert.Equal(aggregate, use.Requirement);
+            },
+            use =>
+            {
+                Assert.Equal("/ifTrue", use.ExpressionPath);
+                Assert.Equal(aggregate, use.Requirement);
+            },
+            use =>
+            {
+                Assert.Equal("/test/left", use.ExpressionPath);
+                Assert.Equal(aggregate, use.Requirement);
+            });
+        Assert.Empty(result.BindingUses);
+    }
+
+    [Fact]
+    public void Analyze_DistinguishesWholeBindingOccurrencesFromFieldRootBindings()
+    {
+        var expression = Expr.Eq(
+            new BindingExpr(LoadBinding),
+            new BindingExpr(LoadBinding));
+        var result = Analyze(
+            expression,
+            Scope(bindings: [Binding(LoadBinding)]),
+            "binding-occurrences");
+
+        Assert.True(result.IsValid);
+        Assert.Equal([LoadBinding], result.Requirements.Bindings.ToArray());
+        Assert.Empty(result.Requirements.Fields);
+        Assert.Empty(result.FieldUses);
+        Assert.Collection(
+            result.BindingUses,
+            use =>
+            {
+                Assert.Equal(LoadBinding, use.Binding);
+                Assert.Equal("/left", use.ExpressionPath);
+            },
+            use =>
+            {
+                Assert.Equal(LoadBinding, use.Binding);
+                Assert.Equal("/right", use.ExpressionPath);
+            });
+    }
+
+    [Fact]
+    public void AnalysisResult_NormalizesAndValidatesOccurrenceProjectionsAgainstRequirements()
+    {
+        var site = new ExprSite(new("occurrences"), Expr.Const(true), ExprScope.Empty);
+        ExprFieldRequirement field = new(
+            FieldPath.FromField("Id"),
+            ExprFieldRootKind.Binding,
+            LoadBinding);
+        ExprRequirements requirements = new(fields: [field], bindings: [LoadBinding]);
+        var result = new ExprAnalysisResult(
+            site,
+            ExprSemanticsCatalog.Default,
+            ExprResultCategory.Boolean,
+            new ValueContract(new ScalarTypeRef(ScalarTypeKind.Bool)),
+            requirements,
+            [],
+            DocumentValidationResult.Valid,
+            knownConstant: ObservationValue.FromBool(true),
+            fieldUses: [new(field, "/z"), new(field, "/a")],
+            bindingUses: [new(LoadBinding, "/y"), new(LoadBinding, "/b")]);
+
+        Assert.Equal(["/a", "/z"], result.FieldUses.Select(static use => use.ExpressionPath).ToArray());
+        Assert.Equal(["/b", "/y"], result.BindingUses.Select(static use => use.ExpressionPath).ToArray());
+
+        Assert.Throws<ArgumentException>(() => new ExprAnalysisResult(
+            site,
+            ExprSemanticsCatalog.Default,
+            ExprResultCategory.Boolean,
+            knownResult: null,
+            requirements,
+            [],
+            DocumentValidationResult.Valid,
+            fieldUses: [new(field, "/same"), new(field, "/same")]));
+        Assert.Throws<ArgumentException>(() => new ExprAnalysisResult(
+            site,
+            ExprSemanticsCatalog.Default,
+            ExprResultCategory.Boolean,
+            knownResult: null,
+            requirements,
+            [],
+            DocumentValidationResult.Valid,
+            bindingUses: [new(LoadBinding, " ")]));
+        Assert.Throws<ArgumentException>(() => new ExprAnalysisResult(
+            site,
+            ExprSemanticsCatalog.Default,
+            ExprResultCategory.Boolean,
+            knownResult: null,
+            ExprRequirements.Empty,
+            [],
+            DocumentValidationResult.Valid,
+            fieldUses: [new(field, "/field")]));
+    }
+
+    [Fact]
     public void Analyze_DisallowedDependenciesAreDiagnosedAfterRequirementsAreDerived()
     {
         var scope = Scope(
@@ -1311,6 +1458,15 @@ public sealed class ExprAnalysisTests
             ExprRequirements.Empty,
             [],
             DocumentValidationResult.Valid));
+        Assert.Throws<ArgumentException>(() => new ExprAnalysisResult(
+            site,
+            ExprSemanticsCatalog.Default,
+            ExprResultCategory.Text,
+            new ValueContract(StringType),
+            ExprRequirements.Empty,
+            [],
+            DocumentValidationResult.Valid,
+            ObservationValue.FromBool(true)));
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             ExprSemanticsCatalog.Default.Functions[0].GetArgumentCategory(-1));
     }
