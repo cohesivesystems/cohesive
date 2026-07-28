@@ -332,14 +332,18 @@ public sealed record AggregateExpr : Expr
     /// <summary>
     /// Creates an aggregate expression.
     /// </summary>
+    /// <param name="operator">Aggregate operation.</param>
+    /// <param name="source">Collection expression supplying aggregate inputs.</param>
+    /// <param name="returnType">Declared aggregate result type.</param>
+    /// <param name="groupBy">Optional grouping expressions.</param>
     public AggregateExpr(
-        AggregateOperator op,
+        AggregateOperator @operator,
         Expr source,
         TypeRef returnType,
         ImmutableArray<Expr> groupBy = default
         )
     {
-        Operator = op;
+        Operator = @operator;
         Source = Guard.RequireNotNull(source);
         ReturnType = Guard.RequireNotNull(returnType);
         GroupBy = groupBy.IsDefault ? [] : groupBy;

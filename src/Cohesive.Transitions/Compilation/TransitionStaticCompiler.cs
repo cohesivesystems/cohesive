@@ -47,6 +47,15 @@ public static class TransitionCompilationDiagnosticCodes
 
     /// <summary>An applicable invariant predicate is statically false.</summary>
     public const string InvariantDisproven = "transitions.compilation.invariant.disproven";
+
+    /// <summary>A MoveMachine node has no exact linked Machine edge evidence.</summary>
+    public const string MachineEdgeUnresolved = "transitions.compilation.machine.edgeUnresolved";
+
+    /// <summary>A linked Machine configuration assignment is incompatible with its aggregate target.</summary>
+    public const string MachineConfigurationMismatch = "transitions.compilation.machine.configurationMismatch";
+
+    /// <summary>A grouped aggregate is outside the restricted Transition v1 expression language.</summary>
+    public const string GroupedAggregateUnsupported = "transitions.compilation.expression.groupedAggregateUnsupported";
 }
 
 /// <summary>
@@ -63,13 +72,17 @@ public static class TransitionStaticCompiler
     /// <summary>Compiles one exact fingerprinted Transition definition document.</summary>
     /// <param name="document">Canonical shared execution-definition document.</param>
     /// <param name="graph">Optional exact shape graph used to resolve qualified contracts and computed fields.</param>
+    /// <param name="machineLinks">
+    /// Optional immutable edge slices projected from exact Cohesive.Machines definitions.
+    /// </param>
     /// <returns>A complete target-independent plan, or partial analysis with structured diagnostics.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="document"/> is <see langword="null"/>.</exception>
     /// <exception cref="InvalidOperationException">Canonical semantic content has no stable JSON representation.</exception>
     /// <exception cref="NotSupportedException">Canonical semantic content contains an unsupported runtime type.</exception>
     public static TransitionCompilationResult Compile(
         ExecutionDefinitionDocument document,
-        ShapeGraph? graph = null)
+        ShapeGraph? graph = null,
+        TransitionMachineLinkCatalog? machineLinks = null)
     {
         ArgumentNullException.ThrowIfNull(document);
 
@@ -87,7 +100,7 @@ public static class TransitionStaticCompiler
         }
 
         var definition = document.GetDefinition<TransitionDefinition>();
-        Context context = new(document, definition, graph);
+        Context context = new(document, definition, graph, machineLinks ?? TransitionMachineLinkCatalog.Empty);
         return context.Compile();
     }
 
@@ -101,13 +114,14 @@ public static class TransitionStaticCompiler
     sealed class Context
     {
         static readonly ExprCapabilityProfile CapabilityProfile =
-            ExprSemanticsCatalog.Default.CreateCapabilityProfile();
+            TransitionExpressionLanguage.Capabilities;
         static readonly JsonSerializerOptions ExpressionJsonOptions =
             ExecutionDefinitionJsonSerializer.CreateOptions();
 
         readonly ExecutionDefinitionDocument document;
         readonly TransitionDefinition definition;
         readonly ShapeGraph? graph;
+        readonly TransitionMachineLinkCatalog machineLinks;
         readonly TransitionConditionSolver conditions;
         readonly List<DocumentValidationDiagnostic> diagnostics = [];
         readonly List<TransitionExpressionSiteAnalysis> sites = [];
@@ -124,6 +138,7 @@ public static class TransitionStaticCompiler
         readonly ValueContract observationContract;
         readonly Dictionary<FieldPath, ComputedFieldState> computedFields = [];
         readonly List<ComputedFieldState> computedOrder = [];
+        readonly Dictionary<MachineEdgeKey, TransitionMachineEdgeLink> usedMachineEdges = [];
         TransitionCondition admittedCondition;
         TransitionCondition appliedCondition;
         TransitionCondition domainRejectedCondition;
@@ -133,11 +148,13 @@ public static class TransitionStaticCompiler
         public Context(
             ExecutionDefinitionDocument document,
             TransitionDefinition definition,
-            ShapeGraph? graph)
+            ShapeGraph? graph,
+            TransitionMachineLinkCatalog machineLinks)
         {
             this.document = document;
             this.definition = definition;
             this.graph = graph;
+            this.machineLinks = machineLinks;
             inputContract = ResolveContract(definition.Input);
             observationContract = ResolveContract(definition.Observation);
             parameters = CreateParameters(inputContract);
@@ -183,7 +200,19 @@ public static class TransitionStaticCompiler
             var analysis = BuildAnalysis();
             var validation = Normalize(diagnostics);
             CompiledTransitionPlan? plan = validation.IsValid
-                ? new(document, definition, analysis)
+                ? new(
+                    document,
+                    definition,
+                    analysis,
+                    graph,
+                    [.. computedOrder.Select(static field => new CompiledTransitionDerivedField(
+                        field.Site.Node,
+                        field.Path,
+                        field.Contract,
+                        field.Expression,
+                        field.DirectDependencies))],
+                    [.. usedMachineEdges.Values
+                        .OrderBy(static edge => edge, TransitionStructuralOrdering.MachineEdges)])
                 : null;
 
             return new(document, definition, analysis, plan, validation);
@@ -300,6 +329,7 @@ public static class TransitionStaticCompiler
                 MatchTransitionNode match => CompileMatch(match, location, input, scope),
                 UpdateTransitionNode update => CompileUpdate(update, location, input, scope),
                 EmitTransitionNode emit => CompileEmit(emit, location, input, scope),
+                MoveMachineTransitionNode movement => CompileMachineMovement(movement, location, input, scope),
                 OutcomeTransitionNode outcome => CompileOutcome(outcome, location, input, scope),
                 _ => input
             };
@@ -597,6 +627,7 @@ public static class TransitionStaticCompiler
                         $"{location}/operation/value",
                         input,
                         TransitionObservationInfluence.Calculation);
+                    AddPatchTargetRead(update, location, input);
                     break;
                 case RemoveTransitionPatch:
                     if (target?.Presence == FieldPresence.Required)
@@ -608,6 +639,7 @@ public static class TransitionStaticCompiler
                             "optional target presence",
                             "required target presence");
                     }
+                    AddPatchTargetRead(update, location, input);
                     break;
                 case IncrementTransitionPatch increment:
                     ValidateTargetCategory(update, location, target, ExprResultCategory.Numeric, "numeric");
@@ -693,6 +725,129 @@ public static class TransitionStaticCompiler
                 input,
                 Origin(emit.Id, location, null, TransitionObservationInfluence.Emission)));
             return input;
+        }
+
+        TransitionCondition CompileMachineMovement(
+            MoveMachineTransitionNode movement,
+            string location,
+            TransitionCondition input,
+            ScopeState scope)
+        {
+            if (!machineLinks.TryGet(movement.Machine, movement.Edge, out var link))
+            {
+                AddDiagnostic(
+                    TransitionCompilationDiagnosticCodes.MachineEdgeUnresolved,
+                    $"Machine edge '{movement.Edge.Value}' from exact definition "
+                    + $"'{movement.Machine.DefinitionId.Value}' is not linked.",
+                    $"{location}/edge",
+                    movement.Id,
+                    stage: "definitionLinking",
+                    expected: "fingerprint-matched Cohesive.Machines edge evidence",
+                    observed: $"{movement.Machine.DefinitionId.Value}:{movement.Edge.Value}",
+                    resolutions: ["Compile and supply the exact referenced Machine definition through the Machine linker."]);
+                return input;
+            }
+
+            usedMachineEdges[new(link.Machine, link.Edge)] = link;
+            var source = AnalyzeSite(
+                movement.Id,
+                TransitionExpressionSiteKind.MachineSourceConfiguration,
+                link.SourceConfiguration,
+                scope,
+                ExprExpectation.Boolean,
+                $"{location}/linked/sourceConfiguration",
+                input,
+                TransitionObservationInfluence.Admission | TransitionObservationInfluence.Branch,
+                conditionAtomScope: $"machine-source:{movement.Id.Value}");
+            var sourceTest = TryGetBoolean(source, link.SourceConfiguration, out var sourceConstant)
+                ? sourceConstant ? conditions.True : conditions.False
+                : BooleanExpressionCondition(
+                    link.SourceConfiguration,
+                    $"machine-source:{movement.Id.Value}");
+            var rejected = conditions.And(input, conditions.Not(sourceTest));
+            _ = AnalyzeSite(
+                movement.Id,
+                TransitionExpressionSiteKind.MachineRejection,
+                movement.Rejection,
+                scope,
+                Exact(definition.Outcome),
+                $"{location}/rejection",
+                rejected,
+                TransitionObservationInfluence.Outcome);
+            AddFact(ConditionalFact.Outcome(
+                TransitionDecisionKind.AdmissionRejected,
+                rejected,
+                Origin(movement.Id, $"{location}/rejection", null, TransitionObservationInfluence.Outcome)));
+
+            var legal = conditions.And(input, sourceTest);
+            foreach (var assignment in link.Assignments)
+            {
+                var assignmentValidation = PortableExecutionValidator.Validate(assignment.Value, graph);
+                foreach (var diagnostic in assignmentValidation.Diagnostics)
+                    diagnostics.Add(WithEvidence(diagnostic, movement.Id, "definitionLinking"));
+
+                var target = ResolveRelativePath(
+                    observationContract,
+                    assignment.Path,
+                    $"{location}/linked/assignments/{Encode(assignment.Path.ToString())}/path",
+                    movement.Id);
+                if (target is not null && assignment.Value.Contract != target)
+                {
+                    AddDiagnostic(
+                        TransitionCompilationDiagnosticCodes.MachineConfigurationMismatch,
+                        $"Machine edge '{movement.Edge.Value}' assigns path '{assignment.Path}' with a different contract.",
+                        $"{location}/linked/assignments/{Encode(assignment.Path.ToString())}/value/contract",
+                        movement.Id,
+                        stage: "definitionLinking",
+                        expected: Describe(target),
+                        observed: Describe(assignment.Value.Contract),
+                        resolutions: ["Regenerate the Machine link against the exact aggregate Shape revision."]);
+                }
+
+                AddObservationFact(
+                    assignment.Path,
+                    legal,
+                    Origin(
+                        movement.Id,
+                        $"{location}/linked/assignments/{Encode(assignment.Path.ToString())}/path",
+                        null,
+                        TransitionObservationInfluence.Calculation | TransitionObservationInfluence.PatchTarget));
+                AddFact(ConditionalFact.Write(
+                    assignment.Path,
+                    isDerived: false,
+                    legal,
+                    Origin(
+                        movement.Id,
+                        $"{location}/linked/assignments/{Encode(assignment.Path.ToString())}/path",
+                        null,
+                        TransitionObservationInfluence.None)));
+            }
+
+            var targetConfiguration = AnalyzeSite(
+                movement.Id,
+                TransitionExpressionSiteKind.MachineTargetConfiguration,
+                link.TargetConfiguration,
+                scope,
+                ExprExpectation.Boolean,
+                $"{location}/linked/targetConfiguration",
+                legal,
+                TransitionObservationInfluence.Invariant,
+                candidateStateReads: true,
+                conditionAtomScope: $"machine-target:{movement.Id.Value}");
+            var targetTest = TryGetBoolean(targetConfiguration, link.TargetConfiguration, out var targetConstant)
+                ? targetConstant ? conditions.True : conditions.False
+                : BooleanExpressionCondition(
+                    link.TargetConfiguration,
+                    $"machine-target:{movement.Id.Value}");
+            invariantsHoldCondition = conditions.And(
+                invariantsHoldCondition,
+                conditions.Or(conditions.Not(legal), targetTest));
+            AddFact(ConditionalFact.MachineMovement(
+                movement.Machine,
+                movement.Edge,
+                legal,
+                Origin(movement.Id, location, null, TransitionObservationInfluence.None)));
+            return legal;
         }
 
         TransitionCondition CompileOutcome(
@@ -918,6 +1073,19 @@ public static class TransitionStaticCompiler
             bool candidateStateReads = false,
             string? conditionAtomScope = null)
         {
+            if (ContainsGroupedAggregate(expression))
+            {
+                AddDiagnostic(
+                    TransitionCompilationDiagnosticCodes.GroupedAggregateUnsupported,
+                    "Grouped aggregate expressions are outside the finite Transition v1 expression language.",
+                    location,
+                    node,
+                    stage: "expressionAnalysis",
+                    expected: "ungrouped aggregate or pure collection function",
+                    observed: "AggregateExpr with groupBy",
+                    resolutions: ["Move grouping into a Cohesive.Relations query and supply its finite result as Transition input."]);
+            }
+
             var siteId = new ExprSiteId(
                 $"{SitePrefix()}/node/{Encode(node.Value)}/{SiteKindName(kind)}/{sites.Count.ToString(CultureInfo.InvariantCulture)}");
             var result = ExprAnalyzer.Analyze(new(
@@ -982,6 +1150,26 @@ public static class TransitionStaticCompiler
             }
 
             return site;
+        }
+
+        static bool ContainsGroupedAggregate(Expr expression)
+        {
+            if (expression is AggregateExpr { GroupBy.IsDefaultOrEmpty: false })
+                return true;
+
+            return expression switch
+            {
+                UnaryExpr unary => ContainsGroupedAggregate(unary.Operand),
+                BinaryExpr binary => ContainsGroupedAggregate(binary.Left)
+                                     || ContainsGroupedAggregate(binary.Right),
+                ConditionalExpr conditional => ContainsGroupedAggregate(conditional.Test)
+                                                 || ContainsGroupedAggregate(conditional.IfTrue)
+                                                 || ContainsGroupedAggregate(conditional.IfFalse),
+                CallExpr call => call.Arguments.Any(ContainsGroupedAggregate),
+                AggregateExpr aggregate => ContainsGroupedAggregate(aggregate.Source)
+                                             || aggregate.GroupBy.Any(ContainsGroupedAggregate),
+                _ => false
+            };
         }
 
         Dictionary<string, TransitionCondition> AnalyzeExpressionEvaluation(
@@ -1325,6 +1513,8 @@ public static class TransitionStaticCompiler
                     conditionAtomScope: "candidate");
                 computedFields.Add(path, new(
                     path,
+                    ValueContract.FromField(field),
+                    field.Compute.Expression,
                     site,
                     currentDependencies,
                     candidateDependencies,
@@ -1433,7 +1623,9 @@ public static class TransitionStaticCompiler
         {
             Dictionary<FieldPath, VisitState> states = [];
             List<FieldPath> stack = [];
-            foreach (var field in computedFields.Keys.OrderBy(static path => path.ToString(), StringComparer.Ordinal))
+            foreach (var field in computedFields.Keys.OrderBy(
+                         static path => path,
+                         TransitionStructuralOrdering.FieldPaths))
             {
                 _ = ResolveDerived(field, states, stack);
             }
@@ -1772,6 +1964,12 @@ public static class TransitionStaticCompiler
                         ToRef(combined),
                         invocationStrength,
                         occurrences),
+                    FactKind.MachineMovement => new TransitionMachineMovementRequirement(
+                        groupFacts[0].Contract!,
+                        groupFacts[0].Edge!.Value,
+                        ToRef(combined),
+                        invocationStrength,
+                        occurrences),
                     FactKind.Capability => new TransitionCapabilityRequirement(
                         group.Key.Capability!.Value,
                         ToRef(combined),
@@ -1787,7 +1985,9 @@ public static class TransitionStaticCompiler
             }
 
             var derived = computedFields.Values
-                .OrderBy(static field => field.Path.ToString(), StringComparer.Ordinal)
+                .OrderBy(
+                    static field => field.Path,
+                    TransitionStructuralOrdering.FieldPaths)
                 .Select(field => new TransitionDerivedFieldAnalysis(
                     field.Path,
                     field.DirectDependencies,
@@ -2197,13 +2397,19 @@ public static class TransitionStaticCompiler
 
         static ImmutableArray<FieldPath> SortPaths(IEnumerable<FieldPath> paths) =>
         [
-            .. paths.Distinct().OrderBy(static path => path.ToString(), StringComparer.Ordinal)
+            .. paths.Distinct().OrderBy(
+                static path => path,
+                TransitionStructuralOrdering.FieldPaths)
         ];
 
         static ImmutableArray<TransitionObservationAccess> SortAccesses(
             IEnumerable<TransitionObservationAccess> accesses) =>
         [
-            .. accesses.Distinct().OrderBy(static access => access.SortKey, StringComparer.Ordinal)
+            .. accesses.Distinct()
+                .OrderBy(static access => access.IsWhole ? 0 : 1)
+                .ThenBy(
+                    static access => access.Path.GetValueOrDefault(),
+                    TransitionStructuralOrdering.FieldPaths)
         ];
 
         static bool TryGetBoolean(
@@ -2252,6 +2458,9 @@ public static class TransitionStaticCompiler
             TransitionExpressionSiteKind.OutcomeValue => "outcome",
             TransitionExpressionSiteKind.InvariantPredicate => "invariant",
             TransitionExpressionSiteKind.ComputedField => "computed",
+            TransitionExpressionSiteKind.MachineSourceConfiguration => "machineSource",
+            TransitionExpressionSiteKind.MachineRejection => "machineRejection",
+            TransitionExpressionSiteKind.MachineTargetConfiguration => "machineTarget",
             _ => "unknown"
         };
 
@@ -2320,12 +2529,18 @@ public static class TransitionStaticCompiler
 
         sealed class ComputedFieldState(
             FieldPath path,
+            ValueContract contract,
+            Expr expression,
             TransitionExpressionSiteAnalysis site,
             ImmutableArray<ObservationDependency> currentDirectDependencies,
             ImmutableArray<ObservationDependency> candidateDirectDependencies,
             ImmutableArray<ConditionalCapabilityUse> candidateCapabilities)
         {
             public FieldPath Path { get; } = path;
+
+            public ValueContract Contract { get; } = contract;
+
+            public Expr Expression { get; } = expression;
 
             public TransitionExpressionSiteAnalysis Site { get; } = site;
 
@@ -2340,7 +2555,9 @@ public static class TransitionStaticCompiler
                     .Select(static dependency => dependency.Access.Path)
                     .OfType<FieldPath>()
                     .Distinct()
-                    .OrderBy(static dependency => dependency.ToString(), StringComparer.Ordinal)
+                    .OrderBy(
+                        static dependency => dependency,
+                        TransitionStructuralOrdering.FieldPaths)
             ];
 
             public ImmutableArray<ConditionalCapabilityUse> CandidateCapabilities { get; } = candidateCapabilities;
@@ -2365,6 +2582,7 @@ public static class TransitionStaticCompiler
             ObservationRead,
             Write,
             Emission,
+            MachineMovement,
             Capability,
             Outcome
         }
@@ -2393,6 +2611,7 @@ public static class TransitionStaticCompiler
             FieldPath? Path = null,
             bool IsDerived = false,
             ExecutionDefinitionReference? Contract = null,
+            ExecutionNodeId? Edge = null,
             ExprCapabilityRequirement? Capability = null,
             TransitionDecisionKind? DecisionKind = null)
         {
@@ -2401,8 +2620,9 @@ public static class TransitionStaticCompiler
                 FactKind.ObservationRead => $"0:{ObservationAccess?.SortKey}",
                 FactKind.Write => $"1:{(IsDerived ? 1 : 0).ToString(CultureInfo.InvariantCulture)}:{Path}",
                 FactKind.Emission => $"2:{Contract?.DefinitionId.Value}:{Contract?.RevisionId.Value}:{Contract?.Fingerprint.Value}",
-                FactKind.Capability => $"3:{((int?)Capability?.Kind).GetValueOrDefault().ToString(CultureInfo.InvariantCulture)}:{Capability?.Capability.Value}",
-                FactKind.Outcome => $"4:{((int?)DecisionKind).GetValueOrDefault().ToString(CultureInfo.InvariantCulture)}",
+                FactKind.MachineMovement => $"3:{Contract?.DefinitionId.Value}:{Contract?.RevisionId.Value}:{Contract?.Fingerprint.Value}:{Edge?.Value}",
+                FactKind.Capability => $"4:{((int?)Capability?.Kind).GetValueOrDefault().ToString(CultureInfo.InvariantCulture)}:{Capability?.Capability.Value}",
+                FactKind.Outcome => $"5:{((int?)DecisionKind).GetValueOrDefault().ToString(CultureInfo.InvariantCulture)}",
                 _ => "9"
             };
         }
@@ -2441,6 +2661,8 @@ public static class TransitionStaticCompiler
 
             public ExecutionDefinitionReference? Contract { get; }
 
+            public ExecutionNodeId? Edge => Key.Edge;
+
             public static ConditionalFact Observation(
                 TransitionObservationAccess access,
                 TransitionCondition condition,
@@ -2467,6 +2689,16 @@ public static class TransitionStaticCompiler
                 origin,
                 contract);
 
+            public static ConditionalFact MachineMovement(
+                ExecutionDefinitionReference machine,
+                ExecutionNodeId edge,
+                TransitionCondition condition,
+                FactOrigin origin) => new(
+                new(FactKind.MachineMovement, Contract: machine, Edge: edge),
+                condition,
+                origin,
+                machine);
+
             public static ConditionalFact Capability(
                 ExprCapabilityRequirement capability,
                 TransitionCondition condition,
@@ -2489,5 +2721,9 @@ public static class TransitionStaticCompiler
             string Reason,
             ImmutableArray<string> Uncovered,
             bool CasesExhaustDomain);
+
+        readonly record struct MachineEdgeKey(
+            ExecutionDefinitionReference Machine,
+            ExecutionNodeId Edge);
     }
 }

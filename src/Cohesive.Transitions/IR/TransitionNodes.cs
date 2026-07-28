@@ -12,6 +12,7 @@ namespace Cohesive.Transitions.IR;
 [JsonDerivedType(typeof(MatchTransitionNode), TransitionWireNames.MatchNode)]
 [JsonDerivedType(typeof(UpdateTransitionNode), TransitionWireNames.UpdateNode)]
 [JsonDerivedType(typeof(EmitTransitionNode), TransitionWireNames.EmitNode)]
+[JsonDerivedType(typeof(MoveMachineTransitionNode), TransitionWireNames.MoveMachineNode)]
 [JsonDerivedType(typeof(OutcomeTransitionNode), TransitionWireNames.OutcomeNode)]
 public abstract record TransitionNode
 {
@@ -392,6 +393,44 @@ public sealed record EmitTransitionNode : TransitionNode
 
     /// <summary>Pure typed payload expression.</summary>
     public Expr Payload { get; }
+}
+
+/// <summary>
+/// Applies one exact edge from a fingerprint-bound Cohesive.Machines definition.
+/// </summary>
+/// <remarks>
+/// Source and target configurations, their observation dependencies, and the state patch remain owned by the
+/// referenced Machine definition. A Transition compiler links this node to immutable Machine-derived evidence;
+/// the Transition IR deliberately does not duplicate the lifecycle graph or physical status-field conventions.
+/// </remarks>
+public sealed record MoveMachineTransitionNode : TransitionNode
+{
+    /// <summary>Creates a Machine edge movement.</summary>
+    /// <param name="id">Stable movement-node identity.</param>
+    /// <param name="machine">Exact Machine definition revision and fingerprint.</param>
+    /// <param name="edge">Stable edge identity owned by the referenced Machine.</param>
+    /// <param name="rejection">Typed Transition outcome returned when the source configuration is illegal.</param>
+    [JsonConstructor]
+    public MoveMachineTransitionNode(
+        ExecutionNodeId id,
+        ExecutionDefinitionReference machine,
+        ExecutionNodeId edge,
+        Expr rejection)
+        : base(id)
+    {
+        Machine = machine;
+        Edge = edge;
+        Rejection = rejection;
+    }
+
+    /// <summary>Exact Machine definition revision and fingerprint.</summary>
+    public ExecutionDefinitionReference Machine { get; }
+
+    /// <summary>Stable edge identity owned by the referenced Machine.</summary>
+    public ExecutionNodeId Edge { get; }
+
+    /// <summary>Typed Transition outcome returned when the source configuration is illegal.</summary>
+    public Expr Rejection { get; }
 }
 
 /// <summary>Authorable terminal outcome dispositions.</summary>

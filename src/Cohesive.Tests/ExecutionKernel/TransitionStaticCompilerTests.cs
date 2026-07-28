@@ -639,10 +639,12 @@ public sealed class TransitionStaticCompilerTests
             2,
             result.Plan.Analysis.GetRequirements<TransitionWriteRequirement>()
                 .Count(static write => write.IsDerived));
+        var observations = result.Plan.Analysis.GetRequirements<TransitionObservationRequirement>();
+        Assert.Single(observations);
+        AssertPatchTargetRead(observations, "raw", "set-raw");
         Assert.DoesNotContain(
-            result.Plan.Analysis.GetRequirements<TransitionObservationRequirement>(),
-            static requirement => HasPath(requirement, "raw")
-                                  || HasPath(requirement, "normalized")
+            observations,
+            static requirement => HasPath(requirement, "normalized")
                                   || HasPath(requirement, "eligible"));
         var derivedAdd = Assert.Single(
             result.Plan.Analysis.GetRequirements<TransitionCapabilityRequirement>(),
@@ -691,9 +693,10 @@ public sealed class TransitionStaticCompilerTests
         var result = TransitionStaticCompiler.Compile(Document(definition), graph);
 
         Assert.True(result.IsSuccessful, Format(result.Validation));
-        Assert.DoesNotContain(
-            result.Plan!.Analysis.GetRequirements<TransitionObservationRequirement>(),
-            static requirement => HasPath(requirement, "raw") || HasPath(requirement, "normalized"));
+        var observations = result.Plan!.Analysis.GetRequirements<TransitionObservationRequirement>();
+        Assert.Single(observations);
+        AssertPatchTargetRead(observations, "raw", "set-raw");
+        Assert.DoesNotContain(observations, static requirement => HasPath(requirement, "normalized"));
         Assert.Contains(
             result.Plan.Analysis.GetRequirements<TransitionWriteRequirement>(),
             static requirement => requirement.IsDerived && requirement.Path.Matches("normalized"));
@@ -733,8 +736,15 @@ public sealed class TransitionStaticCompilerTests
         var analysis = result.Plan!.Analysis;
         var observations = analysis.GetRequirements<TransitionObservationRequirement>();
         var flag = Assert.Single(observations, static requirement => HasPath(requirement, "flag"));
+        AssertPatchTargetRead(observations, "left", "set-left");
         var right = Assert.Single(observations, static requirement => HasPath(requirement, "right"));
-        Assert.DoesNotContain(observations, static requirement => HasPath(requirement, "left"));
+        Assert.Equal(3, observations.Count());
+        Assert.Equal(
+            TransitionObservationInfluence.Calculation | TransitionObservationInfluence.DerivedField,
+            flag.Influences);
+        Assert.Equal(
+            TransitionObservationInfluence.Calculation | TransitionObservationInfluence.DerivedField,
+            right.Influences);
         Assert.Equal(TransitionRequirementStrength.Must, flag.InvocationStrength);
         Assert.Equal(TransitionRequirementStrength.May, right.InvocationStrength);
 
@@ -792,13 +802,17 @@ public sealed class TransitionStaticCompilerTests
             static requirement => Assert.True(requirement.Path.Matches("final")));
         var observations = analysis.GetRequirements<TransitionObservationRequirement>();
         var selectedRead = Assert.Single(observations, static requirement => HasPath(requirement, "selected"));
+        AssertPatchTargetRead(observations, "version", "set-version");
+        Assert.Equal(2, observations.Count());
+        Assert.Equal(
+            TransitionObservationInfluence.Calculation | TransitionObservationInfluence.DerivedField,
+            selectedRead.Influences);
         Assert.Equal(TransitionRequirementStrength.Must, selectedRead.InvocationStrength);
         Assert.DoesNotContain(
             observations,
             static requirement => HasPath(requirement, "flag")
                                   || HasPath(requirement, "left")
-                                  || HasPath(requirement, "right")
-                                  || HasPath(requirement, "version"));
+                                  || HasPath(requirement, "right"));
     }
 
     [Fact]
@@ -847,11 +861,13 @@ public sealed class TransitionStaticCompilerTests
         Assert.True(downstream.AffectedByWrites);
         Assert.Equal(["source"], downstream.BaseDependencies.Select(static path => path.ToString()));
         var observations = analysis.GetRequirements<TransitionObservationRequirement>();
-        Assert.Contains(observations, static requirement => HasPath(requirement, "other"));
+        var other = Assert.Single(observations, static requirement => HasPath(requirement, "other"));
+        AssertPatchTargetRead(observations, "source", "set-source");
+        Assert.Equal(2, observations.Count());
+        Assert.Equal(TransitionObservationInfluence.Calculation, other.Influences);
         Assert.DoesNotContain(
             observations,
-            static requirement => HasPath(requirement, "source")
-                                  || HasPath(requirement, "z")
+            static requirement => HasPath(requirement, "z")
                                   || HasPath(requirement, "z.child"));
     }
 
@@ -946,9 +962,9 @@ public sealed class TransitionStaticCompilerTests
         var result = TransitionStaticCompiler.Compile(Document(definition));
 
         Assert.True(result.IsSuccessful, Format(result.Validation));
-        Assert.DoesNotContain(
-            result.Plan!.Analysis.GetRequirements<TransitionObservationRequirement>(),
-            static requirement => HasPath(requirement, "valid"));
+        var observations = result.Plan!.Analysis.GetRequirements<TransitionObservationRequirement>();
+        Assert.Single(observations);
+        AssertPatchTargetRead(observations, "valid", "establish-valid");
         Assert.Contains(
             result.Plan.Analysis.ExpressionSites,
             static site => site.Node.Value == "valid-invariant"
@@ -1569,6 +1585,29 @@ public sealed class TransitionStaticCompilerTests
         string.Join(",", branch.Alternatives.Select(alternative =>
             $"{alternative.Node.Value}:{alternative.Status}:{analysis.Conditions.Format(alternative.Condition)}:{alternative.Reason}")),
         string.Join(",", branch.UncoveredValues));
+
+    static TransitionObservationRequirement AssertPatchTargetRead(
+        IEnumerable<TransitionObservationRequirement> requirements,
+        string path,
+        string node)
+    {
+        var requirement = Assert.Single(requirements, value => HasPath(value, path));
+        const TransitionObservationInfluence influence =
+            TransitionObservationInfluence.Calculation | TransitionObservationInfluence.PatchTarget;
+        Assert.Equal(influence, requirement.Influences);
+        Assert.True(requirement.RequiresCommitValidation);
+
+        var occurrence = Assert.Single(requirement.Occurrences);
+        Assert.Equal(node, occurrence.Node.Value);
+        Assert.Equal(influence, occurrence.Influence);
+        Assert.Null(occurrence.Site);
+        Assert.EndsWith("/path", occurrence.Location);
+
+        var commitOccurrence = Assert.Single(requirement.CommitValidationOccurrences);
+        Assert.Equal(node, commitOccurrence.Node.Value);
+        Assert.Equal(influence, commitOccurrence.Influence);
+        return requirement;
+    }
 
     static bool HasPath(TransitionObservationRequirement requirement, string path) =>
         requirement.Access.Path is { } fieldPath && fieldPath.Matches(path);
