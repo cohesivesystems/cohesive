@@ -4,6 +4,8 @@ Cohesive is a library suite for semantic system definition and orchestration of 
 
 Detailed package docs live beside each package under `src/*/README.md` and are included in the corresponding NuGet package.
 
+The [Execution Kernel compatibility inventory](docs/EXECUTION_KERNEL_COMPATIBILITY.md) records the current Transitions and Processes behavior against the normative EK-01 through EK-09 scenarios.
+
 ## Core Packages
 
 | Package | Purpose |
