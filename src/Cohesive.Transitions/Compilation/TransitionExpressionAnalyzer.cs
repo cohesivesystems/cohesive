@@ -375,7 +375,7 @@ public static class TransitionExpressionAnalyzer
     {
         var binding = new ExprScopeBinding(
             EntityStateBinding,
-            ExprValueContract.FromShape(entityDefinition.Shape));
+            ValueContract.FromShape(entityDefinition.Shape));
         return new(
             bindings: [binding],
             implicitBinding: binding.Id,
@@ -450,7 +450,7 @@ public static class TransitionExpressionAnalyzer
         FieldDefinition field,
         ExprDependencyKind allowedDependencies)
     {
-        var contract = ExprValueContract.FromField(field);
+        var contract = ValueContract.FromField(field);
         var category = contract.GetResultCategory() == ExprResultCategory.Integer
             ? ExprResultCategory.Numeric
             : contract.GetResultCategory();

@@ -155,6 +155,82 @@ public sealed class ObservationShapeValidationTests
     }
 
     [Fact]
+    public void ObservationShapeValidator_InlineObjectFieldsPreserveCardinalityPresenceAndNullability()
+    {
+        var stringType = new ScalarTypeRef(ScalarTypeKind.String);
+        var shape = new Shape(
+            id: new ShapeId("shape.inline-contract"),
+            fields:
+            [
+                new FieldDefinition(
+                    name: new FieldName("payload"),
+                    type: new ObjectTypeRef(
+                    [
+                        new ObjectFieldTypeDef(
+                            name: "requiredNullable",
+                            type: stringType,
+                            presence: FieldPresence.Required,
+                            nullability: FieldNullability.Nullable),
+                        new ObjectFieldTypeDef(
+                            name: "optionalNonNullable",
+                            type: stringType,
+                            presence: FieldPresence.Optional,
+                            nullability: FieldNullability.NonNullable),
+                        new ObjectFieldTypeDef(
+                            name: "manyNullable",
+                            type: stringType,
+                            cardinality: FieldCardinality.Many,
+                            presence: FieldPresence.Required,
+                            nullability: FieldNullability.Nullable)
+                    ]))
+            ]);
+
+        var valid = Observation(
+            shape,
+            ("requiredNullable", ObservationValue.Null),
+            ("manyNullable", ObservationValue.FromArray(
+            [
+                ObservationValue.FromString("first"),
+                ObservationValue.Null
+            ])));
+        var missingRequired = Observation(
+            shape,
+            ("manyNullable", ObservationValue.FromArray([ObservationValue.FromString("first")])));
+        var nullOptionalNonNullable = Observation(
+            shape,
+            ("requiredNullable", ObservationValue.Null),
+            ("optionalNonNullable", ObservationValue.Null),
+            ("manyNullable", ObservationValue.FromArray([ObservationValue.FromString("first")])));
+
+        Assert.True(
+            ObservationShapeValidator.TryValidateAgainstShape(valid, shape, out var validError),
+            validError);
+        Assert.False(ObservationShapeValidator.TryValidateAgainstShape(
+            missingRequired,
+            shape,
+            out var missingError));
+        Assert.Contains("missing required property 'requiredNullable'", missingError, StringComparison.Ordinal);
+        Assert.False(ObservationShapeValidator.TryValidateAgainstShape(
+            nullOptionalNonNullable,
+            shape,
+            out var nullError));
+        Assert.Contains("non-nullable", nullError, StringComparison.Ordinal);
+
+        static Observation Observation(
+            Shape shape,
+            params (string Name, ObservationValue Value)[] fields) => new(
+            shapeId: shape.Id,
+            id: "inline-1",
+            fields: new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+            {
+                ["payload"] = ObservationValue.FromObject(fields.ToDictionary(
+                    static field => field.Name,
+                    static field => field.Value,
+                    StringComparer.Ordinal))
+            });
+    }
+
+    [Fact]
     public void ObservationShapeValidator_ValidatesNamedStructuralTypes_WithShapeGraph()
     {
         var addressTypeId = new TypeId("type.address");

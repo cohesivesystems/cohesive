@@ -1,19 +1,33 @@
 namespace Cohesive.Model.Expressions;
 
+/// <summary>Expression-specific interpretations of shared semantic value contracts.</summary>
+public static class ValueContractExpressionExtensions
+{
+    /// <summary>Gets the most specific coarse expression-result category known for a value contract.</summary>
+    /// <param name="value">Shared semantic value contract to classify.</param>
+    /// <returns>The portable result category, or <see cref="ExprResultCategory.Any"/> when unknown.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
+    public static ExprResultCategory GetResultCategory(this ValueContract value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        return ExprResultCategorySemantics.Classify(value);
+    }
+}
+
 /// <summary>Shared classification and compatibility rules for coarse expression-result categories.</summary>
 internal static class ExprResultCategorySemantics
 {
     /// <summary>Classifies a portable value contract into its most specific known coarse category.</summary>
     /// <param name="value">Value contract to classify.</param>
     /// <returns>The most specific known category, or <see cref="ExprResultCategory.Any"/>.</returns>
-    public static ExprResultCategory Classify(ExprValueContract? value)
+    public static ExprResultCategory Classify(ValueContract? value)
     {
         if (value is null)
             return ExprResultCategory.Any;
         if (value.Cardinality == FieldCardinality.Many)
             return ExprResultCategory.Collection;
 
-        var isShaped = value.Shape is not null || value.ShapeDefinition is not null;
+        var isShaped = value.Shape is not null;
         var type = value.GetEffectiveType();
         return type switch
         {

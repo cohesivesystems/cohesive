@@ -306,13 +306,20 @@ public sealed class TypeScriptShapeAstBuilder
 
     TsTypeNode TranslateObjectType(ObjectTypeRef obj)
     {
+        if (obj.Fields.IsDefaultOrEmpty)
+            return EmptyObjectType();
+
         var members = ImmutableArray.CreateBuilder<TsPropertySignature>(obj.Fields.Length);
         for (var i = 0; i < obj.Fields.Length; i++)
         {
             var field = obj.Fields[i];
             members.Add(new TsPropertySignature(
                 name: field.Name,
-                type: TranslateType(field.Type),
+                type: TranslateWireFieldType(
+                    field.Type,
+                    field.Cardinality,
+                    field.Nullability,
+                    field.Annotations),
                 isOptional: field.Presence == FieldPresence.Optional));
         }
 

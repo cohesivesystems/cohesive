@@ -34,7 +34,7 @@ internal static class CosmosRelationQueryCanonicalValueCodec
     /// <param name="encoding">Resolved physical encoding when successful.</param>
     /// <returns><see langword="true"/> when the contract has one ordinary scalar Cosmos result encoding.</returns>
     internal static bool TryResolveResultEncoding(
-        ExprValueContract contract,
+        ValueContract contract,
         out CosmosRelationQueryResultValueEncoding encoding)
     {
         ArgumentNullException.ThrowIfNull(contract);
@@ -69,7 +69,7 @@ internal static class CosmosRelationQueryCanonicalValueCodec
     /// <param name="encoding">Retained physical result encoding.</param>
     /// <returns><see langword="true"/> when the pair belongs to the exact compiler/runtime closure.</returns>
     internal static bool IsResultEncodingCompatible(
-        ExprValueContract contract,
+        ValueContract contract,
         CosmosRelationQueryResultValueEncoding encoding)
     {
         ArgumentNullException.ThrowIfNull(contract);
@@ -98,7 +98,7 @@ internal static class CosmosRelationQueryCanonicalValueCodec
     /// Cosmos result decoding returns for the same semantic type.
     /// </returns>
     internal static bool TryEncodeRuntimeParameter(
-        ExprValueContract contract,
+        ValueContract contract,
         ObservationValue value,
         out ObservationValue encoded)
     {
@@ -130,7 +130,7 @@ internal static class CosmosRelationQueryCanonicalValueCodec
     /// <returns><see langword="true"/> when the JSON value exactly satisfies the retained encoding.</returns>
     internal static bool TryDecodeResultValue(
         JsonElement element,
-        ExprValueContract contract,
+        ValueContract contract,
         CosmosRelationQueryResultValueEncoding encoding,
         out ObservationValue value)
     {

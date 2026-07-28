@@ -14,19 +14,19 @@ public static class RelationQueryExpressionAnalyzer
     static readonly ExprCapabilityProfile RelationLanguageProfile = CreateRelationLanguageProfile();
     static readonly ExprExpectation NullableComparableExpectation = new(
         ExprResultCategory.Comparable,
-        new ExprValueContract(
+        new ValueContract(
             presence: FieldPresence.Optional,
             nullability: FieldNullability.Nullable));
     static readonly ExprExpectation NullableComparableParameterExpectation = new(
         ExprResultCategory.Comparable,
-        new ExprValueContract(
+        new ValueContract(
             presence: FieldPresence.Optional,
             nullability: FieldNullability.Nullable),
         ExprDependencyKind.Parameter);
     static readonly ExprExpectation TemporalExpectation = new(ExprResultCategory.Temporal);
     static readonly ExprExpectation NullableTemporalExpectation = new(
         ExprResultCategory.Temporal,
-        new ExprValueContract(nullability: FieldNullability.Nullable));
+        new ValueContract(nullability: FieldNullability.Nullable));
     static readonly ImmutableArray<ExprCapabilityId> RelationAmbientCapabilities =
     [
         ExprCapabilities.EntityIdentity,
@@ -1001,10 +1001,10 @@ public static class RelationQueryExpressionAnalyzer
         }
     }
 
-    static bool IsNumeric(ExprValueContract value) =>
+    static bool IsNumeric(ValueContract value) =>
         value.GetResultCategory() is ExprResultCategory.Numeric or ExprResultCategory.Integer;
 
-    static bool IsComparable(ExprValueContract value) =>
+    static bool IsComparable(ValueContract value) =>
         value.GetResultCategory() is ExprResultCategory.Numeric
             or ExprResultCategory.Integer
             or ExprResultCategory.Text
@@ -1233,8 +1233,8 @@ sealed class RelationQueryShapeResolver
 
     /// <summary>Gets the richest value contract available for a binding-flow value.</summary>
     /// <param name="binding">Binding-flow shape, type, and availability analysis.</param>
-    /// <returns>A portable value contract enriched from a matching shape snapshot when available.</returns>
-    public ExprValueContract GetBindingContract(RelationQueryBindingAnalysis binding)
+    /// <returns>A portable value contract projected from a matching shape when available.</returns>
+    public ValueContract GetBindingContract(RelationQueryBindingAnalysis binding)
     {
         var bindingShape = binding.Shape is { } shapeIdentity && IsUsableShapeIdentity(shapeIdentity)
             ? binding.Shape
@@ -1249,15 +1249,7 @@ sealed class RelationQueryShapeResolver
                 expandedShape = ExpandNamedStructuralFields(graph, shape);
                 expandedShapes.Add(qualifiedShape, expandedShape);
             }
-            if (binding.Type is not null)
-            {
-                return new(
-                    type: binding.Type,
-                    shape: qualifiedShape,
-                    shapeDefinition: expandedShape);
-            }
-
-            return ExprValueContract.FromShape(expandedShape, qualifiedShape);
+            return ValueContract.FromShape(expandedShape, qualifiedShape);
         }
 
         if (binding.Type is not null)
@@ -1332,19 +1324,15 @@ sealed class RelationQueryShapeResolver
             return new ObjectTypeRef(
             [
                 .. structural.Fields.Select(field => new ObjectFieldTypeDef(
-                    field.Name.Value,
-                    field.Cardinality == FieldCardinality.Many
-                        ? new ArrayTypeRef(ExpandNamedStructuralType(
-                            graph,
-                            field.Type,
-                            activeTypes,
-                            depth + 1))
-                        : ExpandNamedStructuralType(
-                            graph,
-                            field.Type,
-                            activeTypes,
-                            depth + 1),
-                    field.Presence))
+                    name: field.Name.Value,
+                    type: ExpandNamedStructuralType(
+                        graph,
+                        field.Type,
+                        activeTypes,
+                        depth + 1),
+                    presence: field.Presence,
+                    cardinality: field.Cardinality,
+                    nullability: field.Nullability))
             ]);
         }
         finally
@@ -1389,7 +1377,7 @@ sealed class RelationQueryShapeResolver
         return false;
     }
 
-    ExprResultCategory GetResultCategory(GraphId graphId, ExprValueContract contract)
+    ExprResultCategory GetResultCategory(GraphId graphId, ValueContract contract)
     {
         var category = contract.GetResultCategory();
         if (category != ExprResultCategory.Any
@@ -1429,7 +1417,7 @@ sealed class RelationQueryShapeResolver
     public bool TryGetFieldContract(
         QualifiedShapeId shapeId,
         FieldPath path,
-        out ExprValueContract contract)
+        out ValueContract contract)
     {
         contract = null!;
         if (!graphs.TryGetValue(shapeId.GraphId, out var graph)
@@ -1439,7 +1427,7 @@ sealed class RelationQueryShapeResolver
             return false;
         }
 
-        ExprValueContract? current = null;
+        ValueContract? current = null;
         for (var index = 0; index < path.Segments.Length; index++)
         {
             var segment = path.Segments[index];
@@ -1452,7 +1440,7 @@ sealed class RelationQueryShapeResolver
                     return false;
                 }
 
-                current = ExprValueContract.FromField(field);
+                current = ValueContract.FromField(field);
                 continue;
             }
 
@@ -1466,9 +1454,9 @@ sealed class RelationQueryShapeResolver
 
     static bool TryNavigate(
         ShapeGraph graph,
-        ExprValueContract current,
+        ValueContract current,
         FieldPathSegment segment,
-        out ExprValueContract? next)
+        out ValueContract? next)
     {
         next = null;
         var effectiveType = current.GetEffectiveType();
@@ -1495,7 +1483,11 @@ sealed class RelationQueryShapeResolver
 
                     next = ComposePathValue(
                         current,
-                        new(field.Type, presence: field.Presence));
+                        new(
+                            field.Type,
+                            cardinality: field.Cardinality,
+                            presence: field.Presence,
+                            nullability: field.Nullability));
                     return true;
                 }
             case NamedTypeRef named
@@ -1515,9 +1507,9 @@ sealed class RelationQueryShapeResolver
         }
     }
 
-    static ExprValueContract ComposePathValue(
-        ExprValueContract parent,
-        ExprValueContract child) => new(
+    static ValueContract ComposePathValue(
+        ValueContract parent,
+        ValueContract child) => new(
         child.Type,
         child.Shape,
         child.Cardinality,
@@ -1526,8 +1518,7 @@ sealed class RelationQueryShapeResolver
             : FieldPresence.Required,
         parent.Nullability == FieldNullability.Nullable || child.Nullability == FieldNullability.Nullable
             ? FieldNullability.Nullable
-            : FieldNullability.NonNullable,
-        child.ShapeDefinition);
+            : FieldNullability.NonNullable);
 }
 
 /// <summary>

@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Globalization;
 using System.Reflection;
+using System.Text.Json;
 using Cohesive.Model;
 using Cohesive.Model.Expressions;
 using Cohesive.Model.Serialization;
@@ -132,14 +133,15 @@ public sealed class ExprAnalysisTests
     }
 
     [Fact]
-    public void Analyze_ScopedFunctionsPreserveShapeOnlyCurrentItemsAndSelectorResults()
+    public void Analyze_ScopedFunctionsPreserveStructuredCurrentItemsAndSelectorResults()
     {
         var itemShape = new Shape(
             new("Item"),
             [new FieldDefinition(new("Name"), StringType)]);
-        var shapedCollection = new ExprValueContract(
-            cardinality: FieldCardinality.Many,
-            shapeDefinition: itemShape);
+        var itemContract = ValueContract.FromShape(itemShape);
+        var shapedCollection = new ValueContract(
+            type: itemContract.Type,
+            cardinality: FieldCardinality.Many);
         var scope = Scope(currentItem: shapedCollection);
         var identitySelect = Analyze(
             Expr.Call(
@@ -158,7 +160,7 @@ public sealed class ExprAnalysisTests
 
         Assert.True(identitySelect.IsValid);
         Assert.Equal(FieldCardinality.Many, identitySelect.KnownResult?.Cardinality);
-        Assert.Same(itemShape, identitySelect.KnownResult?.ShapeDefinition);
+        Assert.Equal(itemContract.Type, identitySelect.KnownResult?.Type);
         AssertDiagnostic(missingField, ExprAnalysisDiagnosticCodes.FieldPathUnknown);
     }
 
@@ -206,28 +208,121 @@ public sealed class ExprAnalysisTests
     }
 
     [Fact]
-    public void ValueContract_RejectsConflictingQualifiedShapeSnapshot()
+    public void ValueContract_RejectsConflictingQualifiedShapeIdentity()
     {
         var shape = new Shape(new("actual"), []);
 
-        var exception = Assert.Throws<ArgumentException>(() => new ExprValueContract(
-            shape: new(new("graph"), new("other")),
-            shapeDefinition: shape));
+        var exception = Assert.Throws<ArgumentException>(() => ValueContract.FromShape(
+            shape,
+            new(new("graph"), new("other"))));
 
-        Assert.Equal("shapeDefinition", exception.ParamName);
+        Assert.Equal("qualifiedShape", exception.ParamName);
     }
 
     [Fact]
-    public void ValueContract_ClassifiesKnownCardinalityAndShapeWithoutAType()
+    public void ValueContract_ClassifiesKnownCardinalityAndEmptyObjectShape()
     {
         var shape = new Shape(new("Empty"), []);
 
         Assert.Equal(
             ExprResultCategory.Collection,
-            new ExprValueContract(cardinality: FieldCardinality.Many).GetResultCategory());
+            new ValueContract(cardinality: FieldCardinality.Many).GetResultCategory());
         Assert.Equal(
             ExprResultCategory.Object,
-            ExprValueContract.FromShape(shape).GetResultCategory());
+            ValueContract.FromShape(shape).GetResultCategory());
+    }
+
+    [Fact]
+    public void ValueContract_EmptyObjectShapePreservesBehaviorAcrossJsonRoundTrip()
+    {
+        var contract = ValueContract.FromShape(new Shape(new("Empty"), []));
+        var roundTrip = RoundTrip(contract);
+
+        Assert.Equal(contract, roundTrip);
+        Assert.Empty(Assert.IsType<ObjectTypeRef>(contract.Type).Fields);
+        Assert.Empty(Assert.IsType<ObjectTypeRef>(roundTrip.Type).Fields);
+        Assert.Equal(contract.GetResultCategory(), roundTrip.GetResultCategory());
+        Assert.True(roundTrip.IsSatisfiedByConstant(
+            ObservationValue.FromObject(ImmutableDictionary<string, ObservationValue>.Empty)));
+        Assert.False(roundTrip.IsSatisfiedByConstant(ObservationValue.FromString("not-an-object")));
+    }
+
+    [Fact]
+    public void ValueContract_NullableOptionalObjectFieldPreservesBehaviorAcrossJsonRoundTrip()
+    {
+        var field = new FieldDefinition(
+            new("Maybe"),
+            StringType,
+            presence: FieldPresence.Optional,
+            nullability: FieldNullability.Nullable);
+        var contract = ValueContract.FromShape(new Shape(new("Optional"), [field]));
+        var roundTrip = RoundTrip(contract);
+        var projectedField = Assert.Single(Assert.IsType<ObjectTypeRef>(roundTrip.Type).Fields);
+
+        Assert.Equal(contract, roundTrip);
+        Assert.Equal(FieldPresence.Optional, projectedField.Presence);
+        Assert.Equal(FieldNullability.Nullable, projectedField.Nullability);
+        Assert.True(roundTrip.IsSatisfiedByConstant(
+            ObservationValue.FromObject(ImmutableDictionary<string, ObservationValue>.Empty)));
+        Assert.True(roundTrip.IsSatisfiedByConstant(ObservationValue.FromObject(
+            new Dictionary<string, ObservationValue> { ["Maybe"] = ObservationValue.Null })));
+        Assert.True(roundTrip.IsSatisfiedByConstant(ObservationValue.FromObject(
+            new Dictionary<string, ObservationValue> { ["Maybe"] = ObservationValue.Undefined })));
+
+        var originalAnalysis = Analyze(
+            Expr.Field(LoadBinding, "Maybe"),
+            Scope(bindings: [new ExprScopeBinding(LoadBinding, contract)]),
+            "nullable-optional-original");
+        var roundTripAnalysis = Analyze(
+            Expr.Field(LoadBinding, "Maybe"),
+            Scope(bindings: [new ExprScopeBinding(LoadBinding, roundTrip)]),
+            "nullable-optional-round-trip");
+
+        Assert.Equal(originalAnalysis.KnownResult, roundTripAnalysis.KnownResult);
+        Assert.Equal(FieldPresence.Optional, roundTripAnalysis.KnownResult?.Presence);
+        Assert.Equal(FieldNullability.Nullable, roundTripAnalysis.KnownResult?.Nullability);
+    }
+
+    [Fact]
+    public void ValueContract_ObjectFieldsDistinguishSingleArrayFromManyValuesAcrossJsonRoundTrip()
+    {
+        var contract = ValueContract.FromShape(new Shape(
+            new("Collections"),
+            [
+                new FieldDefinition(
+                    new("SingleArray"),
+                    new ArrayTypeRef(StringType),
+                    cardinality: FieldCardinality.Single),
+                new FieldDefinition(
+                    new("ManyStrings"),
+                    StringType,
+                    cardinality: FieldCardinality.Many)
+            ]));
+        var roundTrip = RoundTrip(contract);
+        var objectType = Assert.IsType<ObjectTypeRef>(roundTrip.Type);
+        var singleArray = Assert.Single(objectType.Fields, static field => field.Name == "SingleArray");
+        var manyStrings = Assert.Single(objectType.Fields, static field => field.Name == "ManyStrings");
+
+        Assert.Equal(contract, roundTrip);
+        Assert.Equal(FieldCardinality.Single, singleArray.Cardinality);
+        Assert.IsType<ArrayTypeRef>(singleArray.Type);
+        Assert.Equal(FieldCardinality.Many, manyStrings.Cardinality);
+        Assert.Equal(StringType, manyStrings.Type);
+
+        var scope = Scope(bindings: [new ExprScopeBinding(LoadBinding, roundTrip)]);
+        var singleArrayResult = Analyze(
+            Expr.Field(LoadBinding, "SingleArray"),
+            scope,
+            "single-array-field");
+        var manyStringsResult = Analyze(
+            Expr.Field(LoadBinding, "ManyStrings"),
+            scope,
+            "many-string-field");
+
+        Assert.Equal(FieldCardinality.Single, singleArrayResult.KnownResult?.Cardinality);
+        Assert.IsType<ArrayTypeRef>(singleArrayResult.KnownResult?.Type);
+        Assert.Equal(FieldCardinality.Many, manyStringsResult.KnownResult?.Cardinality);
+        Assert.Equal(StringType, manyStringsResult.KnownResult?.Type);
     }
 
     [Fact]
@@ -414,7 +509,7 @@ public sealed class ExprAnalysisTests
         var scope = Scope(
             bindings:
             [
-                new(LoadBinding, ExprValueContract.FromShape(shape))
+                new(LoadBinding, ValueContract.FromShape(shape))
             ],
             implicitBinding: LoadBinding);
 
@@ -597,7 +692,7 @@ public sealed class ExprAnalysisTests
     public void ValueContractsValidateKnownCompositeStructureAroundUnresolvedNestedTypes()
     {
         var unresolved = new NamedTypeRef(new("Unresolved"));
-        var arrayContract = new ExprValueContract(new ArrayTypeRef(unresolved));
+        var arrayContract = new ValueContract(new ArrayTypeRef(unresolved));
 
         Assert.False(arrayContract.IsSatisfiedByConstant(ObservationValue.FromString("not-an-array")));
         Assert.True(arrayContract.IsSatisfiedByConstant(ObservationValue.FromArray(
@@ -613,7 +708,7 @@ public sealed class ExprAnalysisTests
             "invalid-unresolved-array");
         AssertDiagnostic(literal, ExprAnalysisDiagnosticCodes.ResultTypeMismatch);
 
-        var malformedNestedType = new ExprValueContract(new ArrayTypeRef(null!));
+        var malformedNestedType = new ValueContract(new ArrayTypeRef(null!));
         Assert.True(malformedNestedType.IsSatisfiedByConstant(ObservationValue.FromArray(
         [
             ObservationValue.FromString("requires-structural-validation")
@@ -623,7 +718,7 @@ public sealed class ExprAnalysisTests
     [Fact]
     public void Analyze_CanonicalStringTemporalLiteralSatisfiesExactTargetCategoryAndType()
     {
-        var date = new ExprValueContract(new ScalarTypeRef(ScalarTypeKind.Date));
+        var date = new ValueContract(new ScalarTypeRef(ScalarTypeKind.Date));
 
         var result = Analyze(
             Expr.Const("2026-07-14"),
@@ -640,7 +735,7 @@ public sealed class ExprAnalysisTests
     [InlineData("2026-07-17T12:34:56", false)]
     public void Analyze_InstantStringLiteralRequiresExplicitOffset(string text, bool expected)
     {
-        var instant = new ExprValueContract(new ScalarTypeRef(ScalarTypeKind.Instant));
+        var instant = new ValueContract(new ScalarTypeRef(ScalarTypeKind.Instant));
 
         var result = Analyze(
             Expr.Const(text),
@@ -701,7 +796,7 @@ public sealed class ExprAnalysisTests
         var shape = new Shape(
             new("Result"),
             [new FieldDefinition(new("Value"), StringType)]);
-        var shapedValue = ExprValueContract.FromShape(shape);
+        var shapedValue = ValueContract.FromShape(shape);
         var result = Analyze(
             new ConditionalExpr(
                 Expr.Const(true),
@@ -712,7 +807,7 @@ public sealed class ExprAnalysisTests
             "nullable-shaped-conditional");
 
         Assert.True(result.IsValid);
-        Assert.Same(shape, result.KnownResult?.ShapeDefinition);
+        Assert.Equal(shapedValue.Type, result.KnownResult?.Type);
         Assert.Equal(FieldNullability.Nullable, result.KnownResult?.Nullability);
     }
 
@@ -780,8 +875,8 @@ public sealed class ExprAnalysisTests
         };
         var shape = new Shape(new("Malformed"), [malformedField]);
 
-        var exception = Assert.Throws<ArgumentException>(() => ExprValueContract.FromShape(shape));
-        var defaultIdentityException = Assert.Throws<ArgumentException>(() => new ExprValueContract(
+        var exception = Assert.Throws<ArgumentException>(() => ValueContract.FromShape(shape));
+        var defaultIdentityException = Assert.Throws<ArgumentException>(() => new ValueContract(
             shape: default(QualifiedShapeId)));
 
         Assert.Equal("shape", exception.ParamName);
@@ -797,7 +892,7 @@ public sealed class ExprAnalysisTests
             [
                 new ExprScopeBinding(
                     maybe,
-                    new ExprValueContract(),
+                    new ValueContract(),
                     ExprBindingAvailability.MayBeAbsent)
             ]);
 
@@ -862,8 +957,8 @@ public sealed class ExprAnalysisTests
     [Fact]
     public void Analyze_NullAndUndefinedConstantsPreserveValueGuarantees()
     {
-        var required = new ExprValueContract(StringType);
-        var nullable = new ExprValueContract(
+        var required = new ValueContract(StringType);
+        var nullable = new ValueContract(
             StringType,
             nullability: FieldNullability.Nullable);
         var nullAtRequiredSite = Analyze(
@@ -939,7 +1034,7 @@ public sealed class ExprAnalysisTests
             [
                 new(
                     LoadBinding,
-                    ExprValueContract.FromShape(loadShape))
+                    ValueContract.FromShape(loadShape))
             ]);
         var result = Analyze(
             Expr.Field(LoadBinding, "Address.City"),
@@ -962,7 +1057,7 @@ public sealed class ExprAnalysisTests
             [
                 new(
                     related,
-                    new ExprValueContract(shape: new(new("domain"), new("Customer"))),
+                    new ValueContract(shape: new(new("domain"), new("Customer"))),
                     ExprBindingAvailability.MayBeAbsent)
             ]),
             "unresolved-related",
@@ -974,12 +1069,12 @@ public sealed class ExprAnalysisTests
                 [
                     new(
                         LoadBinding,
-                        new ExprValueContract(new ObjectTypeRef(
+                        new ValueContract(new ObjectTypeRef(
                         [
                             new ObjectFieldTypeDef(
                                 "Customer",
                                 new NamedTypeRef(new("Customer")),
-                                FieldPresence.Optional)
+                                presence: FieldPresence.Optional)
                         ])))
                 ],
                 implicitBinding: LoadBinding),
@@ -996,7 +1091,7 @@ public sealed class ExprAnalysisTests
     [Fact]
     public void Analyze_EquivalentArrayContractsAndCardinalityNeutralConstantsSatisfyCollectionTargets()
     {
-        var expected = new ExprValueContract(
+        var expected = new ValueContract(
             StringType,
             cardinality: FieldCardinality.Many,
             nullability: FieldNullability.Nullable);
@@ -1031,7 +1126,7 @@ public sealed class ExprAnalysisTests
             [
                 new(
                     "predicate",
-                    new ExprValueContract(
+                    new ValueContract(
                         new ScalarTypeRef(ScalarTypeKind.Bool),
                         presence: FieldPresence.Optional),
                     FieldPresence.Optional)
@@ -1183,7 +1278,7 @@ public sealed class ExprAnalysisTests
                     UnaryOperator.Not,
                     ExprResultCategory.Boolean,
                     ExprResultCategory.Boolean,
-                    new ExprValueContract(StringType))
+                    new ValueContract(StringType))
             ]));
         Assert.Throws<ArgumentException>(() => new ExprSemanticsCatalog(
             binaryOperators:
@@ -1193,7 +1288,7 @@ public sealed class ExprAnalysisTests
                     ExprResultCategory.Numeric,
                     ExprResultCategory.Numeric,
                     ExprResultCategory.Numeric,
-                new ExprValueContract(StringType))
+                new ValueContract(StringType))
             ]));
         Assert.Throws<ArgumentException>(() => new ExprSemanticsCatalog(
             aggregateOperators:
@@ -1202,17 +1297,17 @@ public sealed class ExprAnalysisTests
                     AggregateOperator.Average,
                     ExprResultCategory.Collection,
                     ExprResultCategory.Numeric,
-                    new ExprValueContract(StringType))
+                    new ValueContract(StringType))
             ]));
         Assert.Throws<ArgumentException>(() => new ExprExpectation(
             ExprResultCategory.Boolean,
-            new ExprValueContract(StringType)));
+            new ValueContract(StringType)));
         var site = new ExprSite(new("invalid-result"), Expr.Const(true), ExprScope.Empty);
         Assert.Throws<ArgumentException>(() => new ExprAnalysisResult(
             site,
             ExprSemanticsCatalog.Default,
             ExprResultCategory.Boolean,
-            new ExprValueContract(StringType),
+            new ValueContract(StringType),
             ExprRequirements.Empty,
             [],
             DocumentValidationResult.Valid));
@@ -1262,11 +1357,15 @@ public sealed class ExprAnalysisTests
         ExprExpectation? expectation = null) =>
         ExprAnalyzer.Analyze(new(new(id), expression, scope, expectation));
 
+    static ValueContract RoundTrip(ValueContract contract) =>
+        JsonSerializer.Deserialize<ValueContract>(JsonSerializer.Serialize(contract))
+        ?? throw new InvalidOperationException("A serialized value contract produced a null result.");
+
     static ExprScope Scope(
         IEnumerable<ExprScopeBinding>? bindings = null,
         ValueBindingId? implicitBinding = null,
         IEnumerable<ExprScopeParameter>? parameters = null,
-        ExprValueContract? currentItem = null,
+        ValueContract? currentItem = null,
         IEnumerable<ExprCapabilityId>? ambient = null) =>
         new(bindings, implicitBinding, parameters, currentItem, ambient);
 
@@ -1274,7 +1373,7 @@ public sealed class ExprAnalysisTests
         ValueBindingId id,
         ExprBindingAvailability availability = ExprBindingAvailability.AlwaysPresent) => new(
         id,
-        new ExprValueContract(
+        new ValueContract(
             new ObjectTypeRef(
             [
                 new ObjectFieldTypeDef("Id", StringType),

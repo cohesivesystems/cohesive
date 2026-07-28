@@ -240,7 +240,7 @@ public sealed record RelationQueryParameterInputContract
     public QueryParameterDefinition Definition => Input.Definition;
 
     /// <summary>Effective expression value contract after parameter defaults are applied.</summary>
-    public ExprValueContract ValueContract { get; }
+    public ValueContract ValueContract { get; }
 
     /// <summary>Demanded-output uses of the parameter.</summary>
     public ImmutableArray<RelationQueryRequirementUse> Uses { get; }

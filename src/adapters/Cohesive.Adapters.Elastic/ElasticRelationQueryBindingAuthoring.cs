@@ -1934,7 +1934,7 @@ public sealed class ElasticRelationQueryStorageBindingBuilder
     }
 
     static bool TryInferRetrievalEncoding(
-        ExprValueContract? contract,
+        ValueContract? contract,
         out ElasticRelationQueryFieldValueEncoding encoding)
     {
         encoding = contract?.GetEffectiveType() switch

@@ -2111,7 +2111,9 @@ export interface EntityTypeName {
 export interface ObjectFieldTypeDef {
   Name: string;
   Type: TypeRef;
+  Cardinality: FieldCardinality;
   Presence: FieldPresence;
+  Nullability: FieldNullability;
   Annotations: ({
     Key: AnnotationKey;
     Value: AnnotationValue;
@@ -2150,6 +2152,18 @@ export const segmentKindLabels: Record<SegmentKind, string> = {
   2: 'Element',
 };
 
+export type FieldCardinality = 0 | 1;
+
+export const fieldCardinalities = {
+  single: 0,
+  many: 1,
+} as const satisfies Record<string, FieldCardinality>;
+
+export const fieldCardinalityLabels: Record<FieldCardinality, string> = {
+  0: 'Single',
+  1: 'Many',
+};
+
 export type FieldPresence = 0 | 1;
 
 export const fieldPresences = {
@@ -2160,6 +2174,18 @@ export const fieldPresences = {
 export const fieldPresenceLabels: Record<FieldPresence, string> = {
   0: 'Required',
   1: 'Optional',
+};
+
+export type FieldNullability = 0 | 1;
+
+export const fieldNullabilities = {
+  nonNullable: 0,
+  nullable: 1,
+} as const satisfies Record<string, FieldNullability>;
+
+export const fieldNullabilityLabels: Record<FieldNullability, string> = {
+  0: 'NonNullable',
+  1: 'Nullable',
 };
 
 export interface AnnotationKey {

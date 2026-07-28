@@ -75,7 +75,7 @@ public enum PostgresRelationQueryValueEncoding
 static class PostgresRelationQueryValueEncodingContracts
 {
     public static void RequireCompatible(
-        ExprValueContract contract,
+        ValueContract contract,
         PostgresRelationQueryValueEncoding encoding,
         string parameterName)
     {
@@ -172,7 +172,7 @@ public sealed record PostgresRelationQueryResultFieldBinding
     public PostgresRelationQueryResultFieldBinding(
         string alias,
         RelationQueryFieldReference field,
-        ExprValueContract valueContract,
+        ValueContract valueContract,
         PostgresRelationQueryValueEncoding encoding,
         QueryAssignmentId? assignment = null,
         ImmutableArray<ValueBindingId> presenceDependencies = default)
@@ -216,7 +216,7 @@ public sealed record PostgresRelationQueryResultFieldBinding
     public RelationQueryFieldReference Field { get; }
 
     /// <summary>Exact semantic value contract used to decode the physical result.</summary>
-    public ExprValueContract ValueContract { get; }
+    public ValueContract ValueContract { get; }
 
     /// <summary>Expected PostgreSQL scalar encoding.</summary>
     public PostgresRelationQueryValueEncoding Encoding { get; }
@@ -282,7 +282,7 @@ public sealed record PostgresRelationQuerySuppliedFieldBinding
         int position,
         RelationQueryInputId input,
         RelationQueryFieldReference field,
-        ExprValueContract valueContract,
+        ValueContract valueContract,
         PostgresRelationQueryValueEncoding encoding,
         PostgresRelationQueryTextOrderingDomainEvidence? orderingDomain = null)
     {
@@ -326,7 +326,7 @@ public sealed record PostgresRelationQuerySuppliedFieldBinding
     public RelationQueryFieldReference Field { get; }
 
     /// <summary>Exact invocation-time semantic value contract.</summary>
-    public ExprValueContract ValueContract { get; }
+    public ValueContract ValueContract { get; }
 
     /// <summary>Expected PostgreSQL scalar encoding.</summary>
     public PostgresRelationQueryValueEncoding Encoding { get; }
@@ -373,7 +373,7 @@ public sealed record PostgresRelationQueryRelationKeyBinding
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="encoding"/> is unsupported.</exception>
     public PostgresRelationQueryRelationKeyBinding(
         string alias,
-        ExprValueContract valueContract,
+        ValueContract valueContract,
         PostgresRelationQueryValueEncoding encoding)
     {
         Alias = new PostgresSqlIdentifier(alias).Value;
@@ -390,7 +390,7 @@ public sealed record PostgresRelationQueryRelationKeyBinding
     public string Alias { get; }
 
     /// <summary>Exact canonical key value contract.</summary>
-    public ExprValueContract ValueContract { get; }
+    public ValueContract ValueContract { get; }
 
     /// <summary>Expected PostgreSQL scalar encoding.</summary>
     public PostgresRelationQueryValueEncoding Encoding { get; }
@@ -417,7 +417,7 @@ public sealed record PostgresRelationQueryParameterBinding
     public PostgresRelationQueryParameterBinding(
         int position,
         QueryParameterDefinition definition,
-        ExprValueContract valueContract,
+        ValueContract valueContract,
         PostgresRelationQueryValueEncoding encoding,
         PostgresRelationQueryTextOrderingDomainEvidence? orderingDomain = null)
     {
@@ -448,7 +448,7 @@ public sealed record PostgresRelationQueryParameterBinding
     public QueryParameterDefinition Definition { get; }
 
     /// <summary>Exact effective compiled value contract.</summary>
-    public ExprValueContract ValueContract { get; }
+    public ValueContract ValueContract { get; }
 
     /// <summary>Expected PostgreSQL scalar encoding.</summary>
     public PostgresRelationQueryValueEncoding Encoding { get; }

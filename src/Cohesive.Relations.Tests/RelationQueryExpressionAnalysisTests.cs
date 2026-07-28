@@ -880,7 +880,10 @@ public sealed class RelationQueryExpressionAnalysisTests
             static field => field.Root == ExprFieldRootKind.CurrentItem
                 && field.Path.ToString() == "item.Location");
         Assert.True(validSite.Site.Scope.TryGetBinding(Load, out var loadBinding));
-        Assert.IsType<ObjectTypeRef>(loadBinding.Value.ShapeDefinition!.GetField("Stops").Type);
+        var loadType = Assert.IsType<ObjectTypeRef>(loadBinding.Value.Type);
+        Assert.IsType<ObjectTypeRef>(Assert.Single(
+            loadType.Fields,
+            static field => field.Name == "Stops").Type);
         Assert.Contains(
             invalidAnalysis.Diagnostics,
             static diagnostic => diagnostic.Code == "relationQuery.expression.fieldPathUnknown"
@@ -970,10 +973,12 @@ public sealed class RelationQueryExpressionAnalysisTests
                 "relationQuery.expression.",
                 StringComparison.Ordinal));
         Assert.True(site.Site.Scope.TryGetBinding(Load, out var loadBinding));
+        var loadType = Assert.IsType<ObjectTypeRef>(loadBinding.Value.Type);
         var stops = Assert.IsType<ArrayTypeRef>(
-            loadBinding.Value.ShapeDefinition!.GetField("Stops").Type);
+            Assert.Single(loadType.Fields, static field => field.Name == "Stops").Type);
         Assert.IsType<ObjectTypeRef>(stops.ElementType);
-        Assert.IsType<NamedTypeRef>(loadBinding.Value.ShapeDefinition.GetField("Details").Type);
+        Assert.IsType<NamedTypeRef>(
+            Assert.Single(loadType.Fields, static field => field.Name == "Details").Type);
     }
 
     [Fact]

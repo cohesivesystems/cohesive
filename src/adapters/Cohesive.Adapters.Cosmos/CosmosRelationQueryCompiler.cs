@@ -1317,7 +1317,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 return new(
                     CompileAggregate(aggregate),
-                    new ExprValueContract(new ScalarTypeRef(ScalarTypeKind.Int64)),
+                    new ValueContract(new ScalarTypeRef(ScalarTypeKind.Int64)),
                     CosmosRelationQueryResultValueEncoding.ExactCountInteger,
                     definition.Id);
             }
@@ -1639,7 +1639,7 @@ public sealed class CosmosRelationQueryCompiler
                 && declaredType is not null
                 && CosmosRelationQueryCanonicalValueCodec.SupportsRuntimeParameterType(declaredType)
                 && !CosmosRelationQueryCanonicalValueCodec.TryEncodeRuntimeParameter(
-                    new ExprValueContract(declaredType),
+                    new ValueContract(declaredType),
                     value,
                     out _))
             {
@@ -1793,8 +1793,7 @@ public sealed class CosmosRelationQueryCompiler
 
             var elementContract = GetCollectionElementContract(collectionContract);
             if (elementContract is null
-                || elementContract.GetEffectiveType() is not ObjectTypeRef
-                    && elementContract.ShapeDefinition is null)
+                || elementContract.GetEffectiveType() is not ObjectTypeRef)
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
@@ -2026,11 +2025,11 @@ public sealed class CosmosRelationQueryCompiler
                 CompileCollectionComparisonValue(valueExpression, valueType, node));
         }
 
-        static ExprValueContract AnalyzeCollectionComparisonValue(
+        static ValueContract AnalyzeCollectionComparisonValue(
             Expr expression,
             RelationQueryExpressionSiteAnalysis site,
             ExprScope predicateScope,
-            ExprValueContract childContract,
+            ValueContract childContract,
             QueryNodeId node,
             RelationQueryInputId input)
         {
@@ -2086,7 +2085,7 @@ public sealed class CosmosRelationQueryCompiler
                 node)
         };
 
-        static ExprValueContract AnalyzeSubexpression(
+        static ValueContract AnalyzeSubexpression(
             Expr expression,
             RelationQueryExpressionSiteAnalysis site,
             string operand,
@@ -2206,20 +2205,18 @@ public sealed class CosmosRelationQueryCompiler
             return false;
         }
 
-        static ExprValueContract? GetCollectionElementContract(ExprValueContract collection)
+        static ValueContract? GetCollectionElementContract(ValueContract collection)
         {
             if (collection.Cardinality == FieldCardinality.Many)
             {
                 return new(
                     collection.Type,
-                    collection.Shape,
-                    shapeDefinition: collection.ShapeDefinition);
+                    collection.Shape);
             }
             return collection.GetEffectiveType() is ArrayTypeRef array
                 ? new(
                     array.ElementType,
-                    collection.Shape,
-                    shapeDefinition: collection.ShapeDefinition)
+                    collection.Shape)
                 : null;
         }
 
@@ -2598,7 +2595,7 @@ public sealed class CosmosRelationQueryCompiler
                 node);
         }
 
-        static ExprValueContract RequireKnownResultContract(
+        static ValueContract RequireKnownResultContract(
             RelationQueryExpressionSiteAnalysis site,
             QueryNodeId node,
             string operation)
@@ -2615,7 +2612,7 @@ public sealed class CosmosRelationQueryCompiler
         }
 
         static CosmosRelationQueryResultValueEncoding ResolveResultEncoding(
-            ExprValueContract contract,
+            ValueContract contract,
             QueryNodeId node)
         {
             if (contract.Cardinality != FieldCardinality.Single)
@@ -2675,7 +2672,7 @@ public sealed class CosmosRelationQueryCompiler
                 node);
         }
 
-        static bool IsRequiredNonNull(ExprValueContract? contract) => contract is
+        static bool IsRequiredNonNull(ValueContract? contract) => contract is
         {
             Presence: FieldPresence.Required,
             Nullability: FieldNullability.NonNullable
@@ -2769,7 +2766,7 @@ public sealed class CosmosRelationQueryCompiler
 
         readonly record struct ResolvedOutput(
             CosmosSqlExpression Expression,
-            ExprValueContract ValueContract,
+            ValueContract ValueContract,
             CosmosRelationQueryResultValueEncoding Encoding,
             QueryAssignmentId? Assignment);
 

@@ -153,7 +153,7 @@ public sealed record QueryParameterDefinition
     /// <see cref="Presence"/> or <see cref="DefaultKind"/> is unsupported.
     /// </exception>
     [JsonIgnore]
-    public ExprValueContract EffectiveValueContract
+    public ValueContract EffectiveValueContract
     {
         get
         {

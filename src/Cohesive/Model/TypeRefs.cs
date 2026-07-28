@@ -358,13 +358,11 @@ public sealed record ObjectTypeRef : TypeRef
     /// <summary>
     /// Creates an inline object type.
     /// </summary>
-    /// <exception cref="ArgumentException"></exception>
+    /// <param name="fields">The inline object's fields, or an empty collection for an empty object type.</param>
     [JsonConstructor]
     public ObjectTypeRef(ImmutableArray<ObjectFieldTypeDef> fields)
     {
         Fields = fields.IsDefault ? ImmutableArray<ObjectFieldTypeDef>.Empty : fields;
-        if (Fields.IsDefaultOrEmpty)
-            throw new ArgumentException(message: "Object type requires at least one field.");
     }
 
     /// <summary>
@@ -405,17 +403,41 @@ public sealed record ObjectFieldTypeDef
     /// <summary>
     /// Creates an inline object field definition.
     /// </summary>
+    /// <param name="name">Stable field name.</param>
+    /// <param name="type">Element or single-value semantic type.</param>
+    /// <param name="cardinality">Whether the field is single or many-valued.</param>
+    /// <param name="presence">Whether the field must be present.</param>
+    /// <param name="nullability">Whether an explicitly present field value may be null.</param>
+    /// <param name="annotations">Optional semantic field annotations.</param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="name"/> or <paramref name="type"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is empty or contains only whitespace.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="presence"/>, <paramref name="cardinality"/>, or <paramref name="nullability"/> is unsupported.
+    /// </exception>
     [JsonConstructor]
     public ObjectFieldTypeDef(
         string name,
         TypeRef type,
+        FieldCardinality cardinality = FieldCardinality.Single,
         FieldPresence presence = FieldPresence.Required,
+        FieldNullability nullability = FieldNullability.NonNullable,
         ImmutableDictionary<AnnotationKey, AnnotationValue>? annotations = null
         )
     {
+        if (!Enum.IsDefined(cardinality))
+            throw new ArgumentOutOfRangeException(nameof(cardinality), cardinality, "Unsupported field cardinality.");
+        if (!Enum.IsDefined(presence))
+            throw new ArgumentOutOfRangeException(nameof(presence), presence, "Unsupported field presence.");
+        if (!Enum.IsDefined(nullability))
+            throw new ArgumentOutOfRangeException(nameof(nullability), nullability, "Unsupported field nullability.");
+
         Name = Guard.RequireNotNullOrWhiteSpace(name);
         Type = Guard.RequireNotNull(type);
+        Cardinality = cardinality;
         Presence = presence;
+        Nullability = nullability;
         Annotations = AnnotationMap.Normalize(annotations);
     }
 
@@ -430,9 +452,19 @@ public sealed record ObjectFieldTypeDef
     public TypeRef Type { get; init; }
 
     /// <summary>
+    /// Whether the field is single or many-valued.
+    /// </summary>
+    public FieldCardinality Cardinality { get; init; }
+
+    /// <summary>
     /// Required/optional indicator.
     /// </summary>
     public FieldPresence Presence { get; init; }
+
+    /// <summary>
+    /// Whether an explicitly present field value may be null.
+    /// </summary>
+    public FieldNullability Nullability { get; init; }
 
     /// <summary>
     /// Optional metadata annotations for inline object fields.
@@ -451,7 +483,9 @@ public sealed record ObjectFieldTypeDef
 
         return Name == other.Name
                && EqualityComparer<TypeRef>.Default.Equals(Type, other.Type)
+               && Cardinality == other.Cardinality
                && Presence == other.Presence
+               && Nullability == other.Nullability
                && ShapeValueEquality.AreAnnotationsEqual(Annotations, other.Annotations);
     }
 
@@ -463,7 +497,9 @@ public sealed record ObjectFieldTypeDef
         HashCode hash = new();
         hash.Add(Name, StringComparer.Ordinal);
         hash.Add(Type);
+        hash.Add((int)Cardinality);
         hash.Add((int)Presence);
+        hash.Add((int)Nullability);
         hash.Add(ShapeValueEquality.GetAnnotationsHashCode(Annotations));
         return hash.ToHashCode();
     }

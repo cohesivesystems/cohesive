@@ -1863,7 +1863,7 @@ public sealed class RelationQueryExpressionLowerer
 
         if (literalType is not ScalarTypeRef
             || value.Kind is not (ObservationValueKind.Null or ObservationValueKind.Undefined)
-                && !new ExprValueContract(literalType).IsSatisfiedByConstant(value))
+                && !new ValueContract(literalType).IsSatisfiedByConstant(value))
         {
             return new ConstantExpr(value);
         }
