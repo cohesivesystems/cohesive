@@ -20,10 +20,166 @@ dotnet add package Cohesive.Transitions
 Transitions. Its structured definitions are stored through the shared execution-definition envelope
 and remain inspectable without the original authoring assembly.
 
-`Cohesive.Transitions.Model.TransitionDefinition`, the current builders, and
-`DeclarativeEntityRuntime` are temporary compatibility surfaces for the earlier flat transition
-model. They are not persisted kernel authority. Existing consumers may continue to use them during
-migration, but new durable semantics should be expressed in `Cohesive.Transitions.IR`.
+Typed C# authoring through `TransitionAuthoring` is a producer of that IR, not a second execution
+model. The returned `Transition<TEntity, TInput, TOutcome>` contains only a canonical
+`ExecutionDefinitionDocument` and its validation result. It does not retain the builder callback,
+expression trees, an `Apply` delegate, entity state, or a runtime service. Persist the document; a
+consumer can deserialize, validate, compile, and interpret it without loading the authoring assembly.
+
+`Cohesive.Transitions.Model.TransitionDefinition`, `Transition<TEntity, TInput>`,
+`TransitionExpressionBuilder`, and `DeclarativeEntityRuntime` remain temporary compatibility
+surfaces for the earlier flat, delegate-backed transition model pending ARI-185. They are not
+persisted kernel authority. Existing consumers may continue to use them during migration, but new
+durable semantics should use the canonical authoring or direct-IR surfaces described below.
+
+## Canonical C# Authoring
+
+The C# frontend accepts a finite, typed syntax for inputs, observations, admission rules, lexical
+locals, ordered `Choice` and exact `Match` branches, algebraic sparse updates, interaction emissions,
+Machine movements, candidate-state invariants, and typed outcomes. Every definition, revision,
+body, rule, branch, binding, update, emission, movement, and outcome receives an explicit stable
+identity. Nested body identities are derived deterministically from their owning case or fallback;
+source file paths and line numbers never participate in identity or fingerprinting.
+
+```csharp
+using Cohesive.Execution;
+using Cohesive.Model.Serialization;
+using Cohesive.Transitions.Authoring;
+using Cohesive.Transitions.Compilation;
+using Cohesive.Transitions.Execution;
+using Cohesive.Transitions.IR;
+
+public enum LoadStatus { Draft, Assigned }
+
+public enum AssignCarrierOutcome { Assigned, NotDraft, InvalidCarrier }
+
+public sealed record AssignCarrierInput(string CarrierId);
+
+public sealed class Load : Entity<Load>
+{
+    public Load()
+    {
+        Status = Field(nameof(Status), LoadStatus.Draft);
+        CarrierId = Field<string?>(
+            nameof(CarrierId),
+            initialValue: null,
+            configure: field => field.Optional());
+    }
+
+    public Field<LoadStatus> Status { get; }
+
+    public Field<string?> CarrierId { get; }
+}
+
+var metadata = new TransitionAuthoringMetadata(
+    new("transition/load/assign-carrier"),
+    new("revision/1"),
+    new("assign-carrier/body"),
+    new(
+        new(TransitionAuthoring.Producer),
+        new("src/domain/Load.cs"),
+        DocumentOrigin.User),
+    displayName: "Assign carrier");
+
+var authored = TransitionAuthoring.Create<Load, AssignCarrierInput, AssignCarrierOutcome>(
+    Load.Define().Shape,
+    metadata,
+    transition =>
+    {
+        transition.Requires(
+            new("assign-carrier/admit/draft"),
+            (load, _) => load.Status == LoadStatus.Draft,
+            (_, _) => AssignCarrierOutcome.NotDraft);
+
+        transition.Choose(new("assign-carrier/validate"), choice => choice
+            .Case(
+                new("assign-carrier/valid"),
+                (_, input) => input.CarrierId != "",
+                valid => valid
+                    .Set(
+                        new("assign-carrier/set-carrier"),
+                        load => load.CarrierId,
+                        (_, input) => input.CarrierId)
+                    .Set(
+                        new("assign-carrier/set-status"),
+                        load => load.Status,
+                        LoadStatus.Assigned)
+                    .Return(
+                        new("assign-carrier/assigned"),
+                        TransitionOutcomeDisposition.Applied,
+                        AssignCarrierOutcome.Assigned))
+            .Fallback(
+                new("assign-carrier/invalid"),
+                invalid => invalid.Return(
+                    new("assign-carrier/rejected"),
+                    TransitionOutcomeDisposition.DomainRejected,
+                    AssignCarrierOutcome.InvalidCarrier)));
+
+        transition.Invariant(
+            new("assign-carrier/invariant/carrier-required"),
+            load => load.Status != LoadStatus.Assigned || load.CarrierId != null);
+    });
+```
+
+The callback above is construction-time syntax only. `authored.Document` is the sole authority, and
+`authored.Reference` is the exact definition/revision/fingerprint reference other semantic blocks
+should retain. Supplying the same explicit identities and semantics through direct IR produces the
+same normalized definition and fingerprint. Display text, C# call-site locations, and source-map
+entries are attribution metadata and are excluded from the semantic fingerprint.
+
+The frontend deliberately rejects arbitrary C#. Expressions may reference declared input,
+observation, and visible lexical-local values and may use only operations representable by portable
+`Expr` IR. Captured state, arbitrary method calls, loops, mutation, reflection, and other unrestricted
+CLR computation cause `TransitionExpressionTranslationException`; they are never hidden in a
+persisted callback.
+
+### Persist, compile, and activate
+
+The durable path always crosses the canonical document boundary:
+
+```csharp
+var json = ExecutionDefinitionJsonSerializer.Serialize(authored.Document);
+var compatibility = new ExecutionDefinitionCompatibilityDeclaration(
+    new([authored.Document.Metadata.SchemaVersion]),
+    [authored.Document.Kind],
+    [authored.Reference]); // In production, this allowlist is owned by the activating interpreter.
+var restored = ExecutionDefinitionJsonSerializer.Deserialize(json, compatibility);
+var compilation = TransitionStaticCompiler.Compile(restored);
+
+if (!compilation.IsSuccessful)
+{
+    // Return or publish compilation.Validation; do not activate a partial plan.
+    return;
+}
+
+var plan = compilation.Plan!;
+// Acquire the observations required by plan.Analysis, construct a TransitionActivation,
+// then call TransitionReferenceInterpreter.Decide(plan, activation).
+```
+
+Authoring records call-site provenance in `ExecutionSourceMap` entries without changing canonical
+identity. Canonical validation and compilation diagnostics resolve their semantic locations through
+that map, so tooling can present the originating C# member and line while retaining the canonical
+location and diagnostic code. A persisted document remains valid and independently interpretable if
+those local source files are moved or unavailable.
+
+Failure contracts are intentionally separated by phase:
+
+- Authoring misuse and non-portable expressions or constants fail immediately with argument,
+  structural-builder, `NotSupportedException`, or `TransitionExpressionTranslationException`
+  failures; no partial authored handle is returned.
+- Canonical semantic problems, including CLR shapes that cannot be inferred portably, are deterministic
+  `DocumentValidationDiagnostic` values on `authored.Validation` or `compilation.Validation`. Error
+  diagnostics prevent creation of a compiled plan; callers must not activate `compilation.Analysis` as
+  though it were complete.
+- Definition activation requires the exact schema, definition identity, semantic revision, and
+  fingerprint admitted by the interpreter. Compatibility failure is a definition/activation failure,
+  not a domain-rejected transition outcome.
+- Reference interpretation performs no I/O and no commit. Domain rejection, no-change, conflict,
+  unavailable observation, and interpreter diagnostics remain distinct decisions/evidence for an
+  external storage or process integration to handle.
+- Sparse observation preserves the distinction between an unobserved path and explicit `Absent`,
+  `Null`, `Unknown`, or `Failed` values. Authoring and adapters must not collapse those states.
 
 ## Canonical IR
 
@@ -111,10 +267,11 @@ the compiled plan. The reference interpreter validates the source configuration,
 candidate state, and verifies the target configuration. It does not copy an independently authored lifecycle
 graph into Transition IR or resolve Machine state through an ambient runtime service.
 
-## Compatibility Example
+## Legacy Compatibility Example
 
-The following example uses the current compatibility authoring and runtime surface. Its eventual
-lowering target is canonical `Cohesive.Transitions.IR` rather than the flat model it produces today.
+The following example uses the flat compatibility authoring and runtime surface pending ARI-185. It
+does not lower to the canonical document today and must not be used as the durable authority for new
+execution-kernel semantics.
 
 ```csharp
 using Cohesive.Transitions.Authoring;

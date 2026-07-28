@@ -1,10 +1,9 @@
-using System.Collections.Immutable;
 using System.Collections;
+using System.Collections.Immutable;
 using System.Linq.Expressions;
 using System.Reflection;
-using Cohesive.Model;
 using Cohesive.Transitions.Model;
-using Cohesive.Transitions.Authoring;
+using TransitionBindingIds = Cohesive.Transitions.IR.TransitionBindingIds;
 
 namespace Cohesive.Transitions.Authoring;
 
@@ -537,15 +536,36 @@ public sealed class TransitionExpressionBuilder<TEntity, TParameters> where TEnt
     {
         readonly Dictionary<string, FieldDefinition> fieldByName;
         readonly HashSet<string> parameterNames;
+        readonly bool allowCapturedValues;
+        readonly IClrTypeRefMapper? typeRefMapper;
         ParameterExpression? currentStateParameter;
         ParameterExpression? currentSnapshotParameter;
 
-        public ExpressionTranslator(EntityDefinition entityDefinition, IReadOnlySet<string> parameterNames)
+        public ExpressionTranslator(
+            EntityDefinition entityDefinition,
+            IReadOnlySet<string> parameterNames,
+            bool allowCapturedValues = true,
+            IClrTypeRefMapper? typeRefMapper = null)
+            : this(
+                Guard.RequireNotNull(entityDefinition).Shape,
+                parameterNames,
+                allowCapturedValues,
+                typeRefMapper)
         {
-            ArgumentNullException.ThrowIfNull(argument: entityDefinition);
+        }
+
+        public ExpressionTranslator(
+            Shape entityShape,
+            IReadOnlySet<string> parameterNames,
+            bool allowCapturedValues = true,
+            IClrTypeRefMapper? typeRefMapper = null)
+        {
+            ArgumentNullException.ThrowIfNull(argument: entityShape);
             ArgumentNullException.ThrowIfNull(argument: parameterNames);
-            fieldByName = entityDefinition.Fields.ToDictionary(x => x.Name.Value, StringComparer.Ordinal);
+            fieldByName = entityShape.Fields.ToDictionary(x => x.Name.Value, StringComparer.Ordinal);
             this.parameterNames = new(parameterNames, StringComparer.Ordinal);
+            this.allowCapturedValues = allowCapturedValues;
+            this.typeRefMapper = typeRefMapper;
         }
 
         public Expr Translate(LambdaExpression lambda)
@@ -644,11 +664,15 @@ public sealed class TransitionExpressionBuilder<TEntity, TParameters> where TEnt
 
         Expr Translate(Expression expression, ParameterExpression entityParameter, ParameterExpression parametersParameter, Type? constantTypeHint = null)
         {
-            if (TryTranslateCapturedConstant(expression, out var captured))
+            if (allowCapturedValues && TryTranslateCapturedConstant(expression, out var captured))
                 return new ConstantExpr(ToConstant(captured, constantTypeHint ?? expression.Type));
 
             switch (expression)
             {
+                case ParameterExpression parameter
+                    when !allowCapturedValues && ReferenceEquals(parameter, parametersParameter):
+                    return Expr.BoundValue(TransitionBindingIds.Input);
+
                 case ConstantExpression constant:
                     return new ConstantExpr(ToConstant(constant.Value, constantTypeHint ?? constant.Type));
 
@@ -731,8 +755,15 @@ public sealed class TransitionExpressionBuilder<TEntity, TParameters> where TEnt
                 return countExpr;
             }
 
-            if (TryTranslateCapturedConstant(expression: member, out var captured))
+            if (allowCapturedValues && TryTranslateCapturedConstant(expression: member, out var captured))
                 return new ConstantExpr(Value: ToConstant(captured, constantTypeHint ?? member.Type));
+
+            if (!allowCapturedValues && IsCapturedMember(member))
+            {
+                throw new TransitionExpressionTranslationException(
+                    $"Captured member '{member.Member.Name}' is not portable canonical Transition semantics. "
+                    + "Declare the value as typed Transition input or an authored local binding.");
+            }
 
             throw new TransitionExpressionTranslationException($"Unsupported member access '{member.Member.Name}'.");
         }
@@ -797,7 +828,7 @@ public sealed class TransitionExpressionBuilder<TEntity, TParameters> where TEnt
                     expression: StripConvert(expression: conditional.IfFalse),
                     entityParameter: entityParameter,
                     parametersParameter: parametersParameter),
-                returnType: new OpaqueRuntimeTypeRef("unknown")
+                returnType: ReturnType(conditional.Type)
                 );
         }
 
@@ -844,10 +875,47 @@ public sealed class TransitionExpressionBuilder<TEntity, TParameters> where TEnt
             ParameterExpression parametersParameter
             )
         {
+            if (allowCapturedValues)
+            {
+                IReadOnlyList<string> legacyMemberNames;
+                if (newExpr.Members is not null && newExpr.Members.Count == newExpr.Arguments.Count)
+                {
+                    legacyMemberNames = [.. newExpr.Members.Select(static member => member.Name)];
+                }
+                else
+                {
+                    var legacyParameters = newExpr.Constructor?.GetParameters();
+                    if (legacyParameters is null || legacyParameters.Length != newExpr.Arguments.Count)
+                    {
+                        throw new TransitionExpressionTranslationException(
+                            "Only named object creation is supported for effect payload expressions.");
+                    }
+
+                    legacyMemberNames =
+                    [
+                        .. legacyParameters.Select(static parameter => parameter.Name
+                            ?? throw new TransitionExpressionTranslationException(
+                                "Effect payload constructor parameters must be named."))
+                    ];
+                }
+
+                List<Expr> legacyArguments = [];
+                for (var index = 0; index < legacyMemberNames.Count; index++)
+                {
+                    legacyArguments.Add(Expr.Const(value: legacyMemberNames[index]));
+                    legacyArguments.Add(Translate(
+                        expression: StripConvert(expression: newExpr.Arguments[index]),
+                        entityParameter: entityParameter,
+                        parametersParameter: parametersParameter));
+                }
+
+                return Expr.Call(function: ExprFunctionNames.Object, [.. legacyArguments]);
+            }
+
             IReadOnlyList<string> memberNames;
             if (newExpr.Members is not null && newExpr.Members.Count == newExpr.Arguments.Count)
             {
-                memberNames = [.. newExpr.Members.Select(x => x.Name)];
+                memberNames = [.. newExpr.Members.Select(DefaultClrTypeRefMapper.GetSerializedMemberName)];
             }
             else
             {
@@ -856,20 +924,40 @@ public sealed class TransitionExpressionBuilder<TEntity, TParameters> where TEnt
                 if (parameters is null || parameters.Length != newExpr.Arguments.Count)
                     throw new TransitionExpressionTranslationException("Only named object creation is supported for effect payload expressions.");
 
-                memberNames = [.. parameters.Select(x => x.Name ?? throw new TransitionExpressionTranslationException("Effect payload constructor parameters must be named."))];
+                var properties = ShapeTypeInspector.GetReadableProperties(newExpr.Type);
+                memberNames =
+                [
+                    .. parameters.Select(parameter => ResolveConstructorMemberName(
+                        parameter,
+                        properties,
+                        newExpr.Type))
+                ];
+            }
+
+            var members = memberNames
+                .Select((name, index) => (Name: name, Index: index))
+                .OrderBy(static member => member.Name, StringComparer.Ordinal)
+                .ToArray();
+            if (members.Select(static member => member.Name).Distinct(StringComparer.Ordinal).Count() != members.Length)
+            {
+                throw new TransitionExpressionTranslationException(
+                    $"Object creation for '{newExpr.Type.Name}' maps more than one value to the same semantic field name.");
             }
 
             List<Expr> arguments = [];
-            for (var i = 0; i < memberNames.Count; i++)
+            foreach (var member in members)
             {
-                arguments.Add(Expr.Const(value: memberNames[i]));
+                arguments.Add(Expr.Const(value: member.Name));
                 arguments.Add(item: Translate(
-                    expression: StripConvert(expression: newExpr.Arguments[i]),
+                    expression: StripConvert(expression: newExpr.Arguments[member.Index]),
                     entityParameter: entityParameter,
                     parametersParameter: parametersParameter));
             }
 
-            return Expr.Call(function: ExprFunctionNames.Object, [.. arguments]);
+            return new CallExpr(
+                ExprFunctionNames.Object,
+                [.. arguments],
+                ReturnType(newExpr.Type));
         }
 
         Expr TranslateMemberInit(
@@ -878,7 +966,28 @@ public sealed class TransitionExpressionBuilder<TEntity, TParameters> where TEnt
             ParameterExpression parametersParameter
             )
         {
-            List<Expr> arguments = [];
+            if (allowCapturedValues)
+            {
+                List<Expr> legacyArguments = [];
+                foreach (var binding in init.Bindings)
+                {
+                    if (binding is not MemberAssignment legacyAssignment)
+                    {
+                        throw new TransitionExpressionTranslationException(
+                            message: "Only simple member assignments are supported in object initializer payload expressions.");
+                    }
+
+                    legacyArguments.Add(item: Expr.Const(value: binding.Member.Name));
+                    legacyArguments.Add(item: Translate(
+                        expression: StripConvert(expression: legacyAssignment.Expression),
+                        entityParameter: entityParameter,
+                        parametersParameter: parametersParameter));
+                }
+
+                return Expr.Call(function: ExprFunctionNames.Object, arguments: [.. legacyArguments]);
+            }
+
+            List<(string Name, Expression Value)> assignments = [];
             foreach (var binding in init.Bindings)
             {
                 if (binding is not MemberAssignment assignment)
@@ -887,14 +996,33 @@ public sealed class TransitionExpressionBuilder<TEntity, TParameters> where TEnt
                         message: "Only simple member assignments are supported in object initializer payload expressions.");
                 }
 
-                arguments.Add(item: Expr.Const(value: binding.Member.Name));
+                assignments.Add((DefaultClrTypeRefMapper.GetSerializedMemberName(binding.Member), assignment.Expression));
+            }
+
+            assignments.Sort(static (left, right) => StringComparer.Ordinal.Compare(left.Name, right.Name));
+            for (var index = 1; index < assignments.Count; index++)
+            {
+                if (string.Equals(assignments[index - 1].Name, assignments[index].Name, StringComparison.Ordinal))
+                {
+                    throw new TransitionExpressionTranslationException(
+                        $"Object initializer for '{init.Type.Name}' assigns semantic field '{assignments[index].Name}' more than once.");
+                }
+            }
+
+            List<Expr> arguments = [];
+            foreach (var assignment in assignments)
+            {
+                arguments.Add(item: Expr.Const(value: assignment.Name));
                 arguments.Add(item: Translate(
-                    expression: StripConvert(expression: assignment.Expression),
+                    expression: StripConvert(expression: assignment.Value),
                     entityParameter: entityParameter,
                     parametersParameter: parametersParameter));
             }
 
-            return Expr.Call(function: ExprFunctionNames.Object, arguments: [.. arguments]);
+            return new CallExpr(
+                ExprFunctionNames.Object,
+                [.. arguments],
+                ReturnType(init.Type));
         }
 
         Expr TranslateStringConcatenation(BinaryExpression binary, ParameterExpression entityParameter, ParameterExpression parametersParameter)
@@ -905,7 +1033,10 @@ public sealed class TransitionExpressionBuilder<TEntity, TParameters> where TEnt
                 arguments: arguments,
                 entityParameter: entityParameter,
                 parametersParameter: parametersParameter);
-            return Expr.Call(ExprFunctionNames.Concat, [.. arguments]);
+            return new CallExpr(
+                ExprFunctionNames.Concat,
+                [.. arguments],
+                ReturnType(typeof(string)));
         }
 
         void CollectStringConcatArguments(Expression expression, List<Expr> arguments, ParameterExpression entityParameter, ParameterExpression parametersParameter)
@@ -1090,7 +1221,9 @@ public sealed class TransitionExpressionBuilder<TEntity, TParameters> where TEnt
                 throw new TransitionExpressionTranslationException(message: $"Transition parameter reference '{member.Member.Name}' is not a property.");
             }
 
-            parameterName = property.Name;
+            parameterName = allowCapturedValues
+                ? property.Name
+                : DefaultClrTypeRefMapper.GetSerializedMemberName(property);
             if (!parameterNames.Contains(parameterName))
             {
                 throw new TransitionExpressionTranslationException(message: $"Transition parameter '{parameterName}' is not declared.");
@@ -1173,12 +1306,13 @@ public sealed class TransitionExpressionBuilder<TEntity, TParameters> where TEnt
                 throw new TransitionExpressionTranslationException($"Count is only supported for collection fields. Field '{field.Name.Value}' is not declared with Many cardinality.");
             }
 
-            expression = Expr.Call(
-                function: ExprFunctionNames.Count,
-                Translate(
+            expression = new CallExpr(
+                ExprFunctionNames.Count,
+                [Translate(
                     expression: collectionExpression,
                     entityParameter: entityParameter,
-                    parametersParameter: parametersParameter));
+                    parametersParameter: parametersParameter)],
+                ReturnType(typeof(int)));
             return true;
         }
 
@@ -1222,12 +1356,13 @@ public sealed class TransitionExpressionBuilder<TEntity, TParameters> where TEnt
             if (collectionExpression is null)
                 return false;
 
-            expression = Expr.Call(
-                function: ExprFunctionNames.Count,
-                Translate(
+            expression = new CallExpr(
+                ExprFunctionNames.Count,
+                [Translate(
                     expression: StripConvert(expression: collectionExpression),
                     entityParameter: entityParameter,
-                    parametersParameter: parametersParameter));
+                    parametersParameter: parametersParameter)],
+                ReturnType(typeof(int)));
             return true;
         }
 
@@ -1248,23 +1383,26 @@ public sealed class TransitionExpressionBuilder<TEntity, TParameters> where TEnt
                     );
             }
 
-            expression = Expr.Call(ExprFunctionNames.Concat, [.. arguments]);
+            expression = new CallExpr(
+                ExprFunctionNames.Concat,
+                [.. arguments],
+                ReturnType(typeof(string)));
             return true;
         }
 
-        static bool IsStringConcatenation(BinaryExpression expression) => 
+        static bool IsStringConcatenation(BinaryExpression expression) =>
             expression.Type == typeof(string) || IsStringConcatMethod(expression.Method);
 
         static bool IsStringConcatCall(MethodCallExpression call) =>
             call.Method.IsStatic && IsStringConcatMethod(call.Method);
 
-        static bool IsStringConcatMethod(MethodInfo? method) => 
+        static bool IsStringConcatMethod(MethodInfo? method) =>
             method is not null && method.DeclaringType == typeof(string) && string.Equals(method.Name, nameof(string.Concat), StringComparison.Ordinal);
 
         static bool IsStringExpression(Expression expression) =>
             UnwrapSemanticValueType(expression.Type) == typeof(string);
 
-        static bool IsFieldProperty(Type type) => 
+        static bool IsFieldProperty(Type type) =>
             type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Field<>);
 
         static Expression StripConvert(Expression expression)
@@ -1294,7 +1432,51 @@ public sealed class TransitionExpressionBuilder<TEntity, TParameters> where TEnt
             return false;
         }
 
-        static bool TryResolveMembershipValues(Expression expression, out IReadOnlyList<object?> values)
+        static bool IsCapturedMember(MemberExpression member)
+        {
+            if (member.Expression is null)
+                return true;
+
+            var source = StripConvert(member.Expression);
+            return source is ConstantExpression
+                   || source is MemberExpression parent && IsCapturedMember(parent);
+        }
+
+        static string ResolveConstructorMemberName(
+            ParameterInfo parameter,
+            IReadOnlyList<PropertyInfo> properties,
+            Type constructedType)
+        {
+            var parameterName = parameter.Name
+                ?? throw new TransitionExpressionTranslationException(
+                    $"Constructor parameters for '{constructedType.Name}' must be named.");
+            PropertyInfo? resolved = null;
+            foreach (var property in properties)
+            {
+                if (!string.Equals(property.Name, parameterName, StringComparison.OrdinalIgnoreCase)
+                    || property.PropertyType != parameter.ParameterType)
+                {
+                    continue;
+                }
+
+                if (resolved is not null)
+                {
+                    throw new TransitionExpressionTranslationException(
+                        $"Constructor parameter '{parameterName}' on '{constructedType.Name}' maps to more than one readable property.");
+                }
+
+                resolved = property;
+            }
+
+            return resolved is null
+                ? parameterName
+                : DefaultClrTypeRefMapper.GetSerializedMemberName(resolved);
+        }
+
+        TypeRef ReturnType(Type type) =>
+            typeRefMapper?.Map(type, nullability: null) ?? new OpaqueRuntimeTypeRef("unknown");
+
+        bool TryResolveMembershipValues(Expression expression, out IReadOnlyList<object?> values)
         {
             switch (StripConvert(expression))
             {
@@ -1302,7 +1484,7 @@ public sealed class TransitionExpressionBuilder<TEntity, TParameters> where TEnt
                     List<object?> arrayValues = [];
                     foreach (var element in newArray.Expressions)
                     {
-                        if (!TryTranslateCapturedConstant(element, out var elementValue))
+                        if (!TryResolveMembershipConstant(element, out var elementValue))
                         {
                             values = [];
                             return false;
@@ -1315,7 +1497,7 @@ public sealed class TransitionExpressionBuilder<TEntity, TParameters> where TEnt
                     return true;
 
                 default:
-                    if (!TryTranslateCapturedConstant(expression, out var captured) || captured is null)
+                    if (!TryResolveMembershipConstant(expression, out var captured) || captured is null)
                     {
                         values = [];
                         return false;
@@ -1340,6 +1522,29 @@ public sealed class TransitionExpressionBuilder<TEntity, TParameters> where TEnt
                     values = [captured];
                     return true;
             }
+        }
+
+        bool TryResolveMembershipConstant(Expression expression, out object? value)
+        {
+            var candidate = StripConvert(expression);
+            if (candidate is ConstantExpression constant)
+            {
+                value = constant.Value;
+                return true;
+            }
+
+            if (allowCapturedValues)
+                return TryTranslateCapturedConstant(candidate, out value);
+
+            if (candidate is MemberExpression member && IsCapturedMember(member))
+            {
+                throw new TransitionExpressionTranslationException(
+                    $"Captured membership value '{member.Member.Name}' is not portable canonical Transition semantics. "
+                    + "Declare the comparison set directly in the authored expression.");
+            }
+
+            value = null;
+            return false;
         }
 
         static bool TryReadCapturedMember(MemberExpression member, out object? value)

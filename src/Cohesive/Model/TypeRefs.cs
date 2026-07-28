@@ -157,6 +157,9 @@ public static class TypeInferenceDiagnosticReasons
     /// The type has no readable public instance properties.
     /// </summary>
     public const string NoReadableProperties = "noReadableProperties";
+
+    /// <summary>Multiple readable properties map to the same serialized field name.</summary>
+    public const string AmbiguousSerializedProperty = "ambiguousSerializedProperty";
 }
 
 /// <summary>
