@@ -1186,8 +1186,10 @@ public static class RelationQueryExpressionAnalyzer
     static ExprCapabilityProfile CreateRelationLanguageProfile()
     {
         var semantics = ExprSemanticsCatalog.Default;
+        // Whole-binding reads require a Relations value-access/evidence model; field access remains supported.
         HashSet<ExprCapabilityId> excluded =
         [
+            ExprCapabilities.Binding,
             .. semantics.AggregateOperators.Select(static definition => definition.OperationCapability)
         ];
         return new(semantics.Capabilities.Where(capability => !excluded.Contains(capability)));

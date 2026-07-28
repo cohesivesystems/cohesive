@@ -1046,6 +1046,8 @@ export const relationOutputModeLabels: Record<RelationOutputMode, string> = {
 };
 
 export type Expr = {
+  readonly $expr: 'binding';
+} & BindingExpr | {
   readonly $expr: 'field';
 } & FieldExpr | {
   readonly $expr: 'currentItem';
@@ -1068,6 +1070,10 @@ export type Expr = {
 } & LiteralExpr | {
   readonly $expr: 'aggregate';
 } & AggregateExpr;
+
+export interface BindingExpr {
+  binding: ValueBindingId;
+}
 
 export interface FieldExpr {
   path: FieldPath;

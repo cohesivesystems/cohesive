@@ -7,6 +7,7 @@ namespace Cohesive.Model;
 /// Shared semantic expression IR used by relations and transitions.
 /// </summary>
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "$expr")]
+[JsonDerivedType(typeof(BindingExpr), "binding")]
 [JsonDerivedType(typeof(FieldExpr), "field")]
 [JsonDerivedType(typeof(CurrentItemExpr), "currentItem")]
 [JsonDerivedType(typeof(ParameterExpr), "parameter")]
@@ -20,6 +21,13 @@ namespace Cohesive.Model;
 [JsonDerivedType(typeof(AggregateExpr), "aggregate")]
 public abstract record Expr
 {
+    /// <summary>
+    /// Expression that references the complete value of a specific semantic binding.
+    /// </summary>
+    /// <param name="binding">Value binding to reference.</param>
+    /// <returns>A whole-binding expression.</returns>
+    public static Expr BoundValue(ValueBindingId binding) => new BindingExpr(binding);
+
     /// <summary>
     /// Expression that references a source field/path.
     /// </summary>
@@ -425,6 +433,12 @@ public sealed record ConditionalExpr : Expr
     /// </summary>
     public TypeRef ReturnType { get; init; }
 }
+
+/// <summary>
+/// Expression that references the complete value of a named semantic binding.
+/// </summary>
+/// <param name="Binding">Value binding whose complete value is returned.</param>
+public sealed record BindingExpr(ValueBindingId Binding) : Expr;
 
 /// <summary>
 /// Expression that references a source field/path, optionally qualified by a value binding.

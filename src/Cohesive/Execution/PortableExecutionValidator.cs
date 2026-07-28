@@ -320,6 +320,15 @@ public static class PortableExecutionValidator
 
             switch (expression)
             {
+                case BindingExpr bindingExpression:
+                    if (string.IsNullOrWhiteSpace(bindingExpression.Binding.Value))
+                    {
+                        Error(
+                            PortableExecutionDiagnosticCodes.InvalidNode,
+                            "A binding expression requires a stable identifier.",
+                            Child(location, "binding"));
+                    }
+                    break;
                 case FieldExpr field:
                     ValidatePath(field.Path, Child(location, "path"));
                     if (field.Binding is { } binding && string.IsNullOrWhiteSpace(binding.Value))

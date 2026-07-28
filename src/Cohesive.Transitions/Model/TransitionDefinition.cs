@@ -6,6 +6,11 @@ namespace Cohesive.Transitions.Model;
 /// <summary>
 /// Declarative state transition definition for an entity.
 /// </summary>
+/// <remarks>
+/// This flat definition is a temporary compatibility surface for existing builders and
+/// <c>DeclarativeEntityRuntime</c>. Canonical persisted execution-kernel semantics are represented by
+/// <c>Cohesive.Transitions.IR.TransitionDefinition</c>; this type is not persisted kernel authority.
+/// </remarks>
 public sealed record TransitionDefinition
 {
     /// <summary>
