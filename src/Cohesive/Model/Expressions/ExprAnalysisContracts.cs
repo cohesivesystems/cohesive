@@ -557,6 +557,15 @@ public readonly record struct ExprFieldRequirement
             Kind: SegmentKind.Field,
             Segment: ExprFieldRoots.CurrentItem
         };
+
+    internal static bool IsValid(ExprFieldRequirement requirement) =>
+        Enum.IsDefined(requirement.Root)
+        && IsValidPath(requirement.Path)
+        && (requirement.Root != ExprFieldRootKind.Binding
+            || requirement.Binding is { } binding && !string.IsNullOrWhiteSpace(binding.Value))
+        && (requirement.Root == ExprFieldRootKind.Binding || requirement.Binding is null)
+        && (requirement.Root != ExprFieldRootKind.CurrentItem
+            || IsCurrentItemPath(requirement.Path));
 }
 
 /// <summary>One operation or ambient capability required by an expression.</summary>
@@ -574,6 +583,26 @@ public readonly record struct ExprCapabilityUse(
     ExprCapabilityRequirement Requirement,
     string ExpressionPath,
     bool IsSatisfied);
+
+/// <summary>One field requirement at a precise expression-tree location.</summary>
+/// <param name="Requirement">The rooted field-path requirement produced by the field expression.</param>
+/// <param name="ExpressionPath">
+/// Culture-independent path to the actual <see cref="FieldExpr"/> or <see cref="FieldRefExpr"/> node.
+/// </param>
+public readonly record struct ExprFieldUse(
+    ExprFieldRequirement Requirement,
+    string ExpressionPath);
+
+/// <summary>One whole-value binding access at a precise expression-tree location.</summary>
+/// <remarks>
+/// This occurrence represents an actual <see cref="BindingExpr"/>. A binding used only as the root
+/// of a <see cref="FieldExpr"/> is represented by <see cref="ExprFieldUse"/> instead.
+/// </remarks>
+/// <param name="Binding">Stable identity of the binding whose complete value is accessed.</param>
+/// <param name="ExpressionPath">Culture-independent path to the actual <see cref="BindingExpr"/> node.</param>
+public readonly record struct ExprBindingUse(
+    ValueBindingId Binding,
+    string ExpressionPath);
 
 /// <summary>Immutable context requirements derived from one or more expressions.</summary>
 public sealed class ExprRequirements
@@ -602,14 +631,7 @@ public sealed class ExprRequirements
         var normalizedParameters = parameters is null ? [] : parameters.ToImmutableArray();
         var normalizedCapabilities = capabilities is null ? [] : capabilities.ToImmutableArray();
 
-        if (normalizedFields.Any(static field =>
-                !Enum.IsDefined(field.Root)
-                || !ExprFieldRequirement.IsValidPath(field.Path)
-                || field.Root == ExprFieldRootKind.Binding
-                    && (field.Binding is not { } binding || string.IsNullOrWhiteSpace(binding.Value))
-                || field.Root != ExprFieldRootKind.Binding && field.Binding is not null
-                || field.Root == ExprFieldRootKind.CurrentItem
-                    && !ExprFieldRequirement.IsCurrentItemPath(field.Path)))
+        if (normalizedFields.Any(static field => !ExprFieldRequirement.IsValid(field)))
         {
             throw new ArgumentException(
                 "Field requirements must contain valid paths and consistent semantic roots.",
@@ -783,13 +805,28 @@ public sealed class ExprAnalysisResult
     /// <param name="requirements">Requirements derived from the expression.</param>
     /// <param name="capabilityUses">Capability uses with expression-tree provenance.</param>
     /// <param name="validation">Structured analysis diagnostics.</param>
+    /// <param name="knownConstant">
+    /// Exact constant result proven by analysis, or <see langword="null"/> when the result is not
+    /// known to be one constant value.
+    /// </param>
+    /// <param name="fieldUses">
+    /// Individual field-expression occurrences with expression-tree provenance, or
+    /// <see langword="null"/> when none are supplied.
+    /// </param>
+    /// <param name="bindingUses">
+    /// Individual whole-value binding-expression occurrences with expression-tree provenance, or
+    /// <see langword="null"/> when none are supplied.
+    /// </param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="site"/>, <paramref name="semantics"/>, <paramref name="requirements"/>,
     /// <paramref name="capabilityUses"/>, or <paramref name="validation"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
     /// <paramref name="knownResult"/> contradicts <paramref name="resultCategory"/>, or
-    /// <paramref name="capabilityUses"/> contains an invalid capability, kind, or expression path.
+    /// <paramref name="knownConstant"/> is conclusively incompatible with <paramref name="knownResult"/>, or
+    /// an occurrence collection contains an invalid or non-required field/binding, expression path,
+    /// or duplicate expression path, or <paramref name="capabilityUses"/> contains an invalid
+    /// capability, kind, or expression path.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="resultCategory"/> is unsupported.</exception>
     public ExprAnalysisResult(
@@ -799,7 +836,10 @@ public sealed class ExprAnalysisResult
         ValueContract? knownResult,
         ExprRequirements requirements,
         IEnumerable<ExprCapabilityUse> capabilityUses,
-        DocumentValidationResult validation)
+        DocumentValidationResult validation,
+        ObservationValue? knownConstant = null,
+        IEnumerable<ExprFieldUse>? fieldUses = null,
+        IEnumerable<ExprBindingUse>? bindingUses = null)
     {
         if (!Enum.IsDefined(resultCategory))
             throw new ArgumentOutOfRangeException(nameof(resultCategory), resultCategory, "Unsupported result category.");
@@ -810,12 +850,63 @@ public sealed class ExprAnalysisResult
                 "The known result contract does not satisfy the declared result category.",
                 nameof(knownResult));
         }
+        if (knownConstant is { } constant
+            && knownResult is not null
+            && !knownResult.IsSatisfiedByConstant(constant))
+        {
+            throw new ArgumentException(
+                "The known constant does not satisfy the known result contract.",
+                nameof(knownConstant));
+        }
 
         Site = Guard.RequireNotNull(site);
         Semantics = Guard.RequireNotNull(semantics);
         ResultCategory = resultCategory;
         KnownResult = knownResult;
+        KnownConstant = knownConstant;
         Requirements = Guard.RequireNotNull(requirements);
+        var normalizedFieldUses = fieldUses is null ? [] : fieldUses.ToImmutableArray();
+        if (normalizedFieldUses.Any(use =>
+                !ExprFieldRequirement.IsValid(use.Requirement)
+                || string.IsNullOrWhiteSpace(use.ExpressionPath)
+                || !Requirements.Fields.Contains(use.Requirement)))
+        {
+            throw new ArgumentException(
+                "Field uses must contain valid rooted requirements retained by the aggregate requirements and valid expression paths.",
+                nameof(fieldUses));
+        }
+        if (HasDuplicateExpressionPath(normalizedFieldUses.Select(static use => use.ExpressionPath)))
+        {
+            throw new ArgumentException(
+                "Field uses cannot contain more than one occurrence at the same expression path.",
+                nameof(fieldUses));
+        }
+        FieldUses =
+        [
+            .. normalizedFieldUses.OrderBy(static use => use.ExpressionPath, StringComparer.Ordinal)
+        ];
+
+        var normalizedBindingUses = bindingUses is null ? [] : bindingUses.ToImmutableArray();
+        if (normalizedBindingUses.Any(use =>
+                string.IsNullOrWhiteSpace(use.Binding.Value)
+                || string.IsNullOrWhiteSpace(use.ExpressionPath)
+                || !Requirements.Bindings.Contains(use.Binding)))
+        {
+            throw new ArgumentException(
+                "Binding uses must contain binding identities retained by the aggregate requirements and valid expression paths.",
+                nameof(bindingUses));
+        }
+        if (HasDuplicateExpressionPath(normalizedBindingUses.Select(static use => use.ExpressionPath)))
+        {
+            throw new ArgumentException(
+                "Binding uses cannot contain more than one occurrence at the same expression path.",
+                nameof(bindingUses));
+        }
+        BindingUses =
+        [
+            .. normalizedBindingUses.OrderBy(static use => use.ExpressionPath, StringComparer.Ordinal)
+        ];
+
         ArgumentNullException.ThrowIfNull(capabilityUses);
         var normalizedCapabilityUses = capabilityUses.ToImmutableArray();
         if (normalizedCapabilityUses.Any(static use =>
@@ -836,6 +927,18 @@ public sealed class ExprAnalysisResult
                 .ThenBy(static use => use.IsSatisfied)
         ];
         Validation = Guard.RequireNotNull(validation);
+
+        static bool HasDuplicateExpressionPath(IEnumerable<string> expressionPaths)
+        {
+            HashSet<string> observed = new(StringComparer.Ordinal);
+            foreach (var expressionPath in expressionPaths)
+            {
+                if (!observed.Add(expressionPath))
+                    return true;
+            }
+
+            return false;
+        }
     }
 
     /// <summary>Analyzed expression site.</summary>
@@ -850,8 +953,24 @@ public sealed class ExprAnalysisResult
     /// <summary>Known portable result contract.</summary>
     public ValueContract? KnownResult { get; }
 
+    /// <summary>
+    /// Exact constant result proven by analysis, or <see langword="null"/> when the result is not
+    /// known to be one constant value.
+    /// </summary>
+    public ObservationValue? KnownConstant { get; }
+
     /// <summary>Requirements derived from the expression.</summary>
     public ExprRequirements Requirements { get; }
+
+    /// <summary>
+    /// Individual field-expression occurrences sorted by their deterministic expression-tree paths.
+    /// </summary>
+    public ImmutableArray<ExprFieldUse> FieldUses { get; }
+
+    /// <summary>
+    /// Individual whole-value binding-expression occurrences sorted by their deterministic expression-tree paths.
+    /// </summary>
+    public ImmutableArray<ExprBindingUse> BindingUses { get; }
 
     /// <summary>Capability uses sorted by expression path, kind, and stable capability identity.</summary>
     public ImmutableArray<ExprCapabilityUse> CapabilityUses { get; }

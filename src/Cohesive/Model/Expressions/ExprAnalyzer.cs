@@ -30,7 +30,9 @@ public static class ExprAnalyzer
         ExprSemanticsCatalog semantics)
     {
         readonly List<ExprFieldRequirement> fields = [];
+        readonly List<ExprFieldUse> fieldUses = [];
         readonly HashSet<ValueBindingId> bindings = [];
+        readonly List<ExprBindingUse> bindingUses = [];
         readonly HashSet<string> parameters = new(StringComparer.Ordinal);
         readonly HashSet<ExprCapabilityRequirement> capabilities = [];
         readonly List<ExprCapabilityUse> capabilityUses = [];
@@ -59,7 +61,10 @@ public static class ExprAnalyzer
                 result.Value,
                 requirements,
                 capabilityUses,
-                DocumentValidationResult.FromDiagnostics(SortDiagnostics(diagnostics)));
+                DocumentValidationResult.FromDiagnostics(SortDiagnostics(diagnostics)),
+                knownConstant: result.ConstantValue,
+                fieldUses: fieldUses,
+                bindingUses: bindingUses);
         }
 
         NodeResult AnalyzeNode(
@@ -113,6 +118,7 @@ public static class ExprAnalyzer
                 return NodeResult.Unknown;
             }
 
+            bindingUses.Add(new(expression.Binding, expressionPath));
             bindings.Add(expression.Binding);
             if (!scope.TryGetBinding(expression.Binding, out var binding))
             {
@@ -153,23 +159,25 @@ public static class ExprAnalyzer
                 && explicitBinding is null
                 && ExprFieldRequirement.IsCurrentItemPath(path))
             {
-                fields.Add(new(
+                AddFieldUse(new(
                     path,
                     ExprFieldRootKind.CurrentItem,
-                    wasUnqualified: true));
+                    wasUnqualified: true),
+                    expressionPath);
                 return AnalyzeCurrentItemPath(path, scope, expressionPath);
             }
 
             var resolvedBinding = explicitBinding ?? scope.ImplicitBinding;
             if (pathIsValid)
             {
-                fields.Add(new(
+                AddFieldUse(new(
                     path,
                     resolvedBinding is null
                         ? ExprFieldRootKind.Unresolved
                         : ExprFieldRootKind.Binding,
                     resolvedBinding,
-                    wasUnqualified));
+                    wasUnqualified),
+                    expressionPath);
             }
 
             if (resolvedBinding is null)
@@ -225,6 +233,12 @@ public static class ExprAnalyzer
             }
 
             return NodeResult.Unknown;
+        }
+
+        void AddFieldUse(ExprFieldRequirement requirement, string expressionPath)
+        {
+            fields.Add(requirement);
+            fieldUses.Add(new(requirement, expressionPath));
         }
 
         NodeResult AnalyzeCurrentItemPath(

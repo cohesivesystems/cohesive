@@ -195,6 +195,38 @@ public readonly record struct FieldPath : IEquatable<FieldPath>
     }
 
     /// <summary>
+    /// Determines whether this path is an ancestor of, or equal to, <paramref name="path"/>.
+    /// </summary>
+    /// <param name="path">The path whose leading segments are compared with this path.</param>
+    /// <returns>
+    /// <see langword="true"/> when every segment in this path equals the corresponding leading
+    /// segment in <paramref name="path"/>; otherwise <see langword="false"/>.
+    /// </returns>
+    public bool IsPrefixOf(FieldPath path)
+    {
+        if (Segments.Length > path.Segments.Length)
+            return false;
+
+        for (var index = 0; index < Segments.Length; index++)
+        {
+            if (Segments[index] != path.Segments[index])
+                return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Determines whether this path and <paramref name="path"/> address equal or nested semantic fields.
+    /// </summary>
+    /// <param name="path">The path to compare for equal or ancestor/descendant coverage.</param>
+    /// <returns>
+    /// <see langword="true"/> when either path is a prefix of the other; otherwise
+    /// <see langword="false"/>.
+    /// </returns>
+    public bool Overlaps(FieldPath path) => IsPrefixOf(path) || path.IsPrefixOf(this);
+
+    /// <summary>
     /// Tries to resolve the terminal segment carrying a field identity.
     /// </summary>
     public bool TryGetTerminalFieldIdentity(out string fieldIdentity)

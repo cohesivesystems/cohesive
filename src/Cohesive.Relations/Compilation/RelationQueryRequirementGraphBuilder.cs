@@ -802,7 +802,7 @@ sealed class RelationQueryRequirementGraphBuilder
         }
 
         var assignments = project.Assignments
-            .Where(assignment => PathsOverlap(assignment.Target, path))
+            .Where(assignment => assignment.Target.Overlaps(path))
             .OrderBy(static assignment => RelationQueryContractOrdering.FieldPathKey(assignment.Target), StringComparer.Ordinal)
             .ThenBy(static assignment => assignment.Id.Value, StringComparer.Ordinal)
             .ToArray();
@@ -854,7 +854,7 @@ sealed class RelationQueryRequirementGraphBuilder
                 continue;
             }
 
-            var suffix = IsPrefix(assignment.Target, path)
+            var suffix = assignment.Target.IsPrefixOf(path)
                 ? path.Segments[assignment.Target.Segments.Length..]
                 : ImmutableArray<FieldPathSegment>.Empty;
             if (!suffix.IsDefaultOrEmpty
@@ -924,12 +924,12 @@ sealed class RelationQueryRequirementGraphBuilder
         }
 
         var groupingMatches = aggregate.Groupings
-            .Where(grouping => PathsOverlap(grouping.Target, path))
+            .Where(grouping => grouping.Target.Overlaps(path))
             .OrderBy(static grouping => RelationQueryContractOrdering.FieldPathKey(grouping.Target), StringComparer.Ordinal)
             .ThenBy(static grouping => grouping.Id.Value, StringComparer.Ordinal)
             .ToArray();
         var aggregateMatches = aggregate.Aggregates
-            .Where(assignment => PathsOverlap(assignment.Target, path))
+            .Where(assignment => assignment.Target.Overlaps(path))
             .OrderBy(static assignment => RelationQueryContractOrdering.FieldPathKey(assignment.Target), StringComparer.Ordinal)
             .ThenBy(static assignment => assignment.Id.Value, StringComparer.Ordinal)
             .ToArray();
@@ -2054,7 +2054,7 @@ sealed class RelationQueryRequirementGraphBuilder
             .Distinct()
             .OrderBy(RelationQueryContractOrdering.FieldPathKey, StringComparer.Ordinal)
             .ToImmutableArray();
-        if (assignments.Any(assignment => IsPrefix(assignment, demandedPath)))
+        if (assignments.Any(assignment => assignment.IsPrefixOf(demandedPath)))
             return [];
         if (!shapeGraphs.TryGetValue(shape.GraphId, out var graph)
             || !TryResolveField(shape, demandedPath, out var contract)
@@ -2073,12 +2073,12 @@ sealed class RelationQueryRequirementGraphBuilder
 
         void Visit(FieldPath currentPath, TypeRef currentType, bool required)
         {
-            if (assignments.Any(assignment => IsPrefix(assignment, currentPath)))
+            if (assignments.Any(assignment => assignment.IsPrefixOf(currentPath)))
                 return;
 
             var hasDescendantAssignment = assignments.Any(assignment =>
                 assignment.Segments.Length > currentPath.Segments.Length
-                && IsPrefix(currentPath, assignment));
+                && currentPath.IsPrefixOf(assignment));
             if (!hasDescendantAssignment)
             {
                 if (required)
@@ -2268,22 +2268,6 @@ sealed class RelationQueryRequirementGraphBuilder
         bypassedTraversals[traversal.Id] = new(traversal, relationship, cardinality);
     }
 
-    static bool PathsOverlap(FieldPath left, FieldPath right) =>
-        IsPrefix(left, right) || IsPrefix(right, left);
-
-    static bool IsPrefix(FieldPath prefix, FieldPath path)
-    {
-        if (prefix.Segments.Length > path.Segments.Length)
-            return false;
-        for (var index = 0; index < prefix.Segments.Length; index++)
-        {
-            if (prefix.Segments[index] != path.Segments[index])
-                return false;
-        }
-
-        return true;
-    }
-
     static bool HasAmbiguousOverlap(
         IReadOnlyList<ProjectionAssignment> assignments,
         FieldPath demand)
@@ -2292,13 +2276,13 @@ sealed class RelationQueryRequirementGraphBuilder
         {
             for (var right = left + 1; right < assignments.Count; right++)
             {
-                if (PathsOverlap(assignments[left].Target, assignments[right].Target))
+                if (assignments[left].Target.Overlaps(assignments[right].Target))
                     return true;
             }
         }
 
         return assignments.Count > 1
-            && assignments.Count(assignment => IsPrefix(assignment.Target, demand)) > 1;
+            && assignments.Count(assignment => assignment.Target.IsPrefixOf(demand)) > 1;
     }
 
     static bool HasAmbiguousAggregateOverlap(
@@ -2313,12 +2297,12 @@ sealed class RelationQueryRequirementGraphBuilder
         {
             for (var right = left + 1; right < paths.Length; right++)
             {
-                if (PathsOverlap(paths[left], paths[right]))
+                if (paths[left].Overlaps(paths[right]))
                     return true;
             }
         }
 
-        return paths.Length > 1 && paths.Count(path => IsPrefix(path, demand)) > 1;
+        return paths.Length > 1 && paths.Count(path => path.IsPrefixOf(demand)) > 1;
     }
 
     static FieldPath AppendPath(

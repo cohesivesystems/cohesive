@@ -38,6 +38,45 @@ public sealed class FieldPathTests
     }
 
     [Fact]
+    public void IsPrefixOf_IncludesEqualPathsAndProperAncestors()
+    {
+        var customer = FieldPath.FromField("Customer");
+        var customerCopy = FieldPath.FromField("Customer");
+        var customerName = FieldPath.Parse("Customer.Name");
+
+        Assert.True(customer.IsPrefixOf(customerCopy));
+        Assert.True(customer.IsPrefixOf(customerName));
+        Assert.False(customerName.IsPrefixOf(customer));
+    }
+
+    [Fact]
+    public void Overlaps_IsSymmetricForAncestorsAndFalseForDisjointPaths()
+    {
+        var customer = FieldPath.FromField("Customer");
+        var customerName = FieldPath.Parse("Customer.Name");
+        var customerId = FieldPath.Parse("Customer.Id");
+        var supplierName = FieldPath.Parse("Supplier.Name");
+
+        Assert.True(customer.Overlaps(customerName));
+        Assert.True(customerName.Overlaps(customer));
+        Assert.False(customerName.Overlaps(customerId));
+        Assert.False(customerName.Overlaps(supplierName));
+    }
+
+    [Fact]
+    public void PrefixAndOverlap_CompareElementSegmentsBySemanticValue()
+    {
+        var orderElement = FieldPath.Parse("Orders.[]");
+        var orderElementSku = FieldPath.Parse("Orders.[].Sku");
+        var orderFieldSku = FieldPath.Parse("Orders.Sku");
+
+        Assert.True(orderElement.IsPrefixOf(orderElementSku));
+        Assert.True(orderElement.Overlaps(orderElementSku));
+        Assert.False(orderElement.IsPrefixOf(orderFieldSku));
+        Assert.False(orderElement.Overlaps(orderFieldSku));
+    }
+
+    [Fact]
     public void EndsWithSegment_MatchesTerminalSegmentOnly()
     {
         var path = FieldPath.Parse("source.OrderId");
