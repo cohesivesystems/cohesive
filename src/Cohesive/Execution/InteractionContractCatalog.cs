@@ -39,10 +39,17 @@ public sealed class InteractionContractCatalog
 {
     readonly ImmutableArray<Entry> entries;
 
-    InteractionContractCatalog(ImmutableArray<Entry> entries) => this.entries = entries;
+    InteractionContractCatalog(ImmutableArray<Entry> entries, ShapeGraph? shapeGraph)
+    {
+        this.entries = entries;
+        ShapeGraph = shapeGraph;
+    }
 
     /// <summary>Number of exact canonical interaction contracts in the catalog.</summary>
     public int Count => entries.Length;
+
+    /// <summary>Contextual named-type and qualified-shape authority retained during catalog linking.</summary>
+    public ShapeGraph? ShapeGraph { get; }
 
     /// <summary>Attempts to assemble a validated exact interaction-contract catalog.</summary>
     /// <param name="documents">Canonical interaction-contract documents to link.</param>
@@ -277,7 +284,7 @@ public sealed class InteractionContractCatalog
             }
         }
 
-        var provisional = new InteractionContractCatalog([.. candidates]);
+        var provisional = new InteractionContractCatalog([.. candidates], graph);
         provisional.ValidateReplyLinks(diagnostics);
         diagnostics.Sort(DocumentValidationDiagnosticComparer.Ordinal);
         var result = DocumentValidationResult.FromDiagnostics(diagnostics);

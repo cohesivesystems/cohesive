@@ -508,11 +508,8 @@ public sealed record DurableOperationClaim
         return observedAtUtc >= ClaimedAtUtc && observedAtUtc < ExpiresAtUtc;
     }
 
-    internal static void RequireUtc(DateTimeOffset value, string parameterName)
-    {
-        if (value.Offset != TimeSpan.Zero)
-            throw new ArgumentException("Durable operation timestamps must be expressed in UTC.", parameterName);
-    }
+    internal static void RequireUtc(DateTimeOffset value, string parameterName) =>
+        ExecutionObservationRequirements.RequireUtc(value, parameterName);
 }
 
 /// <summary>Immutable current snapshot of one claimed physical-operation attempt.</summary>

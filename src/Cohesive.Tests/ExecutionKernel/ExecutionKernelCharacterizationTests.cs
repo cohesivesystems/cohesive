@@ -21,8 +21,8 @@ public sealed class ExecutionKernelCharacterizationTests
         new("EK-04", KernelScenarioStatus.Absent, "The process runtime has one cursor and a locality continuation stack, with no fork, token, or join model."),
         new("EK-05", KernelScenarioStatus.Partial, "Multi-entity transaction scopes and coarse place capabilities exist; capability evidence, guarantee matching, independent authority, and authored compensation do not."),
         new("EK-06", KernelScenarioStatus.Partial, "The canonical reference protocol models stable logical identity, scoped deduplication, fenced claims, attempt history, failure phases, acknowledgement, reconciliation, and replay-safe result admission across the crash cuts; no Storage-backed atomic operation ledger, outbox, or checkpoint integration exists yet."),
-        new("EK-07", KernelScenarioStatus.Partial, "Signals can be buffered by key; duplicate identity, exclusive admission, winner claims, and stale/losing-signal policy do not exist."),
-        new("EK-08", KernelScenarioStatus.Absent, "Process attempts, activation identity, index-generation affinity, pause/continue, restart, and fenced promotion are not modeled."),
+        new("EK-07", KernelScenarioStatus.Partial, "Canonical Signal contracts and Process-control admissions provide typed identity, current-attempt fencing, deduplication, and pause-aware buffering; no Storage-backed inbox, token-liveness check, exclusive winner claim, or stale/losing-signal policy exists yet."),
+        new("EK-08", KernelScenarioStatus.Partial, "Canonical Process control now models stable attempt and activation identity, safe-point-aware pause/continue and restart, and write-once attempt affinities that can carry an index candidate generation; Storage-backed control persistence, generation allocation and cleanup, retry/recovery integration, and fenced idempotent promotion do not exist."),
         new("EK-09", KernelScenarioStatus.Partial, "Representative entity Transitions now lower from typed C# to fingerprint-equivalent canonical IR and activate without callbacks; Process semantics remain CLR delegate-backed and name-bound.")
     ];
 
