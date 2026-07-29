@@ -31,8 +31,8 @@ public sealed class ElasticRelationQueryCompiler
 
     readonly ElasticRelationQueryCompilerOptions options;
     readonly ElasticQueryLoweringPolicy loweringPolicy;
-    readonly RelationQueryConfigurationValueOrigin optionsOrigin;
-    readonly RelationQueryConfigurationValueOrigin loweringPolicyOrigin;
+    readonly EffectiveConfigurationOrigin optionsOrigin;
+    readonly EffectiveConfigurationOrigin loweringPolicyOrigin;
 
     /// <summary>Creates a canonical Elasticsearch compiler.</summary>
     /// <param name="options">Artifact-identity options, or <see langword="null"/> for current defaults.</param>
@@ -47,11 +47,11 @@ public sealed class ElasticRelationQueryCompiler
         this.options = options ?? new();
         this.loweringPolicy = loweringPolicy ?? ElasticQueryLoweringPolicy.Default;
         optionsOrigin = options is null
-            ? RelationQueryConfigurationValueOrigin.AdapterConvention
-            : RelationQueryConfigurationValueOrigin.Explicit;
+            ? EffectiveConfigurationOrigin.AdapterConvention
+            : EffectiveConfigurationOrigin.Explicit;
         loweringPolicyOrigin = loweringPolicy is null
-            ? RelationQueryConfigurationValueOrigin.AdapterConvention
-            : RelationQueryConfigurationValueOrigin.Explicit;
+            ? EffectiveConfigurationOrigin.AdapterConvention
+            : EffectiveConfigurationOrigin.Explicit;
     }
 
     /// <summary>
@@ -706,7 +706,7 @@ public sealed class ElasticRelationQueryCompiler
     RelationQueryAdapterBindingReference CreateBindingReference(
         ElasticRelationQueryStorageBinding storageBinding)
     {
-        var configuration = ImmutableArray.CreateBuilder<RelationQueryConfigurationDecision>(
+        var configuration = ImmutableArray.CreateBuilder<EffectiveConfigurationDecision>(
             storageBinding.ConfigurationDecisions.Length + 3);
         configuration.AddRange(storageBinding.ConfigurationDecisions);
         configuration.Add(new(CompilerProfileSetting, optionsOrigin, options.CompilerProfile));
@@ -779,8 +779,8 @@ public sealed class ElasticRelationQueryCompiler
 
         return new(
             storageBinding.Origin == ElasticRelationQueryBindingOrigin.Convention
-                ? RelationQueryConfigurationValueOrigin.AdapterConvention
-                : RelationQueryConfigurationValueOrigin.Explicit,
+                ? EffectiveConfigurationOrigin.AdapterConvention
+                : EffectiveConfigurationOrigin.Explicit,
             ContextAuthority(storageBinding),
             failure?.Node ?? requirement.Origin?.Node,
             input,
@@ -796,8 +796,8 @@ public sealed class ElasticRelationQueryCompiler
         var actual = CreateBindingReference(storageBinding);
         var expectedAuthority = ContextAuthority(storageBinding);
         var expectedOrigin = storageBinding.Origin == ElasticRelationQueryBindingOrigin.Convention
-            ? RelationQueryConfigurationValueOrigin.AdapterConvention
-            : RelationQueryConfigurationValueOrigin.Explicit;
+            ? EffectiveConfigurationOrigin.AdapterConvention
+            : EffectiveConfigurationOrigin.Explicit;
         var configuration = actual.ConfigurationDecisions.ToDictionary(
             static decision => decision.Setting,
             StringComparer.Ordinal);

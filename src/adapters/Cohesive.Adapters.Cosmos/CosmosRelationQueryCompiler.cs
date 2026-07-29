@@ -27,7 +27,7 @@ public sealed class CosmosRelationQueryCompiler
     public const string CompilerConventionSetting = "compilerConventionSet";
 
     readonly CosmosRelationQueryCompilerOptions options;
-    readonly RelationQueryConfigurationValueOrigin optionsOrigin;
+    readonly EffectiveConfigurationOrigin optionsOrigin;
 
     /// <summary>Creates a canonical Cosmos SQL compiler.</summary>
     /// <param name="options">
@@ -38,8 +38,8 @@ public sealed class CosmosRelationQueryCompiler
     {
         this.options = options ?? new();
         optionsOrigin = options is null
-            ? RelationQueryConfigurationValueOrigin.AdapterConvention
-            : RelationQueryConfigurationValueOrigin.Explicit;
+            ? EffectiveConfigurationOrigin.AdapterConvention
+            : EffectiveConfigurationOrigin.Explicit;
     }
 
     /// <summary>Predicts exact Cosmos realizability from placement and immutable storage-binding evidence.</summary>
@@ -382,8 +382,8 @@ public sealed class CosmosRelationQueryCompiler
         var actual = CreateBindingReference(storageBinding);
         var expectedAuthority = ContextAuthority(storageBinding);
         var expectedOrigin = storageBinding.Origin == CosmosRelationQueryBindingOrigin.Convention
-            ? RelationQueryConfigurationValueOrigin.AdapterConvention
-            : RelationQueryConfigurationValueOrigin.Explicit;
+            ? EffectiveConfigurationOrigin.AdapterConvention
+            : EffectiveConfigurationOrigin.Explicit;
         var configuration = actual.ConfigurationDecisions.ToDictionary(
             static decision => decision.Setting,
             StringComparer.Ordinal);
@@ -419,7 +419,7 @@ public sealed class CosmosRelationQueryCompiler
     RelationQueryAdapterBindingReference CreateBindingReference(
         CosmosRelationQueryStorageBinding storageBinding)
     {
-        var configuration = ImmutableArray.CreateBuilder<RelationQueryConfigurationDecision>(
+        var configuration = ImmutableArray.CreateBuilder<EffectiveConfigurationDecision>(
             storageBinding.ConfigurationDecisions.Length + 2);
         configuration.AddRange(storageBinding.ConfigurationDecisions);
         configuration.Add(new(
@@ -598,8 +598,8 @@ public sealed class CosmosRelationQueryCompiler
         }
         return new(
             storageBinding.Origin == CosmosRelationQueryBindingOrigin.Convention
-                ? RelationQueryConfigurationValueOrigin.AdapterConvention
-                : RelationQueryConfigurationValueOrigin.Explicit,
+                ? EffectiveConfigurationOrigin.AdapterConvention
+                : EffectiveConfigurationOrigin.Explicit,
             ContextAuthority(storageBinding),
             node,
             input,
@@ -611,7 +611,7 @@ public sealed class CosmosRelationQueryCompiler
         CosmosRelationQueryStorageBinding storageBinding,
         RelationQueryRealizationRequirement requirement,
         RelationQueryContextualBranchFailure? failure,
-        out RelationQueryConfigurationDecision decision)
+        out EffectiveConfigurationDecision decision)
     {
         var input = failure?.Input ?? requirement.Origin?.Input;
         if (input is { } inputId)

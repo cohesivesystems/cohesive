@@ -79,7 +79,7 @@ public sealed class ExpressionAuthoredAdapterCompilationTests
         AssertConfigurationDecision(
             storage.ConfigurationDecisions,
             "maximumInputRows",
-            RelationQueryConfigurationValueOrigin.Explicit,
+            EffectiveConfigurationOrigin.Explicit,
             "tests/cosmos-expression/v1");
     }
 
@@ -168,7 +168,7 @@ public sealed class ExpressionAuthoredAdapterCompilationTests
         AssertConfigurationDecision(
             storage.ConfigurationDecisions,
             "indexName",
-            RelationQueryConfigurationValueOrigin.Explicit,
+            EffectiveConfigurationOrigin.Explicit,
             "tests/elastic-expression/v1");
     }
 
@@ -298,9 +298,9 @@ public sealed class ExpressionAuthoredAdapterCompilationTests
     }
 
     static void AssertConfigurationDecision(
-        IEnumerable<RelationQueryConfigurationDecision> decisions,
+        IEnumerable<EffectiveConfigurationDecision> decisions,
         string setting,
-        RelationQueryConfigurationValueOrigin origin,
+        EffectiveConfigurationOrigin origin,
         string authority)
     {
         var decision = Assert.Single(decisions, candidate => candidate.Setting == setting);

@@ -178,7 +178,7 @@ public sealed class ElasticRelationQueryCompilerTests
         Assert.Null(primary.ConfigurationSetting);
         Assert.NotNull(primary.FailedConfigurationSetting);
         Assert.EndsWith("/semanticCapabilities", primary.FailedConfigurationSetting, StringComparison.Ordinal);
-        Assert.Equal(RelationQueryConfigurationValueOrigin.Explicit, primary.Origin);
+        Assert.Equal(EffectiveConfigurationOrigin.Explicit, primary.Origin);
         Assert.Equal(binding.Id.Value, primary.Authority);
 
         var blocked = bound.Evidence.Assessments.Where(static assessment =>
@@ -315,7 +315,7 @@ public sealed class ElasticRelationQueryCompilerTests
             ElasticRelationQueryCompilerOptions.DefaultConventionSetVersion,
             configuration[ElasticRelationQueryCompiler.CompilerConventionSetting].Authority);
         var lowering = configuration[ElasticRelationQueryCompiler.LoweringPolicySetting];
-        Assert.Equal(RelationQueryConfigurationValueOrigin.AdapterConvention, lowering.Origin);
+        Assert.Equal(EffectiveConfigurationOrigin.AdapterConvention, lowering.Origin);
         Assert.Contains(ElasticQueryLoweringPolicy.Default.Fingerprint.Value, lowering.Authority, StringComparison.Ordinal);
     }
 
@@ -1150,7 +1150,7 @@ public sealed class ElasticRelationQueryCompilerTests
                     ElasticRelationQueryCompilationDiagnosticCodes.LoweringConfigurationInvalid));
             Assert.Contains(result.Diagnostics, static diagnostic =>
                 diagnostic.BindingSetting == ElasticRelationQueryCompiler.LoweringPolicySetting
-                && diagnostic.ConfigurationOrigin == RelationQueryConfigurationValueOrigin.Explicit
+                && diagnostic.ConfigurationOrigin == EffectiveConfigurationOrigin.Explicit
                 && diagnostic.ConfigurationAuthority is not null);
             Assert.Empty(result.Artifacts);
         });

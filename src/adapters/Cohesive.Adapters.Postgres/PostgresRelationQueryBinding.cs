@@ -1048,7 +1048,7 @@ public sealed class PostgresRelationQueryStorageBinding
         ImmutableArray<PostgresRelationQueryTableBinding> tables,
         PostgresRelationQueryBindingOrigin origin = PostgresRelationQueryBindingOrigin.Explicit,
         string? conventionSetVersion = null,
-        ImmutableArray<RelationQueryConfigurationDecision> configurationDecisions = default,
+        ImmutableArray<EffectiveConfigurationDecision> configurationDecisions = default,
         RelationQueryPlanComponentFingerprint? compiledPlanFingerprint = null,
         RelationQuerySourcePlacementFingerprint? placementFingerprint = null)
         : this(
@@ -1099,7 +1099,7 @@ public sealed class PostgresRelationQueryStorageBinding
         ImmutableArray<PostgresRelationQueryTableBinding> tables,
         PostgresRelationQueryBindingOrigin origin,
         string? conventionSetVersion,
-        ImmutableArray<RelationQueryConfigurationDecision> configurationDecisions,
+        ImmutableArray<EffectiveConfigurationDecision> configurationDecisions,
         RelationQueryPlanComponentFingerprint? compiledPlanFingerprint,
         RelationQuerySourcePlacementFingerprint? placementFingerprint)
     {
@@ -1142,7 +1142,7 @@ public sealed class PostgresRelationQueryStorageBinding
         }
         if (origin == PostgresRelationQueryBindingOrigin.Convention
             && normalizedDecisions.Any(static decision => decision.Origin is
-                RelationQueryConfigurationValueOrigin.Explicit or RelationQueryConfigurationValueOrigin.ScopedProfile))
+                EffectiveConfigurationOrigin.Explicit or EffectiveConfigurationOrigin.ScopedProfile))
         {
             throw new ArgumentException("A convention-origin binding cannot retain explicit or scoped decisions.", nameof(configurationDecisions));
         }
@@ -1193,7 +1193,7 @@ public sealed class PostgresRelationQueryStorageBinding
     public string? ConventionSetVersion { get; }
 
     /// <summary>Normalized effective configuration provenance.</summary>
-    public ImmutableArray<RelationQueryConfigurationDecision> ConfigurationDecisions { get; }
+    public ImmutableArray<EffectiveConfigurationDecision> ConfigurationDecisions { get; }
 
     /// <summary>Exact compiled-plan affinity, or <see langword="null"/> for an unverified low-level binding.</summary>
     public RelationQueryPlanComponentFingerprint? CompiledPlanFingerprint { get; }

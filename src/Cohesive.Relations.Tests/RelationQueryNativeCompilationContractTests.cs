@@ -640,7 +640,7 @@ public sealed class RelationQueryNativeCompilationContractTests
                         branch.Id,
                         requirement.Id,
                         RelationQueryBoundAssessmentStatus.Available,
-                        RelationQueryConfigurationValueOrigin.AdapterConvention,
+                        EffectiveConfigurationOrigin.AdapterConvention,
                         authority,
                         decision.GetCapabilityEvidence(),
                         decision.GetTargetEnforcedBoundaries(),

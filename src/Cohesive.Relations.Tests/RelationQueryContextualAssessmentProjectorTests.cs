@@ -139,7 +139,7 @@ public sealed class RelationQueryContextualAssessmentProjectorTests
             EvidenceNamespace,
             selectFailure,
             static (_, requirement, failure) => new(
-                RelationQueryConfigurationValueOrigin.AdapterConvention,
+                EffectiveConfigurationOrigin.AdapterConvention,
                 "tests/contextual-assessment/v1",
                 node: failure?.Node ?? requirement.Origin?.Node,
                 input: failure?.Input ?? requirement.Origin?.Input,

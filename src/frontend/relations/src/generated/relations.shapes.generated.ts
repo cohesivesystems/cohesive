@@ -95,7 +95,7 @@ export interface RelationQueryExplainDiagnostic {
   field?: FieldPath | null;
   bindingSetting?: string | null;
   resolution?: string | null;
-  configurationOrigin?: RelationQueryConfigurationValueOrigin | null;
+  configurationOrigin?: EffectiveConfigurationOrigin | null;
   configurationAuthority?: string | null;
   adapterDecisionCode?: RelationQueryAdapterDecisionCode | null;
 }
@@ -186,9 +186,9 @@ export interface RelationQuerySourcePlacementBinding {
   partition?: RelationQueryPartitionBinding | null;
 }
 
-export interface RelationQueryConfigurationDecision {
+export interface EffectiveConfigurationDecision {
   setting: string;
-  origin: RelationQueryConfigurationValueOrigin;
+  origin: EffectiveConfigurationOrigin;
   authority: string;
 }
 
@@ -223,7 +223,7 @@ export interface RelationQueryRealizationDiagnostic {
   placementBinding?: RelationQuerySourcePlacementBindingId | null;
   bindingSetting?: string | null;
   resolution?: string | null;
-  configurationOrigin?: RelationQueryConfigurationValueOrigin | null;
+  configurationOrigin?: EffectiveConfigurationOrigin | null;
   configurationAuthority?: string | null;
   adapterDecisionCode?: RelationQueryAdapterDecisionCode | null;
 }
@@ -559,16 +559,16 @@ export interface FieldPath {
   segments: FieldPathSegment[];
 }
 
-export type RelationQueryConfigurationValueOrigin = 'Explicit' | 'ScopedProfile' | 'AdapterConvention' | 'FrameworkDefault';
+export type EffectiveConfigurationOrigin = 'Explicit' | 'ScopedProfile' | 'AdapterConvention' | 'FrameworkDefault';
 
-export const relationQueryConfigurationValueOrigins = {
+export const effectiveConfigurationOrigins = {
   explicit: 'Explicit',
   scopedProfile: 'ScopedProfile',
   adapterConvention: 'AdapterConvention',
   frameworkDefault: 'FrameworkDefault',
-} as const satisfies Record<string, RelationQueryConfigurationValueOrigin>;
+} as const satisfies Record<string, EffectiveConfigurationOrigin>;
 
-export const relationQueryConfigurationValueOriginLabels: Record<RelationQueryConfigurationValueOrigin, string> = {
+export const effectiveConfigurationOriginLabels: Record<EffectiveConfigurationOrigin, string> = {
   Explicit: 'Explicit',
   ScopedProfile: 'ScopedProfile',
   AdapterConvention: 'AdapterConvention',
@@ -710,7 +710,7 @@ export interface RelationQueryAdapterBindingReference {
   placementFingerprint?: RelationQuerySourcePlacementFingerprint | null;
   sources: RelationQuerySourceInstanceId[];
   placementBindings: RelationQuerySourcePlacementBindingId[];
-  configurationDecisions: RelationQueryConfigurationDecision[];
+  configurationDecisions: EffectiveConfigurationDecision[];
 }
 
 export interface RelationQueryBoundRequirementAssessment {
@@ -718,7 +718,7 @@ export interface RelationQueryBoundRequirementAssessment {
   branch: RelationQueryNativeResultBranchId;
   requirement: RelationQueryRealizationRequirementId;
   status: RelationQueryBoundAssessmentStatus;
-  origin: RelationQueryConfigurationValueOrigin;
+  origin: EffectiveConfigurationOrigin;
   authority: string;
   capabilityEvidence: RelationQueryTargetCapabilityEvidenceId[];
   operatingBoundaries: RelationQueryOperatingBoundaryId[];
@@ -1301,7 +1301,7 @@ export interface RelationQueryNativeCompilationDiagnostic {
   placementBinding?: RelationQuerySourcePlacementBindingId | null;
   bindingSetting?: string | null;
   resolution?: string | null;
-  configurationOrigin?: RelationQueryConfigurationValueOrigin | null;
+  configurationOrigin?: EffectiveConfigurationOrigin | null;
   configurationAuthority?: string | null;
   adapterDecisionCode?: RelationQueryAdapterDecisionCode | null;
 }
@@ -2729,7 +2729,7 @@ export interface RelationQuerySourcePlacement {
   conventionSetVersion: string;
   sourceInstances: RelationQuerySourceInstance[];
   bindings: RelationQuerySourcePlacementBinding[];
-  configurationDecisions: RelationQueryConfigurationDecision[];
+  configurationDecisions: EffectiveConfigurationDecision[];
   fingerprint: RelationQuerySourcePlacementFingerprint;
 }
 

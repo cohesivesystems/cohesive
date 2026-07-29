@@ -1,10 +1,15 @@
 using System.Text.Json.Serialization;
+using Cohesive.Model.Serialization;
 
-namespace Cohesive.Relations.Physical;
+namespace Cohesive.Model;
 
-/// <summary>Precedence tier that supplied one effective physical configuration value.</summary>
-[JsonConverter(typeof(JsonStringEnumConverter))]
-public enum RelationQueryConfigurationValueOrigin
+/// <summary>Precedence tier that supplied one effective compiled or operational configuration value.</summary>
+/// <remarks>
+/// Lower numeric values have higher authority. This is the shared deterministic precedence law for Cohesive
+/// physical planning, target binding, and lifecycle control.
+/// </remarks>
+[JsonConverter(typeof(StrictStringEnumJsonConverterFactory))]
+public enum EffectiveConfigurationOrigin
 {
     /// <summary>An explicit local declaration supplied the effective value.</summary>
     Explicit = 0,
@@ -12,23 +17,21 @@ public enum RelationQueryConfigurationValueOrigin
     /// <summary>A scoped application or subsystem profile supplied the effective value.</summary>
     ScopedProfile = 1,
 
-    /// <summary>A target-adapter convention supplied the effective value.</summary>
+    /// <summary>An adapter or compiler convention supplied the effective value.</summary>
     AdapterConvention = 2,
 
-    /// <summary>A framework-wide convention supplied the effective value.</summary>
+    /// <summary>A framework-wide deterministic convention supplied the effective value.</summary>
     FrameworkDefault = 3
 }
 
-/// <summary>
-/// Portable attribution for one effective physical configuration setting.
-/// </summary>
+/// <summary>Portable attribution for one effective physical or operational configuration setting.</summary>
 /// <remarks>
-/// The configured value remains in its owning artifact property. This decision records only the stable
-/// setting identity and the authority responsible for the effective value, avoiding a second source of truth.
+/// The selected value remains in its owning artifact property. This record retains only the stable setting
+/// identity and authority, keeping provenance inspectable without introducing a second value authority.
 /// </remarks>
-public sealed record RelationQueryConfigurationDecision
+public sealed record EffectiveConfigurationDecision
 {
-    /// <summary>Creates configuration attribution for one effective setting.</summary>
+    /// <summary>Creates attribution for one effective setting.</summary>
     /// <param name="setting">Stable artifact-scoped setting identity.</param>
     /// <param name="origin">Precedence tier that supplied the effective value.</param>
     /// <param name="authority">Stable identity and version of the declaration, profile, or convention.</param>
@@ -40,17 +43,14 @@ public sealed record RelationQueryConfigurationDecision
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="origin"/> is unsupported.</exception>
     [JsonConstructor]
-    public RelationQueryConfigurationDecision(
+    public EffectiveConfigurationDecision(
         string setting,
-        RelationQueryConfigurationValueOrigin origin,
+        EffectiveConfigurationOrigin origin,
         string authority)
     {
         Setting = Guard.RequireNotNullOrWhiteSpace(setting);
         if (!Enum.IsDefined(origin))
-        {
-            throw new ArgumentOutOfRangeException(nameof(origin), origin, "Unsupported configuration-value origin.");
-        }
-
+            throw new ArgumentOutOfRangeException(nameof(origin), origin, "Unsupported effective-configuration origin.");
         Origin = origin;
         Authority = Guard.RequireNotNullOrWhiteSpace(authority);
     }
@@ -59,8 +59,8 @@ public sealed record RelationQueryConfigurationDecision
     public string Setting { get; }
 
     /// <summary>Precedence tier that supplied the effective value.</summary>
-    public RelationQueryConfigurationValueOrigin Origin { get; }
+    public EffectiveConfigurationOrigin Origin { get; }
 
-    /// <summary>Stable identity and version of the declaration, profile, or convention.</summary>
+    /// <summary>Stable identity and version of the effective authority.</summary>
     public string Authority { get; }
 }

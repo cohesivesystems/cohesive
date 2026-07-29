@@ -320,10 +320,10 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
                 ? Scoped(scopedConvention, options.Authority)
                 : Adapter(PostgresRelationQueryStorageBinding.SemanticPathConventionSet));
 
-        List<RelationQueryConfigurationDecision> decisions =
+        List<EffectiveConfigurationDecision> decisions =
         [
-            Decision(TargetSetting, RelationQueryConfigurationValueOrigin.AdapterConvention, PostgresRelationQueryTargetProfile.ProfileId.Value),
-            Decision(TargetProfileSetting, RelationQueryConfigurationValueOrigin.AdapterConvention, PostgresRelationQueryTargetProfile.ProfileId.Value),
+            Decision(TargetSetting, EffectiveConfigurationOrigin.AdapterConvention, PostgresRelationQueryTargetProfile.ProfileId.Value),
+            Decision(TargetProfileSetting, EffectiveConfigurationOrigin.AdapterConvention, PostgresRelationQueryTargetProfile.ProfileId.Value),
             Configuration(DatabaseSetting, effectiveDatabase),
             Configuration(ConventionSetting, effectiveConvention)
         ];
@@ -351,13 +351,13 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
                         placementFingerprint,
                         effectiveConvention.Value,
                         builtTables),
-                    RelationQueryConfigurationValueOrigin.AdapterConvention,
+                    EffectiveConfigurationOrigin.AdapterConvention,
                     DerivedIdAuthority));
         decisions.Add(Configuration(BindingIdSetting, effectiveId));
         try
         {
             var origin = decisions.Any(static decision => decision.Origin is
-                RelationQueryConfigurationValueOrigin.Explicit or RelationQueryConfigurationValueOrigin.ScopedProfile)
+                EffectiveConfigurationOrigin.Explicit or EffectiveConfigurationOrigin.ScopedProfile)
                 ? PostgresRelationQueryBindingOrigin.Explicit
                 : PostgresRelationQueryBindingOrigin.Convention;
             var artifact = new PostgresRelationQueryStorageBinding(
@@ -383,7 +383,7 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
 
     PostgresRelationQueryTableBinding? BuildTable(
         TableDeclaration declaration,
-        ICollection<RelationQueryConfigurationDecision> decisions)
+        ICollection<EffectiveConfigurationDecision> decisions)
     {
         HashSet<FieldPath> consumedColumns = [];
         HashSet<RelationQueryInputId> consumedRelationshipReferences = [];
@@ -450,7 +450,7 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
         TableDeclaration declaration,
         Effective<PostgresRelationQueryColumnMappingConvention> convention,
         ISet<FieldPath> consumedColumns,
-        ICollection<RelationQueryConfigurationDecision> decisions)
+        ICollection<EffectiveConfigurationDecision> decisions)
     {
         var builder = ImmutableArray.CreateBuilder<PostgresRelationQueryFieldBinding>(declaration.Input.Fields.Length);
         foreach (var field in declaration.Input.Fields)
@@ -502,7 +502,7 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
         TableDeclaration declaration,
         Effective<PostgresRelationQueryColumnMappingConvention> convention,
         ISet<FieldPath> consumedColumns,
-        ICollection<RelationQueryConfigurationDecision> decisions)
+        ICollection<EffectiveConfigurationDecision> decisions)
     {
         var required = declaration.Input.Binding.Identity is not null;
         var selected = declaration.IdentityPath ?? InferIdentityPath(declaration.Input);
@@ -578,7 +578,7 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
         Effective<PostgresRelationQueryColumnMappingConvention> convention,
         ISet<FieldPath> consumedColumns,
         ISet<RelationQueryInputId> consumedRelationshipReferences,
-        ICollection<RelationQueryConfigurationDecision> decisions)
+        ICollection<EffectiveConfigurationDecision> decisions)
     {
         var builder = ImmutableArray.CreateBuilder<PostgresRelationQueryRelationshipReferenceBinding>();
         foreach (var traversal in placement.Plan.InputContract.Traversals)
@@ -653,7 +653,7 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
     ImmutableArray<PostgresRelationQueryIntervalValidityBinding> BuildIntervalValidities(
         TableDeclaration declaration,
         ImmutableArray<PostgresRelationQueryFieldBinding> fields,
-        ICollection<RelationQueryConfigurationDecision> decisions)
+        ICollection<EffectiveConfigurationDecision> decisions)
     {
         var builder = ImmutableArray.CreateBuilder<PostgresRelationQueryIntervalValidityBinding>(
             declaration.IntervalValidities.Count);
@@ -1032,7 +1032,7 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
         RelationQueryInputId input,
         Effective<string> column,
         EffectiveValueSemantics value,
-        ICollection<RelationQueryConfigurationDecision> decisions)
+        ICollection<EffectiveConfigurationDecision> decisions)
     {
         decisions.Add(Configuration(FieldSetting(placementBinding, input, "columnName"), column));
         decisions.Add(Configuration(FieldSetting(placementBinding, input, "scalarType"), value.ScalarType));
@@ -1048,7 +1048,7 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
     static void AppendIdentityValueDecisions(
         RelationQuerySourcePlacementBindingId placementBinding,
         EffectiveValueSemantics value,
-        ICollection<RelationQueryConfigurationDecision> decisions)
+        ICollection<EffectiveConfigurationDecision> decisions)
     {
         decisions.Add(Configuration(TableSetting(placementBinding, "identity/scalarType"), value.ScalarType));
         decisions.Add(Configuration(TableSetting(placementBinding, "identity/textSemantics"), value.Text));
@@ -1060,7 +1060,7 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
         RelationQuerySourcePlacementBindingId placementBinding,
         RelationQueryInputId input,
         EffectiveValueSemantics value,
-        ICollection<RelationQueryConfigurationDecision> decisions)
+        ICollection<EffectiveConfigurationDecision> decisions)
     {
         decisions.Add(Configuration(RelationshipSetting(placementBinding, input, "scalarType"), value.ScalarType));
         decisions.Add(Configuration(RelationshipSetting(placementBinding, input, "missingValueEncoding"), value.Missing));
@@ -1138,18 +1138,18 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
         string? setting = null) =>
         diagnostics.Add(new(code, DiagnosticSeverity.Error, message, input, path, setting));
 
-    Effective<T> Explicit<T>(T value) => new(value, RelationQueryConfigurationValueOrigin.Explicit, explicitAuthority);
-    static Effective<T> Scoped<T>(T value, string authority) => new(value, RelationQueryConfigurationValueOrigin.ScopedProfile, authority);
-    static Effective<T> Adapter<T>(T value) => new(value, RelationQueryConfigurationValueOrigin.AdapterConvention, AdapterAuthority);
+    Effective<T> Explicit<T>(T value) => new(value, EffectiveConfigurationOrigin.Explicit, explicitAuthority);
+    static Effective<T> Scoped<T>(T value, string authority) => new(value, EffectiveConfigurationOrigin.ScopedProfile, authority);
+    static Effective<T> Adapter<T>(T value) => new(value, EffectiveConfigurationOrigin.AdapterConvention, AdapterAuthority);
     Effective<string> ExplicitMarker() => Explicit("explicit");
     static Effective<string> AdapterMarker() => Adapter("inferred");
 
-    static RelationQueryConfigurationDecision Configuration<T>(string setting, Effective<T> effective) =>
+    static EffectiveConfigurationDecision Configuration<T>(string setting, Effective<T> effective) =>
         Decision(setting, effective.Origin, effective.Authority);
 
-    static RelationQueryConfigurationDecision Decision(
+    static EffectiveConfigurationDecision Decision(
         string setting,
-        RelationQueryConfigurationValueOrigin origin,
+        EffectiveConfigurationOrigin origin,
         string authority) => new(setting, origin, authority);
 
     static string TableSetting(RelationQuerySourcePlacementBindingId binding, string setting) =>
@@ -1183,7 +1183,7 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
         public Dictionary<(FieldPath Lower, FieldPath Upper), IntervalValidityDeclaration> IntervalValidities { get; } = [];
     }
 
-    internal readonly record struct Effective<T>(T Value, RelationQueryConfigurationValueOrigin Origin, string Authority);
+    internal readonly record struct Effective<T>(T Value, EffectiveConfigurationOrigin Origin, string Authority);
     readonly record struct EffectiveValueSemantics(
         Effective<PostgresRelationQueryScalarType> ScalarType,
         Effective<PostgresRelationQueryMissingValueEncoding> Missing,

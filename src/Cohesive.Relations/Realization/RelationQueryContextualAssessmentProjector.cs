@@ -165,7 +165,7 @@ public sealed record RelationQueryContextualAssessmentAttribution
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="origin"/> is unsupported.</exception>
     public RelationQueryContextualAssessmentAttribution(
-        RelationQueryConfigurationValueOrigin origin,
+        EffectiveConfigurationOrigin origin,
         string authority,
         QueryNodeId? node = null,
         RelationQueryInputId? input = null,
@@ -204,7 +204,7 @@ public sealed record RelationQueryContextualAssessmentAttribution
     }
 
     /// <summary>Configuration-precedence tier that supplied the examined fact.</summary>
-    public RelationQueryConfigurationValueOrigin Origin { get; }
+    public EffectiveConfigurationOrigin Origin { get; }
 
     /// <summary>Stable declaration, profile, convention, or adapter authority.</summary>
     public string Authority { get; }

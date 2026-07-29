@@ -193,7 +193,7 @@ public sealed record RelationQueryNativeCompilationDiagnostic
         RelationQuerySourcePlacementBindingId? placementBinding = null,
         string? bindingSetting = null,
         string? resolution = null,
-        RelationQueryConfigurationValueOrigin? configurationOrigin = null,
+        EffectiveConfigurationOrigin? configurationOrigin = null,
         string? configurationAuthority = null,
         RelationQueryAdapterDecisionCode? adapterDecisionCode = null)
     {
@@ -313,7 +313,7 @@ public sealed record RelationQueryNativeCompilationDiagnostic
     public string? Resolution { get; }
 
     /// <summary>Configuration-precedence tier that supplied the attributed setting, or <see langword="null"/>.</summary>
-    public RelationQueryConfigurationValueOrigin? ConfigurationOrigin { get; }
+    public EffectiveConfigurationOrigin? ConfigurationOrigin { get; }
 
     /// <summary>Stable declaration, profile, convention, or adapter authority, or <see langword="null"/>.</summary>
     public string? ConfigurationAuthority { get; }

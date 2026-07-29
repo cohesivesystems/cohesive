@@ -1044,7 +1044,7 @@ public sealed class PostgresRelationQueryCompilerTests
             fixture.Storage.ConfigurationDecisions,
             static decision => decision.Setting.Contains("/interval/", StringComparison.Ordinal)
                 && decision.Setting.EndsWith("/validatedCheckConstraintName", StringComparison.Ordinal)
-                && decision.Origin == RelationQueryConfigurationValueOrigin.Explicit
+                && decision.Origin == EffectiveConfigurationOrigin.Explicit
                 && decision.Authority == "tests/postgres/temporal-binding/v1");
 
         var jsonOptions = RelationQueryJsonSerializer.CreateOptions();

@@ -84,7 +84,7 @@ public sealed class RelationQueryPlacementAuthoringTests
         Assert.All(
             authored.Placement.ConfigurationDecisions.Where(static decision =>
                 decision.Setting.Contains("/field/", StringComparison.Ordinal)),
-            decision => Assert.Equal(RelationQueryConfigurationValueOrigin.Explicit, decision.Origin));
+            decision => Assert.Equal(EffectiveConfigurationOrigin.Explicit, decision.Origin));
 
         var placed = authored.GetInput(fluent);
         Assert.Equal(sourceContract.Shape, placed.Shape);
@@ -110,7 +110,7 @@ public sealed class RelationQueryPlacementAuthoringTests
         var sourceDecision = Assert.Single(
             placement.ConfigurationDecisions,
             decision => decision.Setting.EndsWith("/source", StringComparison.Ordinal));
-        Assert.Equal(RelationQueryConfigurationValueOrigin.FrameworkDefault, sourceDecision.Origin);
+        Assert.Equal(EffectiveConfigurationOrigin.FrameworkDefault, sourceDecision.Origin);
         Assert.Equal(RelationQueryPlacementBuilder.FrameworkDefaultAuthority, sourceDecision.Authority);
     }
 
@@ -140,16 +140,16 @@ public sealed class RelationQueryPlacementAuthoringTests
         Assert.Contains(
             placement.ConfigurationDecisions,
             decision => decision.Setting.EndsWith("/limits/maximum-batch-size", StringComparison.Ordinal)
-                && decision.Origin == RelationQueryConfigurationValueOrigin.ScopedProfile
+                && decision.Origin == EffectiveConfigurationOrigin.ScopedProfile
                 && decision.Authority == options.Authority);
         Assert.Contains(
             placement.ConfigurationDecisions,
             decision => decision.Setting.EndsWith("/identity/source-selector", StringComparison.Ordinal)
-                && decision.Origin == RelationQueryConfigurationValueOrigin.Explicit);
+                && decision.Origin == EffectiveConfigurationOrigin.Explicit);
         Assert.All(
             placement.ConfigurationDecisions.Where(static decision =>
                 decision.Setting.Contains("/field/", StringComparison.Ordinal)),
-            decision => Assert.Equal(RelationQueryConfigurationValueOrigin.Explicit, decision.Origin));
+            decision => Assert.Equal(EffectiveConfigurationOrigin.Explicit, decision.Origin));
     }
 
     [Fact]
@@ -255,7 +255,7 @@ public sealed class RelationQueryPlacementAuthoringTests
         var roundTrip = JsonSerializer.Deserialize<RelationQuerySourcePlacement>(json, options);
         var changedDecisions = placement.ConfigurationDecisions
             .Select((decision, index) => index == 0
-                ? new RelationQueryConfigurationDecision(
+                ? new EffectiveConfigurationDecision(
                     decision.Setting,
                     decision.Origin,
                     decision.Authority + "/changed")
@@ -327,16 +327,16 @@ public sealed class RelationQueryPlacementAuthoringTests
             [
                 new(
                     "foreign/not-an-artifact-fact",
-                    RelationQueryConfigurationValueOrigin.FrameworkDefault,
+                    EffectiveConfigurationOrigin.FrameworkDefault,
                     RelationQueryPlacementBuilder.FrameworkDefaultAuthority)
             ]));
 
         var binding = Assert.Single(placement.Bindings);
         var sourceSetting = $"placement/{Uri.EscapeDataString(binding.Id.Value)}/source";
-        RelationQueryConfigurationValueOrigin[] invalidConventionOrigins =
+        EffectiveConfigurationOrigin[] invalidConventionOrigins =
         [
-            RelationQueryConfigurationValueOrigin.Explicit,
-            RelationQueryConfigurationValueOrigin.ScopedProfile
+            EffectiveConfigurationOrigin.Explicit,
+            EffectiveConfigurationOrigin.ScopedProfile
         ];
         foreach (var invalidConventionOrigin in invalidConventionOrigins)
         {
@@ -379,7 +379,7 @@ public sealed class RelationQueryPlacementAuthoringTests
             [
                 new(
                     sourceSetting,
-                    RelationQueryConfigurationValueOrigin.FrameworkDefault,
+                    EffectiveConfigurationOrigin.FrameworkDefault,
                     RelationQueryPlacementBuilder.FrameworkDefaultAuthority)
             ]));
     }
@@ -614,14 +614,14 @@ public sealed class RelationQueryPlacementAuthoringTests
         Assert.Empty(traversalInput.Binding.RelationshipKeys);
     }
 
-    static ImmutableArray<RelationQueryConfigurationDecision> ExplicitDecisions(
+    static ImmutableArray<EffectiveConfigurationDecision> ExplicitDecisions(
         RelationQuerySourceInstanceId source,
         RelationQuerySourcePlacementBindingId placement,
         IEnumerable<RelationQueryInputId> fields)
     {
         var sourceSetting = $"source/{Uri.EscapeDataString(source.Value)}";
         var placementSetting = $"placement/{Uri.EscapeDataString(placement.Value)}";
-        List<RelationQueryConfigurationDecision> decisions =
+        List<EffectiveConfigurationDecision> decisions =
         [
             Scoped("placement/convention-set-version"),
             Explicit($"{sourceSetting}/id"),
@@ -642,17 +642,17 @@ public sealed class RelationQueryPlacementAuthoringTests
         return [.. decisions];
     }
 
-    static RelationQueryConfigurationDecision Explicit(string setting) => new(
+    static EffectiveConfigurationDecision Explicit(string setting) => new(
         setting,
-        RelationQueryConfigurationValueOrigin.Explicit,
+        EffectiveConfigurationOrigin.Explicit,
         RelationQueryPlacementBuilder.ExplicitDeclarationAuthority);
 
-    static RelationQueryConfigurationDecision Scoped(string setting) => new(
+    static EffectiveConfigurationDecision Scoped(string setting) => new(
         setting,
-        RelationQueryConfigurationValueOrigin.ScopedProfile,
+        EffectiveConfigurationOrigin.ScopedProfile,
         "tests/placement-profile/v1");
 
-    static string ConfigurationDecisionSignature(RelationQueryConfigurationDecision decision) =>
+    static string ConfigurationDecisionSignature(EffectiveConfigurationDecision decision) =>
         $"{decision.Setting}|{decision.Origin}|{decision.Authority}";
 
     static RelationQueryTargetCapabilityProfile ProfileFor(CompiledRelationQueryPlan plan) => new(

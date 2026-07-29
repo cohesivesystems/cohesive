@@ -44,15 +44,15 @@ public sealed class ElasticRelationQueryStorageBindingPersistenceTests
     [Fact]
     public void ConfigurationDecisions_NormalizeRoundTripAndParticipateInFingerprint()
     {
-        ImmutableArray<RelationQueryConfigurationDecision> decisions =
+        ImmutableArray<EffectiveConfigurationDecision> decisions =
         [
             new(
                 "sourceMode",
-                RelationQueryConfigurationValueOrigin.AdapterConvention,
+                EffectiveConfigurationOrigin.AdapterConvention,
                 "tests/elastic-conventions/v1"),
             new(
                 "indexName",
-                RelationQueryConfigurationValueOrigin.Explicit,
+                EffectiveConfigurationOrigin.Explicit,
                 "tests/deployment/v3")
         ];
         var first = CreateBinding(decisions);
@@ -98,9 +98,9 @@ public sealed class ElasticRelationQueryStorageBindingPersistenceTests
     [Fact]
     public void JsonRehydration_RejectsForeignSettingsAndConventionOriginWithConsumerProvenance()
     {
-        ImmutableArray<RelationQueryConfigurationDecision> decisions =
+        ImmutableArray<EffectiveConfigurationDecision> decisions =
         [
-            new("indexName", RelationQueryConfigurationValueOrigin.Explicit, "tests/deployment/v1")
+            new("indexName", EffectiveConfigurationOrigin.Explicit, "tests/deployment/v1")
         ];
         var foreign = SerializeToObject(CreateBinding(decisions));
         foreign["configurationDecisions"]!.AsArray()[0]!["setting"] = "cosmosOnlySetting";
@@ -181,7 +181,7 @@ public sealed class ElasticRelationQueryStorageBindingPersistenceTests
     }
 
     static ElasticRelationQueryStorageBinding CreateBinding(
-        ImmutableArray<RelationQueryConfigurationDecision> configurationDecisions = default,
+        ImmutableArray<EffectiveConfigurationDecision> configurationDecisions = default,
         bool includeAffinity = false) => new(
         id: new("load-search/v1"),
         source: new RelationQuerySourceInstanceId("loads-source"),
@@ -204,8 +204,8 @@ public sealed class ElasticRelationQueryStorageBindingPersistenceTests
         ],
         origin: !configurationDecisions.IsDefaultOrEmpty
         && configurationDecisions.Any(static decision => decision.Origin is
-                RelationQueryConfigurationValueOrigin.Explicit
-                or RelationQueryConfigurationValueOrigin.ScopedProfile)
+                EffectiveConfigurationOrigin.Explicit
+                or EffectiveConfigurationOrigin.ScopedProfile)
             ? ElasticRelationQueryBindingOrigin.Explicit
             : ElasticRelationQueryBindingOrigin.Convention,
         conventionSetVersion: ElasticRelationQueryStorageBinding.SemanticPathConventionSet,
@@ -277,7 +277,7 @@ public sealed class ElasticRelationQueryStorageBindingPersistenceTests
             configurationDecisions: CreateNestedPathDecisions());
     }
 
-    static ImmutableArray<RelationQueryConfigurationDecision> CreateNestedPathDecisions()
+    static ImmutableArray<EffectiveConfigurationDecision> CreateNestedPathDecisions()
     {
         const string prefix = "field/field:stops/nested/";
         const string authority = "tests/nested-mapping/v2";
@@ -285,15 +285,15 @@ public sealed class ElasticRelationQueryStorageBindingPersistenceTests
         [
             new(
                 prefix + "nestedPath",
-                RelationQueryConfigurationValueOrigin.Explicit,
+                EffectiveConfigurationOrigin.Explicit,
                 authority),
             new(
                 prefix + "child/" + DirectFieldSettingKey("Location") + "/elementPath",
-                RelationQueryConfigurationValueOrigin.Explicit,
+                EffectiveConfigurationOrigin.Explicit,
                 authority),
             new(
                 prefix + "child/" + DirectFieldSettingKey("Type") + "/elementPath",
-                RelationQueryConfigurationValueOrigin.Explicit,
+                EffectiveConfigurationOrigin.Explicit,
                 authority)
         ];
     }
