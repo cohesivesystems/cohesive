@@ -37,6 +37,9 @@ public static class ProcessExecutionDiagnosticCodes
     /// <summary>A logical input identity was reused for different canonical evidence.</summary>
     public const string InputIdentityConflict = "processes.execution.input.identityConflict";
 
+    /// <summary>An unscoped input matches more than one retained wait occurrence.</summary>
+    public const string InputTargetAmbiguous = "processes.execution.input.targetAmbiguous";
+
     /// <summary>A recovery activation must be realized as a new Process attempt.</summary>
     public const string RecoveryRequiresRestart = "processes.execution.recovery.requiresRestart";
 
@@ -69,7 +72,10 @@ public static class ProcessReferenceInterpreter
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(receipt);
         if (receipt.Request.Definition != plan.DefinitionReference)
+        {
             throw new ArgumentException("Process-start receipt pins a different compiled definition.", nameof(receipt));
+        }
+
         return Create(
             plan,
             receipt.Request.InitialContinuation,
@@ -97,7 +103,10 @@ public static class ProcessReferenceInterpreter
         ArgumentNullException.ThrowIfNull(continuation);
         ArgumentNullException.ThrowIfNull(input);
         if (input.Contract != plan.Definition.Input)
+        {
             throw new ArgumentException("Process input does not carry the exact compiled input contract.", nameof(input));
+        }
+
         var validation = PortableExecutionValidator.Validate(input, plan.ValidationContext.ShapeGraph);
         if (!validation.IsValid)
         {
@@ -160,7 +169,10 @@ public static class ProcessReferenceInterpreter
                 "Only a Process definition with RestartAttempt recovery policy can create a replacement attempt.");
         }
         if (abandoned.Definition != plan.DefinitionReference)
+        {
             throw new ArgumentException("Abandoned continuation pins a different Process definition.", nameof(abandoned));
+        }
+
         if (string.IsNullOrWhiteSpace(replacementAttempt.Value)
             || replacementAttempt == abandoned.Continuation.ProcessAttemptId)
         {
@@ -263,7 +275,9 @@ public static class ProcessReferenceInterpreter
         {
             var invalid = ValidateActivation();
             if (invalid is not null)
+            {
                 return Rejected(invalid);
+            }
 
             if (terminal.Kind != ExecutionTerminalOutcomeKind.None && activation.Cancellation is not null)
             {
@@ -275,10 +289,14 @@ public static class ProcessReferenceInterpreter
 
             AdmitInputs();
             if (activation.Cancellation is not null)
+            {
                 return ApplyCancellation();
+            }
 
             if (terminal.Kind != ExecutionTerminalOutcomeKind.None)
+            {
                 return CompleteDecision(DispositionFromTerminal());
+            }
 
             ResumeExistingWaits();
             while (!stopAtDurableCut && terminal.Kind == ExecutionTerminalOutcomeKind.None)
@@ -291,21 +309,31 @@ public static class ProcessReferenceInterpreter
                 if (ready.Length == 0)
                 {
                     if (!ResolveJoins())
+                    {
                         break;
+                    }
+
                     continue;
                 }
 
                 foreach (var tokenId in ready)
                 {
                     if (stopAtDurableCut || terminal.Kind != ExecutionTerminalOutcomeKind.None)
+                    {
                         break;
+                    }
+
                     var token = GetToken(tokenId);
                     if (token.Disposition == ExecutionTokenDisposition.Ready)
+                    {
                         ExecuteToken(token);
+                    }
                 }
 
                 if (!stopAtDurableCut && terminal.Kind == ExecutionTerminalOutcomeKind.None)
+                {
                     _ = ResolveJoins();
+                }
             }
 
             return CompleteDecision(
@@ -381,6 +409,9 @@ public static class ProcessReferenceInterpreter
                     .ThenBy(static candidate => candidate.Target.Continuation.ProcessAttemptId.Value, StringComparer.Ordinal)
                     .ThenBy(static candidate => candidate.Target.Token.Value, StringComparer.Ordinal)
                     .ThenBy(
+                        static candidate => candidate.Target.WaitRegistrationId?.Value ?? string.Empty,
+                        StringComparer.Ordinal)
+                    .ThenBy(
                         static candidate => Convert.ToBase64String(
                             InteractionEnvelopeJsonSerializer.GetCanonicalBytes(candidate.Envelope)),
                         StringComparer.Ordinal)
@@ -400,7 +431,10 @@ public static class ProcessReferenceInterpreter
                         $"Activation presented conflicting canonical evidence for interaction emission '{emission.Value}'.",
                         node: null));
                     foreach (var candidate in candidates)
+                    {
                         AddInputTrace(candidate, conflict with { Input = candidate }, "identity-conflict-batch");
+                    }
+
                     continue;
                 }
 
@@ -443,9 +477,11 @@ public static class ProcessReferenceInterpreter
                 {
                     var policyWait = waits
                         .Where(candidate => candidate.Token == input.Target.Token
+                                            && TargetMatchesWait(input.Target, candidate)
                                             && WaitAccepts(candidate, input.Envelope))
                         .OrderByDescending(static candidate => candidate.Active)
                         .ThenByDescending(static candidate => candidate.RegisteredAtUtc)
+                        .ThenByDescending(static candidate => candidate.RegistrationId.Value, StringComparer.Ordinal)
                         .FirstOrDefault();
                     var stale = Receipt(
                         input,
@@ -473,29 +509,77 @@ public static class ProcessReferenceInterpreter
                     continue;
                 }
 
-                var hasActiveCompatibleWait = waits.Any(candidate =>
-                    candidate.Token == target.Id
-                    && candidate.Active
-                    && WaitAccepts(candidate, input.Envelope));
-                var tombstone = waits
-                    .Where(candidate => candidate.Token == target.Id
-                                        && !candidate.Active
-                                        && WaitAccepts(candidate, input.Envelope))
-                    .OrderByDescending(static candidate => candidate.RegisteredAtUtc)
-                    .FirstOrDefault();
-                if (tombstone is not null && !hasActiveCompatibleWait)
+                ProcessWaitState? activeWait;
+                if (input.Target.WaitRegistrationId is { } exactRegistration)
                 {
-                    var late = Receipt(
-                        input,
-                        LateDisposition(tombstone, input),
-                        tombstone.RegistrationId);
-                    UpsertActivationAdmission(late);
-                    receipts.Add(late);
-                    AddInputTrace(input, late, "late");
-                    continue;
-                }
+                    var addressedWait = waits.SingleOrDefault(candidate =>
+                        candidate.Token == target.Id
+                        && candidate.RegistrationId == exactRegistration);
+                    if (addressedWait is null)
+                    {
+                        var missing = Receipt(input, ProcessInputAdmissionDisposition.MissingTarget);
+                        UpsertActivationAdmission(missing);
+                        receipts.Add(missing);
+                        AddInputTrace(input, missing, "missing-wait-occurrence");
+                        continue;
+                    }
 
-                var activeWait = waits.SingleOrDefault(candidate => candidate.Token == target.Id && candidate.Active);
+                    if (!addressedWait.Active)
+                    {
+                        var disposition = WaitAccepts(addressedWait, input.Envelope)
+                            ? LateDisposition(addressedWait, input)
+                            : MissingDisposition(addressedWait)
+                              ?? ProcessInputAdmissionDisposition.MissingTarget;
+                        var closed = Receipt(input, disposition, addressedWait.RegistrationId);
+                        UpsertActivationAdmission(closed);
+                        receipts.Add(closed);
+                        AddInputTrace(input, closed, "closed-wait-occurrence");
+                        continue;
+                    }
+
+                    activeWait = addressedWait;
+                }
+                else
+                {
+                    var hasActiveCompatibleWait = waits.Any(candidate =>
+                        candidate.Token == target.Id
+                        && candidate.Active
+                        && WaitAccepts(candidate, input.Envelope));
+                    var compatibleTombstones = waits
+                        .Where(candidate => candidate.Token == target.Id
+                                            && !candidate.Active
+                                            && WaitAccepts(candidate, input.Envelope))
+                        .OrderByDescending(static candidate => candidate.RegisteredAtUtc)
+                        .ThenByDescending(static candidate => candidate.RegistrationId.Value, StringComparer.Ordinal)
+                        .ToArray();
+                    if (!hasActiveCompatibleWait && compatibleTombstones.Length > 1)
+                    {
+                        var ambiguous = Receipt(input, ProcessInputAdmissionDisposition.MissingTarget);
+                        UpsertActivationAdmission(ambiguous);
+                        receipts.Add(ambiguous);
+                        diagnostics.Add(Diagnostic(
+                            ProcessExecutionDiagnosticCodes.InputTargetAmbiguous,
+                            "Unscoped interaction matches more than one retained wait occurrence.",
+                            target.Node));
+                        AddInputTrace(input, ambiguous, "ambiguous-wait-occurrence");
+                        continue;
+                    }
+
+                    var tombstone = compatibleTombstones.FirstOrDefault();
+                    if (tombstone is not null && !hasActiveCompatibleWait)
+                    {
+                        var late = Receipt(
+                            input,
+                            LateDisposition(tombstone, input),
+                            tombstone.RegistrationId);
+                        UpsertActivationAdmission(late);
+                        receipts.Add(late);
+                        AddInputTrace(input, late, "late");
+                        continue;
+                    }
+
+                    activeWait = waits.SingleOrDefault(candidate => candidate.Token == target.Id && candidate.Active);
+                }
                 var missingDisposition = activeWait is null || WaitAccepts(activeWait, input.Envelope)
                     ? null
                     : MissingDisposition(activeWait);
@@ -546,12 +630,15 @@ public static class ProcessReferenceInterpreter
         {
             foreach (var waitId in waits
                          .Where(static wait => wait.Active)
-                         .OrderBy(static wait => wait.RegistrationId, StringComparer.Ordinal)
+                         .OrderBy(static wait => wait.RegistrationId.Value, StringComparer.Ordinal)
                          .Select(static wait => wait.RegistrationId)
                          .ToArray())
             {
                 if (terminal.Kind != ExecutionTerminalOutcomeKind.None)
+                {
                     return;
+                }
+
                 var wait = GetWait(waitId);
                 var token = GetToken(wait.Token);
                 if (token.Disposition != ExecutionTokenDisposition.Waiting)
@@ -606,7 +693,10 @@ public static class ProcessReferenceInterpreter
         {
             var timer = wait.Timers.Single();
             if (activation.ObservedAtUtc < timer.DueAtUtc)
+            {
                 return;
+            }
+
             var node = (TimerProcessNode)plan.GetNode(wait.Node);
             DeactivateWait(wait, winnerClause: timer.Clause);
             AddTrace(ProcessTraceEventKind.WaitResolved, token, node.Id, timer.Clause, detail: "timer");
@@ -627,6 +717,7 @@ public static class ProcessReferenceInterpreter
 
             var candidates = bufferedInputs
                 .Where(item => item.Input.Target.Token == token.Id
+                               && TargetMatchesWait(item.Input.Target, wait)
                                && item.Input.Envelope is ReplyEnvelope reply
                                && reply.InReplyTo == outstanding.Emission)
                 .OrderBy(item => item.Input.Envelope.Context.EmissionId.Value, StringComparer.Ordinal)
@@ -682,6 +773,7 @@ public static class ProcessReferenceInterpreter
         {
             foreach (var candidate in bufferedInputs
                          .Where(item => item.Input.Target.Token == token
+                                        && TargetMatchesWait(item.Input.Target, closedWait)
                                         && item.Input.Envelope is ReplyEnvelope reply
                                         && reply.InReplyTo == request)
                          .ToArray())
@@ -896,7 +988,12 @@ public static class ProcessReferenceInterpreter
                 }
             }
             emissions.AddRange(result.Emissions);
-            AddTrace(ProcessTraceEventKind.OperationCompleted, token, node, detail: "completed");
+            AddTrace(
+                ProcessTraceEventKind.OperationCompleted,
+                token,
+                node,
+                detail: "completed",
+                operationOccurrence: token.Step);
             Advance(token, continuation, value);
         }
 
@@ -910,22 +1007,28 @@ public static class ProcessReferenceInterpreter
                 token.Id,
                 node.Id,
                 token.Step);
-            var envelope = new RequestEnvelope(
-                InteractionEnvelope.CurrentSchemaVersion,
-                EnvelopeContext(token, node.Id, emissionId, activation.Context.CausationId),
-                node.Contract,
-                payload,
-                new ProcessTokenInteractionTarget(original.Continuation, token.Id));
-            emissions.Add(envelope);
-            requests.Add(new(token.Id, node.Id, emissionId, node.Contract, activation.ObservedAtUtc));
-            AddTrace(ProcessTraceEventKind.InteractionEmitted, token, node.Id, emission: emissionId, detail: "request");
             var wait = RegisterWait(
                 token,
                 node.Id,
                 ProcessWaitKind.Request,
                 timers: [],
                 obligationEmission: emissionId);
-            AddTrace(ProcessTraceEventKind.WaitRegistered, token, node.Id, detail: wait.RegistrationId);
+            var envelope = new RequestEnvelope(
+                InteractionEnvelope.CurrentSchemaVersion,
+                EnvelopeContext(token, node.Id, emissionId, activation.Context.CausationId),
+                node.Contract,
+                payload,
+                new ProcessTokenInteractionTarget(original.Continuation, token.Id, wait.RegistrationId));
+            emissions.Add(envelope);
+            requests.Add(new(token.Id, node.Id, emissionId, node.Contract, activation.ObservedAtUtc));
+            AddTrace(
+                ProcessTraceEventKind.InteractionEmitted,
+                token,
+                node.Id,
+                emission: emissionId,
+                detail: "request",
+                emissionFingerprint: InteractionEnvelopeJsonSerializer.ComputeContentFingerprint(envelope));
+            AddTrace(ProcessTraceEventKind.WaitRegistered, token, node.Id, detail: wait.RegistrationId.Value);
             Cut(node.Id);
         }
 
@@ -939,12 +1042,19 @@ public static class ProcessReferenceInterpreter
                 token.Id,
                 node.Id,
                 token.Step);
-            emissions.Add(new DomainEventEnvelope(
+            var envelope = new DomainEventEnvelope(
                 InteractionEnvelope.CurrentSchemaVersion,
                 EnvelopeContext(token, node.Id, emissionId, activation.Context.CausationId),
                 node.Contract,
-                payload));
-            AddTrace(ProcessTraceEventKind.InteractionEmitted, token, node.Id, emission: emissionId, detail: "event");
+                payload);
+            emissions.Add(envelope);
+            AddTrace(
+                ProcessTraceEventKind.InteractionEmitted,
+                token,
+                node.Id,
+                emission: emissionId,
+                detail: "event",
+                emissionFingerprint: InteractionEnvelopeJsonSerializer.ComputeContentFingerprint(envelope));
             Advance(token, node.Next);
         }
 
@@ -976,13 +1086,20 @@ public static class ProcessReferenceInterpreter
                 token.Id,
                 node.Id,
                 token.Step);
-            emissions.Add(new SignalEnvelope(
+            var envelope = new SignalEnvelope(
                 InteractionEnvelope.CurrentSchemaVersion,
                 EnvelopeContext(token, node.Id, emissionId, activation.Context.CausationId),
                 node.Contract,
                 payload,
-                resolved.Target!));
-            AddTrace(ProcessTraceEventKind.InteractionEmitted, token, node.Id, emission: emissionId, detail: "signal");
+                resolved.Target!);
+            emissions.Add(envelope);
+            AddTrace(
+                ProcessTraceEventKind.InteractionEmitted,
+                token,
+                node.Id,
+                emission: emissionId,
+                detail: "signal",
+                emissionFingerprint: InteractionEnvelopeJsonSerializer.ComputeContentFingerprint(envelope));
             Advance(token, node.Next);
         }
 
@@ -991,7 +1108,10 @@ public static class ProcessReferenceInterpreter
             foreach (var choiceCase in node.Cases)
             {
                 if (!EvaluateBoolean(choiceCase.Predicate, token, "Choice predicate"))
+                {
                     continue;
+                }
+
                 AddTrace(ProcessTraceEventKind.BranchSelected, token, node.Id, choiceCase.Id);
                 Advance(token, choiceCase.Next);
                 return;
@@ -1110,7 +1230,7 @@ public static class ProcessReferenceInterpreter
                     clause.Priority))
                 .ToImmutableArray();
             var wait = RegisterWait(token, node.Id, ProcessWaitKind.AwaitMatch, timers);
-            AddTrace(ProcessTraceEventKind.WaitRegistered, token, node.Id, detail: wait.RegistrationId);
+            AddTrace(ProcessTraceEventKind.WaitRegistered, token, node.Id, detail: wait.RegistrationId.Value);
             _ = ResolveAwait(wait, GetToken(token.Id));
             Cut(node.Id);
         }
@@ -1123,7 +1243,7 @@ public static class ProcessReferenceInterpreter
                 node.Id,
                 ProcessWaitKind.Timer,
                 [new(node.Id, dueAt, Priority: 0)]);
-            AddTrace(ProcessTraceEventKind.WaitRegistered, token, node.Id, detail: wait.RegistrationId);
+            AddTrace(ProcessTraceEventKind.WaitRegistered, token, node.Id, detail: wait.RegistrationId.Value);
             Cut(node.Id);
         }
 
@@ -1150,13 +1270,20 @@ public static class ProcessReferenceInterpreter
                 node.Id,
                 token.Step);
             var terminalOutcome = CreateOutcome(outcome, payload);
-            emissions.Add(new ReplyEnvelope(
+            var envelope = new ReplyEnvelope(
                 InteractionEnvelope.CurrentSchemaVersion,
                 EnvelopeContext(token, node.Id, emissionId, obligation.Request.Context.EmissionId),
                 node.Contract,
                 obligation.Request.Context.EmissionId,
-                terminalOutcome));
-            AddTrace(ProcessTraceEventKind.InteractionEmitted, token, node.Id, emission: emissionId, detail: "reply");
+                terminalOutcome);
+            emissions.Add(envelope);
+            AddTrace(
+                ProcessTraceEventKind.InteractionEmitted,
+                token,
+                node.Id,
+                emission: emissionId,
+                detail: "reply",
+                emissionFingerprint: InteractionEnvelopeJsonSerializer.ComputeContentFingerprint(envelope));
             DischargeRequestObligation(obligation);
             Advance(GetToken(token.Id), node.Next);
         }
@@ -1171,7 +1298,9 @@ public static class ProcessReferenceInterpreter
                     .Where(item => item.Request.Context.EmissionId != request)
                     .ToImmutableArray();
                 if (retained.Length != candidate.RequestObligations.Length)
+                {
                     tokens[index] = candidate with { RequestObligations = retained };
+                }
             }
 
             for (var index = 0; index < forks.Count; index++)
@@ -1181,14 +1310,16 @@ public static class ProcessReferenceInterpreter
                     .Where(item => item.Request.Context.EmissionId != request)
                     .ToImmutableArray();
                 if (retained.Length != fork.ParentRequestObligations.Length)
+                {
                     forks[index] = fork with { ParentRequestObligations = retained };
+                }
             }
         }
 
         void ExecuteDurableCut(ProcessTokenState token, DurableCutProcessNode node)
         {
             var wait = RegisterWait(token, node.Id, ProcessWaitKind.DurableCut, timers: []);
-            AddTrace(ProcessTraceEventKind.WaitRegistered, token, node.Id, detail: wait.RegistrationId);
+            AddTrace(ProcessTraceEventKind.WaitRegistered, token, node.Id, detail: wait.RegistrationId.Value);
             Cut(node.Id);
         }
 
@@ -1245,7 +1376,10 @@ public static class ProcessReferenceInterpreter
         bool ResolveAwait(ProcessWaitState wait, ProcessTokenState token)
         {
             if (!wait.Active)
+            {
                 return false;
+            }
+
             var node = (AwaitMatchProcessNode)plan.GetNode(wait.Node);
             List<AwaitCandidate> candidates = [];
             HashSet<EmissionId> compatibleInputs = [];
@@ -1257,6 +1391,7 @@ public static class ProcessReferenceInterpreter
                     case ProcessAwaitInteractionClause interaction:
                         foreach (var buffered in bufferedInputs.Where(item =>
                                      item.Input.Target.Token == token.Id
+                                     && TargetMatchesWait(item.Input.Target, wait)
                                      && Contract(item.Input.Envelope) == interaction.Contract))
                         {
                             compatibleInputs.Add(buffered.Input.Envelope.Context.EmissionId);
@@ -1273,7 +1408,10 @@ public static class ProcessReferenceInterpreter
                     case ProcessAwaitTimerClause timer:
                         var deadline = wait.Timers.Single(candidate => candidate.Clause == timer.Id);
                         if (activation.ObservedAtUtc >= deadline.DueAtUtc)
+                        {
                             candidates.Add(new(clause, Input: null, Value: null));
+                        }
+
                         break;
                 }
             }
@@ -1290,7 +1428,9 @@ public static class ProcessReferenceInterpreter
                     "await-stale");
             }
             if (candidates.Count == 0)
+            {
                 return false;
+            }
 
             var winner = candidates
                 .OrderByDescending(static candidate => candidate.Clause.Priority)
@@ -1338,11 +1478,15 @@ public static class ProcessReferenceInterpreter
                 .ToHashSet();
             foreach (var candidate in bufferedInputs
                          .Where(item => item.Input.Target.Token == token
+                                        && TargetMatchesWait(item.Input.Target, wait)
                                         && interactionContracts.Contains(Contract(item.Input.Envelope)))
                          .ToArray())
             {
                 if (winner.Input == candidate)
+                {
                     continue;
+                }
+
                 DispositionInput(
                     candidate,
                     Map(node.LateInput, ProcessInputAdmissionDisposition.Late),
@@ -1405,7 +1549,10 @@ public static class ProcessReferenceInterpreter
 
                 var satisfied = thresholdReached;
                 if (satisfied && join.Policy.Cancellation == ProcessJoinCancellationPolicy.AwaitRemaining)
+                {
                     satisfied = terminalBranches == fork.Branches.Length;
+                }
+
                 if (!satisfied)
                 {
                     if (terminalBranches == fork.Branches.Length)
@@ -1432,7 +1579,10 @@ public static class ProcessReferenceInterpreter
                 {
                     var selectedIds = selected.Select(static branch => branch.Branch).ToHashSet();
                     foreach (var branch in fork.Branches.Where(branch => !selectedIds.Contains(branch.Branch)))
+                    {
                         CancelToken(GetToken(branch.Token));
+                    }
+
                     fork = GetFork(registrationId);
                 }
 
@@ -1492,7 +1642,9 @@ public static class ProcessReferenceInterpreter
             where TKey : notnull
         {
             if (selected.Count == 0)
+            {
                 return parentValues;
+            }
 
             var merged = parentValues.ToDictionary(selectKey);
             foreach (var branch in selected)
@@ -1517,7 +1669,9 @@ public static class ProcessReferenceInterpreter
             IReadOnlyList<ProcessForkBranchState> selected)
         {
             if (selected.Count == 0)
+            {
                 return fork.ParentRequestObligations;
+            }
 
             var parent = fork.ParentRequestObligations.ToDictionary(static obligation => obligation.Binding);
             Dictionary<RequestObligationBindingId, ProcessRequestObligation> merged = [];
@@ -1526,7 +1680,10 @@ public static class ProcessReferenceInterpreter
                 foreach (var obligation in GetToken(branch.Token).RequestObligations)
                 {
                     if (parent.ContainsKey(obligation.Binding))
+                    {
                         continue;
+                    }
+
                     if (merged.TryGetValue(obligation.Binding, out var existing) && existing != obligation)
                     {
                         throw new InvalidOperationException(
@@ -1541,7 +1698,9 @@ public static class ProcessReferenceInterpreter
                 var retainedByEveryBranch = selected.All(branch => GetToken(branch.Token).RequestObligations.Any(
                     candidate => candidate.Binding == obligation.Binding && candidate == obligation));
                 if (retainedByEveryBranch)
+                {
                     merged[obligation.Binding] = obligation;
+                }
             }
             return [.. merged.Values.OrderBy(static obligation => obligation.Binding.Value, StringComparer.Ordinal)];
         }
@@ -1559,7 +1718,10 @@ public static class ProcessReferenceInterpreter
             CloseTokenWork(failed.Id);
             AddTrace(ProcessTraceEventKind.TerminalReached, failed, token.Node, detail: "failed");
             if (token.ForkMembership is not null)
+            {
                 return;
+            }
+
             terminal = new(ExecutionTerminalOutcomeKind.Failed, activation.ObservedAtUtc);
             CancelLiveTokens(token.Id);
             CloseAllTokenWork();
@@ -1656,7 +1818,10 @@ public static class ProcessReferenceInterpreter
         {
             var value = Evaluate(expression, token).RequireConcrete("Process timer deadline");
             if (!value.TryGetInstant(out var instant))
+            {
                 throw new InvalidOperationException($"Timer expression at node '{node.Value}' did not produce an instant.");
+            }
+
             return instant.ToUniversalTime();
         }
 
@@ -1771,7 +1936,10 @@ public static class ProcessReferenceInterpreter
                 && contract is RequestContractDefinition requestDefinition)
             {
                 if (!IsValidRequestResult(wait, request, input))
+                {
                     return ProcessInputAdmissionDisposition.Rejected;
+                }
+
                 return Map(
                     requestDefinition.Response.LateResult,
                     wait,
@@ -1798,7 +1966,10 @@ public static class ProcessReferenceInterpreter
                 && contract is RequestContractDefinition requestDefinition)
             {
                 if (!IsValidRequestResult(wait, request, input))
+                {
                     return ProcessInputAdmissionDisposition.Rejected;
+                }
+
                 return Map(
                     requestDefinition.Response.StaleResult,
                     wait,
@@ -1827,7 +1998,9 @@ public static class ProcessReferenceInterpreter
                         && ReplyMatchesRequest(reply, request.Contract)
                         && request.Outcomes.Any(outcome => outcome.Outcome == reply.Outcome.Id);
             if (valid)
+            {
                 return true;
+            }
 
             diagnostics.Add(Diagnostic(
                 ProcessExecutionDiagnosticCodes.InputNotAdmitted,
@@ -1856,13 +2029,17 @@ public static class ProcessReferenceInterpreter
         ProcessInputAdmissionDisposition DuplicateDisposition(ProcessInputReceipt prior)
         {
             if (prior.WaitRegistrationId is null)
+            {
                 return ProcessInputAdmissionDisposition.Duplicate;
-            var wait = waits.FirstOrDefault(candidate => string.Equals(
-                candidate.RegistrationId,
-                prior.WaitRegistrationId,
-                StringComparison.Ordinal));
+            }
+
+            var wait = waits.FirstOrDefault(candidate =>
+                candidate.RegistrationId == prior.WaitRegistrationId);
             if (wait is null)
+            {
                 return ProcessInputAdmissionDisposition.Duplicate;
+            }
+
             if (wait.Kind == ProcessWaitKind.AwaitMatch
                 && plan.GetNode(wait.Node) is AwaitMatchProcessNode awaitMatch)
             {
@@ -1891,6 +2068,11 @@ public static class ProcessReferenceInterpreter
                 _ => false
             };
         }
+
+        static bool TargetMatchesWait(
+            ProcessTokenInteractionTarget target,
+            ProcessWaitState wait) =>
+            target.WaitRegistrationId is null || target.WaitRegistrationId == wait.RegistrationId;
 
         static ProcessInputAdmissionDisposition Map(
             ProcessAwaitInputDisposition disposition,
@@ -1946,7 +2128,7 @@ public static class ProcessReferenceInterpreter
         ProcessInputReceipt Receipt(
             ProcessActivationInput input,
             ProcessInputAdmissionDisposition disposition,
-            string? waitRegistrationId = null) => new(
+            ProcessWaitRegistrationId? waitRegistrationId = null) => new(
             input,
             disposition,
             activation.ObservedAtUtc,
@@ -1961,24 +2143,33 @@ public static class ProcessReferenceInterpreter
         {
             var index = activationAdmissions.FindIndex(candidate => candidate.Emission == receipt.Emission);
             if (index >= 0)
+            {
                 activationAdmissions[index] = receipt;
+            }
             else
+            {
                 activationAdmissions.Add(receipt);
+            }
         }
 
         void DispositionInput(
             ProcessBufferedInput buffered,
             ProcessInputAdmissionDisposition disposition,
-            string? registrationId,
+            ProcessWaitRegistrationId? registrationId,
             string detail)
         {
             bufferedInputs.Remove(buffered);
             var receipt = Receipt(buffered.Input, disposition, registrationId);
             var index = receipts.FindIndex(candidate => candidate.Emission == receipt.Emission);
             if (index >= 0)
+            {
                 receipts[index] = receipt;
+            }
             else
+            {
                 receipts.Add(receipt);
+            }
+
             UpsertActivationAdmission(receipt);
             AddInputTrace(buffered.Input, receipt, detail);
         }
@@ -1999,7 +2190,9 @@ public static class ProcessReferenceInterpreter
                     failure: null),
                 token?.Node ?? plan.Definition.Entry,
                 emission: input.Envelope.Context.EmissionId,
-                detail: $"{detail}:{receipt.Disposition}");
+                detail: $"{detail}:{receipt.Disposition}",
+                inputDisposition: receipt.Disposition,
+                waitRegistrationId: receipt.WaitRegistrationId);
         }
 
         void Cut(ExecutionNodeId node)
@@ -2062,10 +2255,11 @@ public static class ProcessReferenceInterpreter
             {
                 var tombstone = waits
                     .Where(wait => wait.Token == token
+                                   && TargetMatchesWait(buffered.Input.Target, wait)
                                    && !wait.Active
                                    && WaitAccepts(wait, buffered.Input.Envelope))
                     .OrderByDescending(static wait => wait.RegisteredAtUtc)
-                    .ThenByDescending(static wait => wait.RegistrationId, StringComparer.Ordinal)
+                    .ThenByDescending(static wait => wait.RegistrationId.Value, StringComparer.Ordinal)
                     .FirstOrDefault();
                 DispositionInput(
                     buffered,
@@ -2089,7 +2283,8 @@ public static class ProcessReferenceInterpreter
 
         ProcessTokenState GetToken(TokenId id) => tokens.Single(token => token.Id == id);
 
-        ProcessWaitState GetWait(string id) => waits.Single(wait => string.Equals(wait.RegistrationId, id, StringComparison.Ordinal));
+        ProcessWaitState GetWait(ProcessWaitRegistrationId id) =>
+            waits.Single(wait => wait.RegistrationId == id);
 
         ProcessForkState GetFork(string id) => forks.Single(fork => string.Equals(fork.RegistrationId, id, StringComparison.Ordinal));
 
@@ -2097,18 +2292,28 @@ public static class ProcessReferenceInterpreter
         {
             var index = tokens.FindIndex(candidate => candidate.Id == value.Id);
             if (index < 0)
+            {
                 tokens.Add(value);
+            }
             else
+            {
                 tokens[index] = value;
+            }
 
             if (value.ForkMembership is null)
+            {
                 return;
+            }
+
             var fork = GetFork(value.ForkMembership.RegistrationId);
             var branchIndex = -1;
             for (var candidateIndex = 0; candidateIndex < fork.Branches.Length; candidateIndex++)
             {
                 if (fork.Branches[candidateIndex].Token != value.Id)
+                {
                     continue;
+                }
+
                 branchIndex = candidateIndex;
                 break;
             }
@@ -2146,20 +2351,28 @@ public static class ProcessReferenceInterpreter
 
         void ReplaceWait(ProcessWaitState value)
         {
-            var index = waits.FindIndex(candidate => string.Equals(candidate.RegistrationId, value.RegistrationId, StringComparison.Ordinal));
+            var index = waits.FindIndex(candidate => candidate.RegistrationId == value.RegistrationId);
             if (index < 0)
+            {
                 waits.Add(value);
+            }
             else
+            {
                 waits[index] = value;
+            }
         }
 
         void ReplaceFork(ProcessForkState value)
         {
             var index = forks.FindIndex(candidate => string.Equals(candidate.RegistrationId, value.RegistrationId, StringComparison.Ordinal));
             if (index < 0)
+            {
                 forks.Add(value);
+            }
             else
+            {
                 forks[index] = value;
+            }
         }
 
         void AddTrace(
@@ -2168,7 +2381,11 @@ public static class ProcessReferenceInterpreter
             ExecutionNodeId node,
             ExecutionNodeId? branchOrClause = null,
             EmissionId? emission = null,
-            string? detail = null)
+            string? detail = null,
+            InteractionEnvelopeContentFingerprint? emissionFingerprint = null,
+            long? operationOccurrence = null,
+            ProcessInputAdmissionDisposition? inputDisposition = null,
+            ProcessWaitRegistrationId? waitRegistrationId = null)
         {
             var location = nodeIndexes.TryGetValue(node, out var index) ? $"/nodes/{index}" : null;
             trace.Add(new(
@@ -2184,7 +2401,11 @@ public static class ProcessReferenceInterpreter
                 detail,
                 plan.Document.Metadata.SourceMap.ResolveReferences(
                     location,
-                    plan.Document.Metadata.Provenance.Source.Reference)));
+                    plan.Document.Metadata.Provenance.Source.Reference),
+                emissionFingerprint,
+                operationOccurrence,
+                inputDisposition,
+                waitRegistrationId));
         }
 
         DocumentValidationDiagnostic Diagnostic(
@@ -2244,7 +2465,7 @@ public static class ProcessReferenceInterpreter
                 original.CompletedActivationCount + 1,
                 [.. tokens.OrderBy(static token => token.Id.Value, StringComparer.Ordinal)],
                 [.. forks.OrderBy(static fork => fork.RegistrationId, StringComparer.Ordinal)],
-                [.. waits.OrderBy(static wait => wait.RegistrationId, StringComparer.Ordinal)],
+                [.. waits.OrderBy(static wait => wait.RegistrationId.Value, StringComparer.Ordinal)],
                 [.. bufferedInputs
                     .OrderBy(static input => input.Input.Envelope.Context.EmissionId.Value, StringComparer.Ordinal)],
                 [.. receipts.OrderBy(static receipt => receipt.Emission.Value, StringComparer.Ordinal)],

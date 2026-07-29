@@ -14,6 +14,49 @@ dotnet add package Cohesive.Storage
 - You want storage behavior to attach to semantic entity and relation models without binding application code to a database SDK.
 - You need adapters between entity snapshots, observation records, canonical relation/query source readers, and process execution.
 
+## Durable Process aggregates
+
+`Cohesive.Storage.Processes` defines the physical durability boundary for canonical Process execution. A
+`ProcessDurableCheckpoint` composes the existing semantic authorities—start receipt, complete multi-token
+continuation, lifecycle control, activation and host-operation receipts, durable inbox, interaction outbox, and
+durable Request-operation state—without introducing parallel copies of their fields.
+
+Activation receipts are attempt-scoped and contiguous within an attempt. Each receipt fingerprints the complete
+continuation before and after its activation: the first receipt begins at the canonical clean start or restart,
+adjacent receipts form an exact chain, and the current attempt's final fingerprint names the checkpoint
+continuation. A Control-authorized restart therefore creates a clean zero-activation continuation while retaining
+the abandoned attempt's immutable activation, inbox, outbox, host-operation, and durable-operation evidence.
+Restore validation also proves exact wait topology and bidirectional closure between execution traces, exact
+occurrence-keyed host-operation receipts, fingerprinted outbox envelopes, outstanding Requests, and
+Request-operation state before any host operation can execute. Restored Fork and Join evidence must retain its
+derived occurrence identities, policy-shaped completion history, canonical selected branches, and coherent
+resolved state. Cached host-operation results form a closed union: either a typed successful value with optional
+emissions, or one error diagnostic with no emissions.
+
+`IProcessDurableStore` persists that aggregate under one atomic contract:
+
+- an expected `ProcessStorageRevision` provides physical compare-and-swap;
+- a leased `ProcessWorkerFence` makes an expired, not-yet-acquired, or superseded activation owner stale, and
+  store observations cannot predate retained aggregate or lease-renewal evidence;
+- `ProcessCommitId` plus the deterministic commit fingerprint makes ambiguous exact retries replayable and rejects
+  conflicting identity reuse;
+- inbox admission is durable without a live worker and advances the same revision as checkpoint commits, preventing
+  a registration/commit race from losing an early input; and
+- checkpoint replacement and eligible provider-neutral local mutations commit all-or-none.
+
+Inbox disposition is attributable to the Process attempt that decided it and remains a projection of canonical
+continuation receipts. A pending entry may be buffered and a buffered entry may reach one terminal disposition;
+committed terminal evidence cannot be rewritten. Late input is still admitted after Process completion so the
+canonical interpreter can apply authored late/stale/observe/reject/dead-letter policy. Physical publication and
+durable-operation histories likewise append attempts while permitting only legal monotonic advancement of the
+latest attempt snapshot.
+
+`InMemoryProcessDurableStore` is the copy-on-write reference implementation and semantic test oracle. It exposes
+fault-injection cuts before and after initialization, inbox admission, worker acquisition, worker renewal, and
+aggregate commit. It is not a production durability provider and does not claim physical exactly-once external
+publication. `ProcessCheckpointCompatibilityValidator` must admit a restored checkpoint against the exact compiled
+Process definition before any host operation executes.
+
 ## Canonical relation/query sources
 
 Storage contributes physical acquisition to `Cohesive.Relations`; it does not define another predicate, join,
@@ -113,4 +156,5 @@ not provide an automatic bridge from that deleted model to canonical relation/qu
 
 - `Cohesive.Transitions` for entity state and transition models.
 - `Cohesive.Relations` for canonical relation/query semantics, evaluation, placement, and source-reader contracts.
+- `Cohesive.Processes` for canonical Process IR, continuation state, validation, and reference interpretation.
 - `Cohesive.Adapters.Cosmos` for Cosmos DB-backed storage.

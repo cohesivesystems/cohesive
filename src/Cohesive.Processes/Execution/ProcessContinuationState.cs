@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json.Serialization;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.IR;
@@ -25,6 +26,7 @@ public sealed record ProcessForkMembership(string RegistrationId, ExecutionNodeI
 /// <summary>Complete coordination-local state of one durable Process token.</summary>
 public sealed record ProcessTokenState
 {
+    [JsonConstructor]
     internal ProcessTokenState(
         TokenId id,
         ExecutionNodeId node,
@@ -84,6 +86,7 @@ public sealed record ProcessForkBranchState(
 /// <summary>Durable membership and convergence state for one Fork occurrence.</summary>
 public sealed record ProcessForkState
 {
+    [JsonConstructor]
     internal ProcessForkState(
         string registrationId,
         TokenId owner,
@@ -170,8 +173,9 @@ public sealed record ProcessTimerState(
 /// <summary>Complete durable semantic wait state for one token-node occurrence.</summary>
 public sealed record ProcessWaitState
 {
+    [JsonConstructor]
     internal ProcessWaitState(
-        string registrationId,
+        ProcessWaitRegistrationId registrationId,
         TokenId token,
         ExecutionNodeId node,
         ProcessWaitKind kind,
@@ -194,8 +198,8 @@ public sealed record ProcessWaitState
         ObligationEmission = obligationEmission;
     }
 
-    /// <summary>Opaque stable wait-registration identity.</summary>
-    public string RegistrationId { get; internal init; }
+    /// <summary>Stable identity of this exact durable wait occurrence.</summary>
+    public ProcessWaitRegistrationId RegistrationId { get; internal init; }
 
     /// <summary>Token held by the wait.</summary>
     public TokenId Token { get; internal init; }
@@ -279,7 +283,7 @@ public sealed record ProcessInputReceipt(
     ProcessActivationInput Input,
     ProcessInputAdmissionDisposition Disposition,
     DateTimeOffset ObservedAtUtc,
-    string? WaitRegistrationId = null)
+    ProcessWaitRegistrationId? WaitRegistrationId = null)
 {
     /// <summary>Stable logical input identity projected from <see cref="Input"/>.</summary>
     public EmissionId Emission => Input.Envelope.Context.EmissionId;
@@ -304,6 +308,7 @@ public sealed record ProcessOutstandingRequest(
 /// <summary>Complete immutable semantic continuation of one canonical Process attempt.</summary>
 public sealed class ProcessContinuationState
 {
+    [JsonConstructor]
     internal ProcessContinuationState(
         ExecutionDefinitionReference definition,
         ProcessContinuationIdentity continuation,

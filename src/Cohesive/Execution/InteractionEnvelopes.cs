@@ -17,7 +17,10 @@ public sealed record InteractionAuthorityScope
     {
         Authority = Guard.RequireNotNullOrWhiteSpace(authority);
         if (tenant is not null && string.IsNullOrWhiteSpace(tenant))
+        {
             throw new ArgumentException("An optional tenant identity cannot be empty or white-space.", nameof(tenant));
+        }
+
         Tenant = tenant;
     }
 
@@ -102,9 +105,15 @@ public sealed record InteractionDeliveryRequirements
         InteractionVisibilityDemand visibility)
     {
         if (!Enum.IsDefined(durability) || durability == InteractionDurabilityDemand.Unspecified)
+        {
             throw new ArgumentOutOfRangeException(nameof(durability), durability, "Interaction durability must be explicit.");
+        }
+
         if (!Enum.IsDefined(visibility) || visibility == InteractionVisibilityDemand.Unspecified)
+        {
             throw new ArgumentOutOfRangeException(nameof(visibility), visibility, "Interaction visibility must be explicit.");
+        }
+
         if (durability == InteractionDurabilityDemand.ActivationLocal
             && visibility != InteractionVisibilityDemand.ActivationLocal)
         {
@@ -145,7 +154,9 @@ public abstract record InteractionOrigin
     private protected InteractionOrigin(ExecutionDefinitionReference definition, ExecutionNodeId node)
     {
         if (string.IsNullOrWhiteSpace(node.Value))
+        {
             throw new ArgumentException("An interaction origin requires a stable node identity.", nameof(node));
+        }
 
         Definition = Guard.RequireNotNull(definition);
         Node = node;
@@ -185,7 +196,9 @@ public sealed record TransitionInteractionOrigin : InteractionOrigin
         : base(definition, node)
     {
         if (string.IsNullOrWhiteSpace(outcome.Value))
+        {
             throw new ArgumentException("A Transition interaction origin requires an outcome identity.", nameof(outcome));
+        }
 
         Entity = Guard.RequireNotNull(entity);
         Outcome = outcome;
@@ -233,9 +246,15 @@ public sealed record ProcessInteractionOrigin : InteractionOrigin
         : base(definition, node)
     {
         if (string.IsNullOrWhiteSpace(activation.Value))
+        {
             throw new ArgumentException("A Process interaction origin requires an activation identity.", nameof(activation));
+        }
+
         if (string.IsNullOrWhiteSpace(token.Value))
+        {
             throw new ArgumentException("A Process interaction origin requires a token identity.", nameof(token));
+        }
+
         if ((entity is null) != (transition is null))
         {
             throw new ArgumentException(
@@ -243,7 +262,9 @@ public sealed record ProcessInteractionOrigin : InteractionOrigin
                 nameof(transition));
         }
         if (outcome is { } outcomeId && string.IsNullOrWhiteSpace(outcomeId.Value))
+        {
             throw new ArgumentException("An optional Process outcome identity cannot be default.", nameof(outcome));
+        }
 
         Continuation = Guard.RequireNotNull(continuation);
         Activation = activation;
@@ -286,7 +307,7 @@ public abstract record InteractionTarget
     internal abstract void EnsureDeclaredVariant();
 }
 
-/// <summary>Address of one durable Process control-flow token.</summary>
+/// <summary>Address of one durable Process control-flow token and, optionally, one exact wait occurrence.</summary>
 public sealed record ProcessTokenInteractionTarget : InteractionTarget
 {
     internal override void EnsureDeclaredVariant() { }
@@ -294,16 +315,35 @@ public sealed record ProcessTokenInteractionTarget : InteractionTarget
     /// <summary>Creates a Process-token interaction target.</summary>
     /// <param name="continuation">Logical Process instance and exact current attempt.</param>
     /// <param name="token">Durable target token.</param>
+    /// <param name="waitRegistrationId">
+    /// Optional exact wait occurrence. A null value deliberately leaves the interaction unscoped so it may be
+    /// buffered before a compatible wait is registered.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="continuation"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="token"/> is a default value.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="token"/> or a present <paramref name="waitRegistrationId"/> is a default value.
+    /// </exception>
     [JsonConstructor]
-    public ProcessTokenInteractionTarget(ProcessContinuationIdentity continuation, TokenId token)
+    public ProcessTokenInteractionTarget(
+        ProcessContinuationIdentity continuation,
+        TokenId token,
+        ProcessWaitRegistrationId? waitRegistrationId = null)
     {
         if (string.IsNullOrWhiteSpace(token.Value))
+        {
             throw new ArgumentException("A Process interaction target requires a token identity.", nameof(token));
+        }
+
+        if (waitRegistrationId is { } registration && string.IsNullOrWhiteSpace(registration.Value))
+        {
+            throw new ArgumentException(
+                "A present Process wait target requires a wait-registration identity.",
+                nameof(waitRegistrationId));
+        }
 
         Continuation = Guard.RequireNotNull(continuation);
         Token = token;
+        WaitRegistrationId = waitRegistrationId;
     }
 
     /// <summary>Logical Process instance and exact current attempt.</summary>
@@ -311,6 +351,12 @@ public sealed record ProcessTokenInteractionTarget : InteractionTarget
 
     /// <summary>Durable target token.</summary>
     public TokenId Token { get; }
+
+    /// <summary>
+    /// Exact wait occurrence addressed by the interaction, or <see langword="null"/> for deliberately unscoped
+    /// early delivery to the token.
+    /// </summary>
+    public ProcessWaitRegistrationId? WaitRegistrationId { get; }
 }
 
 /// <summary>Exact semantic address of a typed Transition continuation.</summary>
@@ -333,7 +379,9 @@ public sealed record TransitionInteractionTarget : InteractionTarget
         InteractionEntityReference entity)
     {
         if (string.IsNullOrWhiteSpace(continuation.Value))
+        {
             throw new ArgumentException("A Transition target requires a continuation identity.", nameof(continuation));
+        }
 
         Transition = Guard.RequireNotNull(transition);
         Continuation = continuation;
@@ -385,15 +433,29 @@ public sealed record InteractionEnvelopeContext
         ExecutionProvenance provenance)
     {
         if (string.IsNullOrWhiteSpace(emissionId.Value))
+        {
             throw new ArgumentException("An interaction requires a stable emission identity.", nameof(emissionId));
+        }
+
         if (string.IsNullOrWhiteSpace(correlationId.Value))
+        {
             throw new ArgumentException("An interaction requires a stable correlation identity.", nameof(correlationId));
+        }
+
         if (string.IsNullOrWhiteSpace(idempotencyKey.Value))
+        {
             throw new ArgumentException("An interaction requires a stable idempotency key.", nameof(idempotencyKey));
+        }
+
         if (causationId is { } cause && string.IsNullOrWhiteSpace(cause.Value))
+        {
             throw new ArgumentException("A present interaction causation identity cannot be default.", nameof(causationId));
+        }
+
         if (causationId == emissionId)
+        {
             throw new ArgumentException("An interaction cannot directly cause itself.", nameof(causationId));
+        }
 
         EmissionId = emissionId;
         Origin = Guard.RequireNotNull(origin);
@@ -452,7 +514,9 @@ public abstract record RequestTerminalOutcome
     private protected RequestTerminalOutcome(RequestTerminalOutcomeId id, PortableValue value)
     {
         if (string.IsNullOrWhiteSpace(id.Value))
+        {
             throw new ArgumentException("A terminal outcome requires a stable identity.", nameof(id));
+        }
 
         Id = id;
         Value = InteractionValueRequirements.RequireMaterialized(value, nameof(value), "A terminal outcome");
@@ -562,7 +626,9 @@ public abstract record InteractionEnvelope
         InteractionEnvelopeContext context)
     {
         if (string.IsNullOrWhiteSpace(schemaVersion.Value))
+        {
             throw new ArgumentException("An interaction envelope requires an exact schema version.", nameof(schemaVersion));
+        }
 
         SchemaVersion = schemaVersion;
         Context = Guard.RequireNotNull(context);
@@ -726,9 +792,15 @@ public sealed record ReplyEnvelope : InteractionEnvelope
         : base(schemaVersion, context)
     {
         if (string.IsNullOrWhiteSpace(inReplyTo.Value))
+        {
             throw new ArgumentException("A Reply requires the stable Request emission it discharges.", nameof(inReplyTo));
+        }
+
         if (context.EmissionId == inReplyTo)
+        {
             throw new ArgumentException("A Reply cannot discharge itself.", nameof(inReplyTo));
+        }
+
         if (context.CausationId != inReplyTo)
         {
             throw new ArgumentException(
