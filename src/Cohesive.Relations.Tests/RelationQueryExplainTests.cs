@@ -519,7 +519,7 @@ public sealed class RelationQueryExplainTests
             "tests/explain-bound-unavailable",
             _ => failure,
             static (_, requirement, _) => new(
-                RelationQueryConfigurationValueOrigin.AdapterConvention,
+                EffectiveConfigurationOrigin.AdapterConvention,
                 "tests/explain-bound-unavailable/v1",
                 node: requirement.Origin?.Node,
                 input: requirement.Origin?.Input));
@@ -570,7 +570,7 @@ public sealed class RelationQueryExplainTests
             && diagnostic.AdapterDecisionCode == failure.AdapterDecisionCode
             && diagnostic.ContextEvidence == primary.Id);
         Assert.Equal(failure.Resolution, contextualDiagnostic.Resolution);
-        Assert.Equal(RelationQueryConfigurationValueOrigin.AdapterConvention, contextualDiagnostic.ConfigurationOrigin);
+        Assert.Equal(EffectiveConfigurationOrigin.AdapterConvention, contextualDiagnostic.ConfigurationOrigin);
         Assert.Equal("tests/explain-bound-unavailable/v1", contextualDiagnostic.ConfigurationAuthority);
         Assert.Equal(
             artifact.Fingerprint,
@@ -731,7 +731,7 @@ public sealed class RelationQueryExplainTests
                     branch.Id,
                     requirement.Id,
                     RelationQueryBoundAssessmentStatus.Available,
-                    RelationQueryConfigurationValueOrigin.AdapterConvention,
+                    EffectiveConfigurationOrigin.AdapterConvention,
                     authority,
                     decision.GetCapabilityEvidence(),
                     decision.GetTargetEnforcedBoundaries(),

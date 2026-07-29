@@ -52,12 +52,12 @@ public sealed class ElasticRelationQueryBindingAuthoringTests
         AssertDecision(
             binding,
             "target",
-            RelationQueryConfigurationValueOrigin.AdapterConvention,
+            EffectiveConfigurationOrigin.AdapterConvention,
             ElasticRelationQueryTargetProfile.ProfileId.Value);
         AssertDecision(
             binding,
             "targetProfile",
-            RelationQueryConfigurationValueOrigin.AdapterConvention,
+            EffectiveConfigurationOrigin.AdapterConvention,
             ElasticRelationQueryTargetProfile.ProfileId.Value);
     }
 
@@ -88,22 +88,22 @@ public sealed class ElasticRelationQueryBindingAuthoringTests
         AssertDecision(
             binding,
             "indexName",
-            RelationQueryConfigurationValueOrigin.Explicit,
+            EffectiveConfigurationOrigin.Explicit,
             "tests/elastic-local/v2");
         AssertDecision(
             binding,
             "sourceMode",
-            RelationQueryConfigurationValueOrigin.ScopedProfile,
+            EffectiveConfigurationOrigin.ScopedProfile,
             options.Authority);
         AssertDecision(
             binding,
             "maximumPageSize",
-            RelationQueryConfigurationValueOrigin.Explicit,
+            EffectiveConfigurationOrigin.Explicit,
             "tests/elastic-local/v2");
         Assert.All(
             binding.ConfigurationDecisions.Where(static decision =>
                 decision.Setting.EndsWith("/sourceField", StringComparison.Ordinal)),
-            decision => Assert.Equal(RelationQueryConfigurationValueOrigin.AdapterConvention, decision.Origin));
+            decision => Assert.Equal(EffectiveConfigurationOrigin.AdapterConvention, decision.Origin));
     }
 
     [Fact]
@@ -475,7 +475,7 @@ public sealed class ElasticRelationQueryBindingAuthoringTests
             string.Join(Environment.NewLine, nestedDecisions.Select(static decision => decision.Setting)));
         Assert.All(nestedDecisions, decision =>
         {
-            Assert.Equal(RelationQueryConfigurationValueOrigin.Explicit, decision.Origin);
+            Assert.Equal(EffectiveConfigurationOrigin.Explicit, decision.Origin);
             Assert.Equal(authority, decision.Authority);
         });
 
@@ -666,7 +666,7 @@ public sealed class ElasticRelationQueryBindingAuthoringTests
     static void AssertDecision(
         ElasticRelationQueryStorageBinding binding,
         string setting,
-        RelationQueryConfigurationValueOrigin origin,
+        EffectiveConfigurationOrigin origin,
         string authority)
     {
         var decision = Assert.Single(binding.ConfigurationDecisions, candidate => candidate.Setting == setting);

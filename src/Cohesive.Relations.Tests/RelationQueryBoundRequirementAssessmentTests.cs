@@ -56,7 +56,7 @@ public sealed class RelationQueryBoundRequirementAssessmentTests
             Branch,
             new("requirement/available"),
             RelationQueryBoundAssessmentStatus.Available,
-            RelationQueryConfigurationValueOrigin.AdapterConvention,
+            EffectiveConfigurationOrigin.AdapterConvention,
             "tests/adapter",
             unavailableReason: metadata == "reason" ? RelationQueryUnavailableReason.PolicyRejected : null,
             resolution: metadata == "resolution" ? "Change the binding." : null,
@@ -78,7 +78,7 @@ public sealed class RelationQueryBoundRequirementAssessmentTests
             Branch,
             new("requirement/failure"),
             status,
-            RelationQueryConfigurationValueOrigin.AdapterConvention,
+            EffectiveConfigurationOrigin.AdapterConvention,
             "tests/adapter",
             unavailableReason: RelationQueryUnavailableReason.PolicyRejected,
             resolution: "Change the binding."));
@@ -88,7 +88,7 @@ public sealed class RelationQueryBoundRequirementAssessmentTests
             Branch,
             new("requirement/failure"),
             status,
-            RelationQueryConfigurationValueOrigin.AdapterConvention,
+            EffectiveConfigurationOrigin.AdapterConvention,
             "tests/adapter",
             unavailableReason: RelationQueryUnavailableReason.PrerequisiteBlocked,
             resolution: "Correct the prerequisite decision.",
@@ -180,7 +180,7 @@ public sealed class RelationQueryBoundRequirementAssessmentTests
             Branch,
             new("requirement/available"),
             RelationQueryBoundAssessmentStatus.Available,
-            RelationQueryConfigurationValueOrigin.AdapterConvention,
+            EffectiveConfigurationOrigin.AdapterConvention,
             "tests/adapter");
 
     static RelationQueryBoundRequirementAssessment CreateFailure(
@@ -196,7 +196,7 @@ public sealed class RelationQueryBoundRequirementAssessmentTests
             branch ?? Branch,
             requirement ?? new("requirement/failure"),
             status,
-            RelationQueryConfigurationValueOrigin.AdapterConvention,
+            EffectiveConfigurationOrigin.AdapterConvention,
             "tests/adapter",
             unavailableReason: RelationQueryUnavailableReason.CapabilityEvidenceInvalid,
             message: "The adapter could not prove the required capability.",
@@ -221,7 +221,7 @@ public sealed class RelationQueryBoundRequirementAssessmentTests
             Branch,
             requirement ?? new("requirement/blocked"),
             RelationQueryBoundAssessmentStatus.Blocked,
-            RelationQueryConfigurationValueOrigin.AdapterConvention,
+            EffectiveConfigurationOrigin.AdapterConvention,
             "tests/adapter",
             capabilityEvidence,
             operatingBoundaries,

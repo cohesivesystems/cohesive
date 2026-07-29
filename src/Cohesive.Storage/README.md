@@ -45,6 +45,59 @@ The same facilities can be registered with `IServiceCollection` through `Registe
 `RegisterEntityRelationQueryEvaluator`. Registration order does not choose a source: the v1 catalog permits exactly
 one source per graph-qualified shape and rejects duplicate shape or source identities.
 
+## Bounded lifecycle control
+
+The `Cohesive.Control` namespace is incubated in this package. It defines portable regulation semantics without
+embedding channels, semaphores, timers, CPU samplers, retry libraries, or target SDKs. A control loop combines:
+
+- typed fixed-point observations for CPU, memory, latency, throughput, rejection, lag, and backpressure;
+- explicit objective polarity, so high-pressure and low-pressure metrics cannot be silently inverted;
+- attributable semantic, compiler, adapter, and deployment hard limits whose intersection cannot be overridden;
+- item/byte batching, concurrency, item/byte rates, finite buffers, and reserved workload capacity;
+- deterministic convention resolution with per-setting explicit/profile/adapter/default provenance;
+- a pure AIMD reference reducer with hysteresis, healthy-evidence windows, cooldown, and minimum dwell;
+- an exact definition-content fingerprint on state, recommendations, observations, and safe-point evidence; and
+- a pending recommendation that becomes effective only at an authorized epoch/revision/fence application point of
+  the actuator's required kind (work admission, batch, rate-window, or buffer admission).
+
+The regulator receives an explicit UTC evaluation time and returns complete durable state:
+
+```csharp
+var state = AimdControlState.Create(definition, new ControlEpochId("index-generation-42"), now);
+var decision = AimdControlReferenceRegulator.Evaluate(definition, state, observation, now);
+
+// The recommendation is still non-authoritative here. A Process or materialization runtime maps
+// its invariant-preserving durable cut into this generic contract.
+var result = AimdControlReferenceRegulator.Apply(
+    definition,
+    decision.State,
+    applicationPoint,
+    appliedAtUtc: now);
+```
+
+`ControlBoundedAdmission` is the corresponding mechanism-neutral admission interpretation. It checks selected
+operating points without owning work: concurrency reductions drain existing work, batch boundaries retain the next
+item, an oversized indivisible batch/buffer/rate candidate is unfulfillable rather than retried forever, and
+temporary finite buffer/rate pressure defers rather than drops or reorders work.
+
+Observation freshness is measured from the end of the measurement window, not envelope emission time. A pending
+increase may be superseded by newer non-healthy evidence, and every recommendation expires when its supporting
+window is no longer fresh at actual application. State validation requires revision-reachable transition evidence,
+rederives retained classifications and AIMD steps, and validates current actuation receipts against the exact
+safe-point authority. Workload-budget capacity is an exclusive per-loop allocation; a compiler or runtime must
+arbitrate shared physical pools before creating each loop's budget. Replay identities are scoped to an exact loop,
+definition, epoch, and revision. Every recommendation also carries a paired prior-actuation identity/revision fence,
+or an explicit absence that denotes the definition's initial operating point. While that prior receipt remains in
+current state, validation binds the fence directly to it. Once bounded state rolls forward, the runtime's durable
+ledger must resolve the fence to the exact immutable latest preceding receipt in the same loop, target, epoch, and
+definition, with the stated post-actuation revision and proposed operating point; a missing fence asserts that no
+preceding actuation exists. Pure local validators do not consult this ledger. The same ledger owns arbitrary-history
+replay identities.
+
+`ControlJsonSerializer` persists definitions, observations, controller state, decisions, application points, and
+actuation receipts using strict case-sensitive canonical JSON. Unknown or duplicate properties, wrong scalar
+encodings, unsupported schemas, and noncanonical collection order are rejected.
+
 ## Query authority
 
 `Cohesive.Relations` canonical relation/query IR is the sole authority for predicates, joins, projections,

@@ -940,7 +940,7 @@ public sealed class ElasticRelationQueryStorageBinding
         ElasticRelationQueryPaginationConsistency paginationConsistency = ElasticRelationQueryPaginationConsistency.Unproven,
         ElasticRelationQueryBindingOrigin origin = ElasticRelationQueryBindingOrigin.Explicit,
         string? conventionSetVersion = null,
-        ImmutableArray<RelationQueryConfigurationDecision> configurationDecisions = default,
+        ImmutableArray<EffectiveConfigurationDecision> configurationDecisions = default,
         RelationQueryPlanComponentFingerprint? compiledPlanFingerprint = null,
         RelationQuerySourcePlacementFingerprint? placementFingerprint = null)
     {
@@ -1030,8 +1030,8 @@ public sealed class ElasticRelationQueryStorageBinding
 
         if (origin == ElasticRelationQueryBindingOrigin.Convention
             && normalizedDecisions.Any(static decision => decision.Origin is
-                RelationQueryConfigurationValueOrigin.Explicit
-                or RelationQueryConfigurationValueOrigin.ScopedProfile))
+                EffectiveConfigurationOrigin.Explicit
+                or EffectiveConfigurationOrigin.ScopedProfile))
         {
             throw new ArgumentException(
                 "A convention-origin Elasticsearch binding cannot retain explicit or scoped-profile configuration decisions.",
@@ -1113,7 +1113,7 @@ public sealed class ElasticRelationQueryStorageBinding
         ElasticRelationQueryPaginationConsistency paginationConsistency = ElasticRelationQueryPaginationConsistency.Unproven,
         ElasticRelationQueryBindingOrigin origin = ElasticRelationQueryBindingOrigin.Explicit,
         string? conventionSetVersion = null,
-        ImmutableArray<RelationQueryConfigurationDecision> configurationDecisions = default,
+        ImmutableArray<EffectiveConfigurationDecision> configurationDecisions = default,
         RelationQueryPlanComponentFingerprint? compiledPlanFingerprint = null,
         RelationQuerySourcePlacementFingerprint? placementFingerprint = null)
         : this(
@@ -1194,7 +1194,7 @@ public sealed class ElasticRelationQueryStorageBinding
     public string? ConventionSetVersion { get; }
 
     /// <summary>Effective configuration origins and authorities in deterministic setting order.</summary>
-    public ImmutableArray<RelationQueryConfigurationDecision> ConfigurationDecisions { get; }
+    public ImmutableArray<EffectiveConfigurationDecision> ConfigurationDecisions { get; }
 
     /// <summary>
     /// Exact compiled-plan fingerprint verified by adapter authoring, or <see langword="null"/> for an explicitly
@@ -1268,7 +1268,7 @@ public sealed class ElasticRelationQueryStorageBinding
 
     static void ValidateConfigurationDecisionSettings(
         ElasticRelationQueryStorageBinding binding,
-        ImmutableArray<RelationQueryConfigurationDecision> decisions,
+        ImmutableArray<EffectiveConfigurationDecision> decisions,
         string parameterName)
     {
         HashSet<string> allowed = new(StringComparer.Ordinal)

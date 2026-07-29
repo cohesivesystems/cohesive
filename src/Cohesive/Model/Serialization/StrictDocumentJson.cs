@@ -107,7 +107,25 @@ public static class StrictDocumentJson
                 Location: location)
         ]);
 
-    internal static byte[] GetCanonicalBytes<T>(T value, JsonSerializerOptions options)
+    /// <summary>
+    /// Gets the canonical UTF-8 JSON representation of one typed portable-document object.
+    /// </summary>
+    /// <typeparam name="T">Closed object contract used for serialization.</typeparam>
+    /// <param name="value">Typed object to encode.</param>
+    /// <param name="options">
+    /// Strict serializer options describing the closed wire contract. Arrays retain sequence order while
+    /// object properties and exact base-10 number spellings are canonicalized deterministically.
+    /// </param>
+    /// <returns>Canonical compact UTF-8 JSON bytes for <paramref name="value"/>.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="value"/> or <paramref name="options"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="JsonException">A value cannot be written under <paramref name="options"/>.</exception>
+    /// <exception cref="NotSupportedException">
+    /// <typeparamref name="T"/> or one of its values has no serializer under <paramref name="options"/>.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">The typed value has no canonical JSON representation.</exception>
+    public static byte[] GetCanonicalBytes<T>(T value, JsonSerializerOptions options)
         where T : class
     {
         ArgumentNullException.ThrowIfNull(value);
@@ -117,7 +135,35 @@ public static class StrictDocumentJson
         return GetCanonicalBytes(node, options);
     }
 
-    internal static bool TryReadCanonicalObject<T>(
+    /// <summary>
+    /// Attempts to read one typed object through the strict canonical portable-document wire contract.
+    /// </summary>
+    /// <remarks>
+    /// Reading rejects empty or malformed JSON, non-object roots, duplicate properties at any depth,
+    /// unknown members according to <paramref name="options"/>, and inputs whose typed projection changes
+    /// their canonical semantic JSON. This operation validates the wire representation only; callers remain
+    /// responsible for schema compatibility, linking, and domain invariants.
+    /// </remarks>
+    /// <typeparam name="T">Closed object contract used for deserialization and typed reprojection.</typeparam>
+    /// <param name="json">JSON text to inspect and deserialize.</param>
+    /// <param name="options">Strict serializer options describing the closed wire contract.</param>
+    /// <param name="contractName">Human-readable contract name used in failure messages.</param>
+    /// <param name="value">
+    /// Deserialized typed value when typed projection succeeds, including a projection reported as
+    /// <see cref="StrictDocumentJsonReadFailure.WireNonCanonical"/>; otherwise <see langword="null"/>.
+    /// </param>
+    /// <param name="error">
+    /// Structured wire failure when the method returns <see langword="false"/>; otherwise the default value.
+    /// </param>
+    /// <returns>
+    /// <see langword="true"/> when <paramref name="json"/> has one canonical typed object projection;
+    /// otherwise <see langword="false"/>.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="options"/> or <paramref name="contractName"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="contractName"/> is empty or white space.</exception>
+    public static bool TryReadCanonicalObject<T>(
         string json,
         JsonSerializerOptions options,
         string contractName,
@@ -126,6 +172,7 @@ public static class StrictDocumentJson
         where T : class
     {
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentException.ThrowIfNullOrWhiteSpace(contractName);
         value = null;
         if (string.IsNullOrWhiteSpace(json))
         {
@@ -247,19 +294,40 @@ public static class StrictDocumentJson
             .Replace("/", "~1", StringComparison.Ordinal);
 }
 
-internal enum StrictDocumentJsonReadFailure
+/// <summary>Classification of a failed strict typed portable-document JSON read.</summary>
+public enum StrictDocumentJsonReadFailure
 {
+    /// <summary>No read failure occurred.</summary>
     None = 0,
+
+    /// <summary>The supplied JSON text is null, empty, or consists only of white space.</summary>
     Empty = 1,
+
+    /// <summary>The supplied text is not valid JSON or cannot be canonicalized as JSON.</summary>
     InvalidJson = 2,
+
+    /// <summary>The JSON root is not an object.</summary>
     RootInvalid = 3,
+
+    /// <summary>An object at the reported location repeats a property using ordinal name equality.</summary>
     DuplicateProperty = 4,
+
+    /// <summary>The JSON cannot be deserialized under the closed typed wire contract.</summary>
     DeserializationInvalid = 5,
+
+    /// <summary>Typed deserialization unexpectedly produced a null object.</summary>
     DeserializationNull = 6,
+
+    /// <summary>The input differs from the unique canonical JSON projected by its typed value.</summary>
     WireNonCanonical = 7
 }
 
-internal readonly record struct StrictDocumentJsonReadError(
+/// <summary>Structured failure from a strict typed portable-document JSON read.</summary>
+/// <param name="Failure">Stable failure classification.</param>
+/// <param name="Message">Human-readable diagnostic message.</param>
+/// <param name="Location">JSON Pointer location, or <c>$</c> for the document root.</param>
+/// <remarks>The value is meaningful only when <see cref="StrictDocumentJson.TryReadCanonicalObject{T}"/> fails.</remarks>
+public readonly record struct StrictDocumentJsonReadError(
     StrictDocumentJsonReadFailure Failure,
     string Message,
     string Location);
@@ -380,11 +448,23 @@ sealed class StrictFieldPathSegmentJsonConverter : JsonConverter<FieldPathSegmen
     }
 }
 
-/// <summary>Case-sensitive canonical string encoding for enum values.</summary>
-sealed class StrictStringEnumJsonConverterFactory : JsonConverterFactory
+/// <summary>Case-sensitive canonical string encoding for declared enum values.</summary>
+/// <remarks>
+/// Numeric encodings, numeric aliases, undefined values, and case-insensitive spellings are rejected. This
+/// converter may be installed on a specific enum with <see cref="JsonConverterAttribute"/> or added to portable
+/// document serializer options as a fallback factory for all otherwise-unattributed enums.
+/// </remarks>
+public sealed class StrictStringEnumJsonConverterFactory : JsonConverterFactory
 {
+    /// <summary>Creates a strict canonical string-enum converter factory.</summary>
+    public StrictStringEnumJsonConverterFactory()
+    {
+    }
+
+    /// <inheritdoc />
     public override bool CanConvert(Type typeToConvert) => typeToConvert.IsEnum;
 
+    /// <inheritdoc />
     public override JsonConverter CreateConverter(Type typeToConvert, JsonSerializerOptions options)
     {
         ArgumentNullException.ThrowIfNull(typeToConvert);

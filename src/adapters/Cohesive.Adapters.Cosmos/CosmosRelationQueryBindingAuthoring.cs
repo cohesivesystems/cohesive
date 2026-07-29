@@ -316,7 +316,7 @@ public sealed class CosmosRelationQueryCollectionScopeBuilder
             semanticProfile,
             missingValueBehavior,
             nullValueBehavior,
-            RelationQueryConfigurationValueOrigin.Explicit,
+            EffectiveConfigurationOrigin.Explicit,
             authority));
         return this;
     }
@@ -325,7 +325,7 @@ public sealed class CosmosRelationQueryCollectionScopeBuilder
         declaration.ReportInvalidSelector("child/typed", message);
 
     CosmosCollectionAuthoringValue<T> Explicit<T>(T value) =>
-        new(value, RelationQueryConfigurationValueOrigin.Explicit, authority);
+        new(value, EffectiveConfigurationOrigin.Explicit, authority);
 }
 
 /// <summary>Typed facade for one Cosmos structured-collection evidence declaration.</summary>
@@ -778,10 +778,10 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
     readonly string explicitAuthority;
     readonly List<RelationQueryArtifactAuthoringDiagnostic> diagnostics = [];
     readonly Dictionary<RelationQueryInputId, FieldOverride> explicitFields = [];
-    readonly Dictionary<RelationQueryInputId, RelationQueryConfigurationDecision> stableFields = [];
-    readonly Dictionary<RelationQueryInputId, RelationQueryConfigurationDecision> exactFields = [];
-    readonly Dictionary<FieldPath, RelationQueryConfigurationDecision> stablePaths = [];
-    readonly Dictionary<FieldPath, RelationQueryConfigurationDecision> exactPaths = [];
+    readonly Dictionary<RelationQueryInputId, EffectiveConfigurationDecision> stableFields = [];
+    readonly Dictionary<RelationQueryInputId, EffectiveConfigurationDecision> exactFields = [];
+    readonly Dictionary<FieldPath, EffectiveConfigurationDecision> stablePaths = [];
+    readonly Dictionary<FieldPath, EffectiveConfigurationDecision> exactPaths = [];
     readonly HashSet<string> explicitScalarDeclarations = new(StringComparer.Ordinal);
 
     Effective<CosmosRelationQueryBindingId>? explicitId;
@@ -1069,7 +1069,7 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
                     Collection: null,
                     Decision(
                         FieldSetting(field.Input.Id),
-                        RelationQueryConfigurationValueOrigin.Explicit,
+                        EffectiveConfigurationOrigin.Explicit,
                         explicitAuthority))))
         {
             Error(
@@ -1137,7 +1137,7 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
                 collection,
                 Decision(
                     FieldSetting(field.Input.Id),
-                    RelationQueryConfigurationValueOrigin.Explicit,
+                    EffectiveConfigurationOrigin.Explicit,
                     explicitAuthority)));
         configure(new(collection, explicitAuthority));
         return this;
@@ -1399,12 +1399,12 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
             decisions.Add(Decision(
                 BindingIdSetting,
                 effective.Id is null
-                    ? RelationQueryConfigurationValueOrigin.AdapterConvention
+                    ? EffectiveConfigurationOrigin.AdapterConvention
                     : effective.Id.Value.Origin,
                 effective.Id is null ? DerivedIdAuthority : effective.Id.Value.Authority));
             var hasConsumerConfiguration = decisions.Any(static decision => decision.Origin is
-                RelationQueryConfigurationValueOrigin.Explicit
-                or RelationQueryConfigurationValueOrigin.ScopedProfile);
+                EffectiveConfigurationOrigin.Explicit
+                or EffectiveConfigurationOrigin.ScopedProfile);
             var artifact = new CosmosRelationQueryStorageBinding(
                 id,
                 placedInput.Source.Id,
@@ -1565,15 +1565,15 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
         var stable = ResolveEvidence(options?.StableUniqueOrderingPaths ?? [], stablePaths, stableFields, fieldsById, StableOrderingPrefix);
         var exact = ResolveEvidence(options?.ExactOrderingPaths ?? [], exactPaths, exactFields, fieldsById, ExactOrderingPrefix);
 
-        List<RelationQueryConfigurationDecision> decisions =
+        List<EffectiveConfigurationDecision> decisions =
         [
             Decision(
                 TargetSetting,
-                RelationQueryConfigurationValueOrigin.AdapterConvention,
+                EffectiveConfigurationOrigin.AdapterConvention,
                 CosmosRelationQueryTargetProfile.ProfileId.Value),
             Decision(
                 TargetProfileSetting,
-                RelationQueryConfigurationValueOrigin.AdapterConvention,
+                EffectiveConfigurationOrigin.AdapterConvention,
                 CosmosRelationQueryTargetProfile.ProfileId.Value),
             Configuration(AccountEndpointSetting, effectiveAccount.Value),
             Configuration(DatabaseSetting, effectiveDatabase.Value),
@@ -1654,7 +1654,7 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
                     CollectionDecisions: [],
                     Decision(
                         FieldSetting(field.Input.Id),
-                        RelationQueryConfigurationValueOrigin.AdapterConvention,
+                        EffectiveConfigurationOrigin.AdapterConvention,
                         convention));
             }
         }
@@ -1673,7 +1673,7 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
                     mapping.Value,
                     CollectionScope: null,
                     CollectionDecisions: [],
-                    Decision(FieldSetting(field.Input.Id), RelationQueryConfigurationValueOrigin.ScopedProfile, options.Authority));
+                    Decision(FieldSetting(field.Input.Id), EffectiveConfigurationOrigin.ScopedProfile, options.Authority));
             }
         }
 
@@ -1769,11 +1769,11 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
         var emptyCollections = declaration.EmptyCollections.GetValueOrDefault();
         var children = ImmutableArray.CreateBuilder<CosmosRelationQueryCollectionElementFieldBinding>(
             declaration.Children.Count);
-        List<RelationQueryConfigurationDecision> decisions =
+        List<EffectiveConfigurationDecision> decisions =
         [
             Decision(
                 FieldSetting(field.Input.Id) + "/collectionScope",
-                RelationQueryConfigurationValueOrigin.Explicit,
+                EffectiveConfigurationOrigin.Explicit,
                 explicitAuthority),
             Configuration(prefix + "semanticProfile", semanticProfile),
             Configuration(prefix + "elementScope", elementScope),
@@ -1959,12 +1959,12 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
 
     ResolvedEvidence ResolveEvidence(
         ImmutableArray<FieldPath> optionPaths,
-        IReadOnlyDictionary<FieldPath, RelationQueryConfigurationDecision> explicitDocumentPaths,
-        IReadOnlyDictionary<RelationQueryInputId, RelationQueryConfigurationDecision> explicitFieldInputs,
+        IReadOnlyDictionary<FieldPath, EffectiveConfigurationDecision> explicitDocumentPaths,
+        IReadOnlyDictionary<RelationQueryInputId, EffectiveConfigurationDecision> explicitFieldInputs,
         IReadOnlyDictionary<RelationQueryInputId, EffectiveField> effectiveFields,
         string prefix)
     {
-        Dictionary<FieldPath, RelationQueryConfigurationDecision> resolved = [];
+        Dictionary<FieldPath, EffectiveConfigurationDecision> resolved = [];
         if (options is not null)
         {
             HashSet<FieldPath> scopedPaths = [];
@@ -1990,7 +1990,7 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
                 }
                 resolved[path] = Decision(
                     prefix + PathKey(path),
-                    RelationQueryConfigurationValueOrigin.ScopedProfile,
+                    EffectiveConfigurationOrigin.ScopedProfile,
                     options.Authority);
             }
         }
@@ -2017,7 +2017,7 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
                 continue;
             }
             if (resolved.TryGetValue(field.Path, out var existing)
-                && existing.Origin == RelationQueryConfigurationValueOrigin.Explicit)
+                && existing.Origin == EffectiveConfigurationOrigin.Explicit)
             {
                 Error(
                     CosmosRelationQueryBindingAuthoringDiagnosticCodes.BindingDuplicate,
@@ -2206,14 +2206,14 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
     }
 
     void AddFieldEvidence(
-        IDictionary<RelationQueryInputId, RelationQueryConfigurationDecision> target,
+        IDictionary<RelationQueryInputId, EffectiveConfigurationDecision> target,
         RelationQueryFieldInputContract field,
         string prefix)
     {
         var setting = prefix + field.Input.Id.Value;
         if (!target.TryAdd(
                 field.Input.Id,
-                Decision(setting, RelationQueryConfigurationValueOrigin.Explicit, explicitAuthority)))
+                Decision(setting, EffectiveConfigurationOrigin.Explicit, explicitAuthority)))
         {
             Error(
                 CosmosRelationQueryBindingAuthoringDiagnosticCodes.BindingDuplicate,
@@ -2225,12 +2225,12 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
     }
 
     void AddPathEvidence(
-        IDictionary<FieldPath, RelationQueryConfigurationDecision> target,
+        IDictionary<FieldPath, EffectiveConfigurationDecision> target,
         FieldPath path,
         string prefix)
     {
         var setting = prefix + PathKey(path);
-        if (!target.TryAdd(path, Decision(setting, RelationQueryConfigurationValueOrigin.Explicit, explicitAuthority)))
+        if (!target.TryAdd(path, Decision(setting, EffectiveConfigurationOrigin.Explicit, explicitAuthority)))
         {
             Error(
                 CosmosRelationQueryBindingAuthoringDiagnosticCodes.BindingDuplicate,
@@ -2316,7 +2316,7 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
 
     CosmosRelationQueryBindingId DeriveId(
         EffectiveConfiguration effective,
-        IEnumerable<RelationQueryConfigurationDecision> decisions,
+        IEnumerable<EffectiveConfigurationDecision> decisions,
         RelationQueryPlanComponentFingerprint planFingerprint,
         RelationQuerySourcePlacementFingerprint placementFingerprint)
     {
@@ -2416,17 +2416,17 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
     internal static string SafePathKey(FieldPath path) =>
         path.Segments.IsDefaultOrEmpty ? "invalid" : PathKey(path);
 
-    static RelationQueryConfigurationDecision Configuration<T>(string setting, Effective<T> effective) =>
+    static EffectiveConfigurationDecision Configuration<T>(string setting, Effective<T> effective) =>
         Decision(setting, effective.Origin, effective.Authority);
 
-    static RelationQueryConfigurationDecision Configuration<T>(
+    static EffectiveConfigurationDecision Configuration<T>(
         string setting,
         CosmosCollectionAuthoringValue<T> effective) =>
         Decision(setting, effective.Origin, effective.Authority);
 
-    static RelationQueryConfigurationDecision Decision(
+    static EffectiveConfigurationDecision Decision(
         string setting,
-        RelationQueryConfigurationValueOrigin origin,
+        EffectiveConfigurationOrigin origin,
         string authority) => new(setting, origin, authority);
 
     static bool ReferencesPlan(
@@ -2438,13 +2438,13 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
                 RelationQueryCompiledPlanReference.From(plan)));
 
     Effective<T> Explicit<T>(T value) =>
-        new(value, RelationQueryConfigurationValueOrigin.Explicit, explicitAuthority);
+        new(value, EffectiveConfigurationOrigin.Explicit, explicitAuthority);
 
     static Effective<T> Scoped<T>(T value, string authority) =>
-        new(value, RelationQueryConfigurationValueOrigin.ScopedProfile, authority);
+        new(value, EffectiveConfigurationOrigin.ScopedProfile, authority);
 
     static Effective<T> Adapter<T>(T value, string authority) =>
-        new(value, RelationQueryConfigurationValueOrigin.AdapterConvention, authority);
+        new(value, EffectiveConfigurationOrigin.AdapterConvention, authority);
 
     static void RequireNonEmpty(FieldPath path, string parameterName)
     {
@@ -2475,28 +2475,28 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
         }
     }
 
-    readonly record struct Effective<T>(T Value, RelationQueryConfigurationValueOrigin Origin, string Authority);
+    readonly record struct Effective<T>(T Value, EffectiveConfigurationOrigin Origin, string Authority);
 
     sealed record FieldOverride(
         RelationQueryFieldInputContract Field,
         FieldPath Path,
         CosmosCollectionDeclaration? Collection,
-        RelationQueryConfigurationDecision Decision);
+        EffectiveConfigurationDecision Decision);
 
     sealed record EffectiveField(
         RelationQueryFieldInputContract Field,
         FieldPath Path,
         CosmosRelationQueryCollectionScopeEvidence? CollectionScope,
-        ImmutableArray<RelationQueryConfigurationDecision> CollectionDecisions,
-        RelationQueryConfigurationDecision Decision);
+        ImmutableArray<EffectiveConfigurationDecision> CollectionDecisions,
+        EffectiveConfigurationDecision Decision);
 
     sealed record ResolvedEvidence(
         ImmutableArray<FieldPath> Paths,
-        ImmutableArray<RelationQueryConfigurationDecision> Decisions);
+        ImmutableArray<EffectiveConfigurationDecision> Decisions);
 
     sealed record ResolvedCollection(
         CosmosRelationQueryCollectionScopeEvidence? Scope,
-        ImmutableArray<RelationQueryConfigurationDecision> Decisions);
+        ImmutableArray<EffectiveConfigurationDecision> Decisions);
 
     sealed record EffectiveConfiguration(
         Effective<CosmosRelationQueryBindingId>? Id,
@@ -2514,12 +2514,12 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
         Effective<CosmosMissingValueEncoding> MissingValueEncoding,
         Effective<CosmosNullValueEncoding> NullValueEncoding,
         Effective<string> ConventionSetVersion,
-        List<RelationQueryConfigurationDecision> Decisions);
+        List<EffectiveConfigurationDecision> Decisions);
 }
 
 readonly record struct CosmosCollectionAuthoringValue<T>(
     T Value,
-    RelationQueryConfigurationValueOrigin Origin,
+    EffectiveConfigurationOrigin Origin,
     string Authority);
 
 sealed class CosmosCollectionDeclaration(
@@ -2559,5 +2559,5 @@ sealed record CosmosCollectionChildDeclaration(
     string? SemanticProfile,
     CosmosRelationQueryStructuredCollectionAbsenceBehavior MissingValueBehavior,
     CosmosRelationQueryStructuredCollectionAbsenceBehavior NullValueBehavior,
-    RelationQueryConfigurationValueOrigin Origin,
+    EffectiveConfigurationOrigin Origin,
     string Authority);

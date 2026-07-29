@@ -365,7 +365,7 @@ public sealed class ElasticRelationQueryFieldBindingBuilder
     }
 
     ElasticAuthoringValue<T> Explicit<T>(T value) =>
-        new(value, RelationQueryConfigurationValueOrigin.Explicit, authority);
+        new(value, EffectiveConfigurationOrigin.Explicit, authority);
 }
 
 /// <summary>Configures exact nested-collection correlation and direct child mappings.</summary>
@@ -452,13 +452,13 @@ public sealed class ElasticRelationQueryNestedScopeBuilder
             semanticProfile,
             missingValueBehavior,
             nullValueBehavior,
-            RelationQueryConfigurationValueOrigin.Explicit,
+            EffectiveConfigurationOrigin.Explicit,
             authority));
         return this;
     }
 
     ElasticAuthoringValue<T> Explicit<T>(T value) =>
-        new(value, RelationQueryConfigurationValueOrigin.Explicit, authority);
+        new(value, EffectiveConfigurationOrigin.Explicit, authority);
 }
 
 /// <summary>Typed fluent facade over one Elasticsearch storage-binding authoring session.</summary>
@@ -1096,11 +1096,11 @@ public sealed class ElasticRelationQueryStorageBindingBuilder
                      ?? DeriveId(effective, compiledPlanFingerprint, placementFingerprint);
             decisions.Add(Decision(
                 BindingIdSetting,
-                effective.Id?.Origin ?? RelationQueryConfigurationValueOrigin.AdapterConvention,
+                effective.Id?.Origin ?? EffectiveConfigurationOrigin.AdapterConvention,
                 effective.Id?.Authority ?? DerivedIdAuthority));
             var local = decisions.Any(static decision => decision.Origin is
-                RelationQueryConfigurationValueOrigin.Explicit
-                or RelationQueryConfigurationValueOrigin.ScopedProfile);
+                EffectiveConfigurationOrigin.Explicit
+                or EffectiveConfigurationOrigin.ScopedProfile);
             var artifact = new ElasticRelationQueryStorageBinding(
                 id,
                 placedInput.Source.Id,
@@ -1271,15 +1271,15 @@ public sealed class ElasticRelationQueryStorageBindingBuilder
                 setting: SourceModeSetting);
         }
 
-        List<RelationQueryConfigurationDecision> decisions =
+        List<EffectiveConfigurationDecision> decisions =
         [
             Decision(
                 TargetSetting,
-                RelationQueryConfigurationValueOrigin.AdapterConvention,
+                EffectiveConfigurationOrigin.AdapterConvention,
                 ElasticRelationQueryTargetProfile.ProfileId.Value),
             Decision(
                 TargetProfileSetting,
-                RelationQueryConfigurationValueOrigin.AdapterConvention,
+                EffectiveConfigurationOrigin.AdapterConvention,
                 ElasticRelationQueryTargetProfile.ProfileId.Value),
             Configuration(IndexSetting, effectiveIndex),
             Configuration(SourceModeSetting, effectiveSourceMode),
@@ -1380,7 +1380,7 @@ public sealed class ElasticRelationQueryStorageBindingBuilder
         var prefix = FieldSetting(field.Input.Id) + "/";
         var decisions = FieldDecisions(
             prefix,
-            RelationQueryConfigurationValueOrigin.AdapterConvention,
+            EffectiveConfigurationOrigin.AdapterConvention,
             convention,
             nested: null);
         return new(binding, decisions);
@@ -1445,7 +1445,7 @@ public sealed class ElasticRelationQueryStorageBindingBuilder
                            ?? Adapter(ElasticRelationQueryNullValueBehavior.JsonNullNotIndexed, convention);
         var nullSentinel = declaration.NullValueSentinel ?? Adapter<ObservationValue?>(null, convention);
         ElasticRelationQueryNestedScopeEvidence? nestedScope = null;
-        List<RelationQueryConfigurationDecision> nestedDecisions = [];
+        List<EffectiveConfigurationDecision> nestedDecisions = [];
         if (declaration.Nested is { } nested)
         {
             if (declaration.MissingValueBehavior is not null && nested.OuterMissing is not null)
@@ -1495,7 +1495,7 @@ public sealed class ElasticRelationQueryStorageBindingBuilder
         }
 
         var prefix = FieldSetting(field.Input.Id) + "/";
-        List<RelationQueryConfigurationDecision> decisions =
+        List<EffectiveConfigurationDecision> decisions =
         [
             Configuration(prefix + "sourceField", source),
             Configuration(prefix + "queryField", query),
@@ -1511,8 +1511,8 @@ public sealed class ElasticRelationQueryStorageBindingBuilder
             Configuration(prefix + "nullValueBehavior", nullBehavior),
             Configuration(prefix + "nullValueSentinel", nullSentinel),
             new(prefix + "nestedScope", declaration.Nested is null
-                ? RelationQueryConfigurationValueOrigin.AdapterConvention
-                : RelationQueryConfigurationValueOrigin.Explicit,
+                ? EffectiveConfigurationOrigin.AdapterConvention
+                : EffectiveConfigurationOrigin.Explicit,
                 declaration.Nested is null ? convention : explicitAuthority)
         ];
         decisions.AddRange(nestedDecisions);
@@ -1523,7 +1523,7 @@ public sealed class ElasticRelationQueryStorageBindingBuilder
         RelationQueryFieldInputContract field,
         ElasticNestedDeclaration declaration,
         string convention,
-        ICollection<RelationQueryConfigurationDecision> decisions)
+        ICollection<EffectiveConfigurationDecision> decisions)
     {
         var correlation = declaration.Correlation
                           ?? Adapter(ElasticRelationQueryNestedCorrelationGuarantee.Unproven, convention);
@@ -1534,7 +1534,7 @@ public sealed class ElasticRelationQueryStorageBindingBuilder
         var prefix = FieldSetting(field.Input.Id) + "/nested/";
         decisions.Add(Decision(
             prefix + "nestedPath",
-            RelationQueryConfigurationValueOrigin.Explicit,
+            EffectiveConfigurationOrigin.Explicit,
             explicitAuthority));
         decisions.Add(Configuration(prefix + "correlationGuarantee", correlation));
         decisions.Add(Configuration(prefix + "nullElementBehavior", nullElements));
@@ -1958,9 +1958,9 @@ public sealed class ElasticRelationQueryStorageBindingBuilder
         };
     }
 
-    ImmutableArray<RelationQueryConfigurationDecision> FieldDecisions(
+    ImmutableArray<EffectiveConfigurationDecision> FieldDecisions(
         string prefix,
-        RelationQueryConfigurationValueOrigin origin,
+        EffectiveConfigurationOrigin origin,
         string authority,
         ElasticNestedDeclaration? nested) =>
     [
@@ -2008,20 +2008,20 @@ public sealed class ElasticRelationQueryStorageBindingBuilder
         diagnostics.Add(new(code, DiagnosticSeverity.Error, message, input, semanticPath, setting));
 
     ElasticAuthoringValue<T> Explicit<T>(T value) =>
-        new(value, RelationQueryConfigurationValueOrigin.Explicit, explicitAuthority);
+        new(value, EffectiveConfigurationOrigin.Explicit, explicitAuthority);
 
     static ElasticAuthoringValue<T> Scoped<T>(T value, string authority) =>
-        new(value, RelationQueryConfigurationValueOrigin.ScopedProfile, authority);
+        new(value, EffectiveConfigurationOrigin.ScopedProfile, authority);
 
     static ElasticAuthoringValue<T> Adapter<T>(T value, string authority) =>
-        new(value, RelationQueryConfigurationValueOrigin.AdapterConvention, authority);
+        new(value, EffectiveConfigurationOrigin.AdapterConvention, authority);
 
-    static RelationQueryConfigurationDecision Configuration<T>(string setting, ElasticAuthoringValue<T> effective) =>
+    static EffectiveConfigurationDecision Configuration<T>(string setting, ElasticAuthoringValue<T> effective) =>
         Decision(setting, effective.Origin, effective.Authority);
 
-    static RelationQueryConfigurationDecision Decision(
+    static EffectiveConfigurationDecision Decision(
         string setting,
-        RelationQueryConfigurationValueOrigin origin,
+        EffectiveConfigurationOrigin origin,
         string authority) => new(setting, origin, authority);
 
     internal static string FieldSetting(RelationQueryInputId input) => "field/" + input.Value;
@@ -2125,7 +2125,7 @@ public sealed class ElasticRelationQueryStorageBindingBuilder
 
 readonly record struct ElasticAuthoringValue<T>(
     T Value,
-    RelationQueryConfigurationValueOrigin Origin,
+    EffectiveConfigurationOrigin Origin,
     string Authority);
 
 sealed class ElasticFieldDeclaration(
@@ -2200,12 +2200,12 @@ sealed record ElasticNestedChildDeclaration(
     string SemanticProfile,
     ElasticRelationQueryNestedAbsenceBehavior MissingValueBehavior,
     ElasticRelationQueryNestedAbsenceBehavior NullValueBehavior,
-    RelationQueryConfigurationValueOrigin Origin,
+    EffectiveConfigurationOrigin Origin,
     string Authority);
 
 sealed record ElasticEffectiveField(
     ElasticRelationQueryFieldBinding Binding,
-    ImmutableArray<RelationQueryConfigurationDecision> Decisions);
+    ImmutableArray<EffectiveConfigurationDecision> Decisions);
 
 sealed record ElasticEffectiveConfiguration(
     ElasticAuthoringValue<ElasticRelationQueryBindingId>? Id,
@@ -2216,4 +2216,4 @@ sealed record ElasticEffectiveConfiguration(
     ElasticAuthoringValue<ElasticRelationQueryPaginationConsistency> PaginationConsistency,
     ImmutableArray<ElasticEffectiveField> Fields,
     ElasticAuthoringValue<string> ConventionSetVersion,
-    IReadOnlyList<RelationQueryConfigurationDecision> Decisions);
+    IReadOnlyList<EffectiveConfigurationDecision> Decisions);

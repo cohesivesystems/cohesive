@@ -484,7 +484,7 @@ public sealed class RelationQueryPlacementBuilder
         }
 
         var sourceInstances = sourceDeclarations.Select(static declaration => declaration.Instance).ToImmutableArray();
-        List<RelationQueryConfigurationDecision> decisions =
+        List<EffectiveConfigurationDecision> decisions =
         [
             Decision(
                 "placement/convention-set-version",
@@ -660,7 +660,7 @@ public sealed class RelationQueryPlacementBuilder
         }
 
         var bindingId = declaration.EffectiveId;
-        List<RelationQueryConfigurationDecision> decisions =
+        List<EffectiveConfigurationDecision> decisions =
         [
             Decision(InputSetting(bindingId, "id"), declaration.Id is null ? Framework() : Explicit()),
             Decision(
@@ -780,7 +780,7 @@ public sealed class RelationQueryPlacementBuilder
         InputDeclaration declaration,
         Contract contract,
         RelationQuerySourcePlacementBindingId binding,
-        ICollection<RelationQueryConfigurationDecision> decisions,
+        ICollection<EffectiveConfigurationDecision> decisions,
         ICollection<RelationQueryArtifactAuthoringDiagnostic> found)
     {
         var expectedPaths = contract.Fields.Select(static field => field.Input.Field.Path).ToHashSet();
@@ -902,11 +902,11 @@ public sealed class RelationQueryPlacementBuilder
             declaration.Input,
             setting: InputSetting(declaration.EffectiveId, setting)));
 
-    ValueDecision Scoped() => new(RelationQueryConfigurationValueOrigin.ScopedProfile, options!.Authority);
-    static ValueDecision Explicit() => new(RelationQueryConfigurationValueOrigin.Explicit, ExplicitDeclarationAuthority);
-    static ValueDecision Framework() => new(RelationQueryConfigurationValueOrigin.FrameworkDefault, FrameworkDefaultAuthority);
+    ValueDecision Scoped() => new(EffectiveConfigurationOrigin.ScopedProfile, options!.Authority);
+    static ValueDecision Explicit() => new(EffectiveConfigurationOrigin.Explicit, ExplicitDeclarationAuthority);
+    static ValueDecision Framework() => new(EffectiveConfigurationOrigin.FrameworkDefault, FrameworkDefaultAuthority);
 
-    static RelationQueryConfigurationDecision Decision(string setting, ValueDecision value) =>
+    static EffectiveConfigurationDecision Decision(string setting, ValueDecision value) =>
         new(setting, value.Origin, value.Authority);
 
     static RelationQueryArtifactAuthoringDiagnostic Error(
@@ -925,7 +925,7 @@ public sealed class RelationQueryPlacementBuilder
 
     static string Encode(string value) => Uri.EscapeDataString(value);
 
-    readonly record struct ValueDecision(RelationQueryConfigurationValueOrigin Origin, string Authority);
+    readonly record struct ValueDecision(EffectiveConfigurationOrigin Origin, string Authority);
     internal enum InputContractKind { Source, Traversal }
 
     sealed record Contract(
@@ -949,7 +949,7 @@ public sealed class RelationQueryPlacementBuilder
         public RelationQueryPlacementSourceHandle Handle { get; } = handle;
         public RelationQuerySourceInstance Instance { get; } = instance;
 
-        public void AppendDecisions(ICollection<RelationQueryConfigurationDecision> decisions)
+        public void AppendDecisions(ICollection<EffectiveConfigurationDecision> decisions)
         {
             decisions.Add(Decision(SourceSetting(Instance.Id, "id"), id));
             decisions.Add(Decision(SourceSetting(Instance.Id, "execution-domain"), domain));
@@ -1081,7 +1081,7 @@ public sealed class RelationQueryPlacementBuilder
         InputDeclaration Declaration,
         Contract Contract,
         RelationQuerySourcePlacementBinding Binding,
-        ImmutableArray<RelationQueryConfigurationDecision> Decisions);
+        ImmutableArray<EffectiveConfigurationDecision> Decisions);
 
     internal static string RequireSelector(string selector, string parameterName) =>
         Guard.RequireNotNullOrWhiteSpace(selector, parameterName);

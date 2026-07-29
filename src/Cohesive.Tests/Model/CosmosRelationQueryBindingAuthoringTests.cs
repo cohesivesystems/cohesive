@@ -165,7 +165,7 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
         Assert.NotEmpty(decisions);
         Assert.All(decisions, decision =>
         {
-            Assert.Equal(RelationQueryConfigurationValueOrigin.Explicit, decision.Origin);
+            Assert.Equal(EffectiveConfigurationOrigin.Explicit, decision.Origin);
             Assert.Equal(authority, decision.Authority);
         });
     }
@@ -327,7 +327,7 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
         AssertDecision(
             binding,
             "maximumInputRows",
-            RelationQueryConfigurationValueOrigin.Explicit,
+            EffectiveConfigurationOrigin.Explicit,
             CosmosRelationQueryBinding.LocalDeclarationAuthority);
     }
 
@@ -427,31 +427,31 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
         Assert.Equal(
             FieldPath.FromField("localStatus"),
             binding.ResolveField(fixture.Placed.GetField(load => load.Status).Input.Id));
-        AssertDecision(binding, "rootAlias", RelationQueryConfigurationValueOrigin.Explicit, "tests/local-overrides/v1");
-        AssertDecision(binding, "accountEndpoint", RelationQueryConfigurationValueOrigin.Explicit, "tests/local-overrides/v1");
-        AssertDecision(binding, "databaseName", RelationQueryConfigurationValueOrigin.Explicit, "tests/local-overrides/v1");
-        AssertDecision(binding, "containerName", RelationQueryConfigurationValueOrigin.Explicit, "tests/local-overrides/v1");
-        AssertDecision(binding, "identityPath", RelationQueryConfigurationValueOrigin.Explicit, "tests/local-overrides/v1");
-        AssertDecision(binding, "maximumInputRows", RelationQueryConfigurationValueOrigin.ScopedProfile, "tests/cosmos-profile/v1");
+        AssertDecision(binding, "rootAlias", EffectiveConfigurationOrigin.Explicit, "tests/local-overrides/v1");
+        AssertDecision(binding, "accountEndpoint", EffectiveConfigurationOrigin.Explicit, "tests/local-overrides/v1");
+        AssertDecision(binding, "databaseName", EffectiveConfigurationOrigin.Explicit, "tests/local-overrides/v1");
+        AssertDecision(binding, "containerName", EffectiveConfigurationOrigin.Explicit, "tests/local-overrides/v1");
+        AssertDecision(binding, "identityPath", EffectiveConfigurationOrigin.Explicit, "tests/local-overrides/v1");
+        AssertDecision(binding, "maximumInputRows", EffectiveConfigurationOrigin.ScopedProfile, "tests/cosmos-profile/v1");
         AssertDecision(
             binding,
             "field/" + fixture.Placed.GetField(load => load.Status).Input.Id.Value,
-            RelationQueryConfigurationValueOrigin.Explicit,
+            EffectiveConfigurationOrigin.Explicit,
             "tests/local-overrides/v1");
         AssertDecision(
             binding,
             "field/" + fixture.Placed.GetField(load => load.Id).Input.Id.Value,
-            RelationQueryConfigurationValueOrigin.AdapterConvention,
+            EffectiveConfigurationOrigin.AdapterConvention,
             CosmosRelationQueryStorageBinding.SemanticPathConventionSet);
         AssertDecision(
             binding,
             "target",
-            RelationQueryConfigurationValueOrigin.AdapterConvention,
+            EffectiveConfigurationOrigin.AdapterConvention,
             CosmosRelationQueryTargetProfile.ProfileId.Value);
         AssertDecision(
             binding,
             "targetProfile",
-            RelationQueryConfigurationValueOrigin.AdapterConvention,
+            EffectiveConfigurationOrigin.AdapterConvention,
             CosmosRelationQueryTargetProfile.ProfileId.Value);
 
         HashSet<string> expectedSettings =
@@ -1065,7 +1065,7 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
     static void AssertDecision(
         CosmosRelationQueryStorageBinding binding,
         string setting,
-        RelationQueryConfigurationValueOrigin origin,
+        EffectiveConfigurationOrigin origin,
         string authority)
     {
         var decision = Assert.Single(binding.ConfigurationDecisions, candidate => candidate.Setting == setting);

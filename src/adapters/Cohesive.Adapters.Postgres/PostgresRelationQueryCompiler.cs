@@ -338,12 +338,12 @@ public sealed class PostgresRelationQueryCompiler
         var selectedTables = storageBinding.Tables
             .Where(table => selectedInputs.Contains(table.Input))
             .ToArray();
-        var configuration = ImmutableArray.CreateBuilder<RelationQueryConfigurationDecision>(
+        var configuration = ImmutableArray.CreateBuilder<EffectiveConfigurationDecision>(
             storageBinding.ConfigurationDecisions.Length + 1);
         configuration.AddRange(storageBinding.ConfigurationDecisions);
         configuration.Add(new(
             CompilerProfileSetting,
-            RelationQueryConfigurationValueOrigin.AdapterConvention,
+            EffectiveConfigurationOrigin.AdapterConvention,
             CompilerProfile));
         return new(
             storageBinding.SchemaVersion,
@@ -407,15 +407,15 @@ public sealed class PostgresRelationQueryCompiler
                 failure));
     }
 
-    static (RelationQueryConfigurationValueOrigin Origin, string Authority) AssessmentAuthority(
+    static (EffectiveConfigurationOrigin Origin, string Authority) AssessmentAuthority(
         PostgresRelationQueryStorageBinding storageBinding)
     {
         var (origin, bindingAuthority) = storageBinding.Origin switch
         {
             PostgresRelationQueryBindingOrigin.Explicit =>
-                (RelationQueryConfigurationValueOrigin.Explicit, storageBinding.Id.Value),
+                (EffectiveConfigurationOrigin.Explicit, storageBinding.Id.Value),
             PostgresRelationQueryBindingOrigin.Convention =>
-                (RelationQueryConfigurationValueOrigin.AdapterConvention, storageBinding.ConventionSetVersion!),
+                (EffectiveConfigurationOrigin.AdapterConvention, storageBinding.ConventionSetVersion!),
             _ => throw new ArgumentOutOfRangeException(
                 nameof(storageBinding),
                 storageBinding.Origin,
@@ -442,7 +442,7 @@ public sealed class PostgresRelationQueryCompiler
             if (string.Equals(failedSetting, CompilerProfileSetting, StringComparison.Ordinal))
             {
                 return new(
-                    RelationQueryConfigurationValueOrigin.AdapterConvention,
+                    EffectiveConfigurationOrigin.AdapterConvention,
                     CompilerProfile,
                     site.Node,
                     site.Input,

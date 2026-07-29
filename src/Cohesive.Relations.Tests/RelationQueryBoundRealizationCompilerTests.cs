@@ -41,7 +41,7 @@ public sealed class RelationQueryBoundRealizationCompilerTests
             [
                 new(
                     "compilerProfile",
-                    RelationQueryConfigurationValueOrigin.AdapterConvention,
+                    EffectiveConfigurationOrigin.AdapterConvention,
                     "tests/compiler-v2")
             ]);
 
@@ -217,12 +217,12 @@ public sealed class RelationQueryBoundRealizationCompilerTests
             [
                 new(
                     setting,
-                    RelationQueryConfigurationValueOrigin.Explicit,
+                    EffectiveConfigurationOrigin.Explicit,
                     "tests/exact-local-binding/v1")
             ]);
         var foreign = CopyAssessment(
             assessment,
-            origin: RelationQueryConfigurationValueOrigin.AdapterConvention,
+            origin: EffectiveConfigurationOrigin.AdapterConvention,
             authority: "tests/foreign-adapter-convention/v1",
             configurationSetting: setting);
 
@@ -331,8 +331,8 @@ public sealed class RelationQueryBoundRealizationCompilerTests
             string bindingSetting = "binding/a",
             string message = "Diagnostic prose.",
             string resolution = "Resolution prose.",
-            RelationQueryConfigurationValueOrigin configurationOrigin =
-                RelationQueryConfigurationValueOrigin.AdapterConvention,
+            EffectiveConfigurationOrigin configurationOrigin =
+                EffectiveConfigurationOrigin.AdapterConvention,
             string configurationAuthority = "authority/a",
             string adapterDecisionCode = "adapter-decision/a") => new(
             code,
@@ -388,7 +388,7 @@ public sealed class RelationQueryBoundRealizationCompilerTests
             Diagnostic(field: secondField.Field.Path),
             Diagnostic(placement: "placement/other"),
             Diagnostic(bindingSetting: "binding/other"),
-            Diagnostic(configurationOrigin: RelationQueryConfigurationValueOrigin.ScopedProfile),
+            Diagnostic(configurationOrigin: EffectiveConfigurationOrigin.ScopedProfile),
             Diagnostic(configurationAuthority: "authority/other"),
             Diagnostic(adapterDecisionCode: "adapter-decision/other")
         ];
@@ -400,7 +400,7 @@ public sealed class RelationQueryBoundRealizationCompilerTests
             "REL2992",
             DiagnosticSeverity.Error,
             "Invalid attribution.",
-            configurationOrigin: RelationQueryConfigurationValueOrigin.Explicit));
+            configurationOrigin: EffectiveConfigurationOrigin.Explicit));
         Assert.Throws<ArgumentException>(() => new RelationQueryNativeCompilationDiagnostic(
             "REL2993",
             DiagnosticSeverity.Error,
@@ -555,7 +555,7 @@ public sealed class RelationQueryBoundRealizationCompilerTests
                     branch.Id,
                     requirement.Id,
                     RelationQueryBoundAssessmentStatus.Available,
-                    RelationQueryConfigurationValueOrigin.AdapterConvention,
+                    EffectiveConfigurationOrigin.AdapterConvention,
                     AssessmentAuthority,
                     decision.GetCapabilityEvidence(),
                     decision.GetTargetEnforcedBoundaries(),
@@ -571,7 +571,7 @@ public sealed class RelationQueryBoundRealizationCompilerTests
         RelationQueryBoundRealizationRequest request,
         bool includeAffinity = true,
         bool staleAffinity = false,
-        ImmutableArray<RelationQueryConfigurationDecision> configurationDecisions = default)
+        ImmutableArray<EffectiveConfigurationDecision> configurationDecisions = default)
     {
         var planFingerprint = RelationQueryCompiledPlanReferenceFingerprinter.Compute(request.PlanReference);
         RelationQueryPlanComponentFingerprint? boundPlan = includeAffinity
@@ -601,7 +601,7 @@ public sealed class RelationQueryBoundRealizationCompilerTests
     static RelationQueryBoundRequirementAssessment CopyAssessment(
         RelationQueryBoundRequirementAssessment assessment,
         RelationQueryBoundAssessmentStatus? status = null,
-        RelationQueryConfigurationValueOrigin? origin = null,
+        EffectiveConfigurationOrigin? origin = null,
         string? authority = null,
         ImmutableArray<RelationQueryTargetCapabilityEvidenceId>? capabilityEvidence = null,
         ImmutableArray<RelationQueryOperatingBoundaryId>? operatingBoundaries = null,

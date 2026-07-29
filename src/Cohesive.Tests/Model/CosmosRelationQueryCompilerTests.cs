@@ -687,10 +687,10 @@ public sealed class CosmosRelationQueryCompilerTests
         var explicitConfiguration = explicitlyConfigured.Evidence.Binding.ConfigurationDecisions
             .ToDictionary(static decision => decision.Setting, StringComparer.Ordinal);
         Assert.Equal(
-            RelationQueryConfigurationValueOrigin.AdapterConvention,
+            EffectiveConfigurationOrigin.AdapterConvention,
             conventionalConfiguration[CosmosRelationQueryCompiler.CompilerProfileSetting].Origin);
         Assert.Equal(
-            RelationQueryConfigurationValueOrigin.Explicit,
+            EffectiveConfigurationOrigin.Explicit,
             explicitConfiguration[CosmosRelationQueryCompiler.CompilerProfileSetting].Origin);
         Assert.Equal(
             explicitOptions.CompilerProfile,
@@ -779,8 +779,8 @@ public sealed class CosmosRelationQueryCompilerTests
             static decision => decision.Setting,
             StringComparer.Ordinal);
         var defaultOrigin = incomplete.Origin == CosmosRelationQueryBindingOrigin.Convention
-            ? RelationQueryConfigurationValueOrigin.AdapterConvention
-            : RelationQueryConfigurationValueOrigin.Explicit;
+            ? EffectiveConfigurationOrigin.AdapterConvention
+            : EffectiveConfigurationOrigin.Explicit;
         var defaultAuthority = incomplete.Origin == CosmosRelationQueryBindingOrigin.Convention
             ? incomplete.ConventionSetVersion!
             : incomplete.Id.Value;

@@ -594,7 +594,7 @@ public sealed class CosmosRelationQueryStorageBinding
         CosmosNullValueEncoding nullValueEncoding = CosmosNullValueEncoding.JsonNull,
         CosmosRelationQueryBindingOrigin origin = CosmosRelationQueryBindingOrigin.Explicit,
         string? conventionSetVersion = null,
-        ImmutableArray<RelationQueryConfigurationDecision> configurationDecisions = default,
+        ImmutableArray<EffectiveConfigurationDecision> configurationDecisions = default,
         RelationQueryPlanComponentFingerprint? compiledPlanFingerprint = null,
         RelationQuerySourcePlacementFingerprint? placementFingerprint = null)
     {
@@ -671,8 +671,8 @@ public sealed class CosmosRelationQueryStorageBinding
 
         if (origin == CosmosRelationQueryBindingOrigin.Convention
             && normalizedDecisions.Any(static decision => decision.Origin is
-                RelationQueryConfigurationValueOrigin.Explicit
-                or RelationQueryConfigurationValueOrigin.ScopedProfile))
+                EffectiveConfigurationOrigin.Explicit
+                or EffectiveConfigurationOrigin.ScopedProfile))
         {
             throw new ArgumentException(
                 "A convention-origin Cosmos binding cannot retain explicit or scoped-profile configuration decisions.",
@@ -802,7 +802,7 @@ public sealed class CosmosRelationQueryStorageBinding
         CosmosNullValueEncoding nullValueEncoding = CosmosNullValueEncoding.JsonNull,
         CosmosRelationQueryBindingOrigin origin = CosmosRelationQueryBindingOrigin.Explicit,
         string? conventionSetVersion = null,
-        ImmutableArray<RelationQueryConfigurationDecision> configurationDecisions = default,
+        ImmutableArray<EffectiveConfigurationDecision> configurationDecisions = default,
         RelationQueryPlanComponentFingerprint? compiledPlanFingerprint = null,
         RelationQuerySourcePlacementFingerprint? placementFingerprint = null)
         : this(
@@ -918,7 +918,7 @@ public sealed class CosmosRelationQueryStorageBinding
     /// Effective configuration-decision provenance in stable setting order. Effective values remain represented by
     /// the binding's dedicated properties.
     /// </summary>
-    public ImmutableArray<RelationQueryConfigurationDecision> ConfigurationDecisions { get; }
+    public ImmutableArray<EffectiveConfigurationDecision> ConfigurationDecisions { get; }
 
     /// <summary>
     /// Exact compiled-plan fingerprint verified by adapter authoring, or <see langword="null"/> for an explicitly
@@ -1080,7 +1080,7 @@ public sealed class CosmosRelationQueryStorageBinding
 
     static void ValidateConfigurationDecisionSettings(
         CosmosRelationQueryStorageBinding binding,
-        ImmutableArray<RelationQueryConfigurationDecision> decisions,
+        ImmutableArray<EffectiveConfigurationDecision> decisions,
         string parameterName)
     {
         HashSet<string> allowed = new(StringComparer.Ordinal)

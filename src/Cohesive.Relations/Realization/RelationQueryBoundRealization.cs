@@ -131,7 +131,7 @@ public sealed record RelationQueryAdapterBindingReference
         RelationQuerySourcePlacementFingerprint? placementFingerprint = null,
         ImmutableArray<RelationQuerySourceInstanceId> sources = default,
         ImmutableArray<RelationQuerySourcePlacementBindingId> placementBindings = default,
-        ImmutableArray<RelationQueryConfigurationDecision> configurationDecisions = default)
+        ImmutableArray<EffectiveConfigurationDecision> configurationDecisions = default)
     {
         SchemaVersion = Guard.RequireNotNullOrWhiteSpace(schemaVersion);
         BindingId = Guard.RequireNotNullOrWhiteSpace(bindingId);
@@ -190,7 +190,7 @@ public sealed record RelationQueryAdapterBindingReference
     public ImmutableArray<RelationQuerySourcePlacementBindingId> PlacementBindings { get; }
 
     /// <summary>Effective adapter-binding configuration attribution in stable setting order.</summary>
-    public ImmutableArray<RelationQueryConfigurationDecision> ConfigurationDecisions { get; }
+    public ImmutableArray<EffectiveConfigurationDecision> ConfigurationDecisions { get; }
 
     /// <summary>Determines whether another reference describes the same exact binding evidence.</summary>
     /// <param name="other">Binding reference to compare, or <see langword="null"/>.</param>
@@ -211,8 +211,8 @@ public sealed record RelationQueryAdapterBindingReference
         && PlacementBindings.SequenceEqual(other.PlacementBindings)
         && ConfigurationDecisions.SequenceEqual(other.ConfigurationDecisions);
 
-    static ImmutableArray<RelationQueryConfigurationDecision> NormalizeConfiguration(
-        ImmutableArray<RelationQueryConfigurationDecision> decisions)
+    static ImmutableArray<EffectiveConfigurationDecision> NormalizeConfiguration(
+        ImmutableArray<EffectiveConfigurationDecision> decisions)
     {
         var normalized = decisions.IsDefault ? [] : decisions;
         if (normalized.Any(static decision => decision is null))
@@ -283,7 +283,7 @@ public sealed record RelationQueryBoundRequirementAssessment
         RelationQueryNativeResultBranchId branch,
         RelationQueryRealizationRequirementId requirement,
         RelationQueryBoundAssessmentStatus status,
-        RelationQueryConfigurationValueOrigin origin,
+        EffectiveConfigurationOrigin origin,
         string authority,
         ImmutableArray<RelationQueryTargetCapabilityEvidenceId> capabilityEvidence = default,
         ImmutableArray<RelationQueryOperatingBoundaryId> operatingBoundaries = default,
@@ -435,7 +435,7 @@ public sealed record RelationQueryBoundRequirementAssessment
     public RelationQueryBoundAssessmentStatus Status { get; }
 
     /// <summary>Configuration-precedence tier that supplied the examined fact.</summary>
-    public RelationQueryConfigurationValueOrigin Origin { get; }
+    public EffectiveConfigurationOrigin Origin { get; }
 
     /// <summary>Stable declaration, profile, convention, or adapter authority.</summary>
     public string Authority { get; }

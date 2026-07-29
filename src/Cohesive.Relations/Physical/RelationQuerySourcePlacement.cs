@@ -458,7 +458,7 @@ public sealed class RelationQuerySourcePlacement
         ImmutableArray<RelationQuerySourceInstance> sourceInstances,
         ImmutableArray<RelationQuerySourcePlacementBinding> bindings,
         RelationQuerySourcePlacementFingerprint? fingerprint = null,
-        ImmutableArray<RelationQueryConfigurationDecision> configurationDecisions = default)
+        ImmutableArray<EffectiveConfigurationDecision> configurationDecisions = default)
     {
         SchemaVersion = Guard.RequireNotNullOrWhiteSpace(schemaVersion);
         if (!string.Equals(SchemaVersion, CurrentSchemaVersion, StringComparison.Ordinal))
@@ -574,7 +574,7 @@ public sealed class RelationQuerySourcePlacement
     public ImmutableArray<RelationQuerySourcePlacementBinding> Bindings { get; }
 
     /// <summary>Per-setting effective configuration attribution in deterministic setting order.</summary>
-    public ImmutableArray<RelationQueryConfigurationDecision> ConfigurationDecisions { get; }
+    public ImmutableArray<EffectiveConfigurationDecision> ConfigurationDecisions { get; }
 
     /// <summary>Deterministic identity of this placement artifact.</summary>
     public RelationQuerySourcePlacementFingerprint Fingerprint { get; }
@@ -650,7 +650,7 @@ public sealed class RelationQuerySourcePlacement
     static string EncodeConfigurationSegment(string value) => Uri.EscapeDataString(value);
 
     static void ValidateSourceSelectionDecisions(
-        ImmutableArray<RelationQueryConfigurationDecision> decisions,
+        ImmutableArray<EffectiveConfigurationDecision> decisions,
         ImmutableArray<RelationQuerySourcePlacementBinding> bindings,
         string parameterName)
     {
@@ -666,10 +666,10 @@ public sealed class RelationQuerySourcePlacement
             var isConsistent = binding.Origin switch
             {
                 RelationQuerySourcePlacementOrigin.Explicit =>
-                    decision.Origin == RelationQueryConfigurationValueOrigin.Explicit,
+                    decision.Origin == EffectiveConfigurationOrigin.Explicit,
                 RelationQuerySourcePlacementOrigin.Convention =>
-                    decision.Origin is RelationQueryConfigurationValueOrigin.AdapterConvention
-                        or RelationQueryConfigurationValueOrigin.FrameworkDefault,
+                    decision.Origin is EffectiveConfigurationOrigin.AdapterConvention
+                        or EffectiveConfigurationOrigin.FrameworkDefault,
                 _ => false
             };
             if (!isConsistent)

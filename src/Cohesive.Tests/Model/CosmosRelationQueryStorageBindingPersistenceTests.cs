@@ -87,7 +87,7 @@ public sealed class CosmosRelationQueryStorageBindingPersistenceTests
     public void BindingFingerprint_ChangesWithConfigurationDecisionProvenance()
     {
         var convention = CreateBinding();
-        var explicitBinding = CreateBinding(RelationQueryConfigurationValueOrigin.Explicit);
+        var explicitBinding = CreateBinding(EffectiveConfigurationOrigin.Explicit);
 
         Assert.NotEqual(convention.Fingerprint, explicitBinding.Fingerprint);
     }
@@ -186,7 +186,7 @@ public sealed class CosmosRelationQueryStorageBindingPersistenceTests
     }
 
     static CosmosRelationQueryStorageBinding CreateBinding(
-        RelationQueryConfigurationValueOrigin fieldOrigin = RelationQueryConfigurationValueOrigin.AdapterConvention,
+        EffectiveConfigurationOrigin fieldOrigin = EffectiveConfigurationOrigin.AdapterConvention,
         bool includeAffinity = true) => new(
         id: new("load-search/v1"),
         source: new RelationQuerySourceInstanceId("loads-source"),
@@ -233,10 +233,10 @@ public sealed class CosmosRelationQueryStorageBindingPersistenceTests
         configurationDecisions:
         [
             new("field/field:id", fieldOrigin, "tests/cosmos-fields/v1"),
-            new("rootAlias", RelationQueryConfigurationValueOrigin.AdapterConvention, CosmosRelationQueryStorageBinding.SemanticPathConventionSet),
-            new("accountEndpoint", RelationQueryConfigurationValueOrigin.Explicit, "tests"),
-            new("databaseName", RelationQueryConfigurationValueOrigin.Explicit, "tests"),
-            new("containerName", RelationQueryConfigurationValueOrigin.Explicit, "tests")
+            new("rootAlias", EffectiveConfigurationOrigin.AdapterConvention, CosmosRelationQueryStorageBinding.SemanticPathConventionSet),
+            new("accountEndpoint", EffectiveConfigurationOrigin.Explicit, "tests"),
+            new("databaseName", EffectiveConfigurationOrigin.Explicit, "tests"),
+            new("containerName", EffectiveConfigurationOrigin.Explicit, "tests")
         ],
         compiledPlanFingerprint: includeAffinity ? CompiledPlanFingerprint : null,
         placementFingerprint: includeAffinity ? PlacementFingerprint : null);

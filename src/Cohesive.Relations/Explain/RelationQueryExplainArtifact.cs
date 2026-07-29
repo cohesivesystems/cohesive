@@ -119,7 +119,7 @@ public sealed record RelationQueryExplainDiagnostic
         FieldPath? field = null,
         string? bindingSetting = null,
         string? resolution = null,
-        RelationQueryConfigurationValueOrigin? configurationOrigin = null,
+        EffectiveConfigurationOrigin? configurationOrigin = null,
         string? configurationAuthority = null,
         RelationQueryAdapterDecisionCode? adapterDecisionCode = null)
     {
@@ -254,7 +254,7 @@ public sealed record RelationQueryExplainDiagnostic
     public string? Resolution { get; }
 
     /// <summary>Effective configuration-precedence tier, or <see langword="null"/>.</summary>
-    public RelationQueryConfigurationValueOrigin? ConfigurationOrigin { get; }
+    public EffectiveConfigurationOrigin? ConfigurationOrigin { get; }
 
     /// <summary>Configuration authority paired with <see cref="ConfigurationOrigin"/>, or <see langword="null"/>.</summary>
     public string? ConfigurationAuthority { get; }

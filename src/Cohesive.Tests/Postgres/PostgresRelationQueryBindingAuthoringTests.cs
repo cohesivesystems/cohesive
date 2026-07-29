@@ -94,10 +94,10 @@ public sealed class PostgresRelationQueryBindingAuthoringTests
         Assert.Equal("load_status", explicitTable.ResolveField(fixture.Placed.GetField(load => load.Status).Input.Id).ColumnName);
 
         Assert.Equal(
-            RelationQueryConfigurationValueOrigin.AdapterConvention,
+            EffectiveConfigurationOrigin.AdapterConvention,
             FieldColumnDecision(convention, fixture.Placed.GetField(load => load.Id).Input.Id).Origin);
         Assert.Equal(
-            RelationQueryConfigurationValueOrigin.Explicit,
+            EffectiveConfigurationOrigin.Explicit,
             FieldColumnDecision(explicitBinding, fixture.Placed.GetField(load => load.Id).Input.Id).Origin);
     }
 
@@ -118,19 +118,19 @@ public sealed class PostgresRelationQueryBindingAuthoringTests
         var input = fixture.Placed.GetField(load => load.Status).Input.Id;
 
         Assert.Equal(
-            RelationQueryConfigurationValueOrigin.Explicit,
+            EffectiveConfigurationOrigin.Explicit,
             FieldDecision(binding, input, "scalarType").Origin);
         Assert.Equal(
-            RelationQueryConfigurationValueOrigin.AdapterConvention,
+            EffectiveConfigurationOrigin.AdapterConvention,
             FieldDecision(binding, input, "missingValueEncoding").Origin);
         Assert.Equal(
-            RelationQueryConfigurationValueOrigin.AdapterConvention,
+            EffectiveConfigurationOrigin.AdapterConvention,
             FieldDecision(binding, input, "nullValueEncoding").Origin);
         Assert.Equal(
-            RelationQueryConfigurationValueOrigin.AdapterConvention,
+            EffectiveConfigurationOrigin.AdapterConvention,
             FieldDecision(binding, input, "textSemantics").Origin);
         Assert.Equal(
-            RelationQueryConfigurationValueOrigin.AdapterConvention,
+            EffectiveConfigurationOrigin.AdapterConvention,
             FieldDecision(binding, input, "ordering").Origin);
     }
 
@@ -445,12 +445,12 @@ public sealed class PostgresRelationQueryBindingAuthoringTests
                     .Column(load => load.Status, "load_status", StatusOptions)
                     .Identity(load => load.Id, "load_id", IdOptions));
 
-    static RelationQueryConfigurationDecision FieldColumnDecision(
+    static EffectiveConfigurationDecision FieldColumnDecision(
         PostgresRelationQueryStorageBinding binding,
         RelationQueryInputId input) =>
         FieldDecision(binding, input, "columnName");
 
-    static RelationQueryConfigurationDecision FieldDecision(
+    static EffectiveConfigurationDecision FieldDecision(
         PostgresRelationQueryStorageBinding binding,
         RelationQueryInputId input,
         string setting) =>
