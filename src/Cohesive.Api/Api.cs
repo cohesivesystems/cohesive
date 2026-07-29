@@ -34,6 +34,24 @@ public sealed class ApiBuilder
     public EntityApiBuilder<TEntity> Entity<TEntity>() => new(this, EntityTypeName.From<TEntity>());
 
     /// <summary>
+    /// Starts a root-scoped read operation.
+    /// </summary>
+    /// <param name="name">Stable logical operation name.</param>
+    /// <returns>A builder for the root-scoped query.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="name"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is empty or white space.</exception>
+    public RootOperationBuilder Query(string name) => new(this, this, name, ApiOperationKind.Query, entity: null);
+
+    /// <summary>
+    /// Starts a root-scoped write operation.
+    /// </summary>
+    /// <param name="name">Stable logical operation name.</param>
+    /// <returns>A builder for the root-scoped command.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="name"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is empty or white space.</exception>
+    public RootOperationBuilder Command(string name) => new(this, this, name, ApiOperationKind.Command, entity: null);
+
+    /// <summary>
     /// Starts a generic action operation.
     /// </summary>
     public RootOperationBuilder Action(string name) => new(this, this, name, ApiOperationKind.Action, entity: null);
@@ -152,6 +170,8 @@ public abstract class OperationBuilder<TParent>
     readonly List<ApiResultDefinition> additionalResults = [];
     readonly List<string> tags = [];
     readonly List<ApiScopePolicy> scopePolicies = [];
+    readonly List<ApiAuthorizationRequirement> authorizationRequirements = [];
+    readonly List<ApiSemanticReference> semanticReferences = [];
 
     string? method;
     string? route;
@@ -246,7 +266,7 @@ public abstract class OperationBuilder<TParent>
             kind: kind,
             bodyType: typeof(TResponse),
             isPrimary: false,
-            httpStatusCode: httpStatusCode ?? DefaultHttpStatusCode(kind, typeof(TResponse)),
+            httpStatusCode: httpStatusCode ?? ApiHttpResultConventions.DefaultStatusCode(kind, typeof(TResponse)),
             id: id,
             description: description
             )
@@ -268,7 +288,7 @@ public abstract class OperationBuilder<TParent>
             kind: kind,
             bodyType: typeof(void),
             isPrimary: false,
-            httpStatusCode: httpStatusCode ?? DefaultHttpStatusCode(kind, typeof(void)),
+            httpStatusCode: httpStatusCode ?? ApiHttpResultConventions.DefaultStatusCode(kind, typeof(void)),
             id: id,
             description: description
             )
@@ -291,6 +311,30 @@ public abstract class OperationBuilder<TParent>
     public OperationBuilder<TParent> Scope(ApiScopePolicy policy)
     {
         scopePolicies.Add(policy ?? throw new ArgumentNullException(nameof(policy)));
+        return this;
+    }
+
+    /// <summary>
+    /// Adds a transport-neutral authorization requirement to the operation.
+    /// </summary>
+    /// <param name="requirement">Requirement interpreted by authorization projections.</param>
+    /// <returns>The current operation builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="requirement"/> is <see langword="null"/>.</exception>
+    public OperationBuilder<TParent> Requirement(ApiAuthorizationRequirement requirement)
+    {
+        authorizationRequirements.Add(requirement ?? throw new ArgumentNullException(nameof(requirement)));
+        return this;
+    }
+
+    /// <summary>
+    /// Adds an exact reference to a construct owned by another semantic authority.
+    /// </summary>
+    /// <param name="reference">Semantic authority, schema, path, and optional producer attribution.</param>
+    /// <returns>The current operation builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="reference"/> is <see langword="null"/>.</exception>
+    public OperationBuilder<TParent> SemanticReference(ApiSemanticReference reference)
+    {
+        semanticReferences.Add(reference ?? throw new ArgumentNullException(nameof(reference)));
         return this;
     }
 
@@ -340,7 +384,7 @@ public abstract class OperationBuilder<TParent>
     }
 
     /// <summary>
-    /// Sets the OpenAPI summary text.
+    /// Sets the human-readable operation summary projected by compatible transports.
     /// </summary>
     public OperationBuilder<TParent> Summary(string value)
     {
@@ -349,7 +393,7 @@ public abstract class OperationBuilder<TParent>
     }
 
     /// <summary>
-    /// Sets the OpenAPI description text.
+    /// Sets the human-readable operation description projected by compatible transports.
     /// </summary>
     public OperationBuilder<TParent> Description(string value)
     {
@@ -358,7 +402,7 @@ public abstract class OperationBuilder<TParent>
     }
 
     /// <summary>
-    /// Adds an OpenAPI tag.
+    /// Adds a logical grouping tag projected by compatible transports.
     /// </summary>
     public OperationBuilder<TParent> Tag(string value)
     {
@@ -376,13 +420,9 @@ public abstract class OperationBuilder<TParent>
         if (endpoint is not null)
             return endpoint;
 
-        var finalizedMethod = Guard.RequireNotNullOrWhiteSpace(method);
-        var finalizedRoute = Guard.RequireNotNullOrWhiteSpace(route);
-        var finalizedParameters = FinalizeParameters(finalizedRoute, parameters);
-        var finalizedQuery = FinalizeQuery();
-        var finalizedBody = FinalizeBody(finalizedMethod);
-        var finalizedRequestType = finalizedBody?.BodyType ?? finalizedQuery?.QueryType ?? requestType ?? typeof(void);
-        var finalizedResults = FinalizeResults();
+        var http = FinalizeHttpBinding();
+        var finalizedRequestType = http?.Body?.BodyType ?? http?.Query?.QueryType ?? requestType ?? typeof(void);
+        var finalizedResults = FinalizeResults(hasHttpProjection: http is not null);
         var finalizedResponseType = finalizedResults[0].BodyType;
         var finalizedTags = FinalizeTags(kind, entity, tags);
 
@@ -391,13 +431,7 @@ public abstract class OperationBuilder<TParent>
             kind: kind,
             requestType: finalizedRequestType,
             responseType: finalizedResponseType,
-            http: new(
-                method: finalizedMethod,
-                route: finalizedRoute,
-                parameters: finalizedParameters,
-                body: finalizedBody,
-                query: finalizedQuery
-                ),
+            http: http,
             id: root.CreateEndpointId(name, entity),
             entity: entity,
             transition: transition,
@@ -405,7 +439,9 @@ public abstract class OperationBuilder<TParent>
             description: description,
             tags: finalizedTags,
             results: finalizedResults,
-            scopePolicies: scopePolicies
+            scopePolicies: scopePolicies,
+            authorizationRequirements: authorizationRequirements,
+            semanticReferences: semanticReferences
             );
 
         endpoint = root.Add(operation);
@@ -419,6 +455,35 @@ public abstract class OperationBuilder<TParent>
     {
         Build();
         return parent;
+    }
+
+    HttpBinding? FinalizeHttpBinding()
+    {
+        if (method is null && route is null)
+        {
+            if (body is not null || query is not null || parameters.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    $"Operation '{name}' declares HTTP request bindings but does not declare an HTTP route.");
+            }
+
+            return null;
+        }
+
+        if (method is null || route is null)
+        {
+            throw new InvalidOperationException(
+                $"Operation '{name}' must declare both an HTTP method and route.");
+        }
+
+        var finalizedMethod = Guard.RequireNotNullOrWhiteSpace(method);
+        var finalizedRoute = Guard.RequireNotNullOrWhiteSpace(route);
+        return new HttpBinding(
+            method: finalizedMethod,
+            route: finalizedRoute,
+            parameters: FinalizeParameters(finalizedRoute, parameters),
+            body: FinalizeBody(finalizedMethod),
+            query: FinalizeQuery());
     }
 
     HttpBodyBinding? FinalizeBody(string finalizedMethod)
@@ -445,7 +510,7 @@ public abstract class OperationBuilder<TParent>
 
     HttpQueryBinding? FinalizeQuery() => query;
 
-    IReadOnlyList<ApiResultDefinition> FinalizeResults()
+    IReadOnlyList<ApiResultDefinition> FinalizeResults(bool hasHttpProjection)
     {
         var primary = primaryResult ?? CreateResult(
             kind: ApiResultKind.NoContent,
@@ -456,12 +521,16 @@ public abstract class OperationBuilder<TParent>
             description: null);
 
         if (additionalResults.Count == 0)
-            return [primary];
+            return [hasHttpProjection ? primary : primary.WithHttp(http: null)];
 
         var results = new ApiResultDefinition[additionalResults.Count + 1];
-        results[0] = primary;
+        results[0] = hasHttpProjection ? primary : primary.WithHttp(http: null);
         for (var i = 0; i < additionalResults.Count; i++)
-            results[i + 1] = additionalResults[i];
+        {
+            results[i + 1] = hasHttpProjection
+                ? additionalResults[i]
+                : additionalResults[i].WithHttp(http: null);
+        }
 
         return results;
     }
@@ -484,25 +553,6 @@ public abstract class OperationBuilder<TParent>
             http: binding
             );
     }
-
-    static int DefaultHttpStatusCode(ApiResultKind kind, Type bodyType) => kind switch
-    {
-        ApiResultKind.Success when bodyType == typeof(void) => 204,
-        ApiResultKind.Success => 200,
-        ApiResultKind.Created => 201,
-        ApiResultKind.Accepted => 202,
-        ApiResultKind.NoContent => 204,
-        ApiResultKind.ValidationFailed => 400,
-        ApiResultKind.Unauthorized => 401,
-        ApiResultKind.Forbidden => 403,
-        ApiResultKind.NotFound => 404,
-        ApiResultKind.Conflict => 409,
-        ApiResultKind.PreconditionFailed => 412,
-        ApiResultKind.RateLimited => 429,
-        ApiResultKind.DomainError => 422,
-        ApiResultKind.InfrastructureError => 500,
-        _ => 200
-    };
 
     static bool ShouldInferJsonBody(string method) =>
         !string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase)

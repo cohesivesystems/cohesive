@@ -72,14 +72,18 @@ public sealed class GraphQLSchemaEmitter : IApiCodeEmitter
             for (var i = 0; i < definition.Operations.Count; i++)
             {
                 var operation = definition.Operations[i];
-                var root = SelectRoot(operation);
+                if (operation.Http is not { } http)
+                    continue;
+
+                var root = SelectRoot(operation, http);
                 var usedNames = root == GraphQLRootKind.Query ? queryFieldNames : mutationFieldNames;
                 var field = new GraphQLRootField(
                     Name: CreateUniqueRootFieldName(operation, usedNames),
                     Description: operation.Description ?? operation.Summary,
-                    Arguments: BuildArguments(operation),
+                    Arguments: BuildArguments(operation, http),
                     Type: BuildOperationTypeRef(operation),
-                    Operation: operation
+                    Operation: operation,
+                    Http: http
                     );
 
                 if (root == GraphQLRootKind.Query)
@@ -97,13 +101,13 @@ public sealed class GraphQLSchemaEmitter : IApiCodeEmitter
             return types.OperationResultTypeRef(operation, required: true);
         }
 
-        IReadOnlyList<GraphQArgument> BuildArguments(ApiOperation operation)
+        IReadOnlyList<GraphQArgument> BuildArguments(ApiOperation operation, HttpBinding http)
         {
             List<GraphQArgument> arguments = [];
 
-            for (var i = 0; i < operation.Http.Parameters.Count; i++)
+            for (var i = 0; i < http.Parameters.Count; i++)
             {
-                var parameter = operation.Http.Parameters[i];
+                var parameter = http.Parameters[i];
                 if (parameter.Source != HttpParameterSource.Route)
                     continue;
 
@@ -113,9 +117,9 @@ public sealed class GraphQLSchemaEmitter : IApiCodeEmitter
                     Description: null));
             }
 
-            for (var i = 0; i < operation.Http.Parameters.Count; i++)
+            for (var i = 0; i < http.Parameters.Count; i++)
             {
-                var parameter = operation.Http.Parameters[i];
+                var parameter = http.Parameters[i];
                 if (parameter.Source is not (HttpParameterSource.Query or HttpParameterSource.Header))
                     continue;
 
@@ -125,7 +129,7 @@ public sealed class GraphQLSchemaEmitter : IApiCodeEmitter
                     Description: null));
             }
 
-            if (operation.Http.Query is { } query)
+            if (http.Query is { } query)
             {
                 arguments.Add(new(
                     Name: "request",
@@ -133,7 +137,7 @@ public sealed class GraphQLSchemaEmitter : IApiCodeEmitter
                     Description: null));
             }
 
-            if (operation.Http.Body is { } body)
+            if (http.Body is { } body)
             {
                 arguments.Add(new(
                     Name: "request",
@@ -157,6 +161,8 @@ public sealed class GraphQLSchemaEmitter : IApiCodeEmitter
             if (options.IncludeCohesiveDirectives)
             {
                 builder.AppendLine("directive @cohesiveOperation(id: String!, method: String!, route: String!, kind: String!, entity: String) on FIELD_DEFINITION");
+                builder.AppendLine("directive @cohesiveAuthorizationRequirement(id: String!, description: String) repeatable on FIELD_DEFINITION");
+                builder.AppendLine("directive @cohesiveSemanticReference(authority: String!, schemaVersion: String!, path: [String!]!, sourceReference: String, sourceSemanticPath: [String!], sourceDescription: String) repeatable on FIELD_DEFINITION");
                 builder.AppendLine("directive @scope(kind: String!, cardinality: String!, binding: String!, access: String!, singleScopeParameterName: String, multipleScopesParameterName: String, scopeModeParameterName: String, resourceParameterName: String, resourceDerivationStrategy: String, resourceDerivationFormat: String, resourceDerivationScopeField: String, allowDefaultScope: Boolean!) repeatable on FIELD_DEFINITION");
                 builder.AppendLine();
             }
@@ -223,11 +229,11 @@ public sealed class GraphQLSchemaEmitter : IApiCodeEmitter
                 builder.Append(" @cohesiveOperation(id: ");
                 AppendQuotedGraphQlString(builder, field.Operation.Id.Value);
                 builder.Append(", method: ");
-                AppendQuotedGraphQlString(builder, field.Operation.Http.Method.ToUpperInvariant());
+                AppendQuotedGraphQlString(builder, field.Http.Method.ToUpperInvariant());
                 builder.Append(", route: ");
-                AppendQuotedGraphQlString(builder, field.Operation.Http.Route);
+                AppendQuotedGraphQlString(builder, field.Http.Route);
                 builder.Append(", kind: ");
-                AppendQuotedGraphQlString(builder, field.Operation.Kind.ToString());
+                AppendQuotedGraphQlString(builder, ApiWireNames.OperationKind(field.Operation.Kind));
                 if (field.Operation.Entity is { } entity)
                 {
                     builder.Append(", entity: ");
@@ -235,10 +241,79 @@ public sealed class GraphQLSchemaEmitter : IApiCodeEmitter
                 }
 
                 builder.Append(')');
+                AppendAuthorizationRequirementDirectives(builder, field.Operation.AuthorizationRequirements);
+                AppendSemanticReferenceDirectives(builder, field.Operation.SemanticReferences);
                 AppendScopeDirectives(builder, field.Operation.ScopePolicies);
             }
 
             builder.AppendLine();
+        }
+
+        static void AppendAuthorizationRequirementDirectives(
+            StringBuilder builder,
+            IReadOnlyList<ApiAuthorizationRequirement> requirements)
+        {
+            for (var i = 0; i < requirements.Count; i++)
+            {
+                var requirement = requirements[i];
+                builder.Append(" @cohesiveAuthorizationRequirement(id: ");
+                AppendQuotedGraphQlString(builder, requirement.Id);
+                if (requirement.Description is { } description)
+                {
+                    builder.Append(", description: ");
+                    AppendQuotedGraphQlString(builder, description);
+                }
+
+                builder.Append(')');
+            }
+        }
+
+        static void AppendSemanticReferenceDirectives(
+            StringBuilder builder,
+            IReadOnlyList<ApiSemanticReference> references)
+        {
+            for (var i = 0; i < references.Count; i++)
+            {
+                var reference = references[i];
+                builder.Append(" @cohesiveSemanticReference(authority: ");
+                AppendQuotedGraphQlString(builder, reference.Authority);
+                builder.Append(", schemaVersion: ");
+                AppendQuotedGraphQlString(builder, reference.SchemaVersion.Value);
+                builder.Append(", path: ");
+                AppendGraphQlStringList(builder, reference.Path.Segments);
+                if (reference.Source is { } source)
+                {
+                    builder.Append(", sourceReference: ");
+                    AppendQuotedGraphQlString(builder, source.Reference);
+                    if (source.SemanticPath is { } sourcePath)
+                    {
+                        builder.Append(", sourceSemanticPath: ");
+                        AppendGraphQlStringList(builder, sourcePath.Segments);
+                    }
+
+                    if (source.Description is { } sourceDescription)
+                    {
+                        builder.Append(", sourceDescription: ");
+                        AppendQuotedGraphQlString(builder, sourceDescription);
+                    }
+                }
+
+                builder.Append(')');
+            }
+        }
+
+        static void AppendGraphQlStringList(StringBuilder builder, IReadOnlyList<string> values)
+        {
+            builder.Append('[');
+            for (var i = 0; i < values.Count; i++)
+            {
+                if (i > 0)
+                    builder.Append(", ");
+
+                AppendQuotedGraphQlString(builder, values[i]);
+            }
+
+            builder.Append(']');
         }
 
         static void AppendScopeDirectives(StringBuilder builder, IReadOnlyList<ApiScopePolicy> policies)
@@ -647,6 +722,39 @@ public sealed class GraphQLSchemaEmitter : IApiCodeEmitter
 
                 directives.Add(new JsonObject
                 {
+                    ["name"] = "cohesiveAuthorizationRequirement",
+                    ["description"] = "Declares one transport-neutral authorization requirement projected from a Cohesive API operation.",
+                    ["locations"] = new JsonArray(JsonValue.Create("FIELD_DEFINITION")),
+                    ["args"] = new JsonArray(
+                        BuildDirectiveArg("id", GraphQLTypeRef.NonNull(GraphQLTypeRef.Named("String", GraphQLNamedTypeKind.Scalar))),
+                        BuildDirectiveArg("description", GraphQLTypeRef.Named("String", GraphQLNamedTypeKind.Scalar))
+                        ),
+                    ["isRepeatable"] = true
+                });
+
+                directives.Add(new JsonObject
+                {
+                    ["name"] = "cohesiveSemanticReference",
+                    ["description"] = "Attributes a projected GraphQL field to an exact construct owned by a Cohesive semantic authority.",
+                    ["locations"] = new JsonArray(JsonValue.Create("FIELD_DEFINITION")),
+                    ["args"] = new JsonArray(
+                        BuildDirectiveArg("authority", GraphQLTypeRef.NonNull(GraphQLTypeRef.Named("String", GraphQLNamedTypeKind.Scalar))),
+                        BuildDirectiveArg("schemaVersion", GraphQLTypeRef.NonNull(GraphQLTypeRef.Named("String", GraphQLNamedTypeKind.Scalar))),
+                        BuildDirectiveArg(
+                            "path",
+                            GraphQLTypeRef.NonNull(GraphQLTypeRef.List(
+                                GraphQLTypeRef.NonNull(GraphQLTypeRef.Named("String", GraphQLNamedTypeKind.Scalar))))),
+                        BuildDirectiveArg("sourceReference", GraphQLTypeRef.Named("String", GraphQLNamedTypeKind.Scalar)),
+                        BuildDirectiveArg(
+                            "sourceSemanticPath",
+                            GraphQLTypeRef.List(GraphQLTypeRef.NonNull(GraphQLTypeRef.Named("String", GraphQLNamedTypeKind.Scalar)))),
+                        BuildDirectiveArg("sourceDescription", GraphQLTypeRef.Named("String", GraphQLNamedTypeKind.Scalar))
+                        ),
+                    ["isRepeatable"] = true
+                });
+
+                directives.Add(new JsonObject
+                {
                     ["name"] = "scope",
                     ["description"] = "Describes the semantic scope policy for a Cohesive API operation.",
                     ["locations"] = new JsonArray(JsonValue.Create("FIELD_DEFINITION")),
@@ -679,15 +787,15 @@ public sealed class GraphQLSchemaEmitter : IApiCodeEmitter
             ["defaultValue"] = null
         };
 
-        static GraphQLRootKind SelectRoot(ApiOperation operation)
+        static GraphQLRootKind SelectRoot(ApiOperation operation, HttpBinding http)
         {
             if (operation.Kind == ApiOperationKind.Query)
                 return GraphQLRootKind.Query;
             if (operation.Kind == ApiOperationKind.Command)
                 return GraphQLRootKind.Mutation;
 
-            return string.Equals(operation.Http.Method, "GET", StringComparison.OrdinalIgnoreCase)
-                   || string.Equals(operation.Http.Method, "HEAD", StringComparison.OrdinalIgnoreCase)
+            return string.Equals(http.Method, "GET", StringComparison.OrdinalIgnoreCase)
+                   || string.Equals(http.Method, "HEAD", StringComparison.OrdinalIgnoreCase)
                 ? GraphQLRootKind.Query
                 : GraphQLRootKind.Mutation;
         }
@@ -1093,7 +1201,8 @@ public sealed class GraphQLSchemaEmitter : IApiCodeEmitter
         string? Description,
         IReadOnlyList<GraphQArgument> Arguments,
         GraphQLTypeRef Type,
-        ApiOperation Operation);
+        ApiOperation Operation,
+        HttpBinding Http);
 
     sealed record GraphQArgument(string Name, GraphQLTypeRef Type, string? Description) : GraphQLInputValue(Name, Type, Description);
 

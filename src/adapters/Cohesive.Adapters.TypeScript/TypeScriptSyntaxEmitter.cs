@@ -414,6 +414,10 @@ public static class TypeScriptSyntaxEmitter
                 writer.Write(literal.Value ? "true" : "false");
                 return;
 
+            case TsNullLiteralExpression:
+                writer.Write("null");
+                return;
+
             case TsArrayLiteralExpression array:
                 WriteArrayLiteralExpression(array, ref writer);
                 return;

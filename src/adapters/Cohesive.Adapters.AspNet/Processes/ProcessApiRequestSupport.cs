@@ -14,7 +14,7 @@ static class ProcessApiRequestSupport
             .ReadOperationRequestAsync(httpContext, operation, ct)
             .ConfigureAwait(false);
 
-        if (request is null && operation.Http.Query is not null)
+        if (request is null && operation.Http?.Query is not null)
             return JsonSerializer.Deserialize<TRequest>("{}", DefaultJsonOptions) ?? default!;
 
         if (request is null)

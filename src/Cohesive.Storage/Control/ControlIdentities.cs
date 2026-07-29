@@ -52,6 +52,27 @@ internal static class ControlDerivedIdentity
         return new(builder.ToString());
     }
 
+    internal static ControlActuationId LimitUpdateActuation(
+        ControlLimitUpdateReceipt receipt,
+        ControlApplicationPoint applicationPoint)
+    {
+        var command = receipt.Command;
+        var builder = new StringBuilder("control-limit-update-actuation/v1");
+        Append(builder, command.CommandId.Value);
+        Append(builder, command.IdempotencyKey.Value);
+        Append(builder, command.LoopId.Value);
+        Append(builder, command.Target);
+        Append(builder, command.Epoch.Value);
+        Append(builder, command.DefinitionFingerprint.Algorithm);
+        Append(builder, command.DefinitionFingerprint.Canonicalization);
+        Append(builder, command.DefinitionFingerprint.Value);
+        Append(builder, receipt.AcceptedRevision.Value);
+        Append(builder, applicationPoint.Fence.Value);
+        Append(builder, applicationPoint.Id.Value);
+        Append(builder, applicationPoint.Authority);
+        return new(builder.ToString());
+    }
+
     static void Append(StringBuilder builder, string value) =>
         builder
             .Append(':')
