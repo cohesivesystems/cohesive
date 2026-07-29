@@ -19,7 +19,12 @@ public sealed class ExecutionIdentityTests
             new ProcessAttemptId("attempt/process-2"),
             new ActivationId("activation/reserve-1"),
             new TokenId("token/branch-3"),
-            new OperationAttemptId("operation-attempt/charge-1")
+            new OperationAttemptId("operation-attempt/charge-1"),
+            new EmissionId("emission/request-1"),
+            new InteractionCorrelationId("correlation/order-123"),
+            new InteractionIdempotencyKey("idempotency/charge-order-123"),
+            new InteractionValueSchemaRevision("value-schema/2"),
+            new RequestTerminalOutcomeId("outcome/approved")
         ];
 
         foreach (var identity in identities)
@@ -46,7 +51,12 @@ public sealed class ExecutionIdentityTests
             static value => new ProcessAttemptId(value),
             static value => new ActivationId(value),
             static value => new TokenId(value),
-            static value => new OperationAttemptId(value)
+            static value => new OperationAttemptId(value),
+            static value => new EmissionId(value),
+            static value => new InteractionCorrelationId(value),
+            static value => new InteractionIdempotencyKey(value),
+            static value => new InteractionValueSchemaRevision(value),
+            static value => new RequestTerminalOutcomeId(value)
         ];
 
         foreach (var factory in factories)
@@ -65,6 +75,9 @@ public sealed class ExecutionIdentityTests
         Assert.NotEqual<object>(new ProcessInstanceId(value), new ProcessAttemptId(value));
         Assert.NotEqual<object>(new ActivationId(value), new TokenId(value));
         Assert.NotEqual<object>(new TokenId(value), new OperationAttemptId(value));
+        Assert.NotEqual<object>(new EmissionId(value), new InteractionCorrelationId(value));
+        Assert.NotEqual<object>(new InteractionCorrelationId(value), new InteractionIdempotencyKey(value));
+        Assert.NotEqual<object>(new InteractionValueSchemaRevision(value), new RequestTerminalOutcomeId(value));
     }
 
     [Fact]

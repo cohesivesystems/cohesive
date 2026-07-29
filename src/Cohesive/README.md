@@ -34,6 +34,45 @@ var graph = new ClrShapeGraphBuilder()
 
 `Cohesive` is the foundation package. Higher-level blocks such as `Cohesive.Relations`, `Cohesive.Transitions`, `Cohesive.Processes`, `Cohesive.Presentation`, and `Cohesive.Api` depend on it.
 
+## Canonical execution interactions
+
+`Cohesive.Execution` separates reusable interaction contracts from their runtime emissions.
+`InteractionContractDefinition` is the persisted semantic authority, carried by the shared
+`ExecutionDefinitionDocument`; `InteractionEnvelope` is a versioned runtime value that references one exact,
+typed contract revision and carries its stable emission identity, origin, correlation and causation, authority
+scope, idempotency basis, ordering, delivery demands, and provenance. Payloads and terminal values are
+materialized `PortableValue` instances rather than CLR or transport values, and their exact referenced contracts
+carry the explicit schema revisions.
+
+The contract and envelope algebras are closed over four kinds:
+
+- A domain event records a fact and creates no emitter-side response obligation.
+- A Request creates a typed terminal response obligation and names where that response is consumed.
+- A Signal is an addressed one-way input with no response obligation.
+- A Reply identifies the Request emission it discharges and carries one declared result, failure, timeout, or
+  cancellation outcome.
+
+Request contracts make terminal variants, timeout and cancellation support, retry and ambiguous-outcome
+semantics, late/stale/duplicate-result disposition, retention, and unresolved-result handling explicit. A Request
+envelope carries an exact semantic address for either a durable Process token or a Transition continuation; those
+alternatives are distinct types rather than transport addresses or loosely interpreted strings. The current
+interaction reader validates contract, payload, and Reply-outcome links. Definition/node resolution for Process
+tokens, Transition origins, and Transition continuation addresses belongs to the Process/Transition compiler and
+durable result-admission work, where the referenced definitions and live continuation state are available.
+
+Persistence events are not interaction kinds. Change-feed records, checkpoint history, and outbox storage records
+describe reconstruction, audit, and delivery mechanisms; an adapter must not treat them as domain events unless a
+canonical domain-event contract and envelope explicitly provide that meaning.
+
+`InteractionContractDocuments`, `InteractionContractCatalog`, `InteractionEnvelopeValidator`, and
+`InteractionEnvelopeJsonSerializer` enforce exact schema, revision, fingerprint, discriminator, payload, and Reply
+outcome links with structured diagnostics; envelope admission requires the linked catalog rather than trusting a
+wire discriminator in isolation. The existing `EffectRequest`, delegate-bound continuations, raw Process
+signal payloads, and `EntityOutboxMessage` types remain migration surfaces for current runtimes. They may produce or
+carry canonical interactions, but they are not a parallel semantic authority; durable dispatch, inbox/outbox,
+definition/node resolution, deduplication, acknowledgement, retry/timeout triggering, and reconciliation or
+escalation path enforcement belong to subsequent compiler and runtime work.
+
 ## Expression IR and Analysis
 
 `Expr` is the portable, non-generic expression IR shared by Cohesive languages. An expression
