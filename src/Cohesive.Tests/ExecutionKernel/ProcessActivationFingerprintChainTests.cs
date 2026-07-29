@@ -153,6 +153,7 @@ public sealed class ProcessActivationFingerprintChainTests
         var acquired = await store.AcquireWorkerAsync(
             Context,
             initial.ContinuationIdentity.ProcessInstanceId,
+            initialized.Snapshot!.Revision,
             Worker,
             TimeSpan.FromHours(1),
             fixture.Start.AcceptedAtUtc.AddSeconds(1));
@@ -185,7 +186,7 @@ public sealed class ProcessActivationFingerprintChainTests
             [],
             fixture.Checkpoint.UpdatedAtUtc);
 
-        var result = await store.CommitAsync(Context, commit);
+        var result = await ProcessDurabilityTestFixture.CommitAtEvidenceTimeAsync(store, commit);
 
         Assert.Equal(ProcessStoreMutationDisposition.IdentityConflict, result.Disposition);
         Assert.Equal(snapshot.Revision, result.Snapshot!.Revision);

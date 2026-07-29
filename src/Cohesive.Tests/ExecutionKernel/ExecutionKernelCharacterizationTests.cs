@@ -9,21 +9,21 @@ namespace Cohesive.Tests.ExecutionKernel;
 /// <summary>
 /// Characterizes current canonical reference semantics and legacy Transitions and Processes behavior against
 /// the EK-01 through EK-09 scenarios. These tests intentionally describe current compatibility boundaries; they
-/// include ARI-166's in-memory physical durability interpretation as an executable reference-storage oracle, but
-/// do not claim a production storage adapter or hosted runtime realization.
+/// include ARI-168's durable Process runtime and in-memory physical durability interpretation as an executable
+/// reference oracle, but do not claim a production storage adapter or hosted runtime realization.
 /// </summary>
 public sealed class ExecutionKernelCharacterizationTests
 {
     static readonly IReadOnlyList<KernelScenarioClassification> ScenarioClassifications =
     [
         new("EK-01", KernelScenarioStatus.Pass, "Canonical structured Transition IR, path-sensitive static compilation, full-state and sparse non-I/O reference interpretation, actual execution evidence, conflict detection, and fingerprint-bound Machine-edge linking satisfy the EK-01 reference path."),
-        new("EK-02", KernelScenarioStatus.Partial, "The canonical Process reference interpreter retains complete AwaitMatch registrations, computed timers, early inputs, winner and loser evidence, and deterministic priority/clause/input arbitration in immutable continuation state; ARI-166 now persists that complete continuation and durable inbox disposition in a versioned, atomic in-memory reference checkpoint, while production storage adapters and hosted wake-up scheduling remain absent."),
-        new("EK-03", KernelScenarioStatus.Partial, "The canonical Process reference interpreter emits one stable typed Request, retains its response obligation, admits an exact Reply outcome once, and prevents a linear inbound Reply obligation from being consumed across a Fork or resurrected by Join state; ARI-166 now atomically couples complete checkpoints with exact Request outbox and durable-operation ledgers in reference storage, while production dispatch and host-operation runtime integration remain absent."),
-        new("EK-04", KernelScenarioStatus.Partial, "The canonical Process reference interpreter now executes a stable token set with Fork membership, independent branch bindings, deterministic scheduling, reciprocal Join thresholds and tie-breaks, and replay-stable trace evidence; ARI-166 persists complete multi-token continuations through versioned reference checkpoints with compare-and-swap commits, while production storage adapters and hosted scheduling remain absent."),
+        new("EK-02", KernelScenarioStatus.Partial, "The canonical Process reference interpreter retains complete AwaitMatch registrations, computed timers, early inputs, winner and loser evidence, and deterministic priority/clause/input arbitration in immutable continuation state; the durable reference driver restores that continuation and atomically commits inbox dispositions, while production storage, timer, interaction, and hosted wake-up adapters remain absent."),
+        new("EK-03", KernelScenarioStatus.Partial, "The canonical Process reference interpreter emits one stable typed Request, retains its response obligation, admits an exact Reply outcome once, and prevents a linear inbound Reply obligation from being consumed across a Fork or resurrected by Join state; the durable reference driver atomically couples origin progress, dispatch, acknowledgement, exact Reply admission, and checkpoint persistence, while vendor/manual provider adapters and full workflow conformance remain absent."),
+        new("EK-04", KernelScenarioStatus.Partial, "The canonical Process reference interpreter executes a stable token set with Fork membership, independent branch bindings, deterministic scheduling, reciprocal Join thresholds and tie-breaks, and replay-stable trace evidence; the durable reference driver restores and advances complete multi-token continuations under compare-and-swap and worker fencing, while production storage adapters and end-to-end partial-branch crash conformance remain absent."),
         new("EK-05", KernelScenarioStatus.Partial, "Canonical Process invocation can coordinate independent exact Transition subjects without copying aggregate state; canonical Process IR still has no scope, guarantee-demand, capability-evidence, compensation, or reconciliation construct."),
-        new("EK-06", KernelScenarioStatus.Partial, "The canonical reference protocol models stable logical identity, scoped deduplication, fenced claims, attempt history, failure phases, acknowledgement, reconciliation, and replay-safe result admission across the crash cuts; ARI-166 now realizes atomic checkpoint, inbox, outbox, and operation-ledger commits with leases, fencing, idempotent commit replay, and before/after-commit crash semantics in the in-memory physical reference store, while production adapters and external publication hosting remain absent."),
-        new("EK-07", KernelScenarioStatus.Partial, "Canonical Process reference state now buffers early Signals, deduplicates logical emissions, selects exactly one AwaitMatch winner by stable policy, and dispositions late losers without reopening the wait; ARI-166 adds atomic durable inbox admission, compare-and-swap lost-wakeup protection, and exact wait-occurrence targeting in reference storage, while production delivery hosting remains absent."),
-        new("EK-08", KernelScenarioStatus.Partial, "Canonical Process control now models stable attempt and activation identity, safe-point-aware pause/continue and restart, and write-once attempt affinities that can carry an index candidate generation; ARI-166 composes Control lineage and attempt-affinity evidence into complete durable reference checkpoints protected by worker leases and fences, while generation allocation, cleanup, promotion, hosted recovery, and production storage adapters remain absent."),
+        new("EK-06", KernelScenarioStatus.Pass, "The canonical durable runtime now realizes stable logical operation identity, fenced and renewable claims, attempt history, adapter execution outside the instance gate, acknowledgement, exact Reply admission, authored ambiguous-outcome recovery, and replay-safe atomic checkpoint, inbox, outbox, and operation-ledger commits across before/after-commit crash cuts; the in-memory store and scripted adapter provide the executable reference interpretation required by EK-06."),
+        new("EK-07", KernelScenarioStatus.Pass, "Canonical Process state and the durable runtime now admit Signals through Control as atomic inbox evidence, preserve exact wait-occurrence targets, buffer early delivery, consume one deterministic winner, persist typed duplicate and late-loser dispositions without reopening the wait, and replay both commands and activations inertly; the in-memory store provides the executable reference interpretation required by EK-07."),
+        new("EK-08", KernelScenarioStatus.Partial, "The durable reference driver composes stable Process instance, attempt, activation, checkpoint, and write-once affinity evidence: pause/continue retain the attempt and generation binding, same-attempt recovery preserves them, and RestartAttempt creates one clean fenced replacement without inherited affinity; physical generation allocation, cleanup, promotion, backend swap, and production storage adapters remain absent."),
         new("EK-09", KernelScenarioStatus.Partial, "Representative entity Transitions lower from typed C# to fingerprint-equivalent canonical IR, and Processes now have direct callback-free canonical IR; Process C# lowering and runtime migration remain incomplete.")
     ];
 
@@ -34,10 +34,14 @@ public sealed class ExecutionKernelCharacterizationTests
             ["EK-01", "EK-02", "EK-03", "EK-04", "EK-05", "EK-06", "EK-07", "EK-08", "EK-09"],
             ScenarioClassifications.Select(static scenario => scenario.Id));
         Assert.All(ScenarioClassifications, static scenario => Assert.NotEmpty(scenario.Evidence));
-        var passing = Assert.Single(
-            ScenarioClassifications,
-            static scenario => scenario.Status == KernelScenarioStatus.Pass);
-        Assert.Equal("EK-01", passing.Id);
+        Assert.Equal(
+            ["EK-01", "EK-06", "EK-07"],
+            ScenarioClassifications
+                .Where(static scenario => scenario.Status == KernelScenarioStatus.Pass)
+                .Select(static scenario => scenario.Id));
+        Assert.Equal(
+            KernelScenarioStatus.Partial,
+            Assert.Single(ScenarioClassifications, static scenario => scenario.Id == "EK-08").Status);
     }
 
     [Fact]

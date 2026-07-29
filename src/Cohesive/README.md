@@ -102,13 +102,11 @@ reconciliation and escalation intents, acknowledgement, and target admission. It
 explicit: a Request durable before dispatch remains pending; a dispatched call without acknowledgement becomes
 ambiguous and may be retried only with declared idempotency evidence or after reconciliation; and an acknowledgement
 replayed before target admission skips external execution and reuses the target's durable disposition. Late,
-duplicate, conflicting, and stale evidence remain observable. Callers still choose and persist each cut. Physical
-compare-and-swap, atomic origin commit plus outbox publication, operation-ledger persistence, lease storage, inbox
-admission, and atomic coupling to Process checkpoints or Transition commits are deliberately deferred to the
-Cohesive.Storage realization in ARI-166. Consequently, EK-06 remains Partial at the system-runtime level even though
-its reference protocol is represented and testable. The v1 state schema makes the reference value inspectable, but
-ARI-161 does not introduce a Storage ledger/checkpoint serializer or claim that writing this record alone supplies
-durable atomicity.
+duplicate, conflicting, and stale evidence remain observable. `Cohesive.Storage.Processes.ProcessDurableRuntime`
+now persists and drives those cuts over the atomic Process aggregate: it commits the Request with origin progress,
+records dispatch before adapter I/O, reloads and fences returned evidence, and atomically couples final operation
+disposition with Reply inbox admission. The core executor remains repository-free and reusable; production storage
+and operation adapters must separately prove the capabilities they claim.
 
 The existing `EffectRequest`, delegate-bound continuations, raw Process signal payloads, `EntityOutboxMessage`, and
 legacy Process retry/dead-letter paths remain migration surfaces. They may be adapted to canonical Requests and
@@ -152,8 +150,8 @@ bound to their exact latest receipt or observation cut, while replay results nev
 bind a candidate generation through a stable Process semantic slot: pause/continue retain that binding, while a
 new attempt produced by RestartAttempt begins unbound and therefore requires a fresh generation. Cohesive.Storage,
 not the control protocol, owns physical generation allocation, persistence, cleanup, exclusion, promotion, and
-backend swap. The reference executor likewise does not supply atomic checkpoint/CAS persistence, inbox commits,
-or worker fencing; those physical cuts and legacy Process-runtime integration belong to ARI-166 and ARI-168.
+backend swap. The reference executor itself remains persistence-neutral; the Storage-owned durable Process runtime
+now composes it with atomic checkpoint/CAS persistence, inbox commits, worker fencing, and clean attempt restart.
 
 ## Expression IR and Analysis
 

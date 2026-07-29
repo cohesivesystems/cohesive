@@ -67,7 +67,7 @@ public sealed class ProcessDurabilityFinalInvariantRegressionTests
             [],
             observedAtUtc);
 
-        var result = await scenario.Store.CommitAsync(Context, commit);
+        var result = await ProcessDurabilityTestFixture.CommitAtEvidenceTimeAsync(scenario.Store, commit);
 
         Assert.Equal(ProcessStoreMutationDisposition.IdentityConflict, result.Disposition);
         Assert.Equal(scenario.Snapshot.Revision, result.Snapshot!.Revision);
@@ -267,6 +267,7 @@ public sealed class ProcessDurabilityFinalInvariantRegressionTests
         var acquired = await store.AcquireWorkerAsync(
             Context,
             restarted.ContinuationIdentity.ProcessInstanceId,
+            initialized.Snapshot!.Revision,
             Worker,
             TimeSpan.FromHours(1),
             restartedAtUtc);

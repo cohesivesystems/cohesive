@@ -322,20 +322,30 @@ public interface IProcessDurableStore
     /// <summary>Acquires or reclaims leased and fenced activation ownership.</summary>
     /// <param name="context">Operation context and cancellation.</param>
     /// <param name="instanceId">Logical Process instance.</param>
+    /// <param name="expectedRevision">
+    /// Physical revision whose checkpoint passed compatibility admission before this ownership request.
+    /// </param>
     /// <param name="owner">Stable physical worker identity.</param>
     /// <param name="leaseDuration">Strictly positive ownership lifetime.</param>
     /// <param name="observedAtUtc">UTC claim observation.</param>
-    /// <returns>Acquisition, replay, held-lease, or missing-instance evidence.</returns>
+    /// <returns>Acquisition, replay, revision-conflict, held-lease, or missing-instance evidence.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="context"/> or <paramref name="owner"/> is null.</exception>
     /// <exception cref="ArgumentException">
-    /// An identity is default, <paramref name="owner"/> is empty, <paramref name="leaseDuration"/> is not positive,
-    /// <paramref name="observedAtUtc"/> is not UTC, or the observation predates retained aggregate or lease
-    /// evidence.
+    /// The instance or expected-revision identity is default, <paramref name="owner"/> is empty,
+    /// <paramref name="leaseDuration"/> is not positive, <paramref name="observedAtUtc"/> is not UTC, or the
+    /// observation predates retained aggregate or lease evidence.
     /// </exception>
     /// <exception cref="OperationCanceledException">The operation was cancelled before the atomic boundary.</exception>
+    /// <remarks>
+    /// An exact retry of a committed acquisition may replay from its retained owner and lease-time evidence even
+    /// after another compatible aggregate mutation advances the physical revision. Every acquisition that would
+    /// create or replace a lease requires <paramref name="expectedRevision"/> to match the current aggregate
+    /// revision.
+    /// </remarks>
     Task<ProcessStoreMutationResult> AcquireWorkerAsync(
         OperationContext context,
         ProcessInstanceId instanceId,
+        ProcessStorageRevision expectedRevision,
         string owner,
         TimeSpan leaseDuration,
         DateTimeOffset observedAtUtc);
@@ -347,7 +357,7 @@ public interface IProcessDurableStore
     /// <param name="fence">Exact worker fence to renew.</param>
     /// <param name="leaseDuration">Strictly positive replacement lifetime.</param>
     /// <param name="observedAtUtc">UTC renewal observation.</param>
-    /// <returns>Renewal, stale-fence, expired-lease, or missing-instance evidence.</returns>
+    /// <returns>Renewal, replay/subsumption, stale-fence, expired-lease, or missing-instance evidence.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="context"/> or <paramref name="owner"/> is null.</exception>
     /// <exception cref="ArgumentException">
     /// An identity is default, <paramref name="owner"/> is empty, <paramref name="leaseDuration"/> is not positive,
@@ -355,6 +365,10 @@ public interface IProcessDurableStore
     /// evidence.
     /// </exception>
     /// <exception cref="OperationCanceledException">The operation was cancelled before the atomic boundary.</exception>
+    /// <remarks>
+    /// An exact retry replays when retained lease evidence proves the requested renewal, including when a later
+    /// same-fence renewal or compatible aggregate mutation already subsumes its requested expiry.
+    /// </remarks>
     Task<ProcessStoreMutationResult> RenewWorkerAsync(
         OperationContext context,
         ProcessInstanceId instanceId,
@@ -371,6 +385,11 @@ public interface IProcessDurableStore
     /// <paramref name="context"/> or <paramref name="commit"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="OperationCanceledException">The operation was cancelled before the atomic boundary.</exception>
+    /// <remarks>
+    /// The provider must evaluate worker-lease liveness at its physical commit boundary using the current time
+    /// exposed by <paramref name="context"/> (or a stricter provider-owned clock). <see cref="ProcessDurableCommit.ObservedAtUtc"/>
+    /// is deterministic checkpoint evidence and must never substitute for that fresh fencing observation.
+    /// </remarks>
     Task<ProcessStoreMutationResult> CommitAsync(OperationContext context, ProcessDurableCommit commit);
 }
 

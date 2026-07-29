@@ -87,7 +87,7 @@ public static class ProcessCheckpointCompatibilityValidator
         }
 
         diagnostics.AddRange(ProcessContinuationValidator.Validate(plan, checkpoint.Continuation).Diagnostics);
-        ValidateActivationEvidence(checkpoint, diagnostics);
+        ValidateActivationEvidence(plan, checkpoint, diagnostics);
         ValidateOperationReceipts(plan, checkpoint, diagnostics);
         ValidateInboxEvidence(plan, checkpoint, diagnostics);
         ValidateEmissionLedger(plan, checkpoint, diagnostics);
@@ -97,12 +97,25 @@ public static class ProcessCheckpointCompatibilityValidator
     }
 
     static void ValidateActivationEvidence(
+        CompiledProcessPlan plan,
         ProcessDurableCheckpoint checkpoint,
         List<DocumentValidationDiagnostic> diagnostics)
     {
         for (var activationIndex = 0; activationIndex < checkpoint.Activations.Length; activationIndex++)
         {
             var receipt = checkpoint.Activations[activationIndex];
+            var activationValidation = ProcessReferenceInterpreter.ValidateActivationRequest(
+                plan,
+                receipt.Continuation,
+                receipt.Activation);
+            foreach (var diagnostic in activationValidation.Diagnostics)
+            {
+                diagnostics.Add(diagnostic with
+                {
+                    Location = $"/activations/{activationIndex}{diagnostic.Location ?? string.Empty}"
+                });
+            }
+
             for (var traceIndex = 0; traceIndex < receipt.Evidence.Trace.Length; traceIndex++)
             {
                 var trace = receipt.Evidence.Trace[traceIndex];
@@ -168,16 +181,62 @@ public static class ProcessCheckpointCompatibilityValidator
         {
             var receipt = checkpoint.Activations[activationIndex];
             var key = (receipt.Continuation.ProcessAttemptId, receipt.Activation.Id);
-            if (safePointActivations.Contains(key))
+            if (safePointActivations.Contains(key)
+                || IsImmediateCancellationActivation(plan, checkpoint, receipt))
             {
                 continue;
             }
 
             diagnostics.Add(Error(
                 ProcessCheckpointDiagnosticCodes.ActivationReceiptIncompatible,
-                "Committed activation receipt has no exact lifecycle-control safe-point evidence.",
+                "Committed activation receipt has no exact lifecycle-control durable-cut evidence.",
                 $"/activations/{activationIndex}"));
         }
+    }
+
+    static bool IsImmediateCancellationActivation(
+        CompiledProcessPlan plan,
+        ProcessDurableCheckpoint checkpoint,
+        ProcessActivationCommitReceipt activation)
+    {
+        if (activation.Disposition != ProcessActivationDisposition.Cancelled
+            || activation.Activation.Cause is not (ProcessActivationCause.Control or ProcessActivationCause.Recovery)
+            || activation.Activation.Cancellation is not { } cancellation
+            || cancellation.AttemptId != activation.Continuation.ProcessAttemptId)
+        {
+            return false;
+        }
+
+        if (!ProcessReferenceInterpreter.ValidateActivationRequest(
+                plan,
+                activation.Continuation,
+                activation.Activation).IsValid)
+        {
+            return false;
+        }
+
+        var attempt = checkpoint.Control.Attempts.SingleOrDefault(candidate =>
+            candidate.AttemptId == activation.Continuation.ProcessAttemptId);
+        if (attempt is not
+            {
+                Disposition: ProcessControlAttemptDisposition.Cancelled,
+                Closure: { InterruptedActivation: null } closure
+            })
+        {
+            return false;
+        }
+
+        var receipt = checkpoint.Control.FindReceipt(closure.CommandId);
+        return receipt is
+        {
+            Command: CancelProcessCommand command,
+            Disposition: ProcessControlReceiptDisposition.Applied
+        }
+            && command.Expectation?.Continuation == activation.Continuation
+            && command.Reason == cancellation.Reason
+            && receipt.RecordedAtUtc == closure.OccurredAtUtc
+            && receipt.RecordedAtUtc == activation.Activation.ObservedAtUtc
+            && activation.CommittedAtUtc >= receipt.RecordedAtUtc;
     }
 
     static void ValidateInboxEvidence(
@@ -220,15 +279,17 @@ public static class ProcessCheckpointCompatibilityValidator
 
                 var exactInput = trace.Emission is { } emission
                     && inbox.TryGetValue(emission, out var entry)
-                    && activation.Activation.Inputs.Any(input =>
-                        input.Envelope.Context.EmissionId == emission
-                        && ProcessStorageContentFingerprints.Input(input)
-                            == ProcessStorageContentFingerprints.Input(entry.Input));
+                    && checkpoint.Activations.Take(activationIndex + 1).Any(candidate =>
+                        candidate.Continuation == activation.Continuation
+                        && candidate.Activation.Inputs.Any(input =>
+                            input.Envelope.Context.EmissionId == emission
+                            && ProcessStorageContentFingerprints.Input(input)
+                                == ProcessStorageContentFingerprints.Input(entry.Input)));
                 if (!exactInput)
                 {
                     diagnostics.Add(Error(
                         ProcessCheckpointDiagnosticCodes.InboxReceiptIncompatible,
-                        "Committed InputAdmitted trace has no exact activation input and durable inbox entry.",
+                        "Committed InputAdmitted trace has no exact prior presentation and durable inbox entry.",
                         $"/activations/{activationIndex}/evidence/trace/{traceIndex}/emission"));
                 }
             }
@@ -256,19 +317,24 @@ public static class ProcessCheckpointCompatibilityValidator
                 continue;
             }
 
-            var witnessed = checkpoint.Activations.Any(activation =>
+            var decidingActivation = checkpoint.Activations.FirstOrDefault(activation =>
                 activation.Continuation == continuation
                 && activation.Activation.ObservedAtUtc == receipt.ObservedAtUtc
-                && activation.Activation.Inputs.Any(input =>
-                    ProcessStorageContentFingerprints.Input(input)
-                        == ProcessStorageContentFingerprints.Input(entry.Input))
                 && activation.Evidence.Trace.Any(trace =>
                     trace.Kind == ProcessTraceEventKind.InputAdmitted
                     && trace.Continuation == continuation
                     && trace.Emission == entry.EmissionId
                     && trace.InputDisposition == receipt.Disposition
                     && trace.WaitRegistrationId == receipt.WaitRegistrationId));
-            if (!witnessed)
+            var witnessed = decidingActivation is not null
+                && checkpoint.Activations.Any(activation =>
+                    activation.Continuation == continuation
+                    && activation.Sequence <= decidingActivation.Sequence
+                    && activation.Activation.Inputs.Any(input =>
+                        ProcessStorageContentFingerprints.Input(input)
+                            == ProcessStorageContentFingerprints.Input(entry.Input)));
+            if (!witnessed
+                && !IsRestartAbandonmentDisposition(checkpoint, receipt, continuation))
             {
                 diagnostics.Add(Error(
                     ProcessCheckpointDiagnosticCodes.InboxReceiptIncompatible,
@@ -278,6 +344,39 @@ public static class ProcessCheckpointCompatibilityValidator
         }
     }
 
+    static bool IsRestartAbandonmentDisposition(
+        ProcessDurableCheckpoint checkpoint,
+        ProcessInputReceipt receipt,
+        ProcessContinuationIdentity continuation)
+    {
+        if (receipt.Disposition != ProcessInputAdmissionDisposition.Stale)
+        {
+            return false;
+        }
+
+        var attempt = checkpoint.Control.Attempts.SingleOrDefault(candidate =>
+            candidate.AttemptId == continuation.ProcessAttemptId);
+        if (attempt is not
+            {
+                Disposition: ProcessControlAttemptDisposition.Abandoned,
+                Closure: { } closure
+            })
+        {
+            return false;
+        }
+
+        var controlReceipt = checkpoint.Control.FindReceipt(closure.CommandId);
+        return controlReceipt is
+        {
+            Command: RestartProcessAttemptCommand command,
+            Disposition: ProcessControlReceiptDisposition.Applied
+        }
+            && command.Expectation?.Continuation == continuation
+            && command.Plan.NewAttemptId == checkpoint.Control.CurrentAttempt.AttemptId
+            && controlReceipt.RecordedAtUtc == closure.OccurredAtUtc
+            && receipt.ObservedAtUtc == closure.OccurredAtUtc;
+    }
+
     static void ValidateEmissionLedger(
         CompiledProcessPlan plan,
         ProcessDurableCheckpoint checkpoint,
@@ -285,7 +384,9 @@ public static class ProcessCheckpointCompatibilityValidator
     {
         var emissions = checkpoint.Emissions.ToDictionary(static emission => emission.EmissionId);
         var durableOperations = checkpoint.DurableOperations.ToDictionary(static operation => operation.OperationId);
-        HashSet<EmissionId> traceOrigins = [];
+        var contracts = plan.ValidationContext.InteractionContracts;
+        Dictionary<EmissionId, int> producerClaims = [];
+        HashSet<EmissionId> exactOrigins = [];
         for (var activationIndex = 0; activationIndex < checkpoint.Activations.Length; activationIndex++)
         {
             var activation = checkpoint.Activations[activationIndex];
@@ -298,11 +399,20 @@ public static class ProcessCheckpointCompatibilityValidator
                     continue;
                 }
 
-                if (trace.Emission is not { } emission
-                    || !emissions.TryGetValue(emission, out var outbox)
+                if (trace.Emission is not { } emission)
+                {
+                    diagnostics.Add(Error(
+                        ProcessCheckpointDiagnosticCodes.EmissionLedgerIncompatible,
+                        "Committed InteractionEmitted trace has no unique exact-origin durable outbox record.",
+                        $"/activations/{activationIndex}/evidence/trace/{traceIndex}/emission"));
+                    continue;
+                }
+
+                AddProducerClaim(producerClaims, emission);
+                if (!emissions.TryGetValue(emission, out var outbox)
                     || outbox.EnqueuedAtUtc != activation.CommittedAtUtc
                     || !TraceMatchesEnvelope(plan, trace, outbox.Envelope)
-                    || !traceOrigins.Add(emission))
+                    || !exactOrigins.Add(emission))
                 {
                     diagnostics.Add(Error(
                         ProcessCheckpointDiagnosticCodes.EmissionLedgerIncompatible,
@@ -312,17 +422,36 @@ public static class ProcessCheckpointCompatibilityValidator
             }
         }
 
-        var operationOrigins = checkpoint.Operations
-            .SelectMany(static operation =>
-                operation.Result.IsValidOutcome()
-                    ? operation.Result.Emissions
-                    : [])
-            .Select(static emission => emission.Context.EmissionId)
-            .ToHashSet();
+        foreach (var receipt in checkpoint.Operations)
+        {
+            if (!receipt.Result.IsValidOutcome()
+                || !plan.Definition.Nodes.Any(node => node.Id == receipt.Key.Node)
+                || !TryGetOperationDefinition(
+                    plan.GetNode(receipt.Key.Node),
+                    out _,
+                    out var expectedKind))
+            {
+                continue;
+            }
+
+            foreach (var envelope in receipt.Result.Emissions)
+            {
+                var emission = envelope.Context.EmissionId;
+                AddProducerClaim(producerClaims, emission);
+                if (emissions.TryGetValue(emission, out var outbox)
+                    && outbox.EnqueuedAtUtc == receipt.RecordedAtUtc
+                    && ProcessStorageContentFingerprints.Envelope(outbox.Envelope)
+                        == ProcessStorageContentFingerprints.Envelope(envelope)
+                    && HostOperationOriginMatches(plan, receipt, expectedKind, envelope))
+                {
+                    exactOrigins.Add(emission);
+                }
+            }
+        }
+
         for (var emissionIndex = 0; emissionIndex < checkpoint.Emissions.Length; emissionIndex++)
         {
             var emission = checkpoint.Emissions[emissionIndex];
-            var contracts = plan.ValidationContext.InteractionContracts;
             if (contracts is null
                 || !InteractionEnvelopeValidator.Validate(
                     emission.Envelope,
@@ -335,12 +464,13 @@ public static class ProcessCheckpointCompatibilityValidator
                     $"/emissions/{emissionIndex}/envelope"));
             }
 
-            if (!traceOrigins.Contains(emission.EmissionId)
-                && !operationOrigins.Contains(emission.EmissionId))
+            if (!producerClaims.TryGetValue(emission.EmissionId, out var producerCount)
+                || producerCount != 1
+                || !exactOrigins.Contains(emission.EmissionId))
             {
                 diagnostics.Add(Error(
                     ProcessCheckpointDiagnosticCodes.EmissionLedgerIncompatible,
-                    "Durable outbox record has no committed Process or host-operation origin evidence.",
+                    "Durable outbox record must have exactly one committed Process or host-operation origin.",
                     $"/emissions/{emissionIndex}"));
             }
 
@@ -351,6 +481,42 @@ public static class ProcessCheckpointCompatibilityValidator
                     ProcessCheckpointDiagnosticCodes.EmissionLedgerIncompatible,
                     "Durable Request outbox record has no exact operation-ledger state.",
                     $"/emissions/{emissionIndex}"));
+            }
+        }
+
+        if (contracts is not null)
+        {
+            var executor = new DurableOperationReferenceExecutor(contracts);
+            for (var operationIndex = 0;
+                 operationIndex < checkpoint.DurableOperations.Length;
+                 operationIndex++)
+            {
+                var operation = checkpoint.DurableOperations[operationIndex];
+                var validation = executor.TryCreate(
+                    operation.Request,
+                    operation.Binding,
+                    operation.CreatedAtUtc,
+                    out _);
+                foreach (var diagnostic in validation.Diagnostics)
+                {
+                    diagnostics.Add(diagnostic with
+                    {
+                        Location = $"/durableOperations/{operationIndex}{diagnostic.Location ?? string.Empty}"
+                    });
+                }
+
+                var creationAnchored = operation.Request.Context.Origin is ProcessInteractionOrigin origin
+                    && checkpoint.Activations.Any(receipt =>
+                        receipt.Continuation == origin.Continuation
+                        && receipt.Activation.Id == origin.Activation
+                        && receipt.Activation.ObservedAtUtc == operation.CreatedAtUtc);
+                if (!creationAnchored)
+                {
+                    diagnostics.Add(Error(
+                        ProcessCheckpointDiagnosticCodes.EmissionLedgerIncompatible,
+                        "A durable Request operation's creation time must equal its exact origin activation observation time.",
+                        $"/durableOperations/{operationIndex}/createdAtUtc"));
+                }
             }
         }
 
@@ -427,6 +593,41 @@ public static class ProcessCheckpointCompatibilityValidator
             && string.Equals(trace.Detail, kind, StringComparison.Ordinal)
             && trace.EmissionFingerprint
                 == InteractionEnvelopeJsonSerializer.ComputeContentFingerprint(envelope);
+    }
+
+    static bool HostOperationOriginMatches(
+        CompiledProcessPlan plan,
+        ProcessOperationReceipt receipt,
+        ProcessDefinitionLinkKind operationKind,
+        InteractionEnvelope envelope)
+    {
+        if (envelope.Context.Origin is not ProcessInteractionOrigin origin
+            || origin.Definition != plan.DefinitionReference
+            || origin.Node != receipt.Key.Node
+            || origin.Continuation != receipt.Key.Continuation
+            || origin.Activation != receipt.Key.Activation
+            || origin.Token != receipt.Key.Token)
+        {
+            return false;
+        }
+
+        return operationKind switch
+        {
+            ProcessDefinitionLinkKind.RelationQuery =>
+                origin.Entity is null
+                && origin.Transition is null
+                && origin.Outcome is null,
+            ProcessDefinitionLinkKind.Transition =>
+                origin.Entity is not null
+                && origin.Transition == receipt.OperationDefinition,
+            _ => false
+        };
+    }
+
+    static void AddProducerClaim(Dictionary<EmissionId, int> claims, EmissionId emission)
+    {
+        claims.TryGetValue(emission, out var count);
+        claims[emission] = checked(count + 1);
     }
 
     static void ValidateCleanAttempt(
@@ -597,14 +798,19 @@ public static class ProcessCheckpointCompatibilityValidator
                     && ProcessStorageContentFingerprints.Envelope(outbox.Envelope)
                         == ProcessStorageContentFingerprints.Envelope(emission)
                     && outbox.EnqueuedAtUtc == receipt.RecordedAtUtc;
-                if (valid && retained)
+                var exactOrigin = HostOperationOriginMatches(
+                    plan,
+                    receipt,
+                    expectedKind,
+                    emission);
+                if (valid && retained && exactOrigin)
                 {
                     continue;
                 }
 
                 diagnostics.Add(Error(
                     ProcessCheckpointDiagnosticCodes.OperationReceiptIncompatible,
-                    "Cached host-operation emission is invalid or absent from the exact durable outbox.",
+                    "Cached host-operation emission is invalid, absent from the exact durable outbox, or lacks exact operation-occurrence provenance.",
                     $"{location}/result/emissions/{emissionIndex}"));
             }
         }

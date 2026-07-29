@@ -771,7 +771,7 @@ public sealed record ProcessSignalAdmission
 /// <remarks>
 /// This value is a deterministic semantic state, not a claim that an atomic Storage checkpoint, CAS record,
 /// inbox, or worker fence already exists. Construction deliberately validates the complete retained history;
-/// ARI-166 and ARI-168 realize physical cuts and indexed runtime access paths.
+/// <c>Cohesive.Storage.Processes</c> composes it into physical checkpoints and fenced runtime access paths.
 /// </remarks>
 public sealed record ProcessControlState
 {

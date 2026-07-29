@@ -587,6 +587,63 @@ public sealed class ProcessDurableCheckpointContractTests
     }
 
     [Fact]
+    public void RestartReducer_ClosesPendingInboxUnderAbandonedContinuation()
+    {
+        var fixture = ProcessDurabilityTestFixture.Create(
+            definitionId: "process/durable-checkpoint/restart-pending-inbox",
+            semanticVariant: "restart-pending-inbox",
+            recoveryPolicy: ProcessRecoveryPolicy.RestartAttempt);
+        var checkpoint = fixture.Checkpoint;
+        var pending = Assert.Single(checkpoint.Inbox);
+        Assert.Null(pending.Receipt);
+        var closingContinuation = checkpoint.ContinuationIdentity;
+        ProcessAttemptId replacementAttempt = new("process-attempt/restart-pending-inbox");
+        var restartedAtUtc = checkpoint.UpdatedAtUtc.AddMinutes(1);
+        var command = new RestartProcessAttemptCommand(
+            ProcessControlCommand.CurrentSchemaVersion,
+            new(
+                new("control/restart-pending-inbox"),
+                new("idempotency/control/restart-pending-inbox"),
+                closingContinuation.ProcessInstanceId,
+                fixture.Start.Request.Context.Authorization,
+                restartedAtUtc,
+                fixture.Start.Request.Context.Provenance),
+            new(closingContinuation, checkpoint.Control.Revision),
+            new(
+                replacementAttempt,
+                ProcessAttemptCleanupRequirement.RetainEvidence,
+                new("tests.restart-pending-inbox")));
+        var decision = new ProcessControlReferenceExecutor(
+                Assert.IsType<InteractionContractCatalog>(
+                    fixture.Plan.ValidationContext.InteractionContracts))
+            .Apply(checkpoint.Control, command, restartedAtUtc);
+
+        var replacement = ProcessDurableCheckpointReducer.ApplyControl(
+            fixture.Plan,
+            checkpoint,
+            decision,
+            restartedAtUtc);
+        var compatibility = ProcessCheckpointCompatibilityValidator.Validate(
+            fixture.Plan,
+            replacement);
+
+        Assert.Equal(ProcessControlDecisionDisposition.Applied, decision.Disposition);
+        Assert.Equal(replacementAttempt, replacement.ContinuationIdentity.ProcessAttemptId);
+        var closed = Assert.Single(replacement.Inbox);
+        var receipt = Assert.IsType<ProcessInputReceipt>(closed.Receipt);
+        Assert.Equal(
+            ProcessStorageContentFingerprints.Input(pending.Input),
+            ProcessStorageContentFingerprints.Input(closed.Input));
+        Assert.Equal(ProcessInputAdmissionDisposition.Stale, receipt.Disposition);
+        Assert.Equal(restartedAtUtc, receipt.ObservedAtUtc);
+        Assert.Equal(closingContinuation, closed.DispositionContinuation);
+        Assert.Empty(replacement.Continuation.InputReceipts);
+        Assert.Empty(replacement.Continuation.BufferedInputs);
+        Assert.Empty(replacement.Continuation.OutstandingRequests);
+        Assert.True(compatibility.IsValid, FormatDiagnostics(compatibility));
+    }
+
+    [Fact]
     public void OperationResultEmission_MustBeRetainedByTheExactDurableOutbox()
     {
         var fixture = ProcessDurabilityTestFixture.Create();
@@ -608,6 +665,81 @@ public sealed class ProcessDurableCheckpointContractTests
             candidate.Code == ProcessCheckpointDiagnosticCodes.OperationReceiptIncompatible);
         Assert.Equal("/operations/0/result/emissions/0", diagnostic.Location);
         Assert.Equal("processCheckpointRecovery", diagnostic.Evidence?.Stage);
+    }
+
+    [Fact]
+    public void OperationResultEmission_ExactOccurrenceOriginIsCompatible()
+    {
+        var fixture = ProcessDurabilityTestFixture.Create();
+        var original = Assert.Single(fixture.Checkpoint.Operations);
+        var emission = HostOperationReply(fixture);
+        var operationWithEmission = new ProcessOperationReceipt(
+            original.Key,
+            original.OperationDefinition,
+            ProcessOperationResult.Completed(original.Result.Value!, [emission]),
+            original.RecordedAtUtc);
+        var checkpoint = ProcessDurabilityTestFixture.CopyCheckpoint(
+            fixture.Checkpoint,
+            operations: [operationWithEmission],
+            emissions: [.. fixture.Checkpoint.Emissions, new(emission, original.RecordedAtUtc)]);
+
+        var validation = ProcessCheckpointCompatibilityValidator.Validate(fixture.Plan, checkpoint);
+
+        Assert.True(validation.IsValid, FormatDiagnostics(validation));
+    }
+
+    [Fact]
+    public void OperationResultEmission_MustCarryExactOperationOccurrenceOrigin()
+    {
+        var fixture = ProcessDurabilityTestFixture.Create();
+        var original = Assert.Single(fixture.Checkpoint.Operations);
+        var incompatibleOrigin = new ProcessInteractionOrigin(
+            fixture.Plan.DefinitionReference,
+            new("request"),
+            original.Key.Continuation,
+            original.Key.Activation,
+            original.Key.Token);
+        var emission = HostOperationReply(fixture, incompatibleOrigin);
+        var operationWithEmission = new ProcessOperationReceipt(
+            original.Key,
+            original.OperationDefinition,
+            ProcessOperationResult.Completed(original.Result.Value!, [emission]),
+            original.RecordedAtUtc);
+        var checkpoint = ProcessDurabilityTestFixture.CopyCheckpoint(
+            fixture.Checkpoint,
+            operations: [operationWithEmission],
+            emissions: [.. fixture.Checkpoint.Emissions, new(emission, original.RecordedAtUtc)]);
+
+        var validation = ProcessCheckpointCompatibilityValidator.Validate(fixture.Plan, checkpoint);
+
+        var diagnostic = Assert.Single(validation.Diagnostics, static candidate =>
+            candidate.Code == ProcessCheckpointDiagnosticCodes.OperationReceiptIncompatible);
+        Assert.Equal("/operations/0/result/emissions/0", diagnostic.Location);
+    }
+
+    [Fact]
+    public void OperationResultEmission_RequiresExactlyOneProducingOccurrence()
+    {
+        var fixture = ProcessDurabilityTestFixture.Create();
+        var original = Assert.Single(fixture.Checkpoint.Operations);
+        var emission = HostOperationReply(fixture);
+        var operationWithDuplicateEmission = new ProcessOperationReceipt(
+            original.Key,
+            original.OperationDefinition,
+            ProcessOperationResult.Completed(original.Result.Value!, [emission, emission]),
+            original.RecordedAtUtc);
+        var outbox = new ProcessEmissionRecord(emission, original.RecordedAtUtc);
+        var checkpoint = ProcessDurabilityTestFixture.CopyCheckpoint(
+            fixture.Checkpoint,
+            operations: [operationWithDuplicateEmission],
+            emissions: [.. fixture.Checkpoint.Emissions, outbox]);
+        var outboxIndex = checkpoint.Emissions.IndexOf(outbox);
+
+        var validation = ProcessCheckpointCompatibilityValidator.Validate(fixture.Plan, checkpoint);
+
+        Assert.Contains(validation.Diagnostics, candidate =>
+            candidate.Code == ProcessCheckpointDiagnosticCodes.EmissionLedgerIncompatible
+            && candidate.Location == $"/emissions/{outboxIndex}");
     }
 
     [Fact]
@@ -645,6 +777,33 @@ public sealed class ProcessDurableCheckpointContractTests
         Assert.Contains(validation.Diagnostics, static diagnostic =>
             diagnostic.Code == ProcessCheckpointDiagnosticCodes.EmissionLedgerIncompatible
             && diagnostic.Location == "/continuation/outstandingRequests/0");
+    }
+
+    [Fact]
+    public void DurableRequestOperation_CreationTimeMustEqualItsExactOriginActivationObservation()
+    {
+        var fixture = ProcessDurabilityTestFixture.Create();
+        var original = fixture.DurableOperation;
+        var moved = new DurableOperationState(
+            original.SchemaVersion,
+            original.Request,
+            original.Binding,
+            original.CreatedAtUtc.AddTicks(1),
+            original.Attempts,
+            original.Reconciliations,
+            original.RecoveryRequirement,
+            original.Acknowledgement,
+            original.Admission);
+        var checkpoint = ProcessDurabilityTestFixture.CopyCheckpoint(
+            fixture.Checkpoint,
+            durableOperations: [moved]);
+
+        var validation = ProcessCheckpointCompatibilityValidator.Validate(fixture.Plan, checkpoint);
+
+        var diagnostic = Assert.Single(validation.Diagnostics, static candidate =>
+            candidate.Code == ProcessCheckpointDiagnosticCodes.EmissionLedgerIncompatible
+            && candidate.Location == "/durableOperations/0/createdAtUtc");
+        Assert.Equal("processCheckpointRecovery", diagnostic.Evidence?.Stage);
     }
 
     [Fact]
@@ -749,6 +908,35 @@ public sealed class ProcessDurableCheckpointContractTests
                     InteractionDurabilityDemand.Durable,
                     InteractionVisibilityDemand.AfterOriginCommit),
                 plan.Document.Metadata.Provenance));
+
+    static ReplyEnvelope HostOperationReply(
+        ProcessDurabilityTestFixture fixture,
+        ProcessInteractionOrigin? origin = null)
+    {
+        var receipt = Assert.Single(fixture.Checkpoint.Operations);
+        var pending = Assert.IsType<ReplyEnvelope>(fixture.PendingReply.Envelope);
+        var selectedOrigin = origin ?? new ProcessInteractionOrigin(
+            fixture.Plan.DefinitionReference,
+            receipt.Key.Node,
+            receipt.Key.Continuation,
+            receipt.Key.Activation,
+            receipt.Key.Token);
+        return new(
+            pending.SchemaVersion,
+            new(
+                new("emission/reply/host-operation"),
+                selectedOrigin,
+                pending.Context.CorrelationId,
+                pending.InReplyTo,
+                pending.Context.AuthorityScope,
+                new("idempotency/reply/host-operation"),
+                pending.Context.Ordering,
+                pending.Context.Delivery,
+                pending.Context.Provenance),
+            pending.Contract,
+            pending.InReplyTo,
+            pending.Outcome);
+    }
 
     static string FormatDiagnostics(DocumentValidationResult validation) =>
         string.Join(

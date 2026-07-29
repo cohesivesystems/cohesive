@@ -63,6 +63,22 @@ public static class DurableOperationFailureCodes
     public const string CancelledBeforeDispatch = "operation.cancellation.beforeDispatch";
 }
 
+/// <summary>
+/// Signals that an impure durable-operation boundary was rejected because the canonical Request deadline elapsed.
+/// </summary>
+/// <remarks>
+/// The exception identifies the exact pre-I/O deadline guard so orchestration runtimes can translate it into
+/// structured recovery without mistaking an arbitrary adapter <see cref="InvalidOperationException"/> for timeout
+/// evidence. It never proves that a timeout outcome was durably admitted.
+/// </remarks>
+public sealed class DurableOperationDeadlineElapsedException : InvalidOperationException
+{
+    internal DurableOperationDeadlineElapsedException(string message)
+        : base(message)
+    {
+    }
+}
+
 /// <summary>Whether an impure adapter can inspect a failed unresolved attempt without blindly executing again.</summary>
 public enum DurableOperationReconciliationCapability
 {
@@ -112,15 +128,22 @@ public sealed record DurableOperationAdapterCapabilities
                 "Adapter reconciliation capability must be explicit.");
         }
         if (supportedRequests.IsDefaultOrEmpty)
+        {
             throw new ArgumentException("A durable operation adapter must declare exact Request support.", nameof(supportedRequests));
+        }
 
         var observed = new HashSet<RequestContractReference>();
         foreach (var request in supportedRequests)
         {
             if (request is null)
+            {
                 throw new ArgumentException("Adapter Request support cannot contain null entries.", nameof(supportedRequests));
+            }
+
             if (!observed.Add(request))
+            {
                 throw new ArgumentException("Adapter Request support cannot contain duplicates.", nameof(supportedRequests));
+            }
         }
 
         IdempotencyEvidence = idempotencyEvidence;
@@ -170,7 +193,10 @@ public sealed record DurableOperationAdapterCapabilities
         hash.Add(IdempotencyEvidence);
         hash.Add(Reconciliation);
         foreach (var request in SupportedRequests)
+        {
             hash.Add(request);
+        }
+
         return hash.ToHashCode();
     }
 
@@ -215,16 +241,30 @@ public sealed record DurableOperationInvocation
         binding = Guard.RequireNotNull(binding);
         deduplicationKey = Guard.RequireNotNull(deduplicationKey);
         if (string.IsNullOrWhiteSpace(attemptId.Value))
+        {
             throw new ArgumentException("A durable invocation requires an attempt identity.", nameof(attemptId));
+        }
+
         if (fence.Value <= 0)
+        {
             throw new ArgumentException("A durable invocation requires a positive operation fence.", nameof(fence));
+        }
+
         if (attemptOrdinal <= 0)
+        {
             throw new ArgumentOutOfRangeException(nameof(attemptOrdinal), attemptOrdinal, "An attempt ordinal must be positive.");
+        }
+
         if (deadlineUtc is { } deadline)
+        {
             DurableOperationClaim.RequireUtc(deadline, nameof(deadlineUtc));
+        }
 
         if (request.Contract != binding.Request)
+        {
             throw new ArgumentException("Invocation and binding must reference the same exact Request contract.", nameof(binding));
+        }
+
         var expectedDeduplicationKey = new DurableOperationDeduplicationKey(
             request.Context.AuthorityScope,
             request.Contract,
@@ -291,9 +331,15 @@ public sealed record DurableOperationReconciliationRequest
         Attempt = Guard.RequireNotNull(attempt);
         DeduplicationKey = Guard.RequireNotNull(deduplicationKey);
         if (request.Contract != binding.Request)
+        {
             throw new ArgumentException("Reconciliation and binding must reference the same Request contract.", nameof(binding));
+        }
+
         if (attempt.Stage != DurableOperationAttemptStage.Failed || attempt.Failure is null)
+        {
             throw new ArgumentException("Reconciliation requires a failed attempt.", nameof(attempt));
+        }
+
         var expectedDeduplicationKey = new DurableOperationDeduplicationKey(
             request.Context.AuthorityScope,
             request.Contract,
@@ -305,7 +351,9 @@ public sealed record DurableOperationReconciliationRequest
                 nameof(deduplicationKey));
         }
         if (binding.ReconciliationTarget is null)
+        {
             throw new ArgumentException("Reconciliation requires an exact declared semantic target.", nameof(binding));
+        }
     }
 
     /// <summary>Canonical logical Request.</summary>
@@ -382,11 +430,19 @@ public sealed record DurableOperationBatchItemObservation
         DurableOperationAttemptObservation observation)
     {
         if (string.IsNullOrWhiteSpace(operationId.Value))
+        {
             throw new ArgumentException("Batch evidence requires a logical operation identity.", nameof(operationId));
+        }
+
         if (string.IsNullOrWhiteSpace(attemptId.Value))
+        {
             throw new ArgumentException("Batch evidence requires a physical attempt identity.", nameof(attemptId));
+        }
+
         if (fence.Value <= 0)
+        {
             throw new ArgumentException("Batch evidence requires a positive operation fence.", nameof(fence));
+        }
 
         OperationId = operationId;
         AttemptId = attemptId;
@@ -463,7 +519,10 @@ public sealed record DurableOperationClaimResult
     {
         State = Guard.RequireNotNull(state);
         if (!Enum.IsDefined(disposition))
+        {
             throw new ArgumentOutOfRangeException(nameof(disposition), disposition, "Unsupported claim disposition.");
+        }
+
         if ((disposition is DurableOperationClaimDisposition.Claimed or DurableOperationClaimDisposition.Replayed)
             != (claim is not null))
         {
@@ -518,7 +577,10 @@ public sealed record DurableOperationRenewalResult
     {
         State = Guard.RequireNotNull(state);
         if (!Enum.IsDefined(disposition))
+        {
             throw new ArgumentOutOfRangeException(nameof(disposition), disposition, "Unsupported renewal disposition.");
+        }
+
         if ((disposition is DurableOperationRenewalDisposition.Renewed or DurableOperationRenewalDisposition.Replayed)
             != (claim is not null))
         {
@@ -576,7 +638,10 @@ public sealed record DurableOperationDispatchResult
     {
         State = Guard.RequireNotNull(state);
         if (!Enum.IsDefined(disposition))
+        {
             throw new ArgumentOutOfRangeException(nameof(disposition), disposition, "Unsupported dispatch disposition.");
+        }
+
         if ((disposition is DurableOperationDispatchDisposition.Dispatched or DurableOperationDispatchDisposition.Replayed)
             != (invocation is not null))
         {
@@ -642,7 +707,10 @@ public sealed record DurableOperationObservationResult
     {
         State = Guard.RequireNotNull(state);
         if (!Enum.IsDefined(disposition))
+        {
             throw new ArgumentOutOfRangeException(nameof(disposition), disposition, "Unsupported observation disposition.");
+        }
+
         Disposition = disposition;
     }
 
@@ -682,7 +750,10 @@ public sealed record DurableOperationAdmissionResult
     {
         State = Guard.RequireNotNull(state);
         if (!Enum.IsDefined(kind))
+        {
             throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported admission result kind.");
+        }
+
         if ((kind is DurableOperationAdmissionResultKind.Dispositioned or DurableOperationAdmissionResultKind.Duplicate)
             != (admission is not null))
         {
@@ -744,7 +815,10 @@ public sealed class DurableOperationReferenceExecutor
             ? state.Binding.ReconciliationTarget
             : state.Binding.EscalationTarget;
         if (target is null)
+        {
             throw new InvalidOperationException("A durable recovery intent requires its exact declared target.");
+        }
+
         var identity = new DurableOperationRecoveryIdentity(
             state.OperationId,
             attempt.Claim.AttemptId,
@@ -856,19 +930,30 @@ public sealed class DurableOperationReferenceExecutor
     {
         ArgumentNullException.ThrowIfNull(state);
         if (string.IsNullOrWhiteSpace(attemptId.Value))
+        {
             throw new ArgumentException("A durable claim requires an attempt identity.", nameof(attemptId));
+        }
+
         claimant = Guard.RequireNotNullOrWhiteSpace(claimant);
         DurableOperationClaim.RequireUtc(observedAtUtc, nameof(observedAtUtc));
         RequireOperationObservation(state, observedAtUtc, nameof(observedAtUtc));
 
         if (state.Acknowledgement is not null || state.Admission is not null)
+        {
             return new(state, DurableOperationClaimDisposition.Completed, claim: null);
+        }
+
         if (HasElapsedDeadline(state, observedAtUtc))
+        {
             return new(state, DurableOperationClaimDisposition.DeadlineElapsed, claim: null);
+        }
 
         var current = state.CurrentAttempt;
         if (current?.CompletedAtUtc is { } priorCompletion && observedAtUtc < priorCompletion)
+        {
             throw new ArgumentException("A new claim cannot precede prior attempt completion.", nameof(observedAtUtc));
+        }
+
         if (current?.Stage is DurableOperationAttemptStage.Claimed or DurableOperationAttemptStage.Dispatched)
         {
             if (current.Claim.IsLiveAt(observedAtUtc))
@@ -886,9 +971,15 @@ public sealed class DurableOperationReferenceExecutor
         }
 
         if (state.Attempts.Any(attempt => attempt.Claim.AttemptId == attemptId))
+        {
             return new(state, DurableOperationClaimDisposition.IdentityConflict, claim: null);
+        }
+
         if (state.RecoveryRequirement is not (DurableOperationRecoveryRequirement.None or DurableOperationRecoveryRequirement.Retry))
+        {
             return new(state, DurableOperationClaimDisposition.RecoveryRequired, claim: null);
+        }
+
         if (DispatchAttemptCount(state) >= state.Binding.MaxAttempts)
         {
             state = WithRecovery(state, ResolveUnresolvedRequirement(Response(state)));
@@ -941,7 +1032,9 @@ public sealed class DurableOperationReferenceExecutor
         DurableOperationClaim.RequireUtc(observedAtUtc, nameof(observedAtUtc));
         RequireOperationObservation(state, observedAtUtc, nameof(observedAtUtc));
         if (state.Acknowledgement is not null || state.Admission is not null)
+        {
             return new(state, DurableOperationRenewalDisposition.Completed, claim: null);
+        }
 
         var current = state.CurrentAttempt;
         if (!Matches(current, attemptId, fence)
@@ -951,9 +1044,15 @@ public sealed class DurableOperationReferenceExecutor
         }
         RequireAttemptObservation(current, observedAtUtc, nameof(observedAtUtc));
         if (current.Stage is not (DurableOperationAttemptStage.Claimed or DurableOperationAttemptStage.Dispatched))
+        {
             return new(state, DurableOperationRenewalDisposition.InvalidState, claim: null);
+        }
+
         if (HasElapsedDeadline(state, observedAtUtc))
+        {
             return new(state, DurableOperationRenewalDisposition.DeadlineElapsed, claim: null);
+        }
+
         if (!current.Claim.IsLiveAt(observedAtUtc))
         {
             var expired = ExpireCurrentAttempt(state, observedAtUtc);
@@ -962,7 +1061,9 @@ public sealed class DurableOperationReferenceExecutor
 
         var expiresAtUtc = observedAtUtc.Add(state.Binding.ClaimLease);
         if (expiresAtUtc <= current.Claim.ExpiresAtUtc)
+        {
             return new(state, DurableOperationRenewalDisposition.Replayed, current.Claim);
+        }
 
         var claim = new DurableOperationClaim(
             current.Claim.AttemptId,
@@ -1003,14 +1104,22 @@ public sealed class DurableOperationReferenceExecutor
         DurableOperationClaim.RequireUtc(observedAtUtc, nameof(observedAtUtc));
         RequireOperationObservation(state, observedAtUtc, nameof(observedAtUtc));
         if (state.Acknowledgement is not null || state.Admission is not null)
+        {
             return new(state, DurableOperationDispatchDisposition.Completed, invocation: null);
+        }
 
         var current = state.CurrentAttempt;
         if (!Matches(current, attemptId, fence))
+        {
             return new(state, DurableOperationDispatchDisposition.StaleFence, invocation: null);
+        }
+
         RequireAttemptObservation(current!, observedAtUtc, nameof(observedAtUtc));
         if (HasElapsedDeadline(state, observedAtUtc))
+        {
             return new(state, DurableOperationDispatchDisposition.DeadlineElapsed, invocation: null);
+        }
+
         if (!current!.Claim.IsLiveAt(observedAtUtc))
         {
             var expired = ExpireCurrentAttempt(state, observedAtUtc);
@@ -1038,7 +1147,9 @@ public sealed class DurableOperationReferenceExecutor
                 CreateInvocation(state, current));
         }
         if (current.Stage != DurableOperationAttemptStage.Claimed)
+        {
             return new(state, DurableOperationDispatchDisposition.InvalidState, invocation: null);
+        }
 
         var dispatched = new DurableOperationAttempt(
             current.Ordinal,
@@ -1059,9 +1170,9 @@ public sealed class DurableOperationReferenceExecutor
     /// <param name="adapter">Impure adapter interpretation.</param>
     /// <returns>Typed outcome or explicit failure evidence to persist separately.</returns>
     /// <exception cref="ArgumentNullException">Any argument is <see langword="null"/>.</exception>
+    /// <exception cref="DurableOperationDeadlineElapsedException">The semantic Request deadline elapsed.</exception>
     /// <exception cref="InvalidOperationException">
-    /// Adapter capabilities do not satisfy the durable binding, the semantic deadline elapsed, or the adapter
-    /// returned a null observation.
+    /// Adapter capabilities do not satisfy the durable binding or the adapter returned a null observation.
     /// </exception>
     /// <exception cref="OperationCanceledException"><paramref name="context"/> is canceled.</exception>
     public static async ValueTask<DurableOperationAttemptObservation> ExecuteAsync(
@@ -1075,10 +1186,10 @@ public sealed class DurableOperationReferenceExecutor
         context.ThrowIfCancellationRequested();
         if (invocation.DeadlineUtc is { } deadline && context.UtcNow >= deadline)
         {
-            throw new InvalidOperationException(
+            throw new DurableOperationDeadlineElapsedException(
                 "The semantic Request deadline elapsed; persist the exact typed timeout instead of dispatching.");
         }
-        ValidateAdapterCapabilities(invocation.Binding, adapter.Capabilities, requiresReconciliation: false);
+        ValidateAdapterCapabilities(invocation.Binding, adapter.Capabilities);
         return await adapter.ExecuteAsync(context, invocation).ConfigureAwait(false)
             ?? throw new InvalidOperationException("A durable operation adapter returned a null attempt observation.");
     }
@@ -1095,9 +1206,12 @@ public sealed class DurableOperationReferenceExecutor
     /// <paramref name="invocations"/> is default or empty, contains null, repeats an exact item, or contains more
     /// than one attempt for the same logical operation.
     /// </exception>
+    /// <exception cref="DurableOperationDeadlineElapsedException">
+    /// The semantic Request deadline elapsed for an invocation.
+    /// </exception>
     /// <exception cref="InvalidOperationException">
-    /// Adapter capabilities do not satisfy an invocation, a deadline elapsed, or adapter evidence is incomplete,
-    /// duplicated, or addresses an item that was not dispatched.
+    /// Adapter capabilities do not satisfy an invocation, or adapter evidence is incomplete, duplicated, or
+    /// addresses an item that was not dispatched.
     /// </exception>
     /// <exception cref="OperationCanceledException"><paramref name="context"/> is canceled.</exception>
     public static async ValueTask<ImmutableArray<DurableOperationBatchItemObservation>> ExecuteBatchAsync(
@@ -1108,7 +1222,10 @@ public sealed class DurableOperationReferenceExecutor
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(adapter);
         if (invocations.IsDefaultOrEmpty)
+        {
             throw new ArgumentException("A durable physical batch cannot be default or empty.", nameof(invocations));
+        }
+
         context.ThrowIfCancellationRequested();
 
         var expected = new Dictionary<(EmissionId, OperationAttemptId, OperationFence), int>(invocations.Length);
@@ -1119,10 +1236,10 @@ public sealed class DurableOperationReferenceExecutor
                 ?? throw new ArgumentException("A durable physical batch cannot contain null invocations.", nameof(invocations));
             if (invocation.DeadlineUtc is { } deadline && context.UtcNow >= deadline)
             {
-                throw new InvalidOperationException(
+                throw new DurableOperationDeadlineElapsedException(
                     $"The semantic Request deadline elapsed for batch item '{invocation.Request.Context.EmissionId.Value}'.");
             }
-            ValidateAdapterCapabilities(invocation.Binding, adapter.Capabilities, requiresReconciliation: false);
+            ValidateAdapterCapabilities(invocation.Binding, adapter.Capabilities);
             if (!operationIds.Add(invocation.Request.Context.EmissionId))
             {
                 throw new ArgumentException(
@@ -1131,7 +1248,9 @@ public sealed class DurableOperationReferenceExecutor
             }
             var key = (invocation.Request.Context.EmissionId, invocation.AttemptId, invocation.Fence);
             if (!expected.TryAdd(key, index))
+            {
                 throw new ArgumentException("A durable physical batch cannot repeat an operation item.", nameof(invocations));
+            }
         }
 
         var observed = await adapter.ExecuteBatchAsync(context, invocations).ConfigureAwait(false);
@@ -1146,12 +1265,20 @@ public sealed class DurableOperationReferenceExecutor
         foreach (var item in observed)
         {
             if (item is null)
+            {
                 throw new InvalidOperationException("A durable physical batch returned a null item observation.");
+            }
+
             var key = (item.OperationId, item.AttemptId, item.Fence);
             if (!expected.ContainsKey(key))
+            {
                 throw new InvalidOperationException("A durable physical batch returned evidence for an undispatched item.");
+            }
+
             if (!byItem.TryAdd(key, item))
+            {
                 throw new InvalidOperationException("A durable physical batch returned duplicate evidence for one item.");
+            }
         }
 
         var normalized = ImmutableArray.CreateBuilder<DurableOperationBatchItemObservation>(invocations.Length);
@@ -1159,7 +1286,10 @@ public sealed class DurableOperationReferenceExecutor
         {
             var key = (invocation.Request.Context.EmissionId, invocation.AttemptId, invocation.Fence);
             if (!byItem.TryGetValue(key, out var item))
+            {
                 throw new InvalidOperationException("A durable physical batch omitted evidence for a dispatched item.");
+            }
+
             normalized.Add(item);
         }
 
@@ -1196,7 +1326,10 @@ public sealed class DurableOperationReferenceExecutor
         if (state.Acknowledgement is { } existing)
         {
             if (existing.AttemptId == attemptId && !Matches(state.CurrentAttempt, attemptId, fence))
+            {
                 return new(state, DurableOperationObservationDisposition.StaleFence);
+            }
+
             if (observation is DurableOperationOutcomeObservation duplicate)
             {
                 if (existing.AttemptId == attemptId
@@ -1205,7 +1338,10 @@ public sealed class DurableOperationReferenceExecutor
                     return new(state, DurableOperationObservationDisposition.LateResult);
                 }
                 if (existing.AttemptId == attemptId && existing.Outcome == duplicate.Outcome)
+                {
                     return new(state, DurableOperationObservationDisposition.Replayed);
+                }
+
                 if (existing.AttemptId != attemptId)
                 {
                     return new(
@@ -1219,11 +1355,16 @@ public sealed class DurableOperationReferenceExecutor
             return new(state, DurableOperationObservationDisposition.ConflictingOutcome);
         }
         if (HasElapsedDeadline(state, observedAtUtc))
+        {
             return new(state, DurableOperationObservationDisposition.DeadlineElapsed);
+        }
 
         var current = state.CurrentAttempt;
         if (!Matches(current, attemptId, fence))
+        {
             return new(state, DurableOperationObservationDisposition.StaleFence);
+        }
+
         RequireAttemptObservation(current!, observedAtUtc, nameof(observedAtUtc));
         if (current!.Stage == DurableOperationAttemptStage.Failed)
         {
@@ -1233,7 +1374,10 @@ public sealed class DurableOperationReferenceExecutor
                 : new(state, DurableOperationObservationDisposition.StaleFence);
         }
         if (current.Stage != DurableOperationAttemptStage.Dispatched)
+        {
             return new(state, DurableOperationObservationDisposition.InvalidEvidence);
+        }
+
         if (!current!.Claim.IsLiveAt(observedAtUtc))
         {
             var expired = ExpireCurrentAttempt(state, observedAtUtc);
@@ -1268,9 +1412,10 @@ public sealed class DurableOperationReferenceExecutor
     /// <param name="adapter">Impure adapter interpretation.</param>
     /// <returns>Confirmed outcome, proof of no execution, or unresolved evidence.</returns>
     /// <exception cref="ArgumentNullException">Any argument is <see langword="null"/>.</exception>
+    /// <exception cref="DurableOperationDeadlineElapsedException">The semantic Request deadline elapsed.</exception>
     /// <exception cref="InvalidOperationException">
-    /// The state does not require reconciliation, the semantic deadline elapsed, adapter capabilities do not
-    /// satisfy the binding, or the adapter returned a null observation.
+    /// The state does not require reconciliation, adapter capabilities do not satisfy the binding, or the adapter
+    /// returned a null observation.
     /// </exception>
     /// <exception cref="OperationCanceledException"><paramref name="context"/> is canceled.</exception>
     public static async ValueTask<DurableOperationReconciliationObservation> ReconcileAsync(
@@ -1289,11 +1434,11 @@ public sealed class DurableOperationReferenceExecutor
         }
         if (HasElapsedDeadline(state, context.UtcNow))
         {
-            throw new InvalidOperationException(
+            throw new DurableOperationDeadlineElapsedException(
                 "The semantic Request deadline elapsed; persist the exact typed timeout instead of reconciling.");
         }
 
-        ValidateAdapterCapabilities(state.Binding, adapter.Capabilities, requiresReconciliation: true);
+        ValidateReconciliationAdapterCapabilities(state.Binding, adapter.Capabilities);
         var request = new DurableOperationReconciliationRequest(
             state.Request,
             state.Binding,
@@ -1333,23 +1478,41 @@ public sealed class DurableOperationReferenceExecutor
         {
             var priorEvidence = LastReconciliation(state, attemptId, fence);
             if (priorEvidence?.Observation == observation)
+            {
                 return new(state, DurableOperationObservationDisposition.Replayed);
+            }
+
             if (acknowledgement.AttemptId is null)
+            {
                 return new(state, DurableOperationObservationDisposition.LateResult);
+            }
+
             if (acknowledgement.AttemptId != attemptId || !Matches(state.CurrentAttempt, attemptId, fence))
+            {
                 return new(state, DurableOperationObservationDisposition.StaleFence);
+            }
+
             return acknowledgement.RecoveryIdentity?.Requirement == DurableOperationRecoveryRequirement.Reconcile
                 ? new(state, DurableOperationObservationDisposition.ConflictingOutcome)
                 : new(state, DurableOperationObservationDisposition.LateResult);
         }
         if (HasElapsedDeadline(state, observedAtUtc))
+        {
             return new(state, DurableOperationObservationDisposition.DeadlineElapsed);
+        }
+
         var prior = LastReconciliation(state, attemptId, fence);
         if (prior?.Observation == observation)
+        {
             return new(state, DurableOperationObservationDisposition.Replayed);
+        }
+
         var attempt = state.CurrentAttempt;
         if (!Matches(attempt, attemptId, fence))
+        {
             return new(state, DurableOperationObservationDisposition.StaleFence);
+        }
+
         RequireAttemptObservation(attempt!, observedAtUtc, nameof(observedAtUtc));
         if (state.RecoveryRequirement != DurableOperationRecoveryRequirement.Reconcile
             || attempt!.Stage != DurableOperationAttemptStage.Failed)
@@ -1464,9 +1627,14 @@ public sealed class DurableOperationReferenceExecutor
                 : new(state, DurableOperationObservationDisposition.ConflictingOutcome);
         }
         if (HasElapsedDeadline(state, observedAtUtc))
+        {
             return new(state, DurableOperationObservationDisposition.DeadlineElapsed);
+        }
+
         if (Response(state).Cancellation != RequestOptionalTerminalSemantics.TerminalOutcome)
+        {
             return new(state, DurableOperationObservationDisposition.InvalidEvidence);
+        }
 
         return AcknowledgeEndogenous(
             state,
@@ -1508,7 +1676,10 @@ public sealed class DurableOperationReferenceExecutor
         DurableOperationClaim.RequireUtc(observedAtUtc, nameof(observedAtUtc));
         RequireOperationObservation(state, observedAtUtc, nameof(observedAtUtc));
         if (evidence is not null)
+        {
             _ = InteractionValueRequirements.RequireMaterialized(evidence, nameof(evidence), "Escalation evidence");
+        }
+
         if (state.Acknowledgement is { } acknowledgement)
         {
             return acknowledgement.RecoveryIdentity == identity
@@ -1521,11 +1692,16 @@ public sealed class DurableOperationReferenceExecutor
                     : new(state, DurableOperationObservationDisposition.ConflictingOutcome);
         }
         if (HasElapsedDeadline(state, observedAtUtc))
+        {
             return new(state, DurableOperationObservationDisposition.DeadlineElapsed);
+        }
 
         var expected = GetRecoveryIntent(state);
         if (expected?.Identity != identity)
+        {
             return new(state, DurableOperationObservationDisposition.StaleFence);
+        }
+
         if (identity.Requirement != DurableOperationRecoveryRequirement.Escalate
             || state.CurrentAttempt is not { Stage: DurableOperationAttemptStage.Failed } attempt)
         {
@@ -1566,14 +1742,20 @@ public sealed class DurableOperationReferenceExecutor
         if (state.Acknowledgement is { } acknowledgement)
         {
             if (acknowledgement.Outcome != outcome)
+            {
                 return new(state, DurableOperationObservationDisposition.ConflictingOutcome);
+            }
+
             return state.CurrentAttempt?.Stage == DurableOperationAttemptStage.Resolved
                    && acknowledgement.RecoveryIdentity is null
                 ? new(state, DurableOperationObservationDisposition.Replayed)
                 : new(state, DurableOperationObservationDisposition.LateResult);
         }
         if (HasElapsedDeadline(state, observedAtUtc))
+        {
             return new(state, DurableOperationObservationDisposition.DeadlineElapsed);
+        }
+
         if (state.RecoveryRequirement != DurableOperationRecoveryRequirement.TerminalOutcome
             || state.CurrentAttempt is not { Stage: DurableOperationAttemptStage.Failed } attempt
             || state.Binding.TerminalFailureOutcome != outcome.Id)
@@ -1607,11 +1789,19 @@ public sealed class DurableOperationReferenceExecutor
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(target);
         if (target.Target != state.Request.ResponseTarget)
+        {
             return new(state, DurableOperationAdmissionResultKind.TargetMismatch, admission: null);
+        }
+
         if (state.Admission is { } existing)
+        {
             return new(state, DurableOperationAdmissionResultKind.Duplicate, existing);
+        }
+
         if (state.Acknowledgement is not { } acknowledgement)
+        {
             return new(state, DurableOperationAdmissionResultKind.NotAcknowledged, admission: null);
+        }
 
         var response = Response(state);
         var policy = target.Arrival switch
@@ -1822,7 +2012,10 @@ public sealed class DurableOperationReferenceExecutor
         }
         if (response.Retry == RequestRetrySemantics.ReconcileBeforeRetry
             && DispatchAttemptCount(state) < state.Binding.MaxAttempts)
+        {
             return DurableOperationRecoveryRequirement.Reconcile;
+        }
+
         return response.AmbiguousOutcome switch
         {
             RequestResolutionSemantics.TerminalFailure => DurableOperationRecoveryRequirement.TerminalOutcome,
@@ -1859,9 +2052,14 @@ public sealed class DurableOperationReferenceExecutor
     {
         RequireAttemptObservation(attempt, observedAtUtc, nameof(observedAtUtc));
         if (outcome is RequestTimeoutOutcome or RequestCancellationOutcome)
+        {
             return new(state, DurableOperationObservationDisposition.InvalidEvidence);
+        }
+
         if (!TryValidateOutcome(state, outcome, out var replyBinding))
+        {
             return new(state, DurableOperationObservationDisposition.InvalidEvidence);
+        }
 
         var resolved = new DurableOperationAttempt(
             attempt.Ordinal,
@@ -1897,7 +2095,9 @@ public sealed class DurableOperationReferenceExecutor
         string inFlightFailureCode)
     {
         if (!TryValidateOutcome(state, outcome, out var replyBinding))
+        {
             return new(state, DurableOperationObservationDisposition.InvalidEvidence);
+        }
 
         var attempts = state.Attempts;
         if (state.CurrentAttempt is { } current)
@@ -1948,7 +2148,9 @@ public sealed class DurableOperationReferenceExecutor
         var expected = Response(state).Find(outcome.Id);
         replyBinding = state.Binding.FindReply(outcome.Id);
         if (expected is null || replyBinding is null || outcome.Value.Contract != expected.Schema.Contract)
+        {
             return false;
+        }
 
         return (expected, outcome) switch
         {
@@ -1994,7 +2196,10 @@ public sealed class DurableOperationReferenceExecutor
     {
         DateTimeOffset? deadline = null;
         if (state.Binding.TimeoutAfter is { } timeout)
+        {
             deadline = state.CreatedAtUtc.Add(timeout);
+        }
+
         return new(
             state.Request,
             state.Binding,
@@ -2022,7 +2227,9 @@ public sealed class DurableOperationReferenceExecutor
         {
             var evidence = state.Reconciliations[index];
             if (evidence.AttemptId == attemptId && evidence.Fence == fence)
+            {
                 return evidence;
+            }
         }
 
         return null;
@@ -2034,7 +2241,9 @@ public sealed class DurableOperationReferenceExecutor
         foreach (var attempt in state.Attempts)
         {
             if (attempt.DispatchedAtUtc is not null)
+            {
                 count++;
+            }
         }
 
         return count;
@@ -2054,17 +2263,29 @@ public sealed class DurableOperationReferenceExecutor
         {
             latestEvidenceAtUtc = Later(latestEvidenceAtUtc, attempt.Claim.RenewedAtUtc);
             if (attempt.DispatchedAtUtc is { } dispatchedAtUtc)
+            {
                 latestEvidenceAtUtc = Later(latestEvidenceAtUtc, dispatchedAtUtc);
+            }
+
             if (attempt.CompletedAtUtc is { } completedAtUtc)
+            {
                 latestEvidenceAtUtc = Later(latestEvidenceAtUtc, completedAtUtc);
+            }
         }
         foreach (var reconciliation in state.Reconciliations)
+        {
             latestEvidenceAtUtc = Later(latestEvidenceAtUtc, reconciliation.ObservedAtUtc);
+        }
+
         if (state.Acknowledgement is { } acknowledgement)
+        {
             latestEvidenceAtUtc = Later(latestEvidenceAtUtc, acknowledgement.AcknowledgedAtUtc);
+        }
 
         if (observedAtUtc < latestEvidenceAtUtc)
+        {
             throw new ArgumentException("An operation observation cannot precede persisted operation evidence.", parameterName);
+        }
     }
 
     static DateTimeOffset Later(DateTimeOffset left, DateTimeOffset right) => left >= right ? left : right;
@@ -2078,17 +2299,56 @@ public sealed class DurableOperationReferenceExecutor
                          ?? attempt.DispatchedAtUtc
                          ?? attempt.Claim.ClaimedAtUtc;
         if (observedAtUtc < lowerBound)
+        {
             throw new ArgumentException("An attempt observation cannot precede durable attempt evidence.", parameterName);
+        }
     }
 
-    static void ValidateAdapterCapabilities(
+    /// <summary>Validates that adapter capabilities satisfy one exact durable Request dispatch binding.</summary>
+    /// <param name="binding">Portable execution refinement whose exact Request and idempotency evidence are required.</param>
+    /// <param name="capabilities">Capabilities declared by the selected impure adapter.</param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="binding"/> or <paramref name="capabilities"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// The adapter does not support the exact Request contract or required idempotency evidence.
+    /// </exception>
+    public static void ValidateAdapterCapabilities(
+        DurableRequestBinding binding,
+        DurableOperationAdapterCapabilities capabilities)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        ValidateAdapterCapabilitiesCore(binding, capabilities, requiresReconciliation: false);
+    }
+
+    /// <summary>Validates that adapter capabilities satisfy one exact durable Request reconciliation binding.</summary>
+    /// <param name="binding">Portable execution refinement whose reconciliation path must be interpreted.</param>
+    /// <param name="capabilities">Capabilities declared by the selected impure adapter.</param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="binding"/> or <paramref name="capabilities"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// The adapter does not support the exact Request contract, required idempotency evidence, or reconciliation.
+    /// </exception>
+    public static void ValidateReconciliationAdapterCapabilities(
+        DurableRequestBinding binding,
+        DurableOperationAdapterCapabilities capabilities)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        ValidateAdapterCapabilitiesCore(binding, capabilities, requiresReconciliation: true);
+    }
+
+    static void ValidateAdapterCapabilitiesCore(
         DurableRequestBinding binding,
         DurableOperationAdapterCapabilities capabilities,
         bool requiresReconciliation)
     {
         ArgumentNullException.ThrowIfNull(capabilities);
         if (!capabilities.Supports(binding.Request))
+        {
             throw new InvalidOperationException("The durable operation adapter does not support the exact Request contract.");
+        }
+
         if (binding.IdempotencyEvidence != DurableOperationIdempotencyEvidence.None
             && capabilities.IdempotencyEvidence != binding.IdempotencyEvidence)
         {

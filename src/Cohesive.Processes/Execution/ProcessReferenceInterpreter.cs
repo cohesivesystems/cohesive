@@ -203,6 +203,59 @@ public static class ProcessReferenceInterpreter
             inputs[0]);
     }
 
+    /// <summary>Validates activation evidence that is independent of mutable continuation contents.</summary>
+    /// <param name="plan">Successfully compiled exact Process plan.</param>
+    /// <param name="continuation">Exact logical Process instance and attempt the activation addresses.</param>
+    /// <param name="activation">Activation request to validate.</param>
+    /// <returns>Structured provenance, cancellation, and recovery-policy diagnostics.</returns>
+    /// <exception cref="ArgumentNullException">Any argument is <see langword="null"/>.</exception>
+    public static DocumentValidationResult ValidateActivationRequest(
+        CompiledProcessPlan plan,
+        ProcessContinuationIdentity continuation,
+        ProcessActivation activation)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(continuation);
+        ArgumentNullException.ThrowIfNull(activation);
+
+        DocumentValidationDiagnostic? diagnostic = null;
+        if (activation.Cancellation is { } cancellation
+            && cancellation.AttemptId != continuation.ProcessAttemptId)
+        {
+            diagnostic = ActivationDiagnostic(
+                plan,
+                ProcessExecutionDiagnosticCodes.ActivationInvalid,
+                "Cancellation intent targets a different Process attempt.");
+        }
+        else if (activation.Cancellation is not null
+                 && activation.Cause is not (ProcessActivationCause.Control or ProcessActivationCause.Recovery))
+        {
+            diagnostic = ActivationDiagnostic(
+                plan,
+                ProcessExecutionDiagnosticCodes.ActivationInvalid,
+                "A cancellation intent requires a Control or Recovery activation cause.");
+        }
+        else if (activation.Context.Provenance != plan.Document.Metadata.Provenance)
+        {
+            diagnostic = ActivationDiagnostic(
+                plan,
+                ProcessExecutionDiagnosticCodes.ActivationInvalid,
+                "Activation emission provenance differs from the compiled Process document provenance.");
+        }
+        else if (activation.Cause == ProcessActivationCause.Recovery
+                 && plan.Definition.RecoveryPolicy == ProcessRecoveryPolicy.RestartAttempt)
+        {
+            diagnostic = ActivationDiagnostic(
+                plan,
+                ProcessExecutionDiagnosticCodes.RecoveryRequiresRestart,
+                "This Process definition requires recovery under a new attempt identity; the current continuation cannot resume.");
+        }
+
+        return diagnostic is null
+            ? DocumentValidationResult.Valid
+            : new([diagnostic]);
+    }
+
     /// <summary>Reduces one immutable continuation through a finite deterministic activation.</summary>
     /// <param name="plan">Successfully compiled exact Process plan.</param>
     /// <param name="state">Complete semantic continuation to activate.</param>
@@ -222,6 +275,18 @@ public static class ProcessReferenceInterpreter
         ArgumentNullException.ThrowIfNull(host);
         return new Engine(plan, state, activation, host).Run();
     }
+
+    static DocumentValidationDiagnostic ActivationDiagnostic(
+        CompiledProcessPlan plan,
+        string code,
+        string message) => new(
+        code,
+        DiagnosticSeverity.Error,
+        message,
+        "/activation",
+        Evidence: new(
+            stage: "processReferenceInterpretation",
+            sourceReferences: [plan.Document.Metadata.Provenance.Source.Reference]));
 
     sealed class Engine
     {
@@ -353,38 +418,8 @@ public static class ProcessReferenceInterpreter
                     "Continuation definition identity, revision, or fingerprint differs from the compiled plan.",
                     node: null);
             }
-            if (activation.Cancellation is { } cancellation
-                && cancellation.AttemptId != original.Continuation.ProcessAttemptId)
-            {
-                return Diagnostic(
-                    ProcessExecutionDiagnosticCodes.ActivationInvalid,
-                    "Cancellation intent targets a different Process attempt.",
-                    node: null);
-            }
-            if (activation.Cancellation is not null
-                && activation.Cause is not (ProcessActivationCause.Control or ProcessActivationCause.Recovery))
-            {
-                return Diagnostic(
-                    ProcessExecutionDiagnosticCodes.ActivationInvalid,
-                    "A cancellation intent requires a Control or Recovery activation cause.",
-                    node: null);
-            }
-            if (activation.Context.Provenance != plan.Document.Metadata.Provenance)
-            {
-                return Diagnostic(
-                    ProcessExecutionDiagnosticCodes.ActivationInvalid,
-                    "Activation emission provenance differs from the compiled Process document provenance.",
-                    node: null);
-            }
-            if (activation.Cause == ProcessActivationCause.Recovery
-                && plan.Definition.RecoveryPolicy == ProcessRecoveryPolicy.RestartAttempt)
-            {
-                return Diagnostic(
-                    ProcessExecutionDiagnosticCodes.RecoveryRequiresRestart,
-                    "This Process definition requires recovery under a new attempt identity; the current continuation cannot resume.",
-                    node: null);
-            }
-            return null;
+            var validation = ValidateActivationRequest(plan, original.Continuation, activation);
+            return validation.IsValid ? null : validation.Diagnostics[0];
         }
 
         ProcessActivationDecision ApplyCancellation()
@@ -936,6 +971,12 @@ public static class ProcessReferenceInterpreter
             ArgumentNullException.ThrowIfNull(result);
             if (!result.IsSuccessful)
             {
+                AddTrace(
+                    ProcessTraceEventKind.OperationCompleted,
+                    token,
+                    node,
+                    detail: "failed",
+                    operationOccurrence: token.Step);
                 FailToken(token, result.Failure ?? Diagnostic(
                     ProcessExecutionDiagnosticCodes.OperationFailed,
                     "Host operation failed without structured evidence.",
