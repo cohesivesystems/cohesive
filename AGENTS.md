@@ -325,6 +325,20 @@ Generate:
 
 Focus on semantic intent over mechanical code changes.
 
+## Pull Request Summary Rules
+
+Include a `Critical files for review` section in every pull request description. Select the smallest useful set of
+files that lets a human reviewer understand and validate the semantic change, normally three to seven files, and
+order them by review value. For each file, state in one sentence which contract, invariant, algorithm, wire format,
+or architectural decision deserves attention. Name files with repository-relative paths and link them when the pull
+request surface supports stable file links.
+
+Prefer semantic authorities, public contracts, core algorithms, durable schemas/serialization, nontrivial adapter
+boundaries, and representative invariant tests. Do not make the section an exhaustive changed-file list. Exclude
+generated files, mechanical rename consumers, formatting-only edits, and repetitive fixtures unless they introduce
+independent risk or must be inspected to verify a breaking emitted contract. Summarize such mechanical or broad
+changes elsewhere in the pull request without presenting every affected file as critical review material.
+
 
 ## Testing
 
