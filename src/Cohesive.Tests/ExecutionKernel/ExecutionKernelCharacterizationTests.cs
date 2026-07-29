@@ -7,20 +7,20 @@ using Cohesive.Transitions.IR;
 namespace Cohesive.Tests.ExecutionKernel;
 
 /// <summary>
-/// Characterizes the pre-kernel Transitions and Processes behavior against the
-/// EK-01 through EK-09 scenarios. These tests intentionally describe current
-/// compatibility boundaries; they do not define the future execution semantics.
+/// Characterizes current canonical reference semantics and legacy Transitions and Processes behavior against
+/// the EK-01 through EK-09 scenarios. These tests intentionally describe current compatibility boundaries; they
+/// do not promote a reference protocol to a physically durable runtime realization.
 /// </summary>
 public sealed class ExecutionKernelCharacterizationTests
 {
     static readonly IReadOnlyList<KernelScenarioClassification> ScenarioClassifications =
     [
         new("EK-01", KernelScenarioStatus.Pass, "Canonical structured Transition IR, path-sensitive static compilation, full-state and sparse non-I/O reference interpretation, actual execution evidence, conflict detection, and fingerprint-bound Machine-edge linking satisfy the EK-01 reference path."),
-        new("EK-02", KernelScenarioStatus.Partial, "Wait nodes checkpoint before yielding and accept early signals; AwaitMatch, durable admission/claim/consume state, and a typed timeout race do not exist."),
-        new("EK-03", KernelScenarioStatus.Partial, "Typed effect handlers, retry, continuation freshness, and dead letters exist; stable request identity and vendor/manual/late-result arbitration do not."),
+        new("EK-02", KernelScenarioStatus.Partial, "Canonical durable Request results now have exact target, late, stale, and duplicate dispositions in the reference protocol; AwaitMatch, durable wait registration/arbitration, and Process runtime integration do not exist."),
+        new("EK-03", KernelScenarioStatus.Partial, "Canonical Requests now bind exact Replies, bounded retry, reconciliation, acknowledgement, and target-admission policy; legacy effect handlers are not integrated with that protocol and vendor/manual arbitration remains absent."),
         new("EK-04", KernelScenarioStatus.Absent, "The process runtime has one cursor and a locality continuation stack, with no fork, token, or join model."),
         new("EK-05", KernelScenarioStatus.Partial, "Multi-entity transaction scopes and coarse place capabilities exist; capability evidence, guarantee matching, independent authority, and authored compensation do not."),
-        new("EK-06", KernelScenarioStatus.Partial, "Pending and executed effects plus storage outbox support exist; the runtime has no durable operation attempt/acknowledgement ledger for the crash matrix."),
+        new("EK-06", KernelScenarioStatus.Partial, "The canonical reference protocol models stable logical identity, scoped deduplication, fenced claims, attempt history, failure phases, acknowledgement, reconciliation, and replay-safe result admission across the crash cuts; no Storage-backed atomic operation ledger, outbox, or checkpoint integration exists yet."),
         new("EK-07", KernelScenarioStatus.Partial, "Signals can be buffered by key; duplicate identity, exclusive admission, winner claims, and stale/losing-signal policy do not exist."),
         new("EK-08", KernelScenarioStatus.Absent, "Process attempts, activation identity, index-generation affinity, pause/continue, restart, and fenced promotion are not modeled."),
         new("EK-09", KernelScenarioStatus.Partial, "Representative entity Transitions now lower from typed C# to fingerprint-equivalent canonical IR and activate without callbacks; Process semantics remain CLR delegate-backed and name-bound.")

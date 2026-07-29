@@ -101,23 +101,11 @@ public sealed record ExecutionIrSchemaCompatibilityDeclaration
         if (string.IsNullOrWhiteSpace(schemaVersion.Value))
             throw new ArgumentException("A default execution IR schema version cannot be tested.", nameof(schemaVersion));
 
-        var low = 0;
-        var high = SupportedSchemaVersions.Length - 1;
-        while (low <= high)
-        {
-            var middle = low + ((high - low) / 2);
-            var comparison = StringComparer.Ordinal.Compare(
-                SupportedSchemaVersions[middle].Value,
-                schemaVersion.Value);
-            if (comparison == 0)
-                return true;
-            if (comparison < 0)
-                low = middle + 1;
-            else
-                high = middle - 1;
-        }
-
-        return false;
+        return CanonicalDocumentCollections.BinarySearchIndex(
+            SupportedSchemaVersions,
+            schemaVersion,
+            static (candidate, requested) =>
+                StringComparer.Ordinal.Compare(candidate.Value, requested.Value)) >= 0;
     }
 
     /// <summary>Compares two declarations by their normalized exact version sets.</summary>

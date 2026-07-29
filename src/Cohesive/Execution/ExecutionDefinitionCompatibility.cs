@@ -123,6 +123,38 @@ public sealed record ExecutionDefinitionReference
 
     /// <summary>Exact canonical content fingerprint admitted by this reference.</summary>
     public ExecutionDefinitionFingerprint Fingerprint { get; }
+
+    /// <summary>Compares exact references in canonical identity, revision, and fingerprint order.</summary>
+    /// <param name="left">First exact reference.</param>
+    /// <param name="right">Second exact reference.</param>
+    /// <returns>
+    /// A negative value when <paramref name="left"/> precedes <paramref name="right"/>, zero when their
+    /// canonical components are equal, or a positive value when <paramref name="left"/> follows
+    /// <paramref name="right"/>.
+    /// </returns>
+    internal static int CompareCanonical(
+        ExecutionDefinitionReference left,
+        ExecutionDefinitionReference right)
+    {
+        var comparison = StringComparer.Ordinal.Compare(left.DefinitionId.Value, right.DefinitionId.Value);
+        if (comparison != 0)
+            return comparison;
+
+        comparison = StringComparer.Ordinal.Compare(left.RevisionId.Value, right.RevisionId.Value);
+        if (comparison != 0)
+            return comparison;
+
+        comparison = StringComparer.Ordinal.Compare(left.Fingerprint.Algorithm, right.Fingerprint.Algorithm);
+        if (comparison != 0)
+            return comparison;
+
+        comparison = StringComparer.Ordinal.Compare(
+            left.Fingerprint.Canonicalization,
+            right.Fingerprint.Canonicalization);
+        return comparison != 0
+            ? comparison
+            : StringComparer.Ordinal.Compare(left.Fingerprint.Value, right.Fingerprint.Value);
+    }
 }
 
 /// <summary>
@@ -207,23 +239,11 @@ public sealed record ExecutionDefinitionExtensionCompatibilityDeclaration
                 nameof(schemaVersion));
         }
 
-        var low = 0;
-        var high = SupportedSchemaVersions.Length - 1;
-        while (low <= high)
-        {
-            var middle = low + ((high - low) / 2);
-            var comparison = StringComparer.Ordinal.Compare(
-                SupportedSchemaVersions[middle].Value,
-                schemaVersion.Value);
-            if (comparison == 0)
-                return true;
-            if (comparison < 0)
-                low = middle + 1;
-            else
-                high = middle - 1;
-        }
-
-        return false;
+        return CanonicalDocumentCollections.BinarySearchIndex(
+            SupportedSchemaVersions,
+            schemaVersion,
+            static (candidate, requested) =>
+                StringComparer.Ordinal.Compare(candidate.Value, requested.Value)) >= 0;
     }
 
     /// <summary>Compares declarations by extension identity and normalized exact version set.</summary>
@@ -326,21 +346,11 @@ public sealed record ExecutionDefinitionCompatibilityDeclaration
         if (string.IsNullOrWhiteSpace(kind.Value))
             throw new ArgumentException("A default execution-definition kind cannot be tested.", nameof(kind));
 
-        var low = 0;
-        var high = SupportedKinds.Length - 1;
-        while (low <= high)
-        {
-            var middle = low + ((high - low) / 2);
-            var comparison = StringComparer.Ordinal.Compare(SupportedKinds[middle].Value, kind.Value);
-            if (comparison == 0)
-                return true;
-            if (comparison < 0)
-                low = middle + 1;
-            else
-                high = middle - 1;
-        }
-
-        return false;
+        return CanonicalDocumentCollections.BinarySearchIndex(
+            SupportedKinds,
+            kind,
+            static (candidate, requested) =>
+                StringComparer.Ordinal.Compare(candidate.Value, requested.Value)) >= 0;
     }
 
     /// <summary>Attempts to find the compatibility declaration for an extension identity.</summary>
@@ -357,27 +367,13 @@ public sealed record ExecutionDefinitionCompatibilityDeclaration
         if (string.IsNullOrWhiteSpace(id.Value))
             throw new ArgumentException("A default execution-extension identity cannot be tested.", nameof(id));
 
-        var low = 0;
-        var high = SupportedExtensions.Length - 1;
-        while (low <= high)
-        {
-            var middle = low + ((high - low) / 2);
-            var candidate = SupportedExtensions[middle];
-            var comparison = StringComparer.Ordinal.Compare(candidate.Id.Value, id.Value);
-            if (comparison == 0)
-            {
-                compatibility = candidate;
-                return true;
-            }
-
-            if (comparison < 0)
-                low = middle + 1;
-            else
-                high = middle - 1;
-        }
-
-        compatibility = null;
-        return false;
+        var index = CanonicalDocumentCollections.BinarySearchIndex(
+            SupportedExtensions,
+            id,
+            static (candidate, requested) =>
+                StringComparer.Ordinal.Compare(candidate.Id.Value, requested.Value));
+        compatibility = index >= 0 ? SupportedExtensions[index] : null;
+        return compatibility is not null;
     }
 
     /// <summary>Compares declarations by their normalized exact compatibility sets.</summary>
@@ -477,7 +473,9 @@ public sealed record ExecutionDefinitionCompatibilityDeclaration
 
         }
 
-        return CanonicalDocumentCollections.SortIfNeeded(supportedDefinitions, CompareDefinitions);
+        return CanonicalDocumentCollections.SortIfNeeded(
+            supportedDefinitions,
+            ExecutionDefinitionReference.CompareCanonical);
     }
 
     static ImmutableArray<ExecutionDefinitionExtensionCompatibilityDeclaration> NormalizeExtensions(
@@ -508,28 +506,6 @@ public sealed record ExecutionDefinitionCompatibilityDeclaration
         return CanonicalDocumentCollections.SortIfNeeded(
             supportedExtensions,
             static (left, right) => StringComparer.Ordinal.Compare(left.Id.Value, right.Id.Value));
-    }
-
-    static int CompareDefinitions(ExecutionDefinitionReference left, ExecutionDefinitionReference right)
-    {
-        var comparison = StringComparer.Ordinal.Compare(left.DefinitionId.Value, right.DefinitionId.Value);
-        if (comparison != 0)
-            return comparison;
-
-        comparison = StringComparer.Ordinal.Compare(left.RevisionId.Value, right.RevisionId.Value);
-        if (comparison != 0)
-            return comparison;
-
-        comparison = StringComparer.Ordinal.Compare(left.Fingerprint.Algorithm, right.Fingerprint.Algorithm);
-        if (comparison != 0)
-            return comparison;
-
-        comparison = StringComparer.Ordinal.Compare(
-            left.Fingerprint.Canonicalization,
-            right.Fingerprint.Canonicalization);
-        return comparison != 0
-            ? comparison
-            : StringComparer.Ordinal.Compare(left.Fingerprint.Value, right.Fingerprint.Value);
     }
 
     static bool SequenceEqual<T>(ImmutableArray<T> left, ImmutableArray<T> right)

@@ -67,11 +67,53 @@ canonical domain-event contract and envelope explicitly provide that meaning.
 `InteractionContractDocuments`, `InteractionContractCatalog`, `InteractionEnvelopeValidator`, and
 `InteractionEnvelopeJsonSerializer` enforce exact schema, revision, fingerprint, discriminator, payload, and Reply
 outcome links with structured diagnostics; envelope admission requires the linked catalog rather than trusting a
-wire discriminator in isolation. The existing `EffectRequest`, delegate-bound continuations, raw Process
-signal payloads, and `EntityOutboxMessage` types remain migration surfaces for current runtimes. They may produce or
-carry canonical interactions, but they are not a parallel semantic authority; durable dispatch, inbox/outbox,
-definition/node resolution, deduplication, acknowledgement, retry/timeout triggering, and reconciliation or
-escalation path enforcement belong to subsequent compiler and runtime work.
+wire discriminator in isolation.
+
+## Canonical durable Request execution
+
+The durable-operation reference protocol interprets an ARI-160 `RequestEnvelope` without creating a second
+operation identity: the Request `EmissionId` remains the logical operation identity, while authority scope, exact
+Request contract, and `InteractionIdempotencyKey` form its target-deduplication key. `DurableRequestBinding`
+refines the exact Request contract with a bounded attempt count, claim-lease duration, optional concrete timeout,
+explicit idempotency evidence, one exact Reply contract for every terminal outcome, and exact definition/node
+targets required for reconciliation or escalation. The binding does not repeat the authored response obligation
+and contains no handler, repository, transaction, clock, or provider object.
+
+`DurableOperationState` is portable semantic state for one logical Request. It retains monotonically fenced
+claims, ordered immutable attempt snapshots with append-only attempt allocation, fenced reconciliation evidence,
+explicit pre-call, in-call, post-call/pre-commit, and post-commit/pre-acknowledgement failure evidence, the single
+durable acknowledgement, and the later target admission as distinct facts. Acknowledgements produced by
+reconciliation or escalation retain the exact recovery identity that won. Acknowledging a typed outcome
+prevents another physical call; it does not itself advance a Process token or invoke a Transition continuation.
+Admission instead consumes target-owner evidence and applies the Request's late, stale, or duplicate-result policy,
+including replay of an already durable disposition without advancing twice.
+
+`IDurableOperationAdapter` is the impure boundary. It receives an immutable fenced invocation carrying the same
+Request, correlation, and idempotency identities across retry, exposes target idempotency and reconciliation
+capabilities for exact Request contracts, and returns a typed terminal outcome or explicit failure evidence.
+`IDurableOperationBatchAdapter` applies the same boundary to a physical batch while returning exactly one
+emission/attempt/fence-keyed observation per item. Neither boundary receives aggregate state, an entity repository,
+a Transition callback, or a Process runtime service, so adapter registration cannot become semantic authority and
+a handler cannot mutate authoritative entity state through this contract.
+
+`DurableOperationReferenceExecutor` is a deterministic state transformer, not a production dispatcher or durable
+store. It defines fenced claim and renewal, dispatch, bounded retry, semantic timeout and cancellation, explicit
+reconciliation and escalation intents, acknowledgement, and target admission. It makes the EK-06 crash cuts
+explicit: a Request durable before dispatch remains pending; a dispatched call without acknowledgement becomes
+ambiguous and may be retried only with declared idempotency evidence or after reconciliation; and an acknowledgement
+replayed before target admission skips external execution and reuses the target's durable disposition. Late,
+duplicate, conflicting, and stale evidence remain observable. Callers still choose and persist each cut. Physical
+compare-and-swap, atomic origin commit plus outbox publication, operation-ledger persistence, lease storage, inbox
+admission, and atomic coupling to Process checkpoints or Transition commits are deliberately deferred to the
+Cohesive.Storage realization in ARI-166. Consequently, EK-06 remains Partial at the system-runtime level even though
+its reference protocol is represented and testable. The v1 state schema makes the reference value inspectable, but
+ARI-161 does not introduce a Storage ledger/checkpoint serializer or claim that writing this record alone supplies
+durable atomicity.
+
+The existing `EffectRequest`, delegate-bound continuations, raw Process signal payloads, `EntityOutboxMessage`, and
+legacy Process retry/dead-letter paths remain migration surfaces. They may be adapted to canonical Requests and
+operation observations, but they are not a parallel semantic authority and are not silently treated as the new
+durable protocol.
 
 ## Expression IR and Analysis
 

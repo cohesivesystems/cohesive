@@ -462,22 +462,12 @@ public sealed record RequestResponseObligation
         if (string.IsNullOrWhiteSpace(id.Value))
             throw new ArgumentException("A default terminal-outcome identity cannot be resolved.", nameof(id));
 
-        var low = 0;
-        var high = TerminalOutcomes.Length - 1;
-        while (low <= high)
-        {
-            var middle = low + ((high - low) / 2);
-            var candidate = TerminalOutcomes[middle];
-            var comparison = StringComparer.Ordinal.Compare(candidate.Id.Value, id.Value);
-            if (comparison == 0)
-                return candidate;
-            if (comparison < 0)
-                low = middle + 1;
-            else
-                high = middle - 1;
-        }
-
-        return null;
+        var index = CanonicalDocumentCollections.BinarySearchIndex(
+            TerminalOutcomes,
+            id,
+            static (candidate, requested) =>
+                StringComparer.Ordinal.Compare(candidate.Id.Value, requested.Value));
+        return index >= 0 ? TerminalOutcomes[index] : null;
     }
 
     /// <summary>Compares obligations by their complete normalized semantic value.</summary>

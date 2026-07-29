@@ -313,38 +313,3 @@ public sealed class DocumentValidationDiagnosticComparer : IComparer<DocumentVal
         return left.Length.CompareTo(right.Length);
     }
 }
-
-/// <summary>Shared allocation-aware normalization for canonical immutable document collections.</summary>
-static class CanonicalDocumentCollections
-{
-    /// <summary>Retains canonical storage or returns an ordinally sorted immutable copy.</summary>
-    /// <typeparam name="T">Collection item type.</typeparam>
-    /// <param name="values">Initialized immutable values to normalize.</param>
-    /// <param name="comparison">Canonical ordering comparison.</param>
-    /// <returns>
-    /// <paramref name="values"/> when already ordered; otherwise a sorted immutable copy.
-    /// </returns>
-    /// <exception cref="ArgumentException"><paramref name="values"/> is the default immutable array.</exception>
-    /// <exception cref="ArgumentNullException"><paramref name="comparison"/> is <see langword="null"/>.</exception>
-    public static ImmutableArray<T> SortIfNeeded<T>(
-        ImmutableArray<T> values,
-        Comparison<T> comparison)
-    {
-        if (values.IsDefault)
-            throw new ArgumentException("Canonical document values must be initialized.", nameof(values));
-        ArgumentNullException.ThrowIfNull(comparison);
-
-        for (var index = 1; index < values.Length; index++)
-        {
-            if (comparison(values[index - 1], values[index]) <= 0)
-                continue;
-
-            var sorted = ImmutableArray.CreateBuilder<T>(values.Length);
-            sorted.AddRange(values);
-            sorted.Sort(comparison);
-            return sorted.MoveToImmutable();
-        }
-
-        return values;
-    }
-}

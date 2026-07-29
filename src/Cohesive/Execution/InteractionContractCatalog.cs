@@ -260,7 +260,8 @@ public sealed class InteractionContractCatalog
             index++;
         }
 
-        candidates.Sort(static (left, right) => Compare(left.Reference, right.Reference));
+        candidates.Sort(static (left, right) =>
+            ExecutionDefinitionReference.CompareCanonical(left.Reference, right.Reference));
         for (var candidateIndex = 1; candidateIndex < candidates.Count; candidateIndex++)
         {
             var previous = candidates[candidateIndex - 1];
@@ -323,17 +324,6 @@ public sealed class InteractionContractCatalog
             (ReplyContractReference, ReplyContractDefinition) => true,
             _ => false
         };
-
-    static int Compare(ExecutionDefinitionReference left, ExecutionDefinitionReference right)
-    {
-        var comparison = StringComparer.Ordinal.Compare(left.DefinitionId.Value, right.DefinitionId.Value);
-        if (comparison != 0)
-            return comparison;
-        comparison = StringComparer.Ordinal.Compare(left.RevisionId.Value, right.RevisionId.Value);
-        if (comparison != 0)
-            return comparison;
-        return StringComparer.Ordinal.Compare(left.Fingerprint.Value, right.Fingerprint.Value);
-    }
 
     static string Prefix(string prefix, string? location) =>
         string.IsNullOrEmpty(location) || location == "$"
