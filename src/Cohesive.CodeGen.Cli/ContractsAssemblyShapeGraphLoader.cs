@@ -115,10 +115,13 @@ public static class ContractsAssemblyShapeGraphLoader
         for (var i = 0; i < operation.Results.Count; i++)
             AddRootTypeCandidate(operation.Results[i].BodyType, roots, seen, validateBuildable: true);
 
-        AddRootTypeCandidate(operation.Http.Body?.BodyType, roots, seen, validateBuildable: true);
-        AddRootTypeCandidate(operation.Http.Query?.QueryType, roots, seen, validateBuildable: true);
+        if (operation.Http is not { } http)
+            return;
 
-        var parameters = operation.Http.Parameters;
+        AddRootTypeCandidate(http.Body?.BodyType, roots, seen, validateBuildable: true);
+        AddRootTypeCandidate(http.Query?.QueryType, roots, seen, validateBuildable: true);
+
+        var parameters = http.Parameters;
         for (var i = 0; i < parameters.Count; i++)
             AddRootTypeCandidate(parameters[i].Type, roots, seen, validateBuildable: true);
     }

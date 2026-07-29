@@ -348,6 +348,11 @@ public sealed record TsNumberLiteralExpression(long Value) : TsExpression;
 public sealed record TsBooleanLiteralExpression(bool Value) : TsExpression;
 
 /// <summary>
+/// TypeScript <see langword="null"/> literal expression.
+/// </summary>
+public sealed record TsNullLiteralExpression : TsExpression;
+
+/// <summary>
 /// Array literal expression.
 /// </summary>
 public sealed record TsArrayLiteralExpression : TsExpression

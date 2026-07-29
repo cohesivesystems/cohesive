@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Text.Json.Serialization;
 using Cohesive.Adapters.TypeScript.Ast;
 using Cohesive.Api;
+using Cohesive.Execution;
 using Cohesive.Model;
 
 namespace Cohesive.Adapters.TypeScript;
@@ -54,7 +55,11 @@ public sealed class TypeScriptApiClientAstBuilder
         AppendMetadataDeclarations(statements, metadataNames);
 
         for (var i = 0; i < definition.Operations.Count; i++)
-            statements.Add(BuildFunction(definition.Operations[i]));
+        {
+            var operation = definition.Operations[i];
+            if (operation.Http is not null)
+                statements.Add(BuildFunction(operation));
+        }
 
         return new TsDocument(statements.ToImmutable());
     }
@@ -66,16 +71,19 @@ public sealed class TypeScriptApiClientAstBuilder
         for (var i = 0; i < definition.Operations.Count; i++)
         {
             var operation = definition.Operations[i];
+            if (operation.Http is not { } http)
+                continue;
+
             AppendTypeImports(names, operation.ResponseType);
 
-            if (operation.Http.Body is not null)
-                AppendTypeImports(names, operation.Http.Body.BodyType);
+            if (http.Body is not null)
+                AppendTypeImports(names, http.Body.BodyType);
 
-            if (operation.Http.Query is not null)
-                AppendTypeImports(names, operation.Http.Query.QueryType);
+            if (http.Query is not null)
+                AppendTypeImports(names, http.Query.QueryType);
 
-            for (var parameterIndex = 0; parameterIndex < operation.Http.Parameters.Count; parameterIndex++)
-                AppendTypeImports(names, operation.Http.Parameters[parameterIndex].Type);
+            for (var parameterIndex = 0; parameterIndex < http.Parameters.Count; parameterIndex++)
+                AppendTypeImports(names, http.Parameters[parameterIndex].Type);
         }
 
         names.Sort(StringComparer.Ordinal);
@@ -102,27 +110,53 @@ public sealed class TypeScriptApiClientAstBuilder
         ImmutableArray<TsStatement>.Builder statements,
         in TypeScriptApiClientMetadataNames names)
     {
+        var operationKeyMembers = ImmutableArray.CreateBuilder<TsTypeNode>(definition.Operations.Count);
+        var operationIdProperties = ImmutableArray.CreateBuilder<TsObjectProperty>(definition.Operations.Count);
         var endpointKeyMembers = ImmutableArray.CreateBuilder<TsTypeNode>(definition.Operations.Count);
         var endpointIdProperties = ImmutableArray.CreateBuilder<TsObjectProperty>(definition.Operations.Count);
+        var operationMetadataProperties = ImmutableArray.CreateBuilder<TsObjectProperty>(definition.Operations.Count);
         var scopePolicyMembers = ImmutableArray.CreateBuilder<TsPropertySignature>(definition.Operations.Count);
         var scopePolicyProperties = ImmutableArray.CreateBuilder<TsObjectProperty>(definition.Operations.Count);
 
         for (var i = 0; i < definition.Operations.Count; i++)
         {
             var operation = definition.Operations[i];
-            var endpointKey = BuildFunctionName(operation);
-            endpointKeyMembers.Add(new TsLiteralType(endpointKey));
-            endpointIdProperties.Add(new TsObjectProperty(
-                endpointKey,
+            var operationKey = BuildFunctionName(operation);
+            operationKeyMembers.Add(new TsLiteralType(operationKey));
+            operationIdProperties.Add(new TsObjectProperty(
+                operationKey,
                 new TsStringLiteralExpression(operation.Id.Value)));
+            operationMetadataProperties.Add(new TsObjectProperty(
+                operationKey,
+                BuildOperationMetadataExpression(operation)));
             scopePolicyMembers.Add(new TsPropertySignature(
-                endpointKey,
+                operationKey,
                 new TsRawType($"readonly {names.ScopePolicyMetadataName}[]"),
                 isReadonly: true));
             scopePolicyProperties.Add(new TsObjectProperty(
-                endpointKey,
+                operationKey,
                 BuildScopePoliciesExpression(operation.ScopePolicies)));
+
+            if (operation.Http is not null)
+            {
+                endpointKeyMembers.Add(new TsLiteralType(operationKey));
+                endpointIdProperties.Add(new TsObjectProperty(
+                    operationKey,
+                    new TsStringLiteralExpression(operation.Id.Value)));
+            }
         }
+
+        statements.Add(new TsTypeAliasDeclaration(
+            name: names.OperationKeyTypeName,
+            type: operationKeyMembers.Count == 0
+                ? new TsKeywordType(TsKeyword.Never)
+                : new TsUnionType(operationKeyMembers.ToImmutable())));
+
+        statements.Add(new TsConstDeclaration(
+            name: names.OperationIdsConstName,
+            initializer: new TsObjectLiteralExpression(operationIdProperties.ToImmutable()),
+            satisfiesType: new TsRawType($"Record<{names.OperationKeyTypeName}, string>"),
+            asConst: true));
 
         statements.Add(new TsTypeAliasDeclaration(
             name: names.EndpointKeyTypeName,
@@ -134,6 +168,12 @@ public sealed class TypeScriptApiClientAstBuilder
             name: names.EndpointIdsConstName,
             initializer: new TsObjectLiteralExpression(endpointIdProperties.ToImmutable()),
             satisfiesType: new TsRawType($"Record<{names.EndpointKeyTypeName}, string>"),
+            asConst: true));
+
+        statements.Add(new TsConstDeclaration(
+            name: names.OperationMetadataConstName,
+            initializer: new TsObjectLiteralExpression(operationMetadataProperties.ToImmutable()),
+            satisfiesType: new TsRawType($"Record<{names.OperationKeyTypeName}, unknown>"),
             asConst: true));
 
         statements.Add(new TsInterfaceDeclaration(
@@ -153,15 +193,113 @@ public sealed class TypeScriptApiClientAstBuilder
             ]));
 
         statements.Add(new TsInterfaceDeclaration(
-            name: names.ScopePolicyByEndpointName,
+            name: names.ScopePolicyByOperationName,
             members: scopePolicyMembers.ToImmutable()));
+
+        statements.Add(new TsTypeAliasDeclaration(
+            name: names.ScopePolicyByEndpointName,
+            type: new TsRawType(
+                $"Pick<{names.ScopePolicyByOperationName}, {names.EndpointKeyTypeName}>")));
 
         statements.Add(new TsConstDeclaration(
             name: names.ScopePoliciesConstName,
             initializer: new TsObjectLiteralExpression(scopePolicyProperties.ToImmutable()),
-            satisfiesType: new TsTypeReference(names.ScopePolicyByEndpointName),
+            satisfiesType: new TsTypeReference(names.ScopePolicyByOperationName),
             asConst: true));
     }
+
+    static TsExpression BuildOperationMetadataExpression(ApiOperation operation)
+    {
+        ImmutableArray<TsObjectProperty> properties =
+        [
+            new("id", new TsStringLiteralExpression(operation.Id.Value)),
+            new("kind", new TsStringLiteralExpression(ApiWireNames.OperationKind(operation.Kind))),
+            new("requestContract", new TsStringLiteralExpression(GetTypeScriptTypeText(operation.RequestType))),
+            new("authorizationRequirementIds", BuildAuthorizationRequirementIdsExpression(operation.AuthorizationRequirements)),
+            new("results", BuildResultsExpression(operation.Results)),
+            new("semanticReferences", BuildSemanticReferencesExpression(operation.SemanticReferences)),
+            new("http", BuildHttpBindingExpression(operation.Http))
+        ];
+        return new TsObjectLiteralExpression(properties);
+    }
+
+    static TsExpression BuildAuthorizationRequirementIdsExpression(
+        IReadOnlyList<ApiAuthorizationRequirement> requirements)
+    {
+        var expressions = ImmutableArray.CreateBuilder<TsExpression>(requirements.Count);
+        for (var index = 0; index < requirements.Count; index++)
+            expressions.Add(new TsStringLiteralExpression(requirements[index].Id));
+
+        return new TsArrayLiteralExpression(expressions.MoveToImmutable());
+    }
+
+    static TsExpression BuildResultsExpression(IReadOnlyList<ApiResultDefinition> results)
+    {
+        var expressions = ImmutableArray.CreateBuilder<TsExpression>(results.Count);
+        for (var index = 0; index < results.Count; index++)
+        {
+            var result = results[index];
+            ImmutableArray<TsObjectProperty> properties =
+            [
+                new("id", new TsStringLiteralExpression(result.Id)),
+                new("kind", new TsStringLiteralExpression(ApiWireNames.ResultKind(result.Kind))),
+                new("bodyContract", new TsStringLiteralExpression(GetTypeScriptTypeText(result.BodyType))),
+                new("isPrimary", new TsBooleanLiteralExpression(result.IsPrimary))
+            ];
+            expressions.Add(new TsObjectLiteralExpression(properties));
+        }
+
+        return new TsArrayLiteralExpression(expressions.MoveToImmutable());
+    }
+
+    static TsExpression BuildSemanticReferencesExpression(IReadOnlyList<ApiSemanticReference> references)
+    {
+        var expressions = ImmutableArray.CreateBuilder<TsExpression>(references.Count);
+        for (var index = 0; index < references.Count; index++)
+        {
+            var reference = references[index];
+            ImmutableArray<TsObjectProperty> properties =
+            [
+                new("authority", new TsStringLiteralExpression(reference.Authority)),
+                new("schemaVersion", new TsStringLiteralExpression(reference.SchemaVersion.Value)),
+                new("path", new TsStringLiteralExpression(reference.Path.ToString())),
+                new("source", BuildSemanticSourceExpression(reference.Source))
+            ];
+            expressions.Add(new TsObjectLiteralExpression(properties));
+        }
+
+        return new TsArrayLiteralExpression(expressions.MoveToImmutable());
+    }
+
+    static TsExpression BuildSemanticSourceExpression(ExecutionSourceProvenance? source)
+    {
+        if (source is null)
+            return new TsNullLiteralExpression();
+
+        ImmutableArray<TsObjectProperty> properties =
+        [
+            new("reference", new TsStringLiteralExpression(source.Reference)),
+            new("semanticPath", BuildNullableStringExpression(source.SemanticPath?.ToString())),
+            new("description", BuildNullableStringExpression(source.Description))
+        ];
+        return new TsObjectLiteralExpression(properties);
+    }
+
+    static TsExpression BuildHttpBindingExpression(HttpBinding? http)
+    {
+        if (http is null)
+            return new TsNullLiteralExpression();
+
+        ImmutableArray<TsObjectProperty> properties =
+        [
+            new("method", new TsStringLiteralExpression(http.Method)),
+            new("route", new TsStringLiteralExpression(http.Route))
+        ];
+        return new TsObjectLiteralExpression(properties);
+    }
+
+    static TsExpression BuildNullableStringExpression(string? value) =>
+        value is null ? new TsNullLiteralExpression() : new TsStringLiteralExpression(value);
 
     TsExpression BuildScopePoliciesExpression(IReadOnlyList<ApiScopePolicy> policies)
     {
@@ -231,63 +369,72 @@ public sealed class TypeScriptApiClientAstBuilder
         if (string.IsNullOrWhiteSpace(modulePrefix))
         {
             return new TypeScriptApiClientMetadataNames(
+                OperationIdsConstName: "apiOperationIds",
+                OperationKeyTypeName: "ApiOperationKey",
                 EndpointIdsConstName: "apiEndpointIds",
                 EndpointKeyTypeName: "ApiEndpointKey",
+                OperationMetadataConstName: "apiOperationMetadata",
                 ScopePoliciesConstName: "apiScopePolicies",
+                ScopePolicyByOperationName: "ApiScopePolicyByOperation",
                 ScopePolicyByEndpointName: "ApiScopePolicyByEndpoint",
                 ScopePolicyMetadataName: "ApiScopePolicyMetadata");
         }
 
         var camelPrefix = ToCamelCaseIdentifier(modulePrefix);
         return new TypeScriptApiClientMetadataNames(
+            OperationIdsConstName: $"{camelPrefix}ApiOperationIds",
+            OperationKeyTypeName: $"{modulePrefix}ApiOperationKey",
             EndpointIdsConstName: $"{camelPrefix}ApiEndpointIds",
             EndpointKeyTypeName: $"{modulePrefix}ApiEndpointKey",
+            OperationMetadataConstName: $"{camelPrefix}ApiOperationMetadata",
             ScopePoliciesConstName: $"{camelPrefix}ApiScopePolicies",
+            ScopePolicyByOperationName: $"{modulePrefix}ApiScopePolicyByOperation",
             ScopePolicyByEndpointName: $"{modulePrefix}ApiScopePolicyByEndpoint",
             ScopePolicyMetadataName: $"{modulePrefix}ApiScopePolicyMetadata");
     }
 
     TsFunctionDeclaration BuildFunction(ApiOperation operation)
     {
+        var http = RequireHttp(operation);
         var parameters = ImmutableArray.CreateBuilder<TsParameterDeclaration>();
         parameters.Add(new TsParameterDeclaration("http", new TsTypeReference(options.HttpClientTypeName)));
 
-        for (var i = 0; i < operation.Http.Parameters.Count; i++)
+        for (var i = 0; i < http.Parameters.Count; i++)
         {
-            var parameter = operation.Http.Parameters[i];
+            var parameter = http.Parameters[i];
             if (parameter.Source == HttpParameterSource.Query)
                 continue;
 
             parameters.Add(new TsParameterDeclaration(
                 name: ToCamelCase(parameter.Name),
                 type: new TsRawType(GetParameterTypeScriptTypeText(parameter)),
-                isOptional: CanRenderAsOptionalParameter(operation, parameter)));
+                isOptional: CanRenderAsOptionalParameter(http, parameter)));
         }
 
-        if (operation.Http.Query is { } query)
+        if (http.Query is { } query)
         {
             parameters.Add(new TsParameterDeclaration(
                 name: GetQueryObjectParameterName(operation),
                 type: new TsRawType(AddNullAndUndefined(GetTypeScriptTypeText(query.QueryType))),
-                isOptional: CanRenderQueryObjectAsOptionalParameter(operation)));
+                isOptional: CanRenderQueryObjectAsOptionalParameter(http)));
         }
 
-        for (var i = 0; i < operation.Http.Parameters.Count; i++)
+        for (var i = 0; i < http.Parameters.Count; i++)
         {
-            var parameter = operation.Http.Parameters[i];
+            var parameter = http.Parameters[i];
             if (parameter.Source != HttpParameterSource.Query)
                 continue;
 
             parameters.Add(new TsParameterDeclaration(
                 name: ToCamelCase(parameter.Name),
                 type: new TsRawType(GetParameterTypeScriptTypeText(parameter)),
-                isOptional: CanRenderAsOptionalParameter(operation, parameter)));
+                isOptional: CanRenderAsOptionalParameter(http, parameter)));
         }
 
-        if (operation.Http.Body is not null)
-            parameters.Add(new TsParameterDeclaration(GetBodyParameterName(operation), new TsRawType(GetTypeScriptTypeText(operation.Http.Body.BodyType))));
+        if (http.Body is not null)
+            parameters.Add(new TsParameterDeclaration(GetBodyParameterName(http), new TsRawType(GetTypeScriptTypeText(http.Body.BodyType))));
 
-        var bodyLines = BuildBody(operation);
+        var bodyLines = BuildBody(operation, http);
         return new TsFunctionDeclaration(
             name: BuildFunctionName(operation),
             parameters: parameters.ToImmutable(),
@@ -295,22 +442,22 @@ public sealed class TypeScriptApiClientAstBuilder
             bodyLines: bodyLines);
     }
 
-    ImmutableArray<string> BuildBody(ApiOperation operation)
+    ImmutableArray<string> BuildBody(ApiOperation operation, HttpBinding http)
     {
         var lines = ImmutableArray.CreateBuilder<string>();
-        lines.Add($"const basePath = {BuildRouteExpression(operation.Http)};");
+        lines.Add($"const basePath = {BuildRouteExpression(http)};");
 
-        var hasQuery = operation.Http.Query is not null || CountParameters(operation.Http, HttpParameterSource.Query) > 0;
+        var hasQuery = http.Query is not null || CountParameters(http, HttpParameterSource.Query) > 0;
         if (hasQuery)
         {
             lines.Add("const queryParams = new URLSearchParams();");
 
-            if (operation.Http.Query is { } query)
+            if (http.Query is { } query)
                 AppendQueryObjectLines(lines, operation, query);
 
-            for (var i = 0; i < operation.Http.Parameters.Count; i++)
+            for (var i = 0; i < http.Parameters.Count; i++)
             {
-                var parameter = operation.Http.Parameters[i];
+                var parameter = http.Parameters[i];
                 if (parameter.Source != HttpParameterSource.Query)
                     continue;
 
@@ -325,24 +472,24 @@ public sealed class TypeScriptApiClientAstBuilder
             lines.Add("const path = basePath;");
         }
 
-        var hasHeaders = CountParameters(operation.Http, HttpParameterSource.Header) > 0 || operation.Http.Body is not null;
+        var hasHeaders = CountParameters(http, HttpParameterSource.Header) > 0 || http.Body is not null;
         if (hasHeaders)
         {
             lines.Add("const headers: Record<string, string> = {};");
-            for (var i = 0; i < operation.Http.Parameters.Count; i++)
+            for (var i = 0; i < http.Parameters.Count; i++)
             {
-                var parameter = operation.Http.Parameters[i];
+                var parameter = http.Parameters[i];
                 if (parameter.Source != HttpParameterSource.Header)
                     continue;
 
                 AppendHeaderLines(lines, parameter);
             }
 
-            if (operation.Http.Body is not null)
+            if (http.Body is not null)
                 lines.Add("headers['content-type'] = 'application/json';");
         }
 
-        lines.Add(BuildReturnLine(operation, hasHeaders));
+        lines.Add(BuildReturnLine(operation, http, hasHeaders));
         return lines.ToImmutable();
     }
 
@@ -405,12 +552,12 @@ public sealed class TypeScriptApiClientAstBuilder
         lines.Add($"headers['{parameter.Name}'] = String({parameterName});");
     }
 
-    string BuildReturnLine(ApiOperation operation, bool hasHeaders)
+    string BuildReturnLine(ApiOperation operation, HttpBinding http, bool hasHeaders)
     {
-        var bodyParameterName = operation.Http.Body is null ? null : GetBodyParameterName(operation);
+        var bodyParameterName = http.Body is null ? null : GetBodyParameterName(http);
         var init = new List<string>
         {
-            $"method: '{operation.Http.Method}'"
+            $"method: '{http.Method}'"
         };
 
         if (hasHeaders)
@@ -481,11 +628,11 @@ public sealed class TypeScriptApiClientAstBuilder
         return ToCamelCase(operation.Name);
     }
 
-    static string GetBodyParameterName(ApiOperation operation)
+    static string GetBodyParameterName(HttpBinding http)
     {
-        for (var i = 0; i < operation.Http.Parameters.Count; i++)
+        for (var i = 0; i < http.Parameters.Count; i++)
         {
-            if (string.Equals(operation.Http.Parameters[i].Name, "body", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(http.Parameters[i].Name, "body", StringComparison.OrdinalIgnoreCase))
                 return "request";
         }
 
@@ -494,9 +641,10 @@ public sealed class TypeScriptApiClientAstBuilder
 
     static string GetQueryObjectParameterName(ApiOperation operation)
     {
-        for (var i = 0; i < operation.Http.Parameters.Count; i++)
+        var http = RequireHttp(operation);
+        for (var i = 0; i < http.Parameters.Count; i++)
         {
-            if (string.Equals(operation.Http.Parameters[i].Name, "query", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(http.Parameters[i].Name, "query", StringComparison.OrdinalIgnoreCase))
                 return "request";
         }
 
@@ -628,20 +776,20 @@ public sealed class TypeScriptApiClientAstBuilder
     static bool CanSkipParameter(HttpParameter parameter) =>
         parameter.IsOptional || CanSkipWhenUndefined(parameter.Type);
 
-    static bool CanRenderAsOptionalParameter(ApiOperation operation, HttpParameter parameter)
+    static bool CanRenderAsOptionalParameter(HttpBinding http, HttpParameter parameter)
     {
         if (!parameter.IsOptional)
             return false;
 
-        if (operation.Http.Body is not null)
+        if (http.Body is not null)
             return false;
 
         if (parameter.Source != HttpParameterSource.Query)
             return false;
 
-        for (var i = 0; i < operation.Http.Parameters.Count; i++)
+        for (var i = 0; i < http.Parameters.Count; i++)
         {
-            var candidate = operation.Http.Parameters[i];
+            var candidate = http.Parameters[i];
             if (candidate.Source == HttpParameterSource.Query && !candidate.IsOptional)
                 return false;
         }
@@ -649,20 +797,24 @@ public sealed class TypeScriptApiClientAstBuilder
         return true;
     }
 
-    static bool CanRenderQueryObjectAsOptionalParameter(ApiOperation operation)
+    static bool CanRenderQueryObjectAsOptionalParameter(HttpBinding http)
     {
-        if (operation.Http.Body is not null)
+        if (http.Body is not null)
             return false;
 
-        for (var i = 0; i < operation.Http.Parameters.Count; i++)
+        for (var i = 0; i < http.Parameters.Count; i++)
         {
-            var candidate = operation.Http.Parameters[i];
+            var candidate = http.Parameters[i];
             if (candidate.Source == HttpParameterSource.Query && !candidate.IsOptional)
                 return false;
         }
 
         return true;
     }
+
+    static HttpBinding RequireHttp(ApiOperation operation) =>
+        operation.Http ?? throw new InvalidOperationException(
+            $"API operation '{operation.Id}' does not declare an HTTP projection.");
 
     static string ResolveQueryParameterName(PropertyInfo property) =>
         property.GetCustomAttribute<JsonPropertyNameAttribute>(inherit: true)?.Name ?? ToSnakeCase(property.Name);
@@ -831,9 +983,13 @@ public sealed class TypeScriptApiClientAstBuilder
     }
 
     readonly record struct TypeScriptApiClientMetadataNames(
+        string OperationIdsConstName,
+        string OperationKeyTypeName,
         string EndpointIdsConstName,
         string EndpointKeyTypeName,
+        string OperationMetadataConstName,
         string ScopePoliciesConstName,
+        string ScopePolicyByOperationName,
         string ScopePolicyByEndpointName,
         string ScopePolicyMetadataName);
 }

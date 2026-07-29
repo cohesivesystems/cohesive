@@ -1,4 +1,5 @@
 using Cohesive.Api;
+using Cohesive.Execution;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -9,6 +10,86 @@ namespace Cohesive.Tests.Api;
 
 public sealed class ApiDefinitionTests
 {
+    [Fact]
+    public void Build_RootSemanticOperations_RetainAuthorizationAndExactProvenanceWithoutHttp()
+    {
+        var authorization = new ApiAuthorizationRequirement(
+            id: "execution.inspect",
+            description: "Inspect execution state.");
+        var reference = new ApiSemanticReference(
+            authority: "cohesive.execution.process-control",
+            schemaVersion: new("cohesive-process-control/v1"),
+            path: ExecutionSemanticPath.From("commands").Append("inspect"),
+            source: new ExecutionSourceProvenance("execution-kernel-spec#control"));
+
+        var definition = Cohesive.Api.Api.Define("Execution")
+            .Query("Inspect")
+                .Accepts<InspectRequest>()
+                .Returns<ExecutionStatus>()
+                .Requirement(authorization)
+                .Requirement(authorization)
+                .SemanticReference(reference)
+                .SemanticReference(reference)
+                .Done()
+            .Command("Pause")
+                .Accepts<PauseRequest>()
+                .Returns<ExecutionStatus>()
+                .Done()
+            .Build();
+
+        Assert.Collection(
+            definition.Operations,
+            inspect =>
+            {
+                Assert.Equal(ApiOperationKind.Query, inspect.Kind);
+                Assert.Equal("Execution.Inspect", inspect.Id.Value);
+                Assert.Null(inspect.Http);
+                Assert.Null(inspect.PrimaryResult.Http);
+                Assert.Same(authorization, Assert.Single(inspect.AuthorizationRequirements));
+                Assert.Same(reference, Assert.Single(inspect.SemanticReferences));
+            },
+            pause =>
+            {
+                Assert.Equal(ApiOperationKind.Command, pause.Kind);
+                Assert.Equal("Execution.Pause", pause.Id.Value);
+                Assert.Null(pause.Http);
+                Assert.Null(pause.PrimaryResult.Http);
+            });
+    }
+
+    [Fact]
+    public void WithHttp_ProjectsSemanticOperationWithoutLosingItsAuthorityMetadata()
+    {
+        var authorization = new ApiAuthorizationRequirement("execution.pause");
+        var reference = new ApiSemanticReference(
+            authority: "cohesive.execution.process-control",
+            schemaVersion: new("cohesive-process-control/v1"),
+            path: ExecutionSemanticPath.From("commands").Append("pause"));
+        var semantic = Cohesive.Api.Api.Define("Execution")
+            .Command("Pause")
+                .Accepts<PauseRequest>()
+                .Returns<ExecutionStatus>()
+                .Result<ApiProblem>(ApiResultKind.Conflict)
+                .Requirement(authorization)
+                .SemanticReference(reference)
+                .Build()
+            .Operation;
+
+        var projected = semantic.WithHttp(new HttpBinding(
+            method: "POST",
+            route: "/api/executions/{instance}/pause",
+            parameters: [new("instance", HttpParameterSource.Route, typeof(string))],
+            body: new(typeof(PauseRequest))));
+
+        Assert.Null(semantic.Http);
+        Assert.All(semantic.Results, static result => Assert.Null(result.Http));
+        Assert.Equal("POST", projected.Http?.Method);
+        Assert.Equal(StatusCodes.Status200OK, projected.Results[0].Http?.StatusCode);
+        Assert.Equal(StatusCodes.Status409Conflict, projected.Results[1].Http?.StatusCode);
+        Assert.Same(authorization, Assert.Single(projected.AuthorizationRequirements));
+        Assert.Same(reference, Assert.Single(projected.SemanticReferences));
+    }
+
     [Fact]
     public void Build_EntityDsl_InfersRouteParametersAndBodies()
     {
@@ -31,13 +112,14 @@ public sealed class ApiDefinitionTests
         Assert.Equal(ApiOperationKind.Query, query.Kind);
         Assert.Equal(typeof(void), query.RequestType);
         Assert.Equal(typeof(ShipmentDto), query.ResponseType);
-        Assert.Equal("GET", query.Http.Method);
-        Assert.Equal("/api/shipments/{id}", query.Http.Route);
-        var queryRoute = Assert.Single(query.Http.Parameters);
+        var queryHttp = Assert.IsType<HttpBinding>(query.Http);
+        Assert.Equal("GET", queryHttp.Method);
+        Assert.Equal("/api/shipments/{id}", queryHttp.Route);
+        var queryRoute = Assert.Single(queryHttp.Parameters);
         Assert.Equal("id", queryRoute.Name);
         Assert.Equal(HttpParameterSource.Route, queryRoute.Source);
         Assert.Equal(typeof(string), queryRoute.Type);
-        Assert.Null(query.Http.Body);
+        Assert.Null(queryHttp.Body);
 
         var command = definition.Operations[1];
         Assert.Equal(ApiOperationKind.Command, command.Kind);
@@ -47,9 +129,10 @@ public sealed class ApiDefinitionTests
         Assert.Equal(ApiResultKind.NoContent, command.PrimaryResult.Kind);
         Assert.Equal(StatusCodes.Status204NoContent, command.PrimaryResult.Http?.StatusCode);
         Assert.Equal("Dispatch", command.Transition?.Name);
-        Assert.NotNull(command.Http.Body);
-        Assert.Equal(typeof(DispatchShipmentRequest), command.Http.Body!.BodyType);
-        var commandRoute = Assert.Single(command.Http.Parameters);
+        var commandHttp = Assert.IsType<HttpBinding>(command.Http);
+        Assert.NotNull(commandHttp.Body);
+        Assert.Equal(typeof(DispatchShipmentRequest), commandHttp.Body!.BodyType);
+        var commandRoute = Assert.Single(commandHttp.Parameters);
         Assert.Equal("id", commandRoute.Name);
         Assert.Equal(HttpParameterSource.Route, commandRoute.Source);
         Assert.Equal(typeof(string), commandRoute.Type);
@@ -158,6 +241,26 @@ public sealed class ApiDefinitionTests
     }
 
     [Fact]
+    public void Operation_WithoutHttp_StripsResultTransportBindingsAtTheSemanticBoundary()
+    {
+        var operation = new ApiOperation(
+            name: "Inspect",
+            kind: ApiOperationKind.Query,
+            requestType: typeof(InspectRequest),
+            responseType: typeof(ExecutionStatus),
+            results:
+            [
+                new ApiResultDefinition(
+                    ApiResultKind.Success,
+                    typeof(ExecutionStatus),
+                    http: new ApiHttpResultBinding(StatusCodes.Status200OK))
+            ]);
+
+        Assert.Null(operation.Http);
+        Assert.Null(operation.PrimaryResult.Http);
+    }
+
+    [Fact]
     public void Build_OptionalQueryParameters_RecordOptionality()
     {
         var definition = Cohesive.Api.Api.Define()
@@ -170,8 +273,9 @@ public sealed class ApiDefinitionTests
             .Build();
 
         var operation = Assert.Single(definition.Operations);
+        var http = Assert.IsType<HttpBinding>(operation.Http);
         Assert.Collection(
-            operation.Http.Parameters,
+            http.Parameters,
             term =>
             {
                 Assert.Equal("term", term.Name);
@@ -200,11 +304,12 @@ public sealed class ApiDefinitionTests
             .Build();
 
         var operation = Assert.Single(definition.Operations);
+        var http = Assert.IsType<HttpBinding>(operation.Http);
         Assert.Equal(typeof(SearchShipmentsRequest), operation.RequestType);
-        Assert.NotNull(operation.Http.Query);
-        Assert.Equal(typeof(SearchShipmentsRequest), operation.Http.Query!.QueryType);
-        Assert.Null(operation.Http.Body);
-        Assert.Empty(operation.Http.Parameters);
+        Assert.NotNull(http.Query);
+        Assert.Equal(typeof(SearchShipmentsRequest), http.Query!.QueryType);
+        Assert.Null(http.Body);
+        Assert.Empty(http.Parameters);
     }
 
     [Fact]
@@ -298,4 +403,10 @@ public sealed class ApiDefinitionTests
         string? Term,
         [property: JsonPropertyName("include_archived")] bool? IncludeArchived,
         int? Limit);
+
+    sealed record InspectRequest(string InstanceId);
+
+    sealed record PauseRequest(string InstanceId);
+
+    sealed record ExecutionStatus(string Phase);
 }

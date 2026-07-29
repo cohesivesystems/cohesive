@@ -30,7 +30,8 @@ internal static class HttpRequestBindingSupport
         ArgumentNullException.ThrowIfNull(httpContext);
         ArgumentNullException.ThrowIfNull(operation);
 
-        return operation.Http.Body is not null
+        var http = RequireHttp(operation);
+        return http.Body is not null
             ? await ReadOperationBodyAsync(httpContext, operation, cancellationToken).ConfigureAwait(false)
             : ReadOperationQuery(httpContext, operation);
     }
@@ -49,7 +50,7 @@ internal static class HttpRequestBindingSupport
     {
         ArgumentNullException.ThrowIfNull(httpContext);
         ArgumentNullException.ThrowIfNull(operation);
-        if (operation.Http.Body is not { } body)
+        if (RequireHttp(operation).Body is not { } body)
             return null;
 
         var request = await JsonSerializer.DeserializeAsync(
@@ -72,13 +73,14 @@ internal static class HttpRequestBindingSupport
     {
         ArgumentNullException.ThrowIfNull(httpContext);
         ArgumentNullException.ThrowIfNull(operation);
-        if (operation.Http.Query is { } query)
+        var http = RequireHttp(operation);
+        if (http.Query is { } query)
             return HttpQueryRequestBinder.BindOrNull(httpContext, query.QueryType);
 
         var values = new Dictionary<string, object?>(StringComparer.Ordinal);
-        for (var i = 0; i < operation.Http.Parameters.Count; i++)
+        for (var i = 0; i < http.Parameters.Count; i++)
         {
-            var parameter = operation.Http.Parameters[i];
+            var parameter = http.Parameters[i];
             if (parameter.Source != HttpParameterSource.Query
                 || !httpContext.Request.Query.TryGetValue(parameter.Name, out var rawValues))
             {
@@ -90,6 +92,10 @@ internal static class HttpRequestBindingSupport
 
         return values.Count == 0 ? null : values;
     }
+
+    static HttpBinding RequireHttp(ApiOperation operation) =>
+        operation.Http ?? throw new InvalidOperationException(
+            $"API operation '{operation.Id}' does not declare an HTTP projection.");
 
     /// <summary>Converts raw query values to a declared scalar or sequence type.</summary>
     /// <param name="parameterName">Query parameter name used in conversion diagnostics.</param>

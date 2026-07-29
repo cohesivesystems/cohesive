@@ -1,5 +1,6 @@
 using Cohesive.Model;
 using Cohesive.Transitions.Model;
+using Cohesive.Execution;
 
 namespace Cohesive.Api;
 
@@ -255,6 +256,44 @@ public enum ApiResultKind
     InfrastructureError = 12
 }
 
+/// <summary>Stable host-language-independent wire names for closed API semantic categories.</summary>
+public static class ApiWireNames
+{
+    /// <summary>Gets the canonical wire name of an API operation category.</summary>
+    /// <param name="kind">Operation category to name.</param>
+    /// <returns>The stable lower-camel semantic name.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="kind"/> is unsupported.</exception>
+    public static string OperationKind(ApiOperationKind kind) => kind switch
+    {
+        ApiOperationKind.Query => "query",
+        ApiOperationKind.Command => "command",
+        ApiOperationKind.Action => "action",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported API operation kind.")
+    };
+
+    /// <summary>Gets the canonical wire name of an API result category.</summary>
+    /// <param name="kind">Result category to name.</param>
+    /// <returns>The stable lower-camel semantic name.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="kind"/> is unsupported.</exception>
+    public static string ResultKind(ApiResultKind kind) => kind switch
+    {
+        ApiResultKind.Success => "success",
+        ApiResultKind.Created => "created",
+        ApiResultKind.Accepted => "accepted",
+        ApiResultKind.NoContent => "noContent",
+        ApiResultKind.ValidationFailed => "validationFailed",
+        ApiResultKind.Unauthorized => "unauthorized",
+        ApiResultKind.Forbidden => "forbidden",
+        ApiResultKind.NotFound => "notFound",
+        ApiResultKind.Conflict => "conflict",
+        ApiResultKind.PreconditionFailed => "preconditionFailed",
+        ApiResultKind.RateLimited => "rateLimited",
+        ApiResultKind.DomainError => "domainError",
+        ApiResultKind.InfrastructureError => "infrastructureError",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported API result kind.")
+    };
+}
+
 /// <summary>
 /// Optional HTTP projection metadata for an API result variant.
 /// </summary>
@@ -345,20 +384,18 @@ public sealed class ApiResultDefinition
             ? this
             : new ApiResultDefinition(Kind, BodyType, isPrimary, Id, Description, Http);
 
+    /// <summary>Creates a copy of the result with an updated HTTP projection.</summary>
+    /// <param name="http">HTTP projection metadata, or <see langword="null"/> to remove that projection.</param>
+    /// <returns>This result when <paramref name="http"/> is unchanged; otherwise, an equivalent result with that projection.</returns>
+    public ApiResultDefinition WithHttp(ApiHttpResultBinding? http) =>
+        http == Http
+            ? this
+            : new ApiResultDefinition(Kind, BodyType, IsPrimary, Id, Description, http);
+
     static string GetDefaultId(ApiResultKind kind, bool isPrimary) =>
         isPrimary && kind == ApiResultKind.Success
             ? "success"
-            : ToCamelCase(kind.ToString());
-
-    static string ToCamelCase(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return "result";
-
-        return value.Length == 1
-            ? char.ToLowerInvariant(value[0]).ToString()
-            : char.ToLowerInvariant(value[0]) + value[1..];
-    }
+            : ApiWireNames.ResultKind(kind);
 }
 
 /// <summary>
@@ -369,12 +406,37 @@ public sealed class ApiOperation
     /// <summary>
     /// Creates an API operation.
     /// </summary>
+    /// <param name="name">Stable logical operation name.</param>
+    /// <param name="kind">Semantic operation category.</param>
+    /// <param name="requestType">Declared request payload or envelope type.</param>
+    /// <param name="responseType">Compatibility response type used when <paramref name="results"/> is absent.</param>
+    /// <param name="http">Optional HTTP projection metadata.</param>
+    /// <param name="id">Optional stable endpoint identity; defaults to <paramref name="name"/>.</param>
+    /// <param name="entity">Optional owning entity.</param>
+    /// <param name="transition">Optional transition projected by this operation.</param>
+    /// <param name="summary">Optional human-readable summary.</param>
+    /// <param name="description">Optional human-readable description.</param>
+    /// <param name="tags">Optional logical grouping tags.</param>
+    /// <param name="results">Optional semantic result variants.</param>
+    /// <param name="scopePolicies">Optional semantic scope policies.</param>
+    /// <param name="authorizationRequirements">Optional transport-neutral authorization requirements.</param>
+    /// <param name="semanticReferences">Optional references to exact constructs owned by semantic authorities.</param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="name"/>, <paramref name="requestType"/>, or <paramref name="responseType"/> is
+    /// <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="name"/> is empty or white space, or a supplied collection is structurally invalid.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// Result identities, primary selection, authorization requirements, or semantic references conflict.
+    /// </exception>
     public ApiOperation(
         string name,
         ApiOperationKind kind,
         Type requestType,
         Type responseType,
-        HttpBinding http,
+        HttpBinding? http = null,
         ApiEndpointId? id = null,
         EntityTypeName? entity = null,
         TransitionDefinition? transition = null,
@@ -382,20 +444,27 @@ public sealed class ApiOperation
         string? description = null,
         IReadOnlyList<string>? tags = null,
         IReadOnlyList<ApiResultDefinition>? results = null,
-        IReadOnlyList<ApiScopePolicy>? scopePolicies = null)
+        IReadOnlyList<ApiScopePolicy>? scopePolicies = null,
+        IReadOnlyList<ApiAuthorizationRequirement>? authorizationRequirements = null,
+        IReadOnlyList<ApiSemanticReference>? semanticReferences = null)
     {
         Name = Guard.RequireNotNullOrWhiteSpace(name);
         Id = id ?? new ApiEndpointId(Name);
         Kind = kind;
         RequestType = requestType ?? throw new ArgumentNullException(nameof(requestType));
-        Http = http ?? throw new ArgumentNullException(nameof(http));
+        Http = http;
         Entity = entity;
         Transition = transition;
         Summary = string.IsNullOrWhiteSpace(summary) ? null : summary;
         Description = string.IsNullOrWhiteSpace(description) ? null : description;
         Tags = tags is null || tags.Count == 0 ? [] : [.. tags];
         ScopePolicies = scopePolicies is null || scopePolicies.Count == 0 ? [] : [.. scopePolicies];
-        Results = NormalizeResults(responseType ?? throw new ArgumentNullException(nameof(responseType)), results);
+        AuthorizationRequirements = NormalizeAuthorizationRequirements(authorizationRequirements);
+        SemanticReferences = NormalizeSemanticReferences(semanticReferences);
+        Results = NormalizeResults(
+            responseType ?? throw new ArgumentNullException(nameof(responseType)),
+            results,
+            inferHttpBinding: http is not null);
         PrimaryResult = SelectPrimaryResult(Results);
         ResponseType = PrimaryResult.BodyType;
     }
@@ -448,22 +517,22 @@ public sealed class ApiOperation
     public TransitionDefinition? Transition { get; }
 
     /// <summary>
-    /// HTTP binding metadata.
+    /// Optional HTTP projection metadata.
     /// </summary>
-    public HttpBinding Http { get; }
+    public HttpBinding? Http { get; }
 
     /// <summary>
-    /// Optional OpenAPI summary text.
+    /// Optional human-readable summary projected by compatible transports.
     /// </summary>
     public string? Summary { get; }
 
     /// <summary>
-    /// Optional OpenAPI description text.
+    /// Optional human-readable description projected by compatible transports.
     /// </summary>
     public string? Description { get; }
 
     /// <summary>
-    /// Optional OpenAPI tags.
+    /// Logical grouping tags projected by compatible transports.
     /// </summary>
     public IReadOnlyList<string> Tags { get; }
 
@@ -472,12 +541,126 @@ public sealed class ApiOperation
     /// </summary>
     public IReadOnlyList<ApiScopePolicy> ScopePolicies { get; }
 
-    static IReadOnlyList<ApiResultDefinition> NormalizeResults(Type responseType, IReadOnlyList<ApiResultDefinition>? results)
+    /// <summary>
+    /// Transport-neutral authorization requirements in stable declaration order.
+    /// </summary>
+    public IReadOnlyList<ApiAuthorizationRequirement> AuthorizationRequirements { get; }
+
+    /// <summary>
+    /// Exact semantic authority references in stable declaration order.
+    /// </summary>
+    public IReadOnlyList<ApiSemanticReference> SemanticReferences { get; }
+
+    /// <summary>Creates an equivalent operation projected through HTTP.</summary>
+    /// <remarks>
+    /// Existing explicit result bindings are retained. Results without an HTTP binding receive the
+    /// conventional status code for their semantic result kind.
+    /// </remarks>
+    /// <param name="http">HTTP operation binding to attach.</param>
+    /// <returns>A new operation retaining the semantic identity, contracts, policies, and provenance.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="http"/> is <see langword="null"/>.</exception>
+    public ApiOperation WithHttp(HttpBinding http)
+    {
+        ArgumentNullException.ThrowIfNull(http);
+        var results = new ApiResultDefinition[Results.Count];
+        for (var i = 0; i < Results.Count; i++)
+        {
+            var result = Results[i];
+            results[i] = result.Http is not null
+                ? result
+                : result.WithHttp(new ApiHttpResultBinding(
+                    ApiHttpResultConventions.DefaultStatusCode(result.Kind, result.BodyType)));
+        }
+
+        return new ApiOperation(
+            name: Name,
+            kind: Kind,
+            requestType: RequestType,
+            responseType: ResponseType,
+            http: http,
+            id: Id,
+            entity: Entity,
+            transition: Transition,
+            summary: Summary,
+            description: Description,
+            tags: Tags,
+            results: results,
+            scopePolicies: ScopePolicies,
+            authorizationRequirements: AuthorizationRequirements,
+            semanticReferences: SemanticReferences);
+    }
+
+    static IReadOnlyList<ApiAuthorizationRequirement> NormalizeAuthorizationRequirements(
+        IReadOnlyList<ApiAuthorizationRequirement>? requirements)
+    {
+        if (requirements is null || requirements.Count == 0)
+            return [];
+
+        var normalized = new List<ApiAuthorizationRequirement>(requirements.Count);
+        var byId = new Dictionary<string, ApiAuthorizationRequirement>(StringComparer.Ordinal);
+        for (var i = 0; i < requirements.Count; i++)
+        {
+            var requirement = requirements[i]
+                ?? throw new ArgumentException(
+                    "API authorization requirements must not contain null values.",
+                    nameof(requirements));
+            if (!byId.TryGetValue(requirement.Id, out var existing))
+            {
+                byId.Add(requirement.Id, requirement);
+                normalized.Add(requirement);
+                continue;
+            }
+
+            if (existing != requirement)
+            {
+                throw new InvalidOperationException(
+                    $"API operation declares authorization requirement '{requirement.Id}' with conflicting metadata.");
+            }
+        }
+
+        return normalized.Count == requirements.Count ? [.. requirements] : [.. normalized];
+    }
+
+    static IReadOnlyList<ApiSemanticReference> NormalizeSemanticReferences(
+        IReadOnlyList<ApiSemanticReference>? references)
+    {
+        if (references is null || references.Count == 0)
+            return [];
+
+        var normalized = new List<ApiSemanticReference>(references.Count);
+        var byCoordinate = new Dictionary<(string Authority, ExecutionIrSchemaVersion Schema, string Path), ApiSemanticReference>();
+        for (var i = 0; i < references.Count; i++)
+        {
+            var reference = references[i]
+                ?? throw new ArgumentException(
+                    "API semantic references must not contain null values.",
+                    nameof(references));
+            var coordinate = (reference.Authority, reference.SchemaVersion, reference.Path.ToString());
+            if (!byCoordinate.TryGetValue(coordinate, out var existing))
+            {
+                byCoordinate.Add(coordinate, reference);
+                normalized.Add(reference);
+                continue;
+            }
+
+            if (existing != reference)
+            {
+                throw new InvalidOperationException(
+                    $"API operation declares semantic reference '{reference.Authority}:{reference.Path}' with conflicting provenance.");
+            }
+        }
+
+        return normalized.Count == references.Count ? [.. references] : [.. normalized];
+    }
+
+    static IReadOnlyList<ApiResultDefinition> NormalizeResults(
+        Type responseType,
+        IReadOnlyList<ApiResultDefinition>? results,
+        bool inferHttpBinding)
     {
         if (results is null || results.Count == 0)
         {
             var kind = responseType == typeof(void) ? ApiResultKind.NoContent : ApiResultKind.Success;
-            var statusCode = responseType == typeof(void) ? 204 : 200;
             return
             [
                 new ApiResultDefinition(
@@ -485,7 +668,9 @@ public sealed class ApiOperation
                     bodyType: responseType,
                     isPrimary: true,
                     id: kind == ApiResultKind.NoContent ? "noContent" : "success",
-                    http: new ApiHttpResultBinding(statusCode))
+                    http: inferHttpBinding
+                        ? new ApiHttpResultBinding(ApiHttpResultConventions.DefaultStatusCode(kind, responseType))
+                        : null)
             ];
         }
 
@@ -501,7 +686,7 @@ public sealed class ApiOperation
             if (result.IsPrimary)
                 primaryCount++;
 
-            normalized[i] = result;
+            normalized[i] = inferHttpBinding ? result : result.WithHttp(http: null);
         }
 
         if (primaryCount == 0)
@@ -522,6 +707,28 @@ public sealed class ApiOperation
 
         throw new InvalidOperationException("API operation must declare a primary result.");
     }
+}
+
+static class ApiHttpResultConventions
+{
+    public static int DefaultStatusCode(ApiResultKind kind, Type bodyType) => kind switch
+    {
+        ApiResultKind.Success when bodyType == typeof(void) => 204,
+        ApiResultKind.Success => 200,
+        ApiResultKind.Created => 201,
+        ApiResultKind.Accepted => 202,
+        ApiResultKind.NoContent => 204,
+        ApiResultKind.ValidationFailed => 400,
+        ApiResultKind.Unauthorized => 401,
+        ApiResultKind.Forbidden => 403,
+        ApiResultKind.NotFound => 404,
+        ApiResultKind.Conflict => 409,
+        ApiResultKind.PreconditionFailed => 412,
+        ApiResultKind.RateLimited => 429,
+        ApiResultKind.DomainError => 422,
+        ApiResultKind.InfrastructureError => 500,
+        _ => 200
+    };
 }
 
 /// <summary>

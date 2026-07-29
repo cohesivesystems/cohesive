@@ -62,9 +62,12 @@ public sealed class TypeScriptApiClientEmitter : IApiCodeEmitter
         for (var i = 0; i < definition.Operations.Count; i++)
         {
             var operation = definition.Operations[i];
+            if (operation.Http is not { } http)
+                continue;
+
             estimate += operation.Name.Length * 2;
-            estimate += operation.Http.Route.Length * 2;
-            estimate += operation.Http.Parameters.Count * 32;
+            estimate += http.Route.Length * 2;
+            estimate += http.Parameters.Count * 32;
         }
 
         return estimate;

@@ -8,6 +8,30 @@ namespace Cohesive.Control;
 /// <summary>Stable diagnostic codes emitted by the portable Control contracts and reference interpretations.</summary>
 public static class ControlDiagnosticCodes
 {
+    /// <summary>A manual limit-update command was not authorized for the loop's authority boundary.</summary>
+    public const string LimitUpdateUnauthorized = "control.limitUpdate.unauthorized";
+
+    /// <summary>A manual limit-update command addressed stale or different loop state.</summary>
+    public const string LimitUpdateStaleFence = "control.limitUpdate.staleFence";
+
+    /// <summary>A manual limit-update command identity was reused with different canonical content.</summary>
+    public const string LimitUpdateIdentityConflict = "control.limitUpdate.identityConflict";
+
+    /// <summary>A manual limit-update idempotency key was reused for a different semantic intent.</summary>
+    public const string LimitUpdateIdempotencyConflict = "control.limitUpdate.idempotencyConflict";
+
+    /// <summary>Another accepted manual limit update is still awaiting its safe application point.</summary>
+    public const string LimitUpdatePending = "control.limitUpdate.pending";
+
+    /// <summary>A manual limit-update command cannot be applied as one meaningful bounded transition.</summary>
+    public const string LimitUpdateInvalid = "control.limitUpdate.invalid";
+
+    /// <summary>A manual limit-update application point conflicts with retained evidence under the same identity.</summary>
+    public const string LimitUpdateApplicationPointConflict = "control.limitUpdate.applicationPointConflict";
+
+    /// <summary>No accepted manual limit update is awaiting a safe application point.</summary>
+    public const string LimitUpdateAbsent = "control.limitUpdate.absent";
+
     /// <summary>Durable controller state cannot be produced by the reference state-transition contract.</summary>
     public const string StateInvalid = "control.state.invalid";
 

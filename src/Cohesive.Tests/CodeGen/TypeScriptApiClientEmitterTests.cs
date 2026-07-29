@@ -1,13 +1,145 @@
 using Cohesive.Adapters.TypeScript;
 using Cohesive.Api;
 using Cohesive.Api.CodeGen;
+using Cohesive.Api.Execution;
 using Cohesive.CodeGen;
+using Cohesive.Execution;
 using System.Text.Json.Serialization;
 
 namespace Cohesive.Tests.CodeGen;
 
 public sealed class TypeScriptApiClientEmitterTests
 {
+    [Fact]
+    public void Emit_RouteLessSemanticOperation_RetainsIdentityButOmitsHttpClientAndMockBindings()
+    {
+        var source = new ExecutionSourceProvenance(
+            reference: "notion://execution-kernel/operations/inspect",
+            semanticPath: new(["operations", "inspect"]),
+            description: "Normative inspect operation");
+        var definition = Cohesive.Api.Api.Define("Execution")
+            .Query("Inspect")
+                .Returns<string>()
+                .Requirement(new("execution.inspect"))
+                .SemanticReference(new(
+                    authority: "cohesive.execution.process-control",
+                    schemaVersion: new("cohesive-process-control/v1"),
+                    path: new(["commands", "inspect"]),
+                    source: source))
+                .Done()
+            .Action("Health")
+                .Route("GET", "/health")
+                .Returns<string>()
+                .Done()
+            .Build();
+
+        var client = new TypeScriptApiClientEmitter().Emit(new ApiCodeGenerationRequest(definition));
+        var clientText = Assert.Single(client.Documents).Text;
+        Assert.Contains("export type ApiOperationKey = 'inspect' | 'health';", clientText, StringComparison.Ordinal);
+        Assert.Contains("export const apiOperationIds = {\n  inspect: 'Execution.Inspect',\n  health: 'Execution.Health',\n} as const satisfies Record<ApiOperationKey, string>;", clientText, StringComparison.Ordinal);
+        Assert.Contains("export type ApiEndpointKey = 'health';", clientText, StringComparison.Ordinal);
+        Assert.Contains("export const apiEndpointIds = {\n  health: 'Execution.Health',\n} as const satisfies Record<ApiEndpointKey, string>;", clientText, StringComparison.Ordinal);
+        Assert.Contains("export interface ApiScopePolicyByOperation {", clientText, StringComparison.Ordinal);
+        Assert.Contains("export type ApiScopePolicyByEndpoint = Pick<ApiScopePolicyByOperation, ApiEndpointKey>;", clientText, StringComparison.Ordinal);
+        Assert.Contains("} as const satisfies ApiScopePolicyByOperation;", clientText, StringComparison.Ordinal);
+        Assert.Contains("Execution.Inspect", clientText, StringComparison.Ordinal);
+        Assert.DoesNotContain("export function inspect", clientText, StringComparison.Ordinal);
+        Assert.Contains("export function health", clientText, StringComparison.Ordinal);
+        Assert.Contains("export const apiOperationMetadata = {", clientText, StringComparison.Ordinal);
+        Assert.Contains("authorizationRequirementIds: [\n      'execution.inspect',", clientText, StringComparison.Ordinal);
+        Assert.Contains("authority: 'cohesive.execution.process-control'", clientText, StringComparison.Ordinal);
+        Assert.Contains("schemaVersion: 'cohesive-process-control/v1'", clientText, StringComparison.Ordinal);
+        Assert.Contains("path: '/commands/inspect'", clientText, StringComparison.Ordinal);
+        Assert.Contains("reference: 'notion://execution-kernel/operations/inspect'", clientText, StringComparison.Ordinal);
+        Assert.Contains("semanticPath: '/operations/inspect'", clientText, StringComparison.Ordinal);
+        Assert.Contains("description: 'Normative inspect operation'", clientText, StringComparison.Ordinal);
+        Assert.Contains("http: null", clientText, StringComparison.Ordinal);
+        Assert.Contains("method: 'GET'", clientText, StringComparison.Ordinal);
+        Assert.Contains("route: '/health'", clientText, StringComparison.Ordinal);
+
+        var mock = new TypeScriptPlaywrightApiMockEmitter().Emit(new ApiCodeGenerationRequest(definition));
+        var mockText = Assert.Single(mock.Documents).Text;
+        Assert.DoesNotContain("Execution.Inspect", mockText, StringComparison.Ordinal);
+        Assert.Contains("Execution.Health", mockText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Emit_ExecutionControlCatalog_RetainsAllNineTransportNeutralOperationContracts()
+    {
+        var catalog = ExecutionControlApiCatalog.Create();
+        ApiEndpoint[] expectedEndpoints =
+        [
+            catalog.Start,
+            catalog.Inspect,
+            catalog.Signal,
+            catalog.Pause,
+            catalog.Continue,
+            catalog.RestartAttempt,
+            catalog.Cancel,
+            catalog.Terminate,
+            catalog.UpdateLimits
+        ];
+        Assert.All(catalog.Definition.Operations, static operation => Assert.Null(operation.Http));
+
+        var emitter = new TypeScriptApiClientEmitter(new TypeScriptApiClientEmitterOptions
+        {
+            ModuleName = "executionControl",
+            NewLine = "\n"
+        });
+        var first = Assert.Single(emitter.Emit(catalog.Definition).Documents).Text;
+        var second = Assert.Single(emitter.Emit(catalog.Definition).Documents).Text;
+
+        Assert.Equal(first, second);
+        Assert.Contains("export type ExecutionControlApiOperationKey =", first, StringComparison.Ordinal);
+        Assert.Contains("'start'", first, StringComparison.Ordinal);
+        Assert.Contains("'updateLimits'", first, StringComparison.Ordinal);
+        Assert.Contains("export const executionControlApiOperationIds = {", first, StringComparison.Ordinal);
+        Assert.Contains("} as const satisfies Record<ExecutionControlApiOperationKey, string>;", first, StringComparison.Ordinal);
+        Assert.Contains("export type ExecutionControlApiEndpointKey = never;", first, StringComparison.Ordinal);
+        Assert.Contains("export const executionControlApiEndpointIds = {} as const satisfies Record<ExecutionControlApiEndpointKey, string>;", first, StringComparison.Ordinal);
+        Assert.Contains("export const executionControlApiOperationMetadata = {", first, StringComparison.Ordinal);
+        Assert.Contains("} as const satisfies Record<ExecutionControlApiOperationKey, unknown>;", first, StringComparison.Ordinal);
+        Assert.Equal(9, CountOccurrences(first, "    http: null,"));
+        Assert.DoesNotContain("export function ", first, StringComparison.Ordinal);
+
+        var metadataOffset = first.IndexOf(
+            "export const executionControlApiOperationMetadata = {",
+            StringComparison.Ordinal);
+        var previousOffset = -1;
+        for (var operationIndex = 0; operationIndex < expectedEndpoints.Length; operationIndex++)
+        {
+            var operation = catalog.Definition.GetOperation(expectedEndpoints[operationIndex]);
+            var endpointKey = char.ToLowerInvariant(operation.Name[0]) + operation.Name[1..];
+            var identity = $"{endpointKey}: '{operation.Id.Value}'";
+            Assert.Contains(identity, first, StringComparison.Ordinal);
+
+            var operationHeader =
+                $"{endpointKey}: {{\n    id: '{operation.Id.Value}',\n    kind: '{ApiWireNames.OperationKind(operation.Kind)}',\n    requestContract: '{TypeScriptContractName(operation.RequestType)}',";
+            var offset = first.IndexOf(operationHeader, metadataOffset, StringComparison.Ordinal);
+            Assert.True(offset > previousOffset, $"Endpoint '{operation.Id}' was not emitted in catalog order.");
+            previousOffset = offset;
+
+            foreach (var requirement in operation.AuthorizationRequirements)
+                Assert.Contains($"'{requirement.Id}'", first, StringComparison.Ordinal);
+
+            foreach (var result in operation.Results)
+            {
+                Assert.Contains(
+                    $"id: '{result.Id}',\n        kind: '{ApiWireNames.ResultKind(result.Kind)}',\n        bodyContract: '{TypeScriptContractName(result.BodyType)}',\n        isPrimary: {result.IsPrimary.ToString().ToLowerInvariant()},",
+                    first,
+                    StringComparison.Ordinal);
+            }
+
+            foreach (var reference in operation.SemanticReferences)
+            {
+                Assert.Contains(
+                    $"authority: '{reference.Authority}',\n        schemaVersion: '{reference.SchemaVersion.Value}',\n        path: '{reference.Path}',\n        source: null,",
+                    first,
+                    StringComparison.Ordinal);
+            }
+        }
+    }
+
     [Fact]
     public void Emit_Definition_GeneratesComposableTypeScriptClientFunctions()
     {
@@ -123,6 +255,8 @@ public sealed class TypeScriptApiClientEmitterTests
         }).Emit(new ApiCodeGenerationRequest(definition));
 
         var document = Assert.Single(emission.Documents);
+        Assert.Contains("export type SampleApiOperationKey =", document.Text, StringComparison.Ordinal);
+        Assert.Contains("export const sampleApiOperationIds = {", document.Text, StringComparison.Ordinal);
         Assert.Contains("export type SampleApiEndpointKey =", document.Text, StringComparison.Ordinal);
         Assert.Contains("'getShipment'", document.Text, StringComparison.Ordinal);
         Assert.Contains("'search'", document.Text, StringComparison.Ordinal);
@@ -130,6 +264,8 @@ public sealed class TypeScriptApiClientEmitterTests
         Assert.Contains("getShipment: 'Shipping.Shipment.Get',", document.Text, StringComparison.Ordinal);
         Assert.Contains("search: 'Shipping.Search',", document.Text, StringComparison.Ordinal);
         Assert.Contains("export interface SampleApiScopePolicyMetadata {", document.Text, StringComparison.Ordinal);
+        Assert.Contains("export interface SampleApiScopePolicyByOperation {", document.Text, StringComparison.Ordinal);
+        Assert.Contains("export type SampleApiScopePolicyByEndpoint = Pick<SampleApiScopePolicyByOperation, SampleApiEndpointKey>;", document.Text, StringComparison.Ordinal);
         Assert.Contains("readonly getShipment: readonly SampleApiScopePolicyMetadata[];", document.Text, StringComparison.Ordinal);
         Assert.Contains("readonly getProcess: readonly SampleApiScopePolicyMetadata[];", document.Text, StringComparison.Ordinal);
         Assert.Contains("readonly search: readonly SampleApiScopePolicyMetadata[];", document.Text, StringComparison.Ordinal);
@@ -150,7 +286,7 @@ public sealed class TypeScriptApiClientEmitterTests
         Assert.Contains("strategy: 'structuredResourceId',", document.Text, StringComparison.Ordinal);
         Assert.Contains("format: 'scopedProcessInstanceId',", document.Text, StringComparison.Ordinal);
         Assert.Contains("scopeField: 'scopeId',", document.Text, StringComparison.Ordinal);
-        Assert.Contains("} as const satisfies SampleApiScopePolicyByEndpoint;", document.Text, StringComparison.Ordinal);
+        Assert.Contains("} as const satisfies SampleApiScopePolicyByOperation;", document.Text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -222,7 +358,7 @@ public sealed class TypeScriptApiClientEmitterTests
         Assert.Contains("readonly getShipment: { readonly id: string; };", document.Text, StringComparison.Ordinal);
         Assert.Contains("readonly getShipment: ShipmentDto | ApiProblem;", document.Text, StringComparison.Ordinal);
         Assert.Contains("export const sampleApiResults = {", document.Text, StringComparison.Ordinal);
-        Assert.Contains("notFound: { id: 'notFound', kind: 'NotFound', status: 404, contentType: 'application/json' }", document.Text, StringComparison.Ordinal);
+        Assert.Contains("notFound: { id: 'notFound', kind: 'notFound', status: 404, contentType: 'application/json' }", document.Text, StringComparison.Ordinal);
         Assert.Contains("readonly result: SampleApiResultBuilderByEndpoint[TKey];", document.Text, StringComparison.Ordinal);
         Assert.Contains("readonly notFound: (body: ApiProblem) => ApiMockResponse<ApiProblem>;", document.Text, StringComparison.Ordinal);
         Assert.Contains("notFound: (body: ApiProblem) => semanticResult(sampleApiResults.getShipment.notFound, body),", document.Text, StringComparison.Ordinal);
@@ -281,9 +417,9 @@ public sealed class TypeScriptApiClientEmitterTests
 
         Assert.Contains("import type { ConflictProblemDto, ShipmentDto, SubmitShipmentRequest, ValidationProblemDto } from './sample.shapes.generated';", document.Text, StringComparison.Ordinal);
         Assert.Contains("readonly submit: ShipmentDto | ValidationProblemDto | ConflictProblemDto | void;", document.Text, StringComparison.Ordinal);
-        Assert.Contains("validationFailed: { id: 'validationFailed', kind: 'ValidationFailed', status: 400, contentType: 'application/json' },", document.Text, StringComparison.Ordinal);
-        Assert.Contains("concurrencyTokenMismatch: { id: 'concurrencyTokenMismatch', kind: 'Conflict', status: 412, contentType: 'application/json' },", document.Text, StringComparison.Ordinal);
-        Assert.Contains("alreadyApplied: { id: 'alreadyApplied', kind: 'NoContent', status: 204, contentType: 'application/json' },", document.Text, StringComparison.Ordinal);
+        Assert.Contains("validationFailed: { id: 'validationFailed', kind: 'validationFailed', status: 400, contentType: 'application/json' },", document.Text, StringComparison.Ordinal);
+        Assert.Contains("concurrencyTokenMismatch: { id: 'concurrencyTokenMismatch', kind: 'conflict', status: 412, contentType: 'application/json' },", document.Text, StringComparison.Ordinal);
+        Assert.Contains("alreadyApplied: { id: 'alreadyApplied', kind: 'noContent', status: 204, contentType: 'application/json' },", document.Text, StringComparison.Ordinal);
         Assert.Contains("readonly validationFailed: (body: ValidationProblemDto) => ApiMockResponse<ValidationProblemDto>;", document.Text, StringComparison.Ordinal);
         Assert.Contains("readonly concurrencyTokenMismatch: (body: ConflictProblemDto) => ApiMockResponse<ConflictProblemDto>;", document.Text, StringComparison.Ordinal);
         Assert.Contains("readonly alreadyApplied: () => ApiMockResponse<void>;", document.Text, StringComparison.Ordinal);
@@ -359,6 +495,26 @@ public sealed class TypeScriptApiClientEmitterTests
         strategy: ApiResourceScopeDerivationStrategies.StructuredResourceId,
         format: ApiResourceIdFormats.ScopedProcessInstanceId,
         scopeField: ApiResourceScopeFields.ScopeId);
+
+    static int CountOccurrences(string value, string pattern)
+    {
+        var count = 0;
+        var offset = 0;
+        while ((offset = value.IndexOf(pattern, offset, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            offset += pattern.Length;
+        }
+
+        return count;
+    }
+
+    static string TypeScriptContractName(Type type) => type == typeof(void)
+        ? "void"
+        : type == typeof(string) || type == typeof(Guid) || type == typeof(DateOnly)
+            || type == typeof(TimeOnly) || type == typeof(DateTime) || type == typeof(DateTimeOffset)
+            ? "string"
+            : type.Name.Split('`')[0];
 
     sealed record Shipment(string Id);
 

@@ -5,6 +5,9 @@ namespace Cohesive.Execution;
 /// <summary>Stable wire names for the closed Process-control command and intent families.</summary>
 public static class ExecutionControlWireNames
 {
+    /// <summary>Canonical semantic authority that owns Process lifecycle control.</summary>
+    public const string SemanticAuthority = "cohesive.execution.process-control";
+
     /// <summary>JSON property that discriminates Process-control command variants.</summary>
     public const string CommandDiscriminator = "$command";
 
@@ -47,6 +50,15 @@ public static class ExecutionControlWireNames
     /// <summary>Termination intent discriminator.</summary>
     public const string TerminateIntent = "terminate";
 
+    /// <summary>Gets the canonical semantic path of a closed Process-control command.</summary>
+    /// <param name="action">One of the canonical Process-control command action names.</param>
+    /// <returns>The semantic path owned by the Process-control command family.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="action"/> is not a closed command action.</exception>
+    public static ExecutionSemanticPath CommandPath(string action) => action switch
+    {
+        Inspect or Signal or Pause or Continue or RestartAttempt or Cancel or Terminate => new(["commands", action]),
+        _ => throw new ArgumentOutOfRangeException(nameof(action), action, "Unsupported Process-control action.")
+    };
 }
 
 /// <summary>Portable attributable authorization evidence carried by one control command.</summary>

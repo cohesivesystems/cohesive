@@ -78,20 +78,23 @@ public sealed class OpenApiEmitter : IApiCodeEmitter
             for (var i = 0; i < definition.Operations.Count; i++)
             {
                 var operation = definition.Operations[i];
-                var path = NormalizeOpenApiPath(operation.Http.Route);
+                if (operation.Http is not { } http)
+                    continue;
+
+                var path = NormalizeOpenApiPath(http.Route);
                 if (paths[path] is not JsonObject pathItem)
                 {
                     pathItem = [];
                     paths[path] = pathItem;
                 }
 
-                pathItem[operation.Http.Method.ToLowerInvariant()] = BuildOperation(operation);
+                pathItem[http.Method.ToLowerInvariant()] = BuildOperation(operation, http);
             }
 
             return paths;
         }
 
-        JsonObject BuildOperation(ApiOperation operation)
+        JsonObject BuildOperation(ApiOperation operation, HttpBinding http)
         {
             JsonObject node = new()
             {
@@ -106,11 +109,20 @@ public sealed class OpenApiEmitter : IApiCodeEmitter
             if (operation.ScopePolicies.Count > 0)
                 node["x-cohesive-scope-policies"] = BuildScopePolicies(operation.ScopePolicies);
 
-            var parameters = BuildParameters(operation);
+            if (operation.AuthorizationRequirements.Count > 0)
+            {
+                node["x-cohesive-authorization-requirements"] =
+                    BuildAuthorizationRequirements(operation.AuthorizationRequirements);
+            }
+
+            if (operation.SemanticReferences.Count > 0)
+                node["x-cohesive-semantic-references"] = BuildSemanticReferences(operation.SemanticReferences);
+
+            var parameters = BuildParameters(operation, http);
             if (parameters.Count > 0)
                 node["parameters"] = parameters;
 
-            if (operation.Http.Body is { } body)
+            if (http.Body is { } body)
             {
                 node["requestBody"] = new JsonObject
                 {
@@ -129,15 +141,76 @@ public sealed class OpenApiEmitter : IApiCodeEmitter
             return node;
         }
 
-        JsonArray BuildParameters(ApiOperation operation)
+        static JsonArray BuildAuthorizationRequirements(IReadOnlyList<ApiAuthorizationRequirement> requirements)
+        {
+            JsonArray result = [];
+            for (var i = 0; i < requirements.Count; i++)
+            {
+                var requirement = requirements[i];
+                JsonObject item = new()
+                {
+                    ["id"] = requirement.Id
+                };
+                if (requirement.Description is { } description)
+                    item["description"] = description;
+
+                result.Add(item);
+            }
+
+            return result;
+        }
+
+        static JsonArray BuildSemanticReferences(IReadOnlyList<ApiSemanticReference> references)
+        {
+            JsonArray result = [];
+            for (var i = 0; i < references.Count; i++)
+            {
+                var reference = references[i];
+                JsonObject item = new()
+                {
+                    ["authority"] = reference.Authority,
+                    ["schemaVersion"] = reference.SchemaVersion.Value,
+                    ["path"] = BuildStringArray(reference.Path.Segments)
+                };
+
+                if (reference.Source is { } source)
+                {
+                    JsonObject sourceNode = new()
+                    {
+                        ["reference"] = source.Reference
+                    };
+                    if (source.SemanticPath is { } sourcePath)
+                        sourceNode["semanticPath"] = BuildStringArray(sourcePath.Segments);
+                    if (source.Description is { } sourceDescription)
+                        sourceNode["description"] = sourceDescription;
+
+                    item["source"] = sourceNode;
+                }
+
+                result.Add(item);
+            }
+
+            return result;
+        }
+
+        static JsonArray BuildStringArray(IReadOnlyList<string> values)
+        {
+            JsonArray result = [];
+            for (var i = 0; i < values.Count; i++)
+                result.Add(values[i]);
+
+            return result;
+        }
+
+        JsonArray BuildParameters(ApiOperation operation, HttpBinding http)
         {
             JsonArray parameters = [];
             HashSet<string> emitted = new(StringComparer.OrdinalIgnoreCase);
-            AppendRouteParameters(parameters, emitted, operation);
-            AppendExplicitParameters(parameters, emitted, operation.Http.Parameters, HttpParameterSource.Query);
-            AppendExplicitParameters(parameters, emitted, operation.Http.Parameters, HttpParameterSource.Header);
+            AppendRouteParameters(parameters, emitted, http);
+            AppendExplicitParameters(parameters, emitted, http.Parameters, HttpParameterSource.Query);
+            AppendExplicitParameters(parameters, emitted, http.Parameters, HttpParameterSource.Header);
 
-            if (operation.Http.Query is { } query)
+            if (http.Query is { } query)
                 AppendQueryDtoParameters(parameters, emitted, query.QueryType);
 
             AppendScopeParameters(parameters, emitted, operation.ScopePolicies);
@@ -145,13 +218,13 @@ public sealed class OpenApiEmitter : IApiCodeEmitter
             return parameters;
         }
 
-        void AppendRouteParameters(JsonArray parameters, HashSet<string> emitted, ApiOperation operation)
+        void AppendRouteParameters(JsonArray parameters, HashSet<string> emitted, HttpBinding http)
         {
-            var routeNames = ParseRouteParameters(operation.Http.Route);
+            var routeNames = ParseRouteParameters(http.Route);
             for (var i = 0; i < routeNames.Count; i++)
             {
                 var routeName = routeNames[i];
-                var declared = FindParameter(operation.Http.Parameters, routeName, HttpParameterSource.Route);
+                var declared = FindParameter(http.Parameters, routeName, HttpParameterSource.Route);
                 AppendParameter(parameters, emitted, BuildParameter(
                     name: routeName,
                     location: "path",
@@ -408,14 +481,14 @@ public sealed class OpenApiEmitter : IApiCodeEmitter
             if (results.Count == 1)
             {
                 response["x-cohesive-result-id"] = results[0].Id;
-                response["x-cohesive-result-kind"] = results[0].Kind.ToString();
+                response["x-cohesive-result-kind"] = ApiWireNames.ResultKind(results[0].Kind);
             }
 
             response["x-cohesive-results"] = new JsonArray(results
                 .Select(result => new JsonObject
                 {
                     ["id"] = result.Id,
-                    ["kind"] = result.Kind.ToString(),
+                    ["kind"] = ApiWireNames.ResultKind(result.Kind),
                     ["isPrimary"] = result.IsPrimary,
                     ["httpStatusCode"] = result.Http?.StatusCode ?? statusCode
                 })

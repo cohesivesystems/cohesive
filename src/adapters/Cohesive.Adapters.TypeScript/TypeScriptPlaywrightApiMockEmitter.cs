@@ -101,11 +101,18 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
         writer.Write(modulePrefix);
         writer.WriteLine("ApiEndpointKey =");
         writer.PushIndent();
-        for (var i = 0; i < models.Count; i++)
+        if (models.Count == 0)
         {
-            writer.Write("| ");
-            writer.Write(Quote(models[i].Key));
-            writer.WriteLine(i == models.Count - 1 ? ";" : string.Empty);
+            writer.WriteLine("never;");
+        }
+        else
+        {
+            for (var i = 0; i < models.Count; i++)
+            {
+                writer.Write("| ");
+                writer.Write(Quote(models[i].Key));
+                writer.WriteLine(i == models.Count - 1 ? ";" : string.Empty);
+            }
         }
         writer.PopIndent();
         writer.WriteLine();
@@ -822,7 +829,7 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
         writer.Write(modulePrefix);
         writer.WriteLine("ApiEndpointMatch | null {");
         writer.PushIndent();
-        var methods = models.Select(static model => model.Operation.Http.Method).Distinct(StringComparer.Ordinal).OrderBy(static value => value, StringComparer.Ordinal).ToArray();
+        var methods = models.Select(static model => model.Http.Method).Distinct(StringComparer.Ordinal).OrderBy(static value => value, StringComparer.Ordinal).ToArray();
         for (var i = 0; i < methods.Length; i++)
         {
             var method = methods[i];
@@ -832,7 +839,7 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
             writer.WriteLine(") {");
             writer.PushIndent();
             var methodModels = models
-                .Where(model => string.Equals(model.Operation.Http.Method, method, StringComparison.Ordinal))
+                .Where(model => string.Equals(model.Http.Method, method, StringComparison.Ordinal))
                 .OrderBy(static model => model.RouteParameterCount)
                 .ThenByDescending(static model => model.RouteSegmentCount)
                 .ThenBy(static model => model.Key, StringComparer.Ordinal)
@@ -856,7 +863,7 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
         writer.Write("const ");
         writer.Write(routeVariable);
         writer.Write(" = matchApiMockRoute(");
-        writer.Write(Quote(model.Operation.Http.Route));
+        writer.Write(Quote(model.Http.Route));
         writer.WriteLine(", pathname);");
         writer.Write("if (");
         writer.Write(routeVariable);
@@ -1248,17 +1255,21 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
         for (var i = 0; i < definition.Operations.Count; i++)
         {
             var operation = definition.Operations[i];
+            if (operation.Http is not { } http)
+                continue;
+
             models.Add(new OperationModel(
                 Operation: operation,
+                Http: http,
                 Key: CreateUniqueOperationKey(operation, usedKeys),
-                RouteType: BuildRouteType(operation),
-                QueryType: BuildQueryType(operation),
-                BodyType: operation.Http.Body is { } body ? GetTypeScriptTypeText(body.BodyType) : "null",
+                RouteType: BuildRouteType(http),
+                QueryType: BuildQueryType(http),
+                BodyType: http.Body is { } body ? GetTypeScriptTypeText(body.BodyType) : "null",
                 ResponseBodyType: BuildResponseBodyType(operation),
                 Results: BuildResultModels(operation),
-                QueryProperties: BuildQueryProperties(operation),
-                RouteParameterCount: CountRouteParameters(operation.Http.Route),
-                RouteSegmentCount: CountRouteSegments(operation.Http.Route)));
+                QueryProperties: BuildQueryProperties(http),
+                RouteParameterCount: CountRouteParameters(http.Route),
+                RouteSegmentCount: CountRouteSegments(http.Route)));
         }
 
         return models.ToImmutable();
@@ -1305,9 +1316,9 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
         return $"{ToCamelCase(operationName)}{entityName}";
     }
 
-    static string BuildRouteType(ApiOperation operation)
+    static string BuildRouteType(HttpBinding http)
     {
-        var routeParameters = operation.Http.Parameters.Where(static parameter => parameter.Source == HttpParameterSource.Route).ToArray();
+        var routeParameters = http.Parameters.Where(static parameter => parameter.Source == HttpParameterSource.Route).ToArray();
         if (routeParameters.Length == 0)
             return "Record<string, never>";
 
@@ -1328,12 +1339,12 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
         return builder.ToString();
     }
 
-    static string BuildQueryType(ApiOperation operation)
+    static string BuildQueryType(HttpBinding http)
     {
-        if (operation.Http.Query is { } query)
+        if (http.Query is { } query)
             return GetTypeScriptTypeText(query.QueryType);
 
-        var queryParameters = operation.Http.Parameters.Where(static parameter => parameter.Source == HttpParameterSource.Query).ToArray();
+        var queryParameters = http.Parameters.Where(static parameter => parameter.Source == HttpParameterSource.Query).ToArray();
         if (queryParameters.Length == 0)
             return "Record<string, never>";
 
@@ -1377,7 +1388,7 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
             var result = operation.Results[i];
             results.Add(new ResultModel(
                 Id: result.Id,
-                Kind: result.Kind.ToString(),
+                Kind: ApiWireNames.ResultKind(result.Kind),
                 MethodName: CreateUniqueResultMethodName(result.Id, usedNames),
                 BodyTypeText: GetTypeScriptTypeText(result.BodyType),
                 StatusCode: result.Http?.StatusCode ?? DefaultMockStatusCode(result.Kind, result.BodyType),
@@ -1422,10 +1433,10 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
             _ => bodyType == typeof(void) ? 204 : 200
         };
 
-    static ImmutableArray<QueryPropertyModel> BuildQueryProperties(ApiOperation operation)
+    static ImmutableArray<QueryPropertyModel> BuildQueryProperties(HttpBinding http)
     {
         var properties = ImmutableArray.CreateBuilder<QueryPropertyModel>();
-        if (operation.Http.Query is { } query)
+        if (http.Query is { } query)
         {
             var queryTypeText = GetTypeScriptTypeText(query.QueryType);
             var metadata = ShapeTypeInspector.GetReadablePropertyMetadata(query.QueryType);
@@ -1441,9 +1452,9 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
             }
         }
 
-        for (var i = 0; i < operation.Http.Parameters.Count; i++)
+        for (var i = 0; i < http.Parameters.Count; i++)
         {
-            var parameter = operation.Http.Parameters[i];
+            var parameter = http.Parameters[i];
             if (parameter.Source != HttpParameterSource.Query)
                 continue;
 
@@ -1464,11 +1475,12 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
         for (var i = 0; i < models.Count; i++)
         {
             var operation = models[i].Operation;
-            AppendTypeImports(names, operation.Http.Body?.BodyType);
-            AppendTypeImports(names, operation.Http.Query?.QueryType);
+            var http = models[i].Http;
+            AppendTypeImports(names, http.Body?.BodyType);
+            AppendTypeImports(names, http.Query?.QueryType);
 
-            for (var parameterIndex = 0; parameterIndex < operation.Http.Parameters.Count; parameterIndex++)
-                AppendTypeImports(names, operation.Http.Parameters[parameterIndex].Type);
+            for (var parameterIndex = 0; parameterIndex < http.Parameters.Count; parameterIndex++)
+                AppendTypeImports(names, http.Parameters[parameterIndex].Type);
 
             for (var resultIndex = 0; resultIndex < operation.Results.Count; resultIndex++)
                 AppendTypeImports(names, operation.Results[resultIndex].BodyType);
@@ -1788,6 +1800,7 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
 
     sealed record OperationModel(
         ApiOperation Operation,
+        HttpBinding Http,
         string Key,
         string RouteType,
         string QueryType,

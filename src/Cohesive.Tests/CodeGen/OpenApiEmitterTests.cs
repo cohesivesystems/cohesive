@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using Cohesive.Adapters.OpenApi;
 using Cohesive.Api;
 using Cohesive.Api.CodeGen;
+using Cohesive.Execution;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -11,6 +12,60 @@ namespace Cohesive.Tests.CodeGen;
 
 public sealed class OpenApiEmitterTests
 {
+    [Fact]
+    public void Emit_RouteLessSemanticOperation_OmitsItFromHttpPaths()
+    {
+        var definition = Cohesive.Api.Api.Define("Execution")
+            .Query("Inspect")
+                .Returns<string>()
+                .Done()
+            .Action("Health")
+                .Route("GET", "/health")
+                .Returns<string>()
+                .Done()
+            .Build();
+
+        var emission = new OpenApiEmitter().Emit(new ApiCodeGenerationRequest(definition));
+        using var json = JsonDocument.Parse(Assert.Single(emission.Documents).Text);
+        var paths = json.RootElement.GetProperty("paths");
+
+        Assert.True(paths.TryGetProperty("/health", out _));
+        Assert.Single(paths.EnumerateObject());
+    }
+
+    [Fact]
+    public void Emit_HttpProjection_RetainsAuthorizationAndSemanticProvenanceExtensions()
+    {
+        var definition = Cohesive.Api.Api.Define("Execution")
+            .Action("Health")
+                .Route("GET", "/health")
+                .Returns<string>()
+                .Requirement(new("execution.inspect", "Inspect execution health."))
+                .SemanticReference(new(
+                    "cohesive.execution.process-control",
+                    new("cohesive-process-control-command/v1"),
+                    new(["commands", "inspect"]),
+                    new("spec://execution-kernel", new(["operations", "inspect"]), "Normative source.")))
+                .Done()
+            .Build();
+
+        var emission = new OpenApiEmitter().Emit(new ApiCodeGenerationRequest(definition));
+        using var json = JsonDocument.Parse(Assert.Single(emission.Documents).Text);
+        var operation = json.RootElement.GetProperty("paths").GetProperty("/health").GetProperty("get");
+
+        var requirement = operation.GetProperty("x-cohesive-authorization-requirements")[0];
+        Assert.Equal("execution.inspect", requirement.GetProperty("id").GetString());
+        Assert.Equal("Inspect execution health.", requirement.GetProperty("description").GetString());
+
+        var reference = operation.GetProperty("x-cohesive-semantic-references")[0];
+        Assert.Equal("cohesive.execution.process-control", reference.GetProperty("authority").GetString());
+        Assert.Equal("cohesive-process-control-command/v1", reference.GetProperty("schemaVersion").GetString());
+        Assert.Equal(["commands", "inspect"], reference.GetProperty("path").EnumerateArray().Select(static item => item.GetString()));
+        Assert.Equal("spec://execution-kernel", reference.GetProperty("source").GetProperty("reference").GetString());
+        Assert.Equal(["operations", "inspect"], reference.GetProperty("source").GetProperty("semanticPath").EnumerateArray().Select(static item => item.GetString()));
+        Assert.Equal("Normative source.", reference.GetProperty("source").GetProperty("description").GetString());
+    }
+
     [Fact]
     public void Emit_Definition_GeneratesOpenApiDocument()
     {
@@ -226,7 +281,7 @@ public sealed class OpenApiEmitterTests
             .GetString());
         Assert.Equal("Shipment was not found.", responses.GetProperty("404").GetProperty("description").GetString());
         Assert.Equal("notFound", responses.GetProperty("404").GetProperty("x-cohesive-result-id").GetString());
-        Assert.Equal("NotFound", responses.GetProperty("404").GetProperty("x-cohesive-result-kind").GetString());
+        Assert.Equal("notFound", responses.GetProperty("404").GetProperty("x-cohesive-result-kind").GetString());
         Assert.Equal("notFound", responses.GetProperty("404")
             .GetProperty("x-cohesive-results")[0]
             .GetProperty("id")

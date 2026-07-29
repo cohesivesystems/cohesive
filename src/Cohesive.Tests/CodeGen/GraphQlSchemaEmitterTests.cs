@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using Cohesive.Adapters.GraphQL;
 using Cohesive.Api;
 using Cohesive.Api.CodeGen;
+using Cohesive.Execution;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -11,6 +12,74 @@ namespace Cohesive.Tests.CodeGen;
 
 public sealed class GraphQlSchemaEmitterTests
 {
+    [Fact]
+    public void Emit_RouteLessSemanticOperation_OmitsItFromHttpBackedSchema()
+    {
+        var definition = Cohesive.Api.Api.Define("Execution")
+            .Query("Inspect")
+                .Returns<string>()
+                .Done()
+            .Action("Health")
+                .Route("GET", "/health")
+                .Returns<string>()
+                .Done()
+            .Build();
+
+        var emission = new GraphQLSchemaEmitter().Emit(new ApiCodeGenerationRequest(definition));
+        var sdl = Assert.Single(
+            emission.Documents,
+            static document => document.FileName.EndsWith(".graphql", StringComparison.Ordinal)).Text;
+
+        Assert.Contains("health: String!", sdl, StringComparison.Ordinal);
+        Assert.DoesNotContain("inspect", sdl, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Emit_HttpProjection_RetainsAuthorizationAndSemanticProvenanceDirectives()
+    {
+        var definition = Cohesive.Api.Api.Define("Execution")
+            .Action("Health")
+                .Route("GET", "/health")
+                .Returns<string>()
+                .Requirement(new("execution.inspect", "Inspect execution health."))
+                .SemanticReference(new(
+                    "cohesive.execution.process-control",
+                    new("cohesive-process-control-command/v1"),
+                    new(["commands", "inspect"]),
+                    new("spec://execution-kernel", new(["operations", "inspect"]), "Normative source.")))
+                .Done()
+            .Build();
+
+        var emission = new GraphQLSchemaEmitter(new GraphQLSchemaEmitterOptions
+        {
+            WriteIndented = false
+        }).Emit(new ApiCodeGenerationRequest(definition));
+        var sdl = Assert.Single(
+            emission.Documents,
+            static document => document.FileName.EndsWith(".graphql", StringComparison.Ordinal)).Text;
+
+        Assert.Contains(
+            "@cohesiveAuthorizationRequirement(id: \"execution.inspect\", description: \"Inspect execution health.\")",
+            sdl,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "@cohesiveSemanticReference(authority: \"cohesive.execution.process-control\", schemaVersion: \"cohesive-process-control-command/v1\", path: [\"commands\", \"inspect\"], sourceReference: \"spec://execution-kernel\", sourceSemanticPath: [\"operations\", \"inspect\"], sourceDescription: \"Normative source.\")",
+            sdl,
+            StringComparison.Ordinal);
+
+        var introspection = Assert.Single(
+            emission.Documents,
+            static document => document.FileName.EndsWith(".json", StringComparison.Ordinal)).Text;
+        using var json = JsonDocument.Parse(introspection);
+        var directives = json.RootElement.GetProperty("data").GetProperty("__schema").GetProperty("directives");
+        Assert.Contains(
+            directives.EnumerateArray(),
+            static directive => directive.GetProperty("name").GetString() == "cohesiveAuthorizationRequirement");
+        Assert.Contains(
+            directives.EnumerateArray(),
+            static directive => directive.GetProperty("name").GetString() == "cohesiveSemanticReference");
+    }
+
     [Fact]
     public void Emit_Definition_GeneratesSchemaAndIntrospectionDocuments()
     {
@@ -37,7 +106,7 @@ public sealed class GraphQlSchemaEmitterTests
         Assert.Contains("dispatchShipment(id: ID!, request: DispatchShipmentRequestInput!): ShipmentDto!", sdl);
         Assert.Contains("input DispatchShipmentRequestInput", sdl);
         Assert.Contains("enum ShipmentStatus", sdl);
-        Assert.Contains("@cohesiveOperation(id: \"Shipping.Shipment.Dispatch\", method: \"POST\", route: \"/api/shipments/{id}/dispatch\", kind: \"Command\", entity: \"Shipment\")", sdl);
+        Assert.Contains("@cohesiveOperation(id: \"Shipping.Shipment.Dispatch\", method: \"POST\", route: \"/api/shipments/{id}/dispatch\", kind: \"command\", entity: \"Shipment\")", sdl);
 
         var introspection = Assert.Single(emission.Documents, static document => document.FileName == "shipping.introspection.json").Text;
         using var json = JsonDocument.Parse(introspection);
