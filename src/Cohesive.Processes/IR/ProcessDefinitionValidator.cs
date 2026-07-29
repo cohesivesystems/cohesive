@@ -1,7 +1,6 @@
 using System.Collections.Immutable;
 using System.Globalization;
 using Cohesive.Execution;
-using Cohesive.Model;
 using Cohesive.Model.Expressions;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Compilation;
@@ -119,6 +118,9 @@ public static class ProcessDefinitionDiagnosticCodes
     /// <summary>A required-count Join threshold is incompatible with its reciprocal Fork.</summary>
     public const string JoinRequiredCountInvalid = "processes.ir.joinRequiredCountInvalid";
 
+    /// <summary>A Join makes completion order semantic while declaring it unobservable.</summary>
+    public const string JoinCompletionPolicyInvalid = "processes.ir.joinCompletionPolicyInvalid";
+
     /// <summary>An AwaitMatch declares no eligible clauses.</summary>
     public const string AwaitClausesEmpty = "processes.ir.awaitClausesEmpty";
 
@@ -145,6 +147,9 @@ public static class ProcessDefinitionDiagnosticCodes
 
     /// <summary>A Reply contract does not discharge the exact Request contract retained by its target obligation.</summary>
     public const string ReplyRequestContractMismatch = "processes.ir.replyRequestContractMismatch";
+
+    /// <summary>A live linear Request obligation is consumed inside a Fork branch.</summary>
+    public const string ReplyRequestObligationForked = "processes.ir.replyRequestObligationForked";
 
     /// <summary>A nonterminal, non-durable Process node has no continuation.</summary>
     public const string NonTerminalDeadEnd = "processes.ir.nonTerminalDeadEnd";
@@ -686,6 +691,17 @@ public static class ProcessDefinitionValidator
                 ValidateEnum(join.Policy.Cancellation, Child(location, "policy/cancellation"));
                 ValidateEnum(join.Policy.CompletionOrder, Child(location, "policy/completionOrder"));
                 ValidateEnum(join.Policy.TieBreak, Child(location, "policy/tieBreak"));
+                if (join.Policy.CompletionOrder == ProcessJoinCompletionOrder.Unobservable
+                    && join.Policy.TieBreak == ProcessJoinTieBreak.CompletionThenBranchIdentity)
+                {
+                    Error(
+                        ProcessDefinitionDiagnosticCodes.JoinCompletionPolicyInvalid,
+                        "A Join cannot select by completion order while declaring completion order unobservable.",
+                        Child(location, "policy/tieBreak"),
+                        subject: join.Id.Value,
+                        expected: ProcessJoinTieBreak.BranchIdentity.ToString(),
+                        observed: join.Policy.TieBreak.ToString());
+                }
             }
             RegisterEdge(join.Next, Child(location, "next"), join.Id);
         }
@@ -1782,7 +1798,49 @@ public static class ProcessDefinitionValidator
                         subject: reply.Request.Value,
                         relatedLocations: [obligation.Location],
                         expected: reply.ExpectedRequest.Definition.DefinitionId.Value,
-                        observed: obligation.Contract.Definition.DefinitionId.Value);
+                    observed: obligation.Contract.Definition.DefinitionId.Value);
+                }
+            }
+
+            ValidateForkedRequestObligationConsumption(visible);
+        }
+
+        void ValidateForkedRequestObligationConsumption(
+            IReadOnlyDictionary<ExecutionNodeId, HashSet<RequestObligationBindingId>> visible)
+        {
+            foreach (var forkJoin in forkJoinsByJoin.Values)
+            {
+                if (!forkJoin.IsSound
+                    || !visible.TryGetValue(forkJoin.Fork.Id, out var forkVisible)
+                    || forkVisible.Count == 0)
+                {
+                    continue;
+                }
+
+                foreach (var reply in replyRequests)
+                {
+                    if (!forkVisible.Contains(reply.Request))
+                        continue;
+                    var consumingBranches = forkJoin.Branches
+                        .Where(branch => branch.Nodes.Contains(reply.Owner))
+                        .Select(static branch => branch.Branch.Id.Value)
+                        .OrderBy(static branch => branch, StringComparer.Ordinal)
+                        .ToArray();
+                    if (consumingBranches.Length == 0)
+                        continue;
+
+                    var related = requestObligations.TryGetValue(reply.Request, out var obligation)
+                        ? ImmutableArray.Create(
+                            nodes[forkJoin.Fork.Id].Location,
+                            obligation.Location)
+                        : ImmutableArray.Create(nodes[forkJoin.Fork.Id].Location);
+                    Error(
+                        ProcessDefinitionDiagnosticCodes.ReplyRequestObligationForked,
+                        $"Linear Request obligation '{reply.Request.Value}' cannot be consumed inside Fork branch(es) "
+                        + $"'{string.Join("', '", consumingBranches)}'; reply after the reciprocal Join or acquire the obligation inside one branch.",
+                        reply.Location,
+                        subject: reply.Request.Value,
+                        relatedLocations: related);
                 }
             }
         }
