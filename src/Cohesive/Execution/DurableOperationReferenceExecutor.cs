@@ -788,7 +788,7 @@ public sealed class DurableOperationReferenceExecutor
                     "/binding/timeoutAfter"));
             }
         }
-        var envelopeValidation = InteractionEnvelopeValidator.Validate(request, contracts);
+        var envelopeValidation = InteractionEnvelopeValidator.Validate(request, contracts, contracts.ShapeGraph);
         diagnostics.AddRange(envelopeValidation.Diagnostics);
         if (request.Context.Delivery.Durability != InteractionDurabilityDemand.Durable)
         {

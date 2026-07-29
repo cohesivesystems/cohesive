@@ -1,6 +1,5 @@
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
 
@@ -74,10 +73,7 @@ public static class InteractionEnvelopeJsonSerializer
     public static byte[] GetCanonicalBytes(InteractionEnvelope envelope)
     {
         ArgumentNullException.ThrowIfNull(envelope);
-        var options = CreateOptions();
-        var node = JsonSerializer.SerializeToNode(envelope, typeof(InteractionEnvelope), options)
-            ?? throw new InvalidOperationException("Failed to materialize interaction-envelope JSON.");
-        return GetCanonicalBytes(node, options);
+        return StrictDocumentJson.GetCanonicalBytes<InteractionEnvelope>(envelope, CreateOptions());
     }
 
     /// <summary>Deserializes and contract-links a current-version interaction envelope.</summary>
@@ -91,7 +87,10 @@ public static class InteractionEnvelopeJsonSerializer
         ArgumentNullException.ThrowIfNull(contracts);
         var validation = TryDeserialize(json, contracts, out var envelope);
         if (validation.IsValid && envelope is not null)
+        {
             return envelope;
+        }
+
         throw ValidationException(validation);
     }
 
@@ -113,7 +112,10 @@ public static class InteractionEnvelopeJsonSerializer
         ArgumentNullException.ThrowIfNull(graph);
         var validation = TryDeserialize(json, contracts, graph, out var envelope);
         if (validation.IsValid && envelope is not null)
+        {
             return envelope;
+        }
+
         throw ValidationException(validation);
     }
 
@@ -181,13 +183,34 @@ public static class InteractionEnvelopeJsonSerializer
         ShapeGraph? graph,
         out InteractionEnvelope? envelope)
     {
-        envelope = null;
-        if (string.IsNullOrWhiteSpace(json))
+        var unsupportedSchema = ValidateImplementedSchemaBeforeTypedRead(json);
+        if (unsupportedSchema is not null)
+        {
+            envelope = null;
+            return unsupportedSchema;
+        }
+
+        if (!StrictDocumentJson.TryReadCanonicalObject<InteractionEnvelope>(
+                json,
+                CreateOptions(),
+                "interaction envelope",
+                out envelope,
+                out var error))
         {
             return Error(
-                InteractionEnvelopeJsonDiagnosticCodes.JsonEmpty,
-                "Interaction-envelope JSON cannot be empty.",
-                "$");
+                DiagnosticCode(error.Failure),
+                error.Message,
+                error.Location);
+        }
+
+        return InteractionEnvelopeValidator.Validate(envelope!, contracts, graph, schemaCompatibility);
+    }
+
+    static DocumentValidationResult? ValidateImplementedSchemaBeforeTypedRead(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
         }
 
         JsonDocument parsed;
@@ -195,120 +218,48 @@ public static class InteractionEnvelopeJsonSerializer
         {
             parsed = JsonDocument.Parse(json);
         }
-        catch (JsonException exception)
+        catch (JsonException)
         {
-            return Error(
-                InteractionEnvelopeJsonDiagnosticCodes.JsonInvalid,
-                exception.Message,
-                exception.Path ?? "$");
+            return null;
         }
 
-        byte[] persistedBytes;
         using (parsed)
         {
-            if (parsed.RootElement.ValueKind != JsonValueKind.Object)
+            var root = parsed.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || StrictDocumentJson.TryFindDuplicateProperty(root, string.Empty, out _)
+                || !root.TryGetProperty("schemaVersion", out var schemaVersion)
+                || schemaVersion.ValueKind != JsonValueKind.String
+                || schemaVersion.GetString() is not { } version
+                || string.IsNullOrWhiteSpace(version)
+                || CurrentSchemaCompatibility.Supports(new(version)))
             {
-                return Error(
-                    InteractionEnvelopeJsonDiagnosticCodes.RootInvalid,
-                    "An interaction envelope must be encoded as a JSON object.",
-                    "$");
-            }
-            if (StrictDocumentJson.TryFindDuplicateProperty(parsed.RootElement, string.Empty, out var duplicate))
-            {
-                return Error(
-                    InteractionEnvelopeJsonDiagnosticCodes.DuplicateProperty,
-                    "Interaction-envelope JSON cannot contain duplicate object properties.",
-                    string.IsNullOrEmpty(duplicate) ? "$" : duplicate);
-            }
-            if (parsed.RootElement.TryGetProperty("schemaVersion", out var schemaVersion)
-                && schemaVersion.ValueKind == JsonValueKind.String
-                && schemaVersion.GetString() is { } version
-                && !string.IsNullOrWhiteSpace(version)
-                && !CurrentSchemaCompatibility.Supports(new(version)))
-            {
-                return Error(
-                    InteractionEnvelopeDiagnosticCodes.SchemaVersionUnsupported,
-                    $"Interaction envelope schema '{version}' is not implemented by this reader.",
-                    "/schemaVersion");
+                return null;
             }
 
-            try
-            {
-                var node = JsonNode.Parse(parsed.RootElement.GetRawText())
-                    ?? throw new InvalidOperationException("Failed to materialize interaction-envelope JSON.");
-                persistedBytes = GetCanonicalBytes(node, CreateOptions());
-            }
-            catch (Exception exception) when (IsCanonicalizationFailure(exception))
-            {
-                return Error(
-                    InteractionEnvelopeJsonDiagnosticCodes.JsonInvalid,
-                    exception.Message,
-                    "$");
-            }
-        }
-
-        try
-        {
-            envelope = JsonSerializer.Deserialize<InteractionEnvelope>(json, CreateOptions());
-        }
-        catch (Exception exception) when (exception is JsonException
-                                          or ArgumentException
-                                          or InvalidOperationException
-                                          or NotSupportedException
-                                          or FormatException
-                                          or OverflowException)
-        {
             return Error(
-                InteractionEnvelopeJsonDiagnosticCodes.DeserializationInvalid,
-                exception.Message,
-                exception is JsonException jsonException ? jsonException.Path ?? "$" : "$");
+                InteractionEnvelopeDiagnosticCodes.SchemaVersionUnsupported,
+                $"Interaction envelope schema '{version}' is not implemented by this reader.",
+                "/schemaVersion");
         }
-
-        if (envelope is null)
-        {
-            return Error(
-                InteractionEnvelopeJsonDiagnosticCodes.DeserializationNull,
-                "Interaction-envelope JSON unexpectedly produced a null value.",
-                "$");
-        }
-
-        byte[] projectedBytes;
-        try
-        {
-            projectedBytes = GetCanonicalBytes(envelope);
-        }
-        catch (Exception exception) when (IsCanonicalizationFailure(exception))
-        {
-            return Error(
-                InteractionEnvelopeJsonDiagnosticCodes.DeserializationInvalid,
-                exception.Message,
-                "$");
-        }
-        if (!persistedBytes.AsSpan().SequenceEqual(projectedBytes))
-        {
-            return Error(
-                InteractionEnvelopeJsonDiagnosticCodes.WireNonCanonical,
-                "The supplied interaction differs from the unique canonical typed wire representation.",
-                "$");
-        }
-
-        return InteractionEnvelopeValidator.Validate(envelope, contracts, graph, schemaCompatibility);
     }
 
-    static byte[] GetCanonicalBytes(JsonNode node, JsonSerializerOptions options) =>
-        CanonicalJsonWriter.GetCanonicalBytes(
-            node,
-            options,
-            static _ => CanonicalJsonArrayOrdering.Sequence,
-            numberSemantics: CanonicalJsonNumberSemantics.ExactDecimalRational);
-
-    static bool IsCanonicalizationFailure(Exception exception) =>
-        exception is JsonException
-            or ArgumentException
-            or InvalidOperationException
-            or NotSupportedException
-            or FormatException
-            or OverflowException;
+    static string DiagnosticCode(StrictDocumentJsonReadFailure failure) =>
+        failure switch
+        {
+            StrictDocumentJsonReadFailure.Empty => InteractionEnvelopeJsonDiagnosticCodes.JsonEmpty,
+            StrictDocumentJsonReadFailure.InvalidJson => InteractionEnvelopeJsonDiagnosticCodes.JsonInvalid,
+            StrictDocumentJsonReadFailure.RootInvalid => InteractionEnvelopeJsonDiagnosticCodes.RootInvalid,
+            StrictDocumentJsonReadFailure.DuplicateProperty =>
+                InteractionEnvelopeJsonDiagnosticCodes.DuplicateProperty,
+            StrictDocumentJsonReadFailure.DeserializationInvalid =>
+                InteractionEnvelopeJsonDiagnosticCodes.DeserializationInvalid,
+            StrictDocumentJsonReadFailure.DeserializationNull =>
+                InteractionEnvelopeJsonDiagnosticCodes.DeserializationNull,
+            StrictDocumentJsonReadFailure.WireNonCanonical =>
+                InteractionEnvelopeJsonDiagnosticCodes.WireNonCanonical,
+            _ => throw new ArgumentOutOfRangeException(nameof(failure), failure, "Unknown strict JSON read failure.")
+        };
 
     static JsonException ValidationException(DocumentValidationResult validation)
     {

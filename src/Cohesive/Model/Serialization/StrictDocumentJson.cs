@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 namespace Cohesive.Model.Serialization;
@@ -27,7 +28,9 @@ public static class StrictDocumentJson
         PortableDocumentJsonFormatting formatting = PortableDocumentJsonFormatting.Compact)
     {
         if (!Enum.IsDefined(formatting))
+        {
             throw new ArgumentOutOfRangeException(nameof(formatting), formatting, "Unsupported JSON formatting mode.");
+        }
 
         JsonSerializerOptions options = new(JsonSerializerDefaults.Web)
         {
@@ -67,7 +70,9 @@ public static class StrictDocumentJson
                     }
 
                     if (TryFindDuplicateProperty(property.Value, propertyPath, out duplicateLocation))
+                    {
                         return true;
+                    }
                 }
                 break;
             case JsonValueKind.Array:
@@ -75,7 +80,10 @@ public static class StrictDocumentJson
                 foreach (var item in element.EnumerateArray())
                 {
                     if (TryFindDuplicateProperty(item, $"{path}/{index}", out duplicateLocation))
+                    {
                         return true;
+                    }
+
                     index++;
                 }
                 break;
@@ -99,10 +107,162 @@ public static class StrictDocumentJson
                 Location: location)
         ]);
 
+    internal static byte[] GetCanonicalBytes<T>(T value, JsonSerializerOptions options)
+        where T : class
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        ArgumentNullException.ThrowIfNull(options);
+        var node = JsonSerializer.SerializeToNode(value, typeof(T), options)
+            ?? throw new InvalidOperationException($"Failed to materialize {typeof(T).Name} JSON.");
+        return GetCanonicalBytes(node, options);
+    }
+
+    internal static bool TryReadCanonicalObject<T>(
+        string json,
+        JsonSerializerOptions options,
+        string contractName,
+        out T? value,
+        out StrictDocumentJsonReadError error)
+        where T : class
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        value = null;
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            error = new(
+                StrictDocumentJsonReadFailure.Empty,
+                $"{contractName} JSON cannot be empty.",
+                "$");
+            return false;
+        }
+
+        JsonDocument parsed;
+        try
+        {
+            parsed = JsonDocument.Parse(json);
+        }
+        catch (JsonException exception)
+        {
+            error = new(
+                StrictDocumentJsonReadFailure.InvalidJson,
+                exception.Message,
+                exception.Path ?? "$");
+            return false;
+        }
+
+        byte[] persistedBytes;
+        using (parsed)
+        {
+            if (parsed.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                error = new(
+                    StrictDocumentJsonReadFailure.RootInvalid,
+                    $"A {contractName} must be encoded as a JSON object.",
+                    "$");
+                return false;
+            }
+            if (TryFindDuplicateProperty(parsed.RootElement, string.Empty, out var duplicateLocation))
+            {
+                error = new(
+                    StrictDocumentJsonReadFailure.DuplicateProperty,
+                    $"{contractName} JSON cannot contain duplicate object properties.",
+                    string.IsNullOrEmpty(duplicateLocation) ? "$" : duplicateLocation);
+                return false;
+            }
+
+            try
+            {
+                var node = JsonNode.Parse(parsed.RootElement.GetRawText())
+                    ?? throw new InvalidOperationException($"Failed to materialize {contractName} JSON.");
+                persistedBytes = GetCanonicalBytes(node, options);
+            }
+            catch (Exception exception) when (IsCanonicalWireFailure(exception))
+            {
+                error = new(StrictDocumentJsonReadFailure.InvalidJson, exception.Message, "$");
+                return false;
+            }
+        }
+
+        try
+        {
+            value = JsonSerializer.Deserialize<T>(json, options);
+        }
+        catch (Exception exception) when (IsCanonicalWireFailure(exception))
+        {
+            error = new(
+                StrictDocumentJsonReadFailure.DeserializationInvalid,
+                exception.Message,
+                exception is JsonException jsonException ? jsonException.Path ?? "$" : "$");
+            return false;
+        }
+        if (value is null)
+        {
+            error = new(
+                StrictDocumentJsonReadFailure.DeserializationNull,
+                $"{contractName} JSON unexpectedly produced a null value.",
+                "$");
+            return false;
+        }
+
+        byte[] projectedBytes;
+        try
+        {
+            projectedBytes = GetCanonicalBytes(value, options);
+        }
+        catch (Exception exception) when (IsCanonicalWireFailure(exception))
+        {
+            error = new(StrictDocumentJsonReadFailure.DeserializationInvalid, exception.Message, "$");
+            return false;
+        }
+        if (!persistedBytes.AsSpan().SequenceEqual(projectedBytes))
+        {
+            error = new(
+                StrictDocumentJsonReadFailure.WireNonCanonical,
+                $"The supplied {contractName} differs from its unique canonical typed wire representation.",
+                "$");
+            return false;
+        }
+
+        error = default;
+        return true;
+    }
+
+    static byte[] GetCanonicalBytes(JsonNode node, JsonSerializerOptions options) =>
+        CanonicalJsonWriter.GetCanonicalBytes(
+            node,
+            options,
+            static _ => CanonicalJsonArrayOrdering.Sequence,
+            numberSemantics: CanonicalJsonNumberSemantics.ExactDecimalRational);
+
+    static bool IsCanonicalWireFailure(Exception exception) =>
+        exception is JsonException
+            or ArgumentException
+            or InvalidOperationException
+            or NotSupportedException
+            or FormatException
+            or OverflowException;
+
     static string EscapeJsonPointerSegment(string value) =>
         value.Replace("~", "~0", StringComparison.Ordinal)
             .Replace("/", "~1", StringComparison.Ordinal);
 }
+
+internal enum StrictDocumentJsonReadFailure
+{
+    None = 0,
+    Empty = 1,
+    InvalidJson = 2,
+    RootInvalid = 3,
+    DuplicateProperty = 4,
+    DeserializationInvalid = 5,
+    DeserializationNull = 6,
+    WireNonCanonical = 7
+}
+
+internal readonly record struct StrictDocumentJsonReadError(
+    StrictDocumentJsonReadFailure Failure,
+    string Message,
+    string Location);
 
 /// <summary>
 /// Strict converter for getter-only field-path segments whose kind must remain explicit on input.
@@ -116,7 +276,9 @@ sealed class StrictFieldPathSegmentJsonConverter : JsonConverter<FieldPathSegmen
         JsonSerializerOptions options)
     {
         if (reader.TokenType != JsonTokenType.StartObject)
+        {
             throw new JsonException("A field-path segment must be a JSON object.");
+        }
 
         SegmentKind kind = default;
         string? segment = null;
@@ -131,11 +293,15 @@ sealed class StrictFieldPathSegmentJsonConverter : JsonConverter<FieldPathSegmen
                 break;
             }
             if (reader.TokenType != JsonTokenType.PropertyName)
+            {
                 throw new JsonException("A field-path segment contains an invalid JSON token.");
+            }
 
             var property = reader.GetString();
             if (!reader.Read())
+            {
                 throw new JsonException("A field-path segment ended before its property value.");
+            }
 
             switch (property)
             {
@@ -146,7 +312,10 @@ sealed class StrictFieldPathSegmentJsonConverter : JsonConverter<FieldPathSegmen
                     {
                         hasKind = true;
                         if (reader.TokenType != JsonTokenType.String)
+                        {
                             throw new JsonException("Field-path segment kind must be encoded as a string.");
+                        }
+
                         var text = reader.GetString();
                         if (text is null
                             || !Enum.TryParse(text, ignoreCase: false, out kind)
@@ -172,9 +341,14 @@ sealed class StrictFieldPathSegmentJsonConverter : JsonConverter<FieldPathSegmen
         }
 
         if (!ended)
+        {
             throw new JsonException("A field-path segment JSON object was not terminated.");
+        }
+
         if (!hasKind)
+        {
             throw new JsonException("A field-path segment must declare kind.");
+        }
 
         return new(kind, segment);
     }
@@ -194,9 +368,14 @@ sealed class StrictFieldPathSegmentJsonConverter : JsonConverter<FieldPathSegmen
         writer.WriteStartObject();
         writer.WriteString("kind", value.Kind.ToString());
         if (value.Segment is null)
+        {
             writer.WriteNull("segment");
+        }
         else
+        {
             writer.WriteString("segment", value.Segment);
+        }
+
         writer.WriteEndObject();
     }
 }
@@ -211,7 +390,9 @@ sealed class StrictStringEnumJsonConverterFactory : JsonConverterFactory
         ArgumentNullException.ThrowIfNull(typeToConvert);
         ArgumentNullException.ThrowIfNull(options);
         if (!typeToConvert.IsEnum)
+        {
             throw new ArgumentException($"Type '{typeToConvert}' is not an enum.", nameof(typeToConvert));
+        }
 
         var converterType = typeof(StrictStringEnumJsonConverter<>).MakeGenericType(typeToConvert);
         return (JsonConverter)(Activator.CreateInstance(converterType)
@@ -228,7 +409,9 @@ sealed class StrictStringEnumJsonConverterFactory : JsonConverterFactory
             JsonSerializerOptions options)
         {
             if (reader.TokenType != JsonTokenType.String)
+            {
                 throw new JsonException($"Enum '{typeToConvert.Name}' must be encoded as a string.");
+            }
 
             var text = reader.GetString();
             if (text is null
@@ -313,7 +496,9 @@ public sealed class DiagnosticPreservingStringEnumJsonConverter<TEnum>
         {
             var value = (TEnum)Enum.ToObject(typeof(TEnum), numericValue);
             if (!Enum.IsDefined(value))
+            {
                 return value;
+            }
 
             throw new JsonException(
                 $"Declared value '{value}' of enum '{typeToConvert.Name}' must be encoded as a string.");

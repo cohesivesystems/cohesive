@@ -115,6 +115,46 @@ legacy Process retry/dead-letter paths remain migration surfaces. They may be ad
 operation observations, but they are not a parallel semantic authority and are not silently treated as the new
 durable protocol.
 
+## Canonical Process lifecycle control
+
+`Cohesive.Execution` defines a closed, protocol-neutral Process control family: `Inspect`, `Signal`, `Pause`,
+`Continue`, `RestartAttempt`, `Cancel`, and `Terminate`. Mutating commands carry stable command and idempotency
+identity, attributable authorization evidence, provenance, and an expectation for the exact Process attempt and
+semantic control revision. The revision is the optimistic lifecycle fence, not an external-operation lease fence
+or a physical Storage record version. Accepted mutating and Signal-admission commands retain durable replay
+receipts, so exact replay returns the original result without duplicating a Signal, allocating another attempt, or
+emitting another external intent; `Inspect` remains a read-only observation and creates no receipt;
+conflicting identity reuse and stale attempt or revision expectations remain explicit diagnostics.
+
+`ProcessControlState` retains lifecycle mode, ordered attempt lineage, finite activation position, explicit safe
+points, and authoritative command receipts from which canonical Signal admissions are projected. State admission
+replays those receipts and observations through the same pure lifecycle reducer used by
+`ProcessControlReferenceExecutor`, rejecting histories that could not have been produced by the live semantics.
+Pause, RestartAttempt, and cooperative Cancel defer while an activation is in flight
+and take effect only at an invariant-preserving safe point. Pause and Continue preserve the logical Process
+instance, current attempt, and all attempt affinities. RestartAttempt records abandonment and cleanup for the old
+attempt, then starts one caller-selected stable replacement under the same Process instance without copying old
+affinities. Cancel is a cooperative terminal outcome; Terminate is an immediate, irreversible forced stop with an
+explicit cleanup obligation. A pending cooperative safe-point action is not silently replaced by another; only
+Terminate may preempt it immediately.
+
+A Signal command carries an already-canonical `SignalEnvelope`. The reference interpreter validates its exact
+contract, authority, and current-attempt target, admits it once by emission and scoped idempotency identity, and
+buffers it while the Process is paused or pausing. It returns a first-time admission intent rather than treating an
+in-memory collection as a durable inbox or arbitration mechanism.
+
+`ProcessControlJsonSerializer` provides the strict canonical command, state, and decision wire boundary. Reads
+require the exact interaction catalog so Signals are contract-linked and named reason or affinity values resolve
+through its retained shape graph. `ProcessControlDecision` is itself versioned and portable; first-time intents are
+bound to their exact latest receipt or observation cut, while replay results never emit the intent again.
+
+`ProcessAttemptAffinity` is a generic write-once hook for attempt-bound resources. An index-sync interpretation can
+bind a candidate generation through a stable Process semantic slot: pause/continue retain that binding, while a
+new attempt produced by RestartAttempt begins unbound and therefore requires a fresh generation. Cohesive.Storage,
+not the control protocol, owns physical generation allocation, persistence, cleanup, exclusion, promotion, and
+backend swap. The reference executor likewise does not supply atomic checkpoint/CAS persistence, inbox commits,
+or worker fencing; those physical cuts and legacy Process-runtime integration belong to ARI-166 and ARI-168.
+
 ## Expression IR and Analysis
 
 `Expr` is the portable, non-generic expression IR shared by Cohesive languages. An expression
