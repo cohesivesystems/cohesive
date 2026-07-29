@@ -1,6 +1,8 @@
 # Cohesive.Processes
 
-Declarative process definitions and runtime infrastructure for multistep workflows over entities, canonical relations and queries, waits, signals, and effects.
+Canonical, portable Process semantics for coordinating entity transitions, relation and query evaluations,
+interactions, durable waits, timers, parallel branches, and terminal outcomes without binding the definition to a
+workflow engine, storage system, or host-language callback.
 
 ## Install
 
@@ -8,94 +10,81 @@ Declarative process definitions and runtime infrastructure for multistep workflo
 dotnet add package Cohesive.Processes
 ```
 
-## Use When
+## Canonical Process IR
 
-- You need process definitions that coordinate entity transitions, entity reads, canonical relation/query evaluations, waits, requests, and effects.
-- You want deterministic process planning and runtime state that can be interpreted by different storage or orchestration adapters.
-- You need a semantic process model separate from a specific queue, workflow engine, or database.
-
-## Example
+`Cohesive.Processes.IR.ProcessDefinition` is the persisted semantic authority. A definition is a normalized graph
+with stable node and edge identities, typed inputs and results, portable expressions and bindings, exact references
+to other canonical definitions, explicit recovery policy, and closed Process-node and AwaitMatch-clause unions.
 
 ```csharp
-using Cohesive.Processes.Model;
-using Cohesive.Relations.Authoring;
-using Cohesive.Relations.Execution;
+using Cohesive.Execution;
+using Cohesive.Model;
+using Cohesive.Model.Expressions;
+using Cohesive.Model.Serialization;
+using Cohesive.Processes.IR;
 
-[GenerateProcessDefinition(nameof(Build))]
-public partial class DispatchCustomerProcess : IProcessDefinition<string, DispatchCustomerResult>
-{
-    static readonly CustomerEntity Customers = CustomerEntity.Instance;
-    static readonly CarrierEntity Carriers = CarrierEntity.Instance;
+var text = new ValueContract(new ScalarTypeRef(ScalarTypeKind.String));
+var definition = new ProcessDefinition(
+    input: text,
+    result: text,
+    entry: new("persist-cut"),
+    nodes:
+    [
+        new DurableCutProcessNode(
+            new("persist-cut"),
+            new(new("resume-after-cut"), new("complete"))),
+        new ReturnProcessNode(new("complete"), Expr.Const("done"))
+    ],
+    recoveryPolicy: ProcessRecoveryPolicy.ContinueAttempt);
 
-    async ProcessTask<DispatchCustomerResult> Build(
-        ProcessAuthoringContext<string, DispatchCustomerResult> process,
-        string customerId)
-    {
-        var customer = await process.Read(Customers.ReadById(customerId, snapshot =>
-            new CustomerReadModel(
-                CustomerId: snapshot.Require(entity => entity.Id),
-                Name: snapshot.Require(entity => entity.Name),
-                SegmentId: snapshot.Require(entity => entity.SegmentId))));
+var document = ProcessDefinitionDocuments.Create(
+    new("process/example"),
+    new("revision/1"),
+    definition,
+    new(
+        new("example-producer", "1"),
+        new("examples/process/example"),
+        DocumentOrigin.Generated));
 
-        // CustomerProfiles is a persisted canonical relation/query document plus its
-        // shape and relationship snapshots. The helper authors one exact evaluation.
-        var evaluation = CustomerProfiles.ForCustomer(
-            customerId,
-            evaluationId: $"dispatch/{customerId}/customer-profile");
-        var profile = await process.Evaluate(
-            evaluation,
-            outcome => CustomerProfiles.RequireSingleProfile(outcome));
-        var reservation = await process.Request(new ReserveCarrierRequest(
-            CustomerId: profile.CustomerId,
-            OrderCount: profile.Orders.Count));
-
-        var customerUpdate = await process.Transition(
-            Customers.MarkDispatched,
-            entityId: profile.CustomerId,
-            input: new(reservation.CarrierId));
-
-        var carrierUpdate = await process.Transition(
-            Carriers.ReserveCapacity,
-            entityId: reservation.CarrierId,
-            input: new(reservation.ReservedOrderCount));
-
-        return process.Return(new(
-            CustomerId: profile.CustomerId,
-            CarrierId: reservation.CarrierId,
-            CustomerVersion: customerUpdate.NewVersion,
-            CarrierVersion: carrierUpdate.NewVersion));
-    }
-}
-
-public sealed record ReserveCarrierRequest(string CustomerId, int OrderCount)
-    : IEffectRequest<CarrierReservation>
-{
-    public static string RequestName => "ReserveCarrier";
-}
-
-public sealed record CarrierReservation(string CarrierId, int ReservedOrderCount);
-
-public sealed record DispatchCustomerResult(
-    string CustomerId,
-    string CarrierId,
-    long CustomerVersion,
-    long CarrierVersion);
+var validation = ProcessDefinitionDocuments.Validate(document);
 ```
 
-Configure one `IRelationQueryEvaluator` on `ProcessRuntimeServices`. The same evaluator boundary compiles,
-realizes, physically plans, acquires, and interprets both canonical relation and query definitions; process code
-does not select repositories or execution engines directly. Evaluation identifiers should be deterministic from
-the process instance and semantic operation so replay produces the same attribution.
+The shared `ExecutionDefinitionDocument` owns definition identity, revision, fingerprint, provenance, source maps,
+and extensions. `ProcessDefinitionDocuments` is a typed facade over that envelope; it does not introduce another
+metadata or fingerprint model.
 
-`RelationQueryEvaluationOutcome` deliberately retains in-process compiler, placement, acquisition, and execution
-artifacts rather than defining a durable wire schema. Process authoring therefore requires a projection that runs in
-the evaluation node before checkpoint capture; only the returned application value can become a process variable.
-The runtime rejects a projection that returns the non-wire outcome itself. Evaluation descriptors are portable,
-versioned, and fingerprinted; derive their evaluation identifiers deterministically from process and operation
-identity so retries and replay retain the same attribution.
+Static validation checks graph integrity, exact reference families, portable expression types, definite binding
+visibility, proven Choice/Match coverage, Fork-token ownership and Join structure, AwaitMatch policies, and finite
+activation. Process v1 uses the same fixed pure expression-capability closure as Transition v1 rather than the
+ambient expression catalog. A control-flow recurrence is valid only when it crosses a Request, AwaitMatch, Timer,
+or explicit durable cut. Fork branches may recur across those boundaries when every finite exit belongs to the
+reciprocal Join and at least one structural Join exit exists. The definition contains coordination facts—not copied
+aggregate business state, runtime services, adapters, compiled plans, or delegates.
 
-## Related Packages
+An AwaitMatch clause receiving a Request retains two distinct facts: its typed application payload and a
+`ProcessRequestObligationBinding` representing the admitted logical Request envelope. `ReplyProcessNode` must
+consume that definitely visible obligation, and linking proves that its Reply contract discharges the exact Request
+contract. The Request identity is therefore never reconstructed from an arbitrary application expression.
 
-- `Cohesive.Transitions` for entity transition semantics.
-- `Cohesive.Storage` for repository adapters.
-- `Cohesive.Adapters.DurableTask` for Azure Durable Task execution.
+When a Process invokes a Transition or evaluates a Relation/Query, use an exact `ExecutionDefinitionReference`.
+Supply `ProcessDefinitionValidationContext` while linking to prove that the referenced definition family and its
+input/result contracts match the call site. Interaction nodes resolve their exact typed references through an
+`InteractionContractCatalog`. Referenced definitions remain the semantic authorities; the Process does not embed
+or duplicate them. `ProcessDefinitionLink.TryCreateTransition` derives evidence from a validated canonical
+Transition document. Until Relations adopts the shared execution-definition envelope, Relation/Query evidence is
+an explicit linker attestation boundary rather than a document-derived proof.
+
+## Compatibility authoring and runtimes
+
+The existing `Cohesive.Processes.Model`, authoring, source-generation, and runtime APIs remain compatibility
+surfaces while canonical C# lowering and the finite Process runtime are introduced. Those APIs currently build and
+execute delegate-bearing node objects and must not be treated as durable semantic authority. Existing DurableTask,
+local runtime, effect-handler, transaction-gateway, and relation-query evaluation integrations continue to serve
+legacy definitions until they are migrated to interpret canonical IR.
+
+## Related packages
+
+- `Cohesive.Transitions` for canonical aggregate transition semantics.
+- `Cohesive.Relations` for canonical relation and query semantics.
+- `Cohesive.Storage` for durable checkpoint and repository interpretations.
+- `Cohesive.Adapters.DurableTask` for the current compatibility orchestration adapter.

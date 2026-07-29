@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using System.Text;
 using System.Text.Json;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
@@ -32,8 +31,17 @@ public static class TransitionDefinitionDocumentDiagnosticCodes
 /// </remarks>
 public static class TransitionDefinitionDocuments
 {
+    static readonly ExecutionDefinitionDocumentProjection<TransitionDefinition> Projection = new(
+        kind: new(TransitionWireNames.DefinitionKind),
+        kindMismatchCode: TransitionDefinitionDocumentDiagnosticCodes.KindMismatch,
+        projectionInvalidCode: TransitionDefinitionDocumentDiagnosticCodes.DefinitionProjectionInvalid,
+        wireNonCanonicalCode: TransitionDefinitionDocumentDiagnosticCodes.DefinitionWireNonCanonical,
+        wireNonCanonicalMessage:
+            "The persisted definition is not the unique canonical typed Transition v1 wire representation.",
+        projectionFailurePath: static (_, exception) => (exception as JsonException)?.Path);
+
     /// <summary>Shared execution-definition kind for canonical Transition IR.</summary>
-    public static ExecutionDefinitionKind Kind { get; } = new(TransitionWireNames.DefinitionKind);
+    public static ExecutionDefinitionKind Kind => Projection.Kind;
 
     /// <summary>Creates a fingerprinted shared execution document containing typed Transition IR.</summary>
     /// <param name="definitionId">Stable identity shared by every semantic revision of the Transition.</param>
@@ -177,11 +185,11 @@ public static class TransitionDefinitionDocuments
         ShapeGraph? graph)
     {
         ArgumentNullException.ThrowIfNull(document);
-        var sharedValidation = ExecutionDefinitionDocumentValidator.Validate(document, graph);
-        var transitionValidation = ValidateTransitionContent(document, graph, out _);
-        return WithSourceReferences(
+        return Projection.ValidateAndProject(
+            ExecutionDefinitionDocumentValidator.Validate(document, graph),
             document,
-            CombineDeterministically(sharedValidation, transitionValidation));
+            definition => TransitionDefinitionValidator.Validate(definition, graph),
+            out _);
     }
 
     static DocumentValidationResult CompleteDeserialization(
@@ -190,251 +198,11 @@ public static class TransitionDefinitionDocuments
         ShapeGraph? graph,
         out TransitionDefinition? definition)
     {
-        definition = null;
-        if (document is null)
-        {
-            return sharedValidation;
-        }
-
-        var transitionValidation = ValidateTransitionContent(
+        return Projection.ValidateAndProject(
+            sharedValidation,
             document,
-            graph,
-            out var candidateDefinition);
-        var combined = CombineDeterministically(sharedValidation, transitionValidation);
-        combined = WithSourceReferences(document, combined);
-        if (combined.IsValid)
-        {
-            definition = candidateDefinition;
-        }
-
-        return combined;
+            candidate => TransitionDefinitionValidator.Validate(candidate, graph),
+            out definition);
     }
 
-    static DocumentValidationResult WithSourceReferences(
-        ExecutionDefinitionDocument document,
-        DocumentValidationResult validation)
-    {
-        if (validation.Diagnostics.IsDefaultOrEmpty)
-            return validation;
-
-        var diagnostics = ImmutableArray.CreateBuilder<DocumentValidationDiagnostic>(validation.Diagnostics.Length);
-        foreach (var diagnostic in validation.Diagnostics)
-        {
-            diagnostics.Add(document.Metadata.SourceMap.WithResolvedSourceReferences(
-                diagnostic,
-                document.Metadata.Provenance.Source.Reference,
-                "canonicalValidation"));
-        }
-
-        diagnostics.Sort(DocumentValidationDiagnosticComparer.Ordinal);
-        return DocumentValidationResult.FromDiagnostics(diagnostics.MoveToImmutable());
-    }
-
-    static DocumentValidationResult ValidateTransitionContent(
-        ExecutionDefinitionDocument document,
-        ShapeGraph? graph,
-        out TransitionDefinition? definition)
-    {
-        definition = null;
-        if (document.Kind != Kind)
-        {
-            return Error(
-                TransitionDefinitionDocumentDiagnosticCodes.KindMismatch,
-                $"Expected execution-definition kind '{Kind.Value}', but found '{document.Kind.Value}'.",
-                "/kind");
-        }
-
-        TransitionDefinition candidate;
-        try
-        {
-            candidate = document.GetDefinition<TransitionDefinition>();
-        }
-        catch (Exception exception) when (exception is JsonException
-                                          or ArgumentException
-                                          or InvalidOperationException
-                                          or NotSupportedException
-                                          or FormatException
-                                          or OverflowException)
-        {
-            return Error(
-                TransitionDefinitionDocumentDiagnosticCodes.DefinitionProjectionInvalid,
-                exception.Message,
-                exception is JsonException jsonException
-                    ? PrefixDefinitionLocation(JsonPathToPointer(jsonException.Path))
-                    : "/definition");
-        }
-
-        var validation = CombineDeterministically(
-            ValidateCanonicalWire(document, candidate),
-            PrefixDefinitionLocations(TransitionDefinitionValidator.Validate(candidate, graph)));
-        if (validation.IsValid)
-        {
-            definition = candidate;
-        }
-
-        return validation;
-    }
-
-    static DocumentValidationResult ValidateCanonicalWire(
-        ExecutionDefinitionDocument document,
-        TransitionDefinition definition)
-    {
-        var options = ExecutionDefinitionJsonSerializer.CreateOptions();
-        var projected = JsonSerializer.SerializeToElement(definition, options);
-        var persistedBytes = ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(document);
-        var projectedBytes = ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(
-            document.Metadata.SchemaVersion,
-            document.Kind,
-            projected,
-            document.Extensions);
-        return persistedBytes.AsSpan().SequenceEqual(projectedBytes)
-            ? DocumentValidationResult.Valid
-            : Error(
-                TransitionDefinitionDocumentDiagnosticCodes.DefinitionWireNonCanonical,
-                "The persisted definition is not the unique canonical typed Transition v1 wire representation.",
-                "/definition");
-    }
-
-    static DocumentValidationResult PrefixDefinitionLocations(DocumentValidationResult validation)
-    {
-        if (validation.Diagnostics.IsDefaultOrEmpty)
-        {
-            return validation;
-        }
-
-        return DocumentValidationResult.FromDiagnostics(validation.Diagnostics.Select(static diagnostic =>
-            diagnostic with { Location = PrefixDefinitionLocation(diagnostic.Location) }));
-    }
-
-    static string PrefixDefinitionLocation(string? location)
-    {
-        if (string.IsNullOrEmpty(location) || location == "$")
-        {
-            return "/definition";
-        }
-
-        if (string.Equals(location, "/definition", StringComparison.Ordinal)
-            || location.StartsWith("/definition/", StringComparison.Ordinal))
-        {
-            return location;
-        }
-        return location[0] == '/'
-            ? "/definition" + location
-            : "/definition";
-    }
-
-    static string JsonPathToPointer(string? path)
-    {
-        if (string.IsNullOrEmpty(path) || path == "$")
-        {
-            return "$";
-        }
-
-        StringBuilder pointer = new();
-        var index = path[0] == '$' ? 1 : 0;
-        while (index < path.Length)
-        {
-            switch (path[index])
-            {
-                case '.':
-                    index++;
-                    AppendSegment(ReadUntil(path, ref index, '.', '['), pointer);
-                    break;
-                case '[':
-                    index++;
-                    if (index < path.Length && path[index] is '\'' or '"')
-                    {
-                        var quote = path[index++];
-                        StringBuilder segment = new();
-                        while (index < path.Length && path[index] != quote)
-                        {
-                            if (path[index] == '\\' && index + 1 < path.Length)
-                            {
-                                index++;
-                            }
-
-                            segment.Append(path[index++]);
-                        }
-
-                        if (index < path.Length && path[index] == quote)
-                        {
-                            index++;
-                        }
-                        AppendSegment(segment.ToString(), pointer);
-                    }
-                    else
-                    {
-                        AppendSegment(ReadUntil(path, ref index, ']'), pointer);
-                    }
-
-                    if (index < path.Length && path[index] == ']')
-                    {
-                        index++;
-                    }
-                    break;
-                default:
-                    AppendSegment(ReadUntil(path, ref index, '.', '['), pointer);
-                    break;
-            }
-        }
-
-        return pointer.Length == 0 ? "$" : pointer.ToString();
-    }
-
-    static string ReadUntil(string value, ref int index, params char[] terminators)
-    {
-        var start = index;
-        while (index < value.Length && Array.IndexOf(terminators, value[index]) < 0)
-        {
-            index++;
-        }
-        return value[start..index];
-    }
-
-    static void AppendSegment(string segment, StringBuilder pointer)
-    {
-        if (segment.Length == 0)
-        {
-            return;
-        }
-
-        pointer.Append('/');
-        foreach (var character in segment)
-        {
-            switch (character)
-            {
-                case '~':
-                    pointer.Append("~0");
-                    break;
-                case '/':
-                    pointer.Append("~1");
-                    break;
-                default:
-                    pointer.Append(character);
-                    break;
-            }
-        }
-    }
-
-    static DocumentValidationResult CombineDeterministically(
-        params DocumentValidationResult[] results)
-    {
-        List<DocumentValidationDiagnostic> diagnostics = [];
-        foreach (var result in results)
-        {
-            diagnostics.AddRange(result.Diagnostics);
-        }
-
-        diagnostics.Sort(DocumentValidationDiagnosticComparer.Ordinal);
-        return DocumentValidationResult.FromDiagnostics(diagnostics);
-    }
-
-    static DocumentValidationResult Error(string code, string message, string location) =>
-        DocumentValidationResult.FromDiagnostics([
-            new(
-                Code: code,
-                Severity: DiagnosticSeverity.Error,
-                Message: message,
-                Location: location)
-        ]);
 }

@@ -427,8 +427,8 @@ public sealed class CanonicalTransitionAuthoringTests
             ]);
         var decisionMatch = new MatchTransitionNode(
             Identities.DecisionMatch,
-            TransitionCaseSelection.OrderedFirstMatch,
-            TransitionBranchCompleteness.Fallback,
+            CaseSelection.OrderedFirstMatch,
+            BranchCompleteness.Fallback,
             Expr.BoundValue(Identities.DecisionBinding),
             StringContract,
             [
@@ -443,8 +443,8 @@ public sealed class CanonicalTransitionAuthoringTests
             [decisionMatch]);
         var decisionChoice = new ChoiceTransitionNode(
             Identities.DecisionChoice,
-            TransitionCaseSelection.OrderedFirstMatch,
-            TransitionBranchCompleteness.Fallback,
+            CaseSelection.OrderedFirstMatch,
+            BranchCompleteness.Fallback,
             [
                 new(
                     Identities.ApproveCase,

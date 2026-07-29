@@ -328,7 +328,7 @@ public static class TransitionDefinitionValidator
         }
 
         void ValidateFallbackContract(
-            TransitionBranchCompleteness completeness,
+            BranchCompleteness completeness,
             TransitionFallback? fallback,
             string location)
         {
@@ -337,14 +337,14 @@ public static class TransitionDefinitionValidator
                 return;
             }
 
-            if (completeness == TransitionBranchCompleteness.Fallback && fallback is null)
+            if (completeness == BranchCompleteness.Fallback && fallback is null)
             {
                 Error(
                     TransitionDefinitionDiagnosticCodes.FallbackContractInvalid,
                     "Fallback completeness requires an explicit fallback branch.",
                     Child(location, "fallback"));
             }
-            else if (completeness == TransitionBranchCompleteness.Exhaustive && fallback is not null)
+            else if (completeness == BranchCompleteness.Exhaustive && fallback is not null)
             {
                 Error(
                     TransitionDefinitionDiagnosticCodes.FallbackContractInvalid,

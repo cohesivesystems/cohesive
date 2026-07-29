@@ -97,29 +97,6 @@ public sealed record LetTransitionNode : TransitionNode
     public Expr Value { get; }
 }
 
-/// <summary>Selection semantics for ordered Choice and Match cases.</summary>
-public enum TransitionCaseSelection
-{
-    /// <summary>No case-selection rule was supplied; this value is invalid in canonical IR.</summary>
-    Unspecified = 0,
-
-    /// <summary>Evaluate cases in order and select the first predicate or exact pattern that matches.</summary>
-    OrderedFirstMatch = 1
-}
-
-/// <summary>How a Choice or Match construct declares that all inputs are covered.</summary>
-public enum TransitionBranchCompleteness
-{
-    /// <summary>No completeness contract was supplied; this value is invalid in canonical IR.</summary>
-    Unspecified = 0,
-
-    /// <summary>The declared cases are intended to be exhaustive and must be proven by compilation.</summary>
-    Exhaustive = 1,
-
-    /// <summary>An explicit fallback provides coverage when no declared case matches.</summary>
-    Fallback = 2
-}
-
 /// <summary>One stable predicate branch in an ordered Choice node.</summary>
 public sealed record TransitionChoiceCase
 {
@@ -177,8 +154,8 @@ public sealed record ChoiceTransitionNode : TransitionNode
     [JsonConstructor]
     public ChoiceTransitionNode(
         ExecutionNodeId id,
-        TransitionCaseSelection selection,
-        TransitionBranchCompleteness completeness,
+        CaseSelection selection,
+        BranchCompleteness completeness,
         ImmutableArray<TransitionChoiceCase> cases,
         TransitionFallback? fallback = null)
         : base(id)
@@ -190,10 +167,10 @@ public sealed record ChoiceTransitionNode : TransitionNode
     }
 
     /// <summary>Explicit branch-selection semantics.</summary>
-    public TransitionCaseSelection Selection { get; }
+    public CaseSelection Selection { get; }
 
     /// <summary>Declared coverage mode.</summary>
-    public TransitionBranchCompleteness Completeness { get; }
+    public BranchCompleteness Completeness { get; }
 
     /// <summary>Ordered predicate cases.</summary>
     public ImmutableArray<TransitionChoiceCase> Cases { get; }
@@ -270,8 +247,8 @@ public sealed record MatchTransitionNode : TransitionNode
     [JsonConstructor]
     public MatchTransitionNode(
         ExecutionNodeId id,
-        TransitionCaseSelection selection,
-        TransitionBranchCompleteness completeness,
+        CaseSelection selection,
+        BranchCompleteness completeness,
         Expr value,
         ValueContract contract,
         ImmutableArray<TransitionMatchCase> cases,
@@ -287,10 +264,10 @@ public sealed record MatchTransitionNode : TransitionNode
     }
 
     /// <summary>Explicit case-selection semantics.</summary>
-    public TransitionCaseSelection Selection { get; }
+    public CaseSelection Selection { get; }
 
     /// <summary>Declared coverage mode.</summary>
-    public TransitionBranchCompleteness Completeness { get; }
+    public BranchCompleteness Completeness { get; }
 
     /// <summary>Pure value expression being matched.</summary>
     public Expr Value { get; }
