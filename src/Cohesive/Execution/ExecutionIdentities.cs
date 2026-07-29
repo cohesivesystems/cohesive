@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cohesive.Model.Serialization;
 
@@ -189,6 +191,89 @@ public readonly record struct OperationAttemptId
     /// <summary>Returns the raw operation-attempt identity.</summary>
     /// <returns>The value supplied when this identity was constructed.</returns>
     public override string ToString() => Value;
+}
+
+/// <summary>
+/// Monotonically increasing ownership fence for one logical durable operation.
+/// </summary>
+/// <remarks>
+/// A later fence supersedes every earlier claimant. The value is semantic ownership evidence, not a provider
+/// lease token or physical transaction version.
+/// </remarks>
+[JsonConverter(typeof(OperationFenceJsonConverter))]
+public readonly record struct OperationFence
+{
+    /// <summary>Creates an operation ownership fence.</summary>
+    /// <param name="value">Positive monotonically increasing fence value.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="value"/> is not positive.</exception>
+    [JsonConstructor]
+    public OperationFence(long value)
+    {
+        if (value <= 0)
+            throw new ArgumentOutOfRangeException(nameof(value), value, "An operation fence must be positive.");
+        Value = value;
+    }
+
+    /// <summary>Positive monotonically increasing fence value.</summary>
+    public long Value { get; }
+
+    /// <summary>Returns the invariant-culture fence value.</summary>
+    /// <returns>The positive fence value supplied at construction.</returns>
+    public override string ToString() => Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+}
+
+/// <summary>Portable string-encoded JSON converter for 64-bit operation fences.</summary>
+/// <remarks>String encoding preserves the full 64-bit range across JavaScript and other JSON hosts.</remarks>
+public sealed class OperationFenceJsonConverter : JsonConverter<OperationFence>
+{
+    /// <summary>Creates the canonical operation-fence JSON converter.</summary>
+    public OperationFenceJsonConverter()
+    {
+    }
+
+    /// <summary>Reads a positive invariant-culture fence from its canonical JSON string.</summary>
+    /// <param name="reader">Reader positioned at the fence value.</param>
+    /// <param name="typeToConvert">Requested fence type.</param>
+    /// <param name="options">Active serializer options.</param>
+    /// <returns>The parsed positive operation fence.</returns>
+    /// <exception cref="JsonException">The value is not a canonical positive 64-bit integer string.</exception>
+    public override OperationFence Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options)
+    {
+        var encoded = reader.TokenType == JsonTokenType.String ? reader.GetString() : null;
+        if (encoded is null
+            || !long.TryParse(
+                encoded,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var value)
+            || value <= 0
+            || !string.Equals(encoded, value.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal))
+        {
+            throw new JsonException("An operation fence must be encoded as a positive 64-bit integer string.");
+        }
+
+        return new(value);
+    }
+
+    /// <summary>Writes a fence as a canonical invariant-culture JSON string.</summary>
+    /// <param name="writer">Destination JSON writer.</param>
+    /// <param name="value">Positive operation fence.</param>
+    /// <param name="options">Active serializer options.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="writer"/> is <see langword="null"/>.</exception>
+    /// <exception cref="JsonException"><paramref name="value"/> is the invalid default fence.</exception>
+    public override void Write(
+        Utf8JsonWriter writer,
+        OperationFence value,
+        JsonSerializerOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        if (value.Value <= 0)
+            throw new JsonException("A default operation fence cannot be serialized.");
+        writer.WriteStringValue(value.Value.ToString(CultureInfo.InvariantCulture));
+    }
 }
 
 /// <summary>
