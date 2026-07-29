@@ -68,6 +68,7 @@ public sealed class InMemoryProcessDurableStoreTests
         var acquired = await store.AcquireWorkerAsync(
             Context,
             checkpoint.ContinuationIdentity.ProcessInstanceId,
+            ProcessStorageRevision.Initial,
             "worker/a",
             TimeSpan.FromMinutes(5),
             acquiredAt);
@@ -75,12 +76,14 @@ public sealed class InMemoryProcessDurableStoreTests
         var replayed = await store.AcquireWorkerAsync(
             Context,
             checkpoint.ContinuationIdentity.ProcessInstanceId,
+            acquired.Snapshot!.Revision,
             "worker/a",
             TimeSpan.FromMinutes(20),
             acquiredAt.AddMinutes(1));
         var held = await store.AcquireWorkerAsync(
             Context,
             checkpoint.ContinuationIdentity.ProcessInstanceId,
+            acquired.Snapshot!.Revision,
             "worker/b",
             TimeSpan.FromMinutes(5),
             acquiredAt.AddMinutes(1));
@@ -99,17 +102,18 @@ public sealed class InMemoryProcessDurableStoreTests
             firstLease.Fence,
             TimeSpan.FromMinutes(10),
             renewedAt);
-        var delayedRenewal = await Assert.ThrowsAsync<ArgumentException>(() => store.RenewWorkerAsync(
+        var delayedRenewal = await store.RenewWorkerAsync(
             Context,
             checkpoint.ContinuationIdentity.ProcessInstanceId,
             "worker/a",
             firstLease.Fence,
             TimeSpan.FromMinutes(10),
-            renewedAt.AddSeconds(-1)));
+            renewedAt.AddSeconds(-1));
         var reclaimedAt = renewedAt.AddMinutes(10);
         var reclaimed = await store.AcquireWorkerAsync(
             Context,
             checkpoint.ContinuationIdentity.ProcessInstanceId,
+            renewed.Snapshot!.Revision,
             "worker/b",
             TimeSpan.FromMinutes(5),
             reclaimedAt);
@@ -135,13 +139,51 @@ public sealed class InMemoryProcessDurableStoreTests
         Assert.Equal(renewedAt.AddMinutes(10), renewed.Snapshot.WorkerLease.ExpiresAtUtc);
         Assert.Equal(ProcessStoreMutationDisposition.Replayed, renewalReplay.Disposition);
         Assert.Equal(renewed.Snapshot.Revision, renewalReplay.Snapshot!.Revision);
-        Assert.Equal("observedAtUtc", delayedRenewal.ParamName);
+        Assert.Equal(ProcessStoreMutationDisposition.Replayed, delayedRenewal.Disposition);
+        Assert.Equal(renewed.Snapshot.Revision, delayedRenewal.Snapshot?.Revision);
         Assert.Equal(ProcessStoreMutationDisposition.Applied, reclaimed.Disposition);
         Assert.Equal("worker/b", reclaimed.Snapshot!.WorkerLease!.Owner);
         Assert.True(reclaimed.Snapshot.WorkerLease.Fence.Ordinal > firstLease.Fence.Ordinal);
         Assert.Equal(renewed.Snapshot.Revision.Ordinal + 1, reclaimed.Snapshot.Revision.Ordinal);
         Assert.Equal(ProcessStoreMutationDisposition.StaleFence, staleRenewal.Disposition);
         Assert.Equal(reclaimed.Snapshot.Revision, staleRenewal.Snapshot!.Revision);
+    }
+
+    [Fact]
+    public async Task WorkerLease_AcquireWithStaleExpectedRevisionDoesNotChangeLeaseOrRevision()
+    {
+        var store = new InMemoryProcessDurableStore();
+        var checkpoint = Checkpoint("worker-acquisition-stale-revision");
+        var initialized = await store.InitializeAsync(
+            Context,
+            new("commit/initialize/worker-acquisition-stale-revision"),
+            checkpoint);
+        var initializedSnapshot = Assert.IsType<ProcessDurableStoreSnapshot>(initialized.Snapshot);
+        var input = Input(checkpoint, "emission/input/before-worker-acquisition", "new-checkpoint-evidence");
+        var admitted = await store.AdmitInputAsync(
+            Context,
+            checkpoint.ContinuationIdentity.ProcessInstanceId,
+            input,
+            StartedAtUtc.AddMinutes(1));
+        var current = Assert.IsType<ProcessDurableStoreSnapshot>(admitted.Snapshot);
+
+        var rejected = await store.AcquireWorkerAsync(
+            Context,
+            checkpoint.ContinuationIdentity.ProcessInstanceId,
+            initializedSnapshot.Revision,
+            "worker/stale-reader",
+            TimeSpan.FromMinutes(5),
+            StartedAtUtc.AddMinutes(2));
+        var retained = await store.LoadAsync(
+            Context,
+            checkpoint.ContinuationIdentity.ProcessInstanceId);
+
+        Assert.Equal(ProcessStoreMutationDisposition.RevisionConflict, rejected.Disposition);
+        Assert.Equal(current.Revision, rejected.Snapshot!.Revision);
+        Assert.Null(rejected.Snapshot.WorkerLease);
+        Assert.Equal(current.Revision, retained!.Revision);
+        Assert.Null(retained.WorkerLease);
+        Assert.Equal(current.Checkpoint, retained.Checkpoint);
     }
 
     [Fact]
@@ -153,6 +195,7 @@ public sealed class InMemoryProcessDurableStoreTests
         var beforeCheckpoint = await Assert.ThrowsAsync<ArgumentException>(() => store.AcquireWorkerAsync(
             Context,
             checkpoint.ContinuationIdentity.ProcessInstanceId,
+            ProcessStorageRevision.Initial,
             "worker/a",
             TimeSpan.FromMinutes(10),
             checkpoint.UpdatedAtUtc.AddTicks(-1)));
@@ -160,6 +203,7 @@ public sealed class InMemoryProcessDurableStoreTests
         var acquired = await store.AcquireWorkerAsync(
             Context,
             checkpoint.ContinuationIdentity.ProcessInstanceId,
+            ProcessStorageRevision.Initial,
             "worker/a",
             TimeSpan.FromMinutes(10),
             acquiredAtUtc);
@@ -176,21 +220,23 @@ public sealed class InMemoryProcessDurableStoreTests
         var staleAcquisition = await Assert.ThrowsAsync<ArgumentException>(() => store.AcquireWorkerAsync(
             Context,
             checkpoint.ContinuationIdentity.ProcessInstanceId,
+            renewedSnapshot.Revision,
             "worker/b",
             TimeSpan.FromMinutes(10),
             beforeRenewal));
-        var staleRenewal = await Assert.ThrowsAsync<ArgumentException>(() => store.RenewWorkerAsync(
+        var subsumedRenewal = await store.RenewWorkerAsync(
             Context,
             checkpoint.ContinuationIdentity.ProcessInstanceId,
             "worker/a",
             renewedSnapshot.WorkerLease!.Fence,
             TimeSpan.FromMinutes(10),
-            beforeRenewal));
+            beforeRenewal);
         var retained = await store.LoadAsync(Context, checkpoint.ContinuationIdentity.ProcessInstanceId);
 
         Assert.Equal("observedAtUtc", beforeCheckpoint.ParamName);
         Assert.Equal("observedAtUtc", staleAcquisition.ParamName);
-        Assert.Equal("observedAtUtc", staleRenewal.ParamName);
+        Assert.Equal(ProcessStoreMutationDisposition.Replayed, subsumedRenewal.Disposition);
+        Assert.Equal(renewedSnapshot.Revision, subsumedRenewal.Snapshot?.Revision);
         Assert.Equal(renewedSnapshot.Revision, retained!.Revision);
         Assert.Equal(renewedSnapshot.WorkerLease, retained.WorkerLease);
     }
@@ -258,7 +304,7 @@ public sealed class InMemoryProcessDurableStoreTests
             loaded,
             "worker/a",
             StartedAtUtc.AddMinutes(3));
-        var rejected = await store.CommitAsync(Context, staleWorkerCommit);
+        var rejected = await ProcessDurabilityTestFixture.CommitAtEvidenceTimeAsync(store, staleWorkerCommit);
         var current = await store.LoadAsync(Context, checkpoint.ContinuationIdentity.ProcessInstanceId);
 
         Assert.Equal(ProcessStoreMutationDisposition.Applied, admitted.Disposition);
@@ -287,6 +333,7 @@ public sealed class InMemoryProcessDurableStoreTests
         var reclaimed = await store.AcquireWorkerAsync(
             Context,
             checkpoint.ContinuationIdentity.ProcessInstanceId,
+            first.Revision,
             "worker/b",
             TimeSpan.FromMinutes(10),
             StartedAtUtc.AddMinutes(2));
@@ -297,7 +344,7 @@ public sealed class InMemoryProcessDurableStoreTests
             StartedAtUtc.AddMinutes(3),
             fence: first.WorkerLease!.Fence);
 
-        var rejected = await store.CommitAsync(Context, stale);
+        var rejected = await ProcessDurabilityTestFixture.CommitAtEvidenceTimeAsync(store, stale);
         var reclaimedSnapshot = Assert.IsType<ProcessDurableStoreSnapshot>(reclaimed.Snapshot);
 
         Assert.Equal(ProcessStoreMutationDisposition.StaleFence, rejected.Disposition);
@@ -324,11 +371,37 @@ public sealed class InMemoryProcessDurableStoreTests
             "worker/a",
             acquiredAt.AddMinutes(1));
 
-        var rejected = await store.CommitAsync(Context, expired);
+        var rejected = await ProcessDurabilityTestFixture.CommitAtEvidenceTimeAsync(store, expired);
 
         Assert.Equal(ProcessStoreMutationDisposition.LeaseExpired, rejected.Disposition);
         Assert.Equal(ready.Revision, rejected.Snapshot!.Revision);
         Assert.Equal(checkpoint.UpdatedAtUtc, rejected.Snapshot.Checkpoint.UpdatedAtUtc);
+    }
+
+    [Fact]
+    public async Task Commit_UsesFreshPhysicalObservationRatherThanRetainedCommitEvidenceForLeaseLiveness()
+    {
+        var store = new InMemoryProcessDurableStore();
+        var checkpoint = Checkpoint("physical-lease-observation");
+        var acquiredAtUtc = StartedAtUtc.AddMinutes(1);
+        var ready = await InitializeAndAcquireAsync(
+            store,
+            checkpoint,
+            "worker/a",
+            acquiredAtUtc,
+            TimeSpan.FromMinutes(10));
+        var commit = Commit(
+            "commit/physical-lease-observation",
+            ready,
+            "worker/a",
+            acquiredAtUtc.AddMinutes(2));
+
+        var rejected = await store.CommitAsync(
+            DurableOperationTestFixture.ContextAt(acquiredAtUtc.AddMinutes(11)),
+            commit);
+
+        Assert.Equal(ProcessStoreMutationDisposition.LeaseExpired, rejected.Disposition);
+        Assert.Equal(ready.Revision, rejected.Snapshot?.Revision);
     }
 
     [Fact]
@@ -349,7 +422,7 @@ public sealed class InMemoryProcessDurableStoreTests
             "worker/a",
             acquiredAt.AddTicks(-1));
 
-        var rejected = await store.CommitAsync(Context, beforeClaim);
+        var rejected = await ProcessDurabilityTestFixture.CommitAtEvidenceTimeAsync(store, beforeClaim);
 
         Assert.Equal(ProcessStoreMutationDisposition.LeaseExpired, rejected.Disposition);
         Assert.Equal(ready.Revision, rejected.Snapshot!.Revision);
@@ -383,7 +456,7 @@ public sealed class InMemoryProcessDurableStoreTests
             "worker/a",
             renewedAt.AddTicks(-1));
 
-        var rejected = await store.CommitAsync(Context, beforeRenewal);
+        var rejected = await ProcessDurabilityTestFixture.CommitAtEvidenceTimeAsync(store, beforeRenewal);
 
         Assert.Equal(ProcessStoreMutationDisposition.LeaseExpired, rejected.Disposition);
         Assert.Equal(ready.Revision, rejected.Snapshot!.Revision);
@@ -407,23 +480,24 @@ public sealed class InMemoryProcessDurableStoreTests
             ready,
             "worker/a",
             acquiredAt.AddSeconds(30));
-        var applied = await store.CommitAsync(Context, exact);
+        var applied = await ProcessDurabilityTestFixture.CommitAtEvidenceTimeAsync(store, exact);
         var reclaimed = await store.AcquireWorkerAsync(
             Context,
             checkpoint.ContinuationIdentity.ProcessInstanceId,
+            applied.Snapshot!.Revision,
             "worker/b",
             TimeSpan.FromMinutes(10),
             acquiredAt.AddMinutes(2));
         var reclaimedSnapshot = Assert.IsType<ProcessDurableStoreSnapshot>(reclaimed.Snapshot);
 
-        var replayed = await store.CommitAsync(Context, exact);
+        var replayed = await ProcessDurabilityTestFixture.CommitAtEvidenceTimeAsync(store, exact);
         var changed = Commit(
             "commit/exact",
             reclaimedSnapshot,
             "worker/b",
             acquiredAt.AddMinutes(3),
             [LocalMutation("mutation/changed", "local/changed", "changed", expectedVersion: 0)]);
-        var conflicted = await store.CommitAsync(Context, changed);
+        var conflicted = await ProcessDurabilityTestFixture.CommitAtEvidenceTimeAsync(store, changed);
 
         Assert.Equal(ProcessStoreMutationDisposition.Applied, applied.Disposition);
         Assert.Equal(ProcessStoreMutationDisposition.Replayed, replayed.Disposition);
@@ -452,40 +526,40 @@ public sealed class InMemoryProcessDurableStoreTests
             "one",
             expectedVersion: 0);
 
-        var first = await store.CommitAsync(
-            Context,
+        var first = await ProcessDurabilityTestFixture.CommitAtEvidenceTimeAsync(
+            store,
             Commit(
                 "commit/local/1",
                 current,
                 "worker/a",
                 StartedAtUtc.AddMinutes(2),
                 [firstMutation]));
-        var idempotent = await store.CommitAsync(
-            Context,
+        var idempotent = await ProcessDurabilityTestFixture.CommitAtEvidenceTimeAsync(
+            store,
             Commit(
                 "commit/local/idempotent",
                 first.Snapshot!,
                 "worker/a",
                 StartedAtUtc.AddMinutes(3),
                 [firstMutation]));
-        var changedIdentity = await store.CommitAsync(
-            Context,
+        var changedIdentity = await ProcessDurabilityTestFixture.CommitAtEvidenceTimeAsync(
+            store,
             Commit(
                 "commit/local/changed-identity",
                 idempotent.Snapshot!,
                 "worker/a",
                 StartedAtUtc.AddMinutes(4),
                 [LocalMutation("mutation/resource/1", "local/resource", "changed", expectedVersion: 0)]));
-        var staleVersion = await store.CommitAsync(
-            Context,
+        var staleVersion = await ProcessDurabilityTestFixture.CommitAtEvidenceTimeAsync(
+            store,
             Commit(
                 "commit/local/stale-version",
                 idempotent.Snapshot!,
                 "worker/a",
                 StartedAtUtc.AddMinutes(4),
                 [LocalMutation("mutation/resource/2", "local/resource", "two", expectedVersion: 0)]));
-        var second = await store.CommitAsync(
-            Context,
+        var second = await ProcessDurabilityTestFixture.CommitAtEvidenceTimeAsync(
+            store,
             Commit(
                 "commit/local/2",
                 idempotent.Snapshot!,
@@ -539,7 +613,7 @@ public sealed class InMemoryProcessDurableStoreTests
             [],
             committedAtUtc);
 
-        var result = await store.CommitAsync(Context, commit);
+        var result = await ProcessDurabilityTestFixture.CommitAtEvidenceTimeAsync(store, commit);
 
         Assert.Equal(ProcessStoreMutationDisposition.Applied, result.Disposition);
         Assert.Equal(ready.Revision.Ordinal + 1, result.Snapshot!.Revision.Ordinal);
@@ -575,12 +649,12 @@ public sealed class InMemoryProcessDurableStoreTests
         var taskA = Task.Run(async () =>
         {
             await start.Task;
-            return await store.CommitAsync(Context, commitA);
+            return await ProcessDurabilityTestFixture.CommitAtEvidenceTimeAsync(store, commitA);
         });
         var taskB = Task.Run(async () =>
         {
             await start.Task;
-            return await store.CommitAsync(Context, commitB);
+            return await ProcessDurabilityTestFixture.CommitAtEvidenceTimeAsync(store, commitB);
         });
 
         start.SetResult();
@@ -621,6 +695,7 @@ public sealed class InMemoryProcessDurableStoreTests
         var acquired = await store.AcquireWorkerAsync(
             Context,
             checkpoint.ContinuationIdentity.ProcessInstanceId,
+            ProcessStorageRevision.Initial,
             owner,
             leaseDuration,
             observedAtUtc);

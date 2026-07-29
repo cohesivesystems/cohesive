@@ -211,7 +211,10 @@ public sealed record ProcessSignalTargetResult
 /// <summary>Explicit synchronous evidence port used by the pure Process reference interpreter.</summary>
 /// <remarks>
 /// Implementations may adapt infrastructure, but this contract performs no asynchronous suspension and exposes no
-/// cancellation callback. Semantic cancellation is observed only at declared Process safe points.
+/// cancellation callback. Semantic cancellation is observed only at declared Process safe points. Results must be
+/// deterministic for the complete attempt-, activation-, token-, node-, and occurrence-scoped invocation. A host
+/// call may be repeated after a crash that happened before its enclosing aggregate commit; externally impure or
+/// long-running work must therefore be expressed as a durable Request rather than hidden behind this port.
 /// </remarks>
 public interface IProcessReferenceHost
 {

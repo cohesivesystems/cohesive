@@ -162,12 +162,14 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore
     public Task<ProcessStoreMutationResult> AcquireWorkerAsync(
         OperationContext context,
         ProcessInstanceId instanceId,
+        ProcessStorageRevision expectedRevision,
         string owner,
         TimeSpan leaseDuration,
         DateTimeOffset observedAtUtc)
     {
         ArgumentNullException.ThrowIfNull(context);
         RequireInstance(instanceId);
+        ProcessCheckpointRequirements.RequireIdentity(expectedRevision.Value, nameof(expectedRevision));
         owner = Guard.RequireNotNullOrWhiteSpace(owner);
         ValidateLease(leaseDuration, observedAtUtc);
         context.ThrowIfCancellationRequested();
@@ -180,6 +182,24 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore
             }
 
             var current = aggregate.WorkerLease;
+            if (current is not null && current.IsLive(observedAtUtc))
+            {
+                var requestedExpiry = AddLease(observedAtUtc, leaseDuration);
+                var exactReplay = string.Equals(current.Owner, owner, StringComparison.Ordinal)
+                    && current.ClaimedAtUtc == observedAtUtc
+                    && current.RenewedAtUtc >= observedAtUtc
+                    && current.ExpiresAtUtc >= requestedExpiry;
+                if (exactReplay)
+                {
+                    return Task.FromResult(Result(ProcessStoreMutationDisposition.Replayed, aggregate));
+                }
+            }
+
+            if (aggregate.Revision != expectedRevision)
+            {
+                return Task.FromResult(Result(ProcessStoreMutationDisposition.RevisionConflict, aggregate));
+            }
+
             if (observedAtUtc < aggregate.Checkpoint.UpdatedAtUtc
                 || (current is not null && observedAtUtc < current.RenewedAtUtc))
             {
@@ -247,6 +267,15 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore
                 return Task.FromResult(Result(ProcessStoreMutationDisposition.StaleFence, aggregate));
             }
 
+            var expiresAtUtc = AddLease(observedAtUtc, leaseDuration);
+            var replayedOrSubsumed = observedAtUtc >= current.ClaimedAtUtc
+                && current.RenewedAtUtc >= observedAtUtc
+                && current.ExpiresAtUtc >= expiresAtUtc;
+            if (replayedOrSubsumed)
+            {
+                return Task.FromResult(Result(ProcessStoreMutationDisposition.Replayed, aggregate));
+            }
+
             if (observedAtUtc < aggregate.Checkpoint.UpdatedAtUtc
                 || observedAtUtc < current.RenewedAtUtc)
             {
@@ -258,12 +287,6 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore
             if (!current.IsLive(observedAtUtc))
             {
                 return Task.FromResult(Result(ProcessStoreMutationDisposition.LeaseExpired, aggregate));
-            }
-
-            var expiresAtUtc = AddLease(observedAtUtc, leaseDuration);
-            if (current.RenewedAtUtc == observedAtUtc && current.ExpiresAtUtc == expiresAtUtc)
-            {
-                return Task.FromResult(Result(ProcessStoreMutationDisposition.Replayed, aggregate));
             }
 
             var renewed = new ProcessWorkerLease(
@@ -320,7 +343,9 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore
                 return Task.FromResult(Result(ProcessStoreMutationDisposition.StaleFence, aggregate));
             }
 
-            if (!lease.IsLive(commit.ObservedAtUtc)
+            var physicalObservedAtUtc = context.UtcNow;
+            if (!lease.IsLive(physicalObservedAtUtc)
+                || physicalObservedAtUtc < lease.RenewedAtUtc
                 || commit.ObservedAtUtc < lease.RenewedAtUtc)
             {
                 return Task.FromResult(Result(ProcessStoreMutationDisposition.LeaseExpired, aggregate));
@@ -472,14 +497,110 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore
             || !IsCanonicalPrefix(current.Activations, replacement.Activations)
             || !IsOperationReceiptSuccessor(current.Operations, replacement.Operations)
             || !IsInboxSuccessor(current.Inbox, replacement.Inbox)
+            || FailsToClosePendingInboxOnAttemptReplacement(current, replacement)
             || !IsEmissionSuccessor(current.Emissions, replacement.Emissions)
             || !IsDurableOperationSuccessor(current.DurableOperations, replacement.DurableOperations)
+            || AppendsPhysicalAttemptAcrossBlockedControlCut(current, replacement)
             || AppendsEvidenceToClosedAttempt(current, replacement))
         {
             return false;
         }
 
         return true;
+    }
+
+    static bool FailsToClosePendingInboxOnAttemptReplacement(
+        ProcessDurableCheckpoint current,
+        ProcessDurableCheckpoint replacement)
+    {
+        if (current.ContinuationIdentity.ProcessAttemptId
+            == replacement.ContinuationIdentity.ProcessAttemptId)
+        {
+            return false;
+        }
+
+        var abandoned = replacement.Control.Attempts.SingleOrDefault(attempt =>
+            attempt.AttemptId == current.ContinuationIdentity.ProcessAttemptId);
+        if (abandoned?.Closure is not { } closure)
+        {
+            return true;
+        }
+
+        var replacementById = replacement.Inbox.ToDictionary(static entry => entry.EmissionId);
+        return current.Inbox.Any(entry =>
+            (entry.Receipt is null
+             || entry.Receipt.Disposition == ProcessInputAdmissionDisposition.Buffered)
+            && (!replacementById.TryGetValue(entry.EmissionId, out var candidate)
+                || candidate.Receipt is not { Disposition: ProcessInputAdmissionDisposition.Stale } receipt
+                || candidate.DispositionContinuation != current.ContinuationIdentity
+                || receipt.ObservedAtUtc != closure.OccurredAtUtc));
+    }
+
+    static bool AppendsPhysicalAttemptAcrossBlockedControlCut(
+        ProcessDurableCheckpoint current,
+        ProcessDurableCheckpoint replacement)
+    {
+        var physicalAdmissionIsOpen =
+            current.Control.Mode == ProcessControlMode.Running
+            && replacement.Control.Mode == ProcessControlMode.Running
+            && current.Continuation.Terminal.Kind == ExecutionTerminalOutcomeKind.None
+            && replacement.Continuation.Terminal.Kind == ExecutionTerminalOutcomeKind.None;
+        var replacementClosedAttempts = replacement.Control.Attempts
+            .Where(static attempt => attempt.Disposition != ProcessControlAttemptDisposition.Current)
+            .Select(static attempt => attempt.AttemptId)
+            .ToHashSet();
+        var replacementClosedOperationEmissions = replacement.Operations
+            .Where(receipt => replacementClosedAttempts.Contains(receipt.Key.Continuation.ProcessAttemptId))
+            .SelectMany(static receipt => receipt.Result.Emissions)
+            .Select(static emission => emission.Context.EmissionId)
+            .ToHashSet();
+
+        var currentEmissionsById = current.Emissions.ToDictionary(static emission => emission.EmissionId);
+        foreach (var emission in replacement.Emissions)
+        {
+            var priorAttemptCount = currentEmissionsById.TryGetValue(emission.EmissionId, out var prior)
+                ? prior.Attempts.Length
+                : 0;
+            if (emission.Attempts.Length <= priorAttemptCount)
+            {
+                continue;
+            }
+
+            if (!physicalAdmissionIsOpen
+                || IsAttributedToClosedAttempt(
+                    emission.Envelope,
+                    replacementClosedOperationEmissions,
+                    replacementClosedAttempts))
+            {
+                return true;
+            }
+        }
+
+        var currentById = current.DurableOperations.ToDictionary(static operation => operation.OperationId);
+        foreach (var operation in replacement.DurableOperations)
+        {
+            var priorAttemptCount = currentById.TryGetValue(operation.OperationId, out var prior)
+                ? prior.Attempts.Length
+                : 0;
+            if (operation.Attempts.Length <= priorAttemptCount)
+            {
+                continue;
+            }
+
+            if (!physicalAdmissionIsOpen)
+            {
+                return true;
+            }
+
+            if (operation.Request.Context.Origin is ProcessInteractionOrigin origin
+                && replacement.Control.Attempts.FirstOrDefault(attempt =>
+                    attempt.AttemptId == origin.Continuation.ProcessAttemptId) is not
+                    { Disposition: ProcessControlAttemptDisposition.Current })
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     static bool AppendsEvidenceToClosedAttempt(
@@ -490,6 +611,13 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore
             .Where(static attempt => attempt.Disposition != ProcessControlAttemptDisposition.Current)
             .Select(static attempt => attempt.AttemptId)
             .ToHashSet();
+        var terminalAttemptClosed =
+            current.Continuation.Terminal.Kind != ExecutionTerminalOutcomeKind.None;
+        if (terminalAttemptClosed)
+        {
+            closedAttempts.Add(current.ContinuationIdentity.ProcessAttemptId);
+        }
+
         if (closedAttempts.Count == 0)
         {
             return false;
@@ -529,18 +657,42 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore
             .ToHashSet();
         var currentEmissions = current.Emissions.ToDictionary(static emission => emission.EmissionId);
         if (replacement.Emissions.Any(emission =>
-            IsAttributedToClosedAttempt(emission.Envelope, closedOperationEmissions, closedAttempts)
-            && !currentEmissions.ContainsKey(emission.EmissionId)))
+        {
+            var appendsLogicalEmission = !currentEmissions.TryGetValue(emission.EmissionId, out var prior);
+            var appendsPhysicalAttempt = !appendsLogicalEmission
+                && emission.Attempts.Length > prior!.Attempts.Length;
+            return (terminalAttemptClosed || IsAttributedToClosedAttempt(
+                    emission.Envelope,
+                    closedOperationEmissions,
+                    closedAttempts))
+                && (appendsLogicalEmission || appendsPhysicalAttempt);
+        }))
         {
             return true;
         }
 
         var currentDurableOperations = current.DurableOperations
             .ToDictionary(static operation => operation.OperationId);
-        return replacement.DurableOperations.Any(operation =>
-            operation.Request.Context.Origin is ProcessInteractionOrigin origin
-            && closedAttempts.Contains(origin.Continuation.ProcessAttemptId)
-            && !currentDurableOperations.ContainsKey(operation.OperationId));
+        foreach (var operation in replacement.DurableOperations)
+        {
+            var appendsLogicalOperation =
+                !currentDurableOperations.TryGetValue(operation.OperationId, out var prior);
+            var appendsPhysicalAttempt = !appendsLogicalOperation
+                && operation.Attempts.Length > prior!.Attempts.Length;
+            if (!appendsLogicalOperation && !appendsPhysicalAttempt)
+            {
+                continue;
+            }
+
+            if (terminalAttemptClosed
+                || operation.Request.Context.Origin is ProcessInteractionOrigin origin
+                && closedAttempts.Contains(origin.Continuation.ProcessAttemptId))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     static bool IsAttributedToClosedAttempt(

@@ -80,14 +80,28 @@ internal sealed class ProcessDurabilityTestFixture
         string revisionId = "revision/1",
         string semanticVariant = "baseline",
         ProcessRecoveryPolicy recoveryPolicy = ProcessRecoveryPolicy.ContinueAttempt,
-        RequestRetrySemantics durableOperationRetry = RequestRetrySemantics.StableIdentity)
+        RequestRetrySemantics durableOperationRetry = RequestRetrySemantics.StableIdentity,
+        RequestResultDisposition durableOperationLateResult = RequestResultDisposition.Observe,
+        RequestResultDisposition durableOperationStaleResult = RequestResultDisposition.Reject,
+        RequestResultDisposition durableOperationDuplicateResult = RequestResultDisposition.ReusePriorDisposition,
+        TimeSpan? durableOperationTimeoutAfter = null)
     {
-        var operationContracts = DurableOperationTestFixture.Create(retry: durableOperationRetry);
+        var operationContracts = DurableOperationTestFixture.Create(
+            retry: durableOperationRetry,
+            lateResult: durableOperationLateResult,
+            staleResult: durableOperationStaleResult,
+            duplicateResult: durableOperationDuplicateResult,
+            timeoutAfter: durableOperationTimeoutAfter);
         var relation = DefinitionReference("relation/checkpoint-enrichment", '4');
         var plan = Compile(
             definitionId,
             revisionId,
-            Definition(operationContracts.RequestContract, relation, semanticVariant, recoveryPolicy),
+            Definition(
+                operationContracts.RequestContract,
+                relation,
+                semanticVariant,
+                recoveryPolicy,
+                durableOperationTimeoutAfter is not null),
             operationContracts.Catalog,
             [new(
                 relation,
@@ -257,6 +271,17 @@ internal sealed class ProcessDurabilityTestFixture
     internal static PortableValue StringValue(string value) =>
         PortableValue.Concrete(StringContract, ObservationValue.FromString(value));
 
+    internal static Task<ProcessStoreMutationResult> CommitAtEvidenceTimeAsync(
+        IProcessDurableStore store,
+        ProcessDurableCommit commit)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(commit);
+        return store.CommitAsync(
+            DurableOperationTestFixture.ContextAt(commit.ObservedAtUtc),
+            commit);
+    }
+
     internal static ExecutionDefinitionReference DefinitionReference(string id, char fingerprintDigit) =>
         new(
             new(id),
@@ -270,9 +295,32 @@ internal sealed class ProcessDurabilityTestFixture
         RequestContractReference request,
         ExecutionDefinitionReference relation,
         string semanticVariant,
-        ProcessRecoveryPolicy recoveryPolicy)
+        ProcessRecoveryPolicy recoveryPolicy,
+        bool includeTimeout)
     {
         ValueBindingId relationResult = new("relation.result");
+        ImmutableArray<ProcessRequestOutcomeBranch> requestOutcomes =
+        [
+            new(
+                new("outcome/result"),
+                new("result"),
+                new(Edge("edge/request-result-join", "join"))),
+            new(
+                new("outcome/failure"),
+                new("failure"),
+                new(Edge("edge/request-failure-join", "join")))
+        ];
+        if (includeTimeout)
+        {
+            requestOutcomes =
+            [
+                .. requestOutcomes,
+                new(
+                    new("outcome/timeout"),
+                    new("timeout"),
+                    new(Edge("edge/request-timeout-join", "join")))
+            ];
+        }
         CanonicalProcessNode[] nodes =
         [
             new ForkProcessNode(
@@ -293,16 +341,7 @@ internal sealed class ProcessDurabilityTestFixture
                 new("request"),
                 request,
                 Expr.BoundValue(relationResult),
-                [
-                    new(
-                        new("outcome/result"),
-                        new("result"),
-                        new(Edge("edge/request-result-join", "join"))),
-                    new(
-                        new("outcome/failure"),
-                        new("failure"),
-                        new(Edge("edge/request-failure-join", "join")))
-                ]),
+                requestOutcomes),
             new JoinProcessNode(new("join"), new("fork"), JoinAll(), Edge("edge/join-return", "return")),
             new ReturnProcessNode(new("return"), Expr.Const($"completed/{semanticVariant}"))
         ];

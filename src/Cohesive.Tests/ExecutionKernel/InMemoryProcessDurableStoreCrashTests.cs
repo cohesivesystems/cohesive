@@ -102,6 +102,146 @@ public sealed class InMemoryProcessDurableStoreCrashTests
         scenario.AssertAfter(retry.Snapshot);
     }
 
+    [Fact]
+    public async Task AcquisitionExactRetry_ReplaysAcrossInterveningInboxRevision()
+    {
+        var crash = new CrashOnce(
+            ProcessStoreMutationKind.WorkerAcquisition,
+            ProcessStoreCrashPhase.AfterAtomicCommitBeforeReturn);
+        var store = new InMemoryProcessDurableStore(crash.ShouldCrash);
+        var fixture = ProcessDurabilityTestFixture.Create(
+            definitionId: "process/durable-store-crash/acquisition-intervening-inbox",
+            semanticVariant: "acquisition-intervening-inbox");
+        var checkpoint = fixture.Checkpoint;
+        var instanceId = checkpoint.ContinuationIdentity.ProcessInstanceId;
+        await InitializeAsync(store, checkpoint);
+        var expectedRevision = ProcessStorageRevision.Initial;
+        var owner = "worker/acquisition-intervening-inbox";
+        var leaseDuration = TimeSpan.FromMinutes(5);
+        var acquiredAtUtc = CheckpointedAtUtc.AddMinutes(1);
+
+        var exception = await Assert.ThrowsAsync<ProcessStoreInjectedCrashException>(() =>
+            store.AcquireWorkerAsync(
+                Context,
+                instanceId,
+                expectedRevision,
+                owner,
+                leaseDuration,
+                acquiredAtUtc));
+        var committed = Assert.IsType<ProcessDurableStoreSnapshot>(
+            await store.LoadAsync(Context, instanceId));
+        var committedLease = Assert.IsType<ProcessWorkerLease>(committed.WorkerLease);
+        var input = NewInput(fixture);
+        var admittedAtUtc = acquiredAtUtc.AddSeconds(1);
+        var admitted = await store.AdmitInputAsync(
+            Context,
+            instanceId,
+            input,
+            admittedAtUtc);
+        var admittedSnapshot = Assert.IsType<ProcessDurableStoreSnapshot>(admitted.Snapshot);
+
+        var retry = await store.AcquireWorkerAsync(
+            Context,
+            instanceId,
+            expectedRevision,
+            owner,
+            leaseDuration,
+            acquiredAtUtc);
+        var replayed = Assert.IsType<ProcessDurableStoreSnapshot>(retry.Snapshot);
+        var replayedLease = Assert.IsType<ProcessWorkerLease>(replayed.WorkerLease);
+
+        Assert.Equal(ProcessStoreCrashPhase.AfterAtomicCommitBeforeReturn, exception.Context.Phase);
+        Assert.Equal(ProcessStoreMutationDisposition.Applied, admitted.Disposition);
+        Assert.Equal(ProcessStoreMutationDisposition.Replayed, retry.Disposition);
+        Assert.Equal(admittedSnapshot.Revision, replayed.Revision);
+        Assert.Equal(committedLease, replayedLease);
+        Assert.Equal(new ProcessWorkerFence("1"), replayedLease.Fence);
+        Assert.Equal(owner, replayedLease.Owner);
+        Assert.Equal(acquiredAtUtc, replayedLease.ClaimedAtUtc);
+        Assert.Equal(acquiredAtUtc.Add(leaseDuration), replayedLease.ExpiresAtUtc);
+        Assert.Equal(checkpoint.Inbox.Length + 1, replayed.Checkpoint.Inbox.Length);
+        Assert.Equal(
+            input,
+            Assert.Single(
+                replayed.Checkpoint.Inbox,
+                entry => entry.EmissionId == input.Envelope.Context.EmissionId).Input);
+    }
+
+    [Fact]
+    public async Task RenewalExactRetry_ReplaysAcrossLaterInterveningInboxChronology()
+    {
+        var crash = new CrashOnce(
+            ProcessStoreMutationKind.WorkerRenewal,
+            ProcessStoreCrashPhase.AfterAtomicCommitBeforeReturn);
+        var store = new InMemoryProcessDurableStore(crash.ShouldCrash);
+        var fixture = ProcessDurabilityTestFixture.Create(
+            definitionId: "process/durable-store-crash/renewal-intervening-inbox",
+            semanticVariant: "renewal-intervening-inbox");
+        var checkpoint = fixture.Checkpoint;
+        var instanceId = checkpoint.ContinuationIdentity.ProcessInstanceId;
+        await InitializeAsync(store, checkpoint);
+        var owner = "worker/renewal-intervening-inbox";
+        var acquiredAtUtc = CheckpointedAtUtc.AddMinutes(1);
+        var acquired = await store.AcquireWorkerAsync(
+            Context,
+            instanceId,
+            ProcessStorageRevision.Initial,
+            owner,
+            TimeSpan.FromMinutes(10),
+            acquiredAtUtc);
+        var acquiredSnapshot = Assert.IsType<ProcessDurableStoreSnapshot>(acquired.Snapshot);
+        var acquiredLease = Assert.IsType<ProcessWorkerLease>(acquiredSnapshot.WorkerLease);
+        var renewalDuration = TimeSpan.FromMinutes(12);
+        var renewedAtUtc = acquiredAtUtc.AddMinutes(2);
+
+        var exception = await Assert.ThrowsAsync<ProcessStoreInjectedCrashException>(() =>
+            store.RenewWorkerAsync(
+                Context,
+                instanceId,
+                owner,
+                acquiredLease.Fence,
+                renewalDuration,
+                renewedAtUtc));
+        var committed = Assert.IsType<ProcessDurableStoreSnapshot>(
+            await store.LoadAsync(Context, instanceId));
+        var committedLease = Assert.IsType<ProcessWorkerLease>(committed.WorkerLease);
+        var input = NewInput(fixture);
+        var admittedAtUtc = renewedAtUtc.AddSeconds(1);
+        var admitted = await store.AdmitInputAsync(
+            Context,
+            instanceId,
+            input,
+            admittedAtUtc);
+        var admittedSnapshot = Assert.IsType<ProcessDurableStoreSnapshot>(admitted.Snapshot);
+
+        var retry = await store.RenewWorkerAsync(
+            Context,
+            instanceId,
+            owner,
+            acquiredLease.Fence,
+            renewalDuration,
+            renewedAtUtc);
+        var replayed = Assert.IsType<ProcessDurableStoreSnapshot>(retry.Snapshot);
+        var replayedLease = Assert.IsType<ProcessWorkerLease>(replayed.WorkerLease);
+
+        Assert.Equal(ProcessStoreCrashPhase.AfterAtomicCommitBeforeReturn, exception.Context.Phase);
+        Assert.Equal(ProcessStoreMutationDisposition.Applied, admitted.Disposition);
+        Assert.Equal(ProcessStoreMutationDisposition.Replayed, retry.Disposition);
+        Assert.Equal(admittedSnapshot.Revision, replayed.Revision);
+        Assert.Equal(committedLease, replayedLease);
+        Assert.Equal(acquiredLease.Fence, replayedLease.Fence);
+        Assert.Equal(acquiredLease.ClaimedAtUtc, replayedLease.ClaimedAtUtc);
+        Assert.Equal(renewedAtUtc, replayedLease.RenewedAtUtc);
+        Assert.Equal(renewedAtUtc.Add(renewalDuration), replayedLease.ExpiresAtUtc);
+        Assert.True(replayed.Checkpoint.UpdatedAtUtc > replayedLease.RenewedAtUtc);
+        Assert.Equal(checkpoint.Inbox.Length + 1, replayed.Checkpoint.Inbox.Length);
+        Assert.Equal(
+            input,
+            Assert.Single(
+                replayed.Checkpoint.Inbox,
+                entry => entry.EmissionId == input.Envelope.Context.EmissionId).Input);
+    }
+
     static async Task<CrashScenario> CreateScenarioAsync(
         ProcessStoreMutationKind mutationKind,
         ProcessStoreCrashPhase crashPhase)
@@ -170,6 +310,7 @@ public sealed class InMemoryProcessDurableStoreCrashTests
                         () => store.AcquireWorkerAsync(
                             Context,
                             instanceId,
+                            ProcessStorageRevision.Initial,
                             "worker/crash",
                             TimeSpan.FromMinutes(5),
                             acquiredAtUtc),
@@ -197,6 +338,7 @@ public sealed class InMemoryProcessDurableStoreCrashTests
                     var acquired = await store.AcquireWorkerAsync(
                         Context,
                         instanceId,
+                        ProcessStorageRevision.Initial,
                         "worker/crash",
                         TimeSpan.FromMinutes(5),
                         acquiredAtUtc);
@@ -237,6 +379,7 @@ public sealed class InMemoryProcessDurableStoreCrashTests
                     var acquired = await store.AcquireWorkerAsync(
                         Context,
                         instanceId,
+                        ProcessStorageRevision.Initial,
                         "worker/crash",
                         TimeSpan.FromHours(1),
                         CheckpointedAtUtc.AddMinutes(1));
@@ -264,7 +407,7 @@ public sealed class InMemoryProcessDurableStoreCrashTests
                     return new(
                         store,
                         instanceId,
-                        () => store.CommitAsync(Context, commit),
+                        () => ProcessDurabilityTestFixture.CommitAtEvidenceTimeAsync(store, commit),
                         snapshot =>
                         {
                             var stored = Assert.IsType<ProcessDurableStoreSnapshot>(snapshot);
@@ -298,10 +441,10 @@ public sealed class InMemoryProcessDurableStoreCrashTests
                             Assert.Equal(stored.Checkpoint.ContinuationIdentity, inbox.DispositionContinuation);
                             var emission = Assert.Single(stored.Checkpoint.Emissions);
                             Assert.Equal(priorEmission.EmissionId, emission.EmissionId);
-                            Assert.Single(emission.Attempts);
+                            Assert.Empty(emission.Attempts);
                             var operation = Assert.Single(stored.Checkpoint.DurableOperations);
                             Assert.Equal(priorOperation.OperationId, operation.OperationId);
-                            Assert.Single(operation.Attempts);
+                            Assert.Empty(operation.Attempts);
                             Assert.Empty(stored.Checkpoint.Continuation.OutstandingRequests);
                             Assert.Equal(checkpoint.Operations.Length, stored.Checkpoint.Operations.Length);
                             Assert.Equal(
@@ -396,26 +539,13 @@ public sealed class InMemoryProcessDurableStoreCrashTests
             inputReceipt,
             decision.State.Continuation);
 
-        var contracts = Assert.IsType<InteractionContractCatalog>(
-            fixture.Plan.ValidationContext.InteractionContracts);
-        var operationExecutor = new DurableOperationReferenceExecutor(contracts);
-        var claimed = operationExecutor.Claim(
-            fixture.DurableOperation,
-            new("operation-attempt/crash/composite"),
-            "operation-worker/crash/composite",
-            committedAtUtc.AddMinutes(-1));
-        Assert.Equal(DurableOperationClaimDisposition.Claimed, claimed.Disposition);
-        var claim = Assert.IsType<DurableOperationClaim>(claimed.Claim);
-        var publicationAttempt = new DurableOperationAttempt(
-            ordinal: 1,
-            claim,
-            DurableOperationAttemptStage.Claimed);
         var emissionEntry = Assert.Single(fixture.Checkpoint.Emissions);
         var emission = new ProcessEmissionRecord(
             emissionEntry.Envelope,
-            emissionEntry.EnqueuedAtUtc,
-            [publicationAttempt]);
+            emissionEntry.EnqueuedAtUtc);
 
+        var contracts = Assert.IsType<InteractionContractCatalog>(
+            fixture.Plan.ValidationContext.InteractionContracts);
         var controlExecutor = new ProcessControlReferenceExecutor(contracts);
         var begun = controlExecutor.BeginActivation(
             fixture.Control,
@@ -448,7 +578,7 @@ public sealed class InMemoryProcessDurableStoreCrashTests
             fixture.Checkpoint.Operations,
             [inbox],
             [emission],
-            [claimed.State],
+            fixture.Checkpoint.DurableOperations,
             fixture.Checkpoint.CreatedAtUtc,
             committedAtUtc);
     }
