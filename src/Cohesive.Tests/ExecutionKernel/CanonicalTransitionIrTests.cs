@@ -64,14 +64,14 @@ public sealed class CanonicalTransitionIrTests
             new LetTransitionNode(new("let"), new("status"), StringContract, Expr.Const("pending")),
             new ChoiceTransitionNode(
                 new("choice"),
-                TransitionCaseSelection.OrderedFirstMatch,
-                TransitionBranchCompleteness.Fallback,
+                CaseSelection.OrderedFirstMatch,
+                BranchCompleteness.Fallback,
                 [new(new("choice-case"), Expr.Const(true), terminal)],
                 new(new("choice-fallback"), terminal)),
             new MatchTransitionNode(
                 new("match"),
-                TransitionCaseSelection.OrderedFirstMatch,
-                TransitionBranchCompleteness.Fallback,
+                CaseSelection.OrderedFirstMatch,
+                BranchCompleteness.Fallback,
                 Expr.Const("pending"),
                 StringContract,
                 [new(new("match-case"), ConcreteString("pending"), terminal)],
@@ -211,17 +211,17 @@ public sealed class CanonicalTransitionIrTests
             Enum.GetValues<TransitionOutcomeDisposition>());
         Assert.Equal(
             [
-                TransitionCaseSelection.Unspecified,
-                TransitionCaseSelection.OrderedFirstMatch
+                CaseSelection.Unspecified,
+                CaseSelection.OrderedFirstMatch
             ],
-            Enum.GetValues<TransitionCaseSelection>());
+            Enum.GetValues<CaseSelection>());
         Assert.Equal(
             [
-                TransitionBranchCompleteness.Unspecified,
-                TransitionBranchCompleteness.Exhaustive,
-                TransitionBranchCompleteness.Fallback
+                BranchCompleteness.Unspecified,
+                BranchCompleteness.Exhaustive,
+                BranchCompleteness.Fallback
             ],
-            Enum.GetValues<TransitionBranchCompleteness>());
+            Enum.GetValues<BranchCompleteness>());
 
         var options = ExecutionDefinitionJsonSerializer.CreateOptions();
         Assert.Equal(
@@ -415,8 +415,8 @@ public sealed class CanonicalTransitionIrTests
             "root",
             new ChoiceTransitionNode(
                 new("choose"),
-                TransitionCaseSelection.OrderedFirstMatch,
-                TransitionBranchCompleteness.Exhaustive,
+                CaseSelection.OrderedFirstMatch,
+                BranchCompleteness.Exhaustive,
                 [
                     new(new("approve"), Expr.Param("approved"), approved),
                     new(new("hold"), Expr.Const(true), held)
@@ -425,8 +425,8 @@ public sealed class CanonicalTransitionIrTests
             "root",
             new ChoiceTransitionNode(
                 new("choose"),
-                TransitionCaseSelection.OrderedFirstMatch,
-                TransitionBranchCompleteness.Exhaustive,
+                CaseSelection.OrderedFirstMatch,
+                BranchCompleteness.Exhaustive,
                 [
                     new(new("hold"), Expr.Const(true), held),
                     new(new("approve"), Expr.Param("approved"), approved)
@@ -435,8 +435,8 @@ public sealed class CanonicalTransitionIrTests
             "root",
             new MatchTransitionNode(
                 new("match"),
-                TransitionCaseSelection.OrderedFirstMatch,
-                TransitionBranchCompleteness.Exhaustive,
+                CaseSelection.OrderedFirstMatch,
+                BranchCompleteness.Exhaustive,
                 Expr.Param("decision"),
                 StringContract,
                 [
@@ -447,8 +447,8 @@ public sealed class CanonicalTransitionIrTests
             "root",
             new MatchTransitionNode(
                 new("match"),
-                TransitionCaseSelection.OrderedFirstMatch,
-                TransitionBranchCompleteness.Exhaustive,
+                CaseSelection.OrderedFirstMatch,
+                BranchCompleteness.Exhaustive,
                 Expr.Param("decision"),
                 StringContract,
                 [
@@ -480,8 +480,8 @@ public sealed class CanonicalTransitionIrTests
             "root",
             new ChoiceTransitionNode(
                 new("choice"),
-                TransitionCaseSelection.OrderedFirstMatch,
-                TransitionBranchCompleteness.Fallback,
+                CaseSelection.OrderedFirstMatch,
+                BranchCompleteness.Fallback,
                 [new(new("case"), Expr.Const(true), caseBody)],
                 new(new("fallback"), fallbackBody))));
 
@@ -578,8 +578,8 @@ public sealed class CanonicalTransitionIrTests
                 "root",
                 new MatchTransitionNode(
                     new("match"),
-                    TransitionCaseSelection.OrderedFirstMatch,
-                    TransitionBranchCompleteness.Fallback,
+                    CaseSelection.OrderedFirstMatch,
+                    BranchCompleteness.Fallback,
                     Expr.Const("held"),
                     contract,
                     [new(new("case"), pattern, caseTerminal)],
@@ -615,13 +615,13 @@ public sealed class CanonicalTransitionIrTests
             "root",
             new ChoiceTransitionNode(
                 new("choice"),
-                TransitionCaseSelection.OrderedFirstMatch,
-                TransitionBranchCompleteness.Fallback,
+                CaseSelection.OrderedFirstMatch,
+                BranchCompleteness.Fallback,
                 []),
             new MatchTransitionNode(
                 new("match"),
-                TransitionCaseSelection.OrderedFirstMatch,
-                TransitionBranchCompleteness.Exhaustive,
+                CaseSelection.OrderedFirstMatch,
+                BranchCompleteness.Exhaustive,
                 Expr.Const("approved"),
                 StringContract,
                 [new(new("match-case"), ConcreteBoolean(true), matchCaseBody)],
@@ -656,8 +656,8 @@ public sealed class CanonicalTransitionIrTests
             "root",
             new ChoiceTransitionNode(
                 new("choice"),
-                TransitionCaseSelection.Unspecified,
-                TransitionBranchCompleteness.Unspecified,
+                CaseSelection.Unspecified,
+                BranchCompleteness.Unspecified,
                 [new(new("case"), Expr.Const(true), terminal)])));
 
         var validation = TransitionDefinitionValidator.Validate(definition);
@@ -957,8 +957,8 @@ public sealed class CanonicalTransitionIrTests
                 Expr.Const("notEligible")));
         var match = new MatchTransitionNode(
             new("match-decision"),
-            TransitionCaseSelection.OrderedFirstMatch,
-            TransitionBranchCompleteness.Fallback,
+            CaseSelection.OrderedFirstMatch,
+            BranchCompleteness.Fallback,
             Expr.BoundValue(decisionBinding),
             StringContract,
             [new(new("approved-case"), ConcreteString("approved"), approved)],
@@ -1020,8 +1020,8 @@ public sealed class CanonicalTransitionIrTests
                     Expr.Param("decision")),
                 new ChoiceTransitionNode(
                     new("choose-review-result"),
-                    TransitionCaseSelection.OrderedFirstMatch,
-                    TransitionBranchCompleteness.Fallback,
+                    CaseSelection.OrderedFirstMatch,
+                    BranchCompleteness.Fallback,
                     [new(new("eligible"), Expr.Param("approved"), Sequence("eligible-body", match))],
                     new(new("not-eligible"), notEligible))),
             [
@@ -1051,8 +1051,8 @@ public sealed class CanonicalTransitionIrTests
             "root",
             new ChoiceTransitionNode(
                 new("choice"),
-                TransitionCaseSelection.OrderedFirstMatch,
-                TransitionBranchCompleteness.Exhaustive,
+                CaseSelection.OrderedFirstMatch,
+                BranchCompleteness.Exhaustive,
                 [new(new("case"), Expr.Const(true), terminal)])));
     }
 

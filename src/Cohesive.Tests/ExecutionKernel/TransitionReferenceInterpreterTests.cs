@@ -546,8 +546,8 @@ public sealed class TransitionReferenceInterpreterTests
                 "root",
                 new MatchTransitionNode(
                     new("match"),
-                    TransitionCaseSelection.OrderedFirstMatch,
-                    TransitionBranchCompleteness.Fallback,
+                    CaseSelection.OrderedFirstMatch,
+                    BranchCompleteness.Fallback,
                     Expr.Field("value"),
                     optional,
                     [
@@ -657,8 +657,8 @@ public sealed class TransitionReferenceInterpreterTests
                 "root",
                 new ChoiceTransitionNode(
                     new("choice"),
-                    TransitionCaseSelection.OrderedFirstMatch,
-                    TransitionBranchCompleteness.Fallback,
+                    CaseSelection.OrderedFirstMatch,
+                    BranchCompleteness.Fallback,
                     [new(new("present"), Expr.Eq(Expr.Field("value"), Expr.Const("yes")), Sequence("yes", Outcome("yes-outcome")))],
                     new(new("fallback"), Sequence("no", Outcome("no-outcome"))))),
             observation: ObjectContract(new ObjectFieldTypeDef(
@@ -980,8 +980,8 @@ public sealed class TransitionReferenceInterpreterTests
         ValueBindingId selected = new("selected-decision");
         var match = new MatchTransitionNode(
             new("decision-match"),
-            TransitionCaseSelection.OrderedFirstMatch,
-            TransitionBranchCompleteness.Fallback,
+            CaseSelection.OrderedFirstMatch,
+            BranchCompleteness.Fallback,
             Expr.BoundValue(selected),
             decisionContract,
             [
@@ -1014,8 +1014,8 @@ public sealed class TransitionReferenceInterpreterTests
                 new LetTransitionNode(new("bind-decision"), selected, decisionContract, Expr.Param("decision")),
                 new ChoiceTransitionNode(
                     new("eligibility"),
-                    TransitionCaseSelection.OrderedFirstMatch,
-                    TransitionBranchCompleteness.Fallback,
+                    CaseSelection.OrderedFirstMatch,
+                    BranchCompleteness.Fallback,
                     [new(new("eligible"), Expr.And(Expr.Param("approved"), Expr.Field("eligible")), Sequence("eligible-body", match))],
                     new(new("not-eligible"), Sequence(
                         "not-eligible-body",

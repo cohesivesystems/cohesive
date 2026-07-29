@@ -14,23 +14,25 @@ canonical durable-operation reference protocol now interprets Request attempts, 
 and result admission. Canonical Process control now interprets protocol-neutral lifecycle commands, safe-point
 coordination, attempt lineage, and write-once attempt affinity without claiming a durable runtime realization.
 These protocols are not yet backed by atomic Storage state or integrated with the legacy Process runtime, so they
-do not make EK-06 or EK-08 system-runtime Passes. EK-09 is Partial:
-representative Transitions have a typed C# producer that is equivalent to direct IR, while Processes still lack a
-canonical lowering. The remaining scenarios retain the Partial or Absent classifications recorded below.
+do not make EK-06 or EK-08 system-runtime Passes. Canonical finite Process IR now provides the persisted semantic
+graph, typed bindings, exact references, durable boundaries, and static validation needed by subsequent checkpoint
+and runtime work. EK-09 remains Partial: representative Transitions have a typed C# producer that is equivalent to
+direct IR, while Processes have direct canonical IR but no C# lowering yet. The remaining scenarios retain the
+Partial classifications recorded below.
 
 ## Scenario matrix
 
 | Scenario | Status | Current compatibility | Missing kernel semantics |
 | --- | --- | --- | --- |
 | EK-01 — structured DQ branching | Pass | `Cohesive.Transitions.IR` provides canonical persisted structured definitions with stable nodes, typed contracts and outcomes, ordered branching and matching, algebraic sparse patches, exact interaction-contract emission references, and fingerprint-bound Machine-edge references. `TransitionStaticCompiler` performs target-independent type, flow, exhaustiveness, access/effect, derived-field, invariant, and Machine-link analysis. `TransitionReferenceInterpreter` executes either complete state or finite sparse observations through one deterministic core and returns typed outcomes, committable patches, emission intents, Machine movements, guarantee demands, conflicts, diagnostics, and ordered actual-execution evidence. | None within the EK-01 reference decision. Observation acquisition and authoritative commit remain explicit external interpretations of the returned demands and intents. |
-| EK-02 — durable human review | Partial | Canonical Request, Signal, and Reply contracts declare portable payloads, exact semantic continuation addresses, and typed timeout or cancellation outcomes. The durable-operation reference protocol can classify and disposition eligible, duplicate, late, or stale Request results at an exact Process-token or Transition-continuation target. `WaitNode` still produces the legacy `Waiting` checkpoint, while local and DurableTask runtimes buffer early keyed inputs and DurableTask supplies timers. | Closed `AwaitMatch`, definition/node linking, durable wait registration plus timer arming, signal inbox claim/consume and arbitration, and integration of canonical result admission with Process/Transition commits. |
+| EK-02 — durable human review | Partial | Canonical Request, Signal, and Reply contracts declare portable payloads, exact semantic continuation addresses, and typed timeout or cancellation outcomes. Canonical Process IR adds a closed typed `AwaitMatch` union with exact interaction references, guarded clauses, absolute timers, stable clause and continuation identities, explicit priority arbitration, and late/stale/duplicate/missing-target policy. The durable-operation reference protocol can classify and disposition Request results at an exact Process-token or Transition-continuation target. | Durable wait registration plus timer arming, early inbox admission and buffering, atomic claim/consume and loser invalidation, runtime arbitration, and integration of canonical result admission with Process/Transition commits. |
 | EK-03 — vendor/manual fulfillment | Partial | `DurableRequestBinding` refines an exact Request with bounded attempts, timeout, idempotency evidence, exact Reply mappings, and reconciliation/escalation paths. The reference protocol retains stable Request identity, records attempt and acknowledgement evidence, and applies authored late/stale/duplicate policies. Typed legacy handlers, continuation freshness checks, and dead-lettering remain separate compatibility paths. | Vendor/manual provider arbitration, adapter integration with current Process execution, and physical persistence that atomically couples acknowledgement and target admission to the owning continuation. |
-| EK-04 — parallel gates and join recovery | Absent | A checkpoint has one `CurrentNode` and a LIFO locality continuation stack. Transition batches execute sequentially. | Fork tokens, parallel scheduling, join policy, durable per-branch progress, order-independent recovery, and duplicate-work prevention. |
+| EK-04 — parallel gates and join recovery | Partial | Canonical Process IR declares stable Fork branches and reciprocal Joins with explicit threshold, branch-failure, remaining-branch cancellation, completion-order observability, and deterministic tie-break policy. Static validation rejects malformed ownership and convergence. The legacy checkpoint still has one `CurrentNode` and a LIFO locality continuation stack. | Multi-token checkpoint state, parallel scheduling, durable per-branch progress, atomic join completion, order-independent recovery, and duplicate-work prevention. |
 | EK-05 — capability-safe multi-entity coordination | Partial | `ProcessTransactionScope` can name multi-entity/database scopes, and places expose a coarse transaction capability. | Requirement extraction, adapter capability evidence, proof-directed guarantee matching, independent subject authority, and mandatory authored compensation when atomic scope is unavailable. |
 | EK-06 — durable effect crash matrix | Partial | The canonical reference protocol uses the Request `EmissionId` as logical operation identity, derives a scoped deduplication key, and models leased claim/renewal, monotonic fences, ordered attempt snapshots, explicit failure phase/effect evidence, bounded retry, timeout/cancellation, fenced reconciliation and escalation identities, one durable acknowledgement, physical batches with complete per-item evidence, and a separate target admission. Its state transitions represent all three crash cuts without promising physical exactly-once execution. | ARI-166 Storage realization of atomic origin commit/outbox publication, compare-and-swap claims and fences, durable operation-ledger state, acknowledgement persistence, inbox admission, and atomic Process-checkpoint or Transition-commit coupling. Production adapter conformance and integrated crash tests remain required. |
 | EK-07 — signal arbitration | Partial | Canonical Signal contracts and envelopes provide typed portable payloads, stable emission and idempotency identity, explicit targets, ordering, and provenance. The current DurableTask and local runtimes still accept raw keyed signals and buffer them FIFO. | Durable admission receipts, inbox deduplication, exclusive winner claims, duplicate prior-result behavior, observable losers, and enforcement preventing late or stale signals from reopening a choice. |
 | EK-08 — index rebuild recovery | Partial | `ProcessControlState` retains stable Process instance, attempt, and activation identity, invariant-preserving safe points, ordered attempt lineage, and write-once generic attempt affinities. `ProcessControlReferenceExecutor` makes pause/continue retain the current attempt and affinities, while `RestartAttempt` explicitly abandons the old attempt and starts a stable replacement without inherited affinities. | ARI-166/ARI-168 durable checkpoint and compare-and-swap realization; Storage-owned candidate-generation allocation, binding, cleanup, and abandoned-generation exclusion; retry/recovery integration that retains the attempt and generation; and fenced, idempotent generation promotion plus read/write backend swap. |
-| EK-09 — C# and IR equivalence | Partial | Representative typed C# Transition authoring lowers immediately to the same canonical `Cohesive.Transitions.IR` definitions as direct authoring, with explicit stable definition/revision/node/binding identities, typed contracts, deterministic normalization and fingerprints, strict document round trips, and fingerprint-excluded source maps that reconnect canonical diagnostics to C# call sites. The typed handle retains only the canonical document and validation result, so deserialization and interpretation do not require the producer assembly or callbacks. | `Cohesive.Processes` still persists delegate-bearing executable node objects and has no canonical C#-to-IR lowering or C#/direct-IR equivalence suite. Transition support is intentionally a restricted portable C# subset; broader representative coverage and consumer migration remain follow-on work, but unsupported CLR computation is rejected rather than persisted. |
+| EK-09 — C# and IR equivalence | Partial | Representative typed C# Transition authoring lowers immediately to the same canonical `Cohesive.Transitions.IR` definitions as direct authoring. `Cohesive.Processes.IR` now supports direct canonical authoring with stable node, edge, branch, clause, and binding identities, typed contracts, exact semantic references, deterministic normalization and fingerprints, and strict document round trips. Neither canonical IR requires callbacks or a producer assembly to deserialize and validate. | Canonical Process C# lowering and a Process C#/direct-IR equivalence suite remain ARI-170 work. The legacy Process authoring/runtime path still uses delegate-bearing executable node objects and must migrate without becoming semantic authority. |
 
 The executable classifications and focused behavioral baselines live in `src/Cohesive.Tests/ExecutionKernel/ExecutionKernelCharacterizationTests.cs` and run as part of the existing `Cohesive.Tests` project.
 
@@ -119,6 +121,44 @@ a checkpoint repository, atomically persist receipts or inbox entries, fence wor
 perform promotion. ARI-166 and ARI-168 own those physical cuts and runtime integration; fenced idempotent generation
 promotion and backend swap remain subsequent Storage/index-sync work. Consequently, EK-08 is **Partial**.
 
+## Canonical finite Process IR
+
+ARI-167 introduces `Cohesive.Processes.IR.ProcessDefinition` as the persisted semantic authority for Process
+coordination. It uses the shared execution-definition envelope and fingerprint model rather than defining another
+Process document. The normalized graph has stable node and edge identities, one typed invocation input, a typed
+terminal result, explicit recovery policy, typed continuation bindings, ordered Choice/Match cases, normalized
+Request outcomes, normalized Fork branches, and normalized AwaitMatch clauses. Its closed node union contains
+Transition invocation, Relation/Query evaluation, Request, domain-event emission, Signal send, Choice, Match,
+Fork, Join, AwaitMatch, Timer, Reply, explicit durable cut, Return, and Fail.
+
+Transition and Relation/Query nodes carry exact `ExecutionDefinitionReference` values. Linking supplies derived
+input/result contract evidence through `ProcessDefinitionValidationContext`; the referenced definition remains the
+authority and is not copied into Process IR. Request, event, Signal, Reply, and AwaitMatch nodes use exact typed
+interaction references resolved through `InteractionContractCatalog`. Expressions can observe only the Process
+input and definitely available typed continuation bindings, and Process v1 pins the same explicit pure capability
+profile as Transition v1. An inbound Request clause separately binds its application payload and its admitted
+logical Request obligation; Reply consumes that definitely visible obligation and must link back to the exact
+Request contract. Aggregate state, relation execution artifacts,
+interaction definitions, runtime services, delegates, adapters, and compiled plans are outside the canonical
+closure.
+
+`ProcessDefinitionValidator` checks portable contracts and expressions, exact link families, interaction payloads
+and outcomes, stable construct and edge identity, edge targets, reachability, definite binding flow, Request outcome
+coverage, conservative Choice/Match exhaustiveness proof, Fork/Join reciprocity, token-owned ingress and
+convergence, AwaitMatch arbitration, Request/Reply obligation continuity, and deterministic policy validity. An
+All Join exposes values guaranteed by every completed branch; partial Joins retain only the pre-Fork value scope
+until an explicit aggregation construct is introduced. It also
+builds a same-activation graph in which Request, AwaitMatch, Timer, and explicit durable cut are barriers. Every
+activation path must be acyclic and must reach a terminal node or one of those durable barriers. Recurrence is
+therefore explicit and valid only across a persisted continuation boundary; a durable boundary on one branch does
+not hide a free cycle on another. A Fork branch may contain durable recurrence only when every finite exit remains
+owned by and converges on its reciprocal Join and the branch has a structural Join exit.
+
+This IR is not yet an execution claim. ARI-165 owns the reference interpreter and multi-token semantics, ARI-166
+owns durable checkpoint and inbox/outbox realization, and ARI-170 owns restricted C# lowering and equivalence with
+direct IR. The legacy Process runtime remains characterized separately until those paths consume the canonical
+definition and exact fingerprint.
+
 ## Compatibility surfaces to migrate
 
 ### Flat transitions
@@ -129,9 +169,23 @@ Canonical persisted semantic authority now belongs to `Cohesive.Transitions.IR`.
 
 ### Delegate-bearing processes
 
-`Cohesive.Processes.Model.ProcessDefinition` stores executable node objects. Semantic choices—including branch predicates, entity references, transition inputs, request construction, waits, computations, and terminal results—are CLR `Func` delegates. DurableTask resolves a definition by process name from a local registry and re-evaluates those delegates during orchestration replay. A changed definition under the same name is accepted because checkpoint compatibility validates only `ProcessName`.
+Canonical persisted Process authority now belongs to `Cohesive.Processes.IR.ProcessDefinition`: a normalized,
+typed graph with stable node and edge identities, portable expressions, exact Transition, Relation/Query, and
+interaction references, explicit Fork/Join and AwaitMatch policies, and durable cuts. Its validator proves exact
+reference and binding compatibility, graph integrity, branch/join structure, and finite same-activation execution.
+It carries coordination facts only and does not copy aggregate business state, callbacks, suspended host frames,
+runtime services, adapter state, or compiled plans.
 
-Migration disposition: treat the existing definition, builder, and source-generator output as authoring/compatibility inputs. Effect handlers and transaction gateways remain legitimate adapter mechanisms, but delegates must cease to be persisted semantic authority. Lower authoring into canonical typed nodes and require a definition fingerprint on activation and replay.
+The compatibility `Cohesive.Processes.Model.ProcessDefinition` still stores executable node objects. Semantic
+choices—including branch predicates, entity references, transition inputs, request construction, waits,
+computations, and terminal results—are CLR `Func` delegates. DurableTask resolves a definition by process name from
+a local registry and re-evaluates those delegates during orchestration replay. A changed definition under the same
+name is accepted because checkpoint compatibility validates only `ProcessName`.
+
+Migration disposition: treat the existing definition, builder, and source-generator output as
+authoring/compatibility inputs. Effect handlers and transaction gateways remain legitimate adapter mechanisms,
+but delegates must cease to be persisted semantic authority. ARI-170 should lower authoring into the existing
+canonical typed nodes; ARI-165/ARI-166 should pin the exact definition fingerprint on activation and replay.
 
 ### Single execution cursor
 
@@ -152,9 +206,10 @@ Migration disposition: preserve old checkpoints only behind an explicit compatib
 | Canonical interaction envelopes | `DomainEventEnvelope`, `RequestEnvelope`, `SignalEnvelope`, and `ReplyEnvelope` → `InteractionEnvelopeValidator` and `InteractionEnvelopeJsonSerializer`; strict portable representation exists, but current Process and Storage runtimes do not yet use it as their durable ledger/inbox/outbox contract |
 | Canonical durable Request protocol | `DurableRequestBinding`, `DurableOperationState`, `IDurableOperationAdapter`, `IDurableOperationBatchAdapter`, and `DurableOperationReferenceExecutor` → exact Reply binding, scoped logical deduplication, fenced claim/renewal, attempt/failure evidence, typed timeout/cancellation, recovery identities, acknowledgement, physical-batch item evidence, reconciliation/escalation, and result admission as deterministic reference state; physical persistence and atomic cuts remain deferred to ARI-166 |
 | Canonical Process lifecycle control | `ProcessControlCommand`, `ProcessControlState`, `ProcessControlDecision`, `ProcessControlJsonSerializer`, and `ProcessControlReferenceExecutor` → protocol-neutral Inspect/Signal/Pause/Continue/RestartAttempt/Cancel/Terminate, stable command identity and idempotency, exact attempt/revision fencing, replay receipts, strict canonical wires, safe-point deferral, attempt lineage, canonical Signal admission, and write-once generic attempt affinity; physical checkpoint/CAS/inbox/worker-fence realization and Storage-owned index-generation lifecycle remain deferred to ARI-166/ARI-168 and index-sync work |
+| Canonical Process semantics | `Cohesive.Processes.IR.ProcessDefinition`, its closed node and AwaitMatch unions, `ProcessDefinitionValidator`, and `ProcessDefinitionDocuments` → normalized finite-activation graph, typed bindings and expressions, exact semantic linking, explicit durable boundaries, deterministic validation, and shared execution-definition fingerprints; execution and checkpoint realization remain deferred to ARI-165/ARI-166 |
 | Legacy direct transition activation | `Transition<TEntity,TInput>.Apply` → `Entity.ApplyTransition` → `DeclarativeEntityRuntime.Apply` |
 | Flat transition compatibility | `Cohesive.Transitions.Model.TransitionDefinition`, `TransitionBuilder`, `TransitionExpressionBuilder`, `TransitionExpressionAnalyzer`, `TransitionPatchProjector`, `TransitionResult` |
-| Process planning and replay | `ProcessDefinition`, `ProcessNode`, `BranchingNode`, `ProcessExecutionPlanner`, `ProcessCheckpoint` |
+| Legacy Process planning and replay | `Cohesive.Processes.Model.ProcessDefinition`, `ProcessNode`, `BranchingNode`, `ProcessExecutionPlanner`, `ProcessCheckpoint` |
 | Legacy waits and signals | `WaitNode`, `IProcessWaitAdapter`, `IProcessSignalSink`, `InMemoryProcessWaitAdapter`, `DurableTaskProcessOrchestration`; these still exchange a key plus raw payload rather than canonical Signal envelopes |
 | Legacy effects and recovery substrate | `EffectRequest`, `ProcessPendingEffect`, `EffectExecution`, `ProcessDeadLetter`, `ProcessNodeExecutor`, `ProcessEntityRepositoryAdapter`; these remain runtime migration surfaces and do not yet enforce canonical Request/Reply obligations |
 | Transactions and capabilities | `ProcessTransactionScope`, `ProcessPlace`, `ProcessCapability`, `IProcessTransactionGateway` |

@@ -48,8 +48,8 @@ public sealed class TransitionStaticCompilerTests
         var terminal = Outcome("done", TransitionOutcomeDisposition.Applied, "ok");
         var choice = new ChoiceTransitionNode(
             new("choice"),
-            TransitionCaseSelection.OrderedFirstMatch,
-            TransitionBranchCompleteness.Fallback,
+            CaseSelection.OrderedFirstMatch,
+            BranchCompleteness.Fallback,
             [new(new("case"), Expr.Param("flag"), Sequence("case-body", Set("case-write", "status", "yes")))],
             new(new("fallback"), Sequence("fallback-body", Set("fallback-write", "status", "no"))));
         var valid = Definition(
@@ -87,8 +87,8 @@ public sealed class TransitionStaticCompilerTests
                 "root",
                 new ChoiceTransitionNode(
                     new("choice"),
-                    TransitionCaseSelection.OrderedFirstMatch,
-                    TransitionBranchCompleteness.Exhaustive,
+                    CaseSelection.OrderedFirstMatch,
+                    BranchCompleteness.Exhaustive,
                     [new(new("unknown-case"), Expr.Param("flag"), Sequence("unknown-body", Outcome("unknown-outcome")))])),
             input: ObjectContract(new ObjectFieldTypeDef("flag", new ScalarTypeRef(ScalarTypeKind.Bool))));
         var proven = Definition(
@@ -96,8 +96,8 @@ public sealed class TransitionStaticCompilerTests
                 "root",
                 new ChoiceTransitionNode(
                     new("choice"),
-                    TransitionCaseSelection.OrderedFirstMatch,
-                    TransitionBranchCompleteness.Exhaustive,
+                    CaseSelection.OrderedFirstMatch,
+                    BranchCompleteness.Exhaustive,
                     [
                         new(
                             new("always"),
@@ -134,8 +134,8 @@ public sealed class TransitionStaticCompilerTests
                 "known-root",
                 new MatchTransitionNode(
                     new("known-match"),
-                    TransitionCaseSelection.OrderedFirstMatch,
-                    TransitionBranchCompleteness.Exhaustive,
+                    CaseSelection.OrderedFirstMatch,
+                    BranchCompleteness.Exhaustive,
                     new LiteralExpr(decision.Type!, ObservationValue.FromString("hold")),
                     decision,
                     [
@@ -170,8 +170,8 @@ public sealed class TransitionStaticCompilerTests
             nullability: FieldNullability.Nullable);
         var match = new MatchTransitionNode(
             new("optional-match"),
-            TransitionCaseSelection.OrderedFirstMatch,
-            TransitionBranchCompleteness.Fallback,
+            CaseSelection.OrderedFirstMatch,
+            BranchCompleteness.Fallback,
             Expr.Field("maybeStatus"),
             optionalNullableString,
             [
@@ -224,8 +224,8 @@ public sealed class TransitionStaticCompilerTests
     {
         var match = new MatchTransitionNode(
             new("boolean-match"),
-            TransitionCaseSelection.OrderedFirstMatch,
-            TransitionBranchCompleteness.Fallback,
+            CaseSelection.OrderedFirstMatch,
+            BranchCompleteness.Fallback,
             Expr.Param("flag"),
             BooleanContract,
             [
@@ -270,8 +270,8 @@ public sealed class TransitionStaticCompilerTests
     {
         var match = new MatchTransitionNode(
             new("boolean-match"),
-            TransitionCaseSelection.OrderedFirstMatch,
-            TransitionBranchCompleteness.Fallback,
+            CaseSelection.OrderedFirstMatch,
+            BranchCompleteness.Fallback,
             Expr.Param("flag"),
             BooleanContract,
             [
@@ -324,8 +324,8 @@ public sealed class TransitionStaticCompilerTests
                 new LetTransitionNode(new("first-let"), binding, StringContract, Expr.Const("ready")),
                 new ChoiceTransitionNode(
                     new("choice"),
-                    TransitionCaseSelection.OrderedFirstMatch,
-                    TransitionBranchCompleteness.Fallback,
+                    CaseSelection.OrderedFirstMatch,
+                    BranchCompleteness.Fallback,
                     [new(new("case"), Expr.Const(true), Sequence(
                         "case-body",
                         new LetTransitionNode(new("second-let"), binding, StringContract, Expr.Const("again")),
@@ -348,8 +348,8 @@ public sealed class TransitionStaticCompilerTests
         ValueBindingId branchBinding = new("branchValue");
         var choice = new ChoiceTransitionNode(
             new("choice"),
-            TransitionCaseSelection.OrderedFirstMatch,
-            TransitionBranchCompleteness.Fallback,
+            CaseSelection.OrderedFirstMatch,
+            BranchCompleteness.Fallback,
             [new(new("case"), Expr.Param("flag"), Sequence(
                 "case-body",
                 new LetTransitionNode(
@@ -388,8 +388,8 @@ public sealed class TransitionStaticCompilerTests
     {
         var choice = new ChoiceTransitionNode(
             new("choice"),
-            TransitionCaseSelection.OrderedFirstMatch,
-            TransitionBranchCompleteness.Fallback,
+            CaseSelection.OrderedFirstMatch,
+            BranchCompleteness.Fallback,
             [new(new("case"), Expr.Param("flag"), Sequence(
                 "case-body",
                 Set("case-write", "status", "case")))],
@@ -1174,8 +1174,8 @@ public sealed class TransitionStaticCompilerTests
         var flag = Expr.Param("flag");
         var choice = new ChoiceTransitionNode(
             new("complementary-choice"),
-            TransitionCaseSelection.OrderedFirstMatch,
-            TransitionBranchCompleteness.Exhaustive,
+            CaseSelection.OrderedFirstMatch,
+            BranchCompleteness.Exhaustive,
             [
                 new(new("true-case"), flag, Sequence("true-body", Set("true-write", "status", "yes"))),
                 new(
@@ -1230,8 +1230,8 @@ public sealed class TransitionStaticCompilerTests
 
         var commitChoice = new ChoiceTransitionNode(
             new("commit-choice"),
-            TransitionCaseSelection.OrderedFirstMatch,
-            TransitionBranchCompleteness.Fallback,
+            CaseSelection.OrderedFirstMatch,
+            BranchCompleteness.Fallback,
             [
                 new(
                     new("apply-case"),
@@ -1302,8 +1302,8 @@ public sealed class TransitionStaticCompilerTests
     {
         var first = new ChoiceTransitionNode(
             new("a:b"),
-            TransitionCaseSelection.OrderedFirstMatch,
-            TransitionBranchCompleteness.Fallback,
+            CaseSelection.OrderedFirstMatch,
+            BranchCompleteness.Fallback,
             [
                 new(
                     new("c"),
@@ -1319,8 +1319,8 @@ public sealed class TransitionStaticCompilerTests
                     new LetTransitionNode(new("first-fallback-let"), new("firstFallback"), StringContract, Expr.Const("fallback")))));
         var second = new ChoiceTransitionNode(
             new("a"),
-            TransitionCaseSelection.OrderedFirstMatch,
-            TransitionBranchCompleteness.Fallback,
+            CaseSelection.OrderedFirstMatch,
+            BranchCompleteness.Fallback,
             [
                 new(
                     new("b:c"),
@@ -1412,8 +1412,8 @@ public sealed class TransitionStaticCompilerTests
             new ObjectFieldTypeDef("unused", new ScalarTypeRef(ScalarTypeKind.String)));
         var match = new MatchTransitionNode(
             new("decision-match"),
-            TransitionCaseSelection.OrderedFirstMatch,
-            TransitionBranchCompleteness.Fallback,
+            CaseSelection.OrderedFirstMatch,
+            BranchCompleteness.Fallback,
             Expr.BoundValue(selected),
             decision,
             [
@@ -1433,8 +1433,8 @@ public sealed class TransitionStaticCompilerTests
                 Outcome("portable-fallback-outcome", TransitionOutcomeDisposition.DomainRejected, "unresolved"))));
         var choice = new ChoiceTransitionNode(
             new("eligibility-choice"),
-            TransitionCaseSelection.OrderedFirstMatch,
-            TransitionBranchCompleteness.Fallback,
+            CaseSelection.OrderedFirstMatch,
+            BranchCompleteness.Fallback,
             [new(new("eligible-case"), Expr.And(Expr.Param("approved"), Expr.Field("eligible")), Sequence("eligible-body", match))],
             new(new("ineligible-fallback"), Sequence(
                 "ineligible-body",
@@ -1467,8 +1467,8 @@ public sealed class TransitionStaticCompilerTests
                 "root",
                 new MatchTransitionNode(
                     new("match"),
-                    TransitionCaseSelection.OrderedFirstMatch,
-                    TransitionBranchCompleteness.Exhaustive,
+                    CaseSelection.OrderedFirstMatch,
+                    BranchCompleteness.Exhaustive,
                     Expr.Param("decision"),
                     contract,
                     [.. cases])),

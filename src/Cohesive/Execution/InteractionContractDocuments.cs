@@ -25,8 +25,16 @@ public static class InteractionContractDocumentDiagnosticCodes
 /// </remarks>
 public static class InteractionContractDocuments
 {
+    static readonly ExecutionDefinitionDocumentProjection<InteractionContractDefinition> Projection = new(
+        kind: new(InteractionWireNames.DefinitionKind),
+        kindMismatchCode: InteractionContractDocumentDiagnosticCodes.KindMismatch,
+        projectionInvalidCode: InteractionContractDocumentDiagnosticCodes.DefinitionProjectionInvalid,
+        wireNonCanonicalCode: InteractionContractDocumentDiagnosticCodes.DefinitionWireNonCanonical,
+        wireNonCanonicalMessage:
+            "The persisted definition is not the unique canonical typed interaction wire representation.");
+
     /// <summary>Shared execution-definition kind for canonical interaction contracts.</summary>
-    public static ExecutionDefinitionKind Kind { get; } = new(InteractionWireNames.DefinitionKind);
+    public static ExecutionDefinitionKind Kind => Projection.Kind;
 
     /// <summary>Creates a fingerprinted shared execution document containing one interaction contract.</summary>
     /// <param name="definitionId">Stable identity shared by all revisions of the contract.</param>
@@ -133,11 +141,13 @@ public static class InteractionContractDocuments
         ShapeGraph? graph)
     {
         ArgumentNullException.ThrowIfNull(document);
-        return WithSourceReferences(
+        return Projection.ValidateAndProject(
+            ExecutionDefinitionDocumentValidator.Validate(document, graph),
             document,
-            Combine(
-                ExecutionDefinitionDocumentValidator.Validate(document, graph),
-                ValidateContent(document, graph, out _)));
+            definition => graph is null
+                ? InteractionContractValidator.Validate(definition)
+                : InteractionContractValidator.Validate(definition, graph),
+            out _);
     }
 
     static DocumentValidationResult Complete(
@@ -146,115 +156,12 @@ public static class InteractionContractDocuments
         ShapeGraph? graph,
         out InteractionContractDefinition? definition)
     {
-        definition = null;
-        if (document is null)
-            return shared;
-
-        var content = ValidateContent(document, graph, out var candidate);
-        var combined = WithSourceReferences(document, Combine(shared, content));
-        if (combined.IsValid)
-            definition = candidate;
-        return combined;
+        return Projection.ValidateAndProject(
+            shared,
+            document,
+            candidate => graph is null
+                ? InteractionContractValidator.Validate(candidate)
+                : InteractionContractValidator.Validate(candidate, graph),
+            out definition);
     }
-
-    static DocumentValidationResult ValidateContent(
-        ExecutionDefinitionDocument document,
-        ShapeGraph? graph,
-        out InteractionContractDefinition? definition)
-    {
-        definition = null;
-        if (document.Kind != Kind)
-        {
-            return Error(
-                InteractionContractDocumentDiagnosticCodes.KindMismatch,
-                $"Expected execution-definition kind '{Kind.Value}', but found '{document.Kind.Value}'.",
-                "/kind");
-        }
-
-        InteractionContractDefinition candidate;
-        try
-        {
-            candidate = document.GetDefinition<InteractionContractDefinition>();
-        }
-        catch (Exception exception) when (exception is JsonException
-                                          or ArgumentException
-                                          or InvalidOperationException
-                                          or NotSupportedException
-                                          or FormatException
-                                          or OverflowException)
-        {
-            return Error(
-                InteractionContractDocumentDiagnosticCodes.DefinitionProjectionInvalid,
-                exception.Message,
-                "/definition");
-        }
-
-        var options = ExecutionDefinitionJsonSerializer.CreateOptions();
-        var projected = JsonSerializer.SerializeToElement(candidate, options);
-        var persistedBytes = ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(document);
-        var projectedBytes = ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(
-            document.Metadata.SchemaVersion,
-            document.Kind,
-            projected,
-            document.Extensions);
-        var wire = persistedBytes.AsSpan().SequenceEqual(projectedBytes)
-            ? DocumentValidationResult.Valid
-            : Error(
-                InteractionContractDocumentDiagnosticCodes.DefinitionWireNonCanonical,
-                "The persisted definition is not the unique canonical typed interaction wire representation.",
-                "/definition");
-        var semantic = graph is null
-            ? InteractionContractValidator.Validate(candidate)
-            : InteractionContractValidator.Validate(candidate, graph);
-        var validation = Combine(wire, PrefixDefinition(semantic));
-        if (validation.IsValid)
-            definition = candidate;
-        return validation;
-    }
-
-    static DocumentValidationResult PrefixDefinition(DocumentValidationResult validation) =>
-        validation.Diagnostics.IsDefaultOrEmpty
-            ? validation
-            : DocumentValidationResult.FromDiagnostics(validation.Diagnostics.Select(static diagnostic =>
-                diagnostic with
-                {
-                    Location = string.IsNullOrEmpty(diagnostic.Location) || diagnostic.Location == "$"
-                        ? "/definition"
-                        : diagnostic.Location![0] == '/'
-                            ? "/definition" + diagnostic.Location
-                            : "/definition"
-                }));
-
-    static DocumentValidationResult WithSourceReferences(
-        ExecutionDefinitionDocument document,
-        DocumentValidationResult validation)
-    {
-        if (validation.Diagnostics.IsDefaultOrEmpty)
-            return validation;
-
-        var diagnostics = ImmutableArray.CreateBuilder<DocumentValidationDiagnostic>(validation.Diagnostics.Length);
-        foreach (var diagnostic in validation.Diagnostics)
-        {
-            diagnostics.Add(document.Metadata.SourceMap.WithResolvedSourceReferences(
-                diagnostic,
-                document.Metadata.Provenance.Source.Reference,
-                "canonicalValidation"));
-        }
-        diagnostics.Sort(DocumentValidationDiagnosticComparer.Ordinal);
-        return DocumentValidationResult.FromDiagnostics(diagnostics.MoveToImmutable());
-    }
-
-    static DocumentValidationResult Combine(params DocumentValidationResult[] results)
-    {
-        List<DocumentValidationDiagnostic> diagnostics = [];
-        foreach (var result in results)
-            diagnostics.AddRange(result.Diagnostics);
-        diagnostics.Sort(DocumentValidationDiagnosticComparer.Ordinal);
-        return DocumentValidationResult.FromDiagnostics(diagnostics);
-    }
-
-    static DocumentValidationResult Error(string code, string message, string location) =>
-        DocumentValidationResult.FromDiagnostics([
-            new(code, DiagnosticSeverity.Error, message, location)
-        ]);
 }

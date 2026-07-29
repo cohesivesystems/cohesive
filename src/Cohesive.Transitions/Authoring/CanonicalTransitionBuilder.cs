@@ -714,7 +714,7 @@ public sealed class TransitionChoiceBuilder<TEntity, TInput, TOutcome>
     readonly TransitionAuthoringScope parentScope;
     readonly List<TransitionChoiceCase> cases = [];
     TransitionFallback? fallback;
-    TransitionBranchCompleteness completeness;
+    BranchCompleteness completeness;
 
     internal TransitionChoiceBuilder(
         TransitionAuthoringContext<TEntity, TInput, TOutcome> context,
@@ -762,9 +762,9 @@ public sealed class TransitionChoiceBuilder<TEntity, TInput, TOutcome>
     /// <exception cref="InvalidOperationException">A fallback was already declared.</exception>
     public TransitionChoiceBuilder<TEntity, TInput, TOutcome> Exhaustive()
     {
-        if (fallback is not null || completeness == TransitionBranchCompleteness.Fallback)
+        if (fallback is not null || completeness == BranchCompleteness.Fallback)
             throw new InvalidOperationException("An exhaustive Choice cannot also declare a fallback.");
-        completeness = TransitionBranchCompleteness.Exhaustive;
+        completeness = BranchCompleteness.Exhaustive;
         return this;
     }
 
@@ -786,20 +786,20 @@ public sealed class TransitionChoiceBuilder<TEntity, TInput, TOutcome>
         [CallerMemberName] string sourceMember = "")
     {
         ArgumentNullException.ThrowIfNull(configure);
-        if (completeness == TransitionBranchCompleteness.Exhaustive || fallback is not null)
+        if (completeness == BranchCompleteness.Exhaustive || fallback is not null)
             throw new InvalidOperationException("A Choice can declare either exhaustive cases or one fallback.");
         var source = context.Source(sourceFile, sourceLine, sourceMember, $"Choice fallback '{id.Value}'");
         var branch = new TransitionSequenceBuilder<TEntity, TInput, TOutcome>(context, new(parentScope));
         configure(branch);
         fallback = new(id, branch.BuildSequence(TransitionAuthoringIdentities.BodyFor(id), source));
         context.Register(fallback, source);
-        completeness = TransitionBranchCompleteness.Fallback;
+        completeness = BranchCompleteness.Fallback;
         return this;
     }
 
     internal ChoiceTransitionNode Build(ExecutionNodeId id) => new(
         id,
-        TransitionCaseSelection.OrderedFirstMatch,
+        CaseSelection.OrderedFirstMatch,
         completeness,
         [.. cases],
         fallback);
@@ -818,7 +818,7 @@ public sealed class TransitionMatchBuilder<TEntity, TInput, TOutcome, TValue>
     readonly ValueContract contract;
     readonly List<TransitionMatchCase> cases = [];
     TransitionFallback? fallback;
-    TransitionBranchCompleteness completeness;
+    BranchCompleteness completeness;
 
     internal TransitionMatchBuilder(
         TransitionAuthoringContext<TEntity, TInput, TOutcome> context,
@@ -888,9 +888,9 @@ public sealed class TransitionMatchBuilder<TEntity, TInput, TOutcome, TValue>
     /// <exception cref="InvalidOperationException">A fallback was already declared.</exception>
     public TransitionMatchBuilder<TEntity, TInput, TOutcome, TValue> Exhaustive()
     {
-        if (fallback is not null || completeness == TransitionBranchCompleteness.Fallback)
+        if (fallback is not null || completeness == BranchCompleteness.Fallback)
             throw new InvalidOperationException("An exhaustive Match cannot also declare a fallback.");
-        completeness = TransitionBranchCompleteness.Exhaustive;
+        completeness = BranchCompleteness.Exhaustive;
         return this;
     }
 
@@ -912,20 +912,20 @@ public sealed class TransitionMatchBuilder<TEntity, TInput, TOutcome, TValue>
         [CallerMemberName] string sourceMember = "")
     {
         ArgumentNullException.ThrowIfNull(configure);
-        if (completeness == TransitionBranchCompleteness.Exhaustive || fallback is not null)
+        if (completeness == BranchCompleteness.Exhaustive || fallback is not null)
             throw new InvalidOperationException("A Match can declare either exhaustive cases or one fallback.");
         var source = context.Source(sourceFile, sourceLine, sourceMember, $"Match fallback '{id.Value}'");
         var branch = new TransitionSequenceBuilder<TEntity, TInput, TOutcome>(context, new(parentScope));
         configure(branch);
         fallback = new(id, branch.BuildSequence(TransitionAuthoringIdentities.BodyFor(id), source));
         context.Register(fallback, source);
-        completeness = TransitionBranchCompleteness.Fallback;
+        completeness = BranchCompleteness.Fallback;
         return this;
     }
 
     internal MatchTransitionNode Build(ExecutionNodeId id, Expr value) => new(
         id,
-        TransitionCaseSelection.OrderedFirstMatch,
+        CaseSelection.OrderedFirstMatch,
         completeness,
         value,
         contract,
