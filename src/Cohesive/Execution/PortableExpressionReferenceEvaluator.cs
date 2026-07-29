@@ -1,14 +1,13 @@
 using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Text;
-using Cohesive.Execution;
+using Cohesive.Model;
 using Cohesive.Model.Expressions;
 using Cohesive.Model.Serialization;
-using Cohesive.Transitions.Compilation;
 
-namespace Cohesive.Transitions.Execution;
+namespace Cohesive.Execution;
 
-internal enum TransitionExpressionEvaluationError
+internal enum PortableExpressionEvaluationError
 {
     UnsupportedExpression = 0,
     UnsupportedFieldPath = 1,
@@ -19,27 +18,29 @@ internal enum TransitionExpressionEvaluationError
     RuntimeInputUnavailable = 6
 }
 
-internal sealed class TransitionExpressionEvaluationException(
-    TransitionExpressionEvaluationError error,
+internal sealed class PortableExpressionEvaluationException(
+    PortableExpressionEvaluationError error,
     string message,
     Exception? innerException = null,
     PortableValueState? valueState = null,
     DocumentValidationDiagnostic? sourceDiagnostic = null)
     : InvalidOperationException(message, innerException)
 {
-    public TransitionExpressionEvaluationError Error { get; } = error;
+    public PortableExpressionEvaluationError Error { get; } = error;
 
     public PortableValueState? ValueState { get; } = valueState;
 
     public DocumentValidationDiagnostic? SourceDiagnostic { get; } = sourceDiagnostic;
 }
 
-internal readonly record struct TransitionRuntimeValue(
+internal readonly record struct PortableExpressionValue(
     PortableValueState State,
     ObservationValue Observation,
     DocumentValidationDiagnostic? Failure = null)
 {
-    public static TransitionRuntimeValue FromPortable(PortableValue value) => value.State switch
+    const string EvaluationFailureCode = "execution.expression.failed";
+
+    public static PortableExpressionValue FromPortable(PortableValue value) => value.State switch
     {
         PortableValueState.Concrete => Concrete(value.Value!.Value),
         PortableValueState.Missing => new(PortableValueState.Missing, default),
@@ -50,21 +51,21 @@ internal readonly record struct TransitionRuntimeValue(
         _ => throw new ArgumentOutOfRangeException(nameof(value), value.State, "Unsupported portable value state.")
     };
 
-    public static TransitionRuntimeValue FromObservation(ObservationValue value) => value.Kind switch
+    public static PortableExpressionValue FromObservation(ObservationValue value) => value.Kind switch
     {
         ObservationValueKind.Undefined => Absent,
         ObservationValueKind.Null => Null,
         _ => Concrete(value)
     };
 
-    public static TransitionRuntimeValue Concrete(ObservationValue value) =>
+    public static PortableExpressionValue Concrete(ObservationValue value) =>
         new(PortableValueState.Concrete, value);
 
-    public static TransitionRuntimeValue Absent { get; } = new(PortableValueState.Absent, default);
+    public static PortableExpressionValue Absent { get; } = new(PortableValueState.Absent, default);
 
-    public static TransitionRuntimeValue Null { get; } = new(PortableValueState.Null, default);
+    public static PortableExpressionValue Null { get; } = new(PortableValueState.Null, default);
 
-    public static TransitionRuntimeValue Unknown { get; } = new(PortableValueState.Unknown, default);
+    public static PortableExpressionValue Unknown { get; } = new(PortableValueState.Unknown, default);
 
     public PortableValue ToPortable(ValueContract contract) => State switch
     {
@@ -75,14 +76,14 @@ internal readonly record struct TransitionRuntimeValue(
         PortableValueState.Failed => PortableValue.Failed(
             contract,
             Failure ?? new(
-                TransitionExecutionDiagnosticCodes.ExpressionEvaluationFailed,
+                EvaluationFailureCode,
                 DiagnosticSeverity.Error,
                 "Expression evaluation failed without structured source evidence.")),
         PortableValueState.Concrete => PortableValue.Concrete(contract, Observation),
         _ => throw new ArgumentOutOfRangeException(nameof(State), State, "Unsupported runtime value state.")
     };
 
-    public TransitionRuntimeValue Project(FieldPath path, int startIndex = 0)
+    public PortableExpressionValue Project(FieldPath path, int startIndex = 0)
     {
         if (State is PortableValueState.Absent or PortableValueState.Null
             or PortableValueState.Unknown or PortableValueState.Failed or PortableValueState.Missing)
@@ -96,8 +97,8 @@ internal readonly record struct TransitionRuntimeValue(
             var segment = path.Segments[index];
             if (segment.Kind != SegmentKind.Field || string.IsNullOrWhiteSpace(segment.Segment))
             {
-                throw TransitionExpressionEvaluator.Failure(
-                    TransitionExpressionEvaluationError.UnsupportedFieldPath,
+                throw PortableExpressionReferenceEvaluator.Failure(
+                    PortableExpressionEvaluationError.UnsupportedFieldPath,
                     $"Field path '{path}' contains unsupported collection-element navigation.");
             }
 
@@ -107,8 +108,8 @@ internal readonly record struct TransitionRuntimeValue(
                 return Null;
             if (current.Kind != ObservationValueKind.Object || current.Fields is null)
             {
-                throw TransitionExpressionEvaluator.Failure(
-                    TransitionExpressionEvaluationError.InvalidOperand,
+                throw PortableExpressionReferenceEvaluator.Failure(
+                    PortableExpressionEvaluationError.InvalidOperand,
                     $"Field path '{path}' cannot navigate through value kind '{current.Kind}'.");
             }
 
@@ -124,16 +125,16 @@ internal readonly record struct TransitionRuntimeValue(
         PortableValueState.Concrete => Observation,
         PortableValueState.Absent => ObservationValue.Undefined,
         PortableValueState.Null => ObservationValue.Null,
-        PortableValueState.Missing => throw TransitionExpressionEvaluator.Failure(
-            TransitionExpressionEvaluationError.RuntimeInputUnavailable,
+        PortableValueState.Missing => throw PortableExpressionReferenceEvaluator.Failure(
+            PortableExpressionEvaluationError.RuntimeInputUnavailable,
             $"Operation '{operation}' requires a value that was not observed.",
             valueState: State),
-        PortableValueState.Unknown => throw TransitionExpressionEvaluator.Failure(
-            TransitionExpressionEvaluationError.RuntimeInputUnavailable,
+        PortableValueState.Unknown => throw PortableExpressionReferenceEvaluator.Failure(
+            PortableExpressionEvaluationError.RuntimeInputUnavailable,
             $"Operation '{operation}' cannot consume an unknown value.",
             valueState: State),
-        PortableValueState.Failed => throw TransitionExpressionEvaluator.Failure(
-            TransitionExpressionEvaluationError.RuntimeInputUnavailable,
+        PortableValueState.Failed => throw PortableExpressionReferenceEvaluator.Failure(
+            PortableExpressionEvaluationError.RuntimeInputUnavailable,
             $"Operation '{operation}' cannot consume a failed value: {Failure?.Code ?? "unknown failure"}.",
             valueState: State,
             sourceDiagnostic: Failure),
@@ -146,8 +147,8 @@ internal readonly record struct TransitionRuntimeValue(
             return Observation;
 
         _ = RequireObservation(operation);
-        throw TransitionExpressionEvaluator.Failure(
-            TransitionExpressionEvaluationError.InvalidOperand,
+        throw PortableExpressionReferenceEvaluator.Failure(
+            PortableExpressionEvaluationError.InvalidOperand,
             $"Operation '{operation}' requires a concrete value, but received '{State}'.");
     }
 
@@ -155,25 +156,25 @@ internal readonly record struct TransitionRuntimeValue(
     {
         PortableValueState.Concrete => Observation,
         PortableValueState.Null => ObservationValue.Null,
-        PortableValueState.Absent => throw TransitionExpressionEvaluator.Failure(
-            TransitionExpressionEvaluationError.InvalidOperand,
+        PortableValueState.Absent => throw PortableExpressionReferenceEvaluator.Failure(
+            PortableExpressionEvaluationError.InvalidOperand,
             $"Operation '{operation}' cannot embed an absent value without an explicit optional-field policy.",
             valueState: State),
         _ => RequireObservation(operation)
     };
 }
 
-internal sealed class TransitionExpressionContext
+internal sealed class PortableExpressionEvaluationContext
 {
-    public required Func<ValueBindingId, TransitionRuntimeValue> ResolveBinding { get; init; }
+    public required Func<ValueBindingId, PortableExpressionValue> ResolveBinding { get; init; }
 
-    public required Func<ValueBindingId?, FieldPath, TransitionRuntimeValue> ResolveField { get; init; }
+    public required Func<ValueBindingId?, FieldPath, PortableExpressionValue> ResolveField { get; init; }
 
-    public required Func<string, TransitionRuntimeValue> ResolveParameter { get; init; }
+    public required Func<string, PortableExpressionValue> ResolveParameter { get; init; }
 
-    public TransitionRuntimeValue? CurrentItem { get; init; }
+    public PortableExpressionValue? CurrentItem { get; init; }
 
-    public TransitionExpressionContext WithCurrentItem(TransitionRuntimeValue item) => new()
+    public PortableExpressionEvaluationContext WithCurrentItem(PortableExpressionValue item) => new()
     {
         ResolveBinding = ResolveBinding,
         ResolveField = ResolveField,
@@ -182,22 +183,38 @@ internal sealed class TransitionExpressionContext
     };
 }
 
-internal sealed class TransitionExpressionEvaluator
+internal sealed class PortableExpressionReferenceEvaluator
 {
-    public TransitionRuntimeValue Evaluate(Expr expression, TransitionExpressionContext context)
+    readonly ExprCapabilityProfile capabilities;
+    readonly string interpreterName;
+
+    public PortableExpressionReferenceEvaluator(
+        ExprCapabilityProfile capabilities,
+        string interpreterName)
+    {
+        ArgumentNullException.ThrowIfNull(capabilities);
+        if (string.IsNullOrWhiteSpace(interpreterName))
+            throw new ArgumentException("An interpreter name is required.", nameof(interpreterName));
+
+        this.capabilities = capabilities;
+        this.interpreterName = interpreterName;
+    }
+
+    public PortableExpressionValue Evaluate(Expr expression, PortableExpressionEvaluationContext context)
     {
         ArgumentNullException.ThrowIfNull(expression);
         ArgumentNullException.ThrowIfNull(context);
+        EnsureSupported(expression);
 
         return expression switch
         {
             BindingExpr binding => context.ResolveBinding(binding.Binding),
-            ConstantExpr constant => TransitionRuntimeValue.FromObservation(constant.Value),
-            LiteralExpr literal => TransitionRuntimeValue.FromObservation(literal.Value),
+            ConstantExpr constant => PortableExpressionValue.FromObservation(constant.Value),
+            LiteralExpr literal => PortableExpressionValue.FromObservation(literal.Value),
             FieldExpr field => EvaluateField(field.Path, field.Binding, context),
             FieldRefExpr field => EvaluateField(field.Path, explicitBinding: null, context),
             CurrentItemExpr => context.CurrentItem ?? throw Failure(
-                TransitionExpressionEvaluationError.EvaluationContextUnavailable,
+                PortableExpressionEvaluationError.EvaluationContextUnavailable,
                 "The expression requires a current-item scope that is not available."),
             ParameterExpr parameter => context.ResolveParameter(parameter.Parameter),
             UnaryExpr unary => EvaluateUnary(unary, context),
@@ -206,21 +223,105 @@ internal sealed class TransitionExpressionEvaluator
             CallExpr call => EvaluateCall(call, context),
             AggregateExpr aggregate => EvaluateAggregate(aggregate, context),
             _ => throw Failure(
-                TransitionExpressionEvaluationError.UnsupportedExpression,
-                $"Expression node '{expression.GetType().Name}' is not supported by the Transition reference interpreter.")
+                PortableExpressionEvaluationError.UnsupportedExpression,
+                $"Expression node '{expression.GetType().Name}' is not supported by the {interpreterName}.")
         };
     }
 
-    TransitionRuntimeValue EvaluateField(
+    void EnsureSupported(Expr expression)
+    {
+        switch (expression)
+        {
+            case BindingExpr:
+                RequireCapability(ExprCapabilities.Binding, expression);
+                break;
+            case ConstantExpr:
+                RequireCapability(ExprCapabilities.Constant, expression);
+                break;
+            case LiteralExpr:
+                RequireCapability(ExprCapabilities.TypedLiteral, expression);
+                break;
+            case FieldExpr field:
+                RequireFieldCapabilities(field.Path, expression, typed: false);
+                break;
+            case FieldRefExpr field:
+                RequireFieldCapabilities(field.Path, expression, typed: true);
+                break;
+            case CurrentItemExpr:
+                RequireCapability(ExprCapabilities.CurrentItem, expression);
+                break;
+            case ParameterExpr:
+                RequireCapability(ExprCapabilities.Parameter, expression);
+                break;
+            case UnaryExpr unary:
+                RequireCapability(ExprCapabilities.ForUnary(unary.Operator), expression);
+                break;
+            case BinaryExpr binary:
+                RequireCapability(ExprCapabilities.ForBinary(binary.Operator), expression);
+                break;
+            case ConditionalExpr:
+                RequireCapability(ExprCapabilities.Conditional, expression);
+                break;
+            case CallExpr call:
+                if (string.IsNullOrWhiteSpace(call.Function))
+                {
+                    throw Failure(
+                        PortableExpressionEvaluationError.UnsupportedFunction,
+                        "An expression function requires a non-empty semantic identifier.");
+                }
+                RequireCapability(
+                    ExprCapabilities.ForFunction(call.Function),
+                    expression,
+                    PortableExpressionEvaluationError.UnsupportedFunction);
+                break;
+            case AggregateExpr aggregate:
+                RequireCapability(ExprCapabilities.ForAggregate(aggregate.Operator), expression);
+                break;
+        }
+    }
+
+    void RequireFieldCapabilities(FieldPath path, Expr expression, bool typed)
+    {
+        if (path.Segments.IsDefaultOrEmpty)
+        {
+            throw Failure(
+                PortableExpressionEvaluationError.UnsupportedFieldPath,
+                "A field expression requires a non-empty field path.");
+        }
+
+        RequireCapability(ExprCapabilities.Field, expression);
+        if (typed)
+            RequireCapability(ExprCapabilities.TypedField, expression);
+        if (path.Segments.Length > 1)
+            RequireCapability(ExprCapabilities.NestedFieldPath, expression);
+        if (path.Segments[0] is { Kind: SegmentKind.Field, Segment: ExprFieldRoots.CurrentItem })
+            RequireCapability(ExprCapabilities.CurrentItem, expression);
+    }
+
+    void RequireCapability(
+        ExprCapabilityId capability,
+        Expr expression,
+        PortableExpressionEvaluationError error = PortableExpressionEvaluationError.UnsupportedExpression)
+    {
+        if (capabilities.Supports(capability))
+            return;
+
+        throw Failure(
+            error,
+            $"Expression capability '{capability.Value}' required by '{expression.GetType().Name}' "
+            + $"is not supported by the {interpreterName}.");
+    }
+
+    PortableExpressionValue EvaluateField(
         FieldPath path,
         ValueBindingId? explicitBinding,
-        TransitionExpressionContext context)
+        PortableExpressionEvaluationContext context)
     {
         if (explicitBinding is null
             && path.Segments[0] is { Kind: SegmentKind.Field, Segment: ExprFieldRoots.CurrentItem })
         {
             return (context.CurrentItem ?? throw Failure(
-                    TransitionExpressionEvaluationError.EvaluationContextUnavailable,
+                    PortableExpressionEvaluationError.EvaluationContextUnavailable,
                     "The expression requires a current-item scope that is not available."))
                 .Project(path, startIndex: 1);
         }
@@ -228,29 +329,29 @@ internal sealed class TransitionExpressionEvaluator
         return context.ResolveField(explicitBinding, path);
     }
 
-    TransitionRuntimeValue EvaluateUnary(UnaryExpr unary, TransitionExpressionContext context) =>
+    PortableExpressionValue EvaluateUnary(UnaryExpr unary, PortableExpressionEvaluationContext context) =>
         unary.Operator switch
         {
-            UnaryOperator.Not => TransitionRuntimeValue.Concrete(ObservationValue.FromBool(
+            UnaryOperator.Not => PortableExpressionValue.Concrete(ObservationValue.FromBool(
                 !RequireBoolean(Evaluate(unary.Operand, context), "logical not"))),
             _ => throw Failure(
-                TransitionExpressionEvaluationError.UnsupportedExpression,
+                PortableExpressionEvaluationError.UnsupportedExpression,
                 $"Unary operator '{unary.Operator}' is not supported.")
         };
 
-    TransitionRuntimeValue EvaluateBinary(BinaryExpr binary, TransitionExpressionContext context)
+    PortableExpressionValue EvaluateBinary(BinaryExpr binary, PortableExpressionEvaluationContext context)
     {
         if (binary.Operator == BinaryOperator.And)
         {
             var left = RequireBoolean(Evaluate(binary.Left, context), "logical and left operand");
-            return TransitionRuntimeValue.Concrete(ObservationValue.FromBool(
+            return PortableExpressionValue.Concrete(ObservationValue.FromBool(
                 left && RequireBoolean(Evaluate(binary.Right, context), "logical and right operand")));
         }
 
         if (binary.Operator == BinaryOperator.Or)
         {
             var left = RequireBoolean(Evaluate(binary.Left, context), "logical or left operand");
-            return TransitionRuntimeValue.Concrete(ObservationValue.FromBool(
+            return PortableExpressionValue.Concrete(ObservationValue.FromBool(
                 left || RequireBoolean(Evaluate(binary.Right, context), "logical or right operand")));
         }
 
@@ -269,35 +370,28 @@ internal sealed class TransitionExpressionEvaluator
             BinaryOperator.Mul => Arithmetic(leftValue, rightValue, ObservationValueSemantics.Multiply),
             BinaryOperator.Div => Arithmetic(leftValue, rightValue, ObservationValueSemantics.Divide),
             _ => throw Failure(
-                TransitionExpressionEvaluationError.UnsupportedExpression,
+                PortableExpressionEvaluationError.UnsupportedExpression,
                 $"Binary operator '{binary.Operator}' is not supported.")
         };
     }
 
-    TransitionRuntimeValue EvaluateConditional(
+    PortableExpressionValue EvaluateConditional(
         ConditionalExpr conditional,
-        TransitionExpressionContext context) => Evaluate(
+        PortableExpressionEvaluationContext context) => Evaluate(
         RequireBoolean(Evaluate(conditional.Test, context), "conditional test")
             ? conditional.IfTrue
             : conditional.IfFalse,
         context);
 
-    TransitionRuntimeValue EvaluateCall(CallExpr call, TransitionExpressionContext context)
+    PortableExpressionValue EvaluateCall(CallExpr call, PortableExpressionEvaluationContext context)
     {
         if (!ExprSemanticsCatalog.Default.TryGetFunction(call.Function, out var definition)
             || !definition.Arity.Accepts(call.Arguments.Length))
         {
             throw Failure(
-                TransitionExpressionEvaluationError.UnsupportedFunction,
+                PortableExpressionEvaluationError.UnsupportedFunction,
                 $"Expression function '{call.Function}' is unknown or has invalid arity {call.Arguments.Length}.");
         }
-        if (!TransitionExpressionLanguage.SupportedFunctionNames.Contains(call.Function))
-        {
-            throw Failure(
-                TransitionExpressionEvaluationError.UnsupportedFunction,
-                $"Expression function '{call.Function}' is not supported by the Transition reference interpreter.");
-        }
-
         return call.Function switch
         {
             ExprFunctionNames.Contains => EvaluateContains(call, context),
@@ -315,54 +409,56 @@ internal sealed class TransitionExpressionEvaluator
             ExprFunctionNames.Sum or ExprFunctionNames.Min or ExprFunctionNames.Max
                 or ExprFunctionNames.Avg or ExprFunctionNames.Any or ExprFunctionNames.All =>
                 EvaluateSequenceAggregate(call, context),
-            _ => throw new UnreachableException()
+            _ => throw Failure(
+                PortableExpressionEvaluationError.UnsupportedFunction,
+                $"Expression function '{call.Function}' is not implemented by the {interpreterName}.")
         };
     }
 
-    TransitionRuntimeValue EvaluateAggregate(
+    PortableExpressionValue EvaluateAggregate(
         AggregateExpr aggregate,
-        TransitionExpressionContext context)
+        PortableExpressionEvaluationContext context)
     {
         if (!aggregate.GroupBy.IsDefaultOrEmpty)
         {
             throw Failure(
-                TransitionExpressionEvaluationError.UnsupportedExpression,
-                "Grouped AggregateExpr evaluation is outside finite Transition expression semantics.");
+                PortableExpressionEvaluationError.UnsupportedExpression,
+                $"Grouped AggregateExpr evaluation is not implemented by the {interpreterName}.");
         }
 
         var source = RequireArray(Evaluate(aggregate.Source, context), aggregate.Operator.ToString());
-        return TransitionRuntimeValue.FromObservation(Aggregate(aggregate.Operator, source));
+        return PortableExpressionValue.FromObservation(Aggregate(aggregate.Operator, source));
     }
 
-    TransitionRuntimeValue EvaluateContains(CallExpr call, TransitionExpressionContext context)
+    PortableExpressionValue EvaluateContains(CallExpr call, PortableExpressionEvaluationContext context)
     {
         var source = RequireArray(Evaluate(call.Arguments[0], context), call.Function);
         var candidate = Evaluate(call.Arguments[1], context);
-        return Boolean(source.Any(item => Equals(TransitionRuntimeValue.FromObservation(item), candidate)));
+        return Boolean(source.Any(item => Equals(PortableExpressionValue.FromObservation(item), candidate)));
     }
 
-    TransitionRuntimeValue EvaluateCount(CallExpr call, TransitionExpressionContext context)
+    PortableExpressionValue EvaluateCount(CallExpr call, PortableExpressionEvaluationContext context)
     {
         var value = Evaluate(call.Arguments[0], context).RequireConcrete(call.Function);
         return value.Kind switch
         {
-            ObservationValueKind.Array => TransitionRuntimeValue.Concrete(
+            ObservationValueKind.Array => PortableExpressionValue.Concrete(
                 ObservationValue.FromInt64(value.Array.IsDefault ? 0 : value.Array.Length)),
-            ObservationValueKind.Object => TransitionRuntimeValue.Concrete(
+            ObservationValueKind.Object => PortableExpressionValue.Concrete(
                 ObservationValue.FromInt64(value.Fields?.Count ?? 0)),
             _ => throw InvalidOperand(
                 $"Expression function '{call.Function}' requires an array or object, but received '{value.Kind}'.")
         };
     }
 
-    TransitionRuntimeValue EvaluateTextPredicate(
+    PortableExpressionValue EvaluateTextPredicate(
         CallExpr call,
-        TransitionExpressionContext context,
+        PortableExpressionEvaluationContext context,
         Func<string, string, bool> predicate) => Boolean(predicate(
         RequireString(Evaluate(call.Arguments[0], context), call.Function),
         RequireString(Evaluate(call.Arguments[1], context), call.Function)));
 
-    TransitionRuntimeValue EvaluateObject(CallExpr call, TransitionExpressionContext context)
+    PortableExpressionValue EvaluateObject(CallExpr call, PortableExpressionEvaluationContext context)
     {
         var fields = ImmutableSortedDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
         for (var index = 0; index < call.Arguments.Length; index += 2)
@@ -372,10 +468,10 @@ internal sealed class TransitionExpressionEvaluator
                 throw InvalidOperand($"Expression function 'object' requires unique non-empty string keys; received '{key}'.");
             fields.Add(key, Evaluate(call.Arguments[index + 1], context).RequireEmbeddable(call.Function));
         }
-        return TransitionRuntimeValue.Concrete(ObservationValue.FromObject(fields.ToImmutable()));
+        return PortableExpressionValue.Concrete(ObservationValue.FromObject(fields.ToImmutable()));
     }
 
-    TransitionRuntimeValue EvaluateSelect(CallExpr call, TransitionExpressionContext context)
+    PortableExpressionValue EvaluateSelect(CallExpr call, PortableExpressionEvaluationContext context)
     {
         var source = RequireArray(Evaluate(call.Arguments[0], context), call.Function);
         var result = new ObservationValue[source.Count];
@@ -383,34 +479,34 @@ internal sealed class TransitionExpressionEvaluator
         {
             result[index] = Evaluate(
                     call.Arguments[1],
-                    context.WithCurrentItem(TransitionRuntimeValue.FromObservation(source[index])))
+                    context.WithCurrentItem(PortableExpressionValue.FromObservation(source[index])))
                 .RequireEmbeddable(call.Function);
         }
-        return TransitionRuntimeValue.Concrete(ObservationValue.FromArray(result));
+        return PortableExpressionValue.Concrete(ObservationValue.FromArray(result));
     }
 
-    TransitionRuntimeValue EvaluateAppend(CallExpr call, TransitionExpressionContext context)
+    PortableExpressionValue EvaluateAppend(CallExpr call, PortableExpressionEvaluationContext context)
     {
         var source = RequireArray(Evaluate(call.Arguments[0], context), call.Function);
         var result = new ObservationValue[source.Count + 1];
         Copy(source, result, destinationIndex: 0);
         result[^1] = Evaluate(call.Arguments[1], context).RequireEmbeddable(call.Function);
-        return TransitionRuntimeValue.Concrete(ObservationValue.FromArray(result));
+        return PortableExpressionValue.Concrete(ObservationValue.FromArray(result));
     }
 
-    TransitionRuntimeValue EvaluateAppendRange(CallExpr call, TransitionExpressionContext context)
+    PortableExpressionValue EvaluateAppendRange(CallExpr call, PortableExpressionEvaluationContext context)
     {
         var source = RequireArray(Evaluate(call.Arguments[0], context), call.Function);
         var appended = RequireArray(Evaluate(call.Arguments[1], context), call.Function);
         var result = new ObservationValue[source.Count + appended.Count];
         Copy(source, result, destinationIndex: 0);
         Copy(appended, result, destinationIndex: source.Count);
-        return TransitionRuntimeValue.Concrete(ObservationValue.FromArray(result));
+        return PortableExpressionValue.Concrete(ObservationValue.FromArray(result));
     }
 
-    TransitionRuntimeValue EvaluateInsert(
+    PortableExpressionValue EvaluateInsert(
         CallExpr call,
-        TransitionExpressionContext context,
+        PortableExpressionEvaluationContext context,
         bool isRange)
     {
         var source = RequireArray(Evaluate(call.Arguments[0], context), call.Function);
@@ -424,18 +520,18 @@ internal sealed class TransitionExpressionEvaluator
         inserted.CopyTo(result, index);
         for (var sourceIndex = index; sourceIndex < source.Count; sourceIndex++)
             result[sourceIndex + inserted.Length] = source[sourceIndex];
-        return TransitionRuntimeValue.Concrete(ObservationValue.FromArray(result));
+        return PortableExpressionValue.Concrete(ObservationValue.FromArray(result));
     }
 
-    TransitionRuntimeValue EvaluateConcat(CallExpr call, TransitionExpressionContext context)
+    PortableExpressionValue EvaluateConcat(CallExpr call, PortableExpressionEvaluationContext context)
     {
         StringBuilder result = new();
         foreach (var argument in call.Arguments)
             result.Append(RequireString(Evaluate(argument, context), call.Function));
-        return TransitionRuntimeValue.Concrete(ObservationValue.FromString(result.ToString()));
+        return PortableExpressionValue.Concrete(ObservationValue.FromString(result.ToString()));
     }
 
-    TransitionRuntimeValue EvaluateSequenceAggregate(CallExpr call, TransitionExpressionContext context)
+    PortableExpressionValue EvaluateSequenceAggregate(CallExpr call, PortableExpressionEvaluationContext context)
     {
         var source = RequireArray(Evaluate(call.Arguments[0], context), call.Function);
         if (call.Function is ExprFunctionNames.Any or ExprFunctionNames.All)
@@ -444,8 +540,8 @@ internal sealed class TransitionExpressionEvaluator
             foreach (var item in source)
             {
                 var selected = call.Arguments.Length == 1
-                    ? TransitionRuntimeValue.FromObservation(item)
-                    : Evaluate(call.Arguments[1], context.WithCurrentItem(TransitionRuntimeValue.FromObservation(item)));
+                    ? PortableExpressionValue.FromObservation(item)
+                    : Evaluate(call.Arguments[1], context.WithCurrentItem(PortableExpressionValue.FromObservation(item)));
                 if (RequireBoolean(selected, call.Function) != expected)
                     return Boolean(!expected);
             }
@@ -456,9 +552,9 @@ internal sealed class TransitionExpressionEvaluator
         for (var index = 0; index < source.Count; index++)
         {
             values[index] = (call.Arguments.Length == 1
-                    ? TransitionRuntimeValue.FromObservation(source[index])
+                    ? PortableExpressionValue.FromObservation(source[index])
                     : Evaluate(call.Arguments[1], context.WithCurrentItem(
-                        TransitionRuntimeValue.FromObservation(source[index]))))
+                        PortableExpressionValue.FromObservation(source[index]))))
                 .RequireConcrete(call.Function);
         }
 
@@ -470,7 +566,7 @@ internal sealed class TransitionExpressionEvaluator
             ExprFunctionNames.Avg => AggregateOperator.Average,
             _ => throw new UnreachableException()
         };
-        return TransitionRuntimeValue.FromObservation(Aggregate(operation, values));
+        return PortableExpressionValue.FromObservation(Aggregate(operation, values));
     }
 
     static ObservationValue Aggregate(AggregateOperator operation, IReadOnlyList<ObservationValue> values) =>
@@ -481,12 +577,12 @@ internal sealed class TransitionExpressionEvaluator
             AggregateOperator.Min => MinOrMax(values, findMaximum: false),
             AggregateOperator.Max => MinOrMax(values, findMaximum: true),
             AggregateOperator.Any => ObservationValue.FromBool(values.Any(static value => RequireBoolean(
-                TransitionRuntimeValue.FromObservation(value), ExprFunctionNames.Any))),
+                PortableExpressionValue.FromObservation(value), ExprFunctionNames.Any))),
             AggregateOperator.All => ObservationValue.FromBool(values.All(static value => RequireBoolean(
-                TransitionRuntimeValue.FromObservation(value), ExprFunctionNames.All))),
+                PortableExpressionValue.FromObservation(value), ExprFunctionNames.All))),
             AggregateOperator.Average => Average(values),
             _ => throw Failure(
-                TransitionExpressionEvaluationError.UnsupportedExpression,
+                PortableExpressionEvaluationError.UnsupportedExpression,
                 $"Aggregate operator '{operation}' is not supported.")
         };
 
@@ -501,7 +597,7 @@ internal sealed class TransitionExpressionEvaluator
         }
         catch (Exception exception) when (exception is OverflowException or InvalidOperationException)
         {
-            throw Failure(TransitionExpressionEvaluationError.NumericFailure, "Aggregate sum failed.", exception);
+            throw Failure(PortableExpressionEvaluationError.NumericFailure, "Aggregate sum failed.", exception);
         }
     }
 
@@ -518,7 +614,7 @@ internal sealed class TransitionExpressionEvaluator
         }
         catch (Exception exception) when (exception is OverflowException or InvalidOperationException)
         {
-            throw Failure(TransitionExpressionEvaluationError.NumericFailure, "Aggregate average failed.", exception);
+            throw Failure(PortableExpressionEvaluationError.NumericFailure, "Aggregate average failed.", exception);
         }
     }
 
@@ -539,34 +635,34 @@ internal sealed class TransitionExpressionEvaluator
         }
         catch (InvalidOperationException exception)
         {
-            throw Failure(TransitionExpressionEvaluationError.InvalidOperand, exception.Message, exception);
+            throw Failure(PortableExpressionEvaluationError.InvalidOperand, exception.Message, exception);
         }
     }
 
-    static TransitionRuntimeValue Arithmetic(
-        TransitionRuntimeValue left,
-        TransitionRuntimeValue right,
+    static PortableExpressionValue Arithmetic(
+        PortableExpressionValue left,
+        PortableExpressionValue right,
         Func<ObservationValue, ObservationValue, ObservationValue> operation)
     {
         try
         {
-            return TransitionRuntimeValue.Concrete(operation(
+            return PortableExpressionValue.Concrete(operation(
                 left.RequireConcrete("arithmetic"),
                 right.RequireConcrete("arithmetic")));
         }
-        catch (TransitionExpressionEvaluationException)
+        catch (PortableExpressionEvaluationException)
         {
             throw;
         }
         catch (Exception exception) when (exception is OverflowException or DivideByZeroException or InvalidOperationException)
         {
-            throw Failure(TransitionExpressionEvaluationError.NumericFailure, "Numeric expression evaluation failed.", exception);
+            throw Failure(PortableExpressionEvaluationError.NumericFailure, "Numeric expression evaluation failed.", exception);
         }
     }
 
-    static TransitionRuntimeValue Compare(
-        TransitionRuntimeValue left,
-        TransitionRuntimeValue right,
+    static PortableExpressionValue Compare(
+        PortableExpressionValue left,
+        PortableExpressionValue right,
         Func<int, bool> predicate)
     {
         try
@@ -575,17 +671,17 @@ internal sealed class TransitionExpressionEvaluator
                 left.RequireConcrete("comparison"),
                 right.RequireConcrete("comparison"))));
         }
-        catch (TransitionExpressionEvaluationException)
+        catch (PortableExpressionEvaluationException)
         {
             throw;
         }
         catch (InvalidOperationException exception)
         {
-            throw Failure(TransitionExpressionEvaluationError.InvalidOperand, exception.Message, exception);
+            throw Failure(PortableExpressionEvaluationError.InvalidOperand, exception.Message, exception);
         }
     }
 
-    static bool Equals(TransitionRuntimeValue left, TransitionRuntimeValue right)
+    static bool Equals(PortableExpressionValue left, PortableExpressionValue right)
     {
         if (left.State is PortableValueState.Missing or PortableValueState.Unknown or PortableValueState.Failed)
             _ = left.RequireConcrete("equality");
@@ -597,7 +693,7 @@ internal sealed class TransitionExpressionEvaluator
             || ObservationValueSemantics.Equals(left.Observation, right.Observation);
     }
 
-    static IReadOnlyList<ObservationValue> RequireArray(TransitionRuntimeValue value, string operation)
+    static IReadOnlyList<ObservationValue> RequireArray(PortableExpressionValue value, string operation)
     {
         var observation = value.RequireConcrete(operation);
         if (observation.Kind != ObservationValueKind.Array || observation.Array.IsDefault)
@@ -605,7 +701,7 @@ internal sealed class TransitionExpressionEvaluator
         return observation.Array;
     }
 
-    static int RequireIndex(TransitionRuntimeValue value, int maximumInclusive, string operation)
+    static int RequireIndex(PortableExpressionValue value, int maximumInclusive, string operation)
     {
         var observation = value.RequireConcrete(operation);
         if (!observation.TryGetInt32(out var index)
@@ -618,7 +714,7 @@ internal sealed class TransitionExpressionEvaluator
         return index;
     }
 
-    internal static bool RequireBoolean(TransitionRuntimeValue value, string operation)
+    internal static bool RequireBoolean(PortableExpressionValue value, string operation)
     {
         var observation = value.RequireConcrete(operation);
         if (observation.Kind != ObservationValueKind.Bool)
@@ -626,7 +722,7 @@ internal sealed class TransitionExpressionEvaluator
         return observation.Bool;
     }
 
-    static string RequireString(TransitionRuntimeValue value, string operation)
+    static string RequireString(PortableExpressionValue value, string operation)
     {
         var observation = value.RequireConcrete(operation);
         if (observation.Kind != ObservationValueKind.String || observation.String is null)
@@ -634,8 +730,8 @@ internal sealed class TransitionExpressionEvaluator
         return observation.String;
     }
 
-    static TransitionRuntimeValue Boolean(bool value) =>
-        TransitionRuntimeValue.Concrete(ObservationValue.FromBool(value));
+    static PortableExpressionValue Boolean(bool value) =>
+        PortableExpressionValue.Concrete(ObservationValue.FromBool(value));
 
     static void Copy(
         IReadOnlyList<ObservationValue> source,
@@ -646,14 +742,14 @@ internal sealed class TransitionExpressionEvaluator
             destination[destinationIndex + index] = source[index];
     }
 
-    internal static TransitionExpressionEvaluationException Failure(
-        TransitionExpressionEvaluationError error,
+    internal static PortableExpressionEvaluationException Failure(
+        PortableExpressionEvaluationError error,
         string message,
         Exception? innerException = null,
         PortableValueState? valueState = null,
         DocumentValidationDiagnostic? sourceDiagnostic = null) =>
         new(error, message, innerException, valueState, sourceDiagnostic);
 
-    static TransitionExpressionEvaluationException InvalidOperand(string message) =>
-        Failure(TransitionExpressionEvaluationError.InvalidOperand, message);
+    static PortableExpressionEvaluationException InvalidOperand(string message) =>
+        Failure(PortableExpressionEvaluationError.InvalidOperand, message);
 }

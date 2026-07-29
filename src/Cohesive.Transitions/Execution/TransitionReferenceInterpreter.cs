@@ -127,9 +127,11 @@ public static class TransitionReferenceInterpreter
     {
         readonly CompiledTransitionPlan plan;
         readonly TransitionActivation activation;
-        readonly TransitionExpressionEvaluator evaluator = new();
-        readonly Dictionary<ValueBindingId, TransitionRuntimeValue> bindings = [];
-        readonly Dictionary<FieldPath, TransitionRuntimeValue> candidate = [];
+        readonly PortableExpressionReferenceEvaluator evaluator = new(
+            TransitionExpressionLanguage.Capabilities,
+            interpreterName: "Transition reference interpreter");
+        readonly Dictionary<ValueBindingId, PortableExpressionValue> bindings = [];
+        readonly Dictionary<FieldPath, PortableExpressionValue> candidate = [];
         readonly Dictionary<TransitionObservationAccess, PortableValue> observedReads = [];
         readonly List<TransitionObservationAccess> observedReadOrder = [];
         readonly List<TransitionTraceEvent> trace = [];
@@ -153,7 +155,7 @@ public static class TransitionReferenceInterpreter
                 if (activationFailure is not null)
                     return Failure(TransitionDecisionKind.InfrastructureFailure, activationFailure);
 
-                bindings[TransitionBindingIds.Input] = TransitionRuntimeValue.FromPortable(activation.Input);
+                bindings[TransitionBindingIds.Input] = PortableExpressionValue.FromPortable(activation.Input);
 
                 foreach (var precondition in plan.Definition.Preconditions)
                 {
@@ -243,11 +245,11 @@ public static class TransitionReferenceInterpreter
             {
                 return Failure(exception.Kind, exception.Diagnostic);
             }
-            catch (TransitionExpressionEvaluationException exception)
+            catch (PortableExpressionEvaluationException exception)
             {
                 if (exception.SourceDiagnostic is not null)
                     return Failure(TransitionDecisionKind.InfrastructureFailure, exception.SourceDiagnostic);
-                var code = exception.Error == TransitionExpressionEvaluationError.RuntimeInputUnavailable
+                var code = exception.Error == PortableExpressionEvaluationError.RuntimeInputUnavailable
                     ? exception.ValueState == PortableValueState.Unknown
                         ? TransitionExecutionDiagnosticCodes.ObservationUnknown
                         : TransitionExecutionDiagnosticCodes.ObservationUnavailable
@@ -272,7 +274,7 @@ public static class TransitionReferenceInterpreter
 
         Terminal? ExecuteSequence(
             SequenceTransitionNode sequence,
-            Dictionary<ValueBindingId, TransitionRuntimeValue> scope)
+            Dictionary<ValueBindingId, PortableExpressionValue> scope)
         {
             foreach (var node in sequence.Steps)
             {
@@ -285,25 +287,25 @@ public static class TransitionReferenceInterpreter
 
         Terminal? ExecuteNode(
             TransitionNode node,
-            Dictionary<ValueBindingId, TransitionRuntimeValue> scope) => node switch
-        {
-            SequenceTransitionNode sequence => ExecuteSequence(sequence, new(scope)),
-            LetTransitionNode let => ExecuteLet(let, scope),
-            ChoiceTransitionNode choice => ExecuteChoice(choice, scope),
-            MatchTransitionNode match => ExecuteMatch(match, scope),
-            UpdateTransitionNode update => ExecuteUpdate(update, scope),
-            EmitTransitionNode emit => ExecuteEmit(emit, scope),
-            MoveMachineTransitionNode movement => ExecuteMachineMovement(movement, scope),
-            OutcomeTransitionNode outcome => ExecuteOutcome(outcome, scope),
-            _ => throw Invalid(
-                TransitionExecutionDiagnosticCodes.ExpressionEvaluationFailed,
-                $"Transition node '{node.GetType().Name}' is unsupported.",
-                node.Id)
-        };
+            Dictionary<ValueBindingId, PortableExpressionValue> scope) => node switch
+            {
+                SequenceTransitionNode sequence => ExecuteSequence(sequence, new(scope)),
+                LetTransitionNode let => ExecuteLet(let, scope),
+                ChoiceTransitionNode choice => ExecuteChoice(choice, scope),
+                MatchTransitionNode match => ExecuteMatch(match, scope),
+                UpdateTransitionNode update => ExecuteUpdate(update, scope),
+                EmitTransitionNode emit => ExecuteEmit(emit, scope),
+                MoveMachineTransitionNode movement => ExecuteMachineMovement(movement, scope),
+                OutcomeTransitionNode outcome => ExecuteOutcome(outcome, scope),
+                _ => throw Invalid(
+                    TransitionExecutionDiagnosticCodes.ExpressionEvaluationFailed,
+                    $"Transition node '{node.GetType().Name}' is unsupported.",
+                    node.Id)
+            };
 
         Terminal? ExecuteLet(
             LetTransitionNode let,
-            Dictionary<ValueBindingId, TransitionRuntimeValue> scope)
+            Dictionary<ValueBindingId, PortableExpressionValue> scope)
         {
             var value = Evaluate(let.Value, let.Id, candidateState: false, scope);
             _ = ValidateTyped(value, let.Contract, let.Id);
@@ -314,7 +316,7 @@ public static class TransitionReferenceInterpreter
 
         Terminal? ExecuteChoice(
             ChoiceTransitionNode choice,
-            Dictionary<ValueBindingId, TransitionRuntimeValue> scope)
+            Dictionary<ValueBindingId, PortableExpressionValue> scope)
         {
             foreach (var choiceCase in choice.Cases)
             {
@@ -352,13 +354,13 @@ public static class TransitionReferenceInterpreter
 
         Terminal? ExecuteMatch(
             MatchTransitionNode match,
-            Dictionary<ValueBindingId, TransitionRuntimeValue> scope)
+            Dictionary<ValueBindingId, PortableExpressionValue> scope)
         {
             var value = Evaluate(match.Value, match.Id, candidateState: false, scope);
             _ = ValidateTyped(value, match.Contract, match.Id);
             foreach (var matchCase in match.Cases)
             {
-                if (!RuntimeEquals(value, TransitionRuntimeValue.FromPortable(matchCase.Pattern)))
+                if (!RuntimeEquals(value, PortableExpressionValue.FromPortable(matchCase.Pattern)))
                     continue;
 
                 AddTrace(
@@ -385,7 +387,7 @@ public static class TransitionReferenceInterpreter
 
         Terminal? ExecuteUpdate(
             UpdateTransitionNode update,
-            Dictionary<ValueBindingId, TransitionRuntimeValue> scope)
+            Dictionary<ValueBindingId, PortableExpressionValue> scope)
         {
             var contract = ResolveObservationContract(update.Path);
             var before = ReadCandidate(update.Path, update.Id);
@@ -414,7 +416,7 @@ public static class TransitionReferenceInterpreter
                     $"Patch operation '{update.Operation.GetType().Name}' is unsupported.",
                     update.Id)
             };
-            WriteCandidate(executed.Path, TransitionRuntimeValue.FromPortable(executed.After));
+            WriteCandidate(executed.Path, PortableExpressionValue.FromPortable(executed.After));
             executedPatches.Add(executed);
             TracePatch(executed, TransitionTraceEventKind.PatchExecuted);
             return null;
@@ -424,8 +426,8 @@ public static class TransitionReferenceInterpreter
             UpdateTransitionNode update,
             SetTransitionPatch operation,
             ValueContract contract,
-            TransitionRuntimeValue before,
-            Dictionary<ValueBindingId, TransitionRuntimeValue> scope)
+            PortableExpressionValue before,
+            Dictionary<ValueBindingId, PortableExpressionValue> scope)
         {
             var after = EvaluateTyped(operation.Value, contract, update.Id, candidateState: false, scope);
             return new(
@@ -439,7 +441,7 @@ public static class TransitionReferenceInterpreter
         static TransitionExecutedPatch ExecuteRemove(
             UpdateTransitionNode update,
             ValueContract contract,
-            TransitionRuntimeValue before)
+            PortableExpressionValue before)
         {
             var after = PortableValue.Absent(contract);
             return new(
@@ -454,8 +456,8 @@ public static class TransitionReferenceInterpreter
             UpdateTransitionNode update,
             IncrementTransitionPatch operation,
             ValueContract contract,
-            TransitionRuntimeValue before,
-            Dictionary<ValueBindingId, TransitionRuntimeValue> scope)
+            PortableExpressionValue before,
+            Dictionary<ValueBindingId, PortableExpressionValue> scope)
         {
             var amount = EvaluateTyped(operation.Amount, contract, update.Id, candidateState: false, scope);
             ObservationValue result;
@@ -463,7 +465,7 @@ public static class TransitionReferenceInterpreter
             {
                 result = ObservationValueSemantics.Add(
                     before.RequireConcrete("Increment patch target"),
-                    TransitionRuntimeValue.FromPortable(amount).RequireConcrete("Increment patch amount"));
+                    PortableExpressionValue.FromPortable(amount).RequireConcrete("Increment patch amount"));
             }
             catch (Exception exception) when (exception is InvalidOperationException or OverflowException)
             {
@@ -472,7 +474,7 @@ public static class TransitionReferenceInterpreter
                     $"Increment patch '{update.Id.Value}' failed: {exception.Message}",
                     update.Id);
             }
-            var after = ValidateTyped(TransitionRuntimeValue.Concrete(result), contract, update.Id);
+            var after = ValidateTyped(PortableExpressionValue.Concrete(result), contract, update.Id);
             return new(
                 update.Id,
                 update.Path,
@@ -485,17 +487,17 @@ public static class TransitionReferenceInterpreter
             UpdateTransitionNode update,
             AddToSetTransitionPatch operation,
             ValueContract contract,
-            TransitionRuntimeValue before,
-            Dictionary<ValueBindingId, TransitionRuntimeValue> scope)
+            PortableExpressionValue before,
+            Dictionary<ValueBindingId, PortableExpressionValue> scope)
         {
             var elementContract = ElementContract(contract);
             var value = EvaluateTyped(operation.Value, elementContract, update.Id, candidateState: false, scope);
             var source = RequireArray(before, "AddToSet patch target");
-            var candidateValue = TransitionRuntimeValue.FromPortable(value).RequireObservation("AddToSet patch value");
+            var candidateValue = PortableExpressionValue.FromPortable(value).RequireObservation("AddToSet patch value");
             var changed = !source.Any(item => ObservationValueSemantics.Equals(item, candidateValue));
             var result = changed ? Append(source, candidateValue) : source.ToArray();
             var after = ValidateTyped(
-                TransitionRuntimeValue.Concrete(ObservationValue.FromArray(result)),
+                PortableExpressionValue.Concrete(ObservationValue.FromArray(result)),
                 contract,
                 update.Id);
             return new(
@@ -510,16 +512,16 @@ public static class TransitionReferenceInterpreter
             UpdateTransitionNode update,
             AppendTransitionPatch operation,
             ValueContract contract,
-            TransitionRuntimeValue before,
-            Dictionary<ValueBindingId, TransitionRuntimeValue> scope)
+            PortableExpressionValue before,
+            Dictionary<ValueBindingId, PortableExpressionValue> scope)
         {
             var elementContract = ElementContract(contract);
             var value = EvaluateTyped(operation.Value, elementContract, update.Id, candidateState: false, scope);
             var result = Append(
                 RequireArray(before, "Append patch target"),
-                TransitionRuntimeValue.FromPortable(value).RequireObservation("Append patch value"));
+                PortableExpressionValue.FromPortable(value).RequireObservation("Append patch value"));
             var after = ValidateTyped(
-                TransitionRuntimeValue.Concrete(ObservationValue.FromArray(result)),
+                PortableExpressionValue.Concrete(ObservationValue.FromArray(result)),
                 contract,
                 update.Id);
             return new(
@@ -534,8 +536,8 @@ public static class TransitionReferenceInterpreter
             UpdateTransitionNode update,
             UpsertOwnedChildTransitionPatch operation,
             ValueContract contract,
-            TransitionRuntimeValue before,
-            Dictionary<ValueBindingId, TransitionRuntimeValue> scope)
+            PortableExpressionValue before,
+            Dictionary<ValueBindingId, PortableExpressionValue> scope)
         {
             var elementContract = ElementContract(contract);
             var identityContract = ResolveRelativeContract(elementContract, operation.IdentityPath);
@@ -552,8 +554,8 @@ public static class TransitionReferenceInterpreter
                 candidateState: false,
                 scope);
             var source = RequireArray(before, "owned-child upsert target");
-            var identityValue = TransitionRuntimeValue.FromPortable(identity);
-            var replacementValue = TransitionRuntimeValue.FromPortable(value);
+            var identityValue = PortableExpressionValue.FromPortable(identity);
+            var replacementValue = PortableExpressionValue.FromPortable(value);
             var replacementIdentity = replacementValue.Project(operation.IdentityPath);
             if (!RuntimeEquals(replacementIdentity, identityValue))
             {
@@ -568,7 +570,7 @@ public static class TransitionReferenceInterpreter
             var found = false;
             for (var index = 0; index < result.Length; index++)
             {
-                var childIdentity = TransitionRuntimeValue.FromObservation(result[index]).Project(operation.IdentityPath);
+                var childIdentity = PortableExpressionValue.FromObservation(result[index]).Project(operation.IdentityPath);
                 if (!RuntimeEquals(childIdentity, identityValue))
                     continue;
                 if (found)
@@ -584,7 +586,7 @@ public static class TransitionReferenceInterpreter
             if (!found)
                 result = Append(result, replacement);
             var after = ValidateTyped(
-                TransitionRuntimeValue.Concrete(ObservationValue.FromArray(result)),
+                PortableExpressionValue.Concrete(ObservationValue.FromArray(result)),
                 contract,
                 update.Id);
             return new(
@@ -599,8 +601,8 @@ public static class TransitionReferenceInterpreter
             UpdateTransitionNode update,
             RemoveOwnedChildTransitionPatch operation,
             ValueContract contract,
-            TransitionRuntimeValue before,
-            Dictionary<ValueBindingId, TransitionRuntimeValue> scope)
+            PortableExpressionValue before,
+            Dictionary<ValueBindingId, PortableExpressionValue> scope)
         {
             var elementContract = ElementContract(contract);
             var identityContract = ResolveRelativeContract(elementContract, operation.IdentityPath);
@@ -611,13 +613,13 @@ public static class TransitionReferenceInterpreter
                 candidateState: false,
                 scope);
             var source = RequireArray(before, "owned-child removal target");
-            var identityValue = TransitionRuntimeValue.FromPortable(identity);
+            var identityValue = PortableExpressionValue.FromPortable(identity);
             List<ObservationValue> result = new(source.Count);
             var found = false;
             foreach (var child in source)
             {
                 if (RuntimeEquals(
-                        TransitionRuntimeValue.FromObservation(child).Project(operation.IdentityPath),
+                        PortableExpressionValue.FromObservation(child).Project(operation.IdentityPath),
                         identityValue))
                 {
                     if (found)
@@ -633,7 +635,7 @@ public static class TransitionReferenceInterpreter
                 result.Add(child);
             }
             var after = ValidateTyped(
-                TransitionRuntimeValue.Concrete(ObservationValue.FromArray([.. result])),
+                PortableExpressionValue.Concrete(ObservationValue.FromArray([.. result])),
                 contract,
                 update.Id);
             return new(
@@ -646,7 +648,7 @@ public static class TransitionReferenceInterpreter
 
         Terminal? ExecuteEmit(
             EmitTransitionNode emit,
-            Dictionary<ValueBindingId, TransitionRuntimeValue> scope)
+            Dictionary<ValueBindingId, PortableExpressionValue> scope)
         {
             var contract = FindExpressionContract(
                 emit.Id,
@@ -662,7 +664,7 @@ public static class TransitionReferenceInterpreter
 
         Terminal? ExecuteMachineMovement(
             MoveMachineTransitionNode movement,
-            Dictionary<ValueBindingId, TransitionRuntimeValue> scope)
+            Dictionary<ValueBindingId, PortableExpressionValue> scope)
         {
             var link = plan.MachineEdges.FirstOrDefault(candidateLink =>
                 candidateLink.Machine == movement.Machine && candidateLink.Edge == movement.Edge)
@@ -703,7 +705,7 @@ public static class TransitionReferenceInterpreter
                     new EvaluatedSetTransitionPatch(assignment.Value),
                     before.ToPortable(assignment.Value.Contract),
                     assignment.Value);
-                WriteCandidate(assignment.Path, TransitionRuntimeValue.FromPortable(assignment.Value));
+                WriteCandidate(assignment.Path, PortableExpressionValue.FromPortable(assignment.Value));
                 executedPatches.Add(executed);
                 assignments.Add(executed);
                 TracePatch(executed, TransitionTraceEventKind.PatchExecuted);
@@ -737,7 +739,7 @@ public static class TransitionReferenceInterpreter
 
         Terminal ExecuteOutcome(
             OutcomeTransitionNode outcome,
-            Dictionary<ValueBindingId, TransitionRuntimeValue> scope)
+            Dictionary<ValueBindingId, PortableExpressionValue> scope)
         {
             var value = EvaluateTyped(
                 outcome.Value,
@@ -781,7 +783,7 @@ public static class TransitionReferenceInterpreter
                     new EvaluatedSetTransitionPatch(after),
                     before.ToPortable(derived.Contract),
                     after);
-                WriteCandidate(derived.Path, TransitionRuntimeValue.FromPortable(after));
+                WriteCandidate(derived.Path, PortableExpressionValue.FromPortable(after));
                 executedPatches.Add(executed);
                 if (executed.Changed)
                     changed.Add(executed.Path);
@@ -813,11 +815,11 @@ public static class TransitionReferenceInterpreter
             }
         }
 
-        TransitionRuntimeValue Evaluate(
+        PortableExpressionValue Evaluate(
             Expr expression,
             ExecutionNodeId node,
             bool candidateState,
-            Dictionary<ValueBindingId, TransitionRuntimeValue>? scope = null)
+            Dictionary<ValueBindingId, PortableExpressionValue>? scope = null)
         {
             var visible = scope ?? bindings;
             return evaluator.Evaluate(expression, new()
@@ -833,8 +835,8 @@ public static class TransitionReferenceInterpreter
             ExecutionNodeId node,
             bool candidateState,
             string operation,
-            Dictionary<ValueBindingId, TransitionRuntimeValue>? scope = null) =>
-            TransitionExpressionEvaluator.RequireBoolean(
+            Dictionary<ValueBindingId, PortableExpressionValue>? scope = null) =>
+            PortableExpressionReferenceEvaluator.RequireBoolean(
                 Evaluate(expression, node, candidateState, scope),
                 operation);
 
@@ -843,11 +845,11 @@ public static class TransitionReferenceInterpreter
             ValueContract contract,
             ExecutionNodeId node,
             bool candidateState,
-            Dictionary<ValueBindingId, TransitionRuntimeValue>? scope = null) =>
+            Dictionary<ValueBindingId, PortableExpressionValue>? scope = null) =>
             ValidateTyped(Evaluate(expression, node, candidateState, scope), contract, node);
 
         PortableValue ValidateTyped(
-            TransitionRuntimeValue value,
+            PortableExpressionValue value,
             ValueContract contract,
             ExecutionNodeId node)
         {
@@ -880,46 +882,46 @@ public static class TransitionReferenceInterpreter
             return portable;
         }
 
-        TransitionRuntimeValue ResolveBinding(
+        PortableExpressionValue ResolveBinding(
             ValueBindingId binding,
             ExecutionNodeId node,
             bool candidateState,
-            IReadOnlyDictionary<ValueBindingId, TransitionRuntimeValue> scope)
+            IReadOnlyDictionary<ValueBindingId, PortableExpressionValue> scope)
         {
             if (binding == TransitionBindingIds.Observation)
                 return candidateState ? ReadCandidateWhole(node) : ReadOriginal(access: TransitionObservationAccess.Whole, node);
             if (scope.TryGetValue(binding, out var value))
                 return value;
-            return TransitionRuntimeValue.Absent;
+            return PortableExpressionValue.Absent;
         }
 
-        TransitionRuntimeValue ResolveField(
+        PortableExpressionValue ResolveField(
             ValueBindingId? binding,
             FieldPath path,
             ExecutionNodeId node,
             bool candidateState,
-            IReadOnlyDictionary<ValueBindingId, TransitionRuntimeValue> scope)
+            IReadOnlyDictionary<ValueBindingId, PortableExpressionValue> scope)
         {
             var selected = binding ?? TransitionBindingIds.Observation;
             if (selected == TransitionBindingIds.Observation)
                 return candidateState ? ReadCandidate(path, node) : ReadOriginal(TransitionObservationAccess.At(path), node);
             if (selected == TransitionBindingIds.Input)
-                return TransitionRuntimeValue.FromPortable(activation.Input).Project(path);
+                return PortableExpressionValue.FromPortable(activation.Input).Project(path);
             if (scope.TryGetValue(selected, out var value))
                 return value.Project(path);
-            return TransitionRuntimeValue.Absent;
+            return PortableExpressionValue.Absent;
         }
 
-        TransitionRuntimeValue ResolveParameter(string parameter)
+        PortableExpressionValue ResolveParameter(string parameter)
         {
             var path = FieldPath.FromField(parameter);
             var contract = ResolveInputContract(parameter);
-            var value = TransitionRuntimeValue.FromPortable(activation.Input).Project(path);
+            var value = PortableExpressionValue.FromPortable(activation.Input).Project(path);
             _ = ValidateTyped(value, contract, new($"input/{parameter}"));
             return value;
         }
 
-        TransitionRuntimeValue ReadCandidate(FieldPath path, ExecutionNodeId node)
+        PortableExpressionValue ReadCandidate(FieldPath path, ExecutionNodeId node)
         {
             if (candidate.TryGetValue(path, out var exact))
                 return exact;
@@ -949,10 +951,10 @@ public static class TransitionReferenceInterpreter
                     Suffix(descendant.Key, path.Segments.Length),
                     descendant.Value.RequireObservation("candidate-state reconstruction"));
             }
-            return TransitionRuntimeValue.FromObservation(aggregate);
+            return PortableExpressionValue.FromObservation(aggregate);
         }
 
-        TransitionRuntimeValue ReadCandidateWhole(ExecutionNodeId node)
+        PortableExpressionValue ReadCandidateWhole(ExecutionNodeId node)
         {
             var original = ReadOriginal(TransitionObservationAccess.Whole, node);
             var aggregate = original.RequireObservation("candidate-state reconstruction");
@@ -960,12 +962,12 @@ public static class TransitionReferenceInterpreter
                          static entry => entry.Key,
                          TransitionStructuralOrdering.FieldPaths))
                 aggregate = aggregate.WithField(entry.Key, entry.Value.RequireObservation("candidate-state reconstruction"));
-            return TransitionRuntimeValue.FromObservation(aggregate);
+            return PortableExpressionValue.FromObservation(aggregate);
         }
 
-        void WriteCandidate(FieldPath path, TransitionRuntimeValue value) => candidate[path] = value;
+        void WriteCandidate(FieldPath path, PortableExpressionValue value) => candidate[path] = value;
 
-        TransitionRuntimeValue ReadOriginal(
+        PortableExpressionValue ReadOriginal(
             TransitionObservationAccess access,
             ExecutionNodeId node)
         {
@@ -983,7 +985,7 @@ public static class TransitionReferenceInterpreter
                 observedReads.Add(access, portable);
                 observedReadOrder.Add(access);
             }
-            return TransitionRuntimeValue.FromPortable(portable);
+            return PortableExpressionValue.FromPortable(portable);
         }
 
         bool TryResolveFrame(
@@ -1008,7 +1010,7 @@ public static class TransitionReferenceInterpreter
 
             if (frame.TryGetExact(TransitionObservationAccess.Whole, out var whole))
             {
-                value = TransitionRuntimeValue.FromPortable(whole).Project(requested).ToPortable(contract);
+                value = PortableExpressionValue.FromPortable(whole).Project(requested).ToPortable(contract);
                 return true;
             }
 
@@ -1022,7 +1024,7 @@ public static class TransitionReferenceInterpreter
                 return false;
             }
 
-            value = TransitionRuntimeValue.FromPortable(covering.Value)
+            value = PortableExpressionValue.FromPortable(covering.Value)
                 .Project(Suffix(requested, covering.Access.Path!.Value.Segments.Length))
                 .ToPortable(contract);
             return true;
@@ -1296,10 +1298,10 @@ public static class TransitionReferenceInterpreter
             nullability: collection.Nullability);
 
         static PortableValue Recontract(PortableValue value, ValueContract contract) =>
-            TransitionRuntimeValue.FromPortable(value).ToPortable(contract);
+            PortableExpressionValue.FromPortable(value).ToPortable(contract);
 
         static void RequireKnownPriorValue(
-            TransitionRuntimeValue value,
+            PortableExpressionValue value,
             FieldPath path,
             ExecutionNodeId node)
         {
@@ -1321,14 +1323,14 @@ public static class TransitionReferenceInterpreter
         }
 
         static IReadOnlyList<ObservationValue> RequireArray(
-            TransitionRuntimeValue value,
+            PortableExpressionValue value,
             string operation)
         {
             var observation = value.RequireConcrete(operation);
             if (observation.Kind != ObservationValueKind.Array || observation.Array.IsDefault)
             {
-                throw TransitionExpressionEvaluator.Failure(
-                    TransitionExpressionEvaluationError.InvalidOperand,
+                throw PortableExpressionReferenceEvaluator.Failure(
+                    PortableExpressionEvaluationError.InvalidOperand,
                     $"Operation '{operation}' requires an array, but received '{observation.Kind}'.");
             }
             return observation.Array;
@@ -1345,7 +1347,7 @@ public static class TransitionReferenceInterpreter
             return result;
         }
 
-        static bool RuntimeEquals(TransitionRuntimeValue left, TransitionRuntimeValue right)
+        static bool RuntimeEquals(PortableExpressionValue left, PortableExpressionValue right)
         {
             if (left.State != right.State)
                 return false;
