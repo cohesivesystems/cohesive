@@ -13,8 +13,10 @@ interaction contracts and runtime envelopes provide the shared event, Request, S
 canonical durable-operation reference protocol now interprets Request attempts, acknowledgement, reconciliation,
 and result admission. Canonical Process control now interprets protocol-neutral lifecycle commands, safe-point
 coordination, attempt lineage, and write-once attempt affinity without claiming a durable runtime realization.
-These protocols are not yet backed by atomic Storage state or integrated with the legacy Process runtime, so they
-do not make EK-06 or EK-08 system-runtime Passes. Canonical Process IR and its pure reference interpreter now
+The canonical protocols are now composed by a versioned `Cohesive.Storage.Processes` checkpoint and a
+copy-on-write atomic reference store with inbox admission, CAS revisions, worker fencing, replay receipts, and
+crash-cut injection. They are not yet driven by the production Process recovery loop, so this substrate does not
+make EK-06 or EK-08 system-runtime Passes. Canonical Process IR and its pure reference interpreter now
 provide the persisted semantic graph, typed bindings, exact references, immutable token/wait state, deterministic
 finite activations, and interaction intents needed by subsequent checkpoint work. EK-09 remains Partial:
 representative Transitions have a typed C# producer that is equivalent to direct IR, while Processes have direct
@@ -25,13 +27,13 @@ canonical IR but no C# lowering yet. The remaining scenarios retain the Partial 
 | Scenario | Status | Current compatibility | Missing kernel semantics |
 | --- | --- | --- | --- |
 | EK-01 — structured DQ branching | Pass | `Cohesive.Transitions.IR` provides canonical persisted structured definitions with stable nodes, typed contracts and outcomes, ordered branching and matching, algebraic sparse patches, exact interaction-contract emission references, and fingerprint-bound Machine-edge references. `TransitionStaticCompiler` performs target-independent type, flow, exhaustiveness, access/effect, derived-field, invariant, and Machine-link analysis. `TransitionReferenceInterpreter` executes either complete state or finite sparse observations through one deterministic core and returns typed outcomes, committable patches, emission intents, Machine movements, guarantee demands, conflicts, diagnostics, and ordered actual-execution evidence. | None within the EK-01 reference decision. Observation acquisition and authoritative commit remain explicit external interpretations of the returned demands and intents. |
-| EK-02 — durable human review | Partial | The canonical Process reference interpreter materializes complete `AwaitMatch` registrations, computed absolute timers, early-input buffers, input dispositions, one deterministic winner, invalidated losers, and typed continuation bindings in immutable state. Priority, clause identity, and logical input identity provide replay-stable arbitration. | ARI-166 physical inbox/checkpoint persistence and atomic claim/consume; a wait-occurrence address fence for repeated waits on one token; production timer and interaction adapters. |
-| EK-03 — vendor/manual fulfillment | Partial | Process Request nodes now emit replay-stable canonical Requests, park only their owning token, retain the exact logical obligation, and admit one contract-linked Reply outcome into the authored continuation. Inbound Reply obligations are linear across Fork/Join and cannot be duplicated or resurrected. `DurableOperationReferenceExecutor` separately supplies bounded retry, acknowledgement, reconciliation, and late/stale/duplicate result policy. | ARI-166 atomic coupling of Process continuation, outbox, operation ledger, acknowledgement, and result inbox; provider adapters and full vendor/manual workflow conformance. |
-| EK-04 — parallel gates and join recovery | Partial | `ProcessContinuationState` is a complete token set rather than a cursor. The reference interpreter creates stable Fork children, retains reciprocal membership and branch-local bindings, schedules tokens deterministically, records partial progress, and resolves All/Any/RequiredCount Joins under explicit failure, cancellation, completion-order, and tie-break policy. | ARI-166 physical multi-token checkpoint/CAS realization, worker fencing, and integrated crash/recovery tests. |
+| EK-02 — durable human review | Partial | The canonical Process reference interpreter materializes complete `AwaitMatch` registrations, computed absolute timers, early-input buffers, input dispositions, one deterministic winner, invalidated losers, and typed continuation bindings in immutable state. Every wait occurrence now has a typed replay-stable identity. An interaction may target that exact occurrence, while deliberately unscoped input can still arrive early. The reference store durably admits exact inputs and advances the same aggregate revision used by activation commits, so a racing stale commit reloads instead of losing the input. | ARI-168 recovery-driver integration, production timer and interaction adapters, and end-to-end human-review conformance. |
+| EK-03 — vendor/manual fulfillment | Partial | Process Request nodes emit replay-stable canonical Requests targeted to their exact response waits, park only their owning token, retain the exact logical obligation, and admit one contract-linked Reply outcome into the authored continuation. The versioned Storage checkpoint atomically composes continuation, outbox records, durable operation state, acknowledgements, and inbox dispositions. `DurableOperationReferenceExecutor` supplies bounded retry, acknowledgement, reconciliation, and late/stale/duplicate result policy. | ARI-168 orchestration of store, dispatcher, and Process interpreter; provider adapters and full vendor/manual workflow conformance. |
+| EK-04 — parallel gates and join recovery | Partial | `ProcessContinuationState` is a complete token set rather than a cursor. The reference interpreter creates stable Fork children, retains reciprocal membership and branch-local bindings, schedules tokens deterministically, records partial progress, and resolves All/Any/RequiredCount Joins under explicit failure, cancellation, completion-order, and tie-break policy. `ProcessDurableCheckpoint` preserves the complete continuation under physical CAS and worker fencing; the in-memory reference store verifies all-or-none before/after crash cuts. | ARI-168 recovery-driver integration, a production durable-store adapter, and end-to-end partial-join recovery conformance. |
 | EK-05 — capability-safe multi-entity coordination | Partial | Exact Transition invocations receive independent portable subjects and typed inputs; Process state retains coordination outcomes rather than aggregate snapshots, so multi-entity coordination does not imply one global transaction. | Canonical scope/region, guarantee-demand, capability-evidence, compensation, and reconciliation constructs; proof-directed rejection when an atomic multi-entity demand cannot be realized. The legacy `ProcessTransactionScope` is not canonical authority. |
-| EK-06 — durable effect crash matrix | Partial | The canonical reference protocol uses the Request `EmissionId` as logical operation identity, derives a scoped deduplication key, and models leased claim/renewal, monotonic fences, ordered attempt snapshots, explicit failure phase/effect evidence, bounded retry, timeout/cancellation, fenced reconciliation and escalation identities, one durable acknowledgement, physical batches with complete per-item evidence, and a separate target admission. Its state transitions represent all three crash cuts without promising physical exactly-once execution. | ARI-166 Storage realization of atomic origin commit/outbox publication, compare-and-swap claims and fences, durable operation-ledger state, acknowledgement persistence, inbox admission, and atomic Process-checkpoint or Transition-commit coupling. Production adapter conformance and integrated crash tests remain required. |
-| EK-07 — signal arbitration | Partial | Canonical Signal envelopes enter immutable Process input state by logical `EmissionId`. The reference interpreter buffers early input, deduplicates replay, selects exactly one `AwaitMatch` winner by descending priority, ordinal clause identity, then ordinal emission identity, retains tombstones, and applies authored late/duplicate policy without reopening the wait. | ARI-166 Storage-backed atomic inbox claims and checkpoint commits; an explicit wait-registration occurrence in `ProcessTokenInteractionTarget` so repeated waits on one token can distinguish current from same-attempt stale input. |
-| EK-08 — index rebuild recovery | Partial | `ProcessControlState` retains stable Process instance, attempt, and activation identity, invariant-preserving safe points, ordered attempt lineage, and write-once generic attempt affinities. `ProcessControlReferenceExecutor` makes pause/continue retain the current attempt and affinities, while `RestartAttempt` explicitly abandons the old attempt and starts a stable replacement without inherited affinities. | ARI-166/ARI-168 durable checkpoint and compare-and-swap realization; Storage-owned candidate-generation allocation, binding, cleanup, and abandoned-generation exclusion; retry/recovery integration that retains the attempt and generation; and fenced, idempotent generation promotion plus read/write backend swap. |
+| EK-06 — durable effect crash matrix | Partial | The canonical reference protocol uses the Request `EmissionId` as logical operation identity, derives a scoped deduplication key, and models leased claim/renewal, monotonic fences, ordered attempt snapshots, explicit failure phase/effect evidence, bounded retry, timeout/cancellation, fenced reconciliation and escalation identities, one durable acknowledgement, physical batches with complete per-item evidence, and a separate target admission. The Storage reference aggregate commits continuation, local mutations, inbox/outbox, host-operation receipts, and durable-operation state all-or-none; duplicate commit identities replay, conflicting reuse fails, and injected pre/post-boundary crashes expose none/all respectively. Physical publication remains at-least-once. | ARI-168 integration across interpreter, dispatcher, acknowledgement, and recovery cuts; production adapter conformance and external-side-effect crash tests. |
+| EK-07 — signal arbitration | Partial | Canonical Signal envelopes enter immutable Process input state by logical `EmissionId`. The reference interpreter buffers unscoped early input, deduplicates replay, selects exactly one `AwaitMatch` winner by descending priority, ordinal clause identity, then ordinal emission identity, retains tombstones, and applies authored late/duplicate policy without reopening the wait. Exact `ProcessWaitRegistrationId` targeting prevents stale same-token delivery from routing to a later compatible wait. Durable inbox admission and activation commit share one CAS revision, closing the registration/commit lost-wakeup cut in the reference store. | ARI-168 store/interpreter driver integration, production signal adapters, and end-to-end race conformance. |
+| EK-08 — index rebuild recovery | Partial | `ProcessControlState` retains stable Process instance, attempt, and activation identity, invariant-preserving safe points, ordered attempt lineage, and write-once generic attempt affinities. `ProcessControlReferenceExecutor` makes pause/continue retain the current attempt and affinities, while `RestartAttempt` explicitly abandons the old attempt and starts a stable replacement without inherited affinities. The Storage checkpoint now atomically composes this semantic control authority with the exact continuation under CAS and worker fencing. | ARI-168 recovery integration; Storage-owned candidate-generation allocation, binding, cleanup, and abandoned-generation exclusion; retry/recovery integration that retains the attempt and generation; and fenced, idempotent generation promotion plus read/write backend swap. |
 | EK-09 — C# and IR equivalence | Partial | Representative typed C# Transition authoring lowers immediately to the same canonical `Cohesive.Transitions.IR` definitions as direct authoring. `Cohesive.Processes.IR` now supports direct canonical authoring with stable node, edge, branch, clause, and binding identities, typed contracts, exact semantic references, deterministic normalization and fingerprints, and strict document round trips. Neither canonical IR requires callbacks or a producer assembly to deserialize and validate. | Canonical Process C# lowering and a Process C#/direct-IR equivalence suite remain ARI-170 work. The legacy Process authoring/runtime path still uses delegate-bearing executable node objects and must migrate without becoming semantic authority. |
 
 The executable classifications and focused behavioral baselines live in `src/Cohesive.Tests/ExecutionKernel/ExecutionKernelCharacterizationTests.cs` and run as part of the existing `Cohesive.Tests` project.
@@ -71,12 +73,65 @@ transitions; host cancellation is only operational interruption. The split makes
    external dispatch. Result admission then accepts once or durably returns the target's prior duplicate, late, or
    stale disposition.
 
-This is a reference protocol and conformance substrate, not a hidden in-memory claim that durability already
-exists. The reference executor does not own a repository and deliberately leaves every durable cut to its caller.
-The v1 state schema identifies the portable reference value; it is not a Storage operation-ledger or checkpoint
-wire contract, and ARI-161 adds no bespoke persistence serializer that could imply otherwise.
-ARI-166 owns physical checkpoint, inbox/outbox, operation-ledger, lease/fence, and atomic commit realization in
-Cohesive.Storage. Until that realization and Process/Transition integration exist, EK-06 remains **Partial**.
+This is a reference protocol and conformance substrate, not a hidden claim that semantic state itself performs
+durable I/O. The reference executor does not own a repository and deliberately leaves every durable cut to its
+caller. The v1 state schema identifies the portable reference value; it is not a second Storage operation-ledger
+or checkpoint authority. `ProcessDurableCheckpoint` now composes this state into a physical aggregate without
+copying its fields. Process/Transition driver integration and production adapters remain outstanding, so EK-06
+remains **Partial**.
+
+## Canonical durable Process storage
+
+`Cohesive.Storage.Processes.ProcessDurableCheckpoint` is the versioned physical aggregate for one logical Process
+instance. It composes, rather than mirrors, the canonical start receipt, complete multi-token continuation,
+`ProcessControlState`, committed activation receipts, cached host-operation results, durable inbox, logical
+interaction outbox, and `DurableOperationState` ledger. Its outer physical schema, storage revision, worker lease,
+and worker fence are persistence coordination evidence; they do not replace the Process definition revision,
+semantic control revision, operation fence, or a provider ETag. `ProcessCheckpointCompatibilityValidator` checks
+the exact definition identity, revision, fingerprint, restored-continuation and wait topology, inbox-disposition
+provenance, and bidirectional trace/host-operation/outbox/Request-operation closure before host execution. Restored
+Fork and Join state also proves derived occurrence identities, policy-shaped completion history, canonical winner
+selection, and coherent resolved state. Interaction-emission trace evidence includes the canonical envelope content
+fingerprint, so matching an `EmissionId` is insufficient to replace the payload, contract, origin, target, or
+envelope kind. Cached host-operation results are a closed typed-value-or-error union; failed results cannot retain
+emissions. Each attempt's activation receipts form an exact before/after continuation-fingerprint chain: the first
+receipt consumes the canonical clean start or restart and the current attempt's final receipt publishes the
+checkpoint continuation. A zero-activation current attempt must itself be that exact clean continuation for the
+pinned definition and invocation input.
+
+`IProcessDurableStore` exposes one provider-neutral atomic aggregate boundary. A commit replaces the complete
+checkpoint and composes eligible local mutations under an expected physical revision and exact live worker fence.
+The commit identity and deterministic content fingerprint make an ambiguous exact retry replay its prior result;
+reusing that identity for different content is an identity conflict. Activation receipts, operation receipts,
+inbox dispositions, outbox history, publication attempts, acknowledgements, and durable Request states are
+append-only or monotonic successor evidence. Physical attempt histories append new attempts, while the latest
+attempt snapshot may advance only through its legal claim, dispatch, failure, acknowledgement, or resolution
+stages; renewal or stage rollback is rejected. Once an attempt closes, no new logical activation, host-operation,
+inbox-disposition, outbox, or Request-operation evidence may be attributed to it, while already-retained physical
+publication and durable-operation attempts may continue their legal monotonic reconciliation progress. Activation
+receipts are scoped by Process attempt and use attempt-local contiguous sequences, so restart resets the canonical
+continuation count without erasing prior attempt evidence. Wait indexes and dispatch queues are projections of this
+authority, not independent semantic state.
+
+Inbox admission does not require a live worker. It deduplicates exact canonical input by logical `EmissionId` and
+increments the same aggregate revision used by activation commits. Therefore an input racing wait registration or
+consumption makes the worker's stale commit fail CAS and forces a reload; the input cannot disappear between a
+separate registration and commit. The physical inbox receipt is an attributable projection of the canonical
+semantic receipt: pending input may become Buffered and Buffered may reach one terminal disposition, but terminal
+evidence cannot be rewritten. Terminal continuations still admit late inputs durably so authored late, stale,
+observe, reject, or dead-letter policy can classify them in a subsequent activation. `ProcessWaitRegistrationId`
+identifies one exact token wait occurrence. A null
+target registration remains an intentional early-delivery address, while an exact stale or closed registration
+cannot route to a later compatible wait on the same token.
+
+`InMemoryProcessDurableStore` is a copy-on-write semantic oracle. Initialization, inbox admission, worker
+acquisition, worker renewal, and aggregate commit each expose pre-boundary and post-boundary crash points. A crash
+before publication exposes none of a staged mutation; a crash after publication but before return exposes all of
+it, and the exact retry replays. Reclaiming an expired lease allocates a greater worker fence and permanently makes
+the prior owner stale. A lease is live only from its inclusive claim time to its exclusive expiry; acquisition,
+renewal, and commit observations cannot predate retained aggregate or latest-renewal evidence. This reference
+contract promises atomic local persistence and logical idempotency. It does not promise physical exactly-once
+external publication, and it is not itself a production durability provider.
 
 ## Canonical Process lifecycle control
 
@@ -102,11 +157,18 @@ cleanup. Pending cooperative safe-point actions do not silently replace one anot
 pending action immediately. Recovery of the same attempt, replay of an observation, and explicit attempt restart
 are therefore not collapsed into one operation.
 
+The physical checkpoint retains prior-attempt activation receipts, host-operation receipts, inbox evidence,
+outbox emissions, publication attempts, and durable operation history under their original attempt provenance.
+Restart admits a new current attempt only when Control contains the exact causal abandonment and replacement
+receipt; the replacement starts with a clean zero-activation continuation and cannot inherit the abandoned
+attempt's waits, buffered inputs, Requests, or affinities.
+
 Signal commands wrap an already-canonical `SignalEnvelope`. Exact contract and target validation precede admission;
 active attempts admit Signals for arbitration, paused or pausing attempts buffer them, and retiring or terminal
 attempts reject them. Emission and scoped contract/idempotency identity prevent a replayed logical Signal from
-creating another admission. The control protocol records only admission evidence and an external realization
-intent—it does not yet supply the durable inbox or winner-claim semantics required to make EK-07 Pass.
+creating another admission. The control protocol records admission evidence and an external realization intent;
+the Storage reference store now supplies durable inbox admission and the shared CAS cut, while ARI-168 must connect
+that cut to control and Process interpretation before EK-07 can Pass end to end.
 
 `ProcessControlJsonSerializer` supplies strict canonical command, state, and versioned decision wires. Catalog-aware
 reads link Signals and validate named reason details and attempt-affinity values through the catalog's retained shape
@@ -116,10 +178,11 @@ state can retain the receipt for replay without being able to present it again a
 `ProcessAttemptAffinity` is deliberately generic and write-once. An index-sync Process can use a stable semantic
 slot to bind its current attempt to a concrete candidate-generation value, so pause/continue naturally retain that
 generation and restart naturally requires a fresh binding. Cohesive.Storage remains the authority for allocating,
-persisting, cleaning up, excluding, and promoting physical index generations. The reference executor does not own
-a checkpoint repository, atomically persist receipts or inbox entries, fence workers, allocate generations, or
-perform promotion. ARI-166 and ARI-168 own those physical cuts and runtime integration; fenced idempotent generation
-promotion and backend swap remain subsequent Storage/index-sync work. Consequently, EK-08 is **Partial**.
+persisting, cleaning up, excluding, and promoting physical index generations. The lifecycle reference executor does
+not own a checkpoint repository or allocate and promote generations. ARI-166 now supplies the physical checkpoint,
+atomic receipt/inbox composition, CAS, and worker-fence substrate; ARI-168 owns runtime integration. Fenced
+idempotent generation promotion and backend swap remain subsequent Storage/index-sync work. Consequently, EK-08
+is **Partial**.
 
 ## Canonical finite Process IR
 
@@ -182,11 +245,12 @@ of retaining impossible `Buffered` state. A `RestartAttempt` recovery never resu
 `ProcessReferenceInterpreter.RestartAttempt` creates a clean token set under a controller-supplied replacement
 attempt identity while retaining the exact Process definition and invocation input.
 
-Two model limits remain explicit. Process IR v1 has no canonical scope or guarantee-demand construct, so EK-05
-atomic multi-entity capability rejection cannot yet be expressed honestly. `ProcessTokenInteractionTarget` also
-lacks a wait-registration occurrence, so a Signal cannot soundly distinguish repeated same-token waits within one
-attempt. ARI-166 owns physical checkpoint and inbox/outbox realization, and ARI-170 owns restricted C# lowering and
-equivalence with direct IR. The legacy Process runtime remains a separate compatibility path.
+One major model limit remains explicit. Process IR v1 has no canonical scope or guarantee-demand construct, so
+EK-05 atomic multi-entity capability rejection cannot yet be expressed honestly. Interaction targets now carry an
+optional exact `ProcessWaitRegistrationId`: exact targets cannot cross wait occurrences, while a null occurrence is
+the explicit early-delivery form. ARI-166 supplies physical checkpoint and inbox/outbox realization; ARI-168 owns
+the durable runtime driver, and ARI-170 owns restricted C# lowering and equivalence with direct IR. The legacy
+Process runtime remains a separate compatibility path.
 
 ## Compatibility surfaces to migrate
 
@@ -214,13 +278,14 @@ name is accepted because checkpoint compatibility validates only `ProcessName`.
 Migration disposition: treat the existing definition, builder, and source-generator output as
 authoring/compatibility inputs. Effect handlers and transaction gateways remain legitimate adapter mechanisms,
 but delegates must cease to be persisted semantic authority. ARI-170 should lower authoring into the existing
-canonical typed nodes; ARI-165/ARI-166 should pin the exact definition fingerprint on activation and replay.
+canonical typed nodes. ARI-165 pins exact definition identity, revision, and fingerprint on activation evidence;
+ARI-166 enforces those values across checkpoint restore and replay admission.
 
 ### Single execution cursor
 
-`Cohesive.Processes.Runtime.ProcessCheckpoint` persists one `CurrentNode` plus a locality continuation stack. It has no token set, fork/join state, definition fingerprint, integrated process attempt or activation identity, durable wait inbox, operation ledger, canonical control state, compensation state, or generation-affinity binding. The separate ARI-162 `ProcessControlState` now represents attempt/activation-aware lifecycle control and generic affinity semantically, but the legacy checkpoint neither embeds nor atomically commits it. `ProcessDefinition` also accepts unrestricted control-flow cycles.
+`Cohesive.Processes.Runtime.ProcessCheckpoint` persists one `CurrentNode` plus a locality continuation stack. It has no token set, fork/join state, definition fingerprint, integrated process attempt or activation identity, durable wait inbox, operation ledger, canonical control state, compensation state, or generation-affinity binding. The ARI-166 `ProcessDurableCheckpoint` is the new physical aggregate and composes the canonical continuation, control, interaction, and durable-operation authorities under one atomic store boundary. The legacy checkpoint neither embeds nor atomically commits those authorities. Its `ProcessDefinition` also accepts unrestricted control-flow cycles.
 
-Migration disposition: preserve old checkpoints only behind an explicit compatibility reader. New kernel checkpoints should be versioned envelopes whose token set and wait/operation ledgers compose atomically with canonical Process control state; affinity slots and generation bindings must be derived from canonical Process IR and owning-block contracts. Do not infer parallelism or generation recovery from the old single cursor.
+Migration disposition: preserve old checkpoints only behind an explicit compatibility reader. New work targets `ProcessDurableCheckpoint` and `IProcessDurableStore`; ARI-168 should integrate those contracts rather than expand the legacy adapter. Affinity slots and generation bindings must be derived from canonical Process IR and owning-block contracts. Do not infer parallelism or generation recovery from the old single cursor.
 
 ## Characterized runtime paths
 
@@ -232,10 +297,10 @@ Migration disposition: preserve old checkpoints only behind an explicit compatib
 | Reference transition interpretation | `TransitionReferenceInterpreter.Decide`, `DecideFullState`, and `DecideSparse` → `TransitionDecision` plus `TransitionExecutionEvidence` |
 | Canonical transition activation | `ExecutionDefinitionDocument` → `TransitionStaticCompiler` → `TransitionReferenceInterpreter`; no producer assembly or authoring callback is required |
 | Canonical interaction contracts | `InteractionContractDefinition`, `InteractionContractDocuments`, and `InteractionContractCatalog` → exact typed domain-event, Request, Signal, and Reply contracts with portable schemas and Request obligations |
-| Canonical interaction envelopes | `DomainEventEnvelope`, `RequestEnvelope`, `SignalEnvelope`, and `ReplyEnvelope` → `InteractionEnvelopeValidator` and `InteractionEnvelopeJsonSerializer`; strict portable representation exists, but current Process and Storage runtimes do not yet use it as their durable ledger/inbox/outbox contract |
-| Canonical durable Request protocol | `DurableRequestBinding`, `DurableOperationState`, `IDurableOperationAdapter`, `IDurableOperationBatchAdapter`, and `DurableOperationReferenceExecutor` → exact Reply binding, scoped logical deduplication, fenced claim/renewal, attempt/failure evidence, typed timeout/cancellation, recovery identities, acknowledgement, physical-batch item evidence, reconciliation/escalation, and result admission as deterministic reference state; physical persistence and atomic cuts remain deferred to ARI-166 |
-| Canonical Process lifecycle control | `ProcessControlCommand`, `ProcessControlState`, `ProcessControlDecision`, `ProcessControlJsonSerializer`, and `ProcessControlReferenceExecutor` → protocol-neutral Inspect/Signal/Pause/Continue/RestartAttempt/Cancel/Terminate, stable command identity and idempotency, exact attempt/revision fencing, replay receipts, strict canonical wires, safe-point deferral, attempt lineage, canonical Signal admission, and write-once generic attempt affinity; physical checkpoint/CAS/inbox/worker-fence realization and Storage-owned index-generation lifecycle remain deferred to ARI-166/ARI-168 and index-sync work |
-| Canonical Process semantics | `Cohesive.Processes.IR.ProcessDefinition`, `ProcessStaticCompiler`, `ProcessContinuationState`, and `ProcessReferenceInterpreter` → validated exact finite-activation plan, immutable multi-token continuation, deterministic operations/Fork/Join/waits/Requests/interactions, explicit durable cuts, input arbitration and dispositions, and provenance-bearing execution traces; physical checkpoint/inbox/outbox realization remains deferred to ARI-166 |
+| Canonical interaction envelopes | `DomainEventEnvelope`, `RequestEnvelope`, `SignalEnvelope`, and `ReplyEnvelope` → `InteractionEnvelopeValidator` and `InteractionEnvelopeJsonSerializer`; strict portable representation plus optional exact `ProcessWaitRegistrationId` targeting exists, and `ProcessDurableCheckpoint` retains envelopes as the inbox/outbox authority |
+| Canonical durable Request protocol | `DurableRequestBinding`, `DurableOperationState`, `IDurableOperationAdapter`, `IDurableOperationBatchAdapter`, and `DurableOperationReferenceExecutor` → exact Reply binding, scoped logical deduplication, fenced claim/renewal, attempt/failure evidence, typed timeout/cancellation, recovery identities, acknowledgement, physical-batch item evidence, reconciliation/escalation, and result admission as deterministic reference state; `ProcessDurableCheckpoint` and `IProcessDurableStore` now atomically compose the physical ledger, while runtime dispatch/recovery integration remains ARI-168 work |
+| Canonical Process lifecycle control | `ProcessControlCommand`, `ProcessControlState`, `ProcessControlDecision`, `ProcessControlJsonSerializer`, and `ProcessControlReferenceExecutor` → protocol-neutral Inspect/Signal/Pause/Continue/RestartAttempt/Cancel/Terminate, stable command identity and idempotency, exact attempt/revision fencing, replay receipts, strict canonical wires, safe-point deferral, attempt lineage, canonical Signal admission, and write-once generic attempt affinity; `ProcessDurableCheckpoint` now composes control with physical CAS/inbox/worker-fence state, while ARI-168 and index-sync work own runtime integration and generation lifecycle |
+| Canonical Process semantics | `Cohesive.Processes.IR.ProcessDefinition`, `ProcessStaticCompiler`, `ProcessContinuationState`, `ProcessReferenceInterpreter`, `ProcessContinuationValidator`, `ProcessDurableCheckpoint`, and `IProcessDurableStore` → validated exact finite-activation plan, immutable multi-token continuation, deterministic operations/Fork/Join/waits/Requests/interactions, explicit durable cuts, input arbitration and dispositions, restored-state diagnostics, atomic checkpoint/inbox/outbox persistence, and crash-testable CAS/fencing; production runtime integration remains ARI-168 work |
 | Legacy direct transition activation | `Transition<TEntity,TInput>.Apply` → `Entity.ApplyTransition` → `DeclarativeEntityRuntime.Apply` |
 | Flat transition compatibility | `Cohesive.Transitions.Model.TransitionDefinition`, `TransitionBuilder`, `TransitionExpressionBuilder`, `TransitionExpressionAnalyzer`, `TransitionPatchProjector`, `TransitionResult` |
 | Legacy Process planning and replay | `Cohesive.Processes.Model.ProcessDefinition`, `ProcessNode`, `BranchingNode`, `ProcessExecutionPlanner`, `ProcessCheckpoint` |

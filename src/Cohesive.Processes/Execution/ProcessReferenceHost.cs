@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json.Serialization;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 
@@ -70,13 +71,16 @@ public sealed record ProcessSignalTargetResolution(
 /// <summary>Success or structured failure returned by a reference host operation.</summary>
 public sealed record ProcessOperationResult
 {
+    [JsonConstructor]
     ProcessOperationResult(
         PortableValue? value,
         ImmutableArray<InteractionEnvelope> emissions,
         DocumentValidationDiagnostic? failure)
     {
+        var normalizedEmissions = emissions.IsDefault ? [] : emissions;
+        ValidateOutcome(value, normalizedEmissions, failure);
         Value = value;
-        Emissions = emissions.IsDefault ? [] : emissions;
+        Emissions = normalizedEmissions;
         Failure = failure;
     }
 
@@ -92,6 +96,13 @@ public sealed record ProcessOperationResult
     /// <summary>Whether the operation completed with a typed value.</summary>
     public bool IsSuccessful => Value is not null && Failure is null;
 
+    /// <summary>Determines whether the result is one closed success or failure outcome.</summary>
+    /// <returns>
+    /// <see langword="true"/> when the result is a valid closed outcome; otherwise <see langword="false"/>.
+    /// </returns>
+    public bool IsValidOutcome() =>
+        HasValidOutcomeState(Value, Emissions, Failure);
+
     /// <summary>Creates a successful host-operation result.</summary>
     /// <param name="value">Typed materialized operation result.</param>
     /// <param name="emissions">Canonical interactions produced by the operation.</param>
@@ -103,10 +114,7 @@ public sealed record ProcessOperationResult
         ImmutableArray<InteractionEnvelope> emissions = default)
     {
         ArgumentNullException.ThrowIfNull(value);
-        var normalized = emissions.IsDefault ? [] : emissions;
-        if (normalized.Any(static emission => emission is null))
-            throw new ArgumentException("Operation emissions cannot contain null entries.", nameof(emissions));
-        return new(value, normalized, failure: null);
+        return new(value, emissions, failure: null);
     }
 
     /// <summary>Creates a failed host-operation result.</summary>
@@ -117,10 +125,45 @@ public sealed record ProcessOperationResult
     public static ProcessOperationResult Failed(DocumentValidationDiagnostic failure)
     {
         ArgumentNullException.ThrowIfNull(failure);
-        if (failure.Severity != DiagnosticSeverity.Error)
-            throw new ArgumentException("A failed operation requires an error diagnostic.", nameof(failure));
         return new(value: null, [], failure);
     }
+
+    static void ValidateOutcome(
+        PortableValue? value,
+        ImmutableArray<InteractionEnvelope> emissions,
+        DocumentValidationDiagnostic? failure)
+    {
+        if ((value is null) == (failure is null))
+        {
+            throw new ArgumentException(
+                "An operation result requires exactly one typed value or structured failure.",
+                nameof(value));
+        }
+
+        if (emissions.Any(static emission => emission is null))
+        {
+            throw new ArgumentException("Operation emissions cannot contain null entries.", nameof(emissions));
+        }
+
+        if (failure is not null && failure.Severity != DiagnosticSeverity.Error)
+        {
+            throw new ArgumentException("A failed operation requires an error diagnostic.", nameof(failure));
+        }
+
+        if (failure is not null && !emissions.IsEmpty)
+        {
+            throw new ArgumentException("A failed operation cannot emit interactions.", nameof(emissions));
+        }
+    }
+
+    static bool HasValidOutcomeState(
+        PortableValue? value,
+        ImmutableArray<InteractionEnvelope> emissions,
+        DocumentValidationDiagnostic? failure) =>
+        !emissions.IsDefault
+        && (value is null) != (failure is null)
+        && !emissions.Any(static emission => emission is null)
+        && (failure is null || failure.Severity == DiagnosticSeverity.Error && emissions.IsEmpty);
 }
 
 /// <summary>Success or structured failure from explicit Signal-target resolution.</summary>
@@ -157,7 +200,10 @@ public sealed record ProcessSignalTargetResult
     {
         ArgumentNullException.ThrowIfNull(failure);
         if (failure.Severity != DiagnosticSeverity.Error)
+        {
             throw new ArgumentException("Failed target resolution requires an error diagnostic.", nameof(failure));
+        }
+
         return new(target: null, failure);
     }
 }

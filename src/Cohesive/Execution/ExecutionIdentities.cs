@@ -171,6 +171,34 @@ public readonly record struct TokenId
 }
 
 /// <summary>
+/// Stable identity of one durable wait occurrence registered by a Process token.
+/// </summary>
+/// <remarks>
+/// A token may register the same semantic wait node more than once during one Process attempt. This identity
+/// distinguishes those occurrences so an interaction can address an exact current or retained wait without
+/// preventing deliberately unscoped early delivery to the token.
+/// </remarks>
+[JsonConverter(typeof(SingleValueWrapperJsonConverter))]
+public readonly record struct ProcessWaitRegistrationId
+{
+    /// <summary>Creates a Process wait-registration identity.</summary>
+    /// <param name="value">Replay-stable wait-occurrence identity.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="value"/> is empty or consists only of white-space characters.
+    /// </exception>
+    [JsonConstructor]
+    public ProcessWaitRegistrationId(string value) => Value = Guard.RequireNotNullOrWhiteSpace(value);
+
+    /// <summary>Raw wait-registration identity.</summary>
+    public string Value { get; }
+
+    /// <summary>Returns the raw wait-registration identity.</summary>
+    /// <returns>The value supplied when this identity was constructed.</returns>
+    public override string ToString() => Value;
+}
+
+/// <summary>
 /// Stable identity of one durable retry attempt to perform an external operation.
 /// </summary>
 [JsonConverter(typeof(SingleValueWrapperJsonConverter))]
@@ -210,7 +238,10 @@ public readonly record struct OperationFence
     public OperationFence(long value)
     {
         if (value <= 0)
+        {
             throw new ArgumentOutOfRangeException(nameof(value), value, "An operation fence must be positive.");
+        }
+
         Value = value;
     }
 
@@ -271,7 +302,10 @@ public sealed class OperationFenceJsonConverter : JsonConverter<OperationFence>
     {
         ArgumentNullException.ThrowIfNull(writer);
         if (value.Value <= 0)
+        {
             throw new JsonException("A default operation fence cannot be serialized.");
+        }
+
         writer.WriteStringValue(value.Value.ToString(CultureInfo.InvariantCulture));
     }
 }

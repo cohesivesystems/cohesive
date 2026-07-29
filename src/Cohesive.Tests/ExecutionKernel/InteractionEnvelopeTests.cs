@@ -81,6 +81,38 @@ public sealed class InteractionEnvelopeTests
         Assert.IsType<ProcessInteractionOrigin>(envelopes[1].Context.Origin);
     }
 
+    [Fact]
+    public void ProcessTarget_ExactWaitOccurrenceRoundTripsWithoutCollapsingToTokenScope()
+    {
+        var fixture = ContractFixture.Create();
+        var catalog = Catalog(fixture);
+        ProcessWaitRegistrationId waitRegistration = new("process-wait:v1:sha256:exact");
+        var envelope = new RequestEnvelope(
+            InteractionEnvelope.CurrentSchemaVersion,
+            Context("emission/request/exact-wait", ProcessOrigin()),
+            new(Reference(fixture.Request)),
+            StringValue("collect evidence"),
+            new ProcessTokenInteractionTarget(
+                Continuation(),
+                new("token/review"),
+                waitRegistration));
+
+        var json = InteractionEnvelopeJsonSerializer.Serialize(envelope);
+        var restored = Assert.IsType<RequestEnvelope>(
+            InteractionEnvelopeJsonSerializer.Deserialize(json, catalog));
+        var target = Assert.IsType<ProcessTokenInteractionTarget>(restored.ResponseTarget);
+
+        Assert.Equal(waitRegistration, target.WaitRegistrationId);
+        Assert.Equal(envelope, restored);
+        using var parsed = JsonDocument.Parse(json);
+        Assert.Equal(
+            waitRegistration.Value,
+            parsed.RootElement
+                .GetProperty("responseTarget")
+                .GetProperty("waitRegistrationId")
+                .GetString());
+    }
+
     [Theory]
     [InlineData("persistenceEvent")]
     [InlineData("unknown")]

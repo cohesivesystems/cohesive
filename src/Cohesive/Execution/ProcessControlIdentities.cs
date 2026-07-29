@@ -70,7 +70,7 @@ public readonly record struct ProcessSafePointId
 /// 64-bit range across JSON hosts.
 /// </remarks>
 [JsonConverter(typeof(SingleValueWrapperJsonConverter))]
-public readonly record struct ProcessControlRevision
+public readonly record struct ProcessControlRevision : IComparable<ProcessControlRevision>
 {
     /// <summary>Initial semantic control revision.</summary>
     public static ProcessControlRevision Initial { get; } = new("1");
@@ -106,6 +106,14 @@ public readonly record struct ProcessControlRevision
     /// <summary>Returns the canonical revision string.</summary>
     /// <returns>The canonical positive revision supplied at construction.</returns>
     public override string ToString() => Value;
+
+    /// <summary>Compares semantic control revisions by their positive numeric ordinal.</summary>
+    /// <param name="other">Revision to compare with this value.</param>
+    /// <returns>
+    /// A negative value when this revision precedes <paramref name="other"/>, zero when equal, or a positive value
+    /// when this revision follows <paramref name="other"/>.
+    /// </returns>
+    public int CompareTo(ProcessControlRevision other) => Ordinal.CompareTo(other.Ordinal);
 
     internal ProcessControlRevision Next()
     {

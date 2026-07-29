@@ -19,6 +19,7 @@ public sealed class ExecutionIdentityTests
             new ProcessAttemptId("attempt/process-2"),
             new ActivationId("activation/reserve-1"),
             new TokenId("token/branch-3"),
+            new ProcessWaitRegistrationId("wait/review-4"),
             new OperationAttemptId("operation-attempt/charge-1"),
             new EmissionId("emission/request-1"),
             new InteractionCorrelationId("correlation/order-123"),
@@ -51,6 +52,7 @@ public sealed class ExecutionIdentityTests
             static value => new ProcessAttemptId(value),
             static value => new ActivationId(value),
             static value => new TokenId(value),
+            static value => new ProcessWaitRegistrationId(value),
             static value => new OperationAttemptId(value),
             static value => new EmissionId(value),
             static value => new InteractionCorrelationId(value),
@@ -74,6 +76,8 @@ public sealed class ExecutionIdentityTests
         Assert.NotEqual<object>(new ExecutionDefinitionId(value), new ExecutionRevisionId(value));
         Assert.NotEqual<object>(new ProcessInstanceId(value), new ProcessAttemptId(value));
         Assert.NotEqual<object>(new ActivationId(value), new TokenId(value));
+        Assert.NotEqual<object>(new TokenId(value), new ProcessWaitRegistrationId(value));
+        Assert.NotEqual<object>(new ProcessWaitRegistrationId(value), new OperationAttemptId(value));
         Assert.NotEqual<object>(new TokenId(value), new OperationAttemptId(value));
         Assert.NotEqual<object>(new EmissionId(value), new InteractionCorrelationId(value));
         Assert.NotEqual<object>(new InteractionCorrelationId(value), new InteractionIdempotencyKey(value));

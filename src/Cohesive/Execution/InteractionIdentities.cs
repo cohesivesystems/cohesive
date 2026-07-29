@@ -61,6 +61,26 @@ public readonly record struct InteractionIdempotencyKey
     public override string ToString() => Value;
 }
 
+/// <summary>Deterministic fingerprint of one complete canonical interaction envelope.</summary>
+[JsonConverter(typeof(SingleValueWrapperJsonConverter))]
+public readonly record struct InteractionEnvelopeContentFingerprint
+{
+    /// <summary>Creates an interaction-envelope content fingerprint.</summary>
+    /// <param name="value">Versioned algorithm name and lowercase digest.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="value"/> is empty or white-space.</exception>
+    [JsonConstructor]
+    public InteractionEnvelopeContentFingerprint(string value) =>
+        Value = Guard.RequireNotNullOrWhiteSpace(value);
+
+    /// <summary>Versioned deterministic fingerprint value.</summary>
+    public string Value { get; }
+
+    /// <summary>Returns the versioned deterministic fingerprint.</summary>
+    /// <returns>The value supplied when this fingerprint was constructed.</returns>
+    public override string ToString() => Value;
+}
+
 /// <summary>Exact semantic revision of an interaction payload or result schema.</summary>
 [JsonConverter(typeof(SingleValueWrapperJsonConverter))]
 public readonly record struct InteractionValueSchemaRevision
@@ -112,9 +132,14 @@ public sealed record InteractionEntityReference
     public InteractionEntityReference(EntityTypeName entityType, EntityId entityId)
     {
         if (string.IsNullOrWhiteSpace(entityType.Value))
+        {
             throw new ArgumentException("An interaction entity requires a non-default entity type.", nameof(entityType));
+        }
+
         if (string.IsNullOrWhiteSpace(entityId.Value))
+        {
             throw new ArgumentException("An interaction entity requires a non-default entity identity.", nameof(entityId));
+        }
 
         EntityType = entityType;
         EntityId = entityId;

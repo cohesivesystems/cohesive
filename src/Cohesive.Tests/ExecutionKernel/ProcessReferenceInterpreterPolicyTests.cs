@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Compilation;
@@ -394,6 +395,267 @@ public sealed class ProcessReferenceInterpreterPolicyTests
             replay.State.Tokens.Select(TokenProjection));
     }
 
+    [Fact]
+    public void RepeatedWait_UnscopedInputPrefersActiveOccurrenceWhileExactOldTargetRemainsLate()
+    {
+        var eventDocument = InteractionDocument(
+            "interaction/event/repeated-wait",
+            new DomainEventContractDefinition(StringSchema("event/repeated-wait/v1")));
+        DomainEventContractReference eventContract = new(Reference(eventDocument));
+        var plan = Compile(
+            Definition(
+                "await",
+                ProcessRecoveryPolicy.ContinueAttempt,
+                new AwaitMatchProcessNode(
+                    new("await"),
+                    ProcessAwaitArbitration.ExclusivePriorityThenClauseId,
+                    [
+                        new ProcessAwaitInteractionClause(
+                            new("clause/repeat"),
+                            eventContract,
+                            new(new("await.repeat"), StringContract),
+                            requestObligation: null,
+                            guard: null,
+                            priority: 0,
+                            new(Edge("edge/repeat", "await")))
+                    ],
+                    ProcessAwaitInputDisposition.Observe,
+                    ProcessAwaitInputDisposition.Reject,
+                    ProcessAwaitInputDisposition.ReusePriorDisposition,
+                    ProcessAwaitMissingTargetDisposition.Reject,
+                    TimeSpan.FromDays(1))),
+            Catalog(eventDocument));
+        var initial = ProcessReferenceInterpreter.Create(plan, Continuation(), StringValue("input"));
+        var registered = ProcessReferenceInterpreter.Activate(
+            plan,
+            initial,
+            Activation("activation/repeated-wait/register", ProcessActivationCause.Start),
+            RejectingHost.Instance);
+        var token = Assert.Single(registered.State.Tokens);
+        var firstWait = Assert.Single(registered.State.Waits);
+        var unscopedTarget = new ProcessTokenInteractionTarget(registered.State.Continuation, token.Id);
+        var firstInput = new DomainEventEnvelope(
+            InteractionEnvelope.CurrentSchemaVersion,
+            IncomingContext(
+                plan,
+                registered.State.Continuation,
+                token.Id,
+                "emission/repeated-wait/first"),
+            eventContract,
+            StringValue("first"));
+        var repeated = ProcessReferenceInterpreter.Activate(
+            plan,
+            registered.State,
+            Activation(
+                "activation/repeated-wait/advance",
+                ProcessActivationCause.Interaction,
+                StartedAtUtc.AddMinutes(1),
+                inputs: [new(unscopedTarget, firstInput)]),
+            RejectingHost.Instance);
+        var activeWait = Assert.Single(repeated.State.Waits, static wait => wait.Active);
+
+        Assert.NotEqual(firstWait.RegistrationId, activeWait.RegistrationId);
+        Assert.False(repeated.State.Waits.Single(wait => wait.RegistrationId == firstWait.RegistrationId).Active);
+
+        var exactOldInput = new DomainEventEnvelope(
+            InteractionEnvelope.CurrentSchemaVersion,
+            IncomingContext(
+                plan,
+                repeated.State.Continuation,
+                token.Id,
+                "emission/repeated-wait/exact-old"),
+            eventContract,
+            StringValue("old"));
+        var exactOld = ProcessReferenceInterpreter.Activate(
+            plan,
+            repeated.State,
+            Activation(
+                "activation/repeated-wait/exact-old",
+                ProcessActivationCause.Interaction,
+                StartedAtUtc.AddMinutes(2),
+                inputs:
+                [
+                    new(
+                        new ProcessTokenInteractionTarget(
+                            repeated.State.Continuation,
+                            token.Id,
+                            firstWait.RegistrationId),
+                        exactOldInput)
+                ]),
+            RejectingHost.Instance);
+        var exactOldReceipt = Assert.Single(exactOld.InputAdmissions);
+
+        Assert.Equal(ProcessInputAdmissionDisposition.Observed, exactOldReceipt.Disposition);
+        Assert.Equal(firstWait.RegistrationId, exactOldReceipt.WaitRegistrationId);
+        Assert.Equal(
+            firstWait.RegistrationId,
+            exactOldReceipt.Target.WaitRegistrationId);
+        Assert.Equal(
+            activeWait.RegistrationId,
+            Assert.Single(exactOld.State.Waits, static wait => wait.Active).RegistrationId);
+
+        var unscopedInput = new DomainEventEnvelope(
+            InteractionEnvelope.CurrentSchemaVersion,
+            IncomingContext(
+                plan,
+                repeated.State.Continuation,
+                token.Id,
+                "emission/repeated-wait/unscoped"),
+            eventContract,
+            StringValue("current"));
+        var preferred = ProcessReferenceInterpreter.Activate(
+            plan,
+            repeated.State,
+            Activation(
+                "activation/repeated-wait/unscoped",
+                ProcessActivationCause.Interaction,
+                StartedAtUtc.AddMinutes(2),
+                inputs: [new(unscopedTarget, unscopedInput)]),
+            RejectingHost.Instance);
+        var preferredReceipt = Assert.Single(preferred.InputAdmissions);
+
+        Assert.Equal(ProcessInputAdmissionDisposition.Consumed, preferredReceipt.Disposition);
+        Assert.Equal(activeWait.RegistrationId, preferredReceipt.WaitRegistrationId);
+        Assert.Null(preferredReceipt.Target.WaitRegistrationId);
+        Assert.NotEqual(
+            activeWait.RegistrationId,
+            Assert.Single(preferred.State.Waits, static wait => wait.Active).RegistrationId);
+    }
+
+    [Fact]
+    public void RepeatedWait_UnscopedInputRejectsAmbiguousInactiveOccurrencesWithoutChoosingOne()
+    {
+        var eventDocument = InteractionDocument(
+            "interaction/event/ambiguous-repeated-wait",
+            new DomainEventContractDefinition(StringSchema("event/ambiguous-repeated-wait/v1")));
+        DomainEventContractReference eventContract = new(Reference(eventDocument));
+        var plan = Compile(
+            Definition(
+                "await",
+                ProcessRecoveryPolicy.ContinueAttempt,
+                new AwaitMatchProcessNode(
+                    new("await"),
+                    ProcessAwaitArbitration.ExclusivePriorityThenClauseId,
+                    [
+                        new ProcessAwaitInteractionClause(
+                            new("clause/repeat"),
+                            eventContract,
+                            new(new("await.repeat"), StringContract),
+                            requestObligation: null,
+                            guard: null,
+                            priority: 0,
+                            new(Edge("edge/repeat", "await")))
+                    ],
+                    ProcessAwaitInputDisposition.Observe,
+                    ProcessAwaitInputDisposition.Reject,
+                    ProcessAwaitInputDisposition.ReusePriorDisposition,
+                    ProcessAwaitMissingTargetDisposition.Reject,
+                    TimeSpan.FromDays(1))),
+            Catalog(eventDocument));
+        var initial = ProcessReferenceInterpreter.Create(plan, Continuation(), StringValue("input"));
+        var registered = ProcessReferenceInterpreter.Activate(
+            plan,
+            initial,
+            Activation("activation/ambiguous-wait/register", ProcessActivationCause.Start),
+            RejectingHost.Instance);
+        var token = Assert.Single(registered.State.Tokens);
+        var firstInput = new DomainEventEnvelope(
+            InteractionEnvelope.CurrentSchemaVersion,
+            IncomingContext(
+                plan,
+                registered.State.Continuation,
+                token.Id,
+                "emission/ambiguous-wait/first"),
+            eventContract,
+            StringValue("first"));
+        var repeated = ProcessReferenceInterpreter.Activate(
+            plan,
+            registered.State,
+            Activation(
+                "activation/ambiguous-wait/advance",
+                ProcessActivationCause.Interaction,
+                StartedAtUtc.AddMinutes(1),
+                inputs:
+                [
+                    new(
+                        new ProcessTokenInteractionTarget(registered.State.Continuation, token.Id),
+                        firstInput)
+                ]),
+            RejectingHost.Instance);
+        Assert.Equal(2, repeated.State.Waits.Length);
+        Assert.Single(repeated.State.Waits, static wait => !wait.Active);
+        Assert.Single(repeated.State.Waits, static wait => wait.Active);
+        var inactiveWaits = repeated.State.Waits
+            .Select(wait => wait.Active
+                ? NewWait(
+                    wait.RegistrationId,
+                    wait.Token,
+                    wait.Node,
+                    wait.Kind,
+                    wait.RegisteredAtUtc,
+                    wait.Timers,
+                    active: false,
+                    wait.WinnerClause,
+                    wait.WinnerInput,
+                    wait.ObligationEmission)
+                : wait)
+            .ToImmutableArray();
+        var ambiguousState = NewContinuation(
+            repeated.State.Definition,
+            repeated.State.Continuation,
+            repeated.State.CompletedActivationCount,
+            repeated.State.Tokens,
+            repeated.State.Forks,
+            inactiveWaits,
+            repeated.State.BufferedInputs,
+            repeated.State.InputReceipts,
+            repeated.State.OutstandingRequests,
+            repeated.State.Terminal);
+        var ambiguousInput = new DomainEventEnvelope(
+            InteractionEnvelope.CurrentSchemaVersion,
+            IncomingContext(
+                plan,
+                ambiguousState.Continuation,
+                token.Id,
+                "emission/ambiguous-wait/unscoped"),
+            eventContract,
+            StringValue("ambiguous"));
+        var decision = ProcessReferenceInterpreter.Activate(
+            plan,
+            ambiguousState,
+            Activation(
+                "activation/ambiguous-wait/unscoped",
+                ProcessActivationCause.Interaction,
+                StartedAtUtc.AddMinutes(2),
+                inputs:
+                [
+                    new(
+                        new ProcessTokenInteractionTarget(ambiguousState.Continuation, token.Id),
+                        ambiguousInput)
+                ]),
+            RejectingHost.Instance);
+
+        var receipt = Assert.Single(decision.InputAdmissions);
+        Assert.Equal(ProcessInputAdmissionDisposition.MissingTarget, receipt.Disposition);
+        Assert.Null(receipt.Target.WaitRegistrationId);
+        Assert.Null(receipt.WaitRegistrationId);
+        Assert.Contains(decision.Diagnostics, static diagnostic =>
+            diagnostic.Code == ProcessExecutionDiagnosticCodes.InputTargetAmbiguous);
+        Assert.Equal(
+            inactiveWaits.Select(WaitProjection),
+            decision.State.Waits.Select(WaitProjection));
+        Assert.All(decision.State.Waits, static wait => Assert.False(wait.Active));
+        Assert.DoesNotContain(
+            decision.Evidence.Trace,
+            static trace => trace.Kind == ProcessTraceEventKind.WaitResolved);
+        var admissionTrace = Assert.Single(decision.Evidence.Trace, trace =>
+            trace.Kind == ProcessTraceEventKind.InputAdmitted
+            && trace.Emission == ambiguousInput.Context.EmissionId);
+        Assert.Equal("ambiguous-wait-occurrence:MissingTarget", admissionTrace.Detail);
+        Assert.Equal(ProcessInputAdmissionDisposition.MissingTarget, admissionTrace.InputDisposition);
+        Assert.Null(admissionTrace.WaitRegistrationId);
+    }
+
     static void AssertConflict(ProcessActivationDecision decision, EmissionId emission)
     {
         Assert.Empty(decision.State.BufferedInputs);
@@ -410,7 +672,7 @@ public sealed class ProcessReferenceInterpreterPolicyTests
     static (TokenId Id, ExecutionNodeId Node, ExecutionTokenDisposition Disposition, long Step) TokenProjection(
         ProcessTokenState token) => (token.Id, token.Node, token.Disposition, token.Step);
 
-    static (string Registration, TokenId Token, ExecutionNodeId Node, ProcessWaitKind Kind, bool Active) WaitProjection(
+    static (ProcessWaitRegistrationId Registration, TokenId Token, ExecutionNodeId Node, ProcessWaitKind Kind, bool Active) WaitProjection(
         ProcessWaitState wait) => (wait.RegistrationId, wait.Token, wait.Node, wait.Kind, wait.Active);
 
     static (
@@ -420,8 +682,22 @@ public sealed class ProcessReferenceInterpreterPolicyTests
         ExecutionNodeId Node,
         ExecutionNodeId? BranchOrClause,
         EmissionId? Emission,
-        string? Detail) TraceProjection(ProcessTraceEvent item) =>
-        (item.Sequence, item.Kind, item.Token, item.Node, item.BranchOrClause, item.Emission, item.Detail);
+        string? Detail,
+        InteractionEnvelopeContentFingerprint? EmissionFingerprint,
+        long? OperationOccurrence,
+        ProcessInputAdmissionDisposition? InputDisposition,
+        ProcessWaitRegistrationId? WaitRegistrationId) TraceProjection(ProcessTraceEvent item) =>
+        (item.Sequence,
+            item.Kind,
+            item.Token,
+            item.Node,
+            item.BranchOrClause,
+            item.Emission,
+            item.Detail,
+            item.EmissionFingerprint,
+            item.OperationOccurrence,
+            item.InputDisposition,
+            item.WaitRegistrationId);
 
     static CompiledProcessPlan Compile(
         CanonicalProcessDefinition definition,
@@ -532,6 +808,32 @@ public sealed class ProcessReferenceInterpreterPolicyTests
         Environment.NewLine,
         validation.Diagnostics.Select(static diagnostic =>
             $"{diagnostic.Code} at {diagnostic.Location}: {diagnostic.Message}"));
+
+    [UnsafeAccessor(UnsafeAccessorKind.Constructor)]
+    static extern ProcessContinuationState NewContinuation(
+        ExecutionDefinitionReference definition,
+        ProcessContinuationIdentity continuation,
+        long completedActivationCount,
+        ImmutableArray<ProcessTokenState> tokens,
+        ImmutableArray<ProcessForkState> forks,
+        ImmutableArray<ProcessWaitState> waits,
+        ImmutableArray<ProcessBufferedInput> bufferedInputs,
+        ImmutableArray<ProcessInputReceipt> inputReceipts,
+        ImmutableArray<ProcessOutstandingRequest> outstandingRequests,
+        ExecutionTerminalOutcome terminal);
+
+    [UnsafeAccessor(UnsafeAccessorKind.Constructor)]
+    static extern ProcessWaitState NewWait(
+        ProcessWaitRegistrationId registrationId,
+        TokenId token,
+        ExecutionNodeId node,
+        ProcessWaitKind kind,
+        DateTimeOffset registeredAtUtc,
+        ImmutableArray<ProcessTimerState> timers,
+        bool active,
+        ExecutionNodeId? winnerClause,
+        EmissionId? winnerInput,
+        EmissionId? obligationEmission);
 
     sealed class RejectingHost : IProcessReferenceHost
     {

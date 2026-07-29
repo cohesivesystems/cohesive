@@ -84,6 +84,21 @@ public enum ProcessTraceEventKind
 /// <param name="Emission">Optional logical interaction identity.</param>
 /// <param name="Detail">Optional stable non-sensitive detail.</param>
 /// <param name="SourceReferences">Producer-source references resolved from the canonical source map.</param>
+/// <param name="EmissionFingerprint">
+/// Exact complete interaction-envelope fingerprint for an <see cref="ProcessTraceEventKind.InteractionEmitted"/>
+/// event; null for every other event kind.
+/// </param>
+/// <param name="OperationOccurrence">
+/// Zero-based token-history occurrence for an <see cref="ProcessTraceEventKind.OperationCompleted"/> event; null
+/// for every other event kind.
+/// </param>
+/// <param name="InputDisposition">
+/// Exact semantic disposition for a <see cref="ProcessTraceEventKind.InputAdmitted"/> event; null for every other
+/// event kind.
+/// </param>
+/// <param name="WaitRegistrationId">
+/// Exact wait occurrence named by an input disposition, when one participated in the decision.
+/// </param>
 public sealed record ProcessTraceEvent(
     int Sequence,
     ProcessTraceEventKind Kind,
@@ -95,7 +110,11 @@ public sealed record ProcessTraceEvent(
     ExecutionNodeId? BranchOrClause,
     EmissionId? Emission,
     string? Detail,
-    ImmutableArray<string> SourceReferences);
+    ImmutableArray<string> SourceReferences,
+    InteractionEnvelopeContentFingerprint? EmissionFingerprint = null,
+    long? OperationOccurrence = null,
+    ProcessInputAdmissionDisposition? InputDisposition = null,
+    ProcessWaitRegistrationId? WaitRegistrationId = null);
 
 /// <summary>Attributable deterministic evidence returned by one finite Process activation.</summary>
 /// <param name="Definition">Exact Process definition identity, revision, and fingerprint.</param>

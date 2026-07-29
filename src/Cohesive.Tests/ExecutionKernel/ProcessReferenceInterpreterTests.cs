@@ -135,9 +135,29 @@ public sealed class ProcessReferenceInterpreterTests
             replayFork.Branches.Select(static branch => (branch.Branch, branch.Token, branch.Disposition)));
         Assert.Equal(
             first.Evidence.Trace.Select(static item =>
-                (item.Sequence, item.Kind, item.Token, item.Node, item.BranchOrClause, item.Emission, item.Detail)),
+                (item.Sequence,
+                    item.Kind,
+                    item.Token,
+                    item.Node,
+                    item.BranchOrClause,
+                    item.Emission,
+                    item.Detail,
+                    item.EmissionFingerprint,
+                    item.OperationOccurrence,
+                    item.InputDisposition,
+                    item.WaitRegistrationId)),
             replay.Evidence.Trace.Select(static item =>
-                (item.Sequence, item.Kind, item.Token, item.Node, item.BranchOrClause, item.Emission, item.Detail)));
+                (item.Sequence,
+                    item.Kind,
+                    item.Token,
+                    item.Node,
+                    item.BranchOrClause,
+                    item.Emission,
+                    item.Detail,
+                    item.EmissionFingerprint,
+                    item.OperationOccurrence,
+                    item.InputDisposition,
+                    item.WaitRegistrationId)));
     }
 
     [Fact]
@@ -842,14 +862,18 @@ public sealed class ProcessReferenceInterpreterTests
         Assert.Equal(ProcessActivationDisposition.DurableCut, requested.Disposition);
         var request = Assert.IsType<RequestEnvelope>(Assert.Single(requested.Emissions));
         var token = Assert.Single(requested.State.Tokens);
+        var requestWait = Assert.Single(requested.State.Waits);
         Assert.Equal(
-            new ProcessTokenInteractionTarget(requested.State.Continuation, token.Id),
+            new ProcessTokenInteractionTarget(
+                requested.State.Continuation,
+                token.Id,
+                requestWait.RegistrationId),
             request.ResponseTarget);
         Assert.Equal(request.Context.EmissionId, Assert.Single(requested.State.OutstandingRequests).Emission);
         var replayRequest = Assert.IsType<RequestEnvelope>(Assert.Single(requestReplay.Emissions));
         Assert.Equal(request.Context.EmissionId, replayRequest.Context.EmissionId);
         Assert.Equal(request.Context.IdempotencyKey, replayRequest.Context.IdempotencyKey);
-        Assert.True(Assert.Single(requested.State.Waits).Active);
+        Assert.True(requestWait.Active);
 
         var cancelled = ProcessReferenceInterpreter.Activate(
             plan,

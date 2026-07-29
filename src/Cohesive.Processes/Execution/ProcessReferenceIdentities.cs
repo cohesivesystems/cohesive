@@ -167,7 +167,7 @@ internal static class ProcessReferenceIdentities
     /// identity.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="tokenStep"/> is negative.</exception>
-    internal static string WaitRegistration(
+    internal static ProcessWaitRegistrationId WaitRegistration(
         ProcessContinuationIdentity continuation,
         TokenId token,
         ExecutionNodeId node,
@@ -178,14 +178,14 @@ internal static class ProcessReferenceIdentities
         RequireIdentity(node.Value, nameof(node));
         RequireNonNegative(tokenStep, nameof(tokenStep));
 
-        return Derive(
+        return new(Derive(
             WaitRegistrationPrefix,
             WaitRegistrationPurpose,
             continuation.ProcessInstanceId.Value,
             continuation.ProcessAttemptId.Value,
             token.Value,
             node.Value,
-            tokenStep.ToString(CultureInfo.InvariantCulture));
+            tokenStep.ToString(CultureInfo.InvariantCulture)));
     }
 
     static string Derive(string prefix, string purpose, params ReadOnlySpan<string> fields)
@@ -194,7 +194,9 @@ internal static class ProcessReferenceIdentities
         Append(canonical, Version);
         Append(canonical, purpose);
         foreach (var field in fields)
+        {
             Append(canonical, field);
+        }
 
         return prefix + Convert.ToHexStringLower(SHA256.HashData(canonical.WrittenSpan));
     }
@@ -214,7 +216,10 @@ internal static class ProcessReferenceIdentities
     {
         var destination = writer.GetSpan(value.Length);
         for (var index = 0; index < value.Length; index++)
+        {
             destination[index] = (byte)value[index];
+        }
+
         writer.Advance(value.Length);
     }
 
@@ -234,12 +239,16 @@ internal static class ProcessReferenceIdentities
     static void RequireIdentity(string? value, string parameterName)
     {
         if (string.IsNullOrWhiteSpace(value))
+        {
             throw new ArgumentException("A non-default execution identity is required.", parameterName);
+        }
     }
 
     static void RequireNonNegative(long value, string parameterName)
     {
         if (value < 0)
+        {
             throw new ArgumentOutOfRangeException(parameterName, value, "An occurrence or step must not be negative.");
+        }
     }
 }
