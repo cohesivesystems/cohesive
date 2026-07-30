@@ -1069,9 +1069,24 @@ public static class MaterializationCapabilityCatalog
             or MaterializationCapabilityKind.TargetCleanup;
 }
 
-static class MaterializationCapabilityLimits
+/// <summary>Shared validation of operation bounds against attributable materialization capability evidence.</summary>
+public static class MaterializationCapabilityLimits
 {
-    internal static void RequireSupportedBounds(
+    /// <summary>Requires one evidence assertion to cover the complete requested item-and-byte bound pair.</summary>
+    /// <param name="profile">Endpoint capability profile supplying attributable evidence.</param>
+    /// <param name="capability">Capability required by the operation.</param>
+    /// <param name="itemLimitKind">Item-count dimension applicable to the capability.</param>
+    /// <param name="requestedItems">Positive requested item count.</param>
+    /// <param name="byteLimitKind">Encoded-byte dimension applicable to the capability.</param>
+    /// <param name="requestedBytes">Positive requested encoded-byte count.</param>
+    /// <param name="parameterName">Caller parameter reported when the bound is unsupported.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="profile"/> or <paramref name="parameterName"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="parameterName"/> is empty or white space.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// A capability or limit kind is unsupported, a limit kind is not the canonical item or byte dimension for the
+    /// capability, a requested bound is not positive, or no single evidence assertion covers both requested bounds.
+    /// </exception>
+    public static void RequireSupportedBounds(
         MaterializationCapabilityProfile profile,
         MaterializationCapabilityKind capability,
         MaterializationLimitKind itemLimitKind,
@@ -1080,6 +1095,7 @@ static class MaterializationCapabilityLimits
         long requestedBytes,
         string parameterName)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(parameterName);
         if (SupportsBounds(
                 profile,
                 capability,
@@ -1097,7 +1113,20 @@ static class MaterializationCapabilityLimits
             + $"exceed every attributable realization in capability profile '{profile.Id.Value}'.");
     }
 
-    internal static bool SupportsBounds(
+    /// <summary>Determines whether one evidence assertion covers the complete requested item-and-byte bound pair.</summary>
+    /// <param name="profile">Endpoint capability profile supplying attributable evidence.</param>
+    /// <param name="capability">Capability required by the operation.</param>
+    /// <param name="itemLimitKind">Item-count dimension applicable to the capability.</param>
+    /// <param name="requestedItems">Positive requested item count.</param>
+    /// <param name="byteLimitKind">Encoded-byte dimension applicable to the capability.</param>
+    /// <param name="requestedBytes">Positive requested encoded-byte count.</param>
+    /// <returns><see langword="true"/> when one attributable assertion covers both bounds.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="profile"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// The capability or a limit kind is unsupported, a limit kind is not the canonical item or byte dimension for
+    /// the capability, or a requested bound is not positive.
+    /// </exception>
+    public static bool SupportsBounds(
         MaterializationCapabilityProfile profile,
         MaterializationCapabilityKind capability,
         MaterializationLimitKind itemLimitKind,
@@ -1106,6 +1135,32 @@ static class MaterializationCapabilityLimits
         long requestedBytes)
     {
         ArgumentNullException.ThrowIfNull(profile);
+        if (!Enum.IsDefined(capability))
+            throw new ArgumentOutOfRangeException(nameof(capability), capability, "The materialization capability is unsupported.");
+        if (!Enum.IsDefined(itemLimitKind))
+            throw new ArgumentOutOfRangeException(nameof(itemLimitKind), itemLimitKind, "The materialization limit kind is unsupported.");
+        if (!Enum.IsDefined(byteLimitKind))
+            throw new ArgumentOutOfRangeException(nameof(byteLimitKind), byteLimitKind, "The materialization limit kind is unsupported.");
+        if (!IsItemLimit(itemLimitKind)
+            || !MaterializationCapabilityCatalog.AllowsLimit(capability, itemLimitKind))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(itemLimitKind),
+                itemLimitKind,
+                $"'{itemLimitKind}' is not an applicable item-count limit for capability '{capability}'.");
+        }
+        if (!IsByteLimit(byteLimitKind)
+            || !MaterializationCapabilityCatalog.AllowsLimit(capability, byteLimitKind))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(byteLimitKind),
+                byteLimitKind,
+                $"'{byteLimitKind}' is not an applicable encoded-byte limit for capability '{capability}'.");
+        }
+        if (requestedItems <= 0)
+            throw new ArgumentOutOfRangeException(nameof(requestedItems), requestedItems, "A requested item bound must be positive.");
+        if (requestedBytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(requestedBytes), requestedBytes, "A requested byte bound must be positive.");
         foreach (var evidence in profile.Evidence)
         {
             if (evidence.Capability != capability)
@@ -1123,6 +1178,15 @@ static class MaterializationCapabilityLimits
 
         return false;
     }
+
+    static bool IsItemLimit(MaterializationLimitKind kind) => kind is
+        MaterializationLimitKind.ReadItems
+        or MaterializationLimitKind.ChangeItems
+        or MaterializationLimitKind.WriteItems;
+
+    static bool IsByteLimit(MaterializationLimitKind kind) => kind is
+        MaterializationLimitKind.ReadBytes
+        or MaterializationLimitKind.WriteBytes;
 
     static long Maximum(
         MaterializationCapabilityEvidence evidence,

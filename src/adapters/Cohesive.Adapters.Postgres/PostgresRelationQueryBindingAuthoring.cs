@@ -1,16 +1,12 @@
 using System.Collections.Immutable;
-using System.Globalization;
 using System.Linq.Expressions;
 using System.Security.Cryptography;
 using System.Text;
 using Cohesive.Model;
-using Cohesive.Model.Expressions;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.IR;
-using Cohesive.Relations.Model;
 using Cohesive.Relations.Physical;
-using Cohesive.Relations.Realization;
 
 namespace Cohesive.Adapters.Postgres;
 
@@ -511,7 +507,7 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
             if (required)
             {
                 Error(PostgresRelationQueryBindingAuthoringDiagnosticCodes.BindingMissing,
-                    "The placed PostgreSQL input requires an unambiguous physical identity column.",
+                    "The placed PostgreSQL input requires an exact semantic identity path before a physical identity column can be bound; use typed Identity(...) or Identity(FieldPath, sourceSelector) authoring.",
                     declaration.Input.Binding.Input,
                     setting: TableSetting(declaration.Input.Binding.Id, "identityColumn"));
             }
@@ -754,11 +750,10 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
         }
         foreach (var source in placement.Placement.SourceInstances)
         {
-            if (source.TargetProfile.Target != PostgresRelationQueryTargetProfile.Target
-                || source.TargetProfile.Id != PostgresRelationQueryTargetProfile.ProfileId)
+            if (!source.TargetProfile.HasSameSemantics(PostgresRelationQuerySourceTargetProfile.Default))
             {
                 Error(PostgresRelationQueryBindingAuthoringDiagnosticCodes.PlacementMismatch,
-                    $"Placed source '{source.Id.Value}' does not use the canonical PostgreSQL target profile.");
+                    $"Placed source '{source.Id.Value}' does not use the canonical PostgreSQL source-reader profile.");
             }
         }
     }
@@ -800,7 +795,7 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
         if (databaseSources.Select(static source => source.ExecutionDomain).Distinct().Skip(1).Any())
         {
             Error(PostgresRelationQueryBindingAuthoringDiagnosticCodes.PlacementMismatch,
-                "PostgreSQL v1 table bindings must share one exact execution domain.");
+                "PostgreSQL table bindings must share one exact execution domain.");
         }
     }
 
@@ -873,7 +868,8 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
         FieldPath path,
         out EffectiveValueSemantics value)
     {
-        if (contract is null || !TryInferScalarType(contract.Type, out var inferredScalar))
+        if (contract is null
+            || !PostgresRelationQueryScalarCatalog.TryFromSemanticType(contract.Type, out var inferredScalar))
         {
             Error(PostgresRelationQueryBindingAuthoringDiagnosticCodes.SemanticEvidenceMissing,
                 $"Semantic field '{path}' has no supported scalar PostgreSQL representation.", input, path);
@@ -959,7 +955,7 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
         if (path.Segments.Length != 1 || !path.Segments[0].TryGetFieldIdentity(out var name))
         {
             Error(PostgresRelationQueryBindingAuthoringDiagnosticCodes.SelectorInvalid,
-                "PostgreSQL v1 identity and relationship selectors must be top-level scalar fields.",
+                "PostgreSQL identity and relationship selectors must be top-level scalar fields.",
                 input.Binding.Input, path);
             contract = null;
             return false;
@@ -980,52 +976,14 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
 
     IdentityDeclaration? InferIdentityPath(RelationQueryPlacedInput input)
     {
-        var selector = input.Binding.Identity?.SourceSelector;
-        if (!string.IsNullOrWhiteSpace(selector) && !selector.StartsWith('$'))
-        {
-            try
-            {
-                return new(FieldPath.Parse(selector), Column: null, Options: null);
-            }
-            catch (ArgumentException)
-            {
-                // Fall through to semantic shape-role inference and report only if it is ambiguous.
-            }
-        }
-        var shape = input.Plan.Provenance.ShapeDocuments
-            .SingleOrDefault(document => document.Graph.Id == input.Shape.GraphId)
-            ?.Graph.TryGetShape(input.Shape);
-        var identities = shape?.Fields.Where(static field => field.Role == FieldRole.Identity).ToArray() ?? [];
-        return identities.Length == 1
-            ? new(FieldPath.FromField(identities[0].Name.Value), Column: null, Options: null)
-            : null;
+        var path = input.Binding.Identity?.SemanticPath;
+        return path is null ? null : new(path.Value, Column: null, Options: null);
     }
 
     static bool OwnsRelationshipReference(RelationQueryPlacedInput input, RelationQueryTraversalInputContract traversal) =>
         traversal.Input.Direction == RelationshipTraversalDirection.Forward
             ? input.Binding.Binding == traversal.From && input.Shape == traversal.Definition.SourceShape
             : input.Binding.Input == traversal.Input.Id && input.Shape == traversal.Definition.SourceShape;
-
-    static bool TryInferScalarType(TypeRef? type, out PostgresRelationQueryScalarType scalar)
-    {
-        scalar = type switch
-        {
-            ScalarTypeRef { Kind: ScalarTypeKind.Bool } => PostgresRelationQueryScalarType.Boolean,
-            ScalarTypeRef { Kind: ScalarTypeKind.Int32 } => PostgresRelationQueryScalarType.Int32,
-            ScalarTypeRef { Kind: ScalarTypeKind.Int64 } => PostgresRelationQueryScalarType.Int64,
-            ScalarTypeRef { Kind: ScalarTypeKind.Decimal } => PostgresRelationQueryScalarType.Numeric,
-            ScalarTypeRef { Kind: ScalarTypeKind.String } => PostgresRelationQueryScalarType.Text,
-            ScalarTypeRef { Kind: ScalarTypeKind.Guid } => PostgresRelationQueryScalarType.Uuid,
-            ScalarTypeRef { Kind: ScalarTypeKind.Date } => PostgresRelationQueryScalarType.Date,
-            ScalarTypeRef { Kind: ScalarTypeKind.DateTime } => PostgresRelationQueryScalarType.Timestamp,
-            ScalarTypeRef { Kind: ScalarTypeKind.Instant } => PostgresRelationQueryScalarType.TimestampWithTimeZone,
-            ScalarTypeRef { Kind: ScalarTypeKind.Bytes } => PostgresRelationQueryScalarType.Bytea,
-            EntityReferenceTypeRef => PostgresRelationQueryScalarType.Text,
-            EnumTypeRef => PostgresRelationQueryScalarType.Text,
-            _ => default
-        };
-        return type is ScalarTypeRef or EntityReferenceTypeRef or EnumTypeRef;
-    }
 
     void AppendColumnDecisions(
         RelationQuerySourcePlacementBindingId placementBinding,

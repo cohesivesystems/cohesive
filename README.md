@@ -45,7 +45,7 @@ The [Execution Kernel compatibility inventory](docs/EXECUTION_KERNEL_COMPATIBILI
 | `Cohesive.Adapters.ONNX` | ONNX Runtime inference adapters. |
 | `Cohesive.Adapters.OpenApi` | OpenAPI document emission from Cohesive API declarations. |
 | `Cohesive.Adapters.Parquet` | Parquet row and column writing helpers. |
-| `Cohesive.Adapters.Postgres` | Provider-neutral PostgreSQL relation/query compilation and SQL construction. |
+| `Cohesive.Adapters.Postgres` | PostgreSQL relation/query compilation plus Npgsql-backed bounded source acquisition and rebuild/reconciliation materialization. |
 | `Cohesive.Adapters.TypeScript` | TypeScript emitters for shapes, API clients, constants, and test mocks. |
 
 ## Frontend Packages

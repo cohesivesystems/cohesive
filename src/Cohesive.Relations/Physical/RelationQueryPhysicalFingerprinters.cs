@@ -15,7 +15,7 @@ public static class RelationQuerySourcePlacementFingerprinter
     public const string Algorithm = "sha256";
 
     /// <summary>Canonicalization profile identifier.</summary>
-    public const string Canonicalization = "relation-query-source-placement/v2-c14n/v1";
+    public const string Canonicalization = "relation-query-source-placement/v3-c14n/v1";
 
     /// <summary>Computes a deterministic source-placement fingerprint.</summary>
     /// <param name="placement">Normalized source placement to fingerprint.</param>
@@ -57,6 +57,11 @@ public static class RelationQuerySourcePlacementFingerprinter
             {
                 writer.AppendShape(identity.Shape);
                 writer.Append(identity.SourceSelector);
+                writer.Append(identity.SemanticPath is not null);
+                if (identity.SemanticPath is { } semanticPath)
+                {
+                    writer.AppendPath(semanticPath);
+                }
             }
             writer.Append(binding.Fields.Length);
             foreach (var field in binding.Fields.OrderBy(static field => field.Input.Value, StringComparer.Ordinal))

@@ -535,7 +535,9 @@ public sealed class CanonicalFederatedAdapterConformanceTests
         var placementBuilder = RelationQueryPlacement.For(plan);
         var source = placementBuilder.Source(sourceKey, targetProfile);
         var placed = placementBuilder.PlaceSource(source)
-            .Identity(FederatedLoadRelationFixture.LoadIdFieldName)
+            .Identity(
+                FederatedLoadRelationFixture.LoadIdPath,
+                FederatedLoadRelationFixture.LoadIdFieldName)
             .FieldsBySemanticPath();
         var placement = placementBuilder.Build().RequireValue();
         return new(plan, placement, placement.GetInput(placed));
@@ -560,27 +562,33 @@ public sealed class CanonicalFederatedAdapterConformanceTests
         var placementBuilder = RelationQueryPlacement.For(plan);
         var loadSource = placementBuilder.Source(
             "conformance/postgres/loads",
-            PostgresRelationQueryTargetProfile.Default,
+            PostgresRelationQuerySourceTargetProfile.Default,
             primary);
         var customerSource = placementBuilder.Source(
             "conformance/postgres/customers",
-            PostgresRelationQueryTargetProfile.Default,
+            PostgresRelationQuerySourceTargetProfile.Default,
             related);
         var loadHandle = placementBuilder.Place(sourceContract, loadSource)
-            .Identity(FederatedLoadRelationFixture.LoadIdFieldName)
+            .Identity(
+                FederatedLoadRelationFixture.LoadIdPath,
+                FederatedLoadRelationFixture.LoadIdFieldName)
             .FieldsBySemanticPath();
         var customerHandle = placementBuilder.Place(customerTraversal, customerSource)
-            .Identity(FederatedLoadRelationFixture.CustomerIdFieldName)
+            .Identity(
+                FederatedLoadRelationFixture.CustomerIdPath,
+                FederatedLoadRelationFixture.CustomerIdFieldName)
             .FieldsBySemanticPath();
         RelationQueryPlacementInputBuilder? equipmentHandle = null;
         if (equipmentTraversal is not null)
         {
             var equipmentSource = placementBuilder.Source(
                 "conformance/postgres/equipment",
-                PostgresRelationQueryTargetProfile.Default,
+                PostgresRelationQuerySourceTargetProfile.Default,
                 related);
             equipmentHandle = placementBuilder.Place(equipmentTraversal, equipmentSource)
-                .Identity(FederatedLoadRelationFixture.EquipmentIdFieldName)
+                .Identity(
+                    FederatedLoadRelationFixture.EquipmentIdPath,
+                    FederatedLoadRelationFixture.EquipmentIdFieldName)
                 .FieldsBySemanticPath();
         }
         var placement = placementBuilder.Build().RequireValue();

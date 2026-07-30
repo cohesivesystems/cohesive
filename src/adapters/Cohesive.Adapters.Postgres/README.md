@@ -1,8 +1,9 @@
 # Cohesive.Adapters.Postgres
 
-`Cohesive.Adapters.Postgres` provides an injection-safe standalone PostgreSQL `SELECT` builder and exact,
-persistable storage bindings for Cohesive.Relations plans. The builder can be used without Cohesive.Relations query
-compilation; the storage binding records how a particular compiled plan and placement map to PostgreSQL tables.
+`Cohesive.Adapters.Postgres` is the single PostgreSQL adapter package. It provides an injection-safe standalone
+`SELECT` builder, canonical Relations compilation, exact persistable storage bindings, and Npgsql-backed bounded
+Relations and materialization sources. The builder can be used without Cohesive.Relations query compilation; the
+storage binding remains the shared physical authority for compilation and runtime source execution.
 
 For convention-first C# authoring, begin with the
 [`Cohesive.Relations` quick start](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Relations/docs/GETTING_STARTED.md).
@@ -46,17 +47,19 @@ var statement = template.Bind(new Dictionary<string, object?>
 offset paging, and null-aware structural keyset predicates.
 
 Captured constants remain portable when a compiled artifact is serialized, and runtime bindings accept the same
-closed provider-neutral CLR domain. The supported values are
-`null`, `bool`, `int`, `long`, `decimal`, `string`, `Guid`, `DateOnly`, `DateTime` with
-`DateTimeKind.Unspecified`, `DateTimeOffset`, and `byte[]`. Other CLR types are rejected instead of being serialized
-with ambiguous provider-specific behavior. Runtime parameter values are not persisted; callers supply them to `Bind`.
+closed provider-neutral CLR domain. The supported values are `null`, `bool`, `int`, `long`, `decimal`, `string`,
+`Guid`, finite `DateOnly`, finite microsecond-aligned `DateTime` with `DateTimeKind.Unspecified`, finite UTC
+microsecond-aligned `DateTimeOffset`, and `byte[]`. Other CLR types are rejected instead of being serialized with
+ambiguous provider-specific behavior. Runtime parameter values are not persisted; callers supply them to `Bind`.
 
-The canonical v1 compiler intentionally advertises only the expression closure for which it has exact lowering
+The canonical v2 target profile intentionally advertises only the expression closure for which it has exact lowering
 evidence: comparisons, Boolean logic, conditionals, ordinal prefix/suffix/substring search, and the documented
 aggregates. General arithmetic remains fail-closed even though the standalone SQL builder can express arithmetic;
 checked numeric-domain evidence is required before the relation compiler can claim canonical overflow and rounding
 semantics. Whole-row distinctness is supported within exact physical equality domains, while keyed representative-row
-selection and interval-overlap joins are not advertised by the v1 target profile.
+selection and interval-overlap joins are not advertised by the native-SQL target profile. The separate
+`PostgresRelationQuerySourceTargetProfile` declares only the six primitive acquisition facilities implemented by the
+Npgsql reader, so physical source planning cannot inherit SQL joins, aggregation, or snapshot guarantees.
 
 ## Exact storage-binding authoring
 
@@ -92,7 +95,7 @@ configuration provenance, exact compiled-plan and placement affinity, and a dete
 it with `RelationQueryJsonSerializer.CreateOptions()`; rehydration verifies the persisted fingerprint.
 
 The binding also persists the fixed
-`cohesive.adapters.postgres.sql/database-semantics/utf8-standard-identifiers/v1` profile. PostgreSQL SQL v1 therefore
+`cohesive.adapters.postgres.sql/database-semantics/utf8-standard-identifiers/v1` profile. The canonical PostgreSQL compiler therefore
 requires a UTF-8 database and the standard 63-byte identifier limit; authoring rejects identifiers that cannot be
 represented exactly within that profile. This assumption is included in the binding fingerprint and is inspectable
 through `DatabaseSemanticsProfile`.
@@ -130,6 +133,108 @@ Every demanded PostgreSQL `date`, `timestamp`, or `timestamptz` column also requ
 timestamps, microsecond alignment; it is required for ordinary reads as well as temporal joins. Numeric `SUM` and
 `AVG` similarly require explicit finite decimal-domain evidence, with `AVG` proving both intermediate range and
 rounding behavior.
+
+Before any Npgsql operation in a process that will use temporal acquisition, disable Npgsql's infinity conversions:
+
+```csharp
+AppContext.SetSwitch("Npgsql.DisableDateTimeInfinityConversions", true);
+```
+
+Npgsql snapshots this switch during provider initialization. The caller must also select
+`PostgresNpgsqlTemporalSemantics.InfinityConversionsDisabledBeforeInitialization` in the source policy as explicit
+startup evidence. Registration checks that declaration and the current switch, but cannot retroactively prove when an
+application initialized Npgsql. The default policy therefore rejects temporal source acquisition. This preserves
+finite, microsecond-aligned CLR endpoints as ordinary values and prevents PostgreSQL `infinity` from being conflated
+with them.
+
+## Npgsql-backed source acquisition
+
+`PostgresRelationQuerySourceReader` is registered from the full `CompiledRelationQueryPlan`, its exact
+`CompiledRelationQueryPhysicalPlan`, a source identity resolved from that plan, storage binding, and caller-owned
+`NpgsqlDataSource`. Registration proves that the semantic reference retained by the physical plan matches the supplied
+full plan before using its shape snapshots to validate identity semantics. The reader interprets the same exact
+physical-plan fingerprint, stage, placement, table, column, scalar-domain, missing/null, and identity evidence used by
+the compiler. It implements the canonical `IRelationQuerySourceReader` contract for:
+
+- bounded table enumeration ordered by the bound unique identity;
+- identity point reads and batches; and
+- parameterized relationship-key predicate batches.
+
+Each logical request becomes one set-oriented, parameterized PostgreSQL statement. Key batches use one typed array
+predicate rather than one command per key, so relationship acquisition does not introduce N+1 I/O. Requests name
+canonical semantic selectors; the exact storage binding independently resolves those selectors to physical column
+names. The reader selects only the requested semantic and correlation fields, validates every request against its
+compiled stage and placement affinity, and returns complete, partial, not-found, failed, or inconclusive canonical
+evidence. Caller cancellation is propagated; expected provider failures are retained as sanitized evidence rather than
+exposing SQL text or values.
+
+Relationship batches expand the typed key array and use one bounded `LATERAL` probe per key inside that single
+statement. Both the per-key probe and the global result window are limited, so fan-out evidence does not require an
+unbounded partition count before the adapter can return `Inconclusive`.
+
+`PostgresRelationQuerySourcePolicy` places explicit hard bounds on keys per batch, canonical UTF-8 bytes per key, rows
+retained per read, page items, and bytes. The byte bound applies both to the provider result retained by one Npgsql
+command and to the canonical materialization page. Npgsql executes with sequential access; fixed scalars use
+cancellation-aware async reads, while text and `bytea` are streamed through the same cumulative budget before they are
+retained. Canonical source-placement limits additionally bound buffering, fan-out, batching, and planner-visible
+concurrency. Invalid registration or page bounds are rejected, oversized keys fail before I/O, oversized batch/fan-out
+work becomes inconclusive, and a bounded enumeration that discovers a probe row beyond its declared read boundary
+returns `Partial` evidence. The adapter does not silently split one canonical read into per-row work or widen its
+operating envelope.
+
+The reader borrows a caller-owned, thread-safe, single-host `NpgsqlDataSource`, which must outlive the reader. It never
+disposes the data source; each call creates and disposes its own command and data reader. Public registration also
+requires a `PostgresNpgsqlRuntimeBinding`: an explicit authority maps the persisted database identity to that exact
+data-source instance and a sanitized configuration fingerprint. Passing a different instance or database attestation
+fails before I/O. Multi-host data sources and ambient transactions are rejected so replica choice or hidden
+transaction state cannot become unattributed consistency evidence. Reader diagnostics and materialization capability
+evidence retain the runtime authority and sanitized data-source fingerprint after registration.
+
+```csharp
+var runtime = new PostgresNpgsqlRuntimeBinding(
+    storage.Database,
+    dataSource,
+    "operations/deployment/postgres-primary");
+var reader = new PostgresRelationQuerySourceReader(
+    plan,
+    physicalPlan,
+    postgresSourceId,
+    storage,
+    dataSource,
+    runtime,
+    sourcePolicy);
+```
+
+## Rebuild and reconciliation materialization source
+
+`PostgresMaterializationSource` wraps one reader and one exact PostgreSQL table placement as an
+`IMaterializationSource`. Its exact physical stage exposes enumeration or point/predicate pages, and every instance
+exposes an opaque durable keyset continuation. Paging v2 requires a UUID identity or an ordinal-text identity with
+exact ordering evidence, plus at least 32 bytes of caller-managed secret key material. Continuations are canonical,
+HMAC-SHA-256 authenticated, and rejected before decoding when they exceed the versioned size bound. Identity and
+fan-out state are bounded by the source policy and the exact relationship-key batch. Both item and canonical
+encoded-byte requests are checked against capability evidence before I/O and enforced on each returned page; an
+indivisible item larger than the byte limit is rejected explicitly. Its capability profile is derived from that exact
+physical stage: source-set enumeration, forward-traversal point reads, or inverse-traversal predicate reads are
+advertised only when executable; continuation is always present.
+
+Every page runs as a new PostgreSQL statement snapshot. The source therefore advertises stable identity ordering,
+request-local completeness, and reconciliation, but it does **not** claim one coordinated MVCC snapshot across pages.
+A continuation retains the exclusive identity boundary, exact binding/read affinity, and cumulative
+per-correlation-key emitted counts used to enforce fan-out bounds across resumed statements, not a database snapshot.
+A caller may persist that opaque continuation across pause/resume and must supply the same authentication key after a
+restart while it remains valid. Deliberate key rotation invalidates previously issued continuations. The source does
+not implement change delivery, settlement, or a PostgreSQL materialization write target; incremental CDC and target
+writes remain separate adapter work.
+
+```csharp
+// Resolve this from an application secret store and retain it while issued continuations remain resumable.
+ReadOnlySpan<byte> continuationKey = continuationKeyMaterial;
+var rebuildSource = new PostgresMaterializationSource(
+    reader,
+    sourcePlacement,
+    continuationKey);
+```
 
 ## End-to-end relation compilation
 
@@ -193,11 +298,11 @@ var placementAuthor = RelationQueryPlacement.For(plan);
 var executionDomain = new RelationQueryExecutionDomainId("operations-primary");
 var suppliedSource = placementAuthor.Source(
     "application/supplied-load",
-    PostgresRelationQueryTargetProfile.Default,
+    PostgresRelationQuerySourceTargetProfile.Default,
     executionDomain);
 var customerSource = placementAuthor.Source(
     "postgres/customers",
-    PostgresRelationQueryTargetProfile.Default,
+    PostgresRelationQuerySourceTargetProfile.Default,
     executionDomain);
 var placedLoad = placementAuthor
     .Place(plan.InputContract.Sources.Single(), suppliedSource, loadShape)
@@ -329,15 +434,25 @@ Deterministic fingerprints detect stale or internally inconsistent artifacts; th
 Store artifacts in a trusted location or authenticate them with an application-owned integrity mechanism before
 rehydration. Invocation values remain positional parameters and never become SQL text.
 
-`Cohesive.Adapters.Postgres` deliberately has no Npgsql dependency. `PostgresRelationQueryCompiler` returns a
-provider-neutral `PostgresSqlStatement` containing quoted SQL text and ordered CLR parameter values. It does not create
-Npgsql or ADO.NET parameter objects. The caller owns the final driver mapping for each value, including the PostgreSQL
-type assigned to `null`, and executes the statement through its chosen driver or data-access layer. A supplied root is
-likewise an explicit plan input, not an implicit table scan: only its demanded fields are bound, and acquired inputs
-still use the persisted storage binding.
+`PostgresRelationQueryCompiler` and the standalone builder continue to return a provider-neutral
+`PostgresSqlStatement` containing quoted SQL text and ordered CLR parameter values. The package does not yet provide a
+native-artifact executor that automatically dispatches that statement. Its direct Npgsql dependency is instead used by
+the bounded canonical source reader and materialization source, where the exact storage binding supplies explicit
+PostgreSQL parameter and result types. A supplied relation root remains an explicit plan input, not an implicit table
+scan: only its demanded fields are bound, and acquired inputs still use the persisted storage binding.
 
 Conformance tests compile representative rows, aggregation, relationship traversal, explicit join, temporal join,
 text-search, paging, and distinct plans against the exact advertised profile, including structured fail-closed cases.
-True backend differential execution is deliberately deferred: this package has no approved Npgsql dependency, so a
-future driver integration or conformance harness must compare PostgreSQL results with the in-memory reference
-interpreter without moving provider types into this adapter's public surface.
+Source-reader and materialization conformance tests additionally cover set-oriented point and predicate batches,
+bounded enumeration, authenticated keyset resume and forgery rejection, field projection, provider and page byte
+boundaries, runtime/database affinity failures, cancellation, and the absence of a cross-page snapshot claim. Npgsql
+remains confined to the adapter package; Cohesive.Relations and Cohesive.Storage public contracts do not expose
+provider types.
+
+Set `COHESIVE_POSTGRES_TEST_CONNECTION_STRING` to run the opt-in local PostgreSQL execution scenario against a database
+where the configured user may create and drop a temporary schema:
+
+```bash
+COHESIVE_POSTGRES_TEST_CONNECTION_STRING='Host=localhost;Database=postgres;Username=postgres;Password=postgres' \
+  ./eng/test-postgres-integration.sh
+```

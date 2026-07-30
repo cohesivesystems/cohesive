@@ -87,10 +87,14 @@ public sealed class PostgresSqlConstructionTests
             {
                 ["value"] = new DateTime(2026, 7, 18).AddTicks(1)
             }));
+        var nonUtcInstant = new DateTimeOffset(2026, 7, 18, 12, 0, 0, TimeSpan.FromHours(2));
+        Assert.Throws<ArgumentException>(() => PostgresSqlExpression.Constant(nonUtcInstant));
+        Assert.Throws<ArgumentException>(() => template.Bind(
+            new Dictionary<string, object?> { ["value"] = nonUtcInstant }));
     }
 
     [Fact]
-    public void PersistedTimestampConstantsRequirePostgresMicrosecondAlignment()
+    public void PersistedTimestampConstantsRequireCanonicalPostgresTemporalDomain()
     {
         _ = new PostgresSqlConstant(
             PostgresSqlConstantKind.Timestamp,
@@ -105,6 +109,9 @@ public sealed class PostgresSqlConstructionTests
         Assert.Throws<ArgumentException>(() => new PostgresSqlConstant(
             PostgresSqlConstantKind.TimestampWithTimeZone,
             "2026-07-18T12:00:00.0000001+00:00"));
+        Assert.Throws<ArgumentException>(() => new PostgresSqlConstant(
+            PostgresSqlConstantKind.TimestampWithTimeZone,
+            "2026-07-18T12:00:00.0000010+02:00"));
     }
 
     [Fact]

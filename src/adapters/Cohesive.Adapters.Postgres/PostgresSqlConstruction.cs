@@ -164,6 +164,10 @@ static class PostgresSqlUtf8
 {
     static readonly UTF8Encoding Strict = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
+    public static Encoder CreateEncoder() => Strict.GetEncoder();
+
+    public static int GetMaximumByteCount(int characterCount) => Strict.GetMaxByteCount(characterCount);
+
     public static int GetByteCount(string value, string parameterName)
     {
         try
@@ -357,12 +361,13 @@ public abstract record PostgresSqlExpression
     /// <summary>Creates a parameterized constant expression.</summary>
     /// <param name="value">
     /// Provider-neutral parameter value: <see langword="null"/>, Boolean, 32- or 64-bit integer, decimal, string,
-    /// UUID, date, civil timestamp, instant, or bytes. Mutable byte arrays are captured immediately.
+    /// UUID, date, unspecified-kind microsecond-aligned civil timestamp, UTC microsecond-aligned instant, or bytes.
+    /// Mutable byte arrays are captured immediately.
     /// </param>
     /// <returns>An expression whose value is retained by the command template.</returns>
     /// <exception cref="ArgumentException">
-    /// <paramref name="value"/> has an unsupported CLR type or timestamp kind, or a string is outside the exact
-    /// PostgreSQL UTF-8 text domain.
+    /// <paramref name="value"/> has an unsupported CLR type or timestamp kind, alignment, or offset, or a string is
+    /// outside the exact PostgreSQL UTF-8 text domain.
     /// </exception>
     public static PostgresSqlExpression Constant(object? value) =>
         new ConstantExpression(PostgresSqlConstant.Capture(value));
@@ -374,6 +379,13 @@ public abstract record PostgresSqlExpression
     /// <exception cref="ArgumentException"><paramref name="binding"/> is empty or white space.</exception>
     public static PostgresSqlExpression RuntimeParameter(string binding) =>
         new RuntimeParameterExpression(Guard.RequireNotNullOrWhiteSpace(binding));
+
+    internal static PostgresSqlExpression EqualAny(
+        PostgresSqlExpression operand,
+        string arrayBinding) =>
+        new EqualAnyExpression(
+            Guard.RequireNotNull(operand),
+            Guard.RequireNotNullOrWhiteSpace(arrayBinding));
 
     /// <summary>Applies one explicitly selected PostgreSQL collation to an expression.</summary>
     /// <param name="operand">Text expression to collate.</param>
@@ -657,6 +669,18 @@ public abstract record PostgresSqlExpression
             builder.Append(context.AddRuntime(Binding));
     }
 
+    sealed record EqualAnyExpression(
+        PostgresSqlExpression Operand,
+        string ArrayBinding) : PostgresSqlExpression
+    {
+        internal override void WriteTo(PostgresSqlRenderContext context, StringBuilder builder)
+        {
+            builder.Append('(');
+            Operand.WriteTo(context, builder);
+            builder.Append(" = ANY(").Append(context.AddRuntime(ArrayBinding)).Append("))");
+        }
+    }
+
     sealed record CollateExpression(
         PostgresSqlExpression Operand,
         PostgresSqlIdentifier Collation) : PostgresSqlExpression
@@ -831,7 +855,7 @@ public enum PostgresSqlConstantKind
     /// <summary>Civil timestamp without a time zone.</summary>
     Timestamp = 8,
 
-    /// <summary>Timestamp with an explicit offset.</summary>
+    /// <summary>Finite UTC timestamp represented with an explicit zero offset.</summary>
     TimestampWithTimeZone = 9,
 
     /// <summary>Byte sequence.</summary>
@@ -872,8 +896,13 @@ public sealed record PostgresSqlConstant
                 "A PostgreSQL civil timestamp constant must be unspecified-kind and microsecond-aligned.",
                 nameof(value));
         }
-        if (value is DateTimeOffset instant && instant.Ticks % 10 != 0)
-            throw new ArgumentException("A PostgreSQL instant constant must be microsecond-aligned.", nameof(value));
+        if (value is DateTimeOffset instant
+            && (instant.Offset != TimeSpan.Zero || instant.Ticks % 10 != 0))
+        {
+            throw new ArgumentException(
+                "A PostgreSQL instant constant must be UTC and microsecond-aligned.",
+                nameof(value));
+        }
 
         return value switch
         {
@@ -957,8 +986,10 @@ public sealed record PostgresSqlConstant
             "O",
             CultureInfo.InvariantCulture,
             DateTimeStyles.RoundtripKind);
-        if (parsed.Ticks % 10 != 0)
-            throw new FormatException("A PostgreSQL instant must have microsecond-aligned ticks.");
+        if (parsed.Offset != TimeSpan.Zero || parsed.Ticks % 10 != 0)
+        {
+            throw new FormatException("A PostgreSQL instant must be UTC and microsecond-aligned.");
+        }
         return parsed;
     }
 }
@@ -1440,6 +1471,19 @@ public sealed class PostgresSqlSelectBuilder
         aliases.Add(identifier);
     }
 
+    internal PostgresSqlSelectBuilder(
+        string arrayBinding,
+        string alias,
+        string columnAlias)
+    {
+        var identifier = new PostgresSqlIdentifier(alias);
+        from = new PostgresSqlArrayUnnestFromItem(
+            PostgresSqlExpression.RuntimeParameter(arrayBinding),
+            identifier,
+            new(columnAlias));
+        aliases.Add(identifier);
+    }
+
     /// <summary>Adds one projected expression with a safe result alias.</summary>
     /// <param name="expression">Expression to project.</param>
     /// <param name="alias">Result-column alias.</param>
@@ -1520,6 +1564,19 @@ public sealed class PostgresSqlSelectBuilder
         RequireFromForJoin();
         ValidateJoin(kind, predicate);
         joins.Add(new(new PostgresSqlDerivedFromItem(query, RequireNewAlias(alias)), kind, predicate));
+        return this;
+    }
+
+    internal PostgresSqlSelectBuilder CrossJoinLateral(
+        PostgresSqlSelectQuery query,
+        string alias)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        RequireFromForJoin();
+        joins.Add(new(
+            new PostgresSqlLateralDerivedFromItem(query, RequireNewAlias(alias)),
+            PostgresSqlJoinKind.Cross,
+            Predicate: null));
         return this;
     }
 
@@ -1698,6 +1755,36 @@ internal sealed record PostgresSqlDerivedFromItem(
         Query.WriteTo(context, builder);
         builder.Append(") AS ");
         Alias.WriteQuoted(builder);
+    }
+}
+
+internal sealed record PostgresSqlLateralDerivedFromItem(
+    PostgresSqlSelectQuery Query,
+    PostgresSqlIdentifier SourceAlias) : PostgresSqlFromItem(SourceAlias)
+{
+    public override void WriteTo(PostgresSqlRenderContext context, StringBuilder builder)
+    {
+        builder.Append("LATERAL (");
+        Query.WriteTo(context, builder);
+        builder.Append(") AS ");
+        Alias.WriteQuoted(builder);
+    }
+}
+
+internal sealed record PostgresSqlArrayUnnestFromItem(
+    PostgresSqlExpression Array,
+    PostgresSqlIdentifier SourceAlias,
+    PostgresSqlIdentifier ColumnAlias) : PostgresSqlFromItem(SourceAlias)
+{
+    public override void WriteTo(PostgresSqlRenderContext context, StringBuilder builder)
+    {
+        builder.Append("unnest(");
+        Array.WriteTo(context, builder);
+        builder.Append(") AS ");
+        Alias.WriteQuoted(builder);
+        builder.Append('(');
+        ColumnAlias.WriteQuoted(builder);
+        builder.Append(')');
     }
 }
 

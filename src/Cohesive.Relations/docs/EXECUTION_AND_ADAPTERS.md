@@ -196,10 +196,25 @@ test asserts a single artifact, a single statement, exact selected semantic fiel
 `PostgresRelationQueryExplainProjector.Project(nativeRequest, native)` projects its payload-free native explain
 stage.
 
-The adapter deliberately remains provider-neutral: the application binds `PostgresSqlStatement.Text` and its
-ordered parameter values through Npgsql, ADO.NET, or another chosen driver. See the
+The compiler and standalone SQL builder deliberately remain provider-neutral: a native artifact binds to
+`PostgresSqlStatement.Text` and ordered CLR parameter values, and the application still owns dispatch of that native
+statement. The single adapter package also provides a separate Npgsql-backed canonical source path. See the
 [PostgreSQL adapter guide](https://github.com/cohesivesystems/cohesive/blob/main/src/adapters/Cohesive.Adapters.Postgres/README.md)
-for complete placement, storage binding, standalone SQL construction, temporal domains, and driver responsibilities.
+for complete placement, storage binding, standalone SQL construction, temporal domains, and runtime responsibilities.
+
+`PostgresRelationQuerySourceReader` implements bounded enumeration, identity point/batch lookup, and parameterized
+relationship-key predicate batches for composed physical plans. Each canonical request is one set-oriented,
+parameterized Npgsql statement over the exact bound table and fields; key batches use a typed array predicate instead
+of one command per key. The source and physical policy retain explicit key, row, buffering, fan-out, and concurrency
+boundaries, and expected provider failures return attributable canonical evidence. The reader borrows a caller-owned
+single-host `NpgsqlDataSource`; ambient transactions and multi-host replica selection are rejected rather than treated
+as hidden consistency evidence.
+
+`PostgresMaterializationSource` reuses that reader for bounded rebuild and reconciliation pages. It enforces item and
+canonical encoded-byte limits and resumes through an opaque keyset continuation over a bound UUID or ordering-proven
+ordinal-text identity. Each page is a new PostgreSQL statement snapshot, including after pause/resume. The source can
+therefore claim stable ordering, request-local completeness, and reconciliation, but not a coordinated cross-page
+snapshot. It does not provide change delivery, settlement, or a PostgreSQL write target.
 
 ### Cosmos: two logical source-read stages
 
@@ -286,8 +301,10 @@ while their profiles reject the cross-source row traversal before binding or nat
 the composed source-reader path above; a denormalized Elasticsearch document can instead use the adapter's
 single-index query surface. These are explicit capability outcomes, not silently different definitions.
 
-`IRelationQueryEvaluator` currently owns the composed physical path; it does not automatically choose and execute a
-PostgreSQL native artifact. Native compilation and driver execution are an explicit adapter path today.
+`IRelationQueryEvaluator` currently owns the composed physical path. When a `PostgresRelationQuerySourceReader` is
+registered for a placed source, that path performs its bounded acquisition through Npgsql. The evaluator still does
+not automatically choose or execute a PostgreSQL native artifact; native statement dispatch remains an explicit
+application integration.
 
 ## Cosmos SQL and SDK execution
 
@@ -352,14 +369,17 @@ feasibility and exact contextual realization.
 
 - `RelationQueryEvaluator` executes the composed physical path. Automatic native-artifact selection and driver
   dispatch are not part of the evaluator yet.
-- PostgreSQL emits provider-neutral parameterized SQL; Cohesive.Storage execution/update bindings, extraction of a
-  shared SQL substrate, and additional SQL dialects are separate follow-ups.
+- PostgreSQL native compilation still emits provider-neutral parameterized SQL. Npgsql-backed bounded source
+  acquisition and rebuild/reconciliation materialization paging are available; automatic native-artifact dispatch,
+  change-feed acquisition, write/update targets, extraction of a shared SQL substrate, and additional SQL dialects
+  remain separate follow-ups.
 - Cosmos SQL remains a single-container compiler. Cross-container enrichment uses bounded reads and does not imply
   one atomic snapshot. Partition-aware batching can produce more than one SDK request per logical related stage.
 - Elasticsearch supports the documented SDK query/aggregation closure and narrow correlated collection
   membership. Broader nested-query and collection operators remain deferred.
 - Gremlin compilation and execution remain deferred.
-- Index materialization, rebuild and real-time synchronization, retry, throttling, and orchestration belong to the
-  separate Cohesive.Storage/Cohesive.Control workstream.
+- The PostgreSQL source can feed the Cohesive.Storage materialization ports, but the complete index rebuild and
+  real-time synchronization engine, retry, throttling, and orchestration belong to the separate
+  Cohesive.Storage/Cohesive.Control workstream.
 - Ari's graph proposal UI and AI-specific proposal evidence remain Ari-owned producer concerns; Ari lowers accepted
   semantics into the same canonical relation/query documents.

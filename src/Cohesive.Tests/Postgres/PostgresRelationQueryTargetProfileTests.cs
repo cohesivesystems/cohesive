@@ -1,6 +1,5 @@
 using System.Text.Json.Serialization;
 using Cohesive.Adapters.Postgres;
-using Cohesive.Model;
 using Cohesive.Model.Expressions;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Compilation;
@@ -11,6 +10,31 @@ namespace Cohesive.Tests.Postgres;
 
 public sealed class PostgresRelationQueryTargetProfileTests
 {
+    [Fact]
+    public void SourceAcquisitionCapabilities_MatchTheNpgsqlReaderClosure()
+    {
+        HashSet<RelationQueryPrimitiveCapabilityKind> expected =
+        [
+            RelationQueryPrimitiveCapabilityKind.BatchedKeyLookup,
+            RelationQueryPrimitiveCapabilityKind.BatchedPredicateLookup,
+            RelationQueryPrimitiveCapabilityKind.CompleteSetEnumeration,
+            RelationQueryPrimitiveCapabilityKind.FieldProjection,
+            RelationQueryPrimitiveCapabilityKind.ObservationIdentityRead,
+            RelationQueryPrimitiveCapabilityKind.RelationshipReferenceRead
+        ];
+        var actual = PostgresRelationQuerySourceTargetProfile.Default.Capabilities
+            .Select(static evidence => evidence.Capability)
+            .OfType<PrimitiveRelationQueryCapability>()
+            .Select(static capability => capability.Kind)
+            .ToHashSet();
+
+        Assert.Equal(
+            "cohesive.adapters.postgres.sql/source-reader-v1",
+            PostgresRelationQuerySourceTargetProfile.ProfileId.Value);
+        Assert.Empty(expected.Except(actual));
+        Assert.Empty(actual.Except(expected));
+    }
+
     [Fact]
     public void StructuralCapabilities_MatchTheCompilerClosure()
     {

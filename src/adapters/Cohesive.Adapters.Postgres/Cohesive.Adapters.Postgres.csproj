@@ -7,7 +7,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Npgsql" Version="10.0.3" />
+
     <ProjectReference Include="..\..\Cohesive.Relations\Cohesive.Relations.csproj" />
+    <ProjectReference Include="..\..\Cohesive.Storage\Cohesive.Storage.csproj" />
   </ItemGroup>
 
 </Project>

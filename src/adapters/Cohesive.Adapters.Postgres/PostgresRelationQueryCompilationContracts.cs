@@ -79,22 +79,14 @@ static class PostgresRelationQueryValueEncodingContracts
         PostgresRelationQueryValueEncoding encoding,
         string parameterName)
     {
-        var expected = contract.Type switch
+        if (contract.Cardinality != FieldCardinality.Single
+            || !PostgresRelationQueryScalarCatalog.TryFromSemanticType(contract.Type, out var scalarType))
         {
-            ScalarTypeRef { Kind: ScalarTypeKind.Bool } => PostgresRelationQueryValueEncoding.Boolean,
-            ScalarTypeRef { Kind: ScalarTypeKind.Int32 } => PostgresRelationQueryValueEncoding.Int32,
-            ScalarTypeRef { Kind: ScalarTypeKind.Int64 } => PostgresRelationQueryValueEncoding.Int64,
-            ScalarTypeRef { Kind: ScalarTypeKind.Decimal } => PostgresRelationQueryValueEncoding.Numeric,
-            ScalarTypeRef { Kind: ScalarTypeKind.String } => PostgresRelationQueryValueEncoding.Text,
-            ScalarTypeRef { Kind: ScalarTypeKind.Guid } => PostgresRelationQueryValueEncoding.Uuid,
-            ScalarTypeRef { Kind: ScalarTypeKind.Date } => PostgresRelationQueryValueEncoding.Date,
-            ScalarTypeRef { Kind: ScalarTypeKind.DateTime } => PostgresRelationQueryValueEncoding.Timestamp,
-            ScalarTypeRef { Kind: ScalarTypeKind.Instant } => PostgresRelationQueryValueEncoding.TimestampWithTimeZone,
-            ScalarTypeRef { Kind: ScalarTypeKind.Bytes } => PostgresRelationQueryValueEncoding.Bytea,
-            _ => throw new ArgumentException(
-                $"Semantic type '{contract.Type}' has no exact PostgreSQL scalar encoding.",
-                parameterName)
-        };
+            throw new ArgumentException(
+                $"Semantic type '{contract.Type}' has no exact single-valued PostgreSQL scalar encoding.",
+                parameterName);
+        }
+        var expected = PostgresRelationQueryScalarCatalog.ToValueEncoding(scalarType);
         if (encoding != expected)
         {
             throw new ArgumentException(
@@ -640,7 +632,7 @@ public sealed record PostgresRelationQueryLoweringDecision
 public sealed class PostgresRelationQueryCompiledArtifact
 {
     /// <summary>Current persisted PostgreSQL native-artifact schema version.</summary>
-    public const string CurrentSchemaVersion = "cohesive.relations.postgres-artifact/v2";
+    public const string CurrentSchemaVersion = "cohesive.relations.postgres-artifact/v3";
 
     /// <summary>Creates or rehydrates one validated PostgreSQL native artifact.</summary>
     /// <param name="schemaVersion">Persisted artifact schema version.</param>
@@ -1346,7 +1338,7 @@ public static class PostgresRelationQueryCompilationDiagnosticCodes
     /// <summary>The PostgreSQL binding conflicts with placement, affinity, or target facts.</summary>
     public const string StorageBindingMismatch = "REL2250";
 
-    /// <summary>The selected branch topology cannot be represented by the native v1 compiler.</summary>
+    /// <summary>The selected branch topology cannot be represented by the current native compiler.</summary>
     public const string UnsupportedBranchTopology = "REL2251";
 
     /// <summary>A logical operator or pipeline position is unsupported.</summary>
@@ -1385,9 +1377,9 @@ public static class PostgresRelationQueryCompilationDiagnosticCodes
     /// <summary>Artifact construction failed an internal consistency check.</summary>
     public const string ArtifactInvalid = "REL2263";
 
-    /// <summary>The requested runtime result observability cannot be produced by PostgreSQL SQL v1.</summary>
+    /// <summary>The requested runtime result observability cannot be produced by the current PostgreSQL compiler.</summary>
     public const string ResultObservabilityUnsupported = "REL2264";
 
-    /// <summary>A relation terminal requires a root invocation or invariant contract unavailable to v1.</summary>
+    /// <summary>A relation terminal requires a root invocation or invariant contract unavailable to the current compiler.</summary>
     public const string RelationTerminalUnsupported = "REL2265";
 }

@@ -110,7 +110,8 @@ public sealed class RelationQueryCapabilityDocumentationTests
             new("Cosmos SQL", CosmosRelationQueryTargetProfile.Default),
             new("Cosmos entity source", CosmosRelationQuerySourceReader.TargetProfile),
             new("Elasticsearch", ElasticRelationQueryTargetProfile.Default),
-            new("PostgreSQL", PostgresRelationQueryTargetProfile.Default)
+            new("PostgreSQL", PostgresRelationQueryTargetProfile.Default),
+            new("PostgreSQL source", PostgresRelationQuerySourceTargetProfile.Default)
         ];
 
         StringBuilder markdown = new();

@@ -682,6 +682,7 @@ export const relationQuerySourcePlacementOriginLabels: Record<RelationQuerySourc
 export interface RelationQuerySourceIdentityBinding {
   shape: QualifiedShapeId;
   sourceSelector: string;
+  semanticPath?: FieldPath | null;
 }
 
 export interface RelationQuerySourceFieldBinding {

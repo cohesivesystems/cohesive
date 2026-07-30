@@ -164,6 +164,118 @@ public sealed class MaterializationSourceContractsTests
     }
 
     [Fact]
+    public void CapabilityLimits_RequireKnownKindsAndPositiveBounds()
+    {
+        var profile = CreateSource().Source.Descriptor.CapabilityProfile;
+
+        Assert.True(MaterializationCapabilityLimits.SupportsBounds(
+            profile,
+            MaterializationCapabilityKind.SourceBoundedEnumeration,
+            MaterializationLimitKind.ReadItems,
+            MaximumProfileItems,
+            MaterializationLimitKind.ReadBytes,
+            MaximumPageBytes));
+        Assert.False(MaterializationCapabilityLimits.SupportsBounds(
+            profile,
+            MaterializationCapabilityKind.SourceBoundedEnumeration,
+            MaterializationLimitKind.ReadItems,
+            MaximumProfileItems + 1,
+            MaterializationLimitKind.ReadBytes,
+            MaximumPageBytes));
+        Assert.Throws<ArgumentOutOfRangeException>(() => MaterializationCapabilityLimits.SupportsBounds(
+            profile,
+            MaterializationCapabilityKind.SourceBoundedEnumeration,
+            MaterializationLimitKind.ReadItems,
+            requestedItems: 0,
+            MaterializationLimitKind.ReadBytes,
+            MaximumPageBytes));
+        Assert.Throws<ArgumentOutOfRangeException>(() => MaterializationCapabilityLimits.SupportsBounds(
+            profile,
+            (MaterializationCapabilityKind)int.MaxValue,
+            MaterializationLimitKind.ReadItems,
+            MaximumProfileItems,
+            MaterializationLimitKind.ReadBytes,
+            MaximumPageBytes));
+        Assert.Throws<ArgumentOutOfRangeException>(() => MaterializationCapabilityLimits.SupportsBounds(
+            profile,
+            MaterializationCapabilityKind.SourceBoundedEnumeration,
+            (MaterializationLimitKind)int.MaxValue,
+            MaximumProfileItems,
+            MaterializationLimitKind.ReadBytes,
+            MaximumPageBytes));
+        Assert.Throws<ArgumentException>(() => MaterializationCapabilityLimits.RequireSupportedBounds(
+            profile,
+            MaterializationCapabilityKind.SourceBoundedEnumeration,
+            MaterializationLimitKind.ReadItems,
+            MaximumProfileItems,
+            MaterializationLimitKind.ReadBytes,
+            MaximumPageBytes,
+            parameterName: " "));
+    }
+
+    [Fact]
+    public void CapabilityLimits_RejectNonCanonicalOrCapabilityInapplicableDimensions()
+    {
+        MaterializationCapabilityProfile profile = new(
+            new("tests/materialization-bounds/v1"),
+            MaterializationEndpointRole.Source,
+            Source.Value,
+            [
+                new MaterializationCapabilityEvidence(
+                    new("bounded-enumeration"),
+                    MaterializationCapabilityKind.SourceBoundedEnumeration,
+                    MaterializationCapabilityRealizationKind.Native,
+                    [],
+                    [
+                        new MaterializationOperatingLimit(MaterializationLimitKind.ReadItems, MaximumProfileItems),
+                        new MaterializationOperatingLimit(MaterializationLimitKind.ReadBytes, MaximumPageBytes),
+                        new MaterializationOperatingLimit(MaterializationLimitKind.Parallelism, 4)
+                    ],
+                    ["tests/bounds"])
+            ]);
+
+        var itemDimension = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            MaterializationCapabilityLimits.SupportsBounds(
+                profile,
+                MaterializationCapabilityKind.SourceBoundedEnumeration,
+                MaterializationLimitKind.Parallelism,
+                requestedItems: 1,
+                MaterializationLimitKind.Parallelism,
+                requestedBytes: 1));
+        Assert.Equal("itemLimitKind", itemDimension.ParamName);
+
+        var byteDimension = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            MaterializationCapabilityLimits.SupportsBounds(
+                profile,
+                MaterializationCapabilityKind.SourceBoundedEnumeration,
+                MaterializationLimitKind.ReadItems,
+                requestedItems: 1,
+                MaterializationLimitKind.ReadItems,
+                requestedBytes: 1));
+        Assert.Equal("byteLimitKind", byteDimension.ParamName);
+
+        var inapplicableItem = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            MaterializationCapabilityLimits.SupportsBounds(
+                profile,
+                MaterializationCapabilityKind.SourceBoundedEnumeration,
+                MaterializationLimitKind.WriteItems,
+                requestedItems: 1,
+                MaterializationLimitKind.ReadBytes,
+                requestedBytes: 1));
+        Assert.Equal("itemLimitKind", inapplicableItem.ParamName);
+
+        var inapplicableBytes = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            MaterializationCapabilityLimits.SupportsBounds(
+                profile,
+                MaterializationCapabilityKind.SourceBoundedEnumeration,
+                MaterializationLimitKind.ReadItems,
+                requestedItems: 1,
+                MaterializationLimitKind.WriteBytes,
+                requestedBytes: 1));
+        Assert.Equal("byteLimitKind", inapplicableBytes.ParamName);
+    }
+
+    [Fact]
     public async Task SourceRead_RejectsBoundsBeyondItsAttributableProfile()
     {
         var fixture = CreateSource();
