@@ -410,6 +410,55 @@ public sealed record RelationQuerySourcePlacementBinding
     /// <summary>Optional partition selector.</summary>
     public RelationQueryPartitionBinding? Partition { get; }
 
+    /// <summary>Compares canonical placement bindings structurally.</summary>
+    /// <param name="other">Placement binding to compare.</param>
+    /// <returns><see langword="true"/> when every normalized placement field is equal.</returns>
+    public bool Equals(RelationQuerySourcePlacementBinding? other) =>
+        ReferenceEquals(this, other)
+        || other is not null
+        && Id == other.Id
+        && Input == other.Input
+        && Node == other.Node
+        && Binding == other.Binding
+        && Shape == other.Shape
+        && Source == other.Source
+        && Kind == other.Kind
+        && Acquisition == other.Acquisition
+        && Origin == other.Origin
+        && Identity == other.Identity
+        && Fields.SequenceEqual(other.Fields)
+        && RelationshipKeys.SequenceEqual(other.RelationshipKeys)
+        && Partition == other.Partition;
+
+    /// <summary>Returns a structural hash code for the canonical placement binding.</summary>
+    /// <returns>A hash derived from every normalized placement field.</returns>
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Id);
+        hash.Add(Input);
+        hash.Add(Node);
+        hash.Add(Binding);
+        hash.Add(Shape);
+        hash.Add(Source);
+        hash.Add(Kind);
+        hash.Add(Acquisition);
+        hash.Add(Origin);
+        hash.Add(Identity);
+        foreach (var field in Fields)
+        {
+            hash.Add(field);
+        }
+
+        foreach (var relationshipKey in RelationshipKeys)
+        {
+            hash.Add(relationshipKey);
+        }
+
+        hash.Add(Partition);
+        return hash.ToHashCode();
+    }
+
     static ImmutableArray<T> Normalize<T>(ImmutableArray<T> values, Func<T, string> key, string parameterName)
         where T : class
     {

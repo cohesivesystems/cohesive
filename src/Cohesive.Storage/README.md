@@ -137,6 +137,58 @@ The same facilities can be registered with `IServiceCollection` through `Registe
 `RegisterEntityRelationQueryEvaluator`. Registration order does not choose a source: the v1 catalog permits exactly
 one source per graph-qualified shape and rejects duplicate shape or source identities.
 
+## Relation-derived materialization
+
+`Cohesive.Storage.Materialization` defines one backend-neutral contract for rebuild and incremental synchronization.
+A `MaterializationDocument` persists the exact `RelationQueryCompilationRequest`, its compiled-plan fingerprint, and
+the selected output under the `cohesive-materialization/v1` schema. Loading recompiles that request and fails closed
+if the plan, output, or acquisition-source contract has drifted. The compiled Relations requirement graph,
+dependency manifest, and lineage remain the sole dependency authorities; Storage does not copy their edges.
+Definition validation covers both source-set and relationship-traversal acquisitions, deriving bounded enumeration,
+batched identity lookup, or parameterized predicate requirements from the canonical Relations acquisition kind.
+
+Definitions declare source and target capability requirements by synchronization mode. Requirements include hard
+item/byte/concurrency limits and semantic guarantees such as stable complete enumeration, at-least-once delivery,
+explicit settlement, fenced idempotent versioned writes, generation isolation, exact per-item outcomes, and atomic fenced
+promotion. `MaterializationCapabilityMatcher` resolves those requirements against attributable adapter evidence and
+returns structured diagnostics instead of weakening a guarantee.
+
+Capability matching establishes whether a binding can satisfy the declared consistency strategy; it is not proof
+that a particular run acquired a coordinated snapshot or baseline/change-feed cut. The later execution planner must
+persist the concrete run-scoped snapshot, feed-position, and retention evidence before it authorizes work.
+
+The runtime ports keep three progress concepts separate:
+
+- `MaterializationSourcePosition` is a versioned opaque provider cursor bound to one exact Relations physical plan,
+  source-placement binding, partition, and ordering scope. `MaterializationSourceContinuation` additionally carries
+  the fingerprint of the exact Relations read request, so a page cursor cannot be reused for another input, stage, or
+  constraint set. Materialization page state is separate from Relations evidence completeness: an exhausted page may
+  still report partial source evidence and therefore cannot produce completion proof. Change pages expose a
+  page-level `ThroughPosition`, including for an empty caught-up cut, rather than inferring checkpoint progress from
+  the last delivery.
+- `MaterializationApplicationCheckpoint` records what a specific definition fingerprint and generation durably
+  applied under compare-and-swap and a worker fence. A completed batch checkpoint retains the exact source scope,
+  read fingerprint, and authoritative complete/not-found Relations evidence instead of an unattributed completion
+  flag.
+- `MaterializationSourceSettlement` records a source acknowledgement. The engine must first persist its application
+  checkpoint, then call `IMaterializationSettlingSource`, and finally persist the returned receipt.
+
+`IMaterializationProgressStore` returns a bounded snapshot containing only the latest checkpoint and settlement.
+Implementations may retain additional idempotency and audit evidence internally without making unbounded history part
+of the core port.
+
+`IMaterializationTarget` accepts fenced, idempotent, version-aware mutations for an isolated candidate during rebuild
+and for the active generation during incremental maintenance. Batches return one keyed outcome per input so retries
+can contain only failed items. An unresolved retryable outcome is retained by exact mutation identity, version, and
+content fingerprint, so unrelated work for the same item cannot make a candidate appear complete. A candidate is
+sealed, validated, and then promoted through an active-pointer compare-and-swap fence that is distinct from its
+generation worker fence. Promotion makes the previous active generation inactive and records the displacement boundary;
+retirement remains a separate policy operation, and physical cleanup permanently tombstones the caller-assigned
+generation identity so it cannot be reused. Ordinary target snapshots expose bounded lifecycle metadata rather than all
+materialized items. Pause and Continue retain the same generation, while a Process restart creates a fresh generation. `InMemoryMaterializationSource`,
+`InMemoryMaterializationProgressStore`, and `InMemoryMaterializationTarget` are deterministic reference fakes for adapter
+and engine conformance tests, not production durability implementations.
+
 ## Bounded lifecycle control
 
 The `Cohesive.Control` namespace is incubated in this package. It defines portable regulation semantics without
