@@ -1,3 +1,4 @@
+using Cohesive.Processes.Runtime;
 using DurableTask.Core;
 using DurableTask.Core.Query;
 using DurableTask.Core.Serializing;
@@ -16,16 +17,13 @@ public sealed class DurableTaskProcessExecutionRepositoryTests
                 orchestrationStatus: OrchestrationStatus.Running,
                 customStatus: converter.Serialize(new DurableTaskProcessOrchestrationStatus(
                     ProcessName: "CompileShapeGraph",
-                    Status: ProcessExecutionStatus.Waiting,
-                    CurrentNode: "wait",
-                    CurrentPlace: "default",
-                    Wait: null)),
+                    Status: ProcessExecutionStatus.Waiting)),
                 input: converter.Serialize(new DurableTaskProcessRequest(
                     ProcessName: "CompileShapeGraph",
-                    Parameters: new Dictionary<string, object?> { ["trigger"] = new SampleTrigger("edi-1") },
-                    RunOptions: new() { ProcessId = "shape-graph-compilation--default--001" })),
+                    Parameters: new Dictionary<string, object?> { ["trigger"] = new SampleTrigger("edi-1") })),
                 createdTime: new DateTime(2026, 05, 05, 12, 00, 00, DateTimeKind.Utc),
-                updatedTime: new DateTime(2026, 05, 05, 12, 01, 00, DateTimeKind.Utc))
+                updatedTime: new DateTime(2026, 05, 05, 12, 01, 00, DateTimeKind.Utc),
+                output: converter.Serialize(new DurableTaskProcessOutput(new SampleResult("shape-graph"))))
         ], continuationToken: "ct-out");
         var repository = new DurableTaskProcessExecutionRepository(queryClient, taskHubName: "arihub", dataConverter: converter);
 
@@ -64,6 +62,8 @@ public sealed class DurableTaskProcessExecutionRepositoryTests
         Assert.NotNull(item.Parameters);
         var trigger = Assert.IsType<SampleTrigger>(item.Parameters["trigger"]);
         Assert.Equal("edi-1", trigger.EdiSpecId);
+        var output = Assert.IsType<SampleResult>(item.Output);
+        Assert.Equal("shape-graph", output.ArtifactId);
     }
 
     [Fact]
@@ -75,14 +75,14 @@ public sealed class DurableTaskProcessExecutionRepositoryTests
                 instanceId: "proc-1-extra",
                 orchestrationStatus: OrchestrationStatus.Running,
                 customStatus: null,
-                input: converter.Serialize(new DurableTaskProcessRequest("wrong", null, new() { ProcessId = "proc-1-extra" })),
+                input: converter.Serialize(new DurableTaskProcessRequest("wrong", null)),
                 createdTime: DateTime.UtcNow,
                 updatedTime: DateTime.UtcNow),
             CreateState(
                 instanceId: "proc-1",
                 orchestrationStatus: OrchestrationStatus.Pending,
                 customStatus: null,
-                input: converter.Serialize(new DurableTaskProcessRequest("right", null, new() { ProcessId = "proc-1" })),
+                input: converter.Serialize(new DurableTaskProcessRequest("right", null)),
                 createdTime: DateTime.UtcNow,
                 updatedTime: DateTime.UtcNow)
         ]);
@@ -107,14 +107,10 @@ public sealed class DurableTaskProcessExecutionRepositoryTests
                 orchestrationStatus: OrchestrationStatus.Failed,
                 customStatus: converter.Serialize(new DurableTaskProcessOrchestrationStatus(
                     ProcessName: "CompileShapeGraph",
-                    Status: ProcessExecutionStatus.Running,
-                    CurrentNode: "compile",
-                    CurrentPlace: "default",
-                    Wait: null)),
+                    Status: ProcessExecutionStatus.Running)),
                 input: converter.Serialize(new DurableTaskProcessRequest(
                     ProcessName: "CompileShapeGraph",
-                    Parameters: new Dictionary<string, object?> { ["trigger"] = new SampleTrigger("edi-1") },
-                    RunOptions: new() { ProcessId = "proc-failed" })),
+                    Parameters: new Dictionary<string, object?> { ["trigger"] = new SampleTrigger("edi-1") })),
                 createdTime: new DateTime(2026, 05, 05, 12, 00, 00, DateTimeKind.Utc),
                 updatedTime: new DateTime(2026, 05, 05, 12, 01, 00, DateTimeKind.Utc),
                 failureDetails: new(
@@ -160,8 +156,7 @@ public sealed class DurableTaskProcessExecutionRepositoryTests
                 customStatus: null,
                 input: converter.Serialize(new DurableTaskProcessRequest(
                     ProcessName: "CompileShapeGraph",
-                    Parameters: null,
-                    RunOptions: new() { ProcessId = "proc-failed" })),
+                    Parameters: null)),
                 createdTime: new DateTime(2026, 05, 05, 12, 00, 00, DateTimeKind.Utc),
                 updatedTime: new DateTime(2026, 05, 05, 12, 01, 00, DateTimeKind.Utc),
                 failureDetails: new(
@@ -183,6 +178,51 @@ public sealed class DurableTaskProcessExecutionRepositoryTests
         Assert.Equal("Compilation failed.", item.FailureMessage);
     }
 
+    [Fact]
+    public void QueryWireProjections_ContainMonitoringDataOnly()
+    {
+        Assert.Equal(
+            ["Parameters", "ProcessName"],
+            GetDeclaredPropertyNames<DurableTaskProcessRequest>());
+        Assert.Equal(
+            ["ProcessName", "Status"],
+            GetDeclaredPropertyNames<DurableTaskProcessOrchestrationStatus>());
+        Assert.Equal(
+            ["Result"],
+            GetDeclaredPropertyNames<DurableTaskProcessOutput>());
+
+        Type[] projections =
+        [
+            typeof(DurableTaskProcessRequest),
+            typeof(DurableTaskProcessOrchestrationStatus),
+            typeof(DurableTaskProcessOutput)
+        ];
+        string[] executionAuthorityMembers =
+        [
+            "Checkpoint",
+            "Continuation",
+            "CurrentNode",
+            "CurrentPlace",
+            "Definition",
+            "Node",
+            "RunOptions",
+            "Wait"
+        ];
+
+        foreach (var projection in projections)
+        {
+            var propertyNames = projection.GetProperties().Select(static property => property.Name);
+            Assert.Empty(propertyNames.Intersect(executionAuthorityMembers, StringComparer.Ordinal));
+        }
+    }
+
+    static string[] GetDeclaredPropertyNames<T>() =>
+        typeof(T)
+            .GetProperties()
+            .Select(static property => property.Name)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
     static DataConverter CreateConverter() => new DurableTaskSystemTextJsonDataConverter();
 
     static OrchestrationState CreateState(
@@ -192,13 +232,15 @@ public sealed class DurableTaskProcessExecutionRepositoryTests
         string? input,
         DateTime createdTime,
         DateTime updatedTime,
-        FailureDetails? failureDetails = null
+        FailureDetails? failureDetails = null,
+        string? output = null
         ) => new()
         {
             OrchestrationInstance = new() { InstanceId = instanceId },
             OrchestrationStatus = orchestrationStatus,
             Status = customStatus,
             Input = input,
+            Output = output,
             FailureDetails = failureDetails,
             CreatedTime = createdTime,
             LastUpdatedTime = updatedTime,
@@ -221,4 +263,6 @@ public sealed class DurableTaskProcessExecutionRepositoryTests
     }
 
     sealed record SampleTrigger(string EdiSpecId);
+
+    sealed record SampleResult(string ArtifactId);
 }

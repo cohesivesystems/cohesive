@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using Cohesive.Model.Authoring;
 
 namespace Cohesive.Model;
 
@@ -936,69 +937,15 @@ public sealed class ClrShapeGraphBuilder
 
     static bool TryMapScalarType(Type clrType, out TypeRef typeRef)
     {
-        if (clrType == typeof(string))
-        {
-            typeRef = new ScalarTypeRef(ScalarTypeKind.String);
-            return true;
-        }
-
-        if (clrType == typeof(bool))
-        {
-            typeRef = new ScalarTypeRef(ScalarTypeKind.Bool);
-            return true;
-        }
-
-        if (clrType == typeof(int) || clrType == typeof(short) || clrType == typeof(byte))
-        {
-            typeRef = new ScalarTypeRef(ScalarTypeKind.Int32);
-            return true;
-        }
-
-        if (clrType == typeof(long))
-        {
-            typeRef = new ScalarTypeRef(ScalarTypeKind.Int64);
-            return true;
-        }
-
-        if (clrType == typeof(decimal) || clrType == typeof(float) || clrType == typeof(double))
-        {
-            typeRef = new ScalarTypeRef(ScalarTypeKind.Decimal);
-            return true;
-        }
-
-        if (clrType == typeof(Guid))
-        {
-            typeRef = new ScalarTypeRef(ScalarTypeKind.Guid);
-            return true;
-        }
-
-        if (clrType == typeof(DateOnly))
-        {
-            typeRef = new ScalarTypeRef(ScalarTypeKind.Date);
-            return true;
-        }
-
         if (clrType == typeof(TimeOnly))
         {
             typeRef = new OpaqueRuntimeTypeRef("TimeOnly");
             return true;
         }
 
-        if (clrType == typeof(DateTime))
+        if (DefaultClrTypeRefMapper.TryMapScalarTypeKind(clrType, out var kind))
         {
-            typeRef = new ScalarTypeRef(ScalarTypeKind.DateTime);
-            return true;
-        }
-
-        if (clrType == typeof(DateTimeOffset))
-        {
-            typeRef = new ScalarTypeRef(ScalarTypeKind.Instant);
-            return true;
-        }
-
-        if (clrType == typeof(byte[]))
-        {
-            typeRef = new ScalarTypeRef(ScalarTypeKind.Bytes);
+            typeRef = new ScalarTypeRef(kind);
             return true;
         }
 
@@ -1070,72 +1017,8 @@ public sealed class ClrShapeGraphBuilder
 
     static bool IsQuantityType(Type clrType) => TryGetStructuredQuantity(clrType, out _);
 
-    static bool TryMapScalarKind(Type clrType, out ScalarTypeKind kind)
-    {
-        clrType = UnwrapNullable(clrType);
-        if (clrType == typeof(string))
-        {
-            kind = ScalarTypeKind.String;
-            return true;
-        }
-
-        if (clrType == typeof(bool))
-        {
-            kind = ScalarTypeKind.Bool;
-            return true;
-        }
-
-        if (clrType == typeof(int) || clrType == typeof(short) || clrType == typeof(byte))
-        {
-            kind = ScalarTypeKind.Int32;
-            return true;
-        }
-
-        if (clrType == typeof(long))
-        {
-            kind = ScalarTypeKind.Int64;
-            return true;
-        }
-
-        if (clrType == typeof(decimal) || clrType == typeof(float) || clrType == typeof(double))
-        {
-            kind = ScalarTypeKind.Decimal;
-            return true;
-        }
-
-        if (clrType == typeof(Guid))
-        {
-            kind = ScalarTypeKind.Guid;
-            return true;
-        }
-
-        if (clrType == typeof(DateOnly))
-        {
-            kind = ScalarTypeKind.Date;
-            return true;
-        }
-
-        if (clrType == typeof(DateTime))
-        {
-            kind = ScalarTypeKind.DateTime;
-            return true;
-        }
-
-        if (clrType == typeof(DateTimeOffset))
-        {
-            kind = ScalarTypeKind.Instant;
-            return true;
-        }
-
-        if (clrType == typeof(byte[]))
-        {
-            kind = ScalarTypeKind.Bytes;
-            return true;
-        }
-
-        kind = default;
-        return false;
-    }
+    static bool TryMapScalarKind(Type clrType, out ScalarTypeKind kind) =>
+        DefaultClrTypeRefMapper.TryMapScalarTypeKind(clrType, out kind);
 
     static PrimitiveType MapEnumUnderlyingType(Type clrType)
     {

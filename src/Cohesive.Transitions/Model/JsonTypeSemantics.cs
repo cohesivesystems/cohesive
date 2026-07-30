@@ -1,3 +1,4 @@
+using System.Buffers.Text;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -397,6 +398,33 @@ static class JsonTypeSemantics
         return false;
     }
 
+    static bool TryGetInt64(JsonNode? value, out long result)
+    {
+        if (value is JsonValue jsonValue)
+        {
+            if (jsonValue.TryGetValue(out result))
+                return true;
+
+            if (jsonValue.TryGetValue<decimal>(out var asDecimal)
+                && asDecimal == decimal.Truncate(asDecimal)
+                && asDecimal >= long.MinValue
+                && asDecimal <= long.MaxValue)
+            {
+                result = (long)asDecimal;
+                return true;
+            }
+
+            if (jsonValue.TryGetValue<string>(out var text)
+                && long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out result))
+            {
+                return true;
+            }
+        }
+
+        result = 0;
+        return false;
+    }
+
     static bool TryGetDecimal(JsonNode? value, out decimal result)
     {
         if (value is JsonValue jsonValue)
@@ -498,6 +526,33 @@ static class JsonTypeSemantics
         return false;
     }
 
+    static bool TryGetInt64(JsonElement value, out long result)
+    {
+        if (value.ValueKind == JsonValueKind.Number)
+        {
+            if (value.TryGetInt64(out result))
+                return true;
+
+            if (value.TryGetDecimal(out var asDecimal)
+                && asDecimal == decimal.Truncate(asDecimal)
+                && asDecimal >= long.MinValue
+                && asDecimal <= long.MaxValue)
+            {
+                result = (long)asDecimal;
+                return true;
+            }
+        }
+
+        if (value.ValueKind == JsonValueKind.String
+            && long.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out result))
+        {
+            return true;
+        }
+
+        result = 0;
+        return false;
+    }
+
     static bool TryGetDecimal(JsonElement value, out decimal result)
     {
         if (value.ValueKind == JsonValueKind.Number)
@@ -560,6 +615,8 @@ static class JsonTypeSemantics
 
     static bool TryGetInt32(ObservationValue value, out int result) => value.TryGetInt32(out result);
 
+    static bool TryGetInt64(ObservationValue value, out long result) => value.TryGetInt64(out result);
+
     static bool TryGetDecimal(ObservationValue value, out decimal result) => value.TryGetDecimal(out result);
 
     static bool MatchesScalarType(ScalarTypeKind scalarType, JsonNode value)
@@ -568,10 +625,16 @@ static class JsonTypeSemantics
         {
             ScalarTypeKind.String => TryGetString(value, out _),
             ScalarTypeKind.Int32 => TryGetInt32(value, out _),
+            ScalarTypeKind.Int64 => TryGetInt64(value, out _),
             ScalarTypeKind.Decimal => TryGetDecimal(value, out _),
             ScalarTypeKind.Bool => TryGetBoolean(value, out _),
             ScalarTypeKind.Guid => TryGetString(value, out var guidValue) && Guid.TryParse(guidValue, out _),
+            ScalarTypeKind.Date => TryGetString(value, out var date)
+                && ObservationValue.FromString(date).TryGetDateOnly(out _),
             ScalarTypeKind.DateTime => TryGetString(value, out var timestamp) && DateTimeOffset.TryParse(timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out _),
+            ScalarTypeKind.Instant => TryGetString(value, out var instant)
+                && ObservationValue.FromString(instant).TryGetInstant(out _),
+            ScalarTypeKind.Bytes => MatchesBytes(value),
             _ => false
         };
     }
@@ -582,10 +645,17 @@ static class JsonTypeSemantics
         {
             ScalarTypeKind.String => TryGetString(value, out _),
             ScalarTypeKind.Int32 => TryGetInt32(value, out _),
+            ScalarTypeKind.Int64 => TryGetInt64(value, out _),
             ScalarTypeKind.Decimal => TryGetDecimal(value, out _),
             ScalarTypeKind.Bool => TryGetBoolean(value, out _),
             ScalarTypeKind.Guid => TryGetString(value, out var guidValue) && Guid.TryParse(guidValue, out _),
+            ScalarTypeKind.Date => TryGetString(value, out var date)
+                && ObservationValue.FromString(date).TryGetDateOnly(out _),
             ScalarTypeKind.DateTime => TryGetString(value, out var timestamp) && DateTimeOffset.TryParse(timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out _),
+            ScalarTypeKind.Instant => TryGetString(value, out var instant)
+                && ObservationValue.FromString(instant).TryGetInstant(out _),
+            ScalarTypeKind.Bytes => value.ValueKind == JsonValueKind.String
+                && Base64.IsValid(value.GetString()),
             _ => false
         };
     }
@@ -596,12 +666,25 @@ static class JsonTypeSemantics
         {
             ScalarTypeKind.String => TryGetString(value, out _),
             ScalarTypeKind.Int32 => TryGetInt32(value, out _),
+            ScalarTypeKind.Int64 => TryGetInt64(value, out _),
             ScalarTypeKind.Decimal => TryGetDecimal(value, out _),
             ScalarTypeKind.Bool => TryGetBoolean(value, out _),
             ScalarTypeKind.Guid => TryGetString(value, out var guidValue) && Guid.TryParse(guidValue, out _),
+            ScalarTypeKind.Date => value.TryGetDateOnly(out _),
             ScalarTypeKind.DateTime => TryGetString(value, out var timestamp) && DateTimeOffset.TryParse(timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out _),
+            ScalarTypeKind.Instant => value.TryGetInstant(out _),
+            ScalarTypeKind.Bytes => value.TryGetBytes(out _),
             _ => false
         };
+    }
+
+    static bool MatchesBytes(JsonNode value)
+    {
+        if (value is not JsonValue jsonValue)
+            return false;
+        if (jsonValue.TryGetValue<byte[]>(out _))
+            return true;
+        return jsonValue.TryGetValue<string>(out var text) && Base64.IsValid(text);
     }
 
     static bool MatchesQuantityType(QuantityTypeRef type, JsonNode value)

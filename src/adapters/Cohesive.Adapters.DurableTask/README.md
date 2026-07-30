@@ -1,6 +1,11 @@
 # Cohesive.Adapters.DurableTask
 
-Azure Durable Task integration for running Cohesive process definitions as durable orchestrations.
+Read-only Azure Durable Task monitoring integration for historical Cohesive Process executions.
+
+The former adapter executed callback-bearing Process definitions through a single-cursor checkpoint. ARI-170
+retired that path because it could not preserve canonical Process semantics. This package deliberately does not
+start, resume, or host Processes until a future Durable Task interpretation implements
+`Cohesive.Storage.Processes.IProcessDurableStore` and executes an exact `CompiledProcessPlan`.
 
 ## Install
 
@@ -10,29 +15,24 @@ dotnet add package Cohesive.Adapters.DurableTask
 
 ## Use When
 
-- You want a durable execution host for `Cohesive.Processes`.
-- You need Azure Storage-backed Durable Task workers and process execution repositories.
-- You want process orchestration infrastructure to remain behind Cohesive process runtime contracts.
+- You need to query task-hub records created by the retired adapter during migration.
+- You need an `IProcessExecutionRepository` monitoring projection over an existing Durable Task hub.
+- You do not need to start or advance canonical Processes through Durable Task.
 
-## Example
+## Monitoring boundary
 
 ```csharp
-using Cohesive.Adapters.AzureStorage;
 using Cohesive.Adapters.DurableTask;
-using Cohesive.Adapters.DurableTask.AzureStorage;
 
-services.AddAzureStorageDurableTaskEngine("orders", durable => durable
-    .WithDefinitions(new DurableTaskProcessDefinitionRegistry()
-        .Register(new FulfillOrderProcess().Define().Definition))
-    .ConfigureAzureStorage((sp, settings) =>
-        settings.ConfigureDurableTaskAzureStorage(sp, new DurableTaskAzureStorageSettings
-        {
-            TaskHubName = "orders",
-            AzureStorageName = AzureBlobStorageOptions.DefaultName
-        })));
+IProcessExecutionRepository repository = new DurableTaskProcessExecutionRepository(
+    queryClient,
+    taskHubName: "orders");
 ```
+
+The repository projects lifecycle, timing, input, output, and failure evidence only. Historical current-node,
+place, wait, run-option, callback, and definition-registry data is intentionally not an execution authority.
 
 ## Related Packages
 
-- `Cohesive.Processes` for process definitions and runtime contracts.
-- `Cohesive.Adapters.AzureStorage` for Azure Storage configuration support.
+- `Cohesive.Processes` for canonical Process IR, compilation, and monitoring contracts.
+- `Cohesive.Storage` for the canonical durable Process runtime and store port.
