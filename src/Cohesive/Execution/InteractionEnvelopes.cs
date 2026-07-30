@@ -398,6 +398,125 @@ public sealed record TransitionInteractionTarget : InteractionTarget
     public InteractionEntityReference Entity { get; }
 }
 
+/// <summary>Canonical mapping from child Process terminal status to exact Request outcome identity.</summary>
+public sealed record ProcessChildOutcomeMapping
+{
+    /// <summary>Creates an explicit total child-terminal mapping.</summary>
+    /// <param name="completed">Outcome emitted when the child completes successfully.</param>
+    /// <param name="failed">Outcome emitted when the child fails.</param>
+    /// <param name="cancelled">Outcome emitted when the child is cancelled.</param>
+    /// <param name="terminated">Outcome emitted when the child is forcibly terminated.</param>
+    /// <exception cref="ArgumentException">Any outcome identity is default or repeats another terminal status.</exception>
+    [JsonConstructor]
+    public ProcessChildOutcomeMapping(
+        RequestTerminalOutcomeId completed,
+        RequestTerminalOutcomeId failed,
+        RequestTerminalOutcomeId cancelled,
+        RequestTerminalOutcomeId terminated)
+    {
+        HashSet<RequestTerminalOutcomeId> observed = [];
+        RequireOutcome(completed, nameof(completed), observed);
+        RequireOutcome(failed, nameof(failed), observed);
+        RequireOutcome(cancelled, nameof(cancelled), observed);
+        RequireOutcome(terminated, nameof(terminated), observed);
+        Completed = completed;
+        Failed = failed;
+        Cancelled = cancelled;
+        Terminated = terminated;
+    }
+
+    /// <summary>Exact Request outcome for successful child completion.</summary>
+    public RequestTerminalOutcomeId Completed { get; }
+
+    /// <summary>Exact Request outcome for child failure.</summary>
+    public RequestTerminalOutcomeId Failed { get; }
+
+    /// <summary>Exact Request outcome for child cancellation.</summary>
+    public RequestTerminalOutcomeId Cancelled { get; }
+
+    /// <summary>Exact Request outcome for forced child termination.</summary>
+    public RequestTerminalOutcomeId Terminated { get; }
+
+    /// <summary>Maps one terminal child status to its authored Request outcome.</summary>
+    /// <param name="terminal">Exact terminal child status.</param>
+    /// <returns>The authored Request outcome identity for <paramref name="terminal"/>.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="terminal"/> is non-terminal, unspecified, or unsupported.
+    /// </exception>
+    public RequestTerminalOutcomeId For(ExecutionTerminalOutcomeKind terminal) => terminal switch
+    {
+        ExecutionTerminalOutcomeKind.Completed => Completed,
+        ExecutionTerminalOutcomeKind.Failed => Failed,
+        ExecutionTerminalOutcomeKind.Cancelled => Cancelled,
+        ExecutionTerminalOutcomeKind.Terminated => Terminated,
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(terminal),
+            terminal,
+            "A child Request outcome can be selected only for a terminal Process status.")
+    };
+
+    /// <summary>Returns whether an outcome identity belongs to this total terminal mapping.</summary>
+    /// <param name="outcome">Request outcome identity to inspect.</param>
+    /// <returns><see langword="true"/> when at least one child terminal status maps to the outcome.</returns>
+    public bool Contains(RequestTerminalOutcomeId outcome) =>
+        outcome == Completed || outcome == Failed || outcome == Cancelled || outcome == Terminated;
+
+    static void RequireOutcome(
+        RequestTerminalOutcomeId outcome,
+        string parameterName,
+        ISet<RequestTerminalOutcomeId> observed)
+    {
+        if (string.IsNullOrWhiteSpace(outcome.Value))
+        {
+            throw new ArgumentException(
+                "A child terminal mapping requires an exact Request outcome identity.",
+                parameterName);
+        }
+        if (!observed.Add(outcome))
+        {
+            throw new ArgumentException(
+                "Each child terminal status requires a distinct Request outcome identity.",
+                parameterName);
+        }
+    }
+}
+
+/// <summary>Exact child Process instance that a canonical Request initializes.</summary>
+/// <remarks>
+/// This metadata lets the existing Request binding and adapter pipeline realize a child start without introducing
+/// a second operation model. The Request's <see cref="RequestEnvelope.ResponseTarget"/> remains the parent wait that
+/// consumes the eventual Reply.
+/// </remarks>
+public sealed record ProcessChildRequestTarget
+{
+    /// <summary>Creates an exact child Process Request target.</summary>
+    /// <param name="definition">Pinned child Process definition, revision, and fingerprint.</param>
+    /// <param name="continuation">Interpreter-derived child Process instance and first attempt.</param>
+    /// <param name="outcomeMapping">Authored total mapping from child terminal status to Request outcome.</param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="definition"/> or <paramref name="continuation"/> is <see langword="null"/>.
+    /// </exception>
+    [JsonConstructor]
+    public ProcessChildRequestTarget(
+        ExecutionDefinitionReference definition,
+        ProcessContinuationIdentity continuation,
+        ProcessChildOutcomeMapping outcomeMapping)
+    {
+        Definition = Guard.RequireNotNull(definition);
+        Continuation = Guard.RequireNotNull(continuation);
+        OutcomeMapping = Guard.RequireNotNull(outcomeMapping);
+    }
+
+    /// <summary>Pinned child Process definition, revision, and fingerprint.</summary>
+    public ExecutionDefinitionReference Definition { get; }
+
+    /// <summary>Interpreter-derived child Process instance and first attempt.</summary>
+    public ProcessContinuationIdentity Continuation { get; }
+
+    /// <summary>Authored total mapping from child terminal status to Request outcome.</summary>
+    public ProcessChildOutcomeMapping OutcomeMapping { get; }
+}
+
 /// <summary>Common immutable identity, causality, scope, ordering, delivery, and provenance context.</summary>
 public sealed record InteractionEnvelopeContext
 {
@@ -614,7 +733,7 @@ public abstract record InteractionEnvelope
 {
     /// <summary>Current canonical interaction-envelope schema version.</summary>
     public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } =
-        new("cohesive-interaction-envelope/v1");
+        new("cohesive-interaction-envelope/v2");
 
     /// <summary>Creates a canonical interaction envelope.</summary>
     /// <param name="schemaVersion">Exact interaction-envelope schema version.</param>
@@ -690,12 +809,16 @@ public sealed record RequestEnvelope : InteractionEnvelope
     /// <param name="contract">Exact typed Request contract.</param>
     /// <param name="payload">Portable typed request payload.</param>
     /// <param name="responseTarget">Process token or declared Transition continuation consuming the response.</param>
+    /// <param name="childTarget">
+    /// Optional exact child Process instance initialized by this Request; null for ordinary Requests.
+    /// </param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="context"/>, <paramref name="contract"/>, <paramref name="payload"/>, or
     /// <paramref name="responseTarget"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// <paramref name="schemaVersion"/> is a default value, or <paramref name="payload"/> is unknown or failed.
+    /// <paramref name="schemaVersion"/> is a default value; <paramref name="payload"/> is unknown or failed; or a
+    /// child target is combined with a non-Process origin or non-Process-token response target.
     /// </exception>
     [JsonConstructor]
     public RequestEnvelope(
@@ -703,12 +826,22 @@ public sealed record RequestEnvelope : InteractionEnvelope
         InteractionEnvelopeContext context,
         RequestContractReference contract,
         PortableValue payload,
-        InteractionTarget responseTarget)
+        InteractionTarget responseTarget,
+        ProcessChildRequestTarget? childTarget = null)
         : base(schemaVersion, context)
     {
         Contract = Guard.RequireNotNull(contract);
         Payload = InteractionValueRequirements.RequireMaterialized(payload, nameof(payload), "A Request payload");
         ResponseTarget = Guard.RequireNotNull(responseTarget);
+        if (childTarget is not null
+            && (context.Origin is not ProcessInteractionOrigin
+                || responseTarget is not ProcessTokenInteractionTarget))
+        {
+            throw new ArgumentException(
+                "A child Process Request target requires a Process origin and Process-token response target.",
+                nameof(childTarget));
+        }
+        ChildTarget = childTarget;
     }
 
     /// <summary>Exact typed Request contract.</summary>
@@ -719,6 +852,12 @@ public sealed record RequestEnvelope : InteractionEnvelope
 
     /// <summary>Process token or declared Transition continuation consuming the response.</summary>
     public InteractionTarget ResponseTarget { get; }
+
+    /// <summary>
+    /// Exact child Process instance initialized by this Request, or <see langword="null"/> for an ordinary Request.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ProcessChildRequestTarget? ChildTarget { get; }
 }
 
 /// <summary>Canonical occurrence of an addressed one-way Signal.</summary>

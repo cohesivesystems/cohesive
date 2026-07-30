@@ -54,12 +54,13 @@ and extensions. `ProcessDefinitionDocuments` is a typed facade over that envelop
 metadata or fingerprint model.
 
 Static validation checks graph integrity, exact reference families, portable expression types, definite binding
-visibility, proven Choice/Match coverage, Fork-token ownership and Join structure, AwaitMatch policies, and finite
-activation. Process v1 uses the same fixed pure expression-capability closure as Transition v1 rather than the
-ambient expression catalog. A control-flow recurrence is valid only when it crosses a Request, AwaitMatch, Timer,
-or explicit durable cut. Fork branches may recur across those boundaries when every finite exit belongs to the
-reciprocal Join and at least one structural Join exit exists. The definition contains coordination facts—not copied
-aggregate business state, runtime services, adapters, compiled plans, or delegates.
+visibility, proven Choice/Match coverage, Fork-token ownership and Join structure, AwaitMatch policies, child
+Process protocols, bounded partition-work and recurrence policies, and finite activation. Process v2 uses the same
+fixed pure expression-capability closure as Transition v1 rather than the ambient expression catalog. A control-flow
+recurrence is valid only when it crosses a Request, InvokeProcess, ForEachPartition, RepeatAcrossActivation,
+AwaitMatch, Timer, or explicit durable cut. Fork branches may recur across those boundaries when every finite exit
+belongs to the reciprocal Join and at least one structural Join exit exists. The definition contains coordination
+facts—not copied aggregate business state, runtime services, adapters, compiled plans, or delegates.
 
 An AwaitMatch clause receiving a Request retains two distinct facts: its typed application payload and a
 `ProcessRequestObligationBinding` representing the admitted logical Request envelope. `ReplyProcessNode` must

@@ -142,7 +142,7 @@ public sealed class ExecutionVersionTests
     static ExecutionDefinitionMetadata CreateDefinitionMetadata() => new(
         definitionId: new("definition/index-rebuild"),
         revisionId: new("revision/2026-07-27"),
-        schemaVersion: new("cohesive-execution/v1"),
+        schemaVersion: ExecutionDefinitionDocument.CurrentSchemaVersion,
         fingerprint: new(
             algorithm: "sha256",
             canonicalization: "execution-ir/v1",

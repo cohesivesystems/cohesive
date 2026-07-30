@@ -1325,11 +1325,8 @@ public sealed partial class ProcessDurableRuntime
         ProcessActivationInput? input = null;
         if (admission.Admission.AdvancesTarget)
         {
-            // The v1 runtime has no external-adapter origin variant. Preserve the Request's exact semantic origin
-            // and provenance while deriving new Reply emission and idempotency identities.
             var reply = admission.State.CreateReply(
                 ProcessDurableRuntimeIdentities.OperationReply(operation.OperationId),
-                operation.Request.Context.Origin,
                 ProcessDurableRuntimeIdentities.OperationReplyIdempotency(operation.OperationId),
                 operation.Request.Context.Ordering,
                 operation.Request.Context.Provenance);

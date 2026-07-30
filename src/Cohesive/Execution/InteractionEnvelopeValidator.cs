@@ -27,13 +27,18 @@ public static class InteractionEnvelopeDiagnosticCodes
 
     /// <summary>A Reply result value does not match its declared terminal-outcome schema.</summary>
     public const string OutcomeContractMismatch = "interactions.envelope.reply.outcome.contractMismatch";
+
+    /// <summary>Optional child Process Request target metadata is intrinsically malformed.</summary>
+    public const string ChildTargetInvalid = "interactions.envelope.request.childTarget.invalid";
 }
 
 /// <summary>Static portability, schema-compatibility, and exact interaction-contract link validation.</summary>
 /// <remarks>
 /// Process-token liveness and execution definition/node links for origins and Transition targets are validated by
 /// the consuming Process or Transition compiler/runtime, which owns the referenced definition and continuation
-/// state. This validator does not weaken or infer those links from envelope data alone.
+/// state. This validator checks the intrinsic shape of optional child Request targets, while the owning Process
+/// runtime validates their exact definition and continuation linkage. It does not weaken or infer those links from
+/// envelope data alone.
 /// </remarks>
 public static class InteractionEnvelopeValidator
 {
@@ -99,6 +104,28 @@ public static class InteractionEnvelopeValidator
                     contracts,
                     graph,
                     diagnostics);
+                if (request.ChildTarget is { } childTarget
+                    && (childTarget.Definition is null
+                        || childTarget.Continuation is null
+                        || childTarget.OutcomeMapping is null
+                        || request.Context.Origin is not ProcessInteractionOrigin
+                        || request.ResponseTarget is not ProcessTokenInteractionTarget))
+                {
+                    diagnostics.Add(new(
+                        InteractionEnvelopeDiagnosticCodes.ChildTargetInvalid,
+                        DiagnosticSeverity.Error,
+                        "A child Process Request target requires an exact definition, continuation, Process origin, and Process-token response target.",
+                        "/childTarget"));
+                }
+                else if (request.ChildTarget is { } exactChildTarget
+                         && contracts.TryResolve(request.Contract, out var resolvedRequest)
+                         && resolvedRequest is RequestContractDefinition requestDefinition)
+                {
+                    ValidateChildOutcomeMapping(
+                        exactChildTarget.OutcomeMapping,
+                        requestDefinition,
+                        diagnostics);
+                }
                 break;
             case SignalEnvelope signal:
                 ValidatePayload(
@@ -220,6 +247,44 @@ public static class InteractionEnvelopeValidator
             (RequestCancellationDefinition, RequestCancellationOutcome) => true,
             _ => false
         };
+
+    static void ValidateChildOutcomeMapping(
+        ProcessChildOutcomeMapping mapping,
+        RequestContractDefinition request,
+        ICollection<DocumentValidationDiagnostic> diagnostics)
+    {
+        Validate(mapping.Completed, expectedResult: true, "/childTarget/outcomeMapping/completed");
+        Validate(mapping.Failed, expectedResult: false, "/childTarget/outcomeMapping/failed");
+        Validate(mapping.Cancelled, expectedResult: false, "/childTarget/outcomeMapping/cancelled");
+        Validate(mapping.Terminated, expectedResult: false, "/childTarget/outcomeMapping/terminated");
+        foreach (var declared in request.Response.TerminalOutcomes)
+        {
+            if (!mapping.Contains(declared.Id))
+            {
+                diagnostics.Add(new(
+                    InteractionEnvelopeDiagnosticCodes.ChildTargetInvalid,
+                    DiagnosticSeverity.Error,
+                    $"Request outcome '{declared.Id.Value}' is unreachable from the child terminal mapping.",
+                    "/childTarget/outcomeMapping"));
+            }
+        }
+
+        void Validate(RequestTerminalOutcomeId id, bool expectedResult, string location)
+        {
+            var declared = request.Response.Find(id);
+            var compatible = expectedResult
+                ? declared is RequestResultDefinition
+                : declared is RequestFailureDefinition;
+            if (!compatible)
+            {
+                diagnostics.Add(new(
+                    InteractionEnvelopeDiagnosticCodes.ChildTargetInvalid,
+                    DiagnosticSeverity.Error,
+                    "A child terminal status must map to an exact compatible Request outcome.",
+                    location));
+            }
+        }
+    }
 
     static void AddPortableDiagnostics(
         PortableValue value,

@@ -1,6 +1,6 @@
 # Execution Kernel Compatibility Inventory
 
-This inventory records the compatibility behavior characterized by ARI-153 and the kernel substrate introduced since then against the normative EK-01 through EK-09 scenarios in the [Cohesive Execution Kernel Specification](https://app.notion.com/p/3ab8cf7881f981f78ef1e34d7a907c70). It is a migration baseline, not an alternative semantic contract. Missing behavior remains required by the specification.
+This inventory records the compatibility behavior characterized by ARI-153 and the kernel substrate introduced since then against the normative EK scenarios in the [Cohesive Execution Kernel Specification](https://app.notion.com/p/3ab8cf7881f981f78ef1e34d7a907c70). It is a migration baseline, not an alternative semantic contract. Missing behavior remains required by the specification.
 
 Status meanings:
 
@@ -18,8 +18,10 @@ The canonical protocols are composed by a versioned `Cohesive.Storage.Processes`
 atomic reference store, and a Storage-owned durable reference driver with compatibility-first restore, inbox
 admission, exact activation replay, CAS revisions, worker fencing, Request dispatch/recovery, lifecycle control,
 and crash-cut injection. EK-06 and EK-07 pass in the provider-neutral reference profile. The Process identity,
-attempt, recovery, and affinity portion of EK-08 also passes there, while the complete scenario remains Partial
-until Storage materialization owns generation allocation, exclusion, cleanup, promotion, and backend swap.
+attempt, recovery, affinity, bounded child coordination, and checkpoint-recovery portion of EK-08 also passes
+there, while the complete scenario remains Partial until Storage materialization owns generation allocation,
+exclusion, cleanup, promotion, and backend swap. EK-11 passes in the provider-neutral reference profile through
+exact Relation evaluation, bounded durable recurrence, progress retention, and checkpoint restore.
 Canonical Process IR and its pure reference interpreter now
 provide the persisted semantic graph, typed bindings, exact references, immutable token/wait state, deterministic
 finite activations, and interaction intents needed by subsequent checkpoint work. EK-09 remains Partial:
@@ -34,11 +36,12 @@ canonical IR but no C# lowering yet. The remaining scenarios retain the Partial 
 | EK-02 — durable human review | Partial | The canonical Process reference interpreter materializes complete `AwaitMatch` registrations, computed absolute timers, early-input buffers, input dispositions, one deterministic winner, invalidated losers, and typed continuation bindings in immutable state. Every wait occurrence now has a typed replay-stable identity. The durable reference driver restores that state, admits exact canonical inputs, and atomically commits arbitration with the same aggregate revision, so racing input forces stale work to reload rather than lose the wakeup. | Production timer and interaction adapters, plus end-to-end Motion human-review conformance. |
 | EK-03 — vendor/manual fulfillment | Partial | Process Request nodes emit replay-stable canonical Requests targeted to their exact response waits, park only their owning token, and retain the exact logical obligation. The durable driver commits each Request with origin progress, records dispatch before adapter I/O, reloads and fences result evidence, persists one acknowledgement, and atomically dispositions the operation with contract-linked Reply inbox admission. | Vendor and manual-provider adapters, authored vendor-to-manual routing fixture, and full workflow conformance. |
 | EK-04 — parallel gates and join recovery | Partial | `ProcessContinuationState` is a complete token set rather than a cursor. The reference interpreter creates stable Fork children, retains reciprocal membership and branch-local bindings, schedules tokens deterministically, records partial progress, and resolves All/Any/RequiredCount Joins under explicit failure, cancellation, completion-order, and tie-break policy. The durable driver restores and atomically advances that complete continuation under compatibility admission, CAS, and worker fencing without re-executing committed activations. | A production durable-store adapter and end-to-end crash injection after partial branch completion. |
-| EK-05 — capability-safe multi-entity coordination | Partial | Exact Transition invocations receive independent portable subjects and typed inputs; Process state retains coordination outcomes rather than aggregate snapshots, so multi-entity coordination does not imply one global transaction. | Canonical scope/region, guarantee-demand, capability-evidence, compensation, and reconciliation constructs; proof-directed rejection when an atomic multi-entity demand cannot be realized. The legacy `ProcessTransactionScope` is not canonical authority. |
+| EK-05 — capability-safe multi-entity coordination | Partial | Exact Transition invocations receive independent portable subjects and typed inputs; Process state retains coordination outcomes rather than aggregate snapshots, so multi-entity coordination does not imply one global transaction. The static compiler derives exact direct resources and observation, mutation, wait, external-interaction, child, bounded-work, recurrence, compensation, and reconciliation effects. It rejects `WholeDefinition` atomicity across durable or external boundaries, while compensation and reconciliation remain explicit authored child purposes rather than fallback planning. | Authored nested scope regions, target capability evidence and realization proof, and the end-to-end multi-entity conformance fixture. The legacy `ProcessTransactionScope` is not canonical authority. |
 | EK-06 — durable effect crash matrix | Pass | The Request `EmissionId` is the logical operation identity and its scoped deduplication key survives every physical attempt. The durable driver atomically commits origin progress plus pending operation, records claim and dispatch before adapter I/O, repeats only the same fenced invocation when idempotency evidence permits, routes ambiguous outcomes to authored reconciliation, persists one acknowledgement, and atomically couples final operation disposition with Reply inbox admission. Exact store retries resolve pre/post-boundary crashes without changing intent, and stale fences cannot publish returned evidence. | None in the provider-neutral reference profile. Concrete store and operation adapters must pass the same crash matrix for their claimed realization. |
 | EK-07 — signal arbitration | Pass | Canonical Signal commands enter the durable inbox exactly once by logical `EmissionId`; duplicate admission replays. The durable driver then restores the exact wait topology and uses the reference interpreter's priority, clause-identity, and emission-identity ordering to select one winner, retain loser/tombstone dispositions, and prevent stale exact wait occurrences from routing to later waits. Inbox admission and activation commit share one CAS revision, closing the registration/commit lost-wakeup cut. | None in the provider-neutral reference profile. Production signal and timer adapters must pass the same arbitration scenario. |
-| EK-08 — index rebuild recovery | Partial | The durable driver composes stable Process instance, attempt, activation, control, checkpoint, and write-once affinity evidence. Pause and Continue retain the current attempt and candidate-generation affinity. Same-attempt replay/recovery preserves them; RestartAttempt commits one causal abandonment, creates one clean fenced replacement continuation under the accepted replacement identity, and leaves the new attempt unbound. Old-attempt replay is inert and old workers cannot add new logical evidence. | Storage-owned candidate-generation allocation, cleanup and abandoned-generation exclusion, plus fenced idempotent promotion and read/write backend swap. |
+| EK-08 — index rebuild recovery | Partial | The durable driver composes stable Process instance, attempt, activation, control, checkpoint, and write-once affinity evidence. `ForEachPartition` retains a finite canonical shard set, replay-stable child/Request/wait identities, explicit start and parallelism bounds, and exact member outcomes across checkpoint serialization and restore. A real durable-operation adapter receives self-contained child-start metadata and returns a truthfully originated Reply that joins the parent. Pause and Continue retain the current attempt and candidate-generation affinity. Same-attempt replay/recovery preserves them; RestartAttempt commits one causal abandonment, creates one clean fenced replacement continuation under the accepted replacement identity, and leaves the new attempt unbound. Old-attempt replay is inert and old workers cannot add new logical evidence. | Storage-owned candidate-generation allocation, cleanup and abandoned-generation exclusion, plus fenced idempotent promotion and read/write backend swap. |
 | EK-09 — C# and IR equivalence | Partial | Representative typed C# Transition authoring lowers immediately to the same canonical `Cohesive.Transitions.IR` definitions as direct authoring. `Cohesive.Processes.IR` now supports direct canonical authoring with stable node, edge, branch, clause, and binding identities, typed contracts, exact semantic references, deterministic normalization and fingerprints, and strict document round trips. Neither canonical IR requires callbacks or a producer assembly to deserialize and validate. | Canonical Process C# lowering and a Process C#/direct-IR equivalence suite remain ARI-170 work. The legacy Process authoring/runtime path still uses delegate-bearing executable node objects and must migrate without becoming semantic authority. |
+| EK-11 — durable polling recurrence | Pass | `RepeatAcrossActivation` evaluates a typed progress value and Boolean continuation condition, admits at most one repeat between durable cuts, retains exact occurrence and unchanged-progress counts, and routes deterministically to Completed, Exhausted, or Stalled. The durable runtime serializes, restores, validates, and resumes recurrence progress without a suspended host frame or free graph cycle. | None in the provider-neutral reference profile. Concrete Relation and Process-store adapters must pass the same recurrence and restore scenarios for their claimed realization. |
 
 The executable classifications and focused behavioral baselines live in `src/Cohesive.Tests/ExecutionKernel/ExecutionKernelCharacterizationTests.cs` and run as part of the existing `Cohesive.Tests` project.
 
@@ -84,8 +87,9 @@ follow authored recovery. Neither path fabricates a semantic timeout outcome.
 
 This is a reference protocol and conformance substrate, not a hidden claim that semantic state itself performs
 durable I/O. The reference executor does not own a repository and deliberately leaves every durable cut to its
-caller. The v1 state schema identifies the portable reference value; it is not a second Storage operation-ledger
-or checkpoint authority. `ProcessDurableCheckpoint` composes this state into a physical aggregate without copying
+caller. The v2 `DurableOperationState` schema identifies the portable reference value; it is not a second Storage
+operation-ledger or checkpoint authority. `ProcessDurableCheckpoint` composes this state into a physical aggregate
+without copying
 its fields, and `ProcessDurableRuntime` now drives the three cuts above through exact store-mutation retries,
 operation fencing, adapter dispatch or reconciliation, acknowledgement, and Reply admission. EK-06 therefore
 passes for the provider-neutral reference store and fake-adapter profile; concrete adapters must prove the same
@@ -214,16 +218,19 @@ ARI-167 introduces `Cohesive.Processes.IR.ProcessDefinition` as the persisted se
 coordination. It uses the shared execution-definition envelope and fingerprint model rather than defining another
 Process document. The normalized graph has stable node and edge identities, one typed invocation input, a typed
 terminal result, explicit recovery policy, typed continuation bindings, ordered Choice/Match cases, normalized
-Request outcomes, normalized Fork branches, and normalized AwaitMatch clauses. Its closed node union contains
-Transition invocation, Relation/Query evaluation, Request, domain-event emission, Signal send, Choice, Match,
-Fork, Join, AwaitMatch, Timer, Reply, explicit durable cut, Return, and Fail.
+Request outcomes, normalized Fork branches, normalized AwaitMatch clauses, exact child protocols, bounded
+partition-work limits, and durable recurrence policies. Its closed node union contains Transition invocation,
+Relation/Query evaluation, Request, domain-event emission, Signal send, Choice, Match, Fork, Join, AwaitMatch,
+Timer, Reply, explicit durable cut, child Process invocation, bounded partition child work, durable recurrence,
+Return, and Fail.
 
-Transition and Relation/Query nodes carry exact `ExecutionDefinitionReference` values. Linking supplies derived
-input/result contract evidence through `ProcessDefinitionValidationContext`; the referenced definition remains the
-authority and is not copied into Process IR. Request, event, Signal, Reply, and AwaitMatch nodes use exact typed
-interaction references resolved through `InteractionContractCatalog`. Expressions can observe only the Process
-input and definitely available typed continuation bindings, and Process v1 pins the same explicit pure capability
-profile as Transition v1. An inbound Request clause separately binds its application payload and its admitted
+Transition, Relation/Query, and child Process nodes carry exact `ExecutionDefinitionReference` values. Linking
+supplies derived input/result contract and child-dependency evidence through `ProcessDefinitionValidationContext`;
+the referenced definition remains the authority and is not copied into Process IR. Request, child Process, event,
+Signal, Reply, and AwaitMatch nodes use exact typed interaction references resolved through
+`InteractionContractCatalog`. Expressions can observe only the Process input and definitely available typed
+continuation bindings, and Process v2 pins the same explicit pure capability profile as Transition v1. An inbound
+Request clause separately binds its application payload and its admitted
 logical Request obligation; Reply consumes that definitely visible obligation and must link back to the exact
 Request contract. Aggregate state, relation execution artifacts,
 interaction definitions, runtime services, delegates, adapters, and compiled plans are outside the canonical
@@ -232,14 +239,15 @@ closure.
 `ProcessDefinitionValidator` checks portable contracts and expressions, exact link families, interaction payloads
 and outcomes, stable construct and edge identity, edge targets, reachability, definite binding flow, Request outcome
 coverage, conservative Choice/Match exhaustiveness proof, Fork/Join reciprocity, token-owned ingress and
-convergence, AwaitMatch arbitration, Request/Reply obligation continuity, and deterministic policy validity. An
-All Join exposes values guaranteed by every completed branch; partial Joins retain only the pre-Fork value scope
-until an explicit aggregation construct is introduced. It also
-builds a same-activation graph in which Request, AwaitMatch, Timer, and explicit durable cut are barriers. Every
-activation path must be acyclic and must reach a terminal node or one of those durable barriers. Recurrence is
-therefore explicit and valid only across a persisted continuation boundary; a durable boundary on one branch does
-not hide a free cycle on another. A Fork branch may contain durable recurrence only when every finite exit remains
-owned by and converges on its reciprocal Join and the branch has a structural Join exit.
+convergence, AwaitMatch arbitration, Request/Reply obligation continuity, child outcome and dependency closure,
+bounded work limits, recurrence progress limits, and deterministic policy validity. An All Join exposes values
+guaranteed by every completed branch; partial Joins retain only the pre-Fork value scope until an explicit
+aggregation construct is introduced. It also builds a same-activation graph in which Request, InvokeProcess,
+ForEachPartition, RepeatAcrossActivation, AwaitMatch, Timer, and explicit durable cut are barriers. Every activation
+path must be acyclic and must reach a terminal node or one of those durable barriers. Recurrence is therefore
+explicit and valid only across a persisted continuation boundary; a durable boundary on one branch does not hide a
+free cycle on another. A Fork branch may contain durable recurrence only when every finite exit remains owned by
+and converges on its reciprocal Join and the branch has a structural Join exit.
 
 `ProcessStaticCompiler` admits only a fully validated exact document and produces an indexed plan without copying
 semantic authority. `ProcessReferenceInterpreter` is a pure immutable reducer over that plan: it starts with one
@@ -256,8 +264,9 @@ discharges the logical obligation across every token and retained Fork parent so
 resurrected by a later Join.
 
 The reference continuation retains the complete token set, typed token-local bindings and Request obligations,
-Fork/Join membership and branch dispositions, computed timer deadlines, active waits and tombstones, early inputs,
-input-disposition receipts, outstanding logical Requests, terminal outcome, and exact Process fingerprint. It is
+Fork/Join membership and branch dispositions, replay-stable child invocations, bounded partition work, recurrence
+progress, computed timer deadlines, active waits and tombstones with their exact token-step identity basis, early inputs, input-disposition receipts,
+outstanding logical Requests, terminal outcome, and exact Process fingerprint. It is
 the semantic input to the Storage-owned durable checkpoint, not itself a claim of physical durability. The
 synchronous host port supplies explicit
 Transition, Relation/Query, and Signal-target evidence, while cancellation is observed only at an activation safe
@@ -270,12 +279,16 @@ of retaining impossible `Buffered` state. A `RestartAttempt` recovery never resu
 `ProcessReferenceInterpreter.RestartAttempt` creates a clean token set under a controller-supplied replacement
 attempt identity while retaining the exact Process definition and invocation input.
 
-One major model limit remains explicit. Process IR v1 has no canonical scope or guarantee-demand construct, so
-EK-05 atomic multi-entity capability rejection cannot yet be expressed honestly. Interaction targets now carry an
-optional exact `ProcessWaitRegistrationId`: exact targets cannot cross wait occurrences, while a null occurrence is
-the explicit early-delivery form. `ProcessDurableRuntime` now realizes finite activation, lifecycle, inbox/outbox,
-and durable Request cuts over the canonical checkpoint/store contracts, and ARI-170 owns restricted C# lowering and
-equivalence with direct IR. The legacy Process runtime remains a separate compatibility path.
+Process IR v2 still has no canonical authored nested-scope construct. Target-independent compilation can demand
+`ProcessAtomicScopeDemand.WholeDefinition`: it derives deterministic effect and resource evidence, rejects durable
+waits and external, child, or emission-capable host interactions, and retains the demand for downstream capability
+proof. Passing that structural preflight is not target realization evidence; a target compiler must still prove the
+requested atomic guarantee. EK-05 whole-definition preflight is therefore explicit, while authored nested scopes
+and concrete target realization remain deferred. Interaction targets carry an optional exact
+`ProcessWaitRegistrationId`: exact targets cannot cross wait occurrences, while a null occurrence is the explicit
+early-delivery form. `ProcessDurableRuntime` realizes finite activation, lifecycle, inbox/outbox, and durable Request
+cuts over the canonical checkpoint/store contracts, and ARI-170 owns restricted C# lowering and equivalence with
+direct IR. The legacy Process runtime remains a separate compatibility path.
 
 ## Compatibility surfaces to migrate
 

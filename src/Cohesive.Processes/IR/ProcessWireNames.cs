@@ -1,6 +1,6 @@
 namespace Cohesive.Processes.IR;
 
-/// <summary>Stable wire names used by canonical Process IR v1.</summary>
+/// <summary>Stable wire names used by canonical Process IR v2.</summary>
 /// <remarks>
 /// These constants are the single authority for persisted discriminators. CLR type names are not part of the
 /// portable Process contract and may change without changing its durable representation.
@@ -51,6 +51,15 @@ public static class ProcessWireNames
 
     /// <summary>Explicit durable-cut node discriminator.</summary>
     public const string DurableCutNode = "durableCut";
+
+    /// <summary>Durable child-Process invocation node discriminator.</summary>
+    public const string InvokeProcessNode = "invokeProcess";
+
+    /// <summary>Bounded partition child-work node discriminator.</summary>
+    public const string ForEachPartitionNode = "forEachPartition";
+
+    /// <summary>Durable recurrence node discriminator.</summary>
+    public const string RepeatAcrossActivationNode = "repeatAcrossActivation";
 
     /// <summary>Successful terminal Process node discriminator.</summary>
     public const string ReturnNode = "return";

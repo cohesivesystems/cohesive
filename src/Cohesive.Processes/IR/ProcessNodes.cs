@@ -1,7 +1,6 @@
 using System.Collections.Immutable;
 using System.Text.Json.Serialization;
 using Cohesive.Execution;
-using Cohesive.Model;
 
 namespace Cohesive.Processes.IR;
 
@@ -20,6 +19,9 @@ namespace Cohesive.Processes.IR;
 [JsonDerivedType(typeof(TimerProcessNode), ProcessWireNames.TimerNode)]
 [JsonDerivedType(typeof(ReplyProcessNode), ProcessWireNames.ReplyNode)]
 [JsonDerivedType(typeof(DurableCutProcessNode), ProcessWireNames.DurableCutNode)]
+[JsonDerivedType(typeof(InvokeProcessProcessNode), ProcessWireNames.InvokeProcessNode)]
+[JsonDerivedType(typeof(ForEachPartitionProcessNode), ProcessWireNames.ForEachPartitionNode)]
+[JsonDerivedType(typeof(RepeatAcrossActivationProcessNode), ProcessWireNames.RepeatAcrossActivationNode)]
 [JsonDerivedType(typeof(ReturnProcessNode), ProcessWireNames.ReturnNode)]
 [JsonDerivedType(typeof(FailProcessNode), ProcessWireNames.FailNode)]
 public abstract record ProcessNode
@@ -146,7 +148,7 @@ public sealed record RequestProcessNode : ProcessNode
     {
         Contract = contract;
         Payload = payload;
-        Outcomes = ProcessIrCollections.NormalizeSet(outcomes, CompareOutcomeBranches);
+        Outcomes = ProcessRequestSemantics.NormalizeOutcomes(outcomes);
     }
 
     /// <summary>Exact typed Request contract.</summary>
@@ -182,20 +184,6 @@ public sealed record RequestProcessNode : ProcessNode
         return hash.ToHashCode();
     }
 
-    static int CompareOutcomeBranches(ProcessRequestOutcomeBranch? left, ProcessRequestOutcomeBranch? right)
-    {
-        if (ReferenceEquals(left, right))
-            return 0;
-        if (left is null)
-            return -1;
-        if (right is null)
-            return 1;
-
-        var comparison = StringComparer.Ordinal.Compare(left.Outcome.Value, right.Outcome.Value);
-        return comparison != 0
-            ? comparison
-            : StringComparer.Ordinal.Compare(left.Id.Value, right.Id.Value);
-    }
 }
 
 /// <summary>Emits one typed domain event and continues without creating a response obligation.</summary>
@@ -500,7 +488,7 @@ public sealed record ProcessForkBranch
 
 /// <summary>Creates a normalized finite set of parallel branch tokens owned by one reciprocal Join.</summary>
 /// <remarks>
-/// In Process IR v1, every finite branch exit must reach the reciprocal Join without passing through another Join.
+/// In Process IR v2, every finite branch exit must reach the reciprocal Join without passing through another Join.
 /// Recurrence inside a branch is valid when every cycle crosses a durable boundary and every recurrent region retains
 /// a structural exit to the reciprocal Join. Free-activation cycles and closed recurrent branches are invalid.
 /// </remarks>
@@ -765,6 +753,248 @@ public sealed record DurableCutProcessNode : ProcessNode
 
     /// <summary>Stable edge at which a later activation resumes.</summary>
     public ProcessEdge Resume { get; }
+}
+
+/// <summary>
+/// Starts and joins one exact child Process through the canonical durable Request and Reply protocol.
+/// </summary>
+/// <remarks>
+/// Child Process identity is derived by an interpreter from the parent Process instance, attempt, token, node, and
+/// occurrence. The exact Request contract defines the durable start/join protocol; this node does not
+/// introduce another inbox, outbox, or external-operation model.
+/// </remarks>
+public sealed record InvokeProcessProcessNode : ProcessNode
+{
+    /// <summary>Creates a child Process invocation node.</summary>
+    /// <param name="id">Stable node and child-invocation identity basis.</param>
+    /// <param name="process">Exact child Process definition revision and fingerprint.</param>
+    /// <param name="contract">Exact Request contract used to durably start and join the child.</param>
+    /// <param name="outcomeMapping">Total mapping from child terminal status to exact Request outcomes.</param>
+    /// <param name="input">Portable typed child Process input and Request payload expression.</param>
+    /// <param name="purpose">Explicit ordinary-work, compensation, or reconciliation purpose.</param>
+    /// <param name="cancellation">Explicit parent-to-child cancellation behavior.</param>
+    /// <param name="outcomes">Set-like terminal Request outcome continuations.</param>
+    [JsonConstructor]
+    public InvokeProcessProcessNode(
+        ExecutionNodeId id,
+        ExecutionDefinitionReference process,
+        RequestContractReference contract,
+        ProcessChildOutcomeMapping outcomeMapping,
+        Expr input,
+        ProcessChildPurpose purpose,
+        ProcessChildCancellationPolicy cancellation,
+        ImmutableArray<ProcessRequestOutcomeBranch> outcomes)
+        : base(id)
+    {
+        Process = process;
+        Contract = contract;
+        OutcomeMapping = outcomeMapping;
+        Input = input;
+        Purpose = purpose;
+        Cancellation = cancellation;
+        Outcomes = ProcessRequestSemantics.NormalizeOutcomes(outcomes);
+    }
+
+    /// <summary>Exact child Process definition revision and fingerprint.</summary>
+    public ExecutionDefinitionReference Process { get; }
+
+    /// <summary>Exact Request contract used to durably start and join the child.</summary>
+    public RequestContractReference Contract { get; }
+
+    /// <summary>Total mapping from child terminal status to exact Request outcomes.</summary>
+    public ProcessChildOutcomeMapping OutcomeMapping { get; }
+
+    /// <summary>Portable typed child Process input and Request payload expression.</summary>
+    public Expr Input { get; }
+
+    /// <summary>Explicit semantic purpose of the child invocation.</summary>
+    public ProcessChildPurpose Purpose { get; }
+
+    /// <summary>Explicit parent-to-child cancellation behavior.</summary>
+    public ProcessChildCancellationPolicy Cancellation { get; }
+
+    /// <summary>Terminal outcome branches in deterministic Request outcome-identity order.</summary>
+    public ImmutableArray<ProcessRequestOutcomeBranch> Outcomes { get; }
+
+    /// <summary>Compares child invocation nodes by complete normalized semantic value.</summary>
+    /// <param name="other">Child invocation node to compare with this value.</param>
+    /// <returns><see langword="true"/> when every child, Request, policy, and outcome semantic is equal.</returns>
+    public bool Equals(InvokeProcessProcessNode? other) =>
+        ReferenceEquals(this, other)
+        || other is not null
+        && Id == other.Id
+        && Process == other.Process
+        && Contract == other.Contract
+        && OutcomeMapping == other.OutcomeMapping
+        && Input == other.Input
+        && Purpose == other.Purpose
+        && Cancellation == other.Cancellation
+        && Outcomes.SequenceEqual(other.Outcomes);
+
+    /// <summary>Returns a structural hash code for complete child invocation semantics.</summary>
+    /// <returns>A hash code derived from child identity, Request semantics, policies, and normalized outcomes.</returns>
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Id);
+        hash.Add(Process);
+        hash.Add(Contract);
+        hash.Add(OutcomeMapping);
+        hash.Add(Input);
+        hash.Add(Purpose);
+        hash.Add(Cancellation);
+        foreach (var outcome in Outcomes)
+            hash.Add(outcome);
+        return hash.ToHashCode();
+    }
+}
+
+/// <summary>
+/// Starts a finite, bounded set of partition-keyed child Processes and joins their terminal outcomes.
+/// </summary>
+/// <remarks>
+/// This construct owns only coarse partition-to-child coordination. Page, cursor, shard-item, and record-level
+/// progress remain owned by the semantic storage block supplying the partitions and child work.
+/// </remarks>
+public sealed record ForEachPartitionProcessNode : ProcessNode
+{
+    /// <summary>Creates bounded partition work.</summary>
+    /// <param name="id">Stable node and bounded-work occurrence identity basis.</param>
+    /// <param name="partitions">Portable expression producing the finite partition collection.</param>
+    /// <param name="partition">Typed lexical binding for one partition value.</param>
+    /// <param name="progressIdentity">Portable String expression producing a stable identity for each partition.</param>
+    /// <param name="process">Exact child Process definition used for every partition.</param>
+    /// <param name="contract">Exact Request contract used to durably start and join each child.</param>
+    /// <param name="outcomeMapping">Total mapping from child terminal status to exact Request outcomes.</param>
+    /// <param name="childInput">Portable child input expression evaluated with <paramref name="partition"/> visible.</param>
+    /// <param name="limits">Explicit finite item, activation-start, and parallelism limits.</param>
+    /// <param name="cancellation">Explicit parent-to-child cancellation behavior.</param>
+    /// <param name="completed">Edge selected after every partition child completes successfully.</param>
+    /// <param name="failed">Edge selected when bounded child work reaches its declared failed outcome.</param>
+    [JsonConstructor]
+    public ForEachPartitionProcessNode(
+        ExecutionNodeId id,
+        Expr partitions,
+        ProcessOutputBinding partition,
+        Expr progressIdentity,
+        ExecutionDefinitionReference process,
+        RequestContractReference contract,
+        ProcessChildOutcomeMapping outcomeMapping,
+        Expr childInput,
+        ProcessWorkLimits limits,
+        ProcessChildCancellationPolicy cancellation,
+        ProcessEdge completed,
+        ProcessEdge failed)
+        : base(id)
+    {
+        Partitions = partitions;
+        Partition = partition;
+        ProgressIdentity = progressIdentity;
+        Process = process;
+        Contract = contract;
+        OutcomeMapping = outcomeMapping;
+        ChildInput = childInput;
+        Limits = limits;
+        Cancellation = cancellation;
+        Completed = completed;
+        Failed = failed;
+    }
+
+    /// <summary>Portable expression producing the finite partition collection.</summary>
+    public Expr Partitions { get; }
+
+    /// <summary>Typed lexical binding for one partition value.</summary>
+    public ProcessOutputBinding Partition { get; }
+
+    /// <summary>Portable String expression producing a stable identity for each partition.</summary>
+    public Expr ProgressIdentity { get; }
+
+    /// <summary>Exact child Process definition used for every partition.</summary>
+    public ExecutionDefinitionReference Process { get; }
+
+    /// <summary>Exact Request contract used to durably start and join each child.</summary>
+    public RequestContractReference Contract { get; }
+
+    /// <summary>Total mapping from child terminal status to exact Request outcomes.</summary>
+    public ProcessChildOutcomeMapping OutcomeMapping { get; }
+
+    /// <summary>Portable typed child input expression evaluated with <see cref="Partition"/> visible.</summary>
+    public Expr ChildInput { get; }
+
+    /// <summary>Explicit finite work limits.</summary>
+    public ProcessWorkLimits Limits { get; }
+
+    /// <summary>Explicit parent-to-child cancellation behavior.</summary>
+    public ProcessChildCancellationPolicy Cancellation { get; }
+
+    /// <summary>Edge selected after every partition child completes successfully.</summary>
+    public ProcessEdge Completed { get; }
+
+    /// <summary>Edge selected when bounded child work reaches its declared failed outcome.</summary>
+    public ProcessEdge Failed { get; }
+}
+
+/// <summary>
+/// Makes one explicitly bounded recurrence decision and crosses a durable activation boundary before repeating.
+/// </summary>
+public sealed record RepeatAcrossActivationProcessNode : ProcessNode
+{
+    /// <summary>Creates durable recurrence semantics.</summary>
+    /// <param name="id">Stable recurrence node and occurrence identity basis.</param>
+    /// <param name="continueWhen">Portable Boolean expression deciding whether another occurrence is required.</param>
+    /// <param name="progress">Portable typed value used to prove progress across occurrences.</param>
+    /// <param name="progressContract">Exact portable contract of <paramref name="progress"/>.</param>
+    /// <param name="policy">Explicit occurrence and unchanged-progress limits.</param>
+    /// <param name="repeat">Edge selected at a durable cut when another occurrence is admitted.</param>
+    /// <param name="completed">Edge selected when <paramref name="continueWhen"/> is false.</param>
+    /// <param name="exhausted">Edge selected when the total occurrence limit is reached.</param>
+    /// <param name="stalled">Edge selected when progress remains unchanged beyond its declared limit.</param>
+    [JsonConstructor]
+    public RepeatAcrossActivationProcessNode(
+        ExecutionNodeId id,
+        Expr continueWhen,
+        Expr progress,
+        ValueContract progressContract,
+        ProcessRecurrencePolicy policy,
+        ProcessEdge repeat,
+        ProcessEdge completed,
+        ProcessEdge exhausted,
+        ProcessEdge stalled)
+        : base(id)
+    {
+        ContinueWhen = continueWhen;
+        Progress = progress;
+        ProgressContract = progressContract;
+        Policy = policy;
+        Repeat = repeat;
+        Completed = completed;
+        Exhausted = exhausted;
+        Stalled = stalled;
+    }
+
+    /// <summary>Portable Boolean expression deciding whether another occurrence is required.</summary>
+    public Expr ContinueWhen { get; }
+
+    /// <summary>Portable typed value used to prove progress across occurrences.</summary>
+    public Expr Progress { get; }
+
+    /// <summary>Exact portable contract of <see cref="Progress"/>.</summary>
+    public ValueContract ProgressContract { get; }
+
+    /// <summary>Explicit occurrence and unchanged-progress limits.</summary>
+    public ProcessRecurrencePolicy Policy { get; }
+
+    /// <summary>Edge selected at a durable cut when another occurrence is admitted.</summary>
+    public ProcessEdge Repeat { get; }
+
+    /// <summary>Edge selected when <see cref="ContinueWhen"/> is false.</summary>
+    public ProcessEdge Completed { get; }
+
+    /// <summary>Edge selected when the total occurrence limit is reached.</summary>
+    public ProcessEdge Exhausted { get; }
+
+    /// <summary>Edge selected when progress remains unchanged beyond its declared limit.</summary>
+    public ProcessEdge Stalled { get; }
 }
 
 /// <summary>Terminates the Process successfully with a typed result expression.</summary>

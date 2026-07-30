@@ -1339,7 +1339,10 @@ public sealed class DurableOperationReferenceExecutor
                 }
                 if (existing.AttemptId == attemptId && existing.Outcome == duplicate.Outcome)
                 {
-                    return new(state, DurableOperationObservationDisposition.Replayed);
+                    return existing.AdapterEvidence == duplicate.AdapterEvidence
+                           && existing.ReplyOrigin == duplicate.ReplyOrigin
+                        ? new(state, DurableOperationObservationDisposition.Replayed)
+                        : new(state, DurableOperationObservationDisposition.ConflictingOutcome);
                 }
 
                 if (existing.AttemptId != attemptId)
@@ -1391,6 +1394,7 @@ public sealed class DurableOperationReferenceExecutor
                 current,
                 outcome.Outcome,
                 outcome.AdapterEvidence,
+                outcome.ReplyOrigin,
                 observedAtUtc,
                 DurableOperationAttemptStage.Acknowledged),
             DurableOperationFailureObservation failure => RecordFailure(
@@ -1534,6 +1538,7 @@ public sealed class DurableOperationReferenceExecutor
                 attempt!,
                 outcome.Outcome,
                 outcome.AdapterEvidence,
+                outcome.ReplyOrigin,
                 observedAtUtc,
                 DurableOperationAttemptStage.Resolved,
                 reconciliations,
@@ -1649,6 +1654,10 @@ public sealed class DurableOperationReferenceExecutor
     /// <param name="identity">Stable recovery identity supplied with the escalation intent.</param>
     /// <param name="outcome">Exact declared terminal Request outcome.</param>
     /// <param name="evidence">Optional materially known portable escalation evidence.</param>
+    /// <param name="replyOrigin">
+    /// Exact semantic origin that produced the recovered Reply. Child Process Requests require a Process origin
+    /// matching their pinned child target; ordinary Requests require <see langword="null"/>.
+    /// </param>
     /// <param name="observedAtUtc">Explicit UTC persistence observation.</param>
     /// <returns>
     /// Replacement state and acknowledgement, replay, conflict, stale, deadline, or invalid-evidence disposition.
@@ -1668,6 +1677,7 @@ public sealed class DurableOperationReferenceExecutor
         DurableOperationRecoveryIdentity identity,
         RequestTerminalOutcome outcome,
         PortableValue? evidence,
+        InteractionOrigin? replyOrigin,
         DateTimeOffset observedAtUtc)
     {
         ArgumentNullException.ThrowIfNull(state);
@@ -1684,6 +1694,8 @@ public sealed class DurableOperationReferenceExecutor
         {
             return acknowledgement.RecoveryIdentity == identity
                    && acknowledgement.Outcome == outcome
+                   && acknowledgement.AdapterEvidence == evidence
+                   && acknowledgement.ReplyOrigin == replyOrigin
                 ? new(state, DurableOperationObservationDisposition.Replayed)
                 : identity.OperationId != state.OperationId
                   || identity.Requirement != DurableOperationRecoveryRequirement.Escalate
@@ -1713,6 +1725,7 @@ public sealed class DurableOperationReferenceExecutor
             attempt,
             outcome,
             evidence,
+            replyOrigin,
             observedAtUtc,
             DurableOperationAttemptStage.Resolved,
             recoveryIdentity: identity);
@@ -1721,6 +1734,10 @@ public sealed class DurableOperationReferenceExecutor
     /// <summary>Supplies the exact declared typed terminal failure required by policy.</summary>
     /// <param name="state">State requiring a terminal outcome.</param>
     /// <param name="outcome">Declared typed failure outcome.</param>
+    /// <param name="replyOrigin">
+    /// Exact semantic origin that produced the recovered Reply. Child Process Requests require a Process origin
+    /// matching their pinned child target; ordinary Requests require <see langword="null"/>.
+    /// </param>
     /// <param name="observedAtUtc">Explicit UTC acknowledgement observation.</param>
     /// <returns>Replacement state and acknowledgement, replay, conflict, deadline, or invalid-evidence disposition.</returns>
     /// <exception cref="ArgumentNullException">
@@ -1733,6 +1750,7 @@ public sealed class DurableOperationReferenceExecutor
     public DurableOperationObservationResult ResolveTerminalOutcome(
         DurableOperationState state,
         RequestFailureOutcome outcome,
+        InteractionOrigin? replyOrigin,
         DateTimeOffset observedAtUtc)
     {
         ArgumentNullException.ThrowIfNull(state);
@@ -1741,7 +1759,8 @@ public sealed class DurableOperationReferenceExecutor
         RequireOperationObservation(state, observedAtUtc, nameof(observedAtUtc));
         if (state.Acknowledgement is { } acknowledgement)
         {
-            if (acknowledgement.Outcome != outcome)
+            if (acknowledgement.Outcome != outcome
+                || acknowledgement.ReplyOrigin != replyOrigin)
             {
                 return new(state, DurableOperationObservationDisposition.ConflictingOutcome);
             }
@@ -1768,6 +1787,7 @@ public sealed class DurableOperationReferenceExecutor
             attempt,
             outcome,
             adapterEvidence: null,
+            replyOrigin,
             observedAtUtc,
             DurableOperationAttemptStage.Resolved);
     }
@@ -2045,6 +2065,7 @@ public sealed class DurableOperationReferenceExecutor
         DurableOperationAttempt attempt,
         RequestTerminalOutcome outcome,
         PortableValue? adapterEvidence,
+        InteractionOrigin? replyOrigin,
         DateTimeOffset observedAtUtc,
         DurableOperationAttemptStage resolvedStage,
         ImmutableArray<DurableOperationReconciliationEvidence>? reconciliations = null,
@@ -2052,6 +2073,11 @@ public sealed class DurableOperationReferenceExecutor
     {
         RequireAttemptObservation(attempt, observedAtUtc, nameof(observedAtUtc));
         if (outcome is RequestTimeoutOutcome or RequestCancellationOutcome)
+        {
+            return new(state, DurableOperationObservationDisposition.InvalidEvidence);
+        }
+
+        if (!ReplyOriginMatchesRequest(state.Request, replyOrigin))
         {
             return new(state, DurableOperationObservationDisposition.InvalidEvidence);
         }
@@ -2077,7 +2103,8 @@ public sealed class DurableOperationReferenceExecutor
             outcome,
             observedAtUtc,
             adapterEvidence,
-            recoveryIdentity);
+            recoveryIdentity,
+            replyOrigin);
         var replacement = Replace(
             state,
             attempts: state.Attempts.SetItem(state.Attempts.Length - 1, resolved),
@@ -2094,6 +2121,11 @@ public sealed class DurableOperationReferenceExecutor
         string beforeDispatchFailureCode,
         string inFlightFailureCode)
     {
+        if (state.Request.ChildTarget is not null)
+        {
+            return new(state, DurableOperationObservationDisposition.InvalidEvidence);
+        }
+
         if (!TryValidateOutcome(state, outcome, out var replyBinding))
         {
             return new(state, DurableOperationObservationDisposition.InvalidEvidence);
@@ -2139,6 +2171,13 @@ public sealed class DurableOperationReferenceExecutor
             acknowledgement: acknowledgement);
         return new(replacement, DurableOperationObservationDisposition.Acknowledged);
     }
+
+    static bool ReplyOriginMatchesRequest(RequestEnvelope request, InteractionOrigin? replyOrigin) =>
+        request.ChildTarget is { } childTarget
+            ? replyOrigin is ProcessInteractionOrigin childOrigin
+              && childOrigin.Definition == childTarget.Definition
+              && childOrigin.Continuation == childTarget.Continuation
+            : replyOrigin is null;
 
     bool TryValidateOutcome(
         DurableOperationState state,

@@ -113,6 +113,92 @@ public sealed class InteractionEnvelopeTests
                 .GetString());
     }
 
+    [Fact]
+    public void ChildRequestTarget_RoundTripsExactIdentityWhileOrdinaryRequestsOmitTheExtension()
+    {
+        var fixture = ContractFixture.Create();
+        var catalog = Catalog(fixture);
+        var childTarget = new ProcessChildRequestTarget(
+            DefinitionReference("process/index-worker", 'd'),
+            new(new("process/index-worker/instance-1"), new("process-attempt/1")),
+            ChildOutcomeMapping());
+        var childRequest = new RequestEnvelope(
+            InteractionEnvelope.CurrentSchemaVersion,
+            Context("emission/request/child", ProcessOrigin()),
+            new(Reference(fixture.Request)),
+            StringValue("partition/a"),
+            ProcessTarget(),
+            childTarget);
+        var ordinaryRequest = new RequestEnvelope(
+            InteractionEnvelope.CurrentSchemaVersion,
+            Context("emission/request/ordinary", ProcessOrigin()),
+            new(Reference(fixture.Request)),
+            StringValue("ordinary"),
+            ProcessTarget());
+
+        var childJson = InteractionEnvelopeJsonSerializer.Serialize(childRequest);
+        var restored = Assert.IsType<RequestEnvelope>(
+            InteractionEnvelopeJsonSerializer.Deserialize(childJson, catalog));
+        var ordinaryJson = JsonNode.Parse(InteractionEnvelopeJsonSerializer.Serialize(ordinaryRequest))!.AsObject();
+
+        Assert.Equal(new ExecutionIrSchemaVersion("cohesive-interaction-envelope/v2"), childRequest.SchemaVersion);
+        Assert.Equal(childTarget, restored.ChildTarget);
+        Assert.Equal(childRequest, restored);
+        Assert.Equal(
+            InteractionEnvelopeJsonSerializer.ComputeContentFingerprint(childRequest),
+            InteractionEnvelopeJsonSerializer.ComputeContentFingerprint(restored));
+        Assert.Contains("\"childTarget\"", childJson, StringComparison.Ordinal);
+        Assert.False(ordinaryJson.ContainsKey("childTarget"));
+    }
+
+    [Fact]
+    public void ChildRequestTarget_RequiresIntrinsicProcessAddressing()
+    {
+        var fixture = ContractFixture.Create();
+        var childTarget = new ProcessChildRequestTarget(
+            DefinitionReference("process/index-worker", 'e'),
+            new(new("process/index-worker/instance-2"), new("process-attempt/1")),
+            ChildOutcomeMapping());
+
+        Assert.Throws<ArgumentException>(() => new RequestEnvelope(
+            InteractionEnvelope.CurrentSchemaVersion,
+            Context("emission/request/transition-origin", TransitionOrigin()),
+            new(Reference(fixture.Request)),
+            StringValue("partition/a"),
+            ProcessTarget(),
+            childTarget));
+        Assert.Throws<ArgumentException>(() => new RequestEnvelope(
+            InteractionEnvelope.CurrentSchemaVersion,
+            Context("emission/request/transition-target", ProcessOrigin()),
+            new(Reference(fixture.Request)),
+            StringValue("partition/a"),
+            TransitionTarget(),
+            childTarget));
+    }
+
+    [Fact]
+    public void StrictEnvelopeReader_RejectsPreChildTargetV1Schema()
+    {
+        var fixture = ContractFixture.Create();
+        var catalog = Catalog(fixture);
+        var legacy = new RequestEnvelope(
+            new("cohesive-interaction-envelope/v1"),
+            Context("emission/request/v1", ProcessOrigin()),
+            new(Reference(fixture.Request)),
+            StringValue("legacy"),
+            ProcessTarget());
+
+        var validation = InteractionEnvelopeJsonSerializer.TryDeserialize(
+            InteractionEnvelopeJsonSerializer.Serialize(legacy),
+            catalog,
+            out var restored);
+
+        Assert.Null(restored);
+        Assert.Contains(
+            validation.Diagnostics,
+            static diagnostic => diagnostic.Code == InteractionEnvelopeDiagnosticCodes.SchemaVersionUnsupported);
+    }
+
     [Theory]
     [InlineData("persistenceEvent")]
     [InlineData("unknown")]
@@ -146,17 +232,17 @@ public sealed class InteractionEnvelopeTests
         var fixture = ContractFixture.Create();
         var catalog = Catalog(fixture);
         var envelope = new DomainEventEnvelope(
-            new("cohesive-interaction-envelope/v2"),
+            new("cohesive-interaction-envelope/v3"),
             Context("emission/event/future-schema", TransitionOrigin()),
             new(Reference(fixture.DomainEvent)),
             StringValue("reviewed"));
         var futureWire = JsonNode.Parse(InteractionEnvelopeJsonSerializer.Serialize(envelope))?.AsObject()
             ?? throw new InvalidOperationException("Failed to parse the future interaction-envelope test JSON.");
-        futureWire["futureSemantics"] = new JsonObject { ["mode"] = "v2-only" };
+        futureWire["futureSemantics"] = new JsonObject { ["mode"] = "v3-only" };
 
         var validation = InteractionEnvelopeJsonSerializer.TryDeserialize(
             futureWire.ToJsonString(InteractionEnvelopeJsonSerializer.CreateOptions()),
-            new([new("cohesive-interaction-envelope/v2")]),
+            new([new("cohesive-interaction-envelope/v3")]),
             catalog,
             graph: null,
             out var restored);
@@ -238,7 +324,7 @@ public sealed class InteractionEnvelopeTests
                 requestId,
                 new RequestResultOutcome(new("result"), Int64Value(42))),
             new DomainEventEnvelope(
-                new("cohesive-interaction-envelope/v2"),
+                new("cohesive-interaction-envelope/v3"),
                 Context("emission/event/future-schema", TransitionOrigin()),
                 new(Reference(fixture.DomainEvent)),
                 StringValue("payload"))
@@ -458,6 +544,12 @@ public sealed class InteractionEnvelopeTests
             new("tests/execution-kernel/interactions"),
             DocumentOrigin.Generated);
 
+    static ProcessChildOutcomeMapping ChildOutcomeMapping() => new(
+        new("result"),
+        new("failure"),
+        new("cancelled"),
+        new("terminated"));
+
     static string ExpectedDiscriminator(InteractionEnvelope envelope) => envelope switch
     {
         DomainEventEnvelope => InteractionWireNames.DomainEvent,
@@ -520,7 +612,9 @@ public sealed class InteractionEnvelopeTests
             new(
                 [
                     new RequestResultDefinition(new("result"), StringSchema("result/v1")),
-                    new RequestFailureDefinition(new("failure"), StringSchema("failure/v1"))
+                    new RequestFailureDefinition(new("failure"), StringSchema("failure/v1")),
+                    new RequestFailureDefinition(new("cancelled"), StringSchema("cancelled/v1")),
+                    new RequestFailureDefinition(new("terminated"), StringSchema("terminated/v1"))
                 ],
                 RequestOptionalTerminalSemantics.Unsupported,
                 RequestOptionalTerminalSemantics.Unsupported,

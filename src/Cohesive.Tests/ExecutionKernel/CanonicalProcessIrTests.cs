@@ -5,7 +5,6 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Cohesive.Execution;
-using Cohesive.Model.Expressions;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.IR;
 using CanonicalProcessDefinition = Cohesive.Processes.IR.ProcessDefinition;
@@ -17,6 +16,11 @@ public sealed class CanonicalProcessIrTests
 {
     static readonly ValueContract BooleanContract = new(new ScalarTypeRef(ScalarTypeKind.Bool));
     static readonly ValueContract StringContract = new(new ScalarTypeRef(ScalarTypeKind.String));
+    static readonly ProcessChildOutcomeMapping ChildOutcomeMapping = new(
+        new("succeeded"),
+        new("failed"),
+        new("cancelled"),
+        new("terminated"));
 
     [Fact]
     public void RepresentativeDirectIr_RoundTripsThroughSharedEnvelopeDeterministically()
@@ -55,7 +59,7 @@ public sealed class CanonicalProcessIrTests
         }
         Assert.Equal(definition, restoredDefinition);
         Assert.Equal(
-            "4961ebbf258e84657e0083ded32aa43c4f9ae2ac02c47ffc6e41c3584973ddfc",
+            "4122dba3b69d8a0a4d83ca9ab519bfe5da1366cfb6c692b3725625ba2027aec1",
             document.Metadata.Fingerprint.Value);
     }
 
@@ -131,6 +135,38 @@ public sealed class CanonicalProcessIrTests
                 Expr.Const("approved"),
                 next),
             new DurableCutProcessNode(new("cut"), next),
+            new InvokeProcessProcessNode(
+                new("invoke-process"),
+                DefinitionReference("process/review"),
+                new(DefinitionReference("request/process-review")),
+                ChildOutcomeMapping,
+                Expr.Const("review"),
+                ProcessChildPurpose.Work,
+                ProcessChildCancellationPolicy.Propagate,
+                [new(new("invoke-process/succeeded"), new("succeeded"), continuation)]),
+            new ForEachPartitionProcessNode(
+                new("for-each-partition"),
+                Expr.Const("partition-a"),
+                new(new("partition"), StringContract),
+                Expr.Const("partition-a"),
+                DefinitionReference("process/review-partition"),
+                new(DefinitionReference("request/process-review-partition")),
+                ChildOutcomeMapping,
+                Expr.Const("review"),
+                new(maximumItems: 10, maximumStartsPerActivation: 2, maximumParallelism: 2),
+                ProcessChildCancellationPolicy.Propagate,
+                next,
+                next),
+            new RepeatAcrossActivationProcessNode(
+                new("repeat"),
+                Expr.Const(true),
+                Expr.Const("progress"),
+                StringContract,
+                new(maximumOccurrences: 10, maximumUnchangedProgressOccurrences: 2),
+                next,
+                next,
+                next,
+                next),
             new ReturnProcessNode(new("return"), Expr.Const("approved")),
             new FailProcessNode(new("fail"), Expr.Const("rejected"))
         ];
@@ -149,6 +185,9 @@ public sealed class CanonicalProcessIrTests
             ProcessWireNames.TimerNode,
             ProcessWireNames.ReplyNode,
             ProcessWireNames.DurableCutNode,
+            ProcessWireNames.InvokeProcessNode,
+            ProcessWireNames.ForEachPartitionNode,
+            ProcessWireNames.RepeatAcrossActivationNode,
             ProcessWireNames.ReturnNode,
             ProcessWireNames.FailNode
         ];
@@ -376,7 +415,7 @@ public sealed class CanonicalProcessIrTests
         var nodeTypes = DerivedTypes(typeof(CanonicalProcessNode));
         var clauseTypes = DerivedTypes(typeof(ProcessAwaitClause));
 
-        Assert.Equal(15, nodeTypes.Length);
+        Assert.Equal(18, nodeTypes.Length);
         Assert.Equal(
             [typeof(ProcessAwaitInteractionClause), typeof(ProcessAwaitTimerClause)],
             clauseTypes);
