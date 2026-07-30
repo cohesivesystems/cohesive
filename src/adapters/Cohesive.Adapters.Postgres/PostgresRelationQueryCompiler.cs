@@ -622,7 +622,7 @@ public sealed class PostgresRelationQueryCompiler
         if (request.SelectedPlacements.Any(static placement => placement.Partition is not null))
         {
             Error(
-                "PostgreSQL SQL v1 does not lower source-partition selectors; issuing an unscoped scan would weaken placement semantics.");
+                "The current PostgreSQL compiler does not lower source-partition selectors; issuing an unscoped scan would weaken placement semantics.");
         }
         var selectedTables = storageBinding.Tables
             .Where(table => request.SelectedInputs.Contains(table.Input))
@@ -710,184 +710,21 @@ public sealed class PostgresRelationQueryCompiler
         IReadOnlyDictionary<RelationQueryInputId, RelationQuerySourcePlacementBinding> placements,
         Action<string> error)
     {
-        var fields = request.SelectedFields
-            .ToDictionary(static field => field.Input.Id);
-        var traversals = request.SelectedTraversals
-            .ToDictionary(static traversal => traversal.Input.Id);
         var requiredIdentityBindings = request.SelectedTraversals
             .Select(static traversal => traversal.Input.Direction == RelationshipTraversalDirection.Forward
                 ? traversal.Result
                 : traversal.From)
             .ToHashSet();
-
-        foreach (var table in selectedTables)
+        foreach (var message in PostgresRelationQueryBindingSemanticValidator.ValidateCompilation(
+                     request.Plan,
+                     selectedTables,
+                     placements,
+                     request.SelectedFields,
+                     request.SelectedTraversals,
+                     requiredIdentityBindings))
         {
-            foreach (var field in table.Fields.Where(field => fields.ContainsKey(field.Input)))
-            {
-                if (!fields.TryGetValue(field.Input, out var contract)
-                    || contract.Input.Field.Path != field.SemanticPath
-                    || !placements.TryGetValue(table.Input, out var placement)
-                    || contract.Input.Binding != placement.Binding
-                    || contract.Input.Field.Shape != table.Shape)
-                {
-                    error(
-                        $"PostgreSQL field binding '{field.Input.Value}' does not identify its exact canonical path and placed binding.");
-                }
-            }
-
-            foreach (var reference in table.RelationshipReferences.Where(reference =>
-                         traversals.ContainsKey(reference.Input)))
-            {
-                if (!traversals.TryGetValue(reference.Input, out var traversal)
-                    || reference.SemanticPath != traversal.Definition.SourceReference
-                    || reference.Uniqueness != traversal.Definition.SourceReferenceUniqueness)
-                {
-                    error(
-                        $"PostgreSQL relationship reference '{reference.Input.Value}' does not preserve the canonical source-reference path and uniqueness evidence.");
-                    continue;
-                }
-
-                var ownsReference = traversal.Input.Direction == RelationshipTraversalDirection.Forward
-                    ? placements.TryGetValue(table.Input, out var placement)
-                      && placement.Binding == traversal.From
-                      && table.Shape == traversal.Definition.SourceShape
-                    : table.Input == traversal.Input.Id
-                      && table.Shape == traversal.Definition.SourceShape;
-                if (!ownsReference)
-                {
-                    error(
-                        $"PostgreSQL relationship reference '{reference.Input.Value}' is attached to the wrong placed table.");
-                }
-                if (traversal.Input.Direction == RelationshipTraversalDirection.Inverse
-                    && traversal.Cardinality == RelationshipTraversalCardinality.AtMostOne
-                    && reference.Uniqueness != SourceReferenceUniqueness.GloballyUnique)
-                {
-                    error(
-                        $"Inverse at-most-one traversal '{reference.Input.Value}' lacks globally unique source-reference evidence.");
-                }
-                ValidateRelationshipKeyDomain(
-                    request,
-                    table.Shape,
-                    reference.SemanticPath,
-                    reference.ScalarType,
-                    reference.NumericDomain,
-                    reference.TemporalDomain,
-                    $"relationship reference '{reference.Input.Value}'",
-                    error);
-            }
-
-            if (!placements.TryGetValue(table.Input, out var tablePlacement)
-                || !requiredIdentityBindings.Contains(tablePlacement.Binding)
-                || table.Identity is not { } identity)
-            {
-                continue;
-            }
-
-            var shape = request.Plan.Provenance.ShapeDocuments
-                .SingleOrDefault(document => document.Graph.Id == table.Shape.GraphId)
-                ?.Graph.TryGetShape(table.Shape);
-            var canonicalIdentities = shape?.Fields
-                .Where(static field => field.Role == FieldRole.Identity)
-                .Select(static field => FieldPath.FromField(field.Name.Value))
-                .ToArray() ?? [];
-            var identityFieldExists = identity.SemanticPath.Segments.Length == 1
-                                      && identity.SemanticPath.Segments[0].TryGetFieldIdentity(out var identityField)
-                                      && shape?.TryGetField(identityField, out _) == true;
-            var placementHasIdentity = placements.TryGetValue(table.Input, out var identityPlacement)
-                                       && identityPlacement.Identity is not null;
-            var placementIdentityMatches = false;
-            if (placementHasIdentity)
-            {
-                try
-                {
-                    placementIdentityMatches = FieldPath.Parse(
-                        identityPlacement!.Identity!.SourceSelector) == identity.SemanticPath;
-                }
-                catch (ArgumentException)
-                {
-                    placementIdentityMatches = false;
-                }
-            }
-            if (!identityFieldExists
-                || !placementHasIdentity
-                || !placementIdentityMatches
-                || canonicalIdentities.Length == 1 && identity.SemanticPath != canonicalIdentities[0]
-                || canonicalIdentities.Length > 1)
-            {
-                error(
-                    $"PostgreSQL identity binding for table '{table.PlacementBinding.Value}' does not match exact placement and shape identity evidence.");
-            }
-            ValidateRelationshipKeyDomain(
-                request,
-                table.Shape,
-                identity.SemanticPath,
-                identity.ScalarType,
-                identity.NumericDomain,
-                identity.TemporalDomain,
-                $"identity binding for table '{table.PlacementBinding.Value}'",
-                error);
+            error(message);
         }
-    }
-
-    static void ValidateRelationshipKeyDomain(
-        CompilationContext request,
-        QualifiedShapeId shape,
-        FieldPath path,
-        PostgresRelationQueryScalarType scalarType,
-        PostgresRelationQueryNumericDomainEvidence? numericDomain,
-        PostgresRelationQueryTemporalDomainEvidence? temporalDomain,
-        string description,
-        Action<string> error)
-    {
-        var semanticShape = request.Plan.Provenance.ShapeDocuments
-            .SingleOrDefault(document => document.Graph.Id == shape.GraphId)
-            ?.Graph.TryGetShape(shape);
-        FieldDefinition? field = null;
-        if (path.Segments.Length == 1
-            && path.Segments[0].TryGetFieldIdentity(out var fieldName))
-        {
-            semanticShape?.TryGetField(fieldName, out field);
-        }
-        if (field is null || !TryResolveScalarType(field.Type, out var expected) || expected != scalarType)
-        {
-            error(
-                $"PostgreSQL {description} does not preserve the canonical relationship-key scalar type for '{path}'.");
-            return;
-        }
-        if (scalarType == PostgresRelationQueryScalarType.Numeric && numericDomain is null)
-        {
-            error(
-                $"PostgreSQL {description} requires explicit finite CLR-decimal domain evidence for exact relationship equality.");
-        }
-        if (scalarType is PostgresRelationQueryScalarType.Date
-                or PostgresRelationQueryScalarType.Timestamp
-                or PostgresRelationQueryScalarType.TimestampWithTimeZone
-            && temporalDomain is null)
-        {
-            error(
-                $"PostgreSQL {description} requires explicit finite canonical CLR temporal-domain evidence for exact relationship equality.");
-        }
-    }
-
-    static bool TryResolveScalarType(TypeRef? type, out PostgresRelationQueryScalarType scalarType)
-    {
-        scalarType = type switch
-        {
-            ScalarTypeRef { Kind: ScalarTypeKind.Bool } => PostgresRelationQueryScalarType.Boolean,
-            ScalarTypeRef { Kind: ScalarTypeKind.Int32 } => PostgresRelationQueryScalarType.Int32,
-            ScalarTypeRef { Kind: ScalarTypeKind.Int64 } => PostgresRelationQueryScalarType.Int64,
-            ScalarTypeRef { Kind: ScalarTypeKind.Decimal } => PostgresRelationQueryScalarType.Numeric,
-            ScalarTypeRef { Kind: ScalarTypeKind.String } => PostgresRelationQueryScalarType.Text,
-            ScalarTypeRef { Kind: ScalarTypeKind.Guid } => PostgresRelationQueryScalarType.Uuid,
-            ScalarTypeRef { Kind: ScalarTypeKind.Date } => PostgresRelationQueryScalarType.Date,
-            ScalarTypeRef { Kind: ScalarTypeKind.DateTime } => PostgresRelationQueryScalarType.Timestamp,
-            ScalarTypeRef { Kind: ScalarTypeKind.Instant } => PostgresRelationQueryScalarType.TimestampWithTimeZone,
-            ScalarTypeRef { Kind: ScalarTypeKind.Bytes } => PostgresRelationQueryScalarType.Bytea,
-            EntityReferenceTypeRef => PostgresRelationQueryScalarType.Text,
-            EnumTypeRef => PostgresRelationQueryScalarType.Text,
-            _ => default
-        };
-        return type is ScalarTypeRef or EntityReferenceTypeRef or EnumTypeRef;
     }
 
     sealed class CompilationContext
@@ -1102,7 +939,7 @@ public sealed class PostgresRelationQueryCompiler
             {
                 throw Fail(
                     PostgresRelationQueryCompilationDiagnosticCodes.ResultObservabilityUnsupported,
-                    "PostgreSQL SQL v1 returns values and binding-presence evidence, not contributor-occurrence lineage.",
+                    "The current PostgreSQL compiler returns values and binding-presence evidence, not contributor-occurrence lineage.",
                     branch.Node);
             }
 
@@ -1134,7 +971,7 @@ public sealed class PostgresRelationQueryCompiler
             {
                 throw Fail(
                     PostgresRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                    "PostgreSQL SQL v1 can correlate rooted non-set relation rows only when exactly one root occurrence is supplied per invocation.",
+                    "The current PostgreSQL compiler can correlate rooted non-set relation rows only when exactly one root occurrence is supplied per invocation.",
                     branch.Node);
             }
 
@@ -1179,11 +1016,11 @@ public sealed class PostgresRelationQueryCompiler
                 PageQueryNode page => CompilePage(execution, page),
                 ExpandCollectionQueryNode => throw Fail(
                     PostgresRelationQueryCompilationDiagnosticCodes.UnsupportedLogicalOperator,
-                    "PostgreSQL SQL v1 does not yet lower canonical collection expansion.",
+                    "The current PostgreSQL compiler does not yet lower canonical collection expansion.",
                     node),
                 _ => throw Fail(
                     PostgresRelationQueryCompilationDiagnosticCodes.UnsupportedLogicalOperator,
-                    $"Logical node '{execution.CanonicalNode.GetType().Name}' is outside the PostgreSQL SQL v1 closure.",
+                    $"Logical node '{execution.CanonicalNode.GetType().Name}' is outside the current PostgreSQL compiler closure.",
                     node)
             };
             scopes.Add(node, compiled);
@@ -1209,7 +1046,7 @@ public sealed class PostgresRelationQueryCompiler
             {
                 throw Fail(
                     PostgresRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                    "PostgreSQL SQL v1 can lower a supplied source only when it is the single relation-root occurrence for this invocation; a supplied source set cannot be collapsed to one parameter row.",
+                    "The current PostgreSQL compiler can lower a supplied source only when it is the single relation-root occurrence for this invocation; a supplied source set cannot be collapsed to one parameter row.",
                     source.Id,
                     contract.Input.Id);
             }
@@ -1531,7 +1368,7 @@ public sealed class PostgresRelationQueryCompiler
             if (!distinct.Keys.IsDefaultOrEmpty)
             {
                 throw Fail(PostgresRelationQueryCompilationDiagnosticCodes.UnsupportedLogicalOperator,
-                    "PostgreSQL SQL v1 supports whole-row distinctness; keyed representative selection requires explicit ordering semantics.",
+                    "The current PostgreSQL compiler supports whole-row distinctness; keyed representative selection requires explicit ordering semantics.",
                     distinct.Id);
             }
             if (input.Identities.Count != 0 || input.References.Count != 0 || input.OuterPresence.Count != 0)
@@ -1658,7 +1495,7 @@ public sealed class PostgresRelationQueryCompiler
             if (page.Page.Limit > PostgresRelationQueryTargetProfile.MaximumPageSize)
             {
                 throw Fail(PostgresRelationQueryCompilationDiagnosticCodes.PagingUnstable,
-                    $"Page size {page.Page.Limit} exceeds the PostgreSQL v1 boundary of {PostgresRelationQueryTargetProfile.MaximumPageSize}.",
+                    $"Page size {page.Page.Limit} exceeds the current PostgreSQL boundary of {PostgresRelationQueryTargetProfile.MaximumPageSize}.",
                     page.Id);
             }
 
@@ -1906,7 +1743,7 @@ public sealed class PostgresRelationQueryCompiler
                 AggregateOperator.Average => CompileAverage(value!.Value, filter, resultContract,
                     assignment.Definition.Id, node, groupedInputIsNonEmpty && filter is null),
                 _ => throw Fail(PostgresRelationQueryCompilationDiagnosticCodes.AggregateUnsupported,
-                    $"Aggregate operation '{operation}' is outside the exact PostgreSQL SQL v1 closure.", node)
+                    $"Aggregate operation '{operation}' is outside the exact current PostgreSQL compiler closure.", node)
             };
         }
 
@@ -2254,7 +2091,7 @@ public sealed class PostgresRelationQueryCompiler
             {
                 throw Fail(
                     PostgresRelationQueryCompilationDiagnosticCodes.TemporalJoinUnsupported,
-                    "PostgreSQL SQL v1 cannot prove a doubly-exclusive bounded interval non-empty in the canonical discrete temporal domain.",
+                    "The current PostgreSQL compiler cannot prove a doubly-exclusive bounded interval non-empty in the canonical discrete temporal domain.",
                     node);
             }
 
@@ -2486,7 +2323,7 @@ public sealed class PostgresRelationQueryCompiler
                     "Embedded aggregate expressions are unsupported; use a canonical aggregate node.",
                     site.Node ?? branch.Node),
                 _ => throw Fail(PostgresRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                    $"Expression node '{expression.GetType().Name}' is outside the PostgreSQL SQL v1 closure.",
+                    $"Expression node '{expression.GetType().Name}' is outside the current PostgreSQL compiler closure.",
                     site.Node ?? branch.Node)
             };
             if (result.Contract.Presence == FieldPresence.Optional
@@ -2665,11 +2502,11 @@ public sealed class PostgresRelationQueryCompiler
             {
                 throw Fail(
                     PostgresRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                    "PostgreSQL SQL v1 does not lower canonical arithmetic without explicit checked intermediate-domain evidence.",
+                    "The current PostgreSQL compiler does not lower canonical arithmetic without explicit checked intermediate-domain evidence.",
                     node);
             }
             throw Fail(PostgresRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                $"Binary operator '{binary.Operator}' is outside the exact PostgreSQL SQL v1 closure.", node);
+                $"Binary operator '{binary.Operator}' is outside the exact current PostgreSQL compiler closure.", node);
         }
 
         static void RequireCompatibleNullEquality(
@@ -3591,41 +3428,17 @@ public sealed class PostgresRelationQueryCompiler
             QueryNodeId node,
             RelationQueryInputId input)
         {
-            var expected = ResolveEncoding(contract, node);
-            if (expected != Convert(physical.ScalarType))
-            {
-                throw Fail(PostgresRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                    $"Physical type '{physical.ScalarType}' does not match semantic encoding '{expected}'.", node, input);
-            }
-
-            var missingExpected = contract.Presence == FieldPresence.Required
-                ? PostgresRelationQueryMissingValueEncoding.Prohibited
-                : PostgresRelationQueryMissingValueEncoding.SqlNull;
-            var nullExpected = contract.Nullability == FieldNullability.NonNullable
-                ? PostgresRelationQueryNullValueEncoding.Prohibited
-                : PostgresRelationQueryNullValueEncoding.SqlNull;
-            if (physical.MissingValueEncoding != missingExpected || physical.NullValueEncoding != nullExpected)
-            {
-                throw Fail(PostgresRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                    "Physical SQL null encoding does not preserve the field's missing/null distinction.", node, input);
-            }
-
-            if (expected == PostgresRelationQueryValueEncoding.Numeric && physical.NumericDomain is null)
+            if (PostgresRelationQueryBindingSemanticValidator.GetValueSemanticsMismatch(
+                    contract,
+                    physical.ScalarType,
+                    physical.MissingValueEncoding,
+                    physical.NullValueEncoding,
+                    physical.NumericDomain,
+                    physical.TemporalDomain) is { } mismatch)
             {
                 throw Fail(
                     PostgresRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                    "A PostgreSQL numeric column requires explicit finite typmod/range evidence for canonical Decimal semantics.",
-                    node,
-                    input);
-            }
-            if (expected is PostgresRelationQueryValueEncoding.Date
-                    or PostgresRelationQueryValueEncoding.Timestamp
-                    or PostgresRelationQueryValueEncoding.TimestampWithTimeZone
-                && physical.TemporalDomain is null)
-            {
-                throw Fail(
-                    PostgresRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                    "A PostgreSQL date or timestamp column requires explicit finite canonical CLR temporal-domain evidence.",
+                    mismatch,
                     node,
                     input);
             }
@@ -3636,39 +3449,29 @@ public sealed class PostgresRelationQueryCompiler
             if (contract.Cardinality != FieldCardinality.Single)
             {
                 throw Fail(PostgresRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                    "PostgreSQL SQL v1 requires single-valued scalar fields.", node);
+                    "The current PostgreSQL compiler requires single-valued scalar fields.", node);
             }
 
-            if (TryResolveScalarType(contract.GetEffectiveType(), out var scalarType))
+            if (PostgresRelationQueryScalarCatalog.TryFromSemanticType(
+                    contract.GetEffectiveType(),
+                    out var scalarType))
                 return Convert(scalarType);
 
             throw Fail(
                 PostgresRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                "Semantic value has no exact PostgreSQL SQL v1 scalar encoding.",
+                "Semantic value has no exact scalar encoding in the current PostgreSQL compiler.",
                 node);
         }
 
-        static PostgresRelationQueryValueEncoding Convert(PostgresRelationQueryScalarType scalar) => scalar switch
-        {
-            PostgresRelationQueryScalarType.Boolean => PostgresRelationQueryValueEncoding.Boolean,
-            PostgresRelationQueryScalarType.Int32 => PostgresRelationQueryValueEncoding.Int32,
-            PostgresRelationQueryScalarType.Int64 => PostgresRelationQueryValueEncoding.Int64,
-            PostgresRelationQueryScalarType.Numeric => PostgresRelationQueryValueEncoding.Numeric,
-            PostgresRelationQueryScalarType.Text => PostgresRelationQueryValueEncoding.Text,
-            PostgresRelationQueryScalarType.Uuid => PostgresRelationQueryValueEncoding.Uuid,
-            PostgresRelationQueryScalarType.Date => PostgresRelationQueryValueEncoding.Date,
-            PostgresRelationQueryScalarType.Timestamp => PostgresRelationQueryValueEncoding.Timestamp,
-            PostgresRelationQueryScalarType.TimestampWithTimeZone => PostgresRelationQueryValueEncoding.TimestampWithTimeZone,
-            PostgresRelationQueryScalarType.Bytea => PostgresRelationQueryValueEncoding.Bytea,
-            _ => throw new ArgumentOutOfRangeException(nameof(scalar), scalar, "Unsupported PostgreSQL scalar type.")
-        };
+        static PostgresRelationQueryValueEncoding Convert(PostgresRelationQueryScalarType scalar) =>
+            PostgresRelationQueryScalarCatalog.ToValueEncoding(scalar);
 
         static PostgresSqlJoinKind ConvertJoin(JoinKind kind, QueryNodeId node) => kind switch
         {
             JoinKind.Inner => PostgresSqlJoinKind.Inner,
             JoinKind.Left => PostgresSqlJoinKind.Left,
             _ => throw Fail(PostgresRelationQueryCompilationDiagnosticCodes.JoinUnsupported,
-                $"PostgreSQL SQL v1 supports inner and left joins, not '{kind}'.", node)
+                $"The current PostgreSQL compiler supports inner and left joins, not '{kind}'.", node)
         };
 
         static PostgresSqlBinaryOperator Convert(BinaryOperator @operator) => @operator switch
@@ -4070,7 +3873,7 @@ public sealed class PostgresRelationQueryCompiler
 static class PostgresRelationQueryArtifactFingerprinter
 {
     const string Algorithm = "sha256";
-    const string Canonicalization = "cohesive.relations.postgres-artifact/v2-c14n/v1";
+    const string Canonicalization = "cohesive.relations.postgres-artifact/v3-c14n/v1";
 
     public static PostgresRelationQueryArtifactFingerprint Compute(
         string schemaVersion,

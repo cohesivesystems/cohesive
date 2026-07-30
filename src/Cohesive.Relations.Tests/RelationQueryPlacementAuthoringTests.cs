@@ -12,7 +12,7 @@ namespace Cohesive.Relations.Tests;
 public sealed class RelationQueryPlacementAuthoringTests
 {
     [Fact]
-    public void Explicit_authoring_lowers_to_the_same_normalized_v2_artifact_as_low_level_construction()
+    public void Explicit_authoring_lowers_to_the_same_normalized_v3_artifact_as_low_level_construction()
     {
         var fixture = CreatePortableQuery();
         var profile = ProfileFor(fixture.Plan);
@@ -57,7 +57,7 @@ public sealed class RelationQueryPlacementAuthoringTests
             RelationQuerySourcePlacementBindingKind.SourceSet,
             RelationQuerySourceAcquisitionKind.BoundedEnumeration,
             RelationQuerySourcePlacementOrigin.Explicit,
-            new(sourceContract.Shape, "id"),
+            new(sourceContract.Shape, "id", FieldPath.FromField("id")),
             [
                 .. sourceContract.Fields.Select(static field => new RelationQuerySourceFieldBinding(
                     field.Input.Id,
@@ -81,6 +81,9 @@ public sealed class RelationQueryPlacementAuthoringTests
         Assert.All(
             authored.Placement.Bindings.Single().Fields,
             field => Assert.Equal(field.SemanticPath.ToString(), field.SourceSelector));
+        Assert.Equal(
+            FieldPath.FromField("id"),
+            authored.Placement.Bindings.Single().Identity!.SemanticPath);
         Assert.All(
             authored.Placement.ConfigurationDecisions.Where(static decision =>
                 decision.Setting.Contains("/field/", StringComparison.Ordinal)),
@@ -170,6 +173,7 @@ public sealed class RelationQueryPlacementAuthoringTests
         var placed = authored.GetInput<ImportedLoad>(sourceContract.Input.Id);
 
         Assert.Equal("wire_id", binding.Identity!.SourceSelector);
+        Assert.Equal(FieldPath.FromField("wire_id"), binding.Identity.SemanticPath);
         Assert.Equal(
             "payload.state",
             binding.Fields.Single(field => field.SemanticPath == FieldPath.FromField("wire_status")).SourceSelector);
@@ -191,6 +195,42 @@ public sealed class RelationQueryPlacementAuthoringTests
             "payload.state",
             structuralInput.Binding.Fields.Single(field =>
                 field.SemanticPath == FieldPath.FromField("wire_status")).SourceSelector);
+    }
+
+    [Fact]
+    public void Typed_identity_preserves_semantic_path_when_the_physical_selector_diverges()
+    {
+        var fixture = CreatePortableQuery();
+        var profile = ProfileFor(fixture.Plan);
+        var sourceContract = Assert.Single(fixture.Plan.InputContract.Sources);
+
+        var typedBuilder = RelationQueryPlacement.For(fixture.Plan);
+        var typedSource = typedBuilder.Source(sourceKey: "loads", targetProfile: profile);
+        typedBuilder.Place(sourceContract, typedSource, fixture.SourceShape)
+            .Identity(load => load.Id, "document_key")
+            .FieldsBySemanticPath();
+        var typed = typedBuilder.Build().RequireValue().Placement;
+
+        var structuralBuilder = RelationQueryPlacement.For(fixture.Plan);
+        var structuralSource = structuralBuilder.Source(sourceKey: "loads", targetProfile: profile);
+        structuralBuilder.Place(sourceContract, structuralSource)
+            .Identity(FieldPath.FromField("id"), "document_key")
+            .FieldsBySemanticPath();
+        var structural = structuralBuilder.Build().RequireValue().Placement;
+
+        var physicalOnlyBuilder = RelationQueryPlacement.For(fixture.Plan);
+        var physicalOnlySource = physicalOnlyBuilder.Source(sourceKey: "loads", targetProfile: profile);
+        physicalOnlyBuilder.Place(sourceContract, physicalOnlySource)
+            .Identity("document_key")
+            .FieldsBySemanticPath();
+        var physicalOnly = physicalOnlyBuilder.Build().RequireValue().Placement;
+
+        var typedIdentity = Assert.Single(typed.Bindings).Identity!;
+        Assert.Equal("document_key", typedIdentity.SourceSelector);
+        Assert.Equal(FieldPath.FromField("id"), typedIdentity.SemanticPath);
+        Assert.Equal(typed.Fingerprint, structural.Fingerprint);
+        Assert.Null(Assert.Single(physicalOnly.Bindings).Identity!.SemanticPath);
+        Assert.NotEqual(typed.Fingerprint, physicalOnly.Fingerprint);
     }
 
     [Fact]
@@ -233,7 +273,7 @@ public sealed class RelationQueryPlacementAuthoringTests
     }
 
     [Fact]
-    public void Configuration_decisions_round_trip_and_participate_in_the_v2_fingerprint()
+    public void Configuration_decisions_round_trip_and_participate_in_the_v3_fingerprint()
     {
         var fixture = CreatePortableQuery();
         var profile = ProfileFor(fixture.Plan);
@@ -634,6 +674,7 @@ public sealed class RelationQueryPlacementAuthoringTests
             Explicit($"{placementSetting}/id"),
             Explicit($"{placementSetting}/source"),
             Explicit($"{placementSetting}/acquisition"),
+            Explicit($"{placementSetting}/identity/semantic-path"),
             Explicit($"{placementSetting}/identity/source-selector"),
             Explicit($"{placementSetting}/partition/source-selector")
         ];

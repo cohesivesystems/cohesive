@@ -6,9 +6,26 @@ using Cohesive.Relations.Physical;
 namespace Cohesive.Storage.Materialization;
 
 /// <summary>Shared validation and normalization for materialization wire and runtime contracts.</summary>
-internal static class MaterializationContract
+public static class MaterializationContract
 {
-    internal static DocumentValidationDiagnostic CreateDiagnostic(
+    /// <summary>Creates one complete, attributable materialization diagnostic.</summary>
+    /// <param name="code">Stable machine-readable diagnostic code.</param>
+    /// <param name="severity">Diagnostic severity.</param>
+    /// <param name="message">Human-readable diagnostic message.</param>
+    /// <param name="location">Portable semantic document or operation location.</param>
+    /// <param name="stage">Interpretation stage that emitted the diagnostic.</param>
+    /// <param name="subject">Semantic subject of the diagnostic.</param>
+    /// <param name="sourceReferences">Non-empty attributable evidence references.</param>
+    /// <param name="expected">Expected semantic or operational state.</param>
+    /// <param name="observed">Observed state, excluding secrets and sensitive values.</param>
+    /// <param name="schemaLocation">Optional schema location.</param>
+    /// <param name="relatedLocations">Optional related semantic locations.</param>
+    /// <param name="resolutionOptions">Optional actionable resolution choices.</param>
+    /// <returns>A normalized, complete document-validation diagnostic.</returns>
+    /// <exception cref="ArgumentNullException">A required string is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">A required string or source reference is absent, or a collection is invalid.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="severity"/> is unsupported.</exception>
+    public static DocumentValidationDiagnostic CreateDiagnostic(
         string code,
         DiagnosticSeverity severity,
         string message,

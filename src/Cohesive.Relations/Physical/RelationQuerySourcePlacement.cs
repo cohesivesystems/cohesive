@@ -93,24 +93,39 @@ public sealed record RelationQuerySourcePlacementLimits
     }
 }
 
-/// <summary>Physical selector that supplies stable observation identity.</summary>
+/// <summary>Physical observation identity with optional semantic field-path evidence.</summary>
 public sealed record RelationQuerySourceIdentityBinding
 {
     /// <summary>Creates an observation-identity binding.</summary>
     /// <param name="shape">Semantic shape whose identity is selected.</param>
     /// <param name="sourceSelector">Stable adapter-interpreted selector.</param>
+    /// <param name="semanticPath">
+    /// Optional canonical semantic path that supplies observation identity. This remains <see langword="null"/>
+    /// for source-native identity that is not represented by one semantic shape field.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="sourceSelector"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="shape"/> is incomplete or the selector is empty.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="shape"/> is incomplete, a supplied <paramref name="semanticPath"/> is empty, or the selector is empty.
+    /// </exception>
     [JsonConstructor]
-    public RelationQuerySourceIdentityBinding(QualifiedShapeId shape, string sourceSelector)
+    public RelationQuerySourceIdentityBinding(
+        QualifiedShapeId shape,
+        string sourceSelector,
+        FieldPath? semanticPath = null)
     {
         if (string.IsNullOrWhiteSpace(shape.GraphId.Value) || string.IsNullOrWhiteSpace(shape.ShapeId.Value))
         {
             throw new ArgumentException("An identity binding requires a graph-qualified shape.", nameof(shape));
         }
 
+        if (semanticPath is { } path && path.Segments.IsDefaultOrEmpty)
+        {
+            throw new ArgumentException("An identity binding requires a semantic path.", nameof(semanticPath));
+        }
+
         Shape = shape;
         SourceSelector = Guard.RequireNotNullOrWhiteSpace(sourceSelector);
+        SemanticPath = semanticPath;
     }
 
     /// <summary>Semantic shape whose identity is selected.</summary>
@@ -118,6 +133,12 @@ public sealed record RelationQuerySourceIdentityBinding
 
     /// <summary>Stable adapter-interpreted selector.</summary>
     public string SourceSelector { get; }
+
+    /// <summary>
+    /// Optional canonical semantic path that supplies observation identity, or <see langword="null"/> for
+    /// source-native identity that is not represented by one semantic shape field.
+    /// </summary>
+    public FieldPath? SemanticPath { get; }
 }
 
 /// <summary>Physical selector for one exact compiled field input.</summary>
@@ -274,7 +295,10 @@ public sealed record RelationQuerySourcePlacementBinding
     /// <param name="kind">Source-set or relationship-traversal placement kind.</param>
     /// <param name="acquisition">Physical acquisition mode.</param>
     /// <param name="origin">Whether the placement was explicit or convention-derived.</param>
-    /// <param name="identity">Observation-identity selector, or <see langword="null"/> when identity is not required.</param>
+    /// <param name="identity">
+    /// Observation-identity selector and optional semantic path evidence, or <see langword="null"/> when identity is
+    /// not required.
+    /// </param>
     /// <param name="fields">Physical selectors for compiled fields.</param>
     /// <param name="relationshipKeys">Relationship-reference selectors needed by acquisition.</param>
     /// <param name="partition">Optional partition selector.</param>
@@ -398,7 +422,7 @@ public sealed record RelationQuerySourcePlacementBinding
     /// <summary>Whether the placement was explicit or convention-derived.</summary>
     public RelationQuerySourcePlacementOrigin Origin { get; }
 
-    /// <summary>Observation-identity selector, or <see langword="null"/>.</summary>
+    /// <summary>Observation-identity selector and optional semantic path evidence, or <see langword="null"/>.</summary>
     public RelationQuerySourceIdentityBinding? Identity { get; }
 
     /// <summary>Physical selectors for compiled fields.</summary>
@@ -476,7 +500,7 @@ public sealed record RelationQuerySourcePlacementBinding
 public sealed class RelationQuerySourcePlacement
 {
     /// <summary>Current portable source-placement schema version.</summary>
-    public const string CurrentSchemaVersion = "relation-query-source-placement/v2";
+    public const string CurrentSchemaVersion = "relation-query-source-placement/v3";
 
     /// <summary>Creates a normalized source-placement artifact.</summary>
     /// <param name="schemaVersion">Portable placement schema version.</param>
@@ -673,6 +697,10 @@ public sealed class RelationQuerySourcePlacement
             settings.Add($"{prefix}/acquisition");
             if (binding.Identity is not null)
             {
+                if (binding.Identity.SemanticPath is not null)
+                {
+                    settings.Add($"{prefix}/identity/semantic-path");
+                }
                 settings.Add($"{prefix}/identity/source-selector");
             }
 

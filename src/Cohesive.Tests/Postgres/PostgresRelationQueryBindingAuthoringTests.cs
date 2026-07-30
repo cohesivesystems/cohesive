@@ -255,6 +255,33 @@ public sealed class PostgresRelationQueryBindingAuthoringTests
     }
 
     [Fact]
+    public void Build_PhysicalOnlyPlacementIdentityRequiresExplicitSemanticPath()
+    {
+        var fixture = CreateFixture();
+        var placementBuilder = RelationQueryPlacement.For(fixture.Plan);
+        var source = placementBuilder.Source(
+            "tests/postgres/physical-only-identity",
+            PostgresRelationQuerySourceTargetProfile.Default);
+        var handle = placementBuilder.Place(
+                Assert.Single(fixture.Plan.InputContract.Sources),
+                source,
+                fixture.Placed.ClrShape)
+            .Identity("document_key")
+            .FieldsBySemanticPath();
+        var placement = placementBuilder.Build().RequireValue();
+        var placed = placement.GetInput(handle);
+
+        var result = PostgresRelationQueryBinding.For(placement)
+            .Table(placed, "loads")
+            .Build();
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == PostgresRelationQueryBindingAuthoringDiagnosticCodes.BindingMissing
+            && diagnostic.Message.Contains("semantic identity path", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Persistence_RoundTripPreservesFingerprintAndRejectsStaleAffinity()
     {
         var fixture = CreateFixture();
@@ -603,7 +630,7 @@ public sealed class PostgresRelationQueryBindingAuthoringTests
                     placementConventionSetVersion));
         var source = placementBuilder.Source(
             "tests/postgres/loads",
-            PostgresRelationQueryTargetProfile.Default);
+            PostgresRelationQuerySourceTargetProfile.Default);
         var placedSource = placementBuilder.PlaceSource(source, loadShape)
             .Identity(load => load.Id)
             .FieldsBySemanticPath();

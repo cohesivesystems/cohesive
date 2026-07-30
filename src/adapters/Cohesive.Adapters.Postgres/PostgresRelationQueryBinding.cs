@@ -1018,7 +1018,7 @@ public sealed class PostgresRelationQueryStorageBinding
     public const string SemanticPathConventionSet = "cohesive.adapters.postgres.sql/semantic-path-conventions/v1";
 
     /// <summary>
-    /// Fixed database semantics required by PostgreSQL SQL v1: UTF-8 server encoding and the standard 63-byte
+    /// Fixed database semantics required by the canonical PostgreSQL compiler: UTF-8 server encoding and the standard 63-byte
     /// identifier boundary.
     /// </summary>
     public const string CanonicalDatabaseSemanticsProfile =

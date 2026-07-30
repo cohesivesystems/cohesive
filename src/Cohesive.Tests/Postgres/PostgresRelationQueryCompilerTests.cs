@@ -146,6 +146,10 @@ public sealed class PostgresRelationQueryCompilerTests
             statement.Parameters,
             static parameter => Equals(parameter.Value, "customer-1"));
         Assert.Equal(fixture.Storage.Fingerprint, artifact.StorageBinding.Fingerprint);
+        Assert.Equal("cohesive.relations.postgres-artifact/v3", artifact.SchemaVersion);
+        Assert.Equal(
+            "cohesive.relations.postgres-artifact/v3-c14n/v1",
+            artifact.Fingerprint.Canonicalization);
         Assert.Equal(fixture.Plan.Provenance.DefinitionFingerprint, artifact.Provenance.Plan.DefinitionFingerprint);
         Assert.Equal(fixture.Placement.Placement.Fingerprint, artifact.Provenance.Placement);
         Assert.Contains(
@@ -166,6 +170,25 @@ public sealed class PostgresRelationQueryCompilerTests
         Assert.Equal(json, PostgresRelationQueryArtifactJsonSerializer.Serialize(rehydrated, indented: false));
         Assert.Equal(statement.Parameters.Select(static parameter => parameter.Value),
             rebound.Parameters.Select(static parameter => parameter.Value));
+    }
+
+    [Fact]
+    public void Compile_FrameworkIdentitySelectorInfersTheSingleShapeIdentity()
+    {
+        var fixture = CreateRowsAndAggregatesFixture(useFrameworkIdentitySelector: true);
+        var placed = Assert.Single(fixture.Placement.Placement.Bindings);
+        Assert.Equal(
+            RelationQueryPlacementBuilder.FrameworkIdentitySourceSelector,
+            placed.Identity?.SourceSelector);
+
+        var result = Compile(
+            fixture.Plan,
+            fixture.Realization,
+            fixture.Placement.Placement,
+            fixture.Storage);
+
+        Assert.True(result.IsSuccessful, Format(result.Diagnostics));
+        Assert.Equal(2, result.Artifacts.Length);
     }
 
     [Fact]
@@ -606,6 +629,16 @@ public sealed class PostgresRelationQueryCompilerTests
     {
         var artifact = ParseArtifactJson(CreatePersistedArtifactJson());
         artifact["schemaVersion"] = "cohesive.relations.postgres-artifact/v999";
+
+        Assert.Throws<JsonException>(() =>
+            PostgresRelationQueryArtifactJsonSerializer.DeserializeTrusted(artifact.ToJsonString()));
+    }
+
+    [Fact]
+    public void ArtifactJson_RejectsLegacyV2AfterUtcInstantContractChange()
+    {
+        var artifact = ParseArtifactJson(CreatePersistedArtifactJson());
+        artifact["schemaVersion"] = "cohesive.relations.postgres-artifact/v2";
 
         Assert.Throws<JsonException>(() =>
             PostgresRelationQueryArtifactJsonSerializer.DeserializeTrusted(artifact.ToJsonString()));
@@ -1293,11 +1326,11 @@ public sealed class PostgresRelationQueryCompilerTests
         var executionDomain = new RelationQueryExecutionDomainId("tests/postgres/primary");
         var loadSource = placementBuilder.Source(
             "tests/postgres/supplied-load",
-            PostgresRelationQueryTargetProfile.Default,
+            PostgresRelationQuerySourceTargetProfile.Default,
             executionDomain);
         var customerSource = placementBuilder.Source(
             "tests/postgres/customers",
-            PostgresRelationQueryTargetProfile.Default,
+            PostgresRelationQuerySourceTargetProfile.Default,
             executionDomain);
         var loadHandle = placementBuilder.Place(sourceContract, loadSource, loadShape)
             .FieldsBySemanticPath();
@@ -1374,15 +1407,15 @@ public sealed class PostgresRelationQueryCompilerTests
         var executionDomain = new RelationQueryExecutionDomainId("tests/postgres/primary");
         var loadSource = placementBuilder.Source(
             "tests/postgres/supplied-load",
-            PostgresRelationQueryTargetProfile.Default,
+            PostgresRelationQuerySourceTargetProfile.Default,
             executionDomain);
         var customerSource = placementBuilder.Source(
             "tests/postgres/customers",
-            PostgresRelationQueryTargetProfile.Default,
+            PostgresRelationQuerySourceTargetProfile.Default,
             executionDomain);
         var regionSource = placementBuilder.Source(
             "tests/postgres/regions",
-            PostgresRelationQueryTargetProfile.Default,
+            PostgresRelationQuerySourceTargetProfile.Default,
             executionDomain);
         var loadHandle = placementBuilder.Place(sourceContract, loadSource, loadShape)
             .FieldsBySemanticPath();
@@ -1431,7 +1464,8 @@ public sealed class PostgresRelationQueryCompilerTests
     static RowsAndAggregatesFixture CreateRowsAndAggregatesFixture(
         int offset = 5,
         bool aggregateCountOnly = false,
-        bool includePaging = true)
+        bool includePaging = true,
+        bool useFrameworkIdentitySelector = false)
     {
         var author = RelationQuery.Expression();
         var loadShape = author.Clr.Shape<QueryLoad>();
@@ -1495,11 +1529,12 @@ public sealed class PostgresRelationQueryCompilerTests
         var placementBuilder = RelationQueryPlacement.For(plan);
         var source = placementBuilder.Source(
             "tests/postgres/loads",
-            PostgresRelationQueryTargetProfile.Default,
+            PostgresRelationQuerySourceTargetProfile.Default,
             new("tests/postgres/primary"));
-        var loadHandle = placementBuilder.PlaceSource(source, loadShape)
-            .Identity(load => load.Id)
-            .FieldsBySemanticPath();
+        var placedLoad = placementBuilder.PlaceSource(source, loadShape);
+        var loadHandle = useFrameworkIdentitySelector
+            ? placedLoad.FieldsBySemanticPath()
+            : placedLoad.Identity(load => load.Id).FieldsBySemanticPath();
         var placement = placementBuilder.Build().RequireValue();
         var loadInput = placement.GetInput(loadHandle);
         var storage = PostgresRelationQueryBinding.For(
@@ -1569,11 +1604,11 @@ public sealed class PostgresRelationQueryCompilerTests
         var executionDomain = new RelationQueryExecutionDomainId("tests/postgres/primary");
         var loadSource = placementBuilder.Source(
             "tests/postgres/independent-loads",
-            PostgresRelationQueryTargetProfile.Default,
+            PostgresRelationQuerySourceTargetProfile.Default,
             executionDomain);
         var textSource = placementBuilder.Source(
             "tests/postgres/independent-text-loads",
-            PostgresRelationQueryTargetProfile.Default,
+            PostgresRelationQuerySourceTargetProfile.Default,
             executionDomain);
         var loadContract = plan.InputContract.Sources.Single(source => source.Shape == loadShape.Id);
         var textContract = plan.InputContract.Sources.Single(source => source.Shape == textShape.Id);
@@ -1653,7 +1688,7 @@ public sealed class PostgresRelationQueryCompilerTests
         var placementBuilder = RelationQueryPlacement.For(plan);
         var source = placementBuilder.Source(
             "tests/postgres/nested-count-loads",
-            PostgresRelationQueryTargetProfile.Default,
+            PostgresRelationQuerySourceTargetProfile.Default,
             new("tests/postgres/primary"));
         var loadHandle = placementBuilder.PlaceSource(source, loadShape)
             .Identity(load => load.Id)
@@ -1856,11 +1891,11 @@ public sealed class PostgresRelationQueryCompilerTests
         var executionDomain = new RelationQueryExecutionDomainId("tests/postgres/primary");
         var customerSource = placementBuilder.Source(
             "tests/postgres/customers",
-            PostgresRelationQueryTargetProfile.Default,
+            PostgresRelationQuerySourceTargetProfile.Default,
             executionDomain);
         var loadSource = placementBuilder.Source(
             "tests/postgres/loads",
-            PostgresRelationQueryTargetProfile.Default,
+            PostgresRelationQuerySourceTargetProfile.Default,
             executionDomain);
         var customerHandle = placementBuilder.Place(sourceContract, customerSource, customerShape)
             .Identity(customer => customer.Id)
@@ -1926,7 +1961,7 @@ public sealed class PostgresRelationQueryCompilerTests
         var placementBuilder = RelationQueryPlacement.For(plan);
         var source = placementBuilder.Source(
             "tests/postgres/loads",
-            PostgresRelationQueryTargetProfile.Default,
+            PostgresRelationQuerySourceTargetProfile.Default,
             new("tests/postgres/primary"));
         var loadHandle = placementBuilder.PlaceSource(source, loadShape)
             .Identity(load => load.Id)
@@ -1978,7 +2013,7 @@ public sealed class PostgresRelationQueryCompilerTests
         var placementBuilder = RelationQueryPlacement.For(plan);
         var source = placementBuilder.Source(
             "tests/postgres/loads",
-            PostgresRelationQueryTargetProfile.Default,
+            PostgresRelationQuerySourceTargetProfile.Default,
             new("tests/postgres/primary"));
         var loadHandle = placementBuilder.PlaceSource(source, loadShape)
             .Identity(load => load.Id)
@@ -2091,11 +2126,11 @@ public sealed class PostgresRelationQueryCompilerTests
         var executionDomain = new RelationQueryExecutionDomainId("tests/postgres/primary");
         var loadSource = placementBuilder.Source(
             "tests/postgres/loads",
-            PostgresRelationQueryTargetProfile.Default,
+            PostgresRelationQuerySourceTargetProfile.Default,
             executionDomain);
         var quoteSource = placementBuilder.Source(
             "tests/postgres/load-quotes",
-            PostgresRelationQueryTargetProfile.Default,
+            PostgresRelationQuerySourceTargetProfile.Default,
             executionDomain);
         var loadHandle = placementBuilder.Place(loadContract, loadSource, loadShape)
             .Identity(load => load.Id)
@@ -2175,7 +2210,7 @@ public sealed class PostgresRelationQueryCompilerTests
         var placementBuilder = RelationQueryPlacement.For(plan);
         var source = placementBuilder.Source(
             "tests/postgres/text-loads",
-            PostgresRelationQueryTargetProfile.Default,
+            PostgresRelationQuerySourceTargetProfile.Default,
             new("tests/postgres/primary"));
         var loadHandle = placementBuilder.PlaceSource(source, loadShape)
             .Identity(load => load.Id)
@@ -2232,7 +2267,7 @@ public sealed class PostgresRelationQueryCompilerTests
         var placementBuilder = RelationQueryPlacement.For(plan);
         var source = placementBuilder.Source(
             "tests/postgres/distinct-loads",
-            PostgresRelationQueryTargetProfile.Default,
+            PostgresRelationQuerySourceTargetProfile.Default,
             new("tests/postgres/primary"));
         var loadHandle = placementBuilder.PlaceSource(source, loadShape)
             .Identity(load => load.Id)
@@ -2310,11 +2345,11 @@ public sealed class PostgresRelationQueryCompilerTests
         var executionDomain = new RelationQueryExecutionDomainId("tests/postgres/primary");
         var eventSource = placementBuilder.Source(
             "tests/postgres/load-events",
-            PostgresRelationQueryTargetProfile.Default,
+            PostgresRelationQuerySourceTargetProfile.Default,
             executionDomain);
         var versionSource = placementBuilder.Source(
             "tests/postgres/load-versions",
-            PostgresRelationQueryTargetProfile.Default,
+            PostgresRelationQuerySourceTargetProfile.Default,
             executionDomain);
         var eventHandle = placementBuilder.Place(eventContract, eventSource, eventShape)
             .Identity(value => value.Id)

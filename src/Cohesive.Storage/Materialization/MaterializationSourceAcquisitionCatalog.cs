@@ -8,9 +8,16 @@ namespace Cohesive.Storage.Materialization;
 /// <summary>
 /// Canonical target-independent projection from Relations acquisition semantics to materialization source reads.
 /// </summary>
-internal static class MaterializationSourceAcquisitionCatalog
+public static class MaterializationSourceAcquisitionCatalog
 {
-    internal static bool TryGetReadCapability(
+    /// <summary>Projects one compiled input to its required materialization source-read capability.</summary>
+    /// <param name="plan">Canonical compiled relation plan that owns the input.</param>
+    /// <param name="input">Compiled source or traversal input.</param>
+    /// <param name="capability">Projected materialization capability when the input is known.</param>
+    /// <returns><see langword="true"/> when <paramref name="input"/> belongs to the plan's source contract.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="plan"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The input uses an unsupported relationship direction.</exception>
+    public static bool TryGetReadCapability(
         CompiledRelationQueryPlan plan,
         RelationQueryInputId input,
         out MaterializationCapabilityKind capability)
@@ -41,7 +48,12 @@ internal static class MaterializationSourceAcquisitionCatalog
         return true;
     }
 
-    internal static MaterializationCapabilityKind GetReadCapability(RelationQuerySourceReadConstraint constraint)
+    /// <summary>Projects one canonical Relations read constraint to its materialization source capability.</summary>
+    /// <param name="constraint">Bounded Relations acquisition constraint.</param>
+    /// <returns>The exact materialization source capability required by <paramref name="constraint"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="constraint"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The constraint kind is unsupported.</exception>
+    public static MaterializationCapabilityKind GetReadCapability(RelationQuerySourceReadConstraint constraint)
     {
         ArgumentNullException.ThrowIfNull(constraint);
         return constraint switch
@@ -56,7 +68,12 @@ internal static class MaterializationSourceAcquisitionCatalog
         };
     }
 
-    internal static void RequireCompatibleRead(
+    /// <summary>Validates that one Relations read is authorized by the exact materialization source scope.</summary>
+    /// <param name="read">Canonical Relations source read.</param>
+    /// <param name="scope">Exact physical-plan, placement, partition, and ordering scope.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="read"/> or <paramref name="scope"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">The read and scope differ in affinity, constraint, or selected fields.</exception>
+    public static void RequireCompatibleRead(
         RelationQuerySourceReadRequest read,
         MaterializationSourceScope scope)
     {

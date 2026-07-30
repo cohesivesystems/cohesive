@@ -754,6 +754,12 @@ of the core IR contract. See the executable
 [PostgreSQL native join versus Cosmos composed reads](docs/EXECUTION_AND_ADAPTERS.md#postgresql-native-join-versus-cosmos-composed-reads)
 comparison for the exact placement boundary.
 
+The same adapter binding also drives `PostgresRelationQuerySourceReader` for Npgsql-backed bounded enumeration,
+identity batches, and relationship-key predicate batches in composed physical plans. That source-reader path is
+distinct from automatic execution of a native compiled artifact. `PostgresMaterializationSource` reuses the reader for
+bounded rebuild/reconciliation pages with keyset continuation and explicit per-statement, rather than cross-page,
+snapshot semantics.
+
 ### Federated acquisition
 
 When loads and customers do not share a native query boundary, the canonical physical planner can select a
@@ -1823,6 +1829,8 @@ The current foundation includes:
   host evaluation.
 - Affinity-validated Cosmos SDK artifact execution plus bounded Cosmos entity-source acquisition with explicit
   partition, cross-partition, selector, envelope, chunk, and buffering policy.
+- Npgsql-backed PostgreSQL bounded enumeration, batched point/predicate acquisition, and rebuild/reconciliation
+  materialization paging over the exact canonical storage binding.
 - A canonical in-memory relation/query reference interpreter over supplied evidence.
 - Same-element structured collection existentials with direct-field reference execution and exact Elasticsearch
   nested-query lowering when physical correlation evidence is available.
@@ -1855,7 +1863,8 @@ dotnet add package Cohesive.Relations
 - `Cohesive.Adapters.CSharp` projects canonical catalogs into deterministic, collision-checked relationship identifiers.
 - `Cohesive.Adapters.Cosmos` provides Cosmos-oriented interpretations.
 - `Cohesive.Adapters.Elastic` provides search-oriented interpretations.
-- `Cohesive.Adapters.Postgres` provides provider-neutral PostgreSQL SQL compilation.
+- `Cohesive.Adapters.Postgres` provides provider-neutral PostgreSQL SQL compilation plus Npgsql-backed bounded
+  Relations acquisition and rebuild/reconciliation materialization sources.
 - `Cohesive.Adapters.TypeScript` projects semantic contracts into TypeScript.
 
 ## Direction

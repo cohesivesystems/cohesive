@@ -673,7 +673,13 @@ public sealed class RelationQueryPlacementBuilder
         RelationQuerySourceIdentityBinding? identity = null;
         if (declaration.IdentitySelector is { } explicitIdentity)
         {
-            identity = new(contract.Shape, explicitIdentity);
+            identity = new(contract.Shape, explicitIdentity, declaration.IdentitySemanticPath);
+            if (declaration.IdentitySemanticPath is not null)
+            {
+                decisions.Add(Decision(
+                    InputSetting(bindingId, "identity/semantic-path"),
+                    Explicit()));
+            }
             decisions.Add(Decision(InputSetting(bindingId, "identity/source-selector"), Explicit()));
         }
         else if (acquisition != RelationQuerySourceAcquisitionKind.Supplied)
@@ -972,6 +978,7 @@ public sealed class RelationQueryPlacementBuilder
         readonly Dictionary<FieldPath, string> fieldSelectors = [];
         readonly HashSet<FieldPath> fieldConflicts = [];
         string? identitySelector;
+        FieldPath? identitySemanticPath;
         string? relationshipKeySelector;
         string? partitionSelector;
 
@@ -992,6 +999,7 @@ public sealed class RelationQueryPlacementBuilder
         public IReadOnlyDictionary<FieldPath, string> FieldSelectors => fieldSelectors;
         public IReadOnlySet<FieldPath> FieldConflicts => fieldConflicts;
         public string? IdentitySelector => identitySelector;
+        public FieldPath? IdentitySemanticPath => identitySemanticPath;
         public string? RelationshipKeySelector => relationshipKeySelector;
         public string? PartitionSelector => partitionSelector;
         public virtual QualifiedShapeId? ClrShapeId => null;
@@ -1006,7 +1014,7 @@ public sealed class RelationQueryPlacementBuilder
             }
         }
 
-        public void SetIdentity(string selector)
+        public void SetIdentity(string selector, FieldPath? semanticPath)
         {
             if (identitySelector is not null)
             {
@@ -1015,6 +1023,7 @@ public sealed class RelationQueryPlacementBuilder
             else
             {
                 identitySelector = selector;
+                identitySemanticPath = semanticPath;
             }
         }
 
@@ -1147,14 +1156,42 @@ public class RelationQueryPlacementInputBuilder
         return this;
     }
 
-    /// <summary>Overrides the observation-identity physical selector.</summary>
+    /// <summary>
+    /// Overrides the source-native observation-identity physical selector without asserting that it corresponds to
+    /// a semantic shape field. Use <see cref="Identity(FieldPath, string)"/> when that semantic path is known.
+    /// </summary>
     /// <param name="sourceSelector">Stable adapter-interpreted selector.</param>
     /// <returns>This builder.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="sourceSelector"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException"><paramref name="sourceSelector"/> is empty.</exception>
     public virtual RelationQueryPlacementInputBuilder Identity(string sourceSelector)
     {
-        Declaration.SetIdentity(RelationQueryPlacementBuilder.RequireSelector(sourceSelector, nameof(sourceSelector)));
+        Declaration.SetIdentity(
+            RelationQueryPlacementBuilder.RequireSelector(sourceSelector, nameof(sourceSelector)),
+            semanticPath: null);
+        return this;
+    }
+
+    /// <summary>Maps an exact observation-identity semantic path to a physical selector.</summary>
+    /// <param name="semanticPath">Canonical semantic identity path.</param>
+    /// <param name="sourceSelector">Stable adapter-interpreted selector.</param>
+    /// <returns>This builder.</returns>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="semanticPath"/> is empty or <paramref name="sourceSelector"/> is empty.
+    /// </exception>
+    /// <exception cref="ArgumentNullException"><paramref name="sourceSelector"/> is <see langword="null"/>.</exception>
+    public virtual RelationQueryPlacementInputBuilder Identity(
+        FieldPath semanticPath,
+        string sourceSelector)
+    {
+        if (semanticPath.Segments.IsDefaultOrEmpty)
+        {
+            throw new ArgumentException("An explicit identity semantic path cannot be empty.", nameof(semanticPath));
+        }
+
+        Declaration.SetIdentity(
+            RelationQueryPlacementBuilder.RequireSelector(sourceSelector, nameof(sourceSelector)),
+            semanticPath);
         return this;
     }
 
@@ -1254,6 +1291,22 @@ public sealed class RelationQueryPlacementInputBuilder<T> : RelationQueryPlaceme
         return this;
     }
 
+    /// <summary>Maps an exact identity semantic path to a physical selector while preserving typed chaining.</summary>
+    /// <param name="semanticPath">Canonical semantic identity path.</param>
+    /// <param name="sourceSelector">Stable adapter-interpreted selector.</param>
+    /// <returns>This typed builder.</returns>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="semanticPath"/> is empty or <paramref name="sourceSelector"/> is empty.
+    /// </exception>
+    /// <exception cref="ArgumentNullException"><paramref name="sourceSelector"/> is <see langword="null"/>.</exception>
+    public override RelationQueryPlacementInputBuilder<T> Identity(
+        FieldPath semanticPath,
+        string sourceSelector)
+    {
+        base.Identity(semanticPath, sourceSelector);
+        return this;
+    }
+
     /// <summary>Overrides one demanded field structurally while preserving typed chaining.</summary>
     /// <param name="semanticPath">Exact demanded semantic path.</param>
     /// <param name="sourceSelector">Stable adapter-interpreted selector.</param>
@@ -1313,9 +1366,11 @@ public sealed class RelationQueryPlacementInputBuilder<T> : RelationQueryPlaceme
         string? sourceSelector = null)
     {
         var path = TypedDeclaration.Shape.ResolveMemberPath(RelationQueryPlacedInput<T>.ReadProperties(selector, nameof(selector)));
-        TypedDeclaration.SetIdentity(sourceSelector is null
-            ? path.ToString()
-            : RelationQueryPlacementBuilder.RequireSelector(sourceSelector, nameof(sourceSelector)));
+        TypedDeclaration.SetIdentity(
+            sourceSelector is null
+                ? path.ToString()
+                : RelationQueryPlacementBuilder.RequireSelector(sourceSelector, nameof(sourceSelector)),
+            path);
         return this;
     }
 

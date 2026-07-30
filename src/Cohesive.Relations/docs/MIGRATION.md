@@ -200,6 +200,15 @@ adapter binding evidence. Do not call a legacy compiler with a parallel query ob
 Backend-specific preferences belong in binding builders, compiler options/providers, scoped policy, or attributable
 overrides. Do not edit generated artifacts as an untracked source of semantic behavior.
 
+For PostgreSQL composed acquisition, register `PostgresRelationQuerySourceReader` against the full semantic plan, its
+exact physical plan, source identity resolved from that plan, and persisted PostgreSQL binding instead of adding a
+query repository. It uses a caller-owned single-host `NpgsqlDataSource` for bounded enumeration and set-oriented
+point/relationship-key batches; public registration also requires a `PostgresNpgsqlRuntimeBinding` that attests the
+persisted database identity, exact data-source instance, sanitized endpoint fingerprint, and non-secret authority.
+`PostgresMaterializationSource` can wrap that reader for item/byte-bounded rebuild or reconciliation pages with an
+opaque HMAC-authenticated keyset continuation and caller-managed secret. It does not provide cross-page snapshot,
+change-feed, settlement, or write-target guarantees.
+
 ## Diagnostics migration
 
 Replace catch-all mapping/hydration exceptions and null checks with phase-specific structured results:
@@ -230,12 +239,13 @@ Current portable and adapter contracts expose their schema versions through cons
 - `relation-query/v1`
 - `relation-draft/v1`
 - `relation-query-evaluation/v1`
-- `relation-query-source-placement/v2`
+- `relation-query-source-placement/v3`
 - `relation-query-physical-plan/v1`
 - `relation-query-explain/v1`
 - Cosmos SQL profile `canonical-v2` and binding `cosmos-binding/v5`
 - Elasticsearch profile `canonical-v2` and binding `elastic-binding/v4`
-- PostgreSQL profile `canonical-v1`, binding `postgres-binding/v1`, and artifact `postgres-artifact/v2`
+- PostgreSQL SQL profile `canonical-v2`, source-reader profile `source-reader-v1`, binding `postgres-binding/v1`, and
+  artifact `postgres-artifact/v3`
 
 Migration rules:
 
@@ -248,6 +258,17 @@ Migration rules:
 6. Treat persisted executable SQL artifacts as trusted code. PostgreSQL rehydration is intentionally named
    `DeserializeTrusted`; fingerprints detect inconsistency but are not cryptographic signatures.
 
+Source-placement v3 adds optional semantic identity-path evidence independently from the adapter-interpreted physical
+identity selector. Re-author typed or structural placements to retain that path when identity is a semantic shape
+field; source-native identity such as `$identity` remains valid without one. Recompute placement and downstream
+physical-plan fingerprints because the v3 canonicalization distinguishes absent and present semantic paths.
+
+PostgreSQL artifact v3 tightens the persisted `TimestampWithTimeZone` constant domain to finite, microsecond-aligned
+UTC values with a zero offset. Artifact v2 allowed non-zero-offset `DateTimeOffset` constants and used a different
+canonicalization profile, so it is intentionally not rehydrated as v3. Recompile the canonical plan against its exact
+storage binding and persist the newly fingerprinted v3 artifact; changing only `schemaVersion` or the fingerprint is
+not a semantic migration.
+
 Legacy parameter documents that omit `defaultKind` remain readable where documented, but an old JSON null cannot be
 recovered as an explicit-null default because the historical encoding did not preserve that distinction.
 
@@ -258,6 +279,8 @@ recovered as an explicit-null default because the historical encoding did not pr
 - [ ] Move field shaping into canonical `Project` nodes.
 - [ ] Replace invocation and executable-query types with `RelationQueryEvaluation` and `IRelationQueryEvaluator`.
 - [ ] Replace query repositories and hydration stores with placed bounded source readers.
+- [ ] Bind PostgreSQL sources through `PostgresRelationQuerySourceReader`; use `PostgresMaterializationSource` only
+      when per-statement reconciliation semantics satisfy the rebuild consistency policy.
 - [ ] Configure requirement-gap policy explicitly where conventional incomplete output is not appropriate.
 - [ ] Compile CLR DTO mappers from the canonical plan.
 - [ ] Rebind adapter placement and storage evidence; regenerate target artifacts.

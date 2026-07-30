@@ -7,27 +7,28 @@ using Cohesive.Relations.Serialization;
 
 namespace Cohesive.Adapters.Postgres;
 
-/// <summary>Conservative, versioned capability profile for canonical PostgreSQL query compilation.</summary>
+/// <summary>Conservative, versioned capability profile for canonical PostgreSQL native-query compilation.</summary>
 /// <remarks>
-/// The profile advertises the operation families understood by the v1 compiler. Exact table mappings, column value
-/// encodings, collations, type domains, source co-location, snapshot behavior, interval validity, and ordering evidence
-/// remain binding-scoped compiler obligations. The compiler must reject a declaration when those physical facts do not
-/// prove every boundary retained by the realization report.
+/// The profile advertises the operation families understood by the native SQL compiler, including source acquisition
+/// performed inside one compiled statement. Exact table mappings,
+/// column value encodings, collations, type domains, source co-location, snapshot behavior, interval validity, and
+/// ordering evidence remain binding-scoped interpretation obligations. Compilation or runtime registration must reject
+/// a declaration when those physical facts do not prove every retained boundary.
 /// </remarks>
 public static class PostgresRelationQueryTargetProfile
 {
     /// <summary>Stable PostgreSQL SQL interpretation-target identity.</summary>
     public static RelationQueryTargetId Target { get; } = new("cohesive.adapters.postgres.sql");
 
-    /// <summary>Stable canonical v1 capability-profile identity.</summary>
+    /// <summary>Stable canonical v2 native-SQL capability-profile identity.</summary>
     public static RelationQueryTargetProfileId ProfileId { get; } = new(
-        "cohesive.adapters.postgres.sql/canonical-v1");
+        "cohesive.adapters.postgres.sql/canonical-v2");
 
     /// <summary>Stable convention set used by the default PostgreSQL realization and binding policy.</summary>
     public const string DefaultConventionSetVersion =
         "cohesive.adapters.postgres.sql/semantic-path-conventions/v1";
 
-    /// <summary>Maximum page size accepted by the canonical v1 compiler profile.</summary>
+    /// <summary>Maximum page size accepted by the canonical v2 target profile.</summary>
     public const int MaximumPageSize = 1_000;
 
     /// <summary>Boundary requiring all participating tables to reside in one PostgreSQL database execution domain.</summary>
@@ -74,9 +75,19 @@ public static class PostgresRelationQueryTargetProfile
     public static RelationQueryOperatingBoundaryId PageSizeBoundary { get; } = new(
         "postgres/boundary/max-page-size");
 
+    internal static ImmutableArray<RelationQueryPrimitiveCapabilityKind> SourceAcquisitionCapabilities { get; } =
+    [
+        RelationQueryPrimitiveCapabilityKind.BatchedKeyLookup,
+        RelationQueryPrimitiveCapabilityKind.BatchedPredicateLookup,
+        RelationQueryPrimitiveCapabilityKind.CompleteSetEnumeration,
+        RelationQueryPrimitiveCapabilityKind.FieldProjection,
+        RelationQueryPrimitiveCapabilityKind.ObservationIdentityRead,
+        RelationQueryPrimitiveCapabilityKind.RelationshipReferenceRead
+    ];
+
     /// <summary>
-    /// Default PostgreSQL capability profile for exact query-row, aggregation, relationship, explicit-join, and
-    /// valid-time-join compilation within the declared boundaries.
+    /// Default PostgreSQL capability profile for exact query-row, aggregation, relationship, explicit-join,
+    /// and valid-time-join compilation within the declared boundaries.
     /// </summary>
     public static RelationQueryTargetCapabilityProfile Default { get; } = CreateProfile();
 
@@ -137,7 +148,7 @@ public static class PostgresRelationQueryTargetProfile
                 PageSizeBoundary,
                 RelationQueryOperatingBoundaryKind.MaximumPageSize,
                 MaximumPageSize,
-                "The requested row page does not exceed the canonical PostgreSQL v1 limit.")
+                "The requested row page does not exceed the canonical PostgreSQL v2 limit.")
         ];
 
         List<(string Id, RelationQueryCapability Capability, ImmutableArray<RelationQueryOperatingBoundaryId> Boundaries)>
@@ -182,6 +193,14 @@ public static class PostgresRelationQueryTargetProfile
                 GuaranteeBoundaries(guarantee)));
         }
 
+        foreach (var primitive in SourceAcquisitionCapabilities)
+        {
+            declarations.Add((
+                $"primitive/{(int)primitive}",
+                new PrimitiveRelationQueryCapability(primitive),
+                [SingleDatabaseBoundary, CompleteInputEvidenceBoundary, DeterministicProviderBoundary]));
+        }
+
         foreach (var boundary in boundaries)
         {
             declarations.Add((
@@ -203,7 +222,7 @@ public static class PostgresRelationQueryTargetProfile
             [RelationQueryCompilationProvenance.CurrentCompilerProfile],
             evidence,
             boundaries,
-            "Canonical PostgreSQL SQL v1: exact rows and aggregations over co-located tables, including relationship, explicit inner/left, and valid-time joins, within binding-proven boundaries.");
+            "Canonical PostgreSQL SQL v2: exact rows, aggregations, and statement-local source acquisition over co-located tables, including relationship, explicit inner/left, and valid-time joins, within binding-proven boundaries.");
     }
 
     static ImmutableArray<RelationQueryOperatingBoundaryId> LogicalBoundaries(

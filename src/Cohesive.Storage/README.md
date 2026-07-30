@@ -133,6 +133,11 @@ selection, authoritative absence, partial/inconclusive evidence, and cancellatio
 filters, joins, output shaping, aggregation, and paging. Query source roots are read from registered sources;
 relation roots remain invocation inputs and must be supplied by the evaluation.
 
+`Cohesive.Adapters.Postgres` supplies a production Npgsql-backed implementation of the same source-reader port.
+`PostgresRelationQuerySourceReader` uses the exact persisted PostgreSQL binding for bounded enumeration, point/batch
+identity reads, and set-oriented relationship-key predicate batches. Provider types remain in the adapter package;
+the Storage and Relations ports remain backend-neutral.
+
 The same facilities can be registered with `IServiceCollection` through `RegisterEntityRelationQuerySource` and
 `RegisterEntityRelationQueryEvaluator`. Registration order does not choose a source: the v1 catalog permits exactly
 one source per graph-qualified shape and rejects duplicate shape or source identities.
@@ -188,6 +193,14 @@ generation identity so it cannot be reused. Ordinary target snapshots expose bou
 materialized items. Pause and Continue retain the same generation, while a Process restart creates a fresh generation. `InMemoryMaterializationSource`,
 `InMemoryMaterializationProgressStore`, and `InMemoryMaterializationTarget` are deterministic reference fakes for adapter
 and engine conformance tests, not production durability implementations.
+
+`PostgresMaterializationSource` is a production source-side binding for rebuild and reconciliation. It reuses the
+canonical PostgreSQL Relations reader, applies explicit item and canonical encoded-byte page bounds, and resumes with
+an opaque, size-bounded HMAC-authenticated keyset continuation over a UUID or ordering-proven ordinal-text identity.
+The caller supplies and durably manages the continuation-authentication secret. Each page executes in a new PostgreSQL
+statement snapshot. Its capability evidence therefore claims stable ordering, request-local completeness, and
+reconciliation—not coordinated cross-page snapshot, change delivery, settlement, or target writes. Pause/resume
+retains the continuation boundary but cannot retain an MVCC snapshot.
 
 ## Bounded lifecycle control
 
@@ -259,3 +272,4 @@ not provide an automatic bridge from that deleted model to canonical relation/qu
 - `Cohesive.Relations` for canonical relation/query semantics, evaluation, placement, and source-reader contracts.
 - `Cohesive.Processes` for canonical Process IR, continuation state, validation, and reference interpretation.
 - `Cohesive.Adapters.Cosmos` for Cosmos DB-backed storage.
+- `Cohesive.Adapters.Postgres` for Npgsql-backed canonical Relations acquisition and rebuild/reconciliation sources.
