@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Nodes;
 using Cohesive.Model;
+using Cohesive.Model.Authoring;
 using Cohesive.Model.Serialization;
 using Cohesive.Transitions.Authoring;
 
@@ -82,6 +83,38 @@ public sealed class ObjectEntityDefinitionTests
 
         Assert.Equal(JsonTypeKind.Any, Assert.IsType<JsonTypeRef>(payload.Type).Kind);
         Assert.Equal(ScalarTypeKind.String, Assert.IsType<ScalarTypeRef>(schemaVersion.Type).Kind);
+    }
+
+    [Fact]
+    public void ObjectEntityDefinition_CanonicalScalarFieldsValidatePortableStateValues()
+    {
+        var definition = ObjectEntityDefinition.For<CanonicalScalarPoco>();
+
+        Assert.Equal(
+            ScalarTypeKind.Int64,
+            Assert.IsType<ScalarTypeRef>(
+                Assert.Single(definition.Fields, field => field.Name.Value == nameof(CanonicalScalarPoco.Count)).Type).Kind);
+        Assert.Equal(
+            ScalarTypeKind.Date,
+            Assert.IsType<ScalarTypeRef>(
+                Assert.Single(definition.Fields, field => field.Name.Value == nameof(CanonicalScalarPoco.Date)).Type).Kind);
+        Assert.Equal(
+            ScalarTypeKind.Instant,
+            Assert.IsType<ScalarTypeRef>(
+                Assert.Single(definition.Fields, field => field.Name.Value == nameof(CanonicalScalarPoco.Instant)).Type).Kind);
+        Assert.Equal(
+            ScalarTypeKind.Bytes,
+            Assert.IsType<ScalarTypeRef>(
+                Assert.Single(definition.Fields, field => field.Name.Value == nameof(CanonicalScalarPoco.Payload)).Type).Kind);
+
+        _ = definition.CreateState(
+            entityId: "canonical-scalars/1",
+            stateObject: new CanonicalScalarPoco(
+                Count: 42,
+                Date: new DateOnly(2026, 7, 29),
+                Instant: new DateTimeOffset(2026, 7, 29, 12, 0, 0, TimeSpan.Zero),
+                Payload: [1, 2, 3]),
+            version: 1);
     }
 
     [Fact]
@@ -193,4 +226,10 @@ public sealed class ObjectEntityDefinitionTests
 
         public required JsonNode Payload { get; init; }
     }
+
+    public sealed record CanonicalScalarPoco(
+        long Count,
+        DateOnly Date,
+        DateTimeOffset Instant,
+        byte[] Payload);
 }

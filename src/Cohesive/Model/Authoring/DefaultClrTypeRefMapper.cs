@@ -4,7 +4,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Cohesive.Model.Serialization;
 
-namespace Cohesive.Transitions.Authoring;
+namespace Cohesive.Model.Authoring;
 
 /// <summary>
 /// Default mapping from CLR types to semantic type references using deterministic serialized property identities.
@@ -32,26 +32,11 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
     static TypeRef MapInternal(Type clrType, NullabilityInfo? nullability, HashSet<Type> mapPath)
     {
         var unwrapped = Nullable.GetUnderlyingType(nullableType: clrType) ?? clrType;
-        if (unwrapped == typeof(string))
-            return DomainTypes.String();
-
-        if (unwrapped == typeof(int) || unwrapped == typeof(short) || unwrapped == typeof(byte))
-            return DomainTypes.Int32();
-
-        if (unwrapped == typeof(decimal) || unwrapped == typeof(float) || unwrapped == typeof(double))
-            return DomainTypes.Decimal();
-
-        if (unwrapped == typeof(bool))
-            return DomainTypes.Bool();
-
-        if (unwrapped == typeof(Guid))
-            return DomainTypes.Guid();
-
-        if (unwrapped == typeof(DateTimeOffset) || unwrapped == typeof(DateTime))
-            return DomainTypes.DateTime();
+        if (TryMapScalarTypeKind(unwrapped, out var scalarKind))
+            return new ScalarTypeRef(scalarKind);
 
         if (unwrapped.IsEnum)
-            return DomainTypes.Enum(name: unwrapped.Name, members: [.. Enum.GetNames(enumType: unwrapped)]);
+            return new EnumTypeRef(name: unwrapped.Name, members: [.. Enum.GetNames(enumType: unwrapped)]);
 
         if (TryMapJsonType(unwrapped, out var jsonType))
             return jsonType;
@@ -61,7 +46,7 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
 
         if (TryGetStructuredQuantityRepresentationType(type: unwrapped, representationType: out var representationType))
         {
-            if (!TryMapScalarTypeKind(clrType: representationType, kind: out var scalarKind))
+            if (!TryMapScalarTypeKind(clrType: representationType, kind: out var representationKind))
             {
                 return Opaque(
                     unwrapped,
@@ -69,7 +54,7 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
                     $"Structured quantity representation type '{representationType.FullName ?? representationType.Name}' is not a supported scalar.");
             }
 
-            return DomainTypes.Quantity(quantity: unwrapped.Name, baseKind: scalarKind);
+            return new QuantityTypeRef(quantity: unwrapped.Name, baseKind: representationKind);
         }
 
         if (TryGetKeyValuePairTypes(
@@ -80,7 +65,7 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
                 valueType: out var valueType,
                 valueNullability: out var valueNullability))
         {
-            return DomainTypes.Object(
+            return new ObjectTypeRef(
             [
                 new(name: "Key",
                     type: MapInternal(clrType: keyType, nullability: keyNullability, mapPath: mapPath),
@@ -166,7 +151,7 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
                     "The CLR type maps more than one readable property to the same serialized field name.");
             }
 
-            return DomainTypes.Object(
+            return new ObjectTypeRef(
                 [.. properties.Select(x =>
                 {
                     var propertyNullability = CreateNullabilityOrNull(x.Property);
@@ -195,8 +180,20 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
     static OpaqueRuntimeTypeRef Opaque(Type type, string reason, string? message = null) =>
         new(type.FullName ?? type.Name, new TypeInferenceDiagnostic(reason: reason, message: message));
 
-    internal static string GetSerializedMemberName(MemberInfo member) =>
-        member.GetCustomAttribute<JsonPropertyNameAttribute>(inherit: true)?.Name ?? member.Name;
+    /// <summary>Returns the deterministic JSON field identity of a reflected member.</summary>
+    /// <remarks>
+    /// An explicit <see cref="JsonPropertyNameAttribute"/> value is authoritative; otherwise the CLR member name is
+    /// returned. Serializer naming policies are intentionally excluded because they are ambient configuration rather
+    /// than durable semantic metadata.
+    /// </remarks>
+    /// <param name="member">Reflected CLR member whose serialized identity is requested.</param>
+    /// <returns>The explicit JSON property name, or the CLR member name when no attribute is present.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="member"/> is <see langword="null"/>.</exception>
+    public static string GetSerializedMemberName(MemberInfo member)
+    {
+        ArgumentNullException.ThrowIfNull(member);
+        return member.GetCustomAttribute<JsonPropertyNameAttribute>(inherit: true)?.Name ?? member.Name;
+    }
 
     static bool TryMapJsonType(Type type, out TypeRef typeRef)
     {
@@ -377,8 +374,18 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
         return false;
     }
 
-    static bool TryMapScalarTypeKind(Type clrType, out ScalarTypeKind kind)
+    /// <summary>Attempts to map a CLR scalar type to its canonical semantic scalar kind.</summary>
+    /// <remarks>
+    /// Nullable value types are unwrapped before matching. The mapping is shared by structural CLR authoring
+    /// surfaces so scalar contracts remain aligned across blocks.
+    /// </remarks>
+    /// <param name="clrType">CLR type to classify.</param>
+    /// <param name="kind">Receives the canonical scalar kind when the type is supported.</param>
+    /// <returns><see langword="true"/> when <paramref name="clrType"/> has a canonical scalar mapping.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="clrType"/> is <see langword="null"/>.</exception>
+    public static bool TryMapScalarTypeKind(Type clrType, out ScalarTypeKind kind)
     {
+        ArgumentNullException.ThrowIfNull(clrType);
         var unwrapped = Nullable.GetUnderlyingType(clrType) ?? clrType;
         if (unwrapped == typeof(string))
         {
@@ -389,6 +396,12 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
         if (unwrapped == typeof(int) || unwrapped == typeof(short) || unwrapped == typeof(byte))
         {
             kind = ScalarTypeKind.Int32;
+            return true;
+        }
+
+        if (unwrapped == typeof(long))
+        {
+            kind = ScalarTypeKind.Int64;
             return true;
         }
 
@@ -410,9 +423,27 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
             return true;
         }
 
-        if (unwrapped == typeof(DateTimeOffset) || unwrapped == typeof(DateTime))
+        if (unwrapped == typeof(DateOnly))
+        {
+            kind = ScalarTypeKind.Date;
+            return true;
+        }
+
+        if (unwrapped == typeof(DateTime))
         {
             kind = ScalarTypeKind.DateTime;
+            return true;
+        }
+
+        if (unwrapped == typeof(DateTimeOffset))
+        {
+            kind = ScalarTypeKind.Instant;
+            return true;
+        }
+
+        if (unwrapped == typeof(byte[]))
+        {
+            kind = ScalarTypeKind.Bytes;
             return true;
         }
 

@@ -88,6 +88,26 @@ public sealed class ClrShapeGraphBuilderMetadataTests
     }
 
     [Fact]
+    public void Build_UsesTheSharedCanonicalClrScalarMapping()
+    {
+        var graph = new ClrShapeGraphBuilder()
+            .AddShape<CanonicalScalarEnvelope>()
+            .Build(new("graph.canonical-scalars.test"));
+
+        var shape = Assert.Single(graph.Shapes);
+
+        Assert.Equal(
+            ScalarTypeKind.Int64,
+            Assert.IsType<ScalarTypeRef>(shape.GetField(nameof(CanonicalScalarEnvelope.Count)).Type).Kind);
+        Assert.Equal(
+            ScalarTypeKind.Date,
+            Assert.IsType<ScalarTypeRef>(shape.GetField(nameof(CanonicalScalarEnvelope.Date)).Type).Kind);
+        Assert.Equal(
+            ScalarTypeKind.Bytes,
+            Assert.IsType<ScalarTypeRef>(shape.GetField(nameof(CanonicalScalarEnvelope.Payload)).Type).Kind);
+    }
+
+    [Fact]
     public void Build_MapsJsonRuntimePropertiesToJsonTypeRefs()
     {
         var graph = new ClrShapeGraphBuilder()
@@ -181,6 +201,8 @@ public sealed class ClrShapeGraphBuilderMetadataTests
     sealed record TimeEnvelope(TimeOnly Time);
 
     sealed record TemporalEnvelope(DateTime Civil, DateTimeOffset Instant);
+
+    sealed record CanonicalScalarEnvelope(long Count, DateOnly Date, byte[] Payload);
 
     sealed record JsonEnvelope(JsonElement Element, JsonNode? Node, JsonObject Object, JsonArray Array);
 

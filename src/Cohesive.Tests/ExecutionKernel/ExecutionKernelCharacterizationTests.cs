@@ -7,10 +7,9 @@ using Cohesive.Transitions.IR;
 namespace Cohesive.Tests.ExecutionKernel;
 
 /// <summary>
-/// Characterizes current canonical reference semantics and legacy Transitions and Processes behavior against
-/// the EK-01 through EK-09 scenarios. These tests intentionally describe current compatibility boundaries; they
-/// include ARI-168's durable Process runtime and in-memory physical durability interpretation as an executable
-/// reference oracle, but do not claim a production storage adapter or hosted runtime realization.
+/// Characterizes current canonical reference semantics against the EK-01 through EK-09 scenarios. The durable
+/// Process runtime and in-memory physical durability interpretation are executable reference oracles; they do not
+/// imply a production storage adapter or hosted runtime realization.
 /// </summary>
 public sealed class ExecutionKernelCharacterizationTests
 {
@@ -24,7 +23,7 @@ public sealed class ExecutionKernelCharacterizationTests
         new("EK-06", KernelScenarioStatus.Pass, "The canonical durable runtime now realizes stable logical operation identity, fenced and renewable claims, attempt history, adapter execution outside the instance gate, acknowledgement, exact Reply admission, authored ambiguous-outcome recovery, and replay-safe atomic checkpoint, inbox, outbox, and operation-ledger commits across before/after-commit crash cuts; the in-memory store and scripted adapter provide the executable reference interpretation required by EK-06."),
         new("EK-07", KernelScenarioStatus.Pass, "Canonical Process state and the durable runtime now admit Signals through Control as atomic inbox evidence, preserve exact wait-occurrence targets, buffer early delivery, consume one deterministic winner, persist typed duplicate and late-loser dispositions without reopening the wait, and replay both commands and activations inertly; the in-memory store provides the executable reference interpretation required by EK-07."),
         new("EK-08", KernelScenarioStatus.Partial, "The durable reference driver composes stable Process instance, attempt, activation, checkpoint, and write-once affinity evidence: pause/continue retain the attempt and generation binding, same-attempt recovery preserves them, and RestartAttempt creates one clean fenced replacement without inherited affinity; physical generation allocation, cleanup, promotion, backend swap, and production storage adapters remain absent."),
-        new("EK-09", KernelScenarioStatus.Partial, "Representative entity Transitions lower from typed C# to fingerprint-equivalent canonical IR, and Processes now have direct callback-free canonical IR; Process C# lowering and runtime migration remain incomplete.")
+        new("EK-09", KernelScenarioStatus.Pass, "Representative Transitions and Processes lower from typed C# to fingerprint-equivalent canonical IR, round-trip independently of their producer assemblies, and compile only from persisted execution-definition documents; the former callback and single-cursor Process authorities are no longer shipped.")
     ];
 
     [Fact]
@@ -35,7 +34,7 @@ public sealed class ExecutionKernelCharacterizationTests
             ScenarioClassifications.Select(static scenario => scenario.Id));
         Assert.All(ScenarioClassifications, static scenario => Assert.NotEmpty(scenario.Evidence));
         Assert.Equal(
-            ["EK-01", "EK-06", "EK-07"],
+            ["EK-01", "EK-06", "EK-07", "EK-09"],
             ScenarioClassifications
                 .Where(static scenario => scenario.Status == KernelScenarioStatus.Pass)
                 .Select(static scenario => scenario.Id));
@@ -95,172 +94,6 @@ public sealed class ExecutionKernelCharacterizationTests
         Assert.True(approved.Bool);
     }
 
-    [Fact]
-    public void EK01AndEK09_ReplanningSameCheckpoint_ReevaluatesHostBranchDelegates()
-    {
-        var chooseFirstBranch = true;
-        var process = new ProcessDefinition(
-            name: "DelegateBackedBranch",
-            entryNode: "choose",
-            nodes:
-            [
-                new BranchingNode(
-                    name: "choose",
-                    branches:
-                    [
-                        new(ctx => chooseFirstBranch, "first"),
-                        new(ctx => true, "second")
-                    ],
-                    elseNode: "fallback"),
-                new EndNode("first"),
-                new EndNode("second"),
-                new EndNode("fallback")
-            ]);
-        var context = CreateOperationContext();
-        var engine = CreateEngine();
-        var checkpoint = engine.CreateCheckpoint(
-            context,
-            process,
-            runOptions: new() { ProcessId = "branch-replay" });
-
-        var firstPlan = engine.PlanNextStep(context, process, checkpoint);
-        chooseFirstBranch = false;
-        var replayPlan = engine.PlanNextStep(context, process, checkpoint);
-
-        Assert.Equal(ProcessExecutionPlanKind.Advance, firstPlan.Kind);
-        Assert.Equal("first", firstPlan.Checkpoint.CurrentNode);
-        Assert.Equal("second", replayPlan.Checkpoint.CurrentNode);
-    }
-
-    [Fact]
-    public void EK02_WaitIsCheckpointedBeforeYield_ButOneCheckpointCanBeResumedTwice()
-    {
-        var process = new ProcessDefinition(
-            name: "HumanReview",
-            entryNode: "wait",
-            nodes:
-            [
-                new WaitNode(
-                    name: "wait",
-                    waitType: ProcessWaitType.ExternalEvent,
-                    keyExpression: _ => "review:review-1",
-                    captureVar: "decision",
-                    nextNode: "end"),
-                new EndNode("end")
-            ]);
-        var context = CreateOperationContext();
-        var engine = CreateEngine();
-        var initial = engine.CreateCheckpoint(
-            context,
-            process,
-            runOptions: new() { ProcessId = "human-review" });
-
-        var waitPlan = engine.PlanNextStep(context, process, initial);
-
-        Assert.Equal(ProcessExecutionPlanKind.Wait, waitPlan.Kind);
-        Assert.Equal(ProcessExecutionStatus.Waiting, waitPlan.Checkpoint.Status);
-        Assert.Equal("wait", waitPlan.Checkpoint.CurrentNode);
-        Assert.Equal("review:review-1", waitPlan.Wait?.Key);
-
-        var approved = engine.ResumeWait(context, process, waitPlan.Checkpoint, "approved");
-        var rejected = engine.ResumeWait(context, process, waitPlan.Checkpoint, "rejected");
-
-        Assert.Equal("approved", approved.Variables["decision"]);
-        Assert.Equal("rejected", rejected.Variables["decision"]);
-        Assert.Equal("end", approved.CurrentNode);
-        Assert.Equal("end", rejected.CurrentNode);
-    }
-
-    [Fact]
-    public async Task EK07_EarlyDuplicateSignals_AreBufferedAsDistinctFifoInputs()
-    {
-        var context = CreateOperationContext();
-        var waits = new InMemoryProcessWaitAdapter();
-
-        waits.PublishExternalEvent(key: "approval:review-1", payload: "approved");
-        waits.PublishExternalEvent(key: "approval:review-1", payload: "approved");
-
-        var first = await waits.WaitAsync(
-            context,
-            ProcessWaitType.ExternalEvent,
-            key: "approval:review-1",
-            timeout: null);
-        var duplicate = await waits.WaitAsync(
-            context,
-            ProcessWaitType.ExternalEvent,
-            key: "approval:review-1",
-            timeout: null);
-
-        Assert.Equal("approved", first);
-        Assert.Equal("approved", duplicate);
-    }
-
-    [Fact]
-    public void EK04_ProcessDefinitionAcceptsUnboundedCycle_AndCheckpointHasOneCursor()
-    {
-        var process = new ProcessDefinition(
-            name: "UnboundedCycle",
-            entryNode: "loop",
-            nodes:
-            [
-                new ComputeValueNode(
-                    name: "loop",
-                    valueExpression: _ => null,
-                    nextNode: "loop")
-            ]);
-        var checkpoint = CreateEngine().CreateCheckpoint(
-            CreateOperationContext(),
-            process,
-            runOptions: new() { ProcessId = "unbounded-cycle" });
-
-        Assert.Equal("loop", checkpoint.CurrentNode);
-        Assert.Empty(checkpoint.ContinuationFrames);
-    }
-
-    [Fact]
-    public void EK09_CheckpointAcceptsChangedDefinitionWithSameName()
-    {
-        var original = BranchTo(targetNode: "original");
-        var replacement = BranchTo(targetNode: "replacement");
-        var context = CreateOperationContext();
-        var engine = CreateEngine();
-        var checkpoint = engine.CreateCheckpoint(
-            context,
-            original,
-            runOptions: new() { ProcessId = "same-name-definition" });
-
-        var plan = engine.PlanNextStep(context, replacement, checkpoint);
-
-        Assert.Equal(ProcessExecutionPlanKind.Advance, plan.Kind);
-        Assert.Equal("replacement", plan.Checkpoint.CurrentNode);
-    }
-
-    static ProcessDefinition BranchTo(string targetNode) => new(
-        name: "SameName",
-        entryNode: "choose",
-        nodes:
-        [
-            new BranchingNode(
-                name: "choose",
-                branches: [new(_ => true, targetNode)]),
-            new EndNode(targetNode)
-        ]);
-
-    static OperationContext CreateOperationContext() => OperationContext.Create(
-        timeProvider: new FixedTimeProvider(new DateTimeOffset(2026, 7, 27, 12, 0, 0, TimeSpan.Zero)));
-
-    static ProcessEngine CreateEngine()
-    {
-        var storage = new InMemoryProcessStorageAdapter();
-        return new(new(
-            transitionHost: new DeclarativeTransitionHost(),
-            entityRepository: storage,
-            checkpointRepository: storage,
-            transactionGateway: storage,
-            waitAdapter: new InMemoryProcessWaitAdapter(),
-            deadLetterSink: new InMemoryProcessDeadLetterSink()));
-    }
-
     enum KernelScenarioStatus
     {
         Pass,
@@ -272,11 +105,6 @@ public sealed class ExecutionKernelCharacterizationTests
         string Id,
         KernelScenarioStatus Status,
         string Evidence);
-
-    sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
-    {
-        public override DateTimeOffset GetUtcNow() => utcNow;
-    }
 
     sealed class ReviewEntity : Entity
     {

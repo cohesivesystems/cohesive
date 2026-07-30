@@ -27,7 +27,7 @@ public sealed class DurableTaskProcessExecutionRepository : IProcessExecutionRep
     {
         this.queryClient = Guard.RequireNotNull(queryClient);
         this.taskHubName = string.IsNullOrWhiteSpace(taskHubName) ? null : taskHubName;
-        this.dataConverter = dataConverter ?? DurableTaskProcessSerialization.CreateDataConverter();
+        this.dataConverter = dataConverter ?? DurableTaskProcessQuerySerialization.CreateDataConverter();
     }
 
     /// <inheritdoc />
@@ -159,7 +159,7 @@ public sealed class DurableTaskProcessExecutionRepository : IProcessExecutionRep
 
         try
         {
-            return dataConverter.Deserialize<ProcessRunResult>(serializedOutput) is { } run ? run.Result : null;
+            return dataConverter.Deserialize<DurableTaskProcessOutput>(serializedOutput)?.Result;
         }
         catch
         {

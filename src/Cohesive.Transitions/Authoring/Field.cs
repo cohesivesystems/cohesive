@@ -266,16 +266,8 @@ public class Field<T> : IAuthoredField
                 return IsJsonClrTypeCompatible(t);
 
             case ScalarTypeRef scalar:
-                return scalar.Kind switch
-                {
-                    ScalarTypeKind.String => t == typeof(string),
-                    ScalarTypeKind.Int32 => t == typeof(int),
-                    ScalarTypeKind.Decimal => t == typeof(decimal),
-                    ScalarTypeKind.Bool => t == typeof(bool),
-                    ScalarTypeKind.Guid => t == typeof(Guid),
-                    ScalarTypeKind.DateTime => t == typeof(DateTimeOffset) || t == typeof(DateTime),
-                    _ => false
-                };
+                return DefaultClrTypeRefMapper.TryMapScalarTypeKind(t, out var mappedKind)
+                       && mappedKind == scalar.Kind;
 
             case EnumTypeRef enumType:
                 if (t == typeof(string))
@@ -344,19 +336,8 @@ public class Field<T> : IAuthoredField
         || string.Equals(type.FullName, quantityName, StringComparison.Ordinal);
 
     static bool IsScalarClrTypeCompatible(Type clrType, ScalarTypeKind scalarKind)
-    {
-        var normalized = Nullable.GetUnderlyingType(clrType) ?? clrType;
-        return scalarKind switch
-        {
-            ScalarTypeKind.Int32 => normalized == typeof(int),
-            ScalarTypeKind.Decimal => normalized == typeof(decimal),
-            ScalarTypeKind.String => normalized == typeof(string),
-            ScalarTypeKind.Bool => normalized == typeof(bool),
-            ScalarTypeKind.Guid => normalized == typeof(Guid),
-            ScalarTypeKind.DateTime => normalized == typeof(DateTimeOffset) || normalized == typeof(DateTime),
-            _ => false
-        };
-    }
+        => DefaultClrTypeRefMapper.TryMapScalarTypeKind(clrType, out var mappedKind)
+           && mappedKind == scalarKind;
 
     static bool TryGetEnumerableElementType(Type type, out Type elementType)
     {

@@ -24,9 +24,11 @@ exclusion, cleanup, promotion, and backend swap. EK-11 passes in the provider-ne
 exact Relation evaluation, bounded durable recurrence, progress retention, and checkpoint restore.
 Canonical Process IR and its pure reference interpreter now
 provide the persisted semantic graph, typed bindings, exact references, immutable token/wait state, deterministic
-finite activations, and interaction intents needed by subsequent checkpoint work. EK-09 remains Partial:
-representative Transitions have a typed C# producer that is equivalent to direct IR, while Processes have direct
-canonical IR but no C# lowering yet. The remaining scenarios retain the Partial classifications recorded below.
+finite activations, and interaction intents needed by subsequent checkpoint work. EK-09 now passes:
+representative Transitions and Processes now have typed C# producers that lower to fingerprint-equivalent direct
+IR, survive strict round trips, and compile from their persisted documents without their producer assemblies. The
+delegate-bearing Process model, source generator, single-cursor runtime, and adapters that executed it are no longer
+shipped execution authorities. The remaining scenarios retain the classifications recorded below.
 
 ## Scenario matrix
 
@@ -40,7 +42,7 @@ canonical IR but no C# lowering yet. The remaining scenarios retain the Partial 
 | EK-06 — durable effect crash matrix | Pass | The Request `EmissionId` is the logical operation identity and its scoped deduplication key survives every physical attempt. The durable driver atomically commits origin progress plus pending operation, records claim and dispatch before adapter I/O, repeats only the same fenced invocation when idempotency evidence permits, routes ambiguous outcomes to authored reconciliation, persists one acknowledgement, and atomically couples final operation disposition with Reply inbox admission. Exact store retries resolve pre/post-boundary crashes without changing intent, and stale fences cannot publish returned evidence. | None in the provider-neutral reference profile. Concrete store and operation adapters must pass the same crash matrix for their claimed realization. |
 | EK-07 — signal arbitration | Pass | Canonical Signal commands enter the durable inbox exactly once by logical `EmissionId`; duplicate admission replays. The durable driver then restores the exact wait topology and uses the reference interpreter's priority, clause-identity, and emission-identity ordering to select one winner, retain loser/tombstone dispositions, and prevent stale exact wait occurrences from routing to later waits. Inbox admission and activation commit share one CAS revision, closing the registration/commit lost-wakeup cut. | None in the provider-neutral reference profile. Production signal and timer adapters must pass the same arbitration scenario. |
 | EK-08 — index rebuild recovery | Partial | The durable driver composes stable Process instance, attempt, activation, control, checkpoint, and write-once affinity evidence. `ForEachPartition` retains a finite canonical shard set, replay-stable child/Request/wait identities, explicit start and parallelism bounds, and exact member outcomes across checkpoint serialization and restore. A real durable-operation adapter receives self-contained child-start metadata and returns a truthfully originated Reply that joins the parent. Pause and Continue retain the current attempt and candidate-generation affinity. Same-attempt replay/recovery preserves them; RestartAttempt commits one causal abandonment, creates one clean fenced replacement continuation under the accepted replacement identity, and leaves the new attempt unbound. Old-attempt replay is inert and old workers cannot add new logical evidence. | Storage-owned candidate-generation allocation, cleanup and abandoned-generation exclusion, plus fenced idempotent promotion and read/write backend swap. |
-| EK-09 — C# and IR equivalence | Partial | Representative typed C# Transition authoring lowers immediately to the same canonical `Cohesive.Transitions.IR` definitions as direct authoring. `Cohesive.Processes.IR` now supports direct canonical authoring with stable node, edge, branch, clause, and binding identities, typed contracts, exact semantic references, deterministic normalization and fingerprints, and strict document round trips. Neither canonical IR requires callbacks or a producer assembly to deserialize and validate. | Canonical Process C# lowering and a Process C#/direct-IR equivalence suite remain ARI-170 work. The legacy Process authoring/runtime path still uses delegate-bearing executable node objects and must migrate without becoming semantic authority. |
+| EK-09 — C# and IR equivalence | Pass | Representative typed C# Transition and Process authoring lowers immediately to the same canonical definitions and fingerprints as direct IR. Process authoring covers the closed node union and nested bindings, edges, branches, clauses, outcomes, bounded work, recurrence, child purposes, and terminal outcomes. Typed selectors become portable paths immediately; no callback survives construction. Strict document round trips preserve identity, type information, semantics, diagnostics, provenance, and source maps, and static compilation consumes only the persisted document plus explicit linking evidence. | None for representative Transition and Process equivalence. Each future authoring frontend remains responsible for the same normalization, round-trip, and source-attribution conformance. |
 | EK-11 — durable polling recurrence | Pass | `RepeatAcrossActivation` evaluates a typed progress value and Boolean continuation condition, admits at most one repeat between durable cuts, retains exact occurrence and unchanged-progress counts, and routes deterministically to Completed, Exhausted, or Stalled. The durable runtime serializes, restores, validates, and resumes recurrence progress without a suspended host frame or free graph cycle. | None in the provider-neutral reference profile. Concrete Relation and Process-store adapters must pass the same recurrence and restore scenarios for their claimed realization. |
 
 The executable classifications and focused behavioral baselines live in `src/Cohesive.Tests/ExecutionKernel/ExecutionKernelCharacterizationTests.cs` and run as part of the existing `Cohesive.Tests` project.
@@ -287,10 +289,12 @@ requested atomic guarantee. EK-05 whole-definition preflight is therefore explic
 and concrete target realization remain deferred. Interaction targets carry an optional exact
 `ProcessWaitRegistrationId`: exact targets cannot cross wait occurrences, while a null occurrence is the explicit
 early-delivery form. `ProcessDurableRuntime` realizes finite activation, lifecycle, inbox/outbox, and durable Request
-cuts over the canonical checkpoint/store contracts, and ARI-170 owns restricted C# lowering and equivalence with
-direct IR. The legacy Process runtime remains a separate compatibility path.
+cuts over the canonical checkpoint/store contracts. `ProcessAuthoring.Create` is the restricted C# producer for
+that same IR: its typed construction callback is discarded, its member selectors are immediately lowered to
+binding-qualified semantic paths, and its resulting handle retains only the canonical execution-definition
+document and validation result. Direct IR and representative C# definitions normalize to the same fingerprint.
 
-## Compatibility surfaces to migrate
+## Compatibility and retired surfaces
 
 ### Flat transitions
 
@@ -298,7 +302,7 @@ direct IR. The legacy Process runtime remains a separate compatibility path.
 
 Canonical persisted semantic authority now belongs to `Cohesive.Transitions.IR`. `TransitionAuthoring` and its typed canonical builders are producers of that authority and retain no executable callback. Keep the legacy `Transition<TEntity, TInput>`, `TransitionExpressionBuilder`, and `DeclarativeEntityRuntime` only as temporary compatibility producer/interpreter surfaces pending ARI-185 while consumers migrate. Project the legacy `TransitionResult`, generic effects, and dictionary patches from the canonical decision rather than defining kernel behavior through them.
 
-### Delegate-bearing processes
+### Retired delegate-bearing processes
 
 Canonical persisted Process authority now belongs to `Cohesive.Processes.IR.ProcessDefinition`: a normalized,
 typed graph with stable node and edge identities, portable expressions, exact Transition, Relation/Query, and
@@ -307,26 +311,28 @@ reference and binding compatibility, graph integrity, branch/join structure, and
 It carries coordination facts only and does not copy aggregate business state, callbacks, suspended host frames,
 runtime services, adapter state, or compiled plans.
 
-The compatibility `Cohesive.Processes.Model.ProcessDefinition` still stores executable node objects. Semantic
-choices—including branch predicates, entity references, transition inputs, request construction, waits,
-computations, and terminal results—are CLR `Func` delegates. DurableTask resolves a definition by process name from
-a local registry and re-evaluates those delegates during orchestration replay. A changed definition under the same
-name is accepted because checkpoint compatibility validates only `ProcessName`.
+The former `Cohesive.Processes.Model.ProcessDefinition` stored executable node objects whose branch predicates,
+entity references, transition inputs, Request construction, waits, computations, and terminal results were CLR
+`Func` delegates. The former DurableTask orchestration resolved definitions by name from a local registry and
+re-evaluated those delegates during replay. Those types, their source generator, local execution engine, and
+delegate-consuming adapter entry points have been removed. They are not compatibility inputs and cannot compete
+with the canonical definition.
 
-Migration disposition: treat the existing definition, builder, and source-generator output as
-authoring/compatibility inputs. Effect handlers and transaction gateways remain legitimate adapter mechanisms,
-but delegates must cease to be persisted semantic authority. ARI-170 should lower authoring into the existing
-canonical typed nodes. ARI-165 pins exact definition identity, revision, and fingerprint on activation evidence;
-the canonical checkpoint validator enforces those values across restore and replay admission.
+Migration disposition: author or import `Cohesive.Processes.IR.ProcessDefinition`, persist it in an
+`ExecutionDefinitionDocument`, compile with `ProcessStaticCompiler`, and execute the resulting plan with a
+conforming interpreter. The typed C# frontend does exactly that. Adapter mechanisms may execute explicit compiled
+operations, but may not revive runtime delegates or registry-by-name definition authority.
 
 ### Single execution cursor
 
 `Cohesive.Processes.Runtime.ProcessCheckpoint` persists one `CurrentNode` plus a locality continuation stack. It has no token set, fork/join state, definition fingerprint, integrated process attempt or activation identity, durable wait inbox, operation ledger, canonical control state, compensation state, or generation-affinity binding. The ARI-166 `ProcessDurableCheckpoint` is the new physical aggregate and composes the canonical continuation, control, interaction, and durable-operation authorities under one atomic store boundary. The legacy checkpoint neither embeds nor atomically commits those authorities. Its `ProcessDefinition` also accepts unrestricted control-flow cycles.
 
-Migration disposition: preserve old checkpoints only behind an explicit compatibility reader. New work targets
-`ProcessDurableCheckpoint`, `IProcessDurableStore`, and `ProcessDurableRuntime` rather than expanding the legacy
-adapter. Affinity slots and generation bindings must be derived from canonical Process IR and owning-block
-contracts. Do not infer parallelism or generation recovery from the old single cursor.
+Migration disposition: the old checkpoint and its executor have been removed; no implicit
+compatibility reader is provided. Any future offline migration tool must treat the old value as an explicitly
+versioned import format and produce a newly validated canonical continuation. New work targets
+`ProcessDurableCheckpoint`, `IProcessDurableStore`, and `ProcessDurableRuntime`. Affinity slots and generation
+bindings derive from canonical Process IR and owning-block contracts; parallelism and generation recovery are never
+inferred from the old cursor.
 
 ## Characterized runtime paths
 
@@ -341,14 +347,19 @@ contracts. Do not infer parallelism or generation recovery from the old single c
 | Canonical interaction envelopes | `DomainEventEnvelope`, `RequestEnvelope`, `SignalEnvelope`, and `ReplyEnvelope` → `InteractionEnvelopeValidator` and `InteractionEnvelopeJsonSerializer`; strict portable representation plus optional exact `ProcessWaitRegistrationId` targeting exists, and `ProcessDurableCheckpoint` retains envelopes as the inbox/outbox authority |
 | Canonical durable Request protocol | `DurableRequestBinding`, `DurableOperationState`, `IDurableOperationAdapter`, `IDurableOperationBatchAdapter`, `DurableOperationReferenceExecutor`, and `ProcessDurableRuntime.AdvanceOperationAsync` → exact Reply binding, scoped logical deduplication, fenced claims and attempts, attempt/failure evidence, typed timeout/cancellation requirements, recovery identities, reconciliation, acknowledgement, and result admission; the Process checkpoint/store atomically compose origin, operation, and Reply cuts |
 | Canonical Process lifecycle control | `ProcessControlCommand`, `ProcessControlState`, `ProcessControlDecision`, `ProcessControlJsonSerializer`, `ProcessControlReferenceExecutor`, and `ProcessDurableRuntime` → protocol-neutral Inspect/Signal/Pause/Continue/RestartAttempt/Cancel/Terminate semantics, stable command identity and idempotency, exact attempt/revision fencing, replay and typed no-op receipts, safe-point lifecycle, attempt lineage, durable Signal admission, cancellation terminal composition, and write-once attempt affinity; index-sync work still owns physical generation lifecycle |
+| Canonical Process C# authoring | `ProcessAuthoring.Create` + `ProcessBuilder<TInput,TResult>` → canonical `ExecutionDefinitionDocument`; typed values, bindings, obligations, all closed-union nodes, deterministic owner-relative identities, immediate member-path capture, and `ExecutionSourceMap` attribution without retained callbacks |
 | Canonical Process semantics | `Cohesive.Processes.IR.ProcessDefinition`, `ProcessStaticCompiler`, `ProcessContinuationState`, `ProcessReferenceInterpreter`, `ProcessContinuationValidator`, `ProcessDurableCheckpoint`, `IProcessDurableStore`, and `ProcessDurableRuntime` → validated exact finite-activation plans, immutable multi-token continuations, deterministic operations/Fork/Join/waits/Requests/interactions, compatibility-first restore, exact activation/host-operation replay, atomic checkpoint/inbox/outbox/operation persistence, ambiguous exact mutation retry, and crash-testable CAS/fencing |
 | Legacy direct transition activation | `Transition<TEntity,TInput>.Apply` → `Entity.ApplyTransition` → `DeclarativeEntityRuntime.Apply` |
 | Flat transition compatibility | `Cohesive.Transitions.Model.TransitionDefinition`, `TransitionBuilder`, `TransitionExpressionBuilder`, `TransitionExpressionAnalyzer`, `TransitionPatchProjector`, `TransitionResult` |
-| Legacy Process planning and replay | `Cohesive.Processes.Model.ProcessDefinition`, `ProcessNode`, `BranchingNode`, `ProcessExecutionPlanner`, `ProcessCheckpoint` |
-| Legacy waits and signals | `WaitNode`, `IProcessWaitAdapter`, `IProcessSignalSink`, `InMemoryProcessWaitAdapter`, `DurableTaskProcessOrchestration`; these still exchange a key plus raw payload rather than canonical Signal envelopes |
-| Legacy effects and recovery substrate | `EffectRequest`, `ProcessPendingEffect`, `EffectExecution`, `ProcessDeadLetter`, `ProcessNodeExecutor`, `ProcessEntityRepositoryAdapter`; these remain runtime migration surfaces and do not yet enforce canonical Request/Reply obligations |
-| Transactions and capabilities | `ProcessTransactionScope`, `ProcessPlace`, `ProcessCapability`, `IProcessTransactionGateway` |
+| Canonical durable Process realization | `Cohesive.Storage.Processes.ProcessDurableRuntime` + `IProcessDurableStore` → compiled canonical plans, exact continuation/control/operation authority, atomic persistence, crash recovery, and lifecycle admission |
+| DurableTask monitoring | `DurableTaskProcessExecutionRepository` → authority-neutral task-hub query projection only; the delegate orchestration host and execution registration surface are not shipped |
+| Retired Process authority | `Cohesive.Processes.Model`, its source generator, local runtime/planner/single-cursor checkpoint, delegate ASP.NET start routes, DurableTask execution host, legacy Storage entity adapter, and their legacy-only tests have been removed; Git history is the recovery path |
 
 ## Characterization policy
 
-These tests intentionally lock observable legacy behavior—including unsafe gaps such as re-evaluated branch delegates, repeatable checkpoint consumption, duplicate signal buffering, unrestricted cycles, and same-name definition replacement. When a kernel implementation closes a gap, update the classification and replace the legacy assertion with the corresponding normative conformance test. Do not preserve a characterized gap merely to keep this inventory green.
+The executable inventory locks normative canonical behavior, not retired implementation accidents. ARI-170 removes
+the unsafe Process characterizations for re-evaluated branch delegates, repeatable checkpoint consumption,
+duplicate raw-signal buffering, unrestricted cycles, and same-name definition replacement. Their replacements
+assert typed C#/direct-IR equivalence, strict persisted-document round trips, source-mapped diagnostics, closed-union
+authoring coverage, and absence of the competing authorities from shipped assemblies. Do not restore a retired gap
+as a compatibility behavior merely to keep historical source executable.

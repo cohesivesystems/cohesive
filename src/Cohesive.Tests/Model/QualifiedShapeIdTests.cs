@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Cohesive.Model.Authoring;
 
 namespace Cohesive.Tests.Model;
 
