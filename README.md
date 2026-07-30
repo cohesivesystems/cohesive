@@ -20,7 +20,7 @@ The [Execution Kernel compatibility inventory](docs/EXECUTION_KERNEL_COMPATIBILI
 | `Cohesive.Processes` | Declarative process definitions and runtime execution contracts. |
 | `Cohesive.Presentation` | Backend-declared presentation IR for navigation, views, actions, forms, and flows. |
 | `Cohesive.Api` | Semantic API declarations and endpoint metadata. |
-| `Cohesive.Storage` | Entity repository, observation stream, outbox, and storage adapter contracts. |
+| `Cohesive.Storage` | Entity repository, durable Process state, materialization, Control, and storage adapter contracts. |
 | `Cohesive.AI` | Inference, training, text, vector, ontology, and model registry contracts. |
 | `Cohesive.Identity` | Identity context and scope resolution helpers. |
 | `Cohesive.Host` | CLI, host, and runtime binding helpers. |
