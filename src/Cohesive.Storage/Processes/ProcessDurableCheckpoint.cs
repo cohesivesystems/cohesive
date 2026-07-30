@@ -491,7 +491,7 @@ public sealed class ProcessDurableCheckpoint
 {
     /// <summary>Current exact physical checkpoint schema.</summary>
     public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } =
-        new("cohesive-process-durable-checkpoint/v1");
+        new("cohesive-process-durable-checkpoint/v2");
 
     /// <summary>Creates a complete validated physical Process checkpoint.</summary>
     /// <param name="schemaVersion">Exact physical checkpoint schema.</param>

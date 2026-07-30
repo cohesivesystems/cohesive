@@ -31,7 +31,7 @@ public static class ProcessDefinitionDiagnosticCodes
     /// <summary>A control-flow edge targets no declared Process node.</summary>
     public const string EdgeTargetUnresolved = "processes.ir.edgeTargetUnresolved";
 
-    /// <summary>A Process node or AwaitMatch clause lies outside its closed v1 union.</summary>
+    /// <summary>A Process node or AwaitMatch clause lies outside its closed canonical union.</summary>
     public const string NodeUnsupported = "processes.ir.nodeUnsupported";
 
     /// <summary>A required Process enum value is unspecified or unsupported.</summary>
@@ -67,10 +67,10 @@ public static class ProcessDefinitionDiagnosticCodes
     /// <summary>A construct that produces no value declares a continuation output.</summary>
     public const string OutputNotAllowed = "processes.ir.outputNotAllowed";
 
-    /// <summary>An exact Transition or Relation/Query reference is missing or malformed.</summary>
+    /// <summary>An exact Transition, Relation/Query, or child Process reference is missing or malformed.</summary>
     public const string DefinitionReferenceInvalid = "processes.ir.definitionReferenceInvalid";
 
-    /// <summary>An exact Transition or Relation/Query reference is absent from supplied linker evidence.</summary>
+    /// <summary>An exact Transition, Relation/Query, or child Process reference is absent from supplied linker evidence.</summary>
     public const string DefinitionReferenceUnresolved = "processes.ir.definitionReferenceUnresolved";
 
     /// <summary>A linked definition belongs to the wrong semantic family.</summary>
@@ -159,6 +159,39 @@ public static class ProcessDefinitionDiagnosticCodes
 
     /// <summary>A control-flow cycle can execute without crossing a durable boundary.</summary>
     public const string FreeActivationCycle = "processes.ir.freeActivationCycle";
+
+    /// <summary>Bounded partition-work limits are non-positive or internally inconsistent.</summary>
+    public const string WorkLimitsInvalid = "processes.ir.workLimitsInvalid";
+
+    /// <summary>A bounded partition lexical binding does not describe one collection element.</summary>
+    public const string PartitionBindingCardinalityInvalid = "processes.ir.partitionBindingCardinalityInvalid";
+
+    /// <summary>A child Process input contract and its durable Request payload contract disagree.</summary>
+    public const string ChildRequestContractMismatch = "processes.ir.childRequestContractMismatch";
+
+    /// <summary>A child Process result contract and a mapped durable Request terminal-outcome contract disagree.</summary>
+    public const string ChildRequestResultContractMismatch = "processes.ir.childRequestResultContractMismatch";
+
+    /// <summary>A child recovery policy can replace the exact continuation identity pinned by the parent join.</summary>
+    public const string ChildRecoveryPolicyUnsupported = "processes.ir.childRecoveryPolicyUnsupported";
+
+    /// <summary>A child terminal status is not mapped to an exact compatible Request outcome.</summary>
+    public const string ChildOutcomeMappingInvalid = "processes.ir.childOutcomeMappingInvalid";
+
+    /// <summary>Complete child-Process dependency evidence required to prove finite composition is unavailable.</summary>
+    public const string ProcessDependencyEvidenceMissing = "processes.ir.processDependencyEvidenceMissing";
+
+    /// <summary>A direct or linked child-Process dependency introduces recursion.</summary>
+    public const string ProcessRecursionUnsupported = "processes.ir.processRecursionUnsupported";
+
+    /// <summary>Durable recurrence limits are non-positive or internally inconsistent.</summary>
+    public const string RecurrencePolicyInvalid = "processes.ir.recurrencePolicyInvalid";
+
+    /// <summary>The authored repeat body has no structural path back to its recurrence decision.</summary>
+    public const string RecurrenceRepeatUnresolved = "processes.ir.recurrenceRepeatUnresolved";
+
+    /// <summary>A completed, exhausted, or stalled recurrence exit can structurally reenter the recurrence.</summary>
+    public const string RecurrenceExitReenters = "processes.ir.recurrenceExitReenters";
 }
 
 /// <summary>Validates canonical finite Process IR without executing or physically planning it.</summary>
@@ -166,14 +199,19 @@ public static class ProcessDefinitionDiagnosticCodes
 /// Validation is deterministic and fail-closed. It checks the fixed portable expression closure, exact semantic
 /// links, conservative exhaustiveness proof, definite value and Request-obligation flow, graph integrity,
 /// Fork-token ownership and Join convergence, AwaitMatch policy, and the requirement that every activation
-/// terminate or reach Request, AwaitMatch, Timer, or an explicit durable cut. Physical capabilities, checkpoint
-/// layout, scheduling, effect dispatch, and storage realization belong to later interpretations.
+/// terminate or reach Request, InvokeProcess, ForEachPartition, RepeatAcrossActivation, AwaitMatch, Timer, or an
+/// explicit durable cut. Physical capabilities, checkpoint layout, scheduling, effect dispatch, and storage
+/// realization belong to later interpretations.
 /// </remarks>
 public static class ProcessDefinitionValidator
 {
     /// <summary>Validates a canonical Process definition without optional external linking evidence.</summary>
     /// <param name="definition">Definition to validate.</param>
-    /// <returns>Every structural, portability, type-flow, and finite-activation diagnostic in deterministic order.</returns>
+    /// <returns>
+    /// Every structural, portability, type-flow, and finite-activation diagnostic in deterministic order. Because
+    /// this payload-only overload has no document identity, direct self-recursion proof requires validation through
+    /// the execution-definition document facade.
+    /// </returns>
     /// <exception cref="ArgumentNullException"><paramref name="definition"/> is <see langword="null"/>.</exception>
     public static DocumentValidationResult Validate(ProcessDefinition definition)
     {
@@ -184,7 +222,11 @@ public static class ProcessDefinitionValidator
     /// <summary>Validates a canonical Process definition using exact definition and interaction linking evidence.</summary>
     /// <param name="definition">Definition to validate.</param>
     /// <param name="context">External exact-reference and shape evidence.</param>
-    /// <returns>Every structural, linking, portability, type-flow, and finite-activation diagnostic.</returns>
+    /// <returns>
+    /// Every structural, linking, portability, type-flow, and finite-activation diagnostic. Because this
+    /// payload-only overload has no document identity, direct self-recursion proof requires validation through the
+    /// execution-definition document facade.
+    /// </returns>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="definition"/> or <paramref name="context"/> is <see langword="null"/>.
     /// </exception>
@@ -197,11 +239,23 @@ public static class ProcessDefinitionValidator
         return new ValidationContext(definition, context).Validate();
     }
 
+    internal static DocumentValidationResult Validate(
+        ProcessDefinition definition,
+        ProcessDefinitionValidationContext? context,
+        ExecutionDefinitionReference currentDefinition)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(currentDefinition);
+        return new ValidationContext(definition, context, currentDefinition).Validate();
+    }
+
     sealed class ValidationContext(
         ProcessDefinition definition,
-        ProcessDefinitionValidationContext? context)
+        ProcessDefinitionValidationContext? context,
+        ExecutionDefinitionReference? currentDefinition = null)
     {
         static readonly ValueContract InstantContract = new(new ScalarTypeRef(ScalarTypeKind.Instant));
+        static readonly ValueContract StringContract = new(new ScalarTypeRef(ScalarTypeKind.String));
 
         readonly List<DocumentValidationDiagnostic> diagnostics = [];
         readonly Dictionary<ExecutionNodeId, NodeInfo> nodes = [];
@@ -209,14 +263,17 @@ public static class ProcessDefinitionValidator
         readonly Dictionary<ProcessEdgeId, string> edgeLocations = [];
         readonly List<EdgeInfo> edges = [];
         readonly Dictionary<ValueBindingId, BindingInfo> bindings = [];
+        readonly Dictionary<ValueBindingId, string> localBindings = [];
         readonly List<ExpressionInfo> expressions = [];
         readonly Dictionary<RequestObligationBindingId, RequestObligationInfo> requestObligations = [];
         readonly List<ReplyRequestInfo> replyRequests = [];
         readonly Dictionary<ExecutionNodeId, ForkJoinInfo> forkJoinsByJoin = [];
+        readonly List<ChildReferenceInfo> childReferences = [];
 
         public DocumentValidationResult Validate()
         {
             ValidateDefinition();
+            ValidateProcessDependencies();
             ValidateEdgeTargets();
             ValidateGraph();
             ValidateBindingFlowAndExpressions();
@@ -280,6 +337,12 @@ public static class ProcessDefinitionValidator
         {
             var node = info.Node;
             var location = info.Location;
+            if (ProcessRequestSemantics.TryProjectDeclaredVariant(node, out var requestSemantics))
+            {
+                ValidateRequest(node, requestSemantics, location);
+                return;
+            }
+
             switch (node)
             {
                 case InvokeTransitionProcessNode invocation:
@@ -287,9 +350,6 @@ public static class ProcessDefinitionValidator
                     break;
                 case EvaluateRelationProcessNode evaluation:
                     ValidateEvaluation(evaluation, location);
-                    break;
-                case RequestProcessNode request:
-                    ValidateRequest(request, location);
                     break;
                 case EmitEventProcessNode emission:
                     ValidateEmitEvent(emission, location);
@@ -322,6 +382,12 @@ public static class ProcessDefinitionValidator
                 case DurableCutProcessNode durableCut:
                     RegisterEdge(durableCut.Resume, Child(location, "resume"), durableCut.Id);
                     break;
+                case ForEachPartitionProcessNode partition:
+                    ValidateForEachPartition(partition, location);
+                    break;
+                case RepeatAcrossActivationProcessNode recurrence:
+                    ValidateRepeatAcrossActivation(recurrence, location);
+                    break;
                 case ReturnProcessNode terminal:
                     AddExpression(terminal.Id, terminal.Result, Child(location, "result"), definition.Result);
                     break;
@@ -331,7 +397,7 @@ public static class ProcessDefinitionValidator
                 default:
                     Error(
                         ProcessDefinitionDiagnosticCodes.NodeUnsupported,
-                        $"Process node '{node.GetType().FullName}' is outside the closed v1 node union.",
+                        $"Process node '{node.GetType().FullName}' is outside the closed canonical node union.",
                         location,
                         subject: node.Id.Value);
                     break;
@@ -367,12 +433,212 @@ public static class ProcessDefinitionValidator
                 link?.Result);
         }
 
-        void ValidateRequest(RequestProcessNode request, string location)
+        void ValidateForEachPartition(ForEachPartitionProcessNode partition, string location)
         {
+            ValueContract? itemContract = null;
+            if (partition.Partition is null)
+            {
+                Missing(Child(location, "partition"), "Bounded partition work requires a typed lexical partition binding.");
+            }
+            else
+            {
+                itemContract = partition.Partition.Contract;
+                RegisterLocalBinding(partition.Partition, Child(location, "partition"), partition.Id);
+                if (itemContract?.Cardinality != FieldCardinality.Single)
+                {
+                    Error(
+                        ProcessDefinitionDiagnosticCodes.PartitionBindingCardinalityInvalid,
+                        "A bounded partition lexical binding must describe one collection element.",
+                        Child(location, "partition/contract/cardinality"),
+                        subject: partition.Id.Value,
+                        expected: FieldCardinality.Single.ToString(),
+                        observed: itemContract?.Cardinality.ToString() ?? "missing");
+                }
+            }
+
+            AddExpression(
+                partition.Id,
+                partition.Partitions,
+                Child(location, "partitions"),
+                itemContract is null ? null : CollectionContract(itemContract));
+            AddExpression(
+                partition.Id,
+                partition.ProgressIdentity,
+                Child(location, "progressIdentity"),
+                StringContract,
+                localBinding: partition.Partition);
+
+            var childLink = ResolveDefinition(
+                partition.Process,
+                ProcessDefinitionLinkKind.Process,
+                Child(location, "process"));
+            if (partition.Process is { } childProcess)
+            {
+                childReferences.Add(new(
+                    childProcess,
+                    Child(location, "process"),
+                    childLink));
+            }
+            var request = ResolveInteraction<RequestContractDefinition>(
+                partition.Contract,
+                Child(location, "contract"));
+            ValidateChildRequestContracts(
+                childLink,
+                request,
+                partition.OutcomeMapping,
+                partition.Id,
+                Child(location, "process"),
+                Child(location, "contract"),
+                Child(location, "outcomeMapping"));
+            AddExpression(
+                partition.Id,
+                partition.ChildInput,
+                Child(location, "childInput"),
+                childLink?.Input ?? request?.Payload.Contract,
+                localBinding: partition.Partition);
+
+            ValidateEnum(partition.Cancellation, Child(location, "cancellation"));
+            if (partition.Limits is null)
+            {
+                Missing(Child(location, "limits"), "Bounded partition work requires explicit finite limits.");
+            }
+            else
+            {
+                ValidateWorkLimit(
+                    partition.Limits.MaximumItems,
+                    Child(location, "limits/maximumItems"),
+                    partition.Id,
+                    upperBound: null);
+                ValidateWorkLimit(
+                    partition.Limits.MaximumStartsPerActivation,
+                    Child(location, "limits/maximumStartsPerActivation"),
+                    partition.Id,
+                    partition.Limits.MaximumItems);
+                ValidateWorkLimit(
+                    partition.Limits.MaximumParallelism,
+                    Child(location, "limits/maximumParallelism"),
+                    partition.Id,
+                    partition.Limits.MaximumItems);
+            }
+
+            RegisterEdge(partition.Completed, Child(location, "completed"), partition.Id);
+            RegisterEdge(partition.Failed, Child(location, "failed"), partition.Id);
+        }
+
+        void ValidateRepeatAcrossActivation(
+            RepeatAcrossActivationProcessNode recurrence,
+            string location)
+        {
+            ValidateContract(recurrence.ProgressContract, Child(location, "progressContract"));
+            AddExpression(
+                recurrence.Id,
+                recurrence.ContinueWhen,
+                Child(location, "continueWhen"),
+                expectedBoolean: true);
+            AddExpression(
+                recurrence.Id,
+                recurrence.Progress,
+                Child(location, "progress"),
+                recurrence.ProgressContract);
+
+            if (recurrence.Policy is null)
+            {
+                Missing(Child(location, "policy"), "Recurrence requires explicit finite progress limits.");
+            }
+            else
+            {
+                if (recurrence.Policy.MaximumOccurrences <= 0)
+                {
+                    Error(
+                        ProcessDefinitionDiagnosticCodes.RecurrencePolicyInvalid,
+                        "A recurrence occurrence limit must be positive.",
+                        Child(location, "policy/maximumOccurrences"),
+                        subject: recurrence.Id.Value,
+                        expected: "> 0",
+                        observed: recurrence.Policy.MaximumOccurrences.ToString(CultureInfo.InvariantCulture));
+                }
+                if (recurrence.Policy.MaximumUnchangedProgressOccurrences < 0
+                    || recurrence.Policy.MaximumUnchangedProgressOccurrences >= recurrence.Policy.MaximumOccurrences)
+                {
+                    Error(
+                        ProcessDefinitionDiagnosticCodes.RecurrencePolicyInvalid,
+                        "The unchanged-progress limit must be non-negative and less than the total occurrence limit.",
+                        Child(location, "policy/maximumUnchangedProgressOccurrences"),
+                        subject: recurrence.Id.Value,
+                        expected: $"0..{Math.Max(0, recurrence.Policy.MaximumOccurrences - 1).ToString(CultureInfo.InvariantCulture)}",
+                        observed: recurrence.Policy.MaximumUnchangedProgressOccurrences.ToString(CultureInfo.InvariantCulture));
+                }
+            }
+
+            RegisterEdge(recurrence.Repeat, Child(location, "repeat"), recurrence.Id);
+            RegisterEdge(recurrence.Completed, Child(location, "completed"), recurrence.Id);
+            RegisterEdge(recurrence.Exhausted, Child(location, "exhausted"), recurrence.Id);
+            RegisterEdge(recurrence.Stalled, Child(location, "stalled"), recurrence.Id);
+        }
+
+        void ValidateWorkLimit(
+            int value,
+            string location,
+            ExecutionNodeId node,
+            int? upperBound)
+        {
+            if (value > 0 && (upperBound is null || value <= upperBound.Value))
+                return;
+
+            Error(
+                ProcessDefinitionDiagnosticCodes.WorkLimitsInvalid,
+                upperBound is null
+                    ? "A bounded-work limit must be positive."
+                    : "An activation or parallelism limit must be positive and no greater than the total item limit.",
+                location,
+                subject: node.Value,
+                expected: upperBound is null ? "> 0" : $"1..{upperBound.Value.ToString(CultureInfo.InvariantCulture)}",
+                observed: value.ToString(CultureInfo.InvariantCulture));
+        }
+
+        void ValidateRequest(
+            ProcessNode owner,
+            ProcessRequestSemanticView request,
+            string location)
+        {
+            ProcessDefinitionLink? childLink = null;
+            if (request.IsChildProcess)
+            {
+                ValidateEnum(request.ChildPurpose, Child(location, "purpose"));
+                ValidateEnum(request.ChildCancellation, Child(location, "cancellation"));
+                childLink = ResolveDefinition(
+                    request.ChildProcess,
+                    ProcessDefinitionLinkKind.Process,
+                    Child(location, "process"));
+                if (request.ChildProcess is { } childProcess)
+                {
+                    childReferences.Add(new(
+                        childProcess,
+                        Child(location, "process"),
+                        childLink));
+                }
+            }
+
             var contract = ResolveInteraction<RequestContractDefinition>(
                 request.Contract,
                 Child(location, "contract"));
-            AddExpression(request.Id, request.Payload, Child(location, "payload"), contract?.Payload.Contract);
+            var requestInput = contract?.Payload.Contract;
+            if (request.IsChildProcess)
+            {
+                ValidateChildRequestContracts(
+                    childLink,
+                    contract,
+                    request.ChildOutcomeMapping,
+                    owner.Id,
+                    Child(location, "process"),
+                    Child(location, "contract"),
+                    Child(location, "outcomeMapping"));
+            }
+            AddExpression(
+                owner.Id,
+                request.Payload,
+                Child(location, request.IsChildProcess ? "input" : "payload"),
+                childLink?.Input ?? requestInput);
 
             if (request.Outcomes.IsDefaultOrEmpty)
             {
@@ -380,7 +646,7 @@ public static class ProcessDefinitionValidator
                     ProcessDefinitionDiagnosticCodes.RequestOutcomesEmpty,
                     "A Request node requires a continuation for every terminal outcome.",
                     Child(location, "outcomes"),
-                    subject: request.Id.Value);
+                    subject: owner.Id.Value);
                 return;
             }
 
@@ -432,7 +698,7 @@ public static class ProcessDefinitionValidator
                 RegisterContinuation(
                     branch.Continuation,
                     Child(branchLocation, "continuation"),
-                    request.Id,
+                    owner.Id,
                     expected);
             }
 
@@ -447,8 +713,147 @@ public static class ProcessDefinitionValidator
                     ProcessDefinitionDiagnosticCodes.RequestOutcomeMissing,
                     $"The exact Request contract requires terminal outcome '{required.Id.Value}'.",
                     Child(location, "outcomes"),
-                    subject: request.Id.Value,
+                    subject: owner.Id.Value,
                     expected: required.Id.Value);
+            }
+        }
+
+        void ValidateChildRequestContracts(
+            ProcessDefinitionLink? childLink,
+            RequestContractDefinition? request,
+            ProcessChildOutcomeMapping? outcomeMapping,
+            ExecutionNodeId owner,
+            string processLocation,
+            string contractLocation,
+            string mappingLocation)
+        {
+            if (childLink is not null
+                && childLink.RecoveryPolicy != ProcessRecoveryPolicy.ContinueAttempt)
+            {
+                Error(
+                    ProcessDefinitionDiagnosticCodes.ChildRecoveryPolicyUnsupported,
+                    "Child Process invocation currently requires ContinueAttempt recovery because the parent join pins one exact child continuation identity; replacement-attempt lineage is not yet supported.",
+                    processLocation,
+                    subject: owner.Value,
+                    expected: ProcessRecoveryPolicy.ContinueAttempt.ToString(),
+                    observed: childLink.RecoveryPolicy?.ToString() ?? "missing");
+            }
+
+            if (request is null)
+                return;
+
+            if (outcomeMapping is null)
+            {
+                Missing(mappingLocation, "Child Process invocation requires a total terminal-outcome mapping.");
+            }
+            else
+            {
+                ValidateMappedChildOutcome(
+                    outcomeMapping.Completed,
+                    typeof(RequestResultDefinition),
+                    Child(mappingLocation, "completed"));
+                ValidateMappedChildOutcome(
+                    outcomeMapping.Failed,
+                    typeof(RequestFailureDefinition),
+                    Child(mappingLocation, "failed"));
+                ValidateMappedChildOutcome(
+                    outcomeMapping.Cancelled,
+                    typeof(RequestFailureDefinition),
+                    Child(mappingLocation, "cancelled"));
+                ValidateMappedChildOutcome(
+                    outcomeMapping.Terminated,
+                    typeof(RequestFailureDefinition),
+                    Child(mappingLocation, "terminated"));
+
+                foreach (var declared in request.Response.TerminalOutcomes)
+                {
+                    if (!outcomeMapping.Contains(declared.Id))
+                    {
+                        Error(
+                            ProcessDefinitionDiagnosticCodes.ChildOutcomeMappingInvalid,
+                            $"Request outcome '{declared.Id.Value}' is not reachable from any child terminal status.",
+                            mappingLocation,
+                            subject: owner.Value,
+                            expected: declared.Id.Value);
+                    }
+                }
+            }
+
+            if (childLink is null)
+                return;
+
+            if (childLink.Input != request.Payload.Contract)
+            {
+                Error(
+                    ProcessDefinitionDiagnosticCodes.ChildRequestContractMismatch,
+                    "A child Process input and its durable Request payload must use the same exact contract.",
+                    contractLocation,
+                    subject: owner.Value,
+                    expected: Describe(childLink.Input),
+                    observed: Describe(request.Payload.Contract));
+            }
+
+            if (outcomeMapping is not null
+                && request.Response.Find(outcomeMapping.Failed) is RequestFailureDefinition mappedFailure
+                && childLink.Result != mappedFailure.Schema.Contract)
+            {
+                Error(
+                    ProcessDefinitionDiagnosticCodes.ChildRequestResultContractMismatch,
+                    $"Mapped child failure outcome '{mappedFailure.Id.Value}' must carry the exact child Process result contract.",
+                    Child(mappingLocation, "failed"),
+                    subject: owner.Value,
+                    expected: Describe(childLink.Result),
+                    observed: Describe(mappedFailure.Schema.Contract));
+            }
+
+            var resultCount = 0;
+            foreach (var outcome in request.Response.TerminalOutcomes)
+            {
+                if (outcome is not RequestResultDefinition result)
+                    continue;
+
+                resultCount++;
+                if (childLink.Result == result.Schema.Contract)
+                    continue;
+
+                Error(
+                    ProcessDefinitionDiagnosticCodes.ChildRequestResultContractMismatch,
+                    $"Request result outcome '{result.Id.Value}' must carry the exact child Process result contract.",
+                    contractLocation,
+                    subject: owner.Value,
+                    expected: Describe(childLink.Result),
+                    observed: Describe(result.Schema.Contract));
+            }
+
+            if (resultCount == 0)
+            {
+                Error(
+                    ProcessDefinitionDiagnosticCodes.ChildRequestResultContractMismatch,
+                    "A child Process Request contract requires at least one typed result outcome.",
+                    contractLocation,
+                    subject: owner.Value,
+                    expected: Describe(childLink.Result),
+                    observed: "no Request result outcome");
+            }
+
+            void ValidateMappedChildOutcome(
+                RequestTerminalOutcomeId outcome,
+                Type expectedType,
+                string outcomeLocation)
+            {
+                var declared = request.Response.Find(outcome);
+                if (declared is not null && expectedType.IsInstanceOfType(declared))
+                    return;
+
+                Error(
+                    ProcessDefinitionDiagnosticCodes.ChildOutcomeMappingInvalid,
+                    "A child terminal status must map to an exact compatible Request outcome.",
+                    outcomeLocation,
+                    subject: owner.Value,
+                    expected: expectedType == typeof(RequestResultDefinition)
+                        ? nameof(RequestResultDefinition)
+                        : nameof(RequestFailureDefinition),
+                    observed: declared?.GetType().Name ?? "missing");
             }
         }
 
@@ -785,7 +1190,7 @@ public static class ProcessDefinitionValidator
                     default:
                         Error(
                             ProcessDefinitionDiagnosticCodes.NodeUnsupported,
-                            $"AwaitMatch clause '{clause.GetType().FullName}' is outside the closed v1 clause union.",
+                            $"AwaitMatch clause '{clause.GetType().FullName}' is outside the closed canonical clause union.",
                             clauseLocation,
                             subject: clause.Id.Value);
                         break;
@@ -1010,19 +1415,64 @@ public static class ProcessDefinitionValidator
                 return;
             }
 
-            if (!bindings.TryAdd(output.Binding, new(output.Contract, bindingLocation, producerNode)))
+            if (localBindings.TryGetValue(output.Binding, out var localLocation)
+                || !bindings.TryAdd(output.Binding, new(output.Contract, bindingLocation, producerNode)))
             {
                 Error(
                     ProcessDefinitionDiagnosticCodes.BindingProducerDuplicate,
                     $"Binding '{output.Binding.Value}' has more than one producer.",
                     bindingLocation,
                     subject: output.Binding.Value,
-                    relatedLocations: [bindings[output.Binding].Location]);
+                    relatedLocations:
+                    [
+                        localLocation
+                        ?? bindings[output.Binding].Location
+                    ]);
                 return;
             }
 
             edge?.ProducedBindings.Add(output.Binding);
         }
+
+        void RegisterLocalBinding(
+            ProcessOutputBinding binding,
+            string location,
+            ExecutionNodeId owner)
+        {
+            ValidateContract(binding.Contract, Child(location, "contract"));
+            var bindingLocation = Child(location, "binding");
+            if (string.IsNullOrWhiteSpace(binding.Binding.Value))
+            {
+                Error(
+                    ProcessDefinitionDiagnosticCodes.BindingIdentityMissing,
+                    "A lexical Process binding requires a stable identity.",
+                    bindingLocation,
+                    subject: owner.Value);
+                return;
+            }
+
+            if (bindings.TryGetValue(binding.Binding, out var global)
+                || !localBindings.TryAdd(binding.Binding, bindingLocation))
+            {
+                Error(
+                    ProcessDefinitionDiagnosticCodes.BindingProducerDuplicate,
+                    $"Binding '{binding.Binding.Value}' has more than one producer or lexical owner.",
+                    bindingLocation,
+                    subject: binding.Binding.Value,
+                    relatedLocations:
+                    [
+                        global?.Location
+                        ?? localBindings[binding.Binding]
+                    ]);
+            }
+        }
+
+        static ValueContract CollectionContract(ValueContract element) => new(
+            element.Type,
+            element.Shape,
+            FieldCardinality.Many,
+            element.Presence,
+            element.Nullability);
 
         void RegisterRequestObligation(
             ProcessRequestObligationBinding obligation,
@@ -1176,6 +1626,98 @@ public static class ProcessDefinitionValidator
             return null;
         }
 
+        void ValidateProcessDependencies()
+        {
+            var rootDefinition = currentDefinition;
+            if (rootDefinition is null || childReferences.Count == 0)
+                return;
+
+            foreach (var child in childReferences)
+            {
+                if (SameDefinitionRevision(child.Reference, rootDefinition))
+                {
+                    Error(
+                        ProcessDefinitionDiagnosticCodes.ProcessRecursionUnsupported,
+                        "A Process cannot invoke itself as a child; recurrence must use RepeatAcrossActivation.",
+                        child.Location,
+                        subject: child.Reference.DefinitionId.Value,
+                        expected: "an acyclic child Process dependency",
+                        observed: "direct self-reference");
+                    continue;
+                }
+
+                if (context is null || child.Link is null || child.Link.Kind != ProcessDefinitionLinkKind.Process)
+                    continue;
+
+                Dictionary<ExecutionDefinitionReference, VisitState> states = [];
+                var issue = VisitProcessDependency(child.Link, rootDefinition, states);
+                if (issue is null)
+                    continue;
+
+                Error(
+                    issue.Value.IsRecursion
+                        ? ProcessDefinitionDiagnosticCodes.ProcessRecursionUnsupported
+                        : ProcessDefinitionDiagnosticCodes.ProcessDependencyEvidenceMissing,
+                    issue.Value.IsRecursion
+                        ? "A linked child Process dependency graph contains recursion; use explicit durable recurrence instead."
+                        : "Complete linked child-Process dependency evidence is required to prove finite composition.",
+                    child.Location,
+                    subject: issue.Value.Reference.DefinitionId.Value,
+                    expected: "a complete acyclic child Process dependency graph",
+                    observed: issue.Value.IsRecursion ? "recursive" : "unknown");
+            }
+        }
+
+        ProcessDependencyIssue? VisitProcessDependency(
+            ProcessDefinitionLink link,
+            ExecutionDefinitionReference rootDefinition,
+            Dictionary<ExecutionDefinitionReference, VisitState> states)
+        {
+            if (SameDefinitionRevision(link.Definition, rootDefinition))
+                return new(link.Definition, IsRecursion: true);
+            if (states.TryGetValue(link.Definition, out var retained))
+            {
+                return retained == VisitState.Active
+                    ? new(link.Definition, IsRecursion: true)
+                    : null;
+            }
+            if (!link.HasCompleteProcessDependencyEvidence)
+                return new(link.Definition, IsRecursion: false);
+
+            states[link.Definition] = VisitState.Active;
+            ProcessDependencyIssue? incompleteEvidence = null;
+            foreach (var dependency in link.ProcessDependencies)
+            {
+                if (SameDefinitionRevision(dependency, rootDefinition))
+                    return new(dependency, IsRecursion: true);
+                if (states.TryGetValue(dependency, out var dependencyState)
+                    && dependencyState == VisitState.Active)
+                {
+                    return new(dependency, IsRecursion: true);
+                }
+                if (context is null
+                    || !context.TryResolve(dependency, out var dependencyLink)
+                    || dependencyLink.Kind != ProcessDefinitionLinkKind.Process)
+                {
+                    incompleteEvidence ??= new(dependency, IsRecursion: false);
+                    continue;
+                }
+
+                var issue = VisitProcessDependency(dependencyLink, rootDefinition, states);
+                if (issue is { IsRecursion: true })
+                    return issue;
+                incompleteEvidence ??= issue;
+            }
+            states[link.Definition] = VisitState.Complete;
+            return incompleteEvidence;
+        }
+
+        static bool SameDefinitionRevision(
+            ExecutionDefinitionReference reference,
+            ExecutionDefinitionReference current) =>
+            reference.DefinitionId == current.DefinitionId
+            && reference.RevisionId == current.RevisionId;
+
         ValueContract? GetInteractionInputContract(InteractionContractDefinition? contract) => contract switch
         {
             DomainEventContractDefinition domainEvent => domainEvent.Payload.Contract,
@@ -1292,7 +1834,71 @@ public static class ProcessDefinitionValidator
             }
 
             ValidateForkJoin(outgoing, reachable);
+            ValidateRecurrences(outgoing, reachable);
             ValidateActivationCycles(outgoing, reachable);
+        }
+
+        void ValidateRecurrences(
+            IReadOnlyDictionary<ExecutionNodeId, ImmutableArray<EdgeInfo>> outgoing,
+            IReadOnlySet<ExecutionNodeId> reachable)
+        {
+            foreach (var info in nodes.Values
+                         .Where(static candidate => candidate.Node is RepeatAcrossActivationProcessNode)
+                         .OrderBy(static candidate => candidate.Node.Id.Value, StringComparer.Ordinal))
+            {
+                var recurrence = (RepeatAcrossActivationProcessNode)info.Node;
+                if (recurrence.Repeat is not null
+                    && reachable.Contains(recurrence.Id)
+                    && !CanReach(recurrence.Repeat.Target, recurrence.Id, outgoing))
+                {
+                    Error(
+                        ProcessDefinitionDiagnosticCodes.RecurrenceRepeatUnresolved,
+                        "The repeat body must retain a structural path back to its durable recurrence decision.",
+                        Child(info.Location, "repeat"),
+                        subject: recurrence.Id.Value,
+                        expected: recurrence.Id.Value,
+                        observed: recurrence.Repeat.Target.Value);
+                }
+
+                foreach (var exit in new[]
+                         {
+                             (Name: "completed", Edge: recurrence.Completed),
+                             (Name: "exhausted", Edge: recurrence.Exhausted),
+                             (Name: "stalled", Edge: recurrence.Stalled)
+                         })
+                {
+                    if (exit.Edge is null
+                        || !CanReach(exit.Edge.Target, recurrence.Id, outgoing))
+                        continue;
+                    Error(
+                        ProcessDefinitionDiagnosticCodes.RecurrenceExitReenters,
+                        $"The recurrence {exit.Name} exit must not structurally reenter the recurrence decision.",
+                        Child(info.Location, exit.Name),
+                        subject: recurrence.Id.Value,
+                        expected: "an exit outside the recurrent region",
+                        observed: exit.Edge.Target.Value);
+                }
+            }
+        }
+
+        static bool CanReach(
+            ExecutionNodeId start,
+            ExecutionNodeId target,
+            IReadOnlyDictionary<ExecutionNodeId, ImmutableArray<EdgeInfo>> outgoing)
+        {
+            HashSet<ExecutionNodeId> visited = [];
+            Queue<ExecutionNodeId> pending = new();
+            pending.Enqueue(start);
+            while (pending.TryDequeue(out var current))
+            {
+                if (current == target)
+                    return true;
+                if (!visited.Add(current) || !outgoing.TryGetValue(current, out var edges))
+                    continue;
+                foreach (var edge in edges)
+                    pending.Enqueue(edge.Edge.Target);
+            }
+            return false;
         }
 
         HashSet<ExecutionNodeId> FindReachable(
@@ -2014,7 +2620,10 @@ public static class ProcessDefinitionValidator
             node is RequestProcessNode
                 or AwaitMatchProcessNode
                 or TimerProcessNode
-                or DurableCutProcessNode;
+                or DurableCutProcessNode
+                or InvokeProcessProcessNode
+                or ForEachPartitionProcessNode
+                or RepeatAcrossActivationProcessNode;
 
         static bool IsTerminal(ProcessNode node) => node is ReturnProcessNode or FailProcessNode;
 
@@ -2092,6 +2701,15 @@ public static class ProcessDefinitionValidator
             RequestContractReference Contract,
             string Location,
             ExecutionNodeId ProducerNode);
+
+        sealed record ChildReferenceInfo(
+            ExecutionDefinitionReference Reference,
+            string Location,
+            ProcessDefinitionLink? Link);
+
+        readonly record struct ProcessDependencyIssue(
+            ExecutionDefinitionReference Reference,
+            bool IsRecursion);
 
         sealed record ReplyRequestInfo(
             ExecutionNodeId Owner,

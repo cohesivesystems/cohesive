@@ -16,7 +16,7 @@ public sealed class ExecutionDefinitionSerializationTests
     {
         var document = CreateDocument();
         const string Expected =
-            "{\"definition\":{\"entry\":\"start\",\"orderedSteps\":[\"reserve\",\"commit\"],\"semanticObject\":{\"alpha\":1,\"zeta\":2}},\"extensions\":[],\"kind\":\"transition\",\"schemaVersion\":\"cohesive-execution/v1\"}";
+            "{\"definition\":{\"entry\":\"start\",\"orderedSteps\":[\"reserve\",\"commit\"],\"semanticObject\":{\"alpha\":1,\"zeta\":2}},\"extensions\":[],\"kind\":\"transition\",\"schemaVersion\":\"cohesive-execution/v2\"}";
 
         var normalized = ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(document);
 
@@ -26,7 +26,7 @@ public sealed class ExecutionDefinitionSerializationTests
             ExecutionDefinitionFingerprinter.Canonicalization,
             document.Metadata.Fingerprint.Canonicalization);
         Assert.Equal(
-            "6ccd69bab1704186ce1037e46da1761eb73129f645cd920ac322abae368a358d",
+            "2aad02b26fbb921b257feae707ff9d0990c53217983b32fcc1ed2334ca806424",
             document.Metadata.Fingerprint.Value);
         Assert.Equal(document.Metadata.Fingerprint, ExecutionDefinitionFingerprinter.Compute(document));
     }
@@ -435,6 +435,18 @@ public sealed class ExecutionDefinitionSerializationTests
     public void TryDeserialize_DistinguishesUnsupportedSchemaAndFingerprintFailures()
     {
         var json = ExecutionDefinitionJsonSerializer.Serialize(CreateDocument());
+
+        var priorSchema = JsonNode.Parse(json)!.AsObject();
+        priorSchema["metadata"]!["schemaVersion"] = "cohesive-execution/v1";
+        var priorSchemaValidation = ExecutionDefinitionJsonSerializer.TryDeserialize(
+            priorSchema.ToJsonString(),
+            out var priorSchemaDocument);
+
+        Assert.Null(priorSchemaDocument);
+        AssertDiagnostic(
+            priorSchemaValidation,
+            ExecutionDefinitionDiagnosticCodes.SchemaVersionUnsupported,
+            "/metadata/schemaVersion");
 
         var unsupportedSchema = JsonNode.Parse(json)!.AsObject();
         unsupportedSchema["metadata"]!["schemaVersion"] = "cohesive-execution/v99";

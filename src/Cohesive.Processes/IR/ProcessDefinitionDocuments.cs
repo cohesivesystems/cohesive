@@ -32,7 +32,7 @@ public static class ProcessDefinitionDocuments
         projectionInvalidCode: ProcessDefinitionDocumentDiagnosticCodes.DefinitionProjectionInvalid,
         wireNonCanonicalCode: ProcessDefinitionDocumentDiagnosticCodes.DefinitionWireNonCanonical,
         wireNonCanonicalMessage:
-            "The persisted definition is not the unique canonical typed Process v1 wire representation.",
+            "The persisted definition is not the unique canonical typed Process v2 wire representation.",
         projectionFailurePath: FindProjectionFailurePath);
 
     /// <summary>Shared execution-definition kind for canonical Process IR.</summary>
@@ -120,10 +120,16 @@ public static class ProcessDefinitionDocuments
         out ProcessDefinition? definition)
     {
         var shared = ExecutionDefinitionJsonSerializer.TryDeserialize(json, out document);
+        var parsedDocument = document;
         return Projection.ValidateAndProject(
             shared,
-            document,
-            static candidate => ProcessDefinitionValidator.Validate(candidate),
+            parsedDocument,
+            candidate => parsedDocument is null
+                ? ProcessDefinitionValidator.Validate(candidate)
+                : ProcessDefinitionValidator.Validate(
+                    candidate,
+                    context: null,
+                    DefinitionReference(parsedDocument)),
             out definition);
     }
 
@@ -144,10 +150,16 @@ public static class ProcessDefinitionDocuments
         var shared = context.ShapeGraph is null
             ? ExecutionDefinitionJsonSerializer.TryDeserialize(json, out document)
             : ExecutionDefinitionJsonSerializer.TryDeserialize(json, context.ShapeGraph, out document);
+        var parsedDocument = document;
         return Projection.ValidateAndProject(
             shared,
-            document,
-            candidate => ProcessDefinitionValidator.Validate(candidate, context),
+            parsedDocument,
+            candidate => parsedDocument is null
+                ? ProcessDefinitionValidator.Validate(candidate, context)
+                : ProcessDefinitionValidator.Validate(
+                    candidate,
+                    context,
+                    DefinitionReference(parsedDocument)),
             out definition);
     }
 
@@ -157,14 +169,21 @@ public static class ProcessDefinitionDocuments
     {
         ArgumentNullException.ThrowIfNull(document);
         var graph = context?.ShapeGraph;
+        var definitionReference = DefinitionReference(document);
         return Projection.ValidateAndProject(
             ExecutionDefinitionDocumentValidator.Validate(document, graph),
             document,
-            candidate => context is null
-                ? ProcessDefinitionValidator.Validate(candidate)
-                : ProcessDefinitionValidator.Validate(candidate, context),
+            candidate => ProcessDefinitionValidator.Validate(
+                candidate,
+                context,
+                definitionReference),
             out _);
     }
+
+    static ExecutionDefinitionReference DefinitionReference(ExecutionDefinitionDocument document) => new(
+        document.Metadata.DefinitionId,
+        document.Metadata.RevisionId,
+        document.Metadata.Fingerprint);
 
     static string? FindProjectionFailurePath(JsonElement definition, Exception exception)
     {
@@ -228,6 +247,9 @@ public static class ProcessDefinitionDocuments
         or ProcessWireNames.TimerNode
         or ProcessWireNames.ReplyNode
         or ProcessWireNames.DurableCutNode
+        or ProcessWireNames.InvokeProcessNode
+        or ProcessWireNames.ForEachPartitionNode
+        or ProcessWireNames.RepeatAcrossActivationNode
         or ProcessWireNames.ReturnNode
         or ProcessWireNames.FailNode;
 

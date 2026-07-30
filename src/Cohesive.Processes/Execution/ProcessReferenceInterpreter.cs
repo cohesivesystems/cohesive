@@ -131,11 +131,14 @@ public static class ProcessReferenceInterpreter
             completedActivationCount: 0,
             [root],
             forks: [],
+            children: [],
+            partitions: [],
+            recurrences: [],
             waits: [],
             bufferedInputs: [],
             inputReceipts: [],
             outstandingRequests: [],
-            new(ExecutionTerminalOutcomeKind.None));
+            terminal: new(ExecutionTerminalOutcomeKind.None));
     }
 
     /// <summary>Creates the clean replacement attempt required by a restart-on-recovery Process definition.</summary>
@@ -144,7 +147,8 @@ public static class ProcessReferenceInterpreter
     /// <param name="replacementAttempt">New stable attempt identity allocated by the controlling runtime.</param>
     /// <returns>
     /// Initial state for the same Process instance and definition under <paramref name="replacementAttempt"/>.
-    /// Tokens, waits, forks, receipts, Requests, and terminal state from <paramref name="abandoned"/> are not copied.
+    /// Tokens, Forks, child invocations, partition work, recurrences, waits, receipts, Requests, and terminal state
+    /// from <paramref name="abandoned"/> are not copied.
     /// </returns>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="plan"/> or <paramref name="abandoned"/> is <see langword="null"/>.
@@ -301,6 +305,9 @@ public static class ProcessReferenceInterpreter
             "Process reference interpreter");
         readonly List<ProcessTokenState> tokens;
         readonly List<ProcessForkState> forks;
+        readonly List<ProcessChildState> children;
+        readonly List<ProcessPartitionState> partitions;
+        readonly List<ProcessRecurrenceState> recurrences;
         readonly List<ProcessWaitState> waits;
         readonly List<ProcessBufferedInput> bufferedInputs;
         readonly List<ProcessInputReceipt> receipts;
@@ -309,6 +316,7 @@ public static class ProcessReferenceInterpreter
         readonly List<ProcessInputReceipt> activationAdmissions = [];
         readonly List<DocumentValidationDiagnostic> diagnostics = [];
         readonly List<ProcessTraceEvent> trace = [];
+        readonly Dictionary<string, int> partitionStarts = new(StringComparer.Ordinal);
         readonly Dictionary<ExecutionNodeId, int> nodeIndexes;
         ExecutionTerminalOutcome terminal;
         ExecutionNodeId? safePointNode;
@@ -326,6 +334,9 @@ public static class ProcessReferenceInterpreter
             this.host = host;
             tokens = [.. state.Tokens];
             forks = [.. state.Forks];
+            children = [.. state.Children];
+            partitions = [.. state.Partitions];
+            recurrences = [.. state.Recurrences];
             waits = [.. state.Waits];
             bufferedInputs = [.. state.BufferedInputs];
             receipts = [.. state.InputReceipts];
@@ -373,7 +384,9 @@ public static class ProcessReferenceInterpreter
                     .ToArray();
                 if (ready.Length == 0)
                 {
-                    if (!ResolveJoins())
+                    var progressed = ResolveJoins();
+                    progressed |= ResolvePartitions();
+                    if (!progressed)
                     {
                         break;
                     }
@@ -398,6 +411,7 @@ public static class ProcessReferenceInterpreter
                 if (!stopAtDurableCut && terminal.Kind == ExecutionTerminalOutcomeKind.None)
                 {
                     _ = ResolveJoins();
+                    _ = ResolvePartitions();
                 }
             }
 
@@ -708,6 +722,11 @@ public static class ProcessReferenceInterpreter
                 case ProcessWaitKind.AwaitMatch:
                     _ = ResolveAwait(wait, token);
                     break;
+                case ProcessWaitKind.PartitionBatch:
+                    break;
+                case ProcessWaitKind.RepeatAcrossActivation:
+                    ResumeRecurrence(wait, token);
+                    break;
                 default:
                     FailToken(token, Diagnostic(
                         ProcessExecutionDiagnosticCodes.ContinuationInvalid,
@@ -757,12 +776,27 @@ public static class ProcessReferenceInterpreter
                                && reply.InReplyTo == outstanding.Emission)
                 .OrderBy(item => item.Input.Envelope.Context.EmissionId.Value, StringComparer.Ordinal)
                 .ToArray();
-            var node = (RequestProcessNode)plan.GetNode(wait.Node);
+            var node = plan.GetNode(wait.Node);
+            if (node is ForEachPartitionProcessNode partitionNode)
+            {
+                ResumePartitionRequest(wait, token, outstanding, partitionNode, candidates);
+                return;
+            }
+            if (!ProcessRequestSemantics.TryProject(node, out var semantics))
+            {
+                FailToken(token, Diagnostic(
+                    ProcessExecutionDiagnosticCodes.ContinuationInvalid,
+                    "A persisted Request wait does not refer to a Request-bearing Process node.",
+                    wait.Node));
+                return;
+            }
             foreach (var candidate in candidates)
             {
                 var reply = (ReplyEnvelope)candidate.Input.Envelope;
-                var branch = node.Outcomes.FirstOrDefault(outcome => outcome.Outcome == reply.Outcome.Id);
-                if (branch is null || !ReplyMatchesRequest(reply, node.Contract))
+                var branch = semantics.Outcomes.FirstOrDefault(outcome => outcome.Outcome == reply.Outcome.Id);
+                if (branch is null
+                    || !ReplyMatchesRequest(reply, semantics.Contract)
+                    || !ReplyMatchesChildRequest(token.Id, node.Id, outstanding.Emission, reply))
                 {
                     DispositionInput(
                         candidate,
@@ -775,6 +809,7 @@ public static class ProcessReferenceInterpreter
                 DispositionInput(candidate, ProcessInputAdmissionDisposition.Consumed, wait.RegistrationId, "request-result");
                 requests.Remove(outstanding);
                 DeactivateWait(wait, winnerClause: branch.Id, winnerInput: reply.Context.EmissionId);
+                ResolveChildResult(token, node.Id, outstanding.Emission, semantics.Contract, reply);
                 AddTrace(
                     ProcessTraceEventKind.WaitResolved,
                     token,
@@ -791,6 +826,108 @@ public static class ProcessReferenceInterpreter
             }
         }
 
+        void ResumePartitionRequest(
+            ProcessWaitState wait,
+            ProcessTokenState token,
+            ProcessOutstandingRequest outstanding,
+            ForEachPartitionProcessNode node,
+            IReadOnlyList<ProcessBufferedInput> candidates)
+        {
+            foreach (var candidate in candidates)
+            {
+                var reply = (ReplyEnvelope)candidate.Input.Envelope;
+                if (!ReplyMatchesRequest(reply, node.Contract)
+                    || !ReplyMatchesChildRequest(token.Id, node.Id, outstanding.Emission, reply))
+                {
+                    DispositionInput(
+                        candidate,
+                        ProcessInputAdmissionDisposition.Rejected,
+                        wait.RegistrationId,
+                        "partition-result-rejected");
+                    continue;
+                }
+
+                DispositionInput(
+                    candidate,
+                    ProcessInputAdmissionDisposition.Consumed,
+                    wait.RegistrationId,
+                    "partition-result");
+                requests.Remove(outstanding);
+                DeactivateWait(wait, winnerInput: reply.Context.EmissionId);
+                ResolveChildResult(token, node.Id, outstanding.Emission, node.Contract, reply);
+                ReplaceToken(token with
+                {
+                    Disposition = ExecutionTokenDisposition.Completed,
+                    Step = token.Step + 1
+                });
+                AddTrace(
+                    ProcessTraceEventKind.WaitResolved,
+                    token,
+                    node.Id,
+                    emission: reply.Context.EmissionId,
+                    detail: "partition-request-reply");
+                DispositionOtherRequestResults(
+                    token.Id,
+                    outstanding.Emission,
+                    GetWait(wait.RegistrationId));
+                return;
+            }
+        }
+
+        void ResolveChildResult(
+            ProcessTokenState token,
+            ExecutionNodeId node,
+            EmissionId request,
+            RequestContractReference contract,
+            ReplyEnvelope reply)
+        {
+            var matchingChildren = children.Where(candidate =>
+                candidate.Token == token.Id
+                && candidate.Node == node
+                && candidate.RequestEmission == request).Take(2).ToArray();
+            if (matchingChildren.Length == 0
+                && !ProcessRequestSemantics.TryProjectChild(plan.GetNode(node), out _))
+            {
+                return;
+            }
+            if (matchingChildren is not [var child])
+            {
+                throw new InvalidOperationException(
+                    $"Child Request '{request.Value}' does not map to exactly one child occurrence.");
+            }
+
+            var requestContract = ResolveContract<RequestContractDefinition>(contract, node);
+            _ = requestContract.Response.Find(reply.Outcome.Id)
+                ?? throw new InvalidOperationException("A child Reply outcome is absent from its Request contract.");
+            if (!ProcessRequestSemantics.TryProjectChild(plan.GetNode(node), out var semantics)
+                || !semantics.OutcomeMapping.Contains(reply.Outcome.Id))
+            {
+                throw new InvalidOperationException("A child Reply outcome is absent from its authored terminal mapping.");
+            }
+            var completed = reply.Outcome.Id == semantics.OutcomeMapping.Completed;
+            ReplaceChild(child with
+            {
+                Disposition = completed
+                    ? ProcessChildDisposition.Completed
+                    : ProcessChildDisposition.Failed,
+                TerminalOutcome = reply.Outcome.Id,
+                Result = reply.Outcome.Value
+            });
+            AddTrace(
+                ProcessTraceEventKind.ChildResolved,
+                token,
+                node,
+                emission: reply.Context.EmissionId,
+                detail: completed ? "completed" : "failed");
+        }
+
+        void ResumeRecurrence(ProcessWaitState wait, ProcessTokenState token)
+        {
+            var node = (RepeatAcrossActivationProcessNode)plan.GetNode(wait.Node);
+            DeactivateWait(wait);
+            Resume(token, node.Repeat, output: null);
+        }
+
         bool ReplyMatchesRequest(ReplyEnvelope reply, RequestContractReference request)
         {
             var catalog = plan.ValidationContext.InteractionContracts;
@@ -799,6 +936,32 @@ public static class ProcessReferenceInterpreter
                    && resolved is ReplyContractDefinition definition
                    && definition.Request == request
                    && definition.Outcome == reply.Outcome.Id;
+        }
+
+        bool ReplyMatchesChildRequest(
+            TokenId token,
+            ExecutionNodeId node,
+            EmissionId request,
+            ReplyEnvelope reply)
+        {
+            var matchingChildren = children.Where(candidate =>
+                candidate.Token == token
+                && candidate.Node == node
+                && candidate.RequestEmission == request).Take(2).ToArray();
+            if (matchingChildren.Length == 0)
+            {
+                return !ProcessRequestSemantics.TryProjectChild(plan.GetNode(node), out _);
+            }
+            if (matchingChildren is not [var child])
+            {
+                return false;
+            }
+
+            return ProcessRequestSemantics.TryProjectChild(plan.GetNode(node), out var semantics)
+                && semantics.OutcomeMapping.Contains(reply.Outcome.Id)
+                && reply.Context.Origin is ProcessInteractionOrigin origin
+                && origin.Definition == child.Process
+                && origin.Continuation == child.Continuation;
         }
 
         void DispositionOtherRequestResults(
@@ -841,6 +1004,15 @@ public static class ProcessReferenceInterpreter
                     break;
                 case RequestProcessNode request:
                     ExecuteRequest(token, request);
+                    break;
+                case InvokeProcessProcessNode child:
+                    ExecuteRequest(token, child);
+                    break;
+                case ForEachPartitionProcessNode partition:
+                    ExecutePartitionBatch(token, partition);
+                    break;
+                case RepeatAcrossActivationProcessNode recurrence:
+                    ExecuteRecurrence(token, recurrence);
                     break;
                 case EmitEventProcessNode emit:
                     ExecuteEvent(token, emit);
@@ -1038,39 +1210,460 @@ public static class ProcessReferenceInterpreter
             Advance(token, continuation, value);
         }
 
-        void ExecuteRequest(ProcessTokenState token, RequestProcessNode node)
+        void ExecuteRequest(ProcessTokenState token, CanonicalProcessNode node)
         {
-            var contract = ResolveContract<RequestContractDefinition>(node.Contract, node.Id);
-            var payload = EvaluateTyped(node.Payload, contract.Payload.Contract, token);
+            if (!ProcessRequestSemantics.TryProject(node, out var semantics))
+            {
+                throw new InvalidOperationException(
+                    $"Node '{node.Id.Value}' does not carry shared Request semantics.");
+            }
+
+            var contract = ResolveContract<RequestContractDefinition>(semantics.Contract, node.Id);
+            var payload = EvaluateTyped(semantics.Payload, contract.Payload.Contract, token);
+            var occurrence = token.Step;
             var emissionId = ProcessReferenceIdentities.Emission(
                 original.Continuation,
                 activation.Id,
                 token.Id,
                 node.Id,
-                token.Step);
+                occurrence);
+            ProcessChildRequestTarget? childTarget = null;
+            if (semantics.ChildProcess is { } childProcess)
+            {
+                var registration = ProcessReferenceIdentities.ChildRegistration(
+                    original.Continuation,
+                    token.Id,
+                    node.Id,
+                    occurrence,
+                    progressIdentity: null);
+                var childContinuation = ProcessReferenceIdentities.ChildContinuation(
+                    original.Continuation,
+                    token.Id,
+                    node.Id,
+                    occurrence,
+                    progressIdentity: null,
+                    childProcess);
+                childTarget = new(
+                    childProcess,
+                    childContinuation,
+                    semantics.ChildOutcomeMapping
+                    ?? throw new InvalidOperationException("Child Request semantics require an exact outcome mapping."));
+                children.Add(new(
+                    registration,
+                    token.Id,
+                    token.Id,
+                    node.Id,
+                    occurrence,
+                    progressIdentity: null,
+                    childProcess,
+                    childContinuation,
+                    semantics.ChildPurpose,
+                    semantics.ChildCancellation,
+                    ProcessChildDisposition.Active,
+                    emissionId));
+                AddTrace(ProcessTraceEventKind.ChildRegistered, token, node.Id, detail: registration);
+            }
+
+            EmitRequest(token, node.Id, semantics.Contract, payload, emissionId, childTarget);
+        }
+
+        void EmitRequest(
+            ProcessTokenState token,
+            ExecutionNodeId node,
+            RequestContractReference contract,
+            PortableValue payload,
+            EmissionId emissionId,
+            ProcessChildRequestTarget? childTarget = null)
+        {
             var wait = RegisterWait(
                 token,
-                node.Id,
+                node,
                 ProcessWaitKind.Request,
                 timers: [],
                 obligationEmission: emissionId);
             var envelope = new RequestEnvelope(
                 InteractionEnvelope.CurrentSchemaVersion,
-                EnvelopeContext(token, node.Id, emissionId, activation.Context.CausationId),
-                node.Contract,
+                EnvelopeContext(token, node, emissionId, activation.Context.CausationId),
+                contract,
                 payload,
-                new ProcessTokenInteractionTarget(original.Continuation, token.Id, wait.RegistrationId));
+                new ProcessTokenInteractionTarget(original.Continuation, token.Id, wait.RegistrationId),
+                childTarget);
             emissions.Add(envelope);
-            requests.Add(new(token.Id, node.Id, emissionId, node.Contract, activation.ObservedAtUtc));
+            requests.Add(new(token.Id, node, emissionId, contract, activation.ObservedAtUtc));
             AddTrace(
                 ProcessTraceEventKind.InteractionEmitted,
                 token,
-                node.Id,
+                node,
                 emission: emissionId,
                 detail: "request",
                 emissionFingerprint: InteractionEnvelopeJsonSerializer.ComputeContentFingerprint(envelope));
-            AddTrace(ProcessTraceEventKind.WaitRegistered, token, node.Id, detail: wait.RegistrationId.Value);
+            AddTrace(ProcessTraceEventKind.WaitRegistered, token, node, detail: wait.RegistrationId.Value);
+            Cut(node);
+        }
+
+        void ExecutePartitionBatch(ProcessTokenState token, ForEachPartitionProcessNode node)
+        {
+            var occurrence = token.Step;
+            var evaluated = Evaluate(node.Partitions, token).RequireConcrete("ForEachPartition partitions");
+            if (evaluated.Kind != ObservationValueKind.Array || evaluated.Array.IsDefault)
+            {
+                throw new InvalidOperationException(
+                    $"ForEachPartition node '{node.Id.Value}' requires one concrete finite Array value.");
+            }
+            if (evaluated.Array.Length > node.Limits.MaximumItems)
+            {
+                throw new InvalidOperationException(
+                    $"ForEachPartition node '{node.Id.Value}' produced {evaluated.Array.Length} items, exceeding its explicit maximum of {node.Limits.MaximumItems}.");
+            }
+
+            var registration = ProcessReferenceIdentities.PartitionRegistration(
+                original.Continuation,
+                token.Id,
+                node.Id,
+                occurrence);
+            List<(string ProgressIdentity, PortableValue Partition)> evaluatedWork =
+                new(evaluated.Array.Length);
+            foreach (var item in evaluated.Array)
+            {
+                var partition = ValidateValue(
+                    PortableExpressionValue.FromObservation(item).ToPortable(node.Partition.Contract),
+                    node.Partition.Contract,
+                    node.Id);
+                var itemToken = Bind(token, node.Partition, partition);
+                var progress = Evaluate(node.ProgressIdentity, itemToken)
+                    .RequireConcrete("ForEachPartition progress identity");
+                if (progress.Kind != ObservationValueKind.String
+                    || string.IsNullOrWhiteSpace(progress.String))
+                {
+                    throw new InvalidOperationException(
+                        $"ForEachPartition node '{node.Id.Value}' requires every progress identity to be a non-empty String.");
+                }
+                evaluatedWork.Add((progress.String, partition));
+            }
+
+            evaluatedWork.Sort(static (left, right) =>
+                StringComparer.Ordinal.Compare(left.ProgressIdentity, right.ProgressIdentity));
+            for (var index = 1; index < evaluatedWork.Count; index++)
+            {
+                if (StringComparer.Ordinal.Equals(
+                        evaluatedWork[index - 1].ProgressIdentity,
+                        evaluatedWork[index].ProgressIdentity))
+                {
+                    throw new InvalidOperationException(
+                        $"ForEachPartition node '{node.Id.Value}' produced duplicate progress identity '{evaluatedWork[index].ProgressIdentity}'.");
+                }
+            }
+
+            var work = ImmutableArray.CreateBuilder<ProcessPartitionWorkState>(evaluatedWork.Count);
+            foreach (var (progressIdentity, partition) in evaluatedWork)
+            {
+                var childRegistration = ProcessReferenceIdentities.ChildRegistration(
+                    original.Continuation,
+                    token.Id,
+                    node.Id,
+                    occurrence,
+                    progressIdentity);
+                var childToken = ProcessReferenceIdentities.PartitionToken(
+                    original.Continuation,
+                    token.Id,
+                    node.Id,
+                    occurrence,
+                    progressIdentity);
+                children.Add(new(
+                    childRegistration,
+                    token.Id,
+                    childToken,
+                    node.Id,
+                    occurrence,
+                    progressIdentity,
+                    node.Process,
+                    ProcessReferenceIdentities.ChildContinuation(
+                        original.Continuation,
+                        token.Id,
+                        node.Id,
+                        occurrence,
+                        progressIdentity,
+                        node.Process),
+                    ProcessChildPurpose.Work,
+                    node.Cancellation,
+                    ProcessChildDisposition.Pending));
+                work.Add(new(progressIdentity, partition, childRegistration));
+                AddTrace(
+                    ProcessTraceEventKind.ChildRegistered,
+                    token,
+                    node.Id,
+                    detail: childRegistration);
+            }
+
+            partitions.Add(new(
+                registration,
+                token.Id,
+                node.Id,
+                occurrence,
+                work.MoveToImmutable(),
+                resolved: false));
+            var batchWait = RegisterWait(token, node.Id, ProcessWaitKind.PartitionBatch, timers: []);
+            AddTrace(
+                ProcessTraceEventKind.WaitRegistered,
+                token,
+                node.Id,
+                detail: batchWait.RegistrationId.Value);
+            AddTrace(ProcessTraceEventKind.PartitionBatchChanged, token, node.Id, detail: registration);
+            StartPartitionChildren(GetPartition(registration), node);
             Cut(node.Id);
+        }
+
+        bool ResolvePartitions()
+        {
+            var progressed = false;
+            foreach (var registration in partitions
+                         .Where(static partition => !partition.Resolved)
+                         .OrderBy(static partition => partition.RegistrationId, StringComparer.Ordinal)
+                         .Select(static partition => partition.RegistrationId)
+                         .ToArray())
+            {
+                var partition = GetPartition(registration);
+                var node = (ForEachPartitionProcessNode)plan.GetNode(partition.Node);
+                var owner = GetToken(partition.Owner);
+                if (owner.Disposition != ExecutionTokenDisposition.Waiting)
+                {
+                    continue;
+                }
+
+                var partitionProgressed = false;
+                ExecuteGuarded(
+                    owner,
+                    node.Id,
+                    () => partitionProgressed = ResolvePartition(partition, node, owner));
+                progressed |= partitionProgressed;
+                if (terminal.Kind != ExecutionTerminalOutcomeKind.None || stopAtDurableCut)
+                {
+                    break;
+                }
+            }
+            return progressed;
+        }
+
+        bool ResolvePartition(
+            ProcessPartitionState partition,
+            ForEachPartitionProcessNode node,
+            ProcessTokenState owner)
+        {
+            var members = partition.Work
+                .Select(work => GetChild(work.ChildRegistrationId))
+                .ToArray();
+            if (members.Any(static child => child.Disposition is
+                ProcessChildDisposition.Failed
+                or ProcessChildDisposition.CancellationRequested
+                or ProcessChildDisposition.Detached
+                or ProcessChildDisposition.CancelledBeforeStart))
+            {
+                foreach (var member in members.Where(static child => child.Disposition is
+                             ProcessChildDisposition.Pending or ProcessChildDisposition.Active))
+                {
+                    CancelChild(member, owner);
+                }
+                ResolvePartitionOwner(partition, owner, node, successful: false);
+                return true;
+            }
+
+            var started = StartPartitionChildren(partition, node);
+            members = partition.Work
+                .Select(work => GetChild(work.ChildRegistrationId))
+                .ToArray();
+            if (members.Any(static child => child.Disposition is
+                ProcessChildDisposition.Pending or ProcessChildDisposition.Active))
+            {
+                return started;
+            }
+            var successful = members.All(static child =>
+                child.Disposition == ProcessChildDisposition.Completed);
+            ResolvePartitionOwner(partition, owner, node, successful);
+            return true;
+        }
+
+        void ResolvePartitionOwner(
+            ProcessPartitionState partition,
+            ProcessTokenState owner,
+            ForEachPartitionProcessNode node,
+            bool successful)
+        {
+            var wait = waits.Single(candidate =>
+                candidate.Active
+                && candidate.Kind == ProcessWaitKind.PartitionBatch
+                && candidate.Token == partition.Owner
+                && candidate.Node == partition.Node);
+            DeactivateWait(wait);
+            ReplacePartition(partition with { Resolved = true });
+            AddTrace(
+                ProcessTraceEventKind.PartitionBatchChanged,
+                owner,
+                node.Id,
+                detail: successful ? "completed" : "failed");
+            Resume(owner, successful ? node.Completed : node.Failed, output: null);
+        }
+
+        bool StartPartitionChildren(
+            ProcessPartitionState partition,
+            ForEachPartitionProcessNode node)
+        {
+            var active = partition.Work.Count(work =>
+                GetChild(work.ChildRegistrationId).Disposition == ProcessChildDisposition.Active);
+            var capacity = node.Limits.MaximumParallelism - active;
+            var alreadyStarted = partitionStarts.GetValueOrDefault(partition.RegistrationId);
+            var activationCapacity = node.Limits.MaximumStartsPerActivation - alreadyStarted;
+            var startCount = Math.Min(capacity, activationCapacity);
+            if (startCount <= 0)
+            {
+                return false;
+            }
+
+            var owner = GetToken(partition.Owner);
+            var contract = ResolveContract<RequestContractDefinition>(node.Contract, node.Id);
+            var pending = partition.Work
+                .Select(work => (Work: work, Child: GetChild(work.ChildRegistrationId)))
+                .Where(static candidate => candidate.Child.Disposition == ProcessChildDisposition.Pending)
+                .Take(startCount)
+                .ToArray();
+            var prepared = new List<(
+                ProcessChildState Child,
+                ProcessTokenState Token,
+                PortableValue Payload,
+                EmissionId Emission)>(pending.Length);
+            foreach (var (work, child) in pending)
+            {
+                var bound = Bind(owner, node.Partition, work.Partition);
+                var childToken = new ProcessTokenState(
+                    child.Token,
+                    node.Id,
+                    ExecutionTokenDisposition.Active,
+                    step: 0,
+                    bound.Bindings,
+                    requestObligations: [],
+                    forkMembership: null,
+                    failure: null);
+                var payload = EvaluateTyped(node.ChildInput, contract.Payload.Contract, childToken);
+                var emission = ProcessReferenceIdentities.Emission(
+                    original.Continuation,
+                    activation.Id,
+                    childToken.Id,
+                    node.Id,
+                    childToken.Step);
+                prepared.Add((child, childToken, payload, emission));
+            }
+
+            foreach (var start in prepared)
+            {
+                tokens.Add(start.Token);
+                ReplaceChild(start.Child with
+                {
+                    Disposition = ProcessChildDisposition.Active,
+                    RequestEmission = start.Emission
+                });
+                EmitRequest(
+                    start.Token,
+                    node.Id,
+                    node.Contract,
+                    start.Payload,
+                    start.Emission,
+                    new(start.Child.Process, start.Child.Continuation, node.OutcomeMapping));
+            }
+
+            if (prepared.Count > 0)
+            {
+                partitionStarts[partition.RegistrationId] = alreadyStarted + prepared.Count;
+                AddTrace(
+                    ProcessTraceEventKind.PartitionBatchChanged,
+                    owner,
+                    node.Id,
+                    detail: $"started:{prepared.Count}");
+                return true;
+            }
+            return false;
+        }
+
+        void ExecuteRecurrence(ProcessTokenState token, RepeatAcrossActivationProcessNode node)
+        {
+            var recurrence = recurrences.SingleOrDefault(candidate =>
+                candidate.Active
+                && candidate.Token == token.Id
+                && candidate.Node == node.Id);
+            if (!EvaluateBoolean(node.ContinueWhen, token, "RepeatAcrossActivation predicate"))
+            {
+                if (recurrence is not null)
+                {
+                    ReplaceRecurrence(recurrence with { Active = false });
+                }
+                Advance(token, node.Completed);
+                return;
+            }
+
+            if (recurrence is not null
+                && recurrence.RepeatCount >= node.Policy.MaximumOccurrences)
+            {
+                ReplaceRecurrence(recurrence with { Active = false });
+                Advance(token, node.Exhausted);
+                return;
+            }
+            var progress = EvaluateTyped(node.Progress, node.ProgressContract, token);
+            recurrence ??= CreateRecurrence(token, node);
+            var repeatCount = recurrence.RepeatCount + 1;
+
+            var unchanged = recurrence.LastProgress is not null && recurrence.LastProgress == progress
+                ? (long)recurrence.UnchangedProgressCount + 1L
+                : 0L;
+            var retainedUnchanged = unchanged > int.MaxValue ? int.MaxValue : (int)unchanged;
+            if (unchanged > node.Policy.MaximumUnchangedProgressOccurrences)
+            {
+                ReplaceRecurrence(recurrence with
+                {
+                    UnchangedProgressCount = retainedUnchanged,
+                    LastProgress = progress,
+                    Active = false
+                });
+                Advance(token, node.Stalled);
+                return;
+            }
+
+            ReplaceRecurrence(recurrence with
+            {
+                RepeatCount = repeatCount,
+                UnchangedProgressCount = retainedUnchanged,
+                LastProgress = progress
+            });
+            var wait = RegisterWait(
+                token,
+                node.Id,
+                ProcessWaitKind.RepeatAcrossActivation,
+                timers: []);
+            AddTrace(ProcessTraceEventKind.WaitRegistered, token, node.Id, detail: wait.RegistrationId.Value);
+            AddTrace(
+                ProcessTraceEventKind.RecurrenceAdvanced,
+                token,
+                node.Id,
+                detail: $"repeat:{repeatCount};unchanged:{retainedUnchanged}");
+            Cut(node.Id);
+        }
+
+        ProcessRecurrenceState CreateRecurrence(
+            ProcessTokenState token,
+            RepeatAcrossActivationProcessNode node)
+        {
+            var recurrence = new ProcessRecurrenceState(
+                ProcessReferenceIdentities.RecurrenceRegistration(
+                    original.Continuation,
+                    token.Id,
+                    node.Id,
+                    token.Step),
+                token.Id,
+                node.Id,
+                token.Step,
+                repeatCount: 0,
+                unchangedProgressCount: 0,
+                lastProgress: null,
+                active: true);
+            recurrences.Add(recurrence);
+            return recurrence;
         }
 
         void ExecuteEvent(ProcessTokenState token, EmitEventProcessNode node)
@@ -1400,6 +1993,7 @@ public static class ProcessReferenceInterpreter
                 registration,
                 token.Id,
                 node,
+                token.Step,
                 kind,
                 activation.ObservedAtUtc,
                 timers,
@@ -1972,11 +2566,14 @@ public static class ProcessReferenceInterpreter
                     input);
             }
             if (wait.Kind == ProcessWaitKind.Request
-                && plan.GetNode(wait.Node) is RequestProcessNode request
-                && plan.ValidationContext.InteractionContracts?.TryResolve(request.Contract, out var contract) == true
+                && TryGetRequestNodeSemantics(
+                    plan.GetNode(wait.Node),
+                    out var requestContract,
+                    out var outcomes)
+                && plan.ValidationContext.InteractionContracts?.TryResolve(requestContract, out var contract) == true
                 && contract is RequestContractDefinition requestDefinition)
             {
-                if (!IsValidRequestResult(wait, request, input))
+                if (!IsValidRequestResult(wait, wait.Node, requestContract, outcomes, input))
                 {
                     return ProcessInputAdmissionDisposition.Rejected;
                 }
@@ -2002,11 +2599,14 @@ public static class ProcessReferenceInterpreter
                     input);
             }
             if (wait.Kind == ProcessWaitKind.Request
-                && plan.GetNode(wait.Node) is RequestProcessNode request
-                && plan.ValidationContext.InteractionContracts?.TryResolve(request.Contract, out var contract) == true
+                && TryGetRequestNodeSemantics(
+                    plan.GetNode(wait.Node),
+                    out var requestContract,
+                    out var outcomes)
+                && plan.ValidationContext.InteractionContracts?.TryResolve(requestContract, out var contract) == true
                 && contract is RequestContractDefinition requestDefinition)
             {
-                if (!IsValidRequestResult(wait, request, input))
+                if (!IsValidRequestResult(wait, wait.Node, requestContract, outcomes, input))
                 {
                     return ProcessInputAdmissionDisposition.Rejected;
                 }
@@ -2031,13 +2631,21 @@ public static class ProcessReferenceInterpreter
 
         bool IsValidRequestResult(
             ProcessWaitState wait,
-            RequestProcessNode request,
+            ExecutionNodeId node,
+            RequestContractReference request,
+            ImmutableArray<ProcessRequestOutcomeBranch>? outcomes,
             ProcessActivationInput input)
         {
             var valid = input.Envelope is ReplyEnvelope reply
                         && wait.ObligationEmission == reply.InReplyTo
-                        && ReplyMatchesRequest(reply, request.Contract)
-                        && request.Outcomes.Any(outcome => outcome.Outcome == reply.Outcome.Id);
+                        && ReplyMatchesRequest(reply, request)
+                        && ReplyMatchesChildRequest(
+                            wait.Token,
+                            node,
+                            wait.ObligationEmission.Value,
+                            reply)
+                        && (outcomes is null
+                            || outcomes.Value.Any(outcome => outcome.Outcome == reply.Outcome.Id));
             if (valid)
             {
                 return true;
@@ -2046,7 +2654,7 @@ public static class ProcessReferenceInterpreter
             diagnostics.Add(Diagnostic(
                 ProcessExecutionDiagnosticCodes.InputNotAdmitted,
                 "A correlated Request result does not satisfy the exact Request contract and authored outcome set.",
-                request.Id));
+                node));
             return false;
         }
 
@@ -2087,13 +2695,38 @@ public static class ProcessReferenceInterpreter
                 return Map(awaitMatch.DuplicateInput, prior.Disposition);
             }
             if (wait.Kind == ProcessWaitKind.Request
-                && plan.GetNode(wait.Node) is RequestProcessNode request
-                && plan.ValidationContext.InteractionContracts?.TryResolve(request.Contract, out var contract) == true
+                && TryGetRequestNodeSemantics(
+                    plan.GetNode(wait.Node),
+                    out var requestContract,
+                    out _)
+                && plan.ValidationContext.InteractionContracts?.TryResolve(requestContract, out var contract) == true
                 && contract is RequestContractDefinition requestDefinition)
             {
                 return Map(requestDefinition.Response.DuplicateResult, prior.Disposition);
             }
             return ProcessInputAdmissionDisposition.Duplicate;
+        }
+
+        static bool TryGetRequestNodeSemantics(
+            CanonicalProcessNode node,
+            out RequestContractReference contract,
+            out ImmutableArray<ProcessRequestOutcomeBranch>? outcomes)
+        {
+            if (ProcessRequestSemantics.TryProject(node, out var semantics))
+            {
+                contract = semantics.Contract;
+                outcomes = semantics.Outcomes;
+                return true;
+            }
+            if (ProcessRequestSemantics.TryGetContract(node, out contract))
+            {
+                outcomes = null;
+                return true;
+            }
+
+            contract = null!;
+            outcomes = null;
+            return false;
         }
 
         bool WaitAccepts(ProcessWaitState wait, InteractionEnvelope envelope)
@@ -2279,8 +2912,71 @@ public static class ProcessReferenceInterpreter
             CloseTokenWork(token.Id);
         }
 
+        void DispositionOwnedChildren(ProcessTokenState token)
+        {
+            foreach (var child in children
+                         .Where(candidate => candidate.Disposition is
+                             ProcessChildDisposition.Pending or ProcessChildDisposition.Active)
+                         .Where(candidate => candidate.Owner == token.Id || candidate.Token == token.Id)
+                         .OrderBy(static candidate => candidate.RegistrationId, StringComparer.Ordinal)
+                         .ToArray())
+            {
+                CancelChild(child, token);
+            }
+        }
+
+        void CancelChild(ProcessChildState child, ProcessTokenState traceToken)
+        {
+            if (child.Disposition == ProcessChildDisposition.Pending)
+            {
+                ReplaceChild(child with { Disposition = ProcessChildDisposition.CancelledBeforeStart });
+                AddTrace(
+                    ProcessTraceEventKind.ChildCancelledBeforeStart,
+                    traceToken,
+                    child.Node,
+                    detail: child.RegistrationId);
+                return;
+            }
+            if (child.Disposition != ProcessChildDisposition.Active)
+            {
+                return;
+            }
+
+            var disposition = child.Cancellation switch
+            {
+                ProcessChildCancellationPolicy.Propagate => ProcessChildDisposition.CancellationRequested,
+                ProcessChildCancellationPolicy.Detach => ProcessChildDisposition.Detached,
+                _ => throw new InvalidOperationException(
+                    $"Child '{child.RegistrationId}' has no supported cancellation policy.")
+            };
+            ReplaceChild(child with { Disposition = disposition });
+            AddTrace(
+                disposition == ProcessChildDisposition.Detached
+                    ? ProcessTraceEventKind.ChildDetached
+                    : ProcessTraceEventKind.ChildCancellationRequested,
+                traceToken,
+                child.Node,
+                detail: child.RegistrationId);
+
+            var childToken = tokens.FirstOrDefault(candidate => candidate.Id == child.Token);
+            if (childToken is not null
+                && childToken.Id != traceToken.Id
+                && childToken.Disposition is ExecutionTokenDisposition.Ready
+                    or ExecutionTokenDisposition.Active
+                    or ExecutionTokenDisposition.Waiting)
+            {
+                CancelToken(childToken);
+            }
+        }
+
         void CloseTokenWork(TokenId token)
         {
+            var owner = tokens.FirstOrDefault(candidate => candidate.Id == token);
+            if (owner is not null)
+            {
+                DispositionOwnedChildren(owner);
+            }
+
             foreach (var waitId in waits
                          .Where(wait => wait.Token == token && wait.Active)
                          .Select(static wait => wait.RegistrationId)
@@ -2289,6 +2985,20 @@ public static class ProcessReferenceInterpreter
                 DeactivateWait(GetWait(waitId));
             }
             requests.RemoveAll(request => request.Token == token);
+
+            foreach (var recurrence in recurrences
+                         .Where(candidate => candidate.Token == token && candidate.Active)
+                         .ToArray())
+            {
+                ReplaceRecurrence(recurrence with { Active = false });
+            }
+
+            foreach (var partition in partitions
+                         .Where(candidate => candidate.Owner == token && !candidate.Resolved)
+                         .ToArray())
+            {
+                ReplacePartition(partition with { Resolved = true });
+            }
 
             foreach (var buffered in bufferedInputs
                          .Where(candidate => candidate.Input.Target.Token == token)
@@ -2328,6 +3038,12 @@ public static class ProcessReferenceInterpreter
             waits.Single(wait => wait.RegistrationId == id);
 
         ProcessForkState GetFork(string id) => forks.Single(fork => string.Equals(fork.RegistrationId, id, StringComparison.Ordinal));
+
+        ProcessChildState GetChild(string id) => children.Single(child =>
+            string.Equals(child.RegistrationId, id, StringComparison.Ordinal));
+
+        ProcessPartitionState GetPartition(string id) => partitions.Single(partition =>
+            string.Equals(partition.RegistrationId, id, StringComparison.Ordinal));
 
         void ReplaceToken(ProcessTokenState value)
         {
@@ -2413,6 +3129,48 @@ public static class ProcessReferenceInterpreter
             else
             {
                 forks[index] = value;
+            }
+        }
+
+        void ReplaceChild(ProcessChildState value)
+        {
+            var index = children.FindIndex(candidate =>
+                string.Equals(candidate.RegistrationId, value.RegistrationId, StringComparison.Ordinal));
+            if (index < 0)
+            {
+                children.Add(value);
+            }
+            else
+            {
+                children[index] = value;
+            }
+        }
+
+        void ReplacePartition(ProcessPartitionState value)
+        {
+            var index = partitions.FindIndex(candidate =>
+                string.Equals(candidate.RegistrationId, value.RegistrationId, StringComparison.Ordinal));
+            if (index < 0)
+            {
+                partitions.Add(value);
+            }
+            else
+            {
+                partitions[index] = value;
+            }
+        }
+
+        void ReplaceRecurrence(ProcessRecurrenceState value)
+        {
+            var index = recurrences.FindIndex(candidate =>
+                string.Equals(candidate.RegistrationId, value.RegistrationId, StringComparison.Ordinal));
+            if (index < 0)
+            {
+                recurrences.Add(value);
+            }
+            else
+            {
+                recurrences[index] = value;
             }
         }
 
@@ -2506,6 +3264,9 @@ public static class ProcessReferenceInterpreter
                 original.CompletedActivationCount + 1,
                 [.. tokens.OrderBy(static token => token.Id.Value, StringComparer.Ordinal)],
                 [.. forks.OrderBy(static fork => fork.RegistrationId, StringComparer.Ordinal)],
+                [.. children.OrderBy(static child => child.RegistrationId, StringComparer.Ordinal)],
+                [.. partitions.OrderBy(static partition => partition.RegistrationId, StringComparer.Ordinal)],
+                [.. recurrences.OrderBy(static recurrence => recurrence.RegistrationId, StringComparer.Ordinal)],
                 [.. waits.OrderBy(static wait => wait.RegistrationId.Value, StringComparer.Ordinal)],
                 [.. bufferedInputs
                     .OrderBy(static input => input.Input.Envelope.Context.EmissionId.Value, StringComparer.Ordinal)],

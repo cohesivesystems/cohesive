@@ -73,7 +73,8 @@ internal sealed class DurableOperationTestFixture
         DurableOperationIdempotencyEvidence idempotencyEvidence =
             DurableOperationIdempotencyEvidence.TargetDeduplication,
         TimeSpan? timeoutAfter = null,
-        bool supportsCancellation = false)
+        bool supportsCancellation = false,
+        bool supportsChildOutcomes = false)
     {
         List<RequestTerminalOutcomeDefinition> outcomes =
         [
@@ -88,6 +89,15 @@ internal sealed class DurableOperationTestFixture
                 new RequestCancellationDefinition(
                     new("cancellation"),
                     StringSchema("cancellation/v1")));
+        }
+        if (supportsChildOutcomes)
+        {
+            outcomes.Add(new RequestFailureDefinition(
+                new("child-cancelled"),
+                StringSchema("child-cancelled/v1")));
+            outcomes.Add(new RequestFailureDefinition(
+                new("child-terminated"),
+                StringSchema("child-terminated/v1")));
         }
 
         var response = new RequestResponseObligation(
@@ -152,6 +162,11 @@ internal sealed class DurableOperationTestFixture
             documents.Add(cancellationReplyDocument);
             replies.Add(new(new("cancellation"), new(Reference(cancellationReplyDocument))));
         }
+        if (supportsChildOutcomes)
+        {
+            AddFailureReply("child-cancelled");
+            AddFailureReply("child-terminated");
+        }
         var catalogValidation = InteractionContractCatalog.TryCreate(
             [.. documents],
             out var catalog);
@@ -188,6 +203,17 @@ internal sealed class DurableOperationTestFixture
             cancellationReplyDocument,
             response,
             binding);
+
+        void AddFailureReply(string outcome)
+        {
+            var document = InteractionContractDocuments.Create(
+                new($"interaction/reply/durable-operation-{outcome}"),
+                new("revision/1"),
+                new ReplyContractDefinition(requestReference, new(outcome)),
+                Provenance());
+            documents.Add(document);
+            replies.Add(new(new(outcome), new(Reference(document))));
+        }
     }
 
     internal DurableOperationState CreateState(
@@ -214,6 +240,44 @@ internal sealed class DurableOperationTestFixture
             RequestContract,
             StringValue($"payload/{requestId}"),
             target ?? ProcessTarget());
+
+    internal (DurableOperationState State, ProcessInteractionOrigin ReplyOrigin) CreateChildState(
+        string requestId = "emission/request/child")
+    {
+        var childDefinition = DefinitionReference("process/child", 'e');
+        ProcessContinuationIdentity childContinuation = new(
+            new("process-instance/child"),
+            new("process-attempt/child-1"));
+        var ordinary = Request(requestId);
+        var request = new RequestEnvelope(
+            ordinary.SchemaVersion,
+            ordinary.Context,
+            ordinary.Contract,
+            ordinary.Payload,
+            ordinary.ResponseTarget,
+            new(
+                childDefinition,
+                childContinuation,
+                new(
+                    new("result"),
+                    new("failure"),
+                    new("child-cancelled"),
+                    new("child-terminated"))));
+        var validation = Executor.TryCreate(
+            request,
+            Binding,
+            CreatedAtUtc,
+            out var state);
+        Assert.True(validation.IsValid, FormatDiagnostics(validation));
+        return (
+            Assert.IsType<DurableOperationState>(state),
+            new(
+                childDefinition,
+                new("node/terminal"),
+                childContinuation,
+                new("activation/terminal"),
+                new("token/terminal")));
+    }
 
     internal DurableOperationOutcomeObservation Success(string value = "accepted") =>
         new(new RequestResultOutcome(new("result"), StringValue(value)));

@@ -70,6 +70,42 @@ public sealed class ProcessDurableRuntimeOperationTests
     }
 
     [Fact]
+    public async Task Ek06_RestoreRejectsAcceptedAdmissionWithoutItsCanonicalReplyInboxProjection()
+    {
+        var fixture = ProcessDurabilityTestFixture.Create(
+            definitionId: "process/durable-runtime-operation/missing-admitted-reply",
+            semanticVariant: "missing-admitted-reply");
+        var store = await InitializeStoreAsync(fixture, "missing-admitted-reply");
+        var adapter = new DurableOperationFakeAdapter(fixture.Request.Contract)
+            .Script(fixture.Request.Context.EmissionId, Success("adapter-accepted"));
+        var runtime = Runtime(store, adapter);
+        var executed = await runtime.AdvanceOperationAsync(
+            Context(ProcessDurabilityTestFixture.CheckpointedAtUtc.AddMinutes(1)),
+            fixture.Plan,
+            fixture.Checkpoint.ContinuationIdentity.ProcessInstanceId,
+            fixture.Request.Context.EmissionId);
+        var checkpoint = Assert.IsType<ProcessDurableStoreSnapshot>(executed.Snapshot).Checkpoint;
+        var operation = Assert.Single(checkpoint.DurableOperations);
+        var replyId = ProcessDurableRuntimeIdentities.OperationReply(operation.OperationId);
+        var forged = ProcessDurabilityTestFixture.CopyCheckpoint(
+            checkpoint,
+            inbox: [.. checkpoint.Inbox.Where(entry => entry.EmissionId != replyId)]);
+
+        var validation = ProcessDurableCheckpointJsonSerializer.TryDeserialize(
+            ProcessDurableCheckpointJsonSerializer.Serialize(forged),
+            fixture.Plan,
+            out var restored);
+
+        Assert.False(validation.IsValid);
+        Assert.NotNull(restored);
+        Assert.Contains(
+            validation.Diagnostics,
+            static diagnostic =>
+                diagnostic.Code == ProcessCheckpointDiagnosticCodes.InboxReceiptIncompatible
+                && diagnostic.Location == "/durableOperations/0/admission");
+    }
+
+    [Fact]
     public async Task Ek06_AcknowledgedRecoverySkipsAdapterResolutionAndAdmitsReply()
     {
         var fixture = ProcessDurabilityTestFixture.Create(
@@ -1114,7 +1150,6 @@ public sealed class ProcessDurableRuntimeOperationTests
         var acknowledged = CreateAcknowledgedOperation(fixture, "reply-identity-conflict");
         var deterministicReply = acknowledged.CreateReply(
             ProcessDurableRuntimeIdentities.OperationReply(acknowledged.OperationId),
-            acknowledged.Request.Context.Origin,
             ProcessDurableRuntimeIdentities.OperationReplyIdempotency(acknowledged.OperationId),
             acknowledged.Request.Context.Ordering,
             acknowledged.Request.Context.Provenance);

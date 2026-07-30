@@ -20,12 +20,25 @@ internal static class ProcessReferenceIdentities
     const string RootTokenPurpose = "root-token";
     const string ForkTokenPurpose = "fork-token";
     const string ForkRegistrationPurpose = "fork-registration";
+    const string ChildRegistrationPurpose = "child-registration";
+    const string ChildInstancePurpose = "child-instance";
+    const string ChildAttemptPurpose = "child-attempt";
+    const string ChildCancellationIntentPurpose = "child-cancellation-intent";
+    const string PartitionRegistrationPurpose = "partition-registration";
+    const string PartitionTokenPurpose = "partition-token";
+    const string RecurrenceRegistrationPurpose = "recurrence-registration";
     const string EmissionPurpose = "emission";
     const string IdempotencyPurpose = "interaction-idempotency";
     const string WaitRegistrationPurpose = "wait-registration";
 
     const string TokenPrefix = "process-token:v1:sha256:";
     const string ForkRegistrationPrefix = "process-fork:v1:sha256:";
+    const string ChildRegistrationPrefix = "process-child:v1:sha256:";
+    const string ChildInstancePrefix = "process-child-instance:v1:sha256:";
+    const string ChildAttemptPrefix = "process-child-attempt:v1:sha256:";
+    const string ChildCancellationIntentPrefix = "process-child-cancel:v1:sha256:";
+    const string PartitionRegistrationPrefix = "process-partition:v1:sha256:";
+    const string RecurrenceRegistrationPrefix = "process-recurrence:v1:sha256:";
     const string EmissionPrefix = "process-emission:v1:sha256:";
     const string IdempotencyPrefix = "process-idempotency:v1:sha256:";
     const string WaitRegistrationPrefix = "process-wait:v1:sha256:";
@@ -106,6 +119,176 @@ internal static class ProcessReferenceIdentities
             owner.Value,
             fork.Value,
             forkOccurrence.ToString(CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>Derives one exact child occurrence registration.</summary>
+    /// <param name="continuation">Parent Process continuation that owns the child.</param>
+    /// <param name="owner">Parent coordination token.</param>
+    /// <param name="node">Canonical child-bearing node.</param>
+    /// <param name="occurrence">Zero-based occurrence in the owner-token history.</param>
+    /// <param name="progressIdentity">Partition progress identity, or null for a direct child.</param>
+    /// <returns>A replay-stable child registration identity.</returns>
+    internal static string ChildRegistration(
+        ProcessContinuationIdentity continuation,
+        TokenId owner,
+        ExecutionNodeId node,
+        long occurrence,
+        string? progressIdentity)
+    {
+        RequireContinuation(continuation);
+        RequireIdentity(owner.Value, nameof(owner));
+        RequireIdentity(node.Value, nameof(node));
+        RequireNonNegative(occurrence, nameof(occurrence));
+        if (progressIdentity is not null)
+        {
+            RequireIdentity(progressIdentity, nameof(progressIdentity));
+        }
+
+        return Derive(
+            ChildRegistrationPrefix,
+            ChildRegistrationPurpose,
+            continuation.ProcessInstanceId.Value,
+            continuation.ProcessAttemptId.Value,
+            owner.Value,
+            node.Value,
+            occurrence.ToString(CultureInfo.InvariantCulture),
+            progressIdentity ?? string.Empty);
+    }
+
+    /// <summary>Derives the first exact continuation identity of one child occurrence.</summary>
+    /// <param name="continuation">Parent Process continuation that owns the child.</param>
+    /// <param name="owner">Parent coordination token.</param>
+    /// <param name="node">Canonical child-bearing node.</param>
+    /// <param name="occurrence">Zero-based occurrence in the owner-token history.</param>
+    /// <param name="progressIdentity">Partition progress identity, or null for a direct child.</param>
+    /// <param name="process">Exact child Process definition.</param>
+    /// <returns>Replay-stable child instance and first-attempt identities.</returns>
+    internal static ProcessContinuationIdentity ChildContinuation(
+        ProcessContinuationIdentity continuation,
+        TokenId owner,
+        ExecutionNodeId node,
+        long occurrence,
+        string? progressIdentity,
+        ExecutionDefinitionReference process)
+    {
+        ArgumentNullException.ThrowIfNull(process);
+        var registration = ChildRegistration(continuation, owner, node, occurrence, progressIdentity);
+        var fields = new[]
+        {
+            registration,
+            process.DefinitionId.Value,
+            process.RevisionId.Value,
+            process.Fingerprint.Algorithm,
+            process.Fingerprint.Canonicalization,
+            process.Fingerprint.Value
+        };
+        return new(
+            new(Derive(ChildInstancePrefix, ChildInstancePurpose, fields)),
+            new(Derive(ChildAttemptPrefix, ChildAttemptPurpose, fields)));
+    }
+
+    /// <summary>Derives one replay-stable child cancellation-intent identity.</summary>
+    /// <param name="continuation">Parent Process continuation that owns the intent.</param>
+    /// <param name="registration">Exact child occurrence registration.</param>
+    /// <param name="request">Canonical child Request emission being controlled.</param>
+    /// <returns>A purpose-separated opaque cancellation-intent identity.</returns>
+    internal static string ChildCancellationIntent(
+        ProcessContinuationIdentity continuation,
+        string registration,
+        EmissionId request)
+    {
+        RequireContinuation(continuation);
+        RequireIdentity(registration, nameof(registration));
+        RequireIdentity(request.Value, nameof(request));
+        return Derive(
+            ChildCancellationIntentPrefix,
+            ChildCancellationIntentPurpose,
+            continuation.ProcessInstanceId.Value,
+            continuation.ProcessAttemptId.Value,
+            registration,
+            request.Value);
+    }
+
+    /// <summary>Derives the coordinator registration of one bounded partition occurrence.</summary>
+    /// <param name="continuation">Parent Process continuation.</param>
+    /// <param name="owner">Token executing bounded partition work.</param>
+    /// <param name="node">Canonical bounded-work node.</param>
+    /// <param name="occurrence">Zero-based occurrence in the owner-token history.</param>
+    /// <returns>A replay-stable bounded-work registration identity.</returns>
+    internal static string PartitionRegistration(
+        ProcessContinuationIdentity continuation,
+        TokenId owner,
+        ExecutionNodeId node,
+        long occurrence)
+    {
+        RequireContinuation(continuation);
+        RequireIdentity(owner.Value, nameof(owner));
+        RequireIdentity(node.Value, nameof(node));
+        RequireNonNegative(occurrence, nameof(occurrence));
+        return Derive(
+            PartitionRegistrationPrefix,
+            PartitionRegistrationPurpose,
+            continuation.ProcessInstanceId.Value,
+            continuation.ProcessAttemptId.Value,
+            owner.Value,
+            node.Value,
+            occurrence.ToString(CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>Derives the Request-owning token for one partition child.</summary>
+    /// <param name="continuation">Parent Process continuation.</param>
+    /// <param name="owner">Bounded-work coordinator token.</param>
+    /// <param name="node">Canonical bounded-work node.</param>
+    /// <param name="occurrence">Zero-based occurrence in the owner-token history.</param>
+    /// <param name="progressIdentity">Authored stable partition progress identity.</param>
+    /// <returns>A replay-stable child Request token.</returns>
+    internal static TokenId PartitionToken(
+        ProcessContinuationIdentity continuation,
+        TokenId owner,
+        ExecutionNodeId node,
+        long occurrence,
+        string progressIdentity)
+    {
+        RequireContinuation(continuation);
+        RequireIdentity(owner.Value, nameof(owner));
+        RequireIdentity(node.Value, nameof(node));
+        RequireNonNegative(occurrence, nameof(occurrence));
+        RequireIdentity(progressIdentity, nameof(progressIdentity));
+        return new(Derive(
+            TokenPrefix,
+            PartitionTokenPurpose,
+            continuation.ProcessInstanceId.Value,
+            continuation.ProcessAttemptId.Value,
+            owner.Value,
+            node.Value,
+            occurrence.ToString(CultureInfo.InvariantCulture),
+            progressIdentity));
+    }
+
+    /// <summary>Derives one explicit recurrence occurrence registration.</summary>
+    /// <param name="continuation">Parent Process continuation.</param>
+    /// <param name="token">Token executing the recurrence.</param>
+    /// <param name="node">Canonical recurrence node.</param>
+    /// <param name="occurrence">Zero-based originating occurrence in the token history.</param>
+    /// <returns>A replay-stable recurrence registration identity.</returns>
+    internal static string RecurrenceRegistration(
+        ProcessContinuationIdentity continuation,
+        TokenId token,
+        ExecutionNodeId node,
+        long occurrence)
+    {
+        RequireContinuation(continuation);
+        RequireIdentity(token.Value, nameof(token));
+        RequireIdentity(node.Value, nameof(node));
+        RequireNonNegative(occurrence, nameof(occurrence));
+        return Derive(
+            RecurrenceRegistrationPrefix,
+            RecurrenceRegistrationPurpose,
+            continuation.ProcessInstanceId.Value,
+            continuation.ProcessAttemptId.Value,
+            token.Value,
+            node.Value,
+            occurrence.ToString(CultureInfo.InvariantCulture));
     }
 
     /// <summary>Derives the logical identity of one Process interaction emission.</summary>

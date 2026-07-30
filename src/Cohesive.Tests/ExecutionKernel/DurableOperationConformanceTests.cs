@@ -601,18 +601,21 @@ public sealed class DurableOperationConformanceTests
             staleIdentity,
             outcome,
             evidence: null,
+            replyOrigin: null,
             DurableOperationTestFixture.CreatedAtUtc.AddMinutes(3));
         var resolved = fixture.Executor.ResolveEscalation(
             restored,
             restoredIntent.Identity,
             outcome,
             DurableOperationTestFixture.StringValue("ticket/42"),
+            replyOrigin: null,
             DurableOperationTestFixture.CreatedAtUtc.AddMinutes(3));
         var replay = fixture.Executor.ResolveEscalation(
             resolved.State,
             restoredIntent.Identity,
             outcome,
             DurableOperationTestFixture.StringValue("ticket/42"),
+            replyOrigin: null,
             DurableOperationTestFixture.CreatedAtUtc.AddMinutes(4));
 
         Assert.Equal(DurableOperationObservationDisposition.EscalationRequired, failed.Disposition);
@@ -630,6 +633,124 @@ public sealed class DurableOperationConformanceTests
         Assert.Equal("operator-rejected", resolved.State.Acknowledgement?.Outcome.Value.Value?.String);
         Assert.Equal("ticket/42", resolved.State.Acknowledgement?.AdapterEvidence?.Value?.String);
         Assert.Equal(restoredIntent.Identity, resolved.State.Acknowledgement?.RecoveryIdentity);
+        Assert.Equal(DurableOperationObservationDisposition.Replayed, replay.Disposition);
+        Assert.Same(resolved.State, replay.State);
+    }
+
+    [Fact]
+    public void ChildTerminalOutcomeRecovery_RequiresAndPersistsExactReplyOrigin()
+    {
+        var fixture = DurableOperationTestFixture.Create(
+            retry: RequestRetrySemantics.Never,
+            ambiguousOutcome: RequestResolutionSemantics.TerminalFailure,
+            unresolvedOutcome: RequestResolutionSemantics.TerminalFailure,
+            idempotencyEvidence: DurableOperationIdempotencyEvidence.None,
+            supportsChildOutcomes: true);
+        var (initial, replyOrigin) = fixture.CreateChildState("emission/request/child-terminal");
+        var failed = FailAmbiguously(fixture, initial, "child-terminal");
+        var outcome = new RequestFailureOutcome(
+            new("failure"),
+            DurableOperationTestFixture.StringValue("child-failed"));
+
+        var missingOrigin = fixture.Executor.ResolveTerminalOutcome(
+            failed.State,
+            outcome,
+            replyOrigin: null,
+            DurableOperationTestFixture.CreatedAtUtc.AddMinutes(3));
+        var resolved = fixture.Executor.ResolveTerminalOutcome(
+            failed.State,
+            outcome,
+            replyOrigin,
+            DurableOperationTestFixture.CreatedAtUtc.AddMinutes(3));
+        var options = InteractionEnvelopeJsonSerializer.CreateOptions();
+        var restored = Assert.IsType<DurableOperationState>(
+            JsonSerializer.Deserialize<DurableOperationState>(
+                JsonSerializer.Serialize(resolved.State, options),
+                options));
+        var reply = restored.CreateReply(
+            new("emission/reply/child-terminal"),
+            new("idempotency/reply/child-terminal"),
+            ordering: null,
+            restored.Request.Context.Provenance);
+        var conflictingOrigin = new ProcessInteractionOrigin(
+            replyOrigin.Definition,
+            replyOrigin.Node,
+            replyOrigin.Continuation,
+            new("activation/other-terminal"),
+            replyOrigin.Token);
+        var conflictingReplay = fixture.Executor.ResolveTerminalOutcome(
+            restored,
+            outcome,
+            conflictingOrigin,
+            DurableOperationTestFixture.CreatedAtUtc.AddMinutes(4));
+
+        Assert.Equal(DurableOperationObservationDisposition.TerminalOutcomeRequired, failed.Disposition);
+        Assert.Equal(DurableOperationStatus.TerminalOutcomeRequired, failed.State.Status);
+        Assert.Equal(DurableOperationObservationDisposition.InvalidEvidence, missingOrigin.Disposition);
+        Assert.Equal(DurableOperationObservationDisposition.Acknowledged, resolved.Disposition);
+        Assert.Equal(replyOrigin, restored.Acknowledgement?.ReplyOrigin);
+        Assert.Equal(replyOrigin, reply.Context.Origin);
+        Assert.Equal(DurableOperationObservationDisposition.ConflictingOutcome, conflictingReplay.Disposition);
+    }
+
+    [Fact]
+    public void ChildEscalationRecovery_RequiresExactReplyOriginForResolutionAndReplay()
+    {
+        var fixture = DurableOperationTestFixture.Create(
+            retry: RequestRetrySemantics.Never,
+            ambiguousOutcome: RequestResolutionSemantics.Escalate,
+            unresolvedOutcome: RequestResolutionSemantics.Escalate,
+            idempotencyEvidence: DurableOperationIdempotencyEvidence.None,
+            supportsChildOutcomes: true);
+        var (initial, replyOrigin) = fixture.CreateChildState("emission/request/child-escalation");
+        var failed = FailAmbiguously(fixture, initial, "child-escalation");
+        var intent = Assert.IsType<DurableOperationRecoveryIntent>(
+            DurableOperationReferenceExecutor.GetRecoveryIntent(failed.State));
+        var outcome = new RequestFailureOutcome(
+            new("failure"),
+            DurableOperationTestFixture.StringValue("operator-rejected-child"));
+        var evidence = DurableOperationTestFixture.StringValue("ticket/child-42");
+
+        var missingOrigin = fixture.Executor.ResolveEscalation(
+            failed.State,
+            intent.Identity,
+            outcome,
+            evidence,
+            replyOrigin: null,
+            DurableOperationTestFixture.CreatedAtUtc.AddMinutes(3));
+        var resolved = fixture.Executor.ResolveEscalation(
+            failed.State,
+            intent.Identity,
+            outcome,
+            evidence,
+            replyOrigin,
+            DurableOperationTestFixture.CreatedAtUtc.AddMinutes(3));
+        var conflictingOrigin = new ProcessInteractionOrigin(
+            replyOrigin.Definition,
+            replyOrigin.Node,
+            replyOrigin.Continuation,
+            new("activation/other-escalation"),
+            replyOrigin.Token);
+        var conflictingReplay = fixture.Executor.ResolveEscalation(
+            resolved.State,
+            intent.Identity,
+            outcome,
+            evidence,
+            conflictingOrigin,
+            DurableOperationTestFixture.CreatedAtUtc.AddMinutes(4));
+        var replay = fixture.Executor.ResolveEscalation(
+            resolved.State,
+            intent.Identity,
+            outcome,
+            evidence,
+            replyOrigin,
+            DurableOperationTestFixture.CreatedAtUtc.AddMinutes(4));
+
+        Assert.Equal(DurableOperationObservationDisposition.EscalationRequired, failed.Disposition);
+        Assert.Equal(DurableOperationObservationDisposition.InvalidEvidence, missingOrigin.Disposition);
+        Assert.Equal(DurableOperationObservationDisposition.Acknowledged, resolved.Disposition);
+        Assert.Equal(replyOrigin, resolved.State.Acknowledgement?.ReplyOrigin);
+        Assert.Equal(DurableOperationObservationDisposition.ConflictingOutcome, conflictingReplay.Disposition);
         Assert.Equal(DurableOperationObservationDisposition.Replayed, replay.Disposition);
         Assert.Same(resolved.State, replay.State);
     }
@@ -802,6 +923,32 @@ public sealed class DurableOperationConformanceTests
             invocation,
             adapter);
         return new(dispatch.State, claim, observation);
+    }
+
+    static DurableOperationObservationResult FailAmbiguously(
+        DurableOperationTestFixture fixture,
+        DurableOperationState state,
+        string identity)
+    {
+        var claimed = fixture.Executor.Claim(
+            state,
+            new($"operation-attempt/{identity}"),
+            claimant: "worker/a",
+            DurableOperationTestFixture.CreatedAtUtc);
+        var claim = Assert.IsType<DurableOperationClaim>(claimed.Claim);
+        var dispatched = fixture.Executor.BeginDispatch(
+            claimed.State,
+            claim.AttemptId,
+            claim.Fence,
+            DurableOperationTestFixture.CreatedAtUtc.AddMinutes(1));
+        return fixture.Executor.RecordObservation(
+            dispatched.State,
+            claim.AttemptId,
+            claim.Fence,
+            fixture.Failure(
+                DurableOperationFailurePhase.PostCommitPreAcknowledgement,
+                DurableOperationEffectEvidence.Ambiguous),
+            DurableOperationTestFixture.CreatedAtUtc.AddMinutes(2));
     }
 
     sealed record AttemptExecution(

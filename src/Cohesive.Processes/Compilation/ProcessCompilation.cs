@@ -18,11 +18,15 @@ public sealed class CompiledProcessPlan
     internal CompiledProcessPlan(
         ExecutionDefinitionDocument document,
         CanonicalProcessDefinition definition,
-        ProcessDefinitionValidationContext validationContext)
+        ProcessDefinitionValidationContext validationContext,
+        ProcessCompilationOptions options,
+        ProcessEffectSummary effectSummary)
     {
         Document = document;
         Definition = definition;
         ValidationContext = validationContext;
+        Options = options;
+        EffectSummary = effectSummary;
         nodes = definition.Nodes.ToDictionary(static node => node.Id);
     }
 
@@ -34,6 +38,17 @@ public sealed class CompiledProcessPlan
 
     /// <summary>Exact definition-link, interaction-contract, and shape evidence used to admit the plan.</summary>
     public ProcessDefinitionValidationContext ValidationContext { get; }
+
+    /// <summary>
+    /// Explicit demands retained after target-independent structural preflight for downstream realization proof.
+    /// </summary>
+    public ProcessCompilationOptions Options { get; }
+
+    /// <summary>
+    /// Deterministic compiler-derived effects and exact statically referenced resources. An ExternalInteraction
+    /// effect may conservatively represent host-operation emissions whose resource set is not statically closed.
+    /// </summary>
+    public ProcessEffectSummary EffectSummary { get; }
 
     /// <summary>Exact identity, revision, and semantic fingerprint of the compiled Process.</summary>
     public ExecutionDefinitionReference DefinitionReference => new(
@@ -69,10 +84,10 @@ public sealed class ProcessCompilationResult
     /// <summary>Typed Process payload when strict projection succeeded.</summary>
     public CanonicalProcessDefinition? Definition { get; }
 
-    /// <summary>Executable plan only when canonical validation succeeds.</summary>
+    /// <summary>Executable plan only when canonical validation and structural guarantee-demand preflight succeed.</summary>
     public CompiledProcessPlan? Plan { get; }
 
-    /// <summary>Deterministically ordered document, linking, expression, and graph diagnostics.</summary>
+    /// <summary>Deterministically ordered document, linking, expression, graph, and guarantee-demand diagnostics.</summary>
     public DocumentValidationResult Validation { get; }
 
     /// <summary>Whether compilation produced a complete executable plan.</summary>

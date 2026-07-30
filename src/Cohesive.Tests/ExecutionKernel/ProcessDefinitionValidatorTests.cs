@@ -384,6 +384,439 @@ public sealed class ProcessDefinitionValidatorTests
     }
 
     [Fact]
+    public void Validate_ForEachPartitionRequiresSingleElementBindingContract()
+    {
+        var child = DefinitionReference("process/partition-child");
+        var requestDocument = InteractionDocument(
+            "interaction/request/partition-child",
+            SingleOutcomeRequestDefinition());
+        var request = new RequestContractReference(Reference(requestDocument));
+        var manyStrings = new ValueContract(
+            new ScalarTypeRef(ScalarTypeKind.String),
+            cardinality: FieldCardinality.Many);
+        var definition = Definition(
+            entry: "partitions",
+            input: manyStrings,
+            nodes:
+            [
+                new ForEachPartitionProcessNode(
+                    new("partitions"),
+                    Expr.BoundValue(ProcessBindingIds.Input),
+                    new(new("partition"), manyStrings),
+                    Expr.Const("partition-a"),
+                    child,
+                    request,
+                    ChildOutcomeMapping(),
+                    Expr.Const("review"),
+                    new(maximumItems: 10, maximumStartsPerActivation: 2, maximumParallelism: 2),
+                    ProcessChildCancellationPolicy.Propagate,
+                    Edge("edge/completed", "return"),
+                    Edge("edge/failed", "return")),
+                new ReturnProcessNode(new("return"), Expr.Const("done"))
+            ]);
+        var context = new ProcessDefinitionValidationContext(
+            definitions:
+            [
+                new ProcessDefinitionLink(
+                    child,
+                    ProcessDefinitionLinkKind.Process,
+                    StringContract,
+                    StringContract,
+                    processDependencies: [],
+                    recoveryPolicy: ProcessRecoveryPolicy.ContinueAttempt)
+            ],
+            interactionContracts: Catalog(requestDocument));
+
+        var validation = ProcessDefinitionValidator.Validate(definition, context);
+
+        AssertDiagnostic(
+            validation,
+            ProcessDefinitionDiagnosticCodes.PartitionBindingCardinalityInvalid,
+            "/nodes/0/partition/contract/cardinality");
+    }
+
+    [Fact]
+    public void Validate_ChildProcessResultMustMatchEveryRequestResultOutcome()
+    {
+        var child = DefinitionReference("process/review-child");
+        var requestDocument = InteractionDocument(
+            "interaction/request/review-child",
+            SingleOutcomeRequestDefinition());
+        var request = new RequestContractReference(Reference(requestDocument));
+        var definition = Definition(
+            entry: "child",
+            nodes:
+            [
+                new InvokeProcessProcessNode(
+                    new("child"),
+                    child,
+                    request,
+                    ChildOutcomeMapping(),
+                    Expr.Const("review"),
+                    ProcessChildPurpose.Work,
+                    ProcessChildCancellationPolicy.Propagate,
+                    [
+                        new(
+                            new("child/approved"),
+                            new("approved"),
+                            new(Edge("edge/approved", "return"))),
+                        new(
+                            new("child/failed"),
+                            new("failed"),
+                            new(Edge("edge/failed", "return")))
+                    ]),
+                new ReturnProcessNode(new("return"), Expr.Const("done"))
+            ]);
+        var context = new ProcessDefinitionValidationContext(
+            definitions:
+            [
+                new ProcessDefinitionLink(
+                    child,
+                    ProcessDefinitionLinkKind.Process,
+                    StringContract,
+                    BooleanContract,
+                    processDependencies: [],
+                    recoveryPolicy: ProcessRecoveryPolicy.ContinueAttempt)
+            ],
+            interactionContracts: Catalog(requestDocument));
+
+        var validation = ProcessDefinitionValidator.Validate(definition, context);
+
+        var diagnostic = AssertDiagnostic(
+            validation,
+            ProcessDefinitionDiagnosticCodes.ChildRequestResultContractMismatch,
+            "/nodes/0/contract");
+        Assert.Equal("child", diagnostic.Evidence?.Subject);
+    }
+
+    [Fact]
+    public void Validate_MappedChildFailureMustCarryTheExactChildProcessResultContract()
+    {
+        var child = DefinitionReference("process/review-child-failure");
+        var requestDocument = InteractionDocument(
+            "interaction/request/review-child-failure",
+            new RequestContractDefinition(
+                StringSchema(),
+                new(
+                    [
+                        new RequestResultDefinition(new("approved"), StringSchema()),
+                        new RequestFailureDefinition(new("failed"), BooleanSchema()),
+                        new RequestFailureDefinition(new("cancelled"), StringSchema()),
+                        new RequestFailureDefinition(new("terminated"), StringSchema())
+                    ],
+                    RequestOptionalTerminalSemantics.Unsupported,
+                    RequestOptionalTerminalSemantics.Unsupported,
+                    RequestResultDisposition.Reject,
+                    RequestResultDisposition.Reject,
+                    RequestResultDisposition.ReusePriorDisposition,
+                    RequestRetrySemantics.Never,
+                    RequestResolutionSemantics.TerminalFailure,
+                    RequestResolutionSemantics.TerminalFailure,
+                    TimeSpan.FromDays(7))));
+        var request = new RequestContractReference(Reference(requestDocument));
+        var definition = Definition(
+            entry: "child",
+            nodes:
+            [
+                new InvokeProcessProcessNode(
+                    new("child"),
+                    child,
+                    request,
+                    ChildOutcomeMapping(),
+                    Expr.Const("review"),
+                    ProcessChildPurpose.Work,
+                    ProcessChildCancellationPolicy.Propagate,
+                    [
+                        new(new("child/approved"), new("approved"), new(Edge("edge/approved", "return"))),
+                        new(new("child/failed"), new("failed"), new(Edge("edge/failed", "return"))),
+                        new(new("child/cancelled"), new("cancelled"), new(Edge("edge/cancelled", "return"))),
+                        new(new("child/terminated"), new("terminated"), new(Edge("edge/terminated", "return")))
+                    ]),
+                new ReturnProcessNode(new("return"), Expr.Const("done"))
+            ]);
+        var context = new ProcessDefinitionValidationContext(
+            definitions:
+            [
+                new ProcessDefinitionLink(
+                    child,
+                    ProcessDefinitionLinkKind.Process,
+                    StringContract,
+                    StringContract,
+                    processDependencies: [],
+                    recoveryPolicy: ProcessRecoveryPolicy.ContinueAttempt)
+            ],
+            interactionContracts: Catalog(requestDocument));
+
+        var validation = ProcessDefinitionValidator.Validate(definition, context);
+
+        AssertDiagnostic(
+            validation,
+            ProcessDefinitionDiagnosticCodes.ChildRequestResultContractMismatch,
+            "/nodes/0/outcomeMapping/failed");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Validate_ChildProcessRequiresContinueAttemptRecoveryAndDocumentFacadeMapsProcessReference(
+        bool partitioned)
+    {
+        var child = DefinitionReference(partitioned ? "process/partition-restarted" : "process/direct-restarted");
+        var requestDocument = InteractionDocument(
+            partitioned ? "interaction/request/partition-restarted" : "interaction/request/direct-restarted",
+            SingleOutcomeRequestDefinition());
+        var request = new RequestContractReference(Reference(requestDocument));
+        CanonicalProcessNode childNode = partitioned
+            ? new ForEachPartitionProcessNode(
+                new("child"),
+                Expr.BoundValue(ProcessBindingIds.Input),
+                new(new("partition"), StringContract),
+                Expr.BoundValue(new("partition")),
+                child,
+                request,
+                ChildOutcomeMapping(),
+                Expr.BoundValue(new("partition")),
+                new(maximumItems: 2, maximumStartsPerActivation: 1, maximumParallelism: 1),
+                ProcessChildCancellationPolicy.Propagate,
+                Edge("edge/completed", "return"),
+                Edge("edge/failed", "return"))
+            : new InvokeProcessProcessNode(
+                new("child"),
+                child,
+                request,
+                ChildOutcomeMapping(),
+                Expr.BoundValue(ProcessBindingIds.Input),
+                ProcessChildPurpose.Work,
+                ProcessChildCancellationPolicy.Propagate,
+                [
+                    new(
+                        new("child/approved"),
+                        new("approved"),
+                        new(Edge("edge/approved", "return"))),
+                    new(
+                        new("child/failed"),
+                        new("failed"),
+                        new(Edge("edge/failed", "return")))
+                ]);
+        var input = partitioned
+            ? new ValueContract(new ScalarTypeRef(ScalarTypeKind.String), cardinality: FieldCardinality.Many)
+            : StringContract;
+        var definition = Definition(
+            entry: "child",
+            input: input,
+            nodes:
+            [
+                childNode,
+                new ReturnProcessNode(new("return"), Expr.Const("done"))
+            ]);
+        var context = new ProcessDefinitionValidationContext(
+            definitions:
+            [
+                new ProcessDefinitionLink(
+                    child,
+                    ProcessDefinitionLinkKind.Process,
+                    StringContract,
+                    StringContract,
+                    processDependencies: [],
+                    recoveryPolicy: ProcessRecoveryPolicy.RestartAttempt)
+            ],
+            interactionContracts: Catalog(requestDocument));
+
+        var validation = ProcessDefinitionValidator.Validate(definition, context);
+
+        AssertDiagnostic(
+            validation,
+            ProcessDefinitionDiagnosticCodes.ChildRecoveryPolicyUnsupported,
+            "/nodes/0/process");
+
+        var sourceReference = partitioned
+            ? "src/PartitionCoordinator.cs:31"
+            : "src/DirectCoordinator.cs:17";
+        var document = ProcessDefinitionDocuments.Create(
+            new(partitioned ? "process/partition-parent" : "process/direct-parent"),
+            new("revision/1"),
+            definition,
+            Provenance(),
+            sourceMap: new(
+            [
+                new(
+                    sourceReference,
+                    new(["nodes", "0", "process"]),
+                    "Child recovery contract")
+            ]));
+
+        var documentValidation = ProcessDefinitionDocuments.Validate(document, context);
+
+        var diagnostic = AssertDiagnostic(
+            documentValidation,
+            ProcessDefinitionDiagnosticCodes.ChildRecoveryPolicyUnsupported,
+            "/definition/nodes/0/process");
+        Assert.Equal([sourceReference], diagnostic.Evidence?.SourceReferences);
+    }
+
+    [Fact]
+    public void Validate_InvokeProcessWithMissingProcessReference_RemainsAChildInvocation()
+    {
+        var definition = Definition(
+            entry: "child",
+            nodes:
+            [
+                new InvokeProcessProcessNode(
+                    new("child"),
+                    process: null!,
+                    new(DefinitionReference("interaction/request/child")),
+                    ChildOutcomeMapping(),
+                    Expr.Const("review"),
+                    ProcessChildPurpose.Work,
+                    ProcessChildCancellationPolicy.Propagate,
+                    [
+                        new(
+                            new("child/completed"),
+                            new("completed"),
+                            new(Edge("edge/completed", "return")))
+                    ]),
+                new ReturnProcessNode(new("return"), Expr.Const("done"))
+            ]);
+
+        var validation = ProcessDefinitionValidator.Validate(definition);
+
+        AssertDiagnostic(
+            validation,
+            ProcessDefinitionDiagnosticCodes.DefinitionReferenceInvalid,
+            "/nodes/0/process");
+    }
+
+    [Fact]
+    public void Validate_RepeatAcrossActivationWithMissingEdge_ReturnsDiagnosticsWithoutThrowing()
+    {
+        var definition = Definition(
+            entry: "repeat",
+            nodes:
+            [
+                new RepeatAcrossActivationProcessNode(
+                    new("repeat"),
+                    Expr.Const(false),
+                    Expr.Const("progress"),
+                    StringContract,
+                    new(maximumOccurrences: 10, maximumUnchangedProgressOccurrences: 2),
+                    repeat: null!,
+                    Edge("edge/completed", "return"),
+                    Edge("edge/exhausted", "return"),
+                    Edge("edge/stalled", "return")),
+                new ReturnProcessNode(new("return"), Expr.Const("done"))
+            ]);
+
+        var validation = ProcessDefinitionValidator.Validate(definition);
+
+        AssertDiagnostic(
+            validation,
+            ProcessDefinitionDiagnosticCodes.RequiredMemberMissing,
+            "/nodes/0/repeat");
+    }
+
+    [Fact]
+    public void DocumentFacade_PrioritizesProvenRecursionOverMissingSiblingEvidence()
+    {
+        var child = DefinitionReference("process/child");
+        var requestDocument = InteractionDocument(
+            "interaction/request/child",
+            SingleOutcomeRequestDefinition());
+        var request = new RequestContractReference(Reference(requestDocument));
+        var definition = Definition(
+            entry: "child",
+            nodes:
+            [
+                new InvokeProcessProcessNode(
+                    new("child"),
+                    child,
+                    request,
+                    ChildOutcomeMapping(),
+                    Expr.Const("review"),
+                    ProcessChildPurpose.Work,
+                    ProcessChildCancellationPolicy.Propagate,
+                    [
+                        new(
+                            new("child/approved"),
+                            new("approved"),
+                            new(Edge("edge/approved", "return"))),
+                        new(
+                            new("child/failed"),
+                            new("failed"),
+                            new(Edge("edge/failed", "return")))
+                    ]),
+                new ReturnProcessNode(new("return"), Expr.Const("done"))
+            ]);
+        var document = ProcessDefinitionDocuments.Create(
+            new("process/root"),
+            new("revision/1"),
+            definition,
+            Provenance());
+        var context = new ProcessDefinitionValidationContext(
+            definitions:
+            [
+                new ProcessDefinitionLink(
+                    child,
+                    ProcessDefinitionLinkKind.Process,
+                    StringContract,
+                    StringContract,
+                    processDependencies:
+                    [
+                        DefinitionReference("process/aaa-missing"),
+                        Reference(document)
+                    ],
+                    recoveryPolicy: ProcessRecoveryPolicy.ContinueAttempt)
+            ],
+            interactionContracts: Catalog(requestDocument));
+
+        var validation = ProcessDefinitionDocuments.Validate(document, context);
+
+        AssertDiagnostic(
+            validation,
+            ProcessDefinitionDiagnosticCodes.ProcessRecursionUnsupported,
+            "/definition/nodes/0/process");
+        Assert.DoesNotContain(
+            validation.Diagnostics,
+            static diagnostic => diagnostic.Code == ProcessDefinitionDiagnosticCodes.ProcessDependencyEvidenceMissing);
+    }
+
+    [Fact]
+    public void DocumentFacade_RejectsDirectChildRecursionByStableDefinitionRevision()
+    {
+        var definition = Definition(
+            entry: "child",
+            nodes:
+            [
+                new InvokeProcessProcessNode(
+                    new("child"),
+                    DefinitionReference("process/self"),
+                    new(DefinitionReference("interaction/request/self")),
+                    ChildOutcomeMapping(),
+                    Expr.Const("input"),
+                    ProcessChildPurpose.Work,
+                    ProcessChildCancellationPolicy.Propagate,
+                    [
+                        new(
+                            new("child/completed"),
+                            new("completed"),
+                            new(Edge("edge/completed", "return")))
+                    ]),
+                new ReturnProcessNode(new("return"), Expr.Const("done"))
+            ]);
+        var document = ProcessDefinitionDocuments.Create(
+            new("process/self"),
+            new("revision/1"),
+            definition,
+            Provenance());
+
+        var validation = ProcessDefinitionDocuments.Validate(document);
+
+        AssertDiagnostic(
+            validation,
+            ProcessDefinitionDiagnosticCodes.ProcessRecursionUnsupported,
+            "/definition/nodes/0/process");
+    }
+
+    [Fact]
     public void Validate_ForkAndJoinMustBeReciprocalAndEveryBranchMustConverge()
     {
         var definition = Definition(
@@ -1093,6 +1526,12 @@ public sealed class ProcessDefinitionValidatorTests
             RequestResolutionSemantics.TerminalFailure,
             RequestResolutionSemantics.TerminalFailure,
             TimeSpan.FromDays(7)));
+
+    static ProcessChildOutcomeMapping ChildOutcomeMapping() => new(
+        new("approved"),
+        new("failed"),
+        new("cancelled"),
+        new("terminated"));
 
     static ExecutionDefinitionDocument InteractionDocument(
         string id,

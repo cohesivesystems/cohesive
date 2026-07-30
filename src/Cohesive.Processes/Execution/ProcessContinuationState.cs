@@ -142,6 +142,251 @@ public sealed record ProcessForkState
     public bool Resolved { get; internal init; }
 }
 
+/// <summary>Durable lifecycle of one exact child Process invocation.</summary>
+public enum ProcessChildDisposition
+{
+    /// <summary>No lifecycle disposition was supplied; invalid for persisted child state.</summary>
+    Unspecified = 0,
+
+    /// <summary>A bounded partition-work child identity is retained but its Request has not yet been emitted.</summary>
+    Pending = 1,
+
+    /// <summary>The child Request is outstanding and awaits one exact terminal Reply.</summary>
+    Active = 2,
+
+    /// <summary>The child produced a declared successful Request result.</summary>
+    Completed = 3,
+
+    /// <summary>The child produced a declared non-success terminal Request result.</summary>
+    Failed = 4,
+
+    /// <summary>Owner or partition closure retained an intent to propagate cancellation to started child work.</summary>
+    CancellationRequested = 5,
+
+    /// <summary>Owner or partition closure deliberately left started child work independently active.</summary>
+    Detached = 6,
+
+    /// <summary>
+    /// Owner or partition closure, including sibling failure, cancelled bounded child work before its Request emitted.
+    /// </summary>
+    CancelledBeforeStart = 7
+}
+
+/// <summary>Complete durable semantic state of one exact child Process invocation.</summary>
+public sealed record ProcessChildState
+{
+    /// <summary>Creates one replay-stable child Process occurrence.</summary>
+    /// <param name="registrationId">Opaque child occurrence identity.</param>
+    /// <param name="owner">Parent coordination token that owns the child.</param>
+    /// <param name="token">
+    /// Replay-derived token that owns the child's canonical Request once started; pending bounded children have no
+    /// token state or wait yet.
+    /// </param>
+    /// <param name="node">Canonical child-bearing Process node.</param>
+    /// <param name="occurrence">Zero-based occurrence in the owner token history.</param>
+    /// <param name="progressIdentity">Stable partition progress identity, or null for a direct invocation.</param>
+    /// <param name="process">Exact child Process definition identity, revision, and fingerprint.</param>
+    /// <param name="continuation">Interpreter-derived child Process instance and first attempt identity.</param>
+    /// <param name="purpose">Explicit ordinary-work, compensation, or reconciliation purpose.</param>
+    /// <param name="cancellation">Explicit parent-to-child cancellation policy.</param>
+    /// <param name="disposition">Current durable child lifecycle disposition.</param>
+    /// <param name="requestEmission">Canonical Request emission once the child has started.</param>
+    /// <param name="terminalOutcome">Declared terminal Request outcome once observed.</param>
+    /// <param name="result">Typed terminal outcome value once observed.</param>
+    [JsonConstructor]
+    internal ProcessChildState(
+        string registrationId,
+        TokenId owner,
+        TokenId token,
+        ExecutionNodeId node,
+        long occurrence,
+        string? progressIdentity,
+        ExecutionDefinitionReference process,
+        ProcessContinuationIdentity continuation,
+        ProcessChildPurpose purpose,
+        ProcessChildCancellationPolicy cancellation,
+        ProcessChildDisposition disposition,
+        EmissionId? requestEmission = null,
+        RequestTerminalOutcomeId? terminalOutcome = null,
+        PortableValue? result = null)
+    {
+        RegistrationId = registrationId;
+        Owner = owner;
+        Token = token;
+        Node = node;
+        Occurrence = occurrence;
+        ProgressIdentity = progressIdentity;
+        Process = process;
+        Continuation = continuation;
+        Purpose = purpose;
+        Cancellation = cancellation;
+        Disposition = disposition;
+        RequestEmission = requestEmission;
+        TerminalOutcome = terminalOutcome;
+        Result = result;
+    }
+
+    /// <summary>Opaque replay-stable child occurrence identity.</summary>
+    public string RegistrationId { get; internal init; }
+
+    /// <summary>Parent coordination token that owns the child.</summary>
+    public TokenId Owner { get; internal init; }
+
+    /// <summary>
+    /// Replay-derived token that owns the child's canonical Request once started; it is not materialized for pending
+    /// or cancelled-before-start bounded children.
+    /// </summary>
+    public TokenId Token { get; internal init; }
+
+    /// <summary>Canonical child-bearing Process node.</summary>
+    public ExecutionNodeId Node { get; internal init; }
+
+    /// <summary>Zero-based occurrence in the owner token history.</summary>
+    public long Occurrence { get; internal init; }
+
+    /// <summary>Stable partition progress identity, or null for a direct invocation.</summary>
+    public string? ProgressIdentity { get; internal init; }
+
+    /// <summary>Exact child Process definition identity, revision, and fingerprint.</summary>
+    public ExecutionDefinitionReference Process { get; internal init; }
+
+    /// <summary>Interpreter-derived child Process instance and first attempt identity.</summary>
+    public ProcessContinuationIdentity Continuation { get; internal init; }
+
+    /// <summary>Explicit ordinary-work, compensation, or reconciliation purpose.</summary>
+    public ProcessChildPurpose Purpose { get; internal init; }
+
+    /// <summary>Explicit parent-to-child cancellation policy.</summary>
+    public ProcessChildCancellationPolicy Cancellation { get; internal init; }
+
+    /// <summary>Current durable child lifecycle disposition.</summary>
+    public ProcessChildDisposition Disposition { get; internal init; }
+
+    /// <summary>Canonical Request emission once the child has started.</summary>
+    public EmissionId? RequestEmission { get; internal init; }
+
+    /// <summary>Declared terminal Request outcome once observed.</summary>
+    public RequestTerminalOutcomeId? TerminalOutcome { get; internal init; }
+
+    /// <summary>Typed terminal outcome value once observed.</summary>
+    public PortableValue? Result { get; internal init; }
+}
+
+/// <summary>One retained partition value and its exact child occurrence.</summary>
+/// <param name="ProgressIdentity">Authored stable progress identity for the partition.</param>
+/// <param name="Partition">Exact typed portable partition value evaluated once by the owner.</param>
+/// <param name="ChildRegistrationId">Replay-stable child occurrence identity for the partition.</param>
+public sealed record ProcessPartitionWorkState(
+    string ProgressIdentity,
+    PortableValue Partition,
+    string ChildRegistrationId);
+
+/// <summary>Durable coarse-grained coordination state for one bounded partition-work occurrence.</summary>
+public sealed record ProcessPartitionState
+{
+    /// <summary>Creates one replay-stable bounded partition-work occurrence.</summary>
+    /// <param name="registrationId">Opaque bounded-work occurrence identity.</param>
+    /// <param name="owner">Parked coordinator token.</param>
+    /// <param name="node">Canonical <see cref="ForEachPartitionProcessNode"/> identity.</param>
+    /// <param name="occurrence">Zero-based occurrence in the owner token history.</param>
+    /// <param name="work">Finite work set in canonical progress-identity order.</param>
+    /// <param name="resolved">
+    /// Whether the bounded occurrence is finalized after a successful join or owner termination/cancellation.
+    /// </param>
+    [JsonConstructor]
+    internal ProcessPartitionState(
+        string registrationId,
+        TokenId owner,
+        ExecutionNodeId node,
+        long occurrence,
+        ImmutableArray<ProcessPartitionWorkState> work,
+        bool resolved)
+    {
+        RegistrationId = registrationId;
+        Owner = owner;
+        Node = node;
+        Occurrence = occurrence;
+        Work = work.IsDefault ? [] : work;
+        Resolved = resolved;
+    }
+
+    /// <summary>Opaque replay-stable bounded-work occurrence identity.</summary>
+    public string RegistrationId { get; internal init; }
+
+    /// <summary>Parked coordinator token.</summary>
+    public TokenId Owner { get; internal init; }
+
+    /// <summary>Canonical <see cref="ForEachPartitionProcessNode"/> identity.</summary>
+    public ExecutionNodeId Node { get; internal init; }
+
+    /// <summary>Zero-based occurrence in the owner token history.</summary>
+    public long Occurrence { get; internal init; }
+
+    /// <summary>Finite work set in canonical progress-identity order.</summary>
+    public ImmutableArray<ProcessPartitionWorkState> Work { get; internal init; }
+
+    /// <summary>Whether the bounded occurrence is finalized after a successful join or owner termination/cancellation.</summary>
+    public bool Resolved { get; internal init; }
+}
+
+/// <summary>Durable progress state for one explicit recurrence across activations.</summary>
+public sealed record ProcessRecurrenceState
+{
+    /// <summary>Creates one replay-stable recurrence occurrence.</summary>
+    /// <param name="registrationId">Opaque recurrence occurrence identity.</param>
+    /// <param name="token">Token executing the recurrence.</param>
+    /// <param name="node">Canonical recurrence node.</param>
+    /// <param name="occurrence">Zero-based originating occurrence in the token history.</param>
+    /// <param name="repeatCount">Number of admitted repeat decisions.</param>
+    /// <param name="unchangedProgressCount">Consecutive repeat decisions with unchanged progress.</param>
+    /// <param name="lastProgress">Last exact typed progress value, or null before the first repeat.</param>
+    /// <param name="active">Whether later execution may continue this recurrence occurrence.</param>
+    [JsonConstructor]
+    internal ProcessRecurrenceState(
+        string registrationId,
+        TokenId token,
+        ExecutionNodeId node,
+        long occurrence,
+        int repeatCount,
+        int unchangedProgressCount,
+        PortableValue? lastProgress,
+        bool active)
+    {
+        RegistrationId = registrationId;
+        Token = token;
+        Node = node;
+        Occurrence = occurrence;
+        RepeatCount = repeatCount;
+        UnchangedProgressCount = unchangedProgressCount;
+        LastProgress = lastProgress;
+        Active = active;
+    }
+
+    /// <summary>Opaque replay-stable recurrence occurrence identity.</summary>
+    public string RegistrationId { get; internal init; }
+
+    /// <summary>Token executing the recurrence.</summary>
+    public TokenId Token { get; internal init; }
+
+    /// <summary>Canonical recurrence node.</summary>
+    public ExecutionNodeId Node { get; internal init; }
+
+    /// <summary>Zero-based originating occurrence in the token history.</summary>
+    public long Occurrence { get; internal init; }
+
+    /// <summary>Number of admitted repeat decisions.</summary>
+    public int RepeatCount { get; internal init; }
+
+    /// <summary>Consecutive repeat decisions with unchanged progress.</summary>
+    public int UnchangedProgressCount { get; internal init; }
+
+    /// <summary>Last exact typed progress value, or null before the first repeat.</summary>
+    public PortableValue? LastProgress { get; internal init; }
+
+    /// <summary>Whether later execution may continue this recurrence occurrence.</summary>
+    public bool Active { get; internal init; }
+}
+
 /// <summary>Kind of durable semantic wait held by a Process token.</summary>
 public enum ProcessWaitKind
 {
@@ -158,7 +403,13 @@ public enum ProcessWaitKind
     DurableCut = 3,
 
     /// <summary>An emitted Request awaiting one terminal Reply.</summary>
-    Request = 4
+    Request = 4,
+
+    /// <summary>A bounded partition coordinator awaiting child capacity or terminal outcomes.</summary>
+    PartitionBatch = 5,
+
+    /// <summary>An explicit recurrence cut that may resume only in a later activation.</summary>
+    RepeatAcrossActivation = 6
 }
 
 /// <summary>Computed deadline of one durable timer clause.</summary>
@@ -178,6 +429,7 @@ public sealed record ProcessWaitState
         ProcessWaitRegistrationId registrationId,
         TokenId token,
         ExecutionNodeId node,
+        long occurrence,
         ProcessWaitKind kind,
         DateTimeOffset registeredAtUtc,
         ImmutableArray<ProcessTimerState> timers,
@@ -189,6 +441,7 @@ public sealed record ProcessWaitState
         RegistrationId = registrationId;
         Token = token;
         Node = node;
+        Occurrence = occurrence;
         Kind = kind;
         RegisteredAtUtc = registeredAtUtc;
         Timers = timers.IsDefault ? [] : timers;
@@ -206,6 +459,9 @@ public sealed record ProcessWaitState
 
     /// <summary>Canonical wait node.</summary>
     public ExecutionNodeId Node { get; internal init; }
+
+    /// <summary>Zero-based token step that supplied the replay basis for this exact wait registration.</summary>
+    public long Occurrence { get; internal init; }
 
     /// <summary>Semantic wait kind.</summary>
     public ProcessWaitKind Kind { get; internal init; }
@@ -315,6 +571,9 @@ public sealed class ProcessContinuationState
         long completedActivationCount,
         ImmutableArray<ProcessTokenState> tokens,
         ImmutableArray<ProcessForkState> forks,
+        ImmutableArray<ProcessChildState> children,
+        ImmutableArray<ProcessPartitionState> partitions,
+        ImmutableArray<ProcessRecurrenceState> recurrences,
         ImmutableArray<ProcessWaitState> waits,
         ImmutableArray<ProcessBufferedInput> bufferedInputs,
         ImmutableArray<ProcessInputReceipt> inputReceipts,
@@ -326,6 +585,9 @@ public sealed class ProcessContinuationState
         CompletedActivationCount = completedActivationCount;
         Tokens = tokens.IsDefault ? [] : tokens;
         Forks = forks.IsDefault ? [] : forks;
+        Children = children.IsDefault ? [] : children;
+        Partitions = partitions.IsDefault ? [] : partitions;
+        Recurrences = recurrences.IsDefault ? [] : recurrences;
         Waits = waits.IsDefault ? [] : waits;
         BufferedInputs = bufferedInputs.IsDefault ? [] : bufferedInputs;
         InputReceipts = inputReceipts.IsDefault ? [] : inputReceipts;
@@ -347,6 +609,15 @@ public sealed class ProcessContinuationState
 
     /// <summary>Fork and Join membership in stable registration order.</summary>
     public ImmutableArray<ProcessForkState> Forks { get; }
+
+    /// <summary>Exact child Process occurrences in stable registration order.</summary>
+    public ImmutableArray<ProcessChildState> Children { get; }
+
+    /// <summary>Bounded partition-work occurrences in stable registration order.</summary>
+    public ImmutableArray<ProcessPartitionState> Partitions { get; }
+
+    /// <summary>Retained recurrence occurrences in stable registration order.</summary>
+    public ImmutableArray<ProcessRecurrenceState> Recurrences { get; }
 
     /// <summary>Active waits and retained wait tombstones in stable registration order.</summary>
     public ImmutableArray<ProcessWaitState> Waits { get; }

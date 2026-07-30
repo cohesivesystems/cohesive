@@ -1,7 +1,6 @@
 using System.Collections.Immutable;
 using System.Text.Json;
 using Cohesive.Execution;
-using Cohesive.Model;
 using Cohesive.Model.Serialization;
 
 namespace Cohesive.Tests.ExecutionKernel;
@@ -174,7 +173,7 @@ public sealed class ExecutionDefinitionCompatibilityTests
     {
         var document = Document("definition/rebuild", "revision/1", "process");
         var compatibility = new ExecutionDefinitionCompatibilityDeclaration(
-            new([new("cohesive-execution/v2")]),
+            new([new("cohesive-execution/v1")]),
             [new("transition")],
             [Reference("definition/other", "revision/1", document.Metadata.Fingerprint.Value)]);
 
@@ -303,7 +302,7 @@ public sealed class ExecutionDefinitionCompatibilityTests
         new(new(id), [.. versions.Select(static version => new ExecutionExtensionSchemaVersion(version))]);
 
     static ExecutionIrSchemaCompatibilityDeclaration SchemaCompatibility() =>
-        new([new("cohesive-execution/v1")]);
+        new([ExecutionDefinitionDocument.CurrentSchemaVersion]);
 
     static T RoundTrip<T>(T value) =>
         JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(value, JsonOptions), JsonOptions)!;

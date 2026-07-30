@@ -32,6 +32,27 @@ public sealed class DurableOperationContractTests
     }
 
     [Fact]
+    public void StateConstructor_RejectsLegacyNestedRequestEnvelopeSchema()
+    {
+        var fixture = DurableOperationTestFixture.Create();
+        var current = fixture.Request();
+        var legacy = new RequestEnvelope(
+            new("cohesive-interaction-envelope/v1"),
+            current.Context,
+            current.Contract,
+            current.Payload,
+            current.ResponseTarget);
+
+        var exception = Assert.Throws<ArgumentException>(() => new DurableOperationState(
+            DurableOperationState.CurrentSchemaVersion,
+            legacy,
+            fixture.Binding,
+            DurableOperationTestFixture.CreatedAtUtc));
+
+        Assert.Equal("request", exception.ParamName);
+    }
+
+    [Fact]
     public void TryCreate_RejectsIncompleteReplyMappingsAndUnsafeStableIdentityRetry()
     {
         var fixture = DurableOperationTestFixture.Create();
@@ -492,7 +513,6 @@ public sealed class DurableOperationContractTests
 
         var reply = acknowledged.CreateReply(
             new("emission/reply/1"),
-            acknowledged.Request.Context.Origin,
             new("idempotency/reply/1"),
             ordering: null,
             acknowledged.Request.Context.Provenance);

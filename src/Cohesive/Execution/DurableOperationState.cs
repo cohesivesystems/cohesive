@@ -251,12 +251,17 @@ public sealed record DurableOperationOutcomeObservation : DurableOperationAttemp
     /// <summary>Creates a typed terminal outcome observation.</summary>
     /// <param name="outcome">Typed terminal Request outcome.</param>
     /// <param name="adapterEvidence">Optional materially known portable target receipt or evidence.</param>
+    /// <param name="replyOrigin">
+    /// Exact semantic origin that produced the Reply. Child Process Requests require a Process origin matching their
+    /// pinned child target.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="outcome"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException"><paramref name="adapterEvidence"/> is unknown or failed.</exception>
     [JsonConstructor]
     public DurableOperationOutcomeObservation(
         RequestTerminalOutcome outcome,
-        PortableValue? adapterEvidence = null)
+        PortableValue? adapterEvidence = null,
+        InteractionOrigin? replyOrigin = null)
     {
         Outcome = Guard.RequireNotNull(outcome);
         AdapterEvidence = adapterEvidence is null
@@ -265,6 +270,8 @@ public sealed record DurableOperationOutcomeObservation : DurableOperationAttemp
                 adapterEvidence,
                 nameof(adapterEvidence),
                 "Adapter acknowledgement evidence");
+        replyOrigin?.EnsureDeclaredVariant();
+        ReplyOrigin = replyOrigin;
     }
 
     /// <summary>Typed terminal Request outcome.</summary>
@@ -272,6 +279,9 @@ public sealed record DurableOperationOutcomeObservation : DurableOperationAttemp
 
     /// <summary>Optional materially known portable target receipt or evidence.</summary>
     public PortableValue? AdapterEvidence { get; }
+
+    /// <summary>Exact semantic origin that produced the Reply, when supplied by the adapter.</summary>
+    public InteractionOrigin? ReplyOrigin { get; }
 }
 
 /// <summary>Explicit failure observation from a physical adapter invocation.</summary>
@@ -312,12 +322,17 @@ public sealed record DurableOperationReconciledOutcome : DurableOperationReconci
     /// <summary>Creates a reconciled terminal outcome.</summary>
     /// <param name="outcome">Confirmed typed terminal Request outcome.</param>
     /// <param name="adapterEvidence">Optional materially known portable reconciliation evidence.</param>
+    /// <param name="replyOrigin">
+    /// Exact semantic origin that produced the reconciled Reply. Child Process Requests require a matching Process
+    /// origin.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="outcome"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException"><paramref name="adapterEvidence"/> is unknown or failed.</exception>
     [JsonConstructor]
     public DurableOperationReconciledOutcome(
         RequestTerminalOutcome outcome,
-        PortableValue? adapterEvidence = null)
+        PortableValue? adapterEvidence = null,
+        InteractionOrigin? replyOrigin = null)
     {
         Outcome = Guard.RequireNotNull(outcome);
         AdapterEvidence = adapterEvidence is null
@@ -326,6 +341,8 @@ public sealed record DurableOperationReconciledOutcome : DurableOperationReconci
                 adapterEvidence,
                 nameof(adapterEvidence),
                 "Reconciliation evidence");
+        replyOrigin?.EnsureDeclaredVariant();
+        ReplyOrigin = replyOrigin;
     }
 
     /// <summary>Confirmed typed terminal Request outcome.</summary>
@@ -333,6 +350,9 @@ public sealed record DurableOperationReconciledOutcome : DurableOperationReconci
 
     /// <summary>Optional materially known portable reconciliation evidence.</summary>
     public PortableValue? AdapterEvidence { get; }
+
+    /// <summary>Exact semantic origin that produced the reconciled Reply, when supplied by the adapter.</summary>
+    public InteractionOrigin? ReplyOrigin { get; }
 }
 
 /// <summary>Reconciliation proved that the external consequence never occurred.</summary>
@@ -649,6 +669,7 @@ public sealed record DurableOperationAcknowledgement
     /// <param name="recoveryIdentity">
     /// Exact reconciliation or escalation identity that produced the outcome, when applicable.
     /// </param>
+    /// <param name="replyOrigin">Exact semantic origin that produced the Reply, when externally observed.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="replyContract"/> or <paramref name="outcome"/> is <see langword="null"/>.
     /// </exception>
@@ -666,7 +687,8 @@ public sealed record DurableOperationAcknowledgement
         RequestTerminalOutcome outcome,
         DateTimeOffset acknowledgedAtUtc,
         PortableValue? adapterEvidence = null,
-        DurableOperationRecoveryIdentity? recoveryIdentity = null)
+        DurableOperationRecoveryIdentity? recoveryIdentity = null,
+        InteractionOrigin? replyOrigin = null)
     {
         replyContract = Guard.RequireNotNull(replyContract);
         outcome = Guard.RequireNotNull(outcome);
@@ -702,6 +724,8 @@ public sealed record DurableOperationAcknowledgement
                 nameof(adapterEvidence),
                 "Adapter acknowledgement evidence");
         RecoveryIdentity = recoveryIdentity;
+        replyOrigin?.EnsureDeclaredVariant();
+        ReplyOrigin = replyOrigin;
     }
 
     /// <summary>Logical Request emission discharged by the outcome.</summary>
@@ -724,6 +748,9 @@ public sealed record DurableOperationAcknowledgement
 
     /// <summary>Exact reconciliation or escalation identity that produced the outcome, when applicable.</summary>
     public DurableOperationRecoveryIdentity? RecoveryIdentity { get; }
+
+    /// <summary>Exact semantic origin that produced the Reply, when externally observed.</summary>
+    public InteractionOrigin? ReplyOrigin { get; }
 
 }
 
@@ -919,7 +946,7 @@ public sealed record DurableOperationAdmission
 public sealed record DurableOperationState
 {
     /// <summary>Current portable durable-operation state schema.</summary>
-    public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } = new("cohesive-durable-operation/v1");
+    public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } = new("cohesive-durable-operation/v2");
 
     /// <summary>Creates one validated durable-operation state snapshot.</summary>
     /// <param name="schemaVersion">Exact durable-operation state schema.</param>
@@ -935,9 +962,9 @@ public sealed record DurableOperationState
     /// <paramref name="request"/> or <paramref name="binding"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// The schema is not the current exact version; creation time is not UTC; the binding addresses another Request
-    /// contract; attempt or reconciliation history is malformed; or acknowledgement, admission, fence, and recovery
-    /// evidence are inconsistent.
+    /// The state schema or nested Request-envelope schema is not the current exact version; creation time is not UTC;
+    /// the binding addresses another Request contract; attempt or reconciliation history is malformed; or
+    /// acknowledgement, admission, fence, and recovery evidence are inconsistent.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="recoveryRequirement"/> is unsupported.</exception>
     [JsonConstructor]
@@ -965,6 +992,12 @@ public sealed record DurableOperationState
 
         Request = Guard.RequireNotNull(request);
         Binding = Guard.RequireNotNull(binding);
+        if (request.SchemaVersion != InteractionEnvelope.CurrentSchemaVersion)
+        {
+            throw new ArgumentException(
+                "Durable operation state requires the current exact nested Request-envelope schema.",
+                nameof(request));
+        }
         if (request.Contract != binding.Request)
             throw new ArgumentException("Durable operation state and binding must reference the same exact Request contract.", nameof(binding));
         DateTimeOffset? deadlineUtc = null;
@@ -1240,6 +1273,18 @@ public sealed record DurableOperationState
             }
             if (binding.FindReply(acknowledgement.Outcome.Id)?.Reply != acknowledgement.ReplyContract)
                 throw new ArgumentException("Acknowledgement must use the exact bound Reply contract.", nameof(acknowledgement));
+            if (request.ChildTarget is { } childTarget
+                ? acknowledgement.ReplyOrigin is not ProcessInteractionOrigin childOrigin
+                  || childOrigin.Definition != childTarget.Definition
+                  || childOrigin.Continuation != childTarget.Continuation
+                : acknowledgement.ReplyOrigin is not null)
+            {
+                throw new ArgumentException(
+                    request.ChildTarget is null
+                        ? "An ordinary Request acknowledgement cannot override its authored origin."
+                        : "A child Process acknowledgement requires its exact pinned child Process Reply origin.",
+                    nameof(acknowledgement));
+            }
             if (recoveryRequirement != DurableOperationRecoveryRequirement.None)
                 throw new ArgumentException("An acknowledged operation cannot require recovery.", nameof(recoveryRequirement));
         }
@@ -1274,7 +1319,8 @@ public sealed record DurableOperationState
                 && reconciliation.ObservedAtUtc == acknowledgement.AcknowledgedAtUtc
                 && reconciliation.Observation is DurableOperationReconciledOutcome resolved
                 && resolved.Outcome == acknowledgement.Outcome
-                && resolved.AdapterEvidence == acknowledgement.AdapterEvidence))
+                && resolved.AdapterEvidence == acknowledgement.AdapterEvidence
+                && resolved.ReplyOrigin == acknowledgement.ReplyOrigin))
         {
             throw new ArgumentException(
                 "A reconciliation acknowledgement requires its exact fenced outcome evidence.",
@@ -1363,23 +1409,20 @@ public sealed record DurableOperationState
 
     /// <summary>Creates the canonical Reply from this state's exact Request and acknowledgement.</summary>
     /// <param name="replyId">Stable logical Reply emission identity.</param>
-    /// <param name="origin">Closed Transition or Process origin producing the Reply.</param>
     /// <param name="idempotencyKey">Stable logical Reply deduplication basis.</param>
     /// <param name="ordering">Optional explicit Reply ordering key.</param>
     /// <param name="provenance">Reply producer and semantic source attribution.</param>
     /// <returns>
     /// A current-schema Reply preserving the exact Request correlation, authority, delivery, and causal identity.
+    /// Ordinary Requests retain their Request origin; child Requests use the exact persisted child origin.
     /// </returns>
     /// <exception cref="InvalidOperationException">This operation has no durable acknowledgement.</exception>
-    /// <exception cref="ArgumentNullException">
-    /// <paramref name="origin"/> or <paramref name="provenance"/> is <see langword="null"/>.
-    /// </exception>
+    /// <exception cref="ArgumentNullException"><paramref name="provenance"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
     /// <paramref name="replyId"/> or <paramref name="idempotencyKey"/> is a default value.
     /// </exception>
     public ReplyEnvelope CreateReply(
         EmissionId replyId,
-        InteractionOrigin origin,
         InteractionIdempotencyKey idempotencyKey,
         InteractionOrdering? ordering,
         ExecutionProvenance provenance)
@@ -1388,7 +1431,7 @@ public sealed record DurableOperationState
             ?? throw new InvalidOperationException("A canonical Reply requires a durable acknowledgement.");
         var context = new InteractionEnvelopeContext(
             replyId,
-            Guard.RequireNotNull(origin),
+            acknowledgement.ReplyOrigin ?? Request.Context.Origin,
             Request.Context.CorrelationId,
             Request.Context.EmissionId,
             Request.Context.AuthorityScope,

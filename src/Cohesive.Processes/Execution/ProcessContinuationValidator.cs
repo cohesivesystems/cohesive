@@ -45,6 +45,15 @@ public static class ProcessContinuationDiagnosticCodes
     /// <summary>A Fork registration, branch token, or reciprocal plan node contradicts another.</summary>
     public const string ForkStateMismatch = "processes.execution.continuation.forkStateMismatch";
 
+    /// <summary>A child registration, identity, Request, or terminal result contradicts another.</summary>
+    public const string ChildStateMismatch = "processes.execution.continuation.childStateMismatch";
+
+    /// <summary>A bounded partition registration, work item, child, or owner contradicts another.</summary>
+    public const string PartitionStateMismatch = "processes.execution.continuation.partitionStateMismatch";
+
+    /// <summary>A recurrence identity, progress value, count, or durable wait contradicts another.</summary>
+    public const string RecurrenceStateMismatch = "processes.execution.continuation.recurrenceStateMismatch";
+
     /// <summary>A terminal continuation retains state that can no longer be consumed.</summary>
     public const string TerminalStateInvalid = "processes.execution.continuation.terminalStateInvalid";
 }
@@ -87,6 +96,9 @@ public static class ProcessContinuationValidator
             BuildObligationContracts(plan.Definition);
         readonly Dictionary<TokenId, (ProcessTokenState Token, int Index)> tokens = [];
         readonly Dictionary<string, (ProcessForkState Fork, int Index)> forks = new(StringComparer.Ordinal);
+        readonly Dictionary<string, (ProcessChildState Child, int Index)> children = new(StringComparer.Ordinal);
+        readonly Dictionary<string, (ProcessPartitionState Partition, int Index)> partitions = new(StringComparer.Ordinal);
+        readonly Dictionary<string, (ProcessRecurrenceState Recurrence, int Index)> recurrences = new(StringComparer.Ordinal);
         readonly Dictionary<ProcessWaitRegistrationId, (ProcessWaitState Wait, int Index)> waits = [];
         readonly Dictionary<EmissionId, (ProcessBufferedInput Input, int Index)> bufferedInputs = [];
         readonly Dictionary<EmissionId, (ProcessInputReceipt Receipt, int Index)> inputReceipts = [];
@@ -95,6 +107,18 @@ public static class ProcessContinuationValidator
         public DocumentValidationResult Validate()
         {
             ValidateDefinition();
+            if (state.Continuation is null
+                || string.IsNullOrWhiteSpace(state.Continuation.ProcessInstanceId.Value)
+                || string.IsNullOrWhiteSpace(state.Continuation.ProcessAttemptId.Value))
+            {
+                Error(
+                    ProcessContinuationDiagnosticCodes.StateMemberInvalid,
+                    "A restored Process continuation requires exact instance and attempt identity evidence.",
+                    "/continuation");
+                diagnostics.Sort(DocumentValidationDiagnosticComparer.Ordinal);
+                return DocumentValidationResult.FromDiagnostics(diagnostics);
+            }
+
             ValidateCanonicalCollections();
             IndexState();
             ValidateTokenState();
@@ -103,6 +127,9 @@ public static class ProcessContinuationValidator
             ValidateInputs();
             ValidateRequests();
             ValidateForks();
+            ValidateChildren();
+            ValidatePartitions();
+            ValidateRecurrences();
             ValidateTerminalState();
             diagnostics.Sort(DocumentValidationDiagnosticComparer.Ordinal);
             return DocumentValidationResult.FromDiagnostics(diagnostics);
@@ -330,6 +357,21 @@ public static class ProcessContinuationValidator
                 "/forks",
                 "registrationId");
             ValidateCanonicalIdentities(
+                state.Children,
+                static child => child?.RegistrationId,
+                "/children",
+                "registrationId");
+            ValidateCanonicalIdentities(
+                state.Partitions,
+                static partition => partition?.RegistrationId,
+                "/partitions",
+                "registrationId");
+            ValidateCanonicalIdentities(
+                state.Recurrences,
+                static recurrence => recurrence?.RegistrationId,
+                "/recurrences",
+                "registrationId");
+            ValidateCanonicalIdentities(
                 state.Waits,
                 static wait => wait?.RegistrationId.Value,
                 "/waits",
@@ -437,6 +479,33 @@ public static class ProcessContinuationValidator
                 }
             }
 
+            for (var index = 0; index < state.Children.Length; index++)
+            {
+                var child = state.Children[index];
+                if (child is not null && !string.IsNullOrWhiteSpace(child.RegistrationId))
+                {
+                    children.TryAdd(child.RegistrationId, (child, index));
+                }
+            }
+
+            for (var index = 0; index < state.Partitions.Length; index++)
+            {
+                var partition = state.Partitions[index];
+                if (partition is not null && !string.IsNullOrWhiteSpace(partition.RegistrationId))
+                {
+                    partitions.TryAdd(partition.RegistrationId, (partition, index));
+                }
+            }
+
+            for (var index = 0; index < state.Recurrences.Length; index++)
+            {
+                var recurrence = state.Recurrences[index];
+                if (recurrence is not null && !string.IsNullOrWhiteSpace(recurrence.RegistrationId))
+                {
+                    recurrences.TryAdd(recurrence.RegistrationId, (recurrence, index));
+                }
+            }
+
             for (var index = 0; index < state.BufferedInputs.Length; index++)
             {
                 var buffered = state.BufferedInputs[index];
@@ -496,6 +565,33 @@ public static class ProcessContinuationValidator
                 if (wait is not null)
                 {
                     ResolveNode(wait.Node, ItemLocation("/waits", index, "node"));
+                }
+            }
+
+            for (var index = 0; index < state.Children.Length; index++)
+            {
+                var child = state.Children[index];
+                if (child is not null)
+                {
+                    ResolveNode(child.Node, ItemLocation("/children", index, "node"));
+                }
+            }
+
+            for (var index = 0; index < state.Partitions.Length; index++)
+            {
+                var partition = state.Partitions[index];
+                if (partition is not null)
+                {
+                    ResolveNode(partition.Node, ItemLocation("/partitions", index, "node"));
+                }
+            }
+
+            for (var index = 0; index < state.Recurrences.Length; index++)
+            {
+                var recurrence = state.Recurrences[index];
+                if (recurrence is not null)
+                {
+                    ResolveNode(recurrence.Node, ItemLocation("/recurrences", index, "node"));
                 }
             }
 
@@ -572,6 +668,26 @@ public static class ProcessContinuationValidator
         void ValidateWaitShape(ProcessWaitState wait, int index)
         {
             var location = ItemLocation("/waits", index);
+            var tokenFound = tokens.TryGetValue(wait.Token, out var token);
+            var identityValid = wait.Occurrence >= 0
+                && tokenFound
+                && !string.IsNullOrWhiteSpace(wait.Node.Value)
+                && token.Token.Step > wait.Occurrence
+                && (!wait.Active || token.Token.Step - 1 == wait.Occurrence)
+                && wait.RegistrationId == ProcessReferenceIdentities.WaitRegistration(
+                    state.Continuation,
+                    wait.Token,
+                    wait.Node,
+                    wait.Occurrence);
+            if (!identityValid)
+            {
+                Error(
+                    ProcessContinuationDiagnosticCodes.WaitShapeMismatch,
+                    $"Wait '{wait.RegistrationId}' contradicts its exact token-step occurrence identity.",
+                    Child(location, "registrationId"),
+                    subject: wait.RegistrationId.Value);
+            }
+
             if (!planNodes.TryGetValue(wait.Node, out var node))
             {
                 return;
@@ -582,7 +698,9 @@ public static class ProcessContinuationValidator
                 (ProcessWaitKind.AwaitMatch, AwaitMatchProcessNode) => true,
                 (ProcessWaitKind.Timer, TimerProcessNode) => true,
                 (ProcessWaitKind.DurableCut, DurableCutProcessNode) => true,
-                (ProcessWaitKind.Request, RequestProcessNode) => true,
+                (ProcessWaitKind.Request, RequestProcessNode or InvokeProcessProcessNode or ForEachPartitionProcessNode) => true,
+                (ProcessWaitKind.PartitionBatch, ForEachPartitionProcessNode) => true,
+                (ProcessWaitKind.RepeatAcrossActivation, RepeatAcrossActivationProcessNode) => true,
                 _ => false
             };
             if (!kindMatches)
@@ -634,6 +752,9 @@ public static class ProcessContinuationValidator
                 (ProcessWaitKind.DurableCut, DurableCutProcessNode, _, _) => false,
                 (ProcessWaitKind.Request, RequestProcessNode request, { } winner, not null) =>
                     request.Outcomes.Any(outcome => outcome.Id == winner),
+                (ProcessWaitKind.Request, InvokeProcessProcessNode child, { } winner, not null) =>
+                    child.Outcomes.Any(outcome => outcome.Id == winner),
+                (ProcessWaitKind.Request, ForEachPartitionProcessNode, null, not null) => true,
                 (ProcessWaitKind.AwaitMatch, AwaitMatchProcessNode awaitMatch, { } winner, var input) =>
                     awaitMatch.Clauses.Any(clause =>
                         clause.Id == winner
@@ -732,14 +853,33 @@ public static class ProcessContinuationValidator
                 }
 
                 if (!planNodes.TryGetValue(wait.Node, out var node)
-                    || node is not RequestProcessNode requestNode
-                    || requestEntry.Request.Contract != requestNode.Contract)
+                    || !TryGetRequestNodeSemantics(node, out var requestContract)
+                    || requestEntry.Request.Contract != requestContract)
                 {
                     Error(
                         ProcessContinuationDiagnosticCodes.RequestStateMismatch,
                         $"Outstanding Request '{emission.Value}' does not match the exact compiled Request node.",
                         ItemLocation("/outstandingRequests", requestEntry.Index),
                         subject: emission.Value);
+                }
+
+                if (node is InvokeProcessProcessNode or ForEachPartitionProcessNode)
+                {
+                    var matchingChildren = children.Values.Count(candidate =>
+                        candidate.Child.Disposition == ProcessChildDisposition.Active
+                        && candidate.Child.Token == wait.Token
+                        && candidate.Child.Node == wait.Node
+                        && candidate.Child.RequestEmission == emission);
+                    if (matchingChildren != 1)
+                    {
+                        Error(
+                            ProcessContinuationDiagnosticCodes.ChildStateMismatch,
+                            $"Active child Request wait '{wait.RegistrationId}' must reverse-map to exactly one active child occurrence.",
+                            location,
+                            subject: wait.RegistrationId.Value,
+                            expected: "1",
+                            observed: matchingChildren.ToString(CultureInfo.InvariantCulture));
+                    }
                 }
             }
 
@@ -1178,6 +1318,807 @@ public static class ProcessContinuationValidator
             or ExecutionTokenDisposition.Active
             or ExecutionTokenDisposition.Waiting;
 
+        void ValidateChildren()
+        {
+            foreach (var (child, childIndex) in children.Values)
+            {
+                var location = ItemLocation("/children", childIndex);
+                if (!planNodes.TryGetValue(child.Node, out var node)
+                    || !TryGetChildNodeSemantics(
+                        node,
+                        out var process,
+                        out var contract,
+                        out var purpose,
+                        out var cancellation,
+                        out var multiplicity))
+                {
+                    Error(
+                        ProcessContinuationDiagnosticCodes.ChildStateMismatch,
+                        $"Child registration '{child.RegistrationId}' does not refer to a child-bearing Process node.",
+                        Child(location, "node"),
+                        subject: child.RegistrationId);
+                    continue;
+                }
+
+                var ownerFound = tokens.TryGetValue(child.Owner, out var owner);
+                var identityInputsValid = ownerFound
+                    && child.Occurrence >= 0
+                    && child.Continuation is not null
+                    && child.Process is not null
+                    && !string.IsNullOrWhiteSpace(child.Token.Value)
+                    && (multiplicity == ProcessChildRequestMultiplicity.Single
+                        ? child.ProgressIdentity is null
+                        : !string.IsNullOrWhiteSpace(child.ProgressIdentity));
+                var expectedRegistration = identityInputsValid
+                    ? ProcessReferenceIdentities.ChildRegistration(
+                        state.Continuation,
+                        child.Owner,
+                        child.Node,
+                        child.Occurrence,
+                        child.ProgressIdentity)
+                    : null;
+                var expectedToken = identityInputsValid
+                    && multiplicity == ProcessChildRequestMultiplicity.Partitioned
+                    ? ProcessReferenceIdentities.PartitionToken(
+                        state.Continuation,
+                        child.Owner,
+                        child.Node,
+                        child.Occurrence,
+                        child.ProgressIdentity!)
+                    : child.Owner;
+                var expectedContinuation = identityInputsValid
+                    ? ProcessReferenceIdentities.ChildContinuation(
+                        state.Continuation,
+                        child.Owner,
+                        child.Node,
+                        child.Occurrence,
+                        child.ProgressIdentity,
+                        process)
+                    : null;
+                var expectedRequestWait = identityInputsValid
+                    ? ProcessReferenceIdentities.WaitRegistration(
+                        state.Continuation,
+                        child.Token,
+                        child.Node,
+                        multiplicity == ProcessChildRequestMultiplicity.Single ? child.Occurrence : 0)
+                    : default;
+                var identityValid = identityInputsValid
+                    && owner.Token.Step > child.Occurrence
+                    && string.Equals(child.RegistrationId, expectedRegistration, StringComparison.Ordinal)
+                    && child.Token == expectedToken
+                    && child.Process == process
+                    && child.Continuation == expectedContinuation
+                    && child.Purpose == purpose
+                    && child.Cancellation == cancellation;
+                if (!identityValid)
+                {
+                    Error(
+                        ProcessContinuationDiagnosticCodes.ChildStateMismatch,
+                        $"Child registration '{child.RegistrationId}' contradicts its exact owner, node, definition, policy, or derived identity.",
+                        location,
+                        subject: child.RegistrationId);
+                }
+
+                if (!Enum.IsDefined(child.Disposition)
+                    || child.Disposition == ProcessChildDisposition.Unspecified)
+                {
+                    Error(
+                        ProcessContinuationDiagnosticCodes.ChildStateMismatch,
+                        $"Child registration '{child.RegistrationId}' has no durable lifecycle disposition.",
+                        Child(location, "disposition"),
+                        subject: child.RegistrationId);
+                    continue;
+                }
+
+                if (multiplicity == ProcessChildRequestMultiplicity.Single
+                    && child.Disposition is (ProcessChildDisposition.Pending
+                        or ProcessChildDisposition.CancelledBeforeStart))
+                {
+                    Error(
+                        ProcessContinuationDiagnosticCodes.ChildStateMismatch,
+                        $"Direct child registration '{child.RegistrationId}' cannot retain a pre-start lifecycle disposition because InvokeProcess starts atomically.",
+                        Child(location, "disposition"),
+                        subject: child.RegistrationId);
+                }
+
+                if (multiplicity == ProcessChildRequestMultiplicity.Single
+                    && child.Disposition is (ProcessChildDisposition.CancellationRequested
+                        or ProcessChildDisposition.Detached)
+                    && (!ownerFound || !IsTerminal(owner.Token.Disposition)))
+                {
+                    Error(
+                        ProcessContinuationDiagnosticCodes.ChildStateMismatch,
+                        $"Direct child registration '{child.RegistrationId}' cannot retain a cancellation disposition while its shared owner token remains live.",
+                        Child(location, "token"),
+                        subject: child.RegistrationId);
+                }
+
+                var requestCount = child.RequestEmission is { } emission
+                    ? requests.Values.Count(candidate =>
+                        candidate.Request.Emission == emission
+                        && candidate.Request.Token == child.Token
+                        && candidate.Request.Node == child.Node
+                        && candidate.Request.Contract == contract)
+                    : 0;
+                var waitCount = child.RequestEmission is { } requestEmission
+                    ? waits.Values.Count(candidate =>
+                        candidate.Wait.Active
+                        && candidate.Wait.Kind == ProcessWaitKind.Request
+                        && candidate.Wait.Token == child.Token
+                        && candidate.Wait.Node == child.Node
+                        && candidate.Wait.RegistrationId == expectedRequestWait
+                        && candidate.Wait.ObligationEmission == requestEmission)
+                    : 0;
+                var lifecycleShapeValid = child.Disposition switch
+                {
+                    ProcessChildDisposition.Pending or ProcessChildDisposition.CancelledBeforeStart =>
+                        child.RequestEmission is null
+                        && child.TerminalOutcome is null
+                        && child.Result is null
+                        && requestCount == 0
+                        && waitCount == 0,
+                    ProcessChildDisposition.Active =>
+                        child.RequestEmission is not null
+                        && child.TerminalOutcome is null
+                        && child.Result is null
+                        && requestCount == 1
+                        && waitCount == 1
+                        && tokens.TryGetValue(child.Token, out var activeToken)
+                        && activeToken.Token.Disposition == ExecutionTokenDisposition.Waiting,
+                    ProcessChildDisposition.Completed or ProcessChildDisposition.Failed =>
+                        child.RequestEmission is not null
+                        && child.TerminalOutcome is not null
+                        && child.Result is not null
+                        && requestCount == 0
+                        && waitCount == 0,
+                    ProcessChildDisposition.CancellationRequested or ProcessChildDisposition.Detached =>
+                        child.RequestEmission is not null
+                        && child.TerminalOutcome is null
+                        && child.Result is null
+                        && requestCount == 0
+                        && waitCount == 0,
+                    _ => false
+                };
+                if (!lifecycleShapeValid)
+                {
+                    Error(
+                        ProcessContinuationDiagnosticCodes.ChildStateMismatch,
+                        $"Child registration '{child.RegistrationId}' has Request or result evidence that contradicts its lifecycle disposition.",
+                        location,
+                        subject: child.RegistrationId);
+                }
+
+                if (child.Disposition is ProcessChildDisposition.Pending
+                    or ProcessChildDisposition.CancelledBeforeStart)
+                {
+                    if (waits.Values.Any(candidate =>
+                            candidate.Wait.Kind == ProcessWaitKind.Request
+                            && candidate.Wait.Token == child.Token
+                            && candidate.Wait.Node == child.Node))
+                    {
+                        Error(
+                            ProcessContinuationDiagnosticCodes.ChildStateMismatch,
+                            $"Pre-start child registration '{child.RegistrationId}' cannot retain a Request wait.",
+                            Child(location, "requestEmission"),
+                            subject: child.RegistrationId);
+                    }
+                }
+                else if (child.Disposition is ProcessChildDisposition.CancellationRequested
+                    or ProcessChildDisposition.Detached)
+                {
+                    ValidateCancelledChildEvidence(child, childIndex, expectedRequestWait);
+                }
+
+                if (multiplicity == ProcessChildRequestMultiplicity.Partitioned)
+                {
+                    var memberFound = tokens.TryGetValue(child.Token, out var member);
+                    var memberLifecycleValid = child.Disposition switch
+                    {
+                        ProcessChildDisposition.Pending or ProcessChildDisposition.CancelledBeforeStart =>
+                            !memberFound,
+                        ProcessChildDisposition.Active =>
+                            memberFound
+                            && member.Token.Disposition == ExecutionTokenDisposition.Waiting
+                            && member.Token.Node == child.Node,
+                        ProcessChildDisposition.Completed or ProcessChildDisposition.Failed =>
+                            memberFound
+                            && member.Token.Disposition == ExecutionTokenDisposition.Completed
+                            && member.Token.Node == child.Node,
+                        ProcessChildDisposition.CancellationRequested or ProcessChildDisposition.Detached =>
+                            memberFound
+                            && member.Token.Disposition == ExecutionTokenDisposition.Cancelled
+                            && member.Token.Node == child.Node,
+                        _ => false
+                    };
+                    if (!memberLifecycleValid)
+                    {
+                        Error(
+                            ProcessContinuationDiagnosticCodes.ChildStateMismatch,
+                            $"Partition child '{child.RegistrationId}' contradicts its deterministic member-token lifecycle.",
+                            Child(location, "token"),
+                            subject: child.RegistrationId);
+                    }
+                }
+
+                if (child.TerminalOutcome is { } outcomeId && child.Result is { } result)
+                {
+                    var requestDefinition = plan.ValidationContext.InteractionContracts is { } catalog
+                        && catalog.TryResolve(contract, out var resolved)
+                        ? resolved as RequestContractDefinition
+                        : null;
+                    var outcome = requestDefinition?.Response.Find(outcomeId);
+                    var resultValid = outcome is not null
+                        && result.Contract == outcome.Schema.Contract
+                        && PortableExecutionValidator.Validate(result, plan.ValidationContext.ShapeGraph).IsValid
+                        && (child.Disposition == ProcessChildDisposition.Completed)
+                        == (outcome is RequestResultDefinition);
+                    if (!resultValid)
+                    {
+                        Error(
+                            ProcessContinuationDiagnosticCodes.ChildStateMismatch,
+                            $"Child registration '{child.RegistrationId}' terminal result violates its exact Request outcome contract or classification.",
+                            Child(location, "result"),
+                            subject: child.RegistrationId);
+                    }
+
+                    ValidateTerminalChildEvidence(
+                        child,
+                        childIndex,
+                        node,
+                        contract,
+                        expectedRequestWait,
+                        outcomeId,
+                        result);
+                }
+            }
+
+            foreach (var group in children.Values
+                         .Where(static candidate => candidate.Child.RequestEmission is not null)
+                         .GroupBy(static candidate => candidate.Child.RequestEmission!.Value))
+            {
+                if (group.Count() <= 1)
+                {
+                    continue;
+                }
+
+                var duplicate = group.OrderBy(static candidate => candidate.Index).Last();
+                Error(
+                    ProcessContinuationDiagnosticCodes.ChildStateMismatch,
+                    "A child Request emission can belong to exactly one child occurrence.",
+                    ItemLocation("/children", duplicate.Index, "requestEmission"),
+                    subject: duplicate.Child.RegistrationId,
+                    expected: "1",
+                    observed: group.Count().ToString(CultureInfo.InvariantCulture));
+            }
+
+            foreach (var group in children.Values
+                         .Where(static candidate => candidate.Child.ProgressIdentity is null)
+                         .GroupBy(static candidate => (
+                             candidate.Child.Owner,
+                             candidate.Child.Node,
+                             candidate.Child.Occurrence)))
+            {
+                if (group.Count() <= 1)
+                {
+                    continue;
+                }
+
+                var duplicate = group.OrderBy(static candidate => candidate.Index).Last();
+                Error(
+                    ProcessContinuationDiagnosticCodes.ChildStateMismatch,
+                    "An InvokeProcess owner, node, and occurrence can retain exactly one direct child.",
+                    ItemLocation("/children", duplicate.Index),
+                    subject: duplicate.Child.RegistrationId,
+                    expected: "1",
+                    observed: group.Count().ToString(CultureInfo.InvariantCulture));
+            }
+        }
+
+        void ValidateTerminalChildEvidence(
+            ProcessChildState child,
+            int childIndex,
+            CanonicalProcessNode node,
+            RequestContractReference contract,
+            ProcessWaitRegistrationId expectedWait,
+            RequestTerminalOutcomeId outcome,
+            PortableValue result)
+        {
+            var location = ItemLocation("/children", childIndex);
+            var childRequestWaits = waits.Values.Where(candidate =>
+                candidate.Wait.Kind == ProcessWaitKind.Request
+                && candidate.Wait.Token == child.Token
+                && candidate.Wait.Node == child.Node
+                && candidate.Wait.ObligationEmission == child.RequestEmission).ToArray();
+            if (childRequestWaits is not [var waitEntry]
+                || waitEntry.Wait.Active
+                || waitEntry.Wait.RegistrationId != expectedWait)
+            {
+                Error(
+                    ProcessContinuationDiagnosticCodes.ChildStateMismatch,
+                    $"Terminal child registration '{child.RegistrationId}' requires one exact inactive Request wait tombstone.",
+                    Child(location, "requestEmission"),
+                    subject: child.RegistrationId,
+                    expected: "1",
+                    observed: childRequestWaits.Length.ToString(CultureInfo.InvariantCulture));
+                return;
+            }
+
+            var wait = waitEntry.Wait;
+            var expectedWinner = ProcessRequestSemantics.TryProject(node, out var semantics)
+                ? semantics.Outcomes.SingleOrDefault(candidate => candidate.Outcome == outcome)?.Id
+                : null;
+            var winnerShapeValid = wait.WinnerInput is not null
+                && (node is ForEachPartitionProcessNode
+                    ? wait.WinnerClause is null
+                    : expectedWinner is not null && wait.WinnerClause == expectedWinner);
+            var consumedReplies = inputReceipts.Values.Where(candidate =>
+                candidate.Receipt.Disposition == ProcessInputAdmissionDisposition.Consumed
+                && candidate.Receipt.Target.Continuation == state.Continuation
+                && candidate.Receipt.Target.Token == child.Token
+                && candidate.Receipt.Input.Envelope is ReplyEnvelope reply
+                && reply.InReplyTo == child.RequestEmission).ToArray();
+            var receiptValid = wait.WinnerInput is { } winner
+                && consumedReplies is [var receiptEntry]
+                && receiptEntry.Receipt.Emission == winner
+                && receiptEntry.Receipt.WaitRegistrationId == wait.RegistrationId
+                && receiptEntry.Receipt.Target.WaitRegistrationId == wait.RegistrationId
+                && receiptEntry.Receipt.Input.Envelope is ReplyEnvelope reply
+                && reply.Context.EmissionId == winner
+                && reply.InReplyTo == child.RequestEmission
+                && reply.Outcome.Id == outcome
+                && reply.Outcome.Value == result
+                && reply.Context.Origin is ProcessInteractionOrigin origin
+                && origin.Definition == child.Process
+                && origin.Continuation == child.Continuation
+                && plan.ValidationContext.InteractionContracts is { } catalog
+                && catalog.TryResolve(reply.Contract, out var resolvedReply)
+                && resolvedReply is ReplyContractDefinition replyDefinition
+                && replyDefinition.Request == contract
+                && replyDefinition.Outcome == outcome;
+            if (winnerShapeValid && receiptValid)
+            {
+                return;
+            }
+
+            Error(
+                ProcessContinuationDiagnosticCodes.ChildStateMismatch,
+                $"Terminal child registration '{child.RegistrationId}' lacks its exact consumed Reply, winner, target, contract, outcome, value, or child origin evidence.",
+                Child(location, "result"),
+                subject: child.RegistrationId);
+        }
+
+        void ValidateCancelledChildEvidence(
+            ProcessChildState child,
+            int childIndex,
+            ProcessWaitRegistrationId expectedWait)
+        {
+            var location = ItemLocation("/children", childIndex);
+            var childRequestWaits = waits.Values.Where(candidate =>
+                candidate.Wait.Kind == ProcessWaitKind.Request
+                && candidate.Wait.Token == child.Token
+                && candidate.Wait.Node == child.Node
+                && candidate.Wait.ObligationEmission == child.RequestEmission).ToArray();
+            var consumedReplies = inputReceipts.Values.Count(candidate =>
+                candidate.Receipt.Disposition == ProcessInputAdmissionDisposition.Consumed
+                && candidate.Receipt.Target.Continuation == state.Continuation
+                && candidate.Receipt.Target.Token == child.Token
+                && candidate.Receipt.Input.Envelope is ReplyEnvelope reply
+                && reply.InReplyTo == child.RequestEmission);
+            if (childRequestWaits is [var waitEntry]
+                && !waitEntry.Wait.Active
+                && waitEntry.Wait.RegistrationId == expectedWait
+                && waitEntry.Wait.WinnerClause is null
+                && waitEntry.Wait.WinnerInput is null
+                && consumedReplies == 0)
+            {
+                return;
+            }
+
+            Error(
+                ProcessContinuationDiagnosticCodes.ChildStateMismatch,
+                $"Cancelled or detached child registration '{child.RegistrationId}' requires one exact unresolved Request tombstone and no consumed Reply.",
+                Child(location, "requestEmission"),
+                subject: child.RegistrationId,
+                expected: "one inactive winnerless wait; zero consumed Replies",
+                observed: $"waits={childRequestWaits.Length}; consumedReplies={consumedReplies}");
+        }
+
+        void ValidatePartitions()
+        {
+            foreach (var (partition, partitionIndex) in partitions.Values)
+            {
+                var location = ItemLocation("/partitions", partitionIndex);
+                if (!planNodes.TryGetValue(partition.Node, out var planNode)
+                    || planNode is not ForEachPartitionProcessNode node)
+                {
+                    Error(
+                        ProcessContinuationDiagnosticCodes.PartitionStateMismatch,
+                        $"Partition registration '{partition.RegistrationId}' does not refer to bounded partition work.",
+                        Child(location, "node"),
+                        subject: partition.RegistrationId);
+                    continue;
+                }
+
+                var ownerFound = tokens.TryGetValue(partition.Owner, out var owner);
+                var identityValid = ownerFound
+                    && partition.Occurrence >= 0
+                    && owner.Token.Step > partition.Occurrence
+                    && string.Equals(
+                        partition.RegistrationId,
+                        ProcessReferenceIdentities.PartitionRegistration(
+                            state.Continuation,
+                            partition.Owner,
+                            partition.Node,
+                            partition.Occurrence),
+                        StringComparison.Ordinal);
+                if (!identityValid)
+                {
+                    Error(
+                        ProcessContinuationDiagnosticCodes.PartitionStateMismatch,
+                        $"Partition registration '{partition.RegistrationId}' contradicts its exact owner occurrence identity.",
+                        location,
+                        subject: partition.RegistrationId);
+                }
+
+                var matchingWaits = ownerFound
+                    && partition.Occurrence >= 0
+                    ? waits.Values.Where(candidate =>
+                        candidate.Wait.Kind == ProcessWaitKind.PartitionBatch
+                        && candidate.Wait.Token == partition.Owner
+                        && candidate.Wait.Node == partition.Node
+                        && candidate.Wait.Occurrence == partition.Occurrence
+                        && candidate.Wait.RegistrationId == ProcessReferenceIdentities.WaitRegistration(
+                            state.Continuation,
+                            partition.Owner,
+                            partition.Node,
+                            partition.Occurrence)).ToArray()
+                    : [];
+                var waitShapeValid = matchingWaits is [var exactWait]
+                    && exactWait.Wait.Active == !partition.Resolved;
+                var ownerShapeValid = waitShapeValid
+                    && (partition.Resolved
+                        || ownerFound
+                           && owner.Token.Disposition == ExecutionTokenDisposition.Waiting
+                           && owner.Token.Node == partition.Node);
+                if (!ownerShapeValid)
+                {
+                    Error(
+                        ProcessContinuationDiagnosticCodes.PartitionStateMismatch,
+                        $"Partition registration '{partition.RegistrationId}' contradicts its coordinator wait or resolved state.",
+                        Child(location, "resolved"),
+                        subject: partition.RegistrationId);
+                }
+
+                if (partition.Work.Length > node.Limits.MaximumItems)
+                {
+                    Error(
+                        ProcessContinuationDiagnosticCodes.PartitionStateMismatch,
+                        $"Partition registration '{partition.RegistrationId}' exceeds its compiled maximum item count.",
+                        Child(location, "work"),
+                        subject: partition.RegistrationId,
+                        expected: $"<= {node.Limits.MaximumItems}",
+                        observed: partition.Work.Length.ToString(CultureInfo.InvariantCulture));
+                }
+
+                string? previous = null;
+                HashSet<string> progressIds = new(StringComparer.Ordinal);
+                HashSet<string> childIds = new(StringComparer.Ordinal);
+                for (var workIndex = 0; workIndex < partition.Work.Length; workIndex++)
+                {
+                    var work = partition.Work[workIndex];
+                    var workLocation = ItemLocation(Child(location, "work"), workIndex);
+                    if (work is null)
+                    {
+                        Error(
+                            ProcessContinuationDiagnosticCodes.PartitionStateMismatch,
+                            "Partition work cannot contain a null item.",
+                            workLocation,
+                            subject: partition.RegistrationId);
+                        continue;
+                    }
+
+                    var workValid = !string.IsNullOrWhiteSpace(work.ProgressIdentity)
+                        && progressIds.Add(work.ProgressIdentity)
+                        && (previous is null
+                            || StringComparer.Ordinal.Compare(previous, work.ProgressIdentity) < 0)
+                        && !string.IsNullOrWhiteSpace(work.ChildRegistrationId)
+                        && childIds.Add(work.ChildRegistrationId)
+                        && work.Partition is not null
+                        && work.Partition.Contract == node.Partition.Contract
+                        && work.Partition.State is not (
+                            PortableValueState.Missing
+                            or PortableValueState.Unknown
+                            or PortableValueState.Failed)
+                        && PortableExecutionValidator.Validate(
+                            work.Partition,
+                            plan.ValidationContext.ShapeGraph).IsValid
+                        && children.TryGetValue(work.ChildRegistrationId, out var child)
+                        && child.Child.Owner == partition.Owner
+                        && child.Child.Node == partition.Node
+                        && child.Child.Occurrence == partition.Occurrence
+                        && string.Equals(
+                            child.Child.ProgressIdentity,
+                            work.ProgressIdentity,
+                            StringComparison.Ordinal);
+                    if (!workValid)
+                    {
+                        Error(
+                            ProcessContinuationDiagnosticCodes.PartitionStateMismatch,
+                            $"Partition work '{work.ProgressIdentity}' is noncanonical or contradicts its typed value and exact child occurrence.",
+                            workLocation,
+                            subject: partition.RegistrationId);
+                    }
+                    previous = work.ProgressIdentity;
+                }
+
+                var unexpectedChildren = children.Values.Count(candidate =>
+                    candidate.Child.Owner == partition.Owner
+                    && candidate.Child.Node == partition.Node
+                    && candidate.Child.Occurrence == partition.Occurrence
+                    && !childIds.Contains(candidate.Child.RegistrationId));
+                if (unexpectedChildren != 0)
+                {
+                    Error(
+                        ProcessContinuationDiagnosticCodes.PartitionStateMismatch,
+                        $"Partition registration '{partition.RegistrationId}' does not name every child in its exact occurrence.",
+                        Child(location, "work"),
+                        subject: partition.RegistrationId,
+                        observed: unexpectedChildren.ToString(CultureInfo.InvariantCulture));
+                }
+
+                var occurrenceChildren = partition.Work
+                    .Where(static work => work is not null)
+                    .Select(work => children.TryGetValue(work.ChildRegistrationId, out var child)
+                        ? child.Child
+                        : null)
+                    .Where(static child => child is not null)
+                    .ToArray();
+                var activeChildren = occurrenceChildren.Count(static child => child!.Disposition
+                    == ProcessChildDisposition.Active);
+                var resolutionShapeValid = activeChildren <= node.Limits.MaximumParallelism
+                    && (partition.Resolved
+                        ? occurrenceChildren.All(static child => child!.Disposition is not (
+                            ProcessChildDisposition.Pending or ProcessChildDisposition.Active))
+                        : occurrenceChildren.All(static child => child!.Disposition is not (
+                            ProcessChildDisposition.Failed
+                            or ProcessChildDisposition.CancellationRequested
+                            or ProcessChildDisposition.Detached
+                            or ProcessChildDisposition.CancelledBeforeStart)));
+                if (!resolutionShapeValid)
+                {
+                    Error(
+                        ProcessContinuationDiagnosticCodes.PartitionStateMismatch,
+                        $"Partition registration '{partition.RegistrationId}' contradicts its parallelism bound or resolved child lifecycle.",
+                        Child(location, "resolved"),
+                        subject: partition.RegistrationId,
+                        expected: $"active <= {node.Limits.MaximumParallelism}; coherent resolution");
+                }
+            }
+
+
+            foreach (var group in partitions.Values
+                         .Where(static candidate => !candidate.Partition.Resolved)
+                         .GroupBy(static candidate => (
+                             candidate.Partition.Owner,
+                             candidate.Partition.Node)))
+            {
+                if (group.Count() <= 1)
+                {
+                    continue;
+                }
+
+                var duplicate = group.OrderBy(static candidate => candidate.Index).Last();
+                Error(
+                    ProcessContinuationDiagnosticCodes.PartitionStateMismatch,
+                    "A coordinator token and bounded-work node can retain at most one unresolved partition occurrence.",
+                    ItemLocation("/partitions", duplicate.Index),
+                    subject: duplicate.Partition.RegistrationId,
+                    expected: "1",
+                    observed: group.Count().ToString(CultureInfo.InvariantCulture));
+            }
+
+            foreach (var (wait, waitIndex) in waits.Values)
+            {
+                if (wait.Kind != ProcessWaitKind.PartitionBatch)
+                {
+                    continue;
+                }
+
+                var matching = partitions.Values.Count(candidate =>
+                    candidate.Partition.Owner == wait.Token
+                    && candidate.Partition.Node == wait.Node
+                    && !string.IsNullOrWhiteSpace(candidate.Partition.Owner.Value)
+                    && !string.IsNullOrWhiteSpace(candidate.Partition.Node.Value)
+                    && candidate.Partition.Occurrence >= 0
+                    && candidate.Partition.Occurrence == wait.Occurrence
+                    && wait.Active == !candidate.Partition.Resolved
+                    && wait.RegistrationId == ProcessReferenceIdentities.WaitRegistration(
+                        state.Continuation,
+                        candidate.Partition.Owner,
+                        candidate.Partition.Node,
+                        candidate.Partition.Occurrence));
+                if (matching != 1)
+                {
+                    Error(
+                        ProcessContinuationDiagnosticCodes.PartitionStateMismatch,
+                        $"PartitionBatch wait '{wait.RegistrationId}' requires one exact partition occurrence with the reciprocal lifecycle.",
+                        ItemLocation("/waits", waitIndex),
+                        subject: wait.RegistrationId.Value,
+                        expected: "1",
+                        observed: matching.ToString(CultureInfo.InvariantCulture));
+                }
+            }
+        }
+
+        void ValidateRecurrences()
+        {
+            foreach (var (recurrence, recurrenceIndex) in recurrences.Values)
+            {
+                var location = ItemLocation("/recurrences", recurrenceIndex);
+                if (!planNodes.TryGetValue(recurrence.Node, out var planNode)
+                    || planNode is not RepeatAcrossActivationProcessNode node)
+                {
+                    Error(
+                        ProcessContinuationDiagnosticCodes.RecurrenceStateMismatch,
+                        $"Recurrence registration '{recurrence.RegistrationId}' does not refer to explicit durable recurrence.",
+                        Child(location, "node"),
+                        subject: recurrence.RegistrationId);
+                    continue;
+                }
+
+                var tokenFound = tokens.TryGetValue(recurrence.Token, out var token);
+                var identityValid = tokenFound
+                    && recurrence.Occurrence >= 0
+                    && token.Token.Step > recurrence.Occurrence
+                    && string.Equals(
+                        recurrence.RegistrationId,
+                        ProcessReferenceIdentities.RecurrenceRegistration(
+                            state.Continuation,
+                            recurrence.Token,
+                            recurrence.Node,
+                            recurrence.Occurrence),
+                        StringComparison.Ordinal);
+                var countsValid = recurrence.RepeatCount is >= 1
+                    && recurrence.RepeatCount <= node.Policy.MaximumOccurrences
+                    && recurrence.UnchangedProgressCount >= 0
+                    && (recurrence.UnchangedProgressCount < recurrence.RepeatCount
+                        || !recurrence.Active
+                           && recurrence.UnchangedProgressCount == recurrence.RepeatCount
+                           && (long)recurrence.UnchangedProgressCount
+                               == (long)node.Policy.MaximumUnchangedProgressOccurrences + 1L)
+                    && (long)recurrence.UnchangedProgressCount
+                        <= (long)node.Policy.MaximumUnchangedProgressOccurrences + 1L
+                    && (recurrence.Active
+                        ? recurrence.UnchangedProgressCount <= node.Policy.MaximumUnchangedProgressOccurrences
+                        : true);
+                var progressValid = recurrence.LastProgress is { } progress
+                    && progress.Contract == node.ProgressContract
+                    && progress.State is not (
+                        PortableValueState.Missing
+                        or PortableValueState.Unknown
+                        or PortableValueState.Failed)
+                    && PortableExecutionValidator.Validate(progress, plan.ValidationContext.ShapeGraph).IsValid;
+                var activeValid = !recurrence.Active
+                    || tokenFound
+                       && IsLive(token.Token.Disposition)
+                       && token.Token.Step > 0;
+                var initialWaitCount = tokenFound
+                    && recurrence.Occurrence >= 0
+                    ? waits.Values.Count(candidate =>
+                        candidate.Wait.Kind == ProcessWaitKind.RepeatAcrossActivation
+                        && candidate.Wait.Token == recurrence.Token
+                        && candidate.Wait.Node == recurrence.Node
+                        && candidate.Wait.RegistrationId == ProcessReferenceIdentities.WaitRegistration(
+                            state.Continuation,
+                            recurrence.Token,
+                            recurrence.Node,
+                            recurrence.Occurrence))
+                    : 0;
+                if (!identityValid
+                    || !countsValid
+                    || !progressValid
+                    || !activeValid
+                    || initialWaitCount != 1)
+                {
+                    Error(
+                        ProcessContinuationDiagnosticCodes.RecurrenceStateMismatch,
+                        $"Recurrence registration '{recurrence.RegistrationId}' contradicts its identity, progress, limits, token lifecycle, or initial wait tombstone.",
+                        location,
+                        subject: recurrence.RegistrationId);
+                }
+            }
+
+            foreach (var (wait, waitIndex) in waits.Values)
+            {
+                if (wait.Kind != ProcessWaitKind.RepeatAcrossActivation)
+                {
+                    continue;
+                }
+
+                var matching = recurrences.Values.Count(candidate =>
+                    candidate.Recurrence.Token == wait.Token
+                    && candidate.Recurrence.Node == wait.Node
+                    && wait.Occurrence >= candidate.Recurrence.Occurrence
+                    && (!wait.Active
+                        || candidate.Recurrence.Active
+                           && tokens.TryGetValue(wait.Token, out var token)
+                           && !string.IsNullOrWhiteSpace(wait.Node.Value)
+                           && token.Token.Step > 0
+                           && wait.RegistrationId == ProcessReferenceIdentities.WaitRegistration(
+                               state.Continuation,
+                               wait.Token,
+                               wait.Node,
+                               token.Token.Step - 1)));
+                if (wait.Active ? matching != 1 : matching == 0)
+                {
+                    Error(
+                        ProcessContinuationDiagnosticCodes.RecurrenceStateMismatch,
+                        wait.Active
+                            ? $"Repeat wait '{wait.RegistrationId}' requires one exact active recurrence occurrence."
+                            : $"Repeat wait tombstone '{wait.RegistrationId}' requires one retained recurrence occurrence.",
+                        ItemLocation("/waits", waitIndex),
+                        subject: wait.RegistrationId.Value,
+                        expected: "1",
+                        observed: matching.ToString(CultureInfo.InvariantCulture));
+                }
+            }
+
+            foreach (var group in recurrences.Values.GroupBy(static candidate => (
+                         candidate.Recurrence.Token,
+                         candidate.Recurrence.Node)))
+            {
+                var expectedWaitCount = group.Sum(static candidate => (long)candidate.Recurrence.RepeatCount);
+                var recurrenceWaits = waits.Values.Count(candidate =>
+                    candidate.Wait.Kind == ProcessWaitKind.RepeatAcrossActivation
+                    && candidate.Wait.Token == group.Key.Token
+                    && candidate.Wait.Node == group.Key.Node);
+                var expectedActiveCount = group.Count(candidate =>
+                    candidate.Recurrence.Active
+                    && tokens.TryGetValue(candidate.Recurrence.Token, out var token)
+                    && token.Token.Disposition == ExecutionTokenDisposition.Waiting
+                    && token.Token.Node == candidate.Recurrence.Node);
+                var activeWaitCount = waits.Values.Count(candidate =>
+                    candidate.Wait.Active
+                    && candidate.Wait.Kind == ProcessWaitKind.RepeatAcrossActivation
+                    && candidate.Wait.Token == group.Key.Token
+                    && candidate.Wait.Node == group.Key.Node);
+                if (recurrenceWaits == expectedWaitCount && activeWaitCount == expectedActiveCount)
+                {
+                    continue;
+                }
+
+                var first = group.OrderBy(static candidate => candidate.Index).First();
+                Error(
+                    ProcessContinuationDiagnosticCodes.RecurrenceStateMismatch,
+                    "Retained recurrence state requires exactly one wait tombstone per committed repeat and one active recurrence wait while its token is parked at the recurrence node.",
+                    ItemLocation("/recurrences", first.Index),
+                    subject: first.Recurrence.RegistrationId,
+                    expected: $"waits={expectedWaitCount}; active={expectedActiveCount}",
+                    observed: $"waits={recurrenceWaits}; active={activeWaitCount}");
+            }
+
+
+            foreach (var group in recurrences.Values
+                         .GroupBy(static candidate => (
+                             candidate.Recurrence.Token,
+                             candidate.Recurrence.Node)))
+            {
+                if (group.Count() <= 1)
+                {
+                    continue;
+                }
+
+                var duplicate = group.OrderBy(static candidate => candidate.Index).Last();
+                Error(
+                    ProcessContinuationDiagnosticCodes.RecurrenceStateMismatch,
+                    "A token and recurrence node can retain at most one recurrence registration.",
+                    ItemLocation("/recurrences", duplicate.Index),
+                    subject: duplicate.Recurrence.RegistrationId,
+                    expected: "1",
+                    observed: group.Count().ToString(CultureInfo.InvariantCulture));
+            }
+        }
+
         void ValidateTerminalState()
         {
             if (state.Terminal is null)
@@ -1208,10 +2149,17 @@ public static class ProcessContinuationValidator
                         && branch.Disposition is ExecutionTokenDisposition.Ready
                             or ExecutionTokenDisposition.Active
                             or ExecutionTokenDisposition.Waiting)));
+            var liveChildren = state.Children.Count(static child => child is not null
+                && child.Disposition is ProcessChildDisposition.Pending or ProcessChildDisposition.Active);
+            var livePartitions = state.Partitions.Count(static partition => partition is { Resolved: false });
+            var liveRecurrences = state.Recurrences.Count(static recurrence => recurrence is { Active: true });
             if (state.BufferedInputs.IsDefaultOrEmpty
                 && liveTokens == 0
                 && activeWaits == 0
                 && liveForks == 0
+                && liveChildren == 0
+                && livePartitions == 0
+                && liveRecurrences == 0
                 && state.OutstandingRequests.IsDefaultOrEmpty)
             {
                 return;
@@ -1219,11 +2167,42 @@ public static class ProcessContinuationValidator
 
             Error(
                 ProcessContinuationDiagnosticCodes.TerminalStateInvalid,
-                "A terminal Process continuation cannot retain live tokens, waits, Requests, Fork work, or buffered input.",
+                "A terminal Process continuation cannot retain live tokens, waits, Requests, Fork, child, partition, recurrence work, or buffered input.",
                 state.BufferedInputs.IsDefaultOrEmpty ? "/terminal" : "/bufferedInputs",
                 subject: state.Continuation?.ProcessInstanceId.Value,
                 expected: "no live work",
-                observed: $"tokens={liveTokens}; waits={activeWaits}; forks={liveForks}; requests={state.OutstandingRequests.Length}; buffered={state.BufferedInputs.Length}");
+                observed: $"tokens={liveTokens}; waits={activeWaits}; forks={liveForks}; children={liveChildren}; partitions={livePartitions}; recurrences={liveRecurrences}; requests={state.OutstandingRequests.Length}; buffered={state.BufferedInputs.Length}");
+        }
+
+        static bool TryGetRequestNodeSemantics(
+            CanonicalProcessNode node,
+            out RequestContractReference contract) =>
+            ProcessRequestSemantics.TryGetContract(node, out contract);
+
+        static bool TryGetChildNodeSemantics(
+            CanonicalProcessNode node,
+            out ExecutionDefinitionReference process,
+            out RequestContractReference contract,
+            out ProcessChildPurpose purpose,
+            out ProcessChildCancellationPolicy cancellation,
+            out ProcessChildRequestMultiplicity multiplicity)
+        {
+            if (ProcessRequestSemantics.TryProjectChild(node, out var child))
+            {
+                process = child.Process;
+                contract = child.Contract;
+                purpose = child.Purpose;
+                cancellation = child.Cancellation;
+                multiplicity = child.Multiplicity;
+                return true;
+            }
+
+            process = null!;
+            contract = null!;
+            purpose = ProcessChildPurpose.Unspecified;
+            cancellation = ProcessChildCancellationPolicy.Unspecified;
+            multiplicity = default;
+            return false;
         }
 
         static Dictionary<ValueBindingId, ValueContract> BuildBindingContracts(CanonicalProcessDefinition definition)
@@ -1256,6 +2235,15 @@ public static class ProcessContinuationValidator
                         {
                             Add(contracts, outcome.Continuation.Output);
                         }
+                        break;
+                    case InvokeProcessProcessNode child:
+                        foreach (var outcome in child.Outcomes)
+                        {
+                            Add(contracts, outcome.Continuation.Output);
+                        }
+                        break;
+                    case ForEachPartitionProcessNode partition:
+                        Add(contracts, partition.Partition);
                         break;
                     case AwaitMatchProcessNode awaitMatch:
                         foreach (var clause in awaitMatch.Clauses)

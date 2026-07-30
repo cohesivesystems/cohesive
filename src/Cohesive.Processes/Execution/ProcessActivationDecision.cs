@@ -69,7 +69,28 @@ public enum ProcessTraceEventKind
     TerminalReached = 11,
 
     /// <summary>Cancellation was applied at an activation safe point.</summary>
-    CancellationApplied = 12
+    CancellationApplied = 12,
+
+    /// <summary>A replay-stable child Process occurrence was retained.</summary>
+    ChildRegistered = 13,
+
+    /// <summary>A child Process terminal outcome was admitted.</summary>
+    ChildResolved = 14,
+
+    /// <summary>Owner or partition closure retained a child cancellation-propagation intent.</summary>
+    ChildCancellationRequested = 15,
+
+    /// <summary>Owner or partition closure deliberately detached child work.</summary>
+    ChildDetached = 16,
+
+    /// <summary>A bounded partition-work occurrence was retained or resolved.</summary>
+    PartitionBatchChanged = 17,
+
+    /// <summary>A durable recurrence decision retained explicit progress evidence.</summary>
+    RecurrenceAdvanced = 18,
+
+    /// <summary>Owner or partition closure closed bounded child work before its Request was emitted.</summary>
+    ChildCancelledBeforeStart = 19
 }
 
 /// <summary>One ordered attributable observation from Process reference interpretation.</summary>

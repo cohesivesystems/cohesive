@@ -91,6 +91,8 @@ public static class ProcessCheckpointCompatibilityValidator
         ValidateOperationReceipts(plan, checkpoint, diagnostics);
         ValidateInboxEvidence(plan, checkpoint, diagnostics);
         ValidateEmissionLedger(plan, checkpoint, diagnostics);
+        ValidateAdmittedReplyEvidence(checkpoint, diagnostics);
+        ValidateChildRequestEvidence(plan, checkpoint, diagnostics);
         ValidateCleanAttempt(plan, checkpoint, diagnostics);
         diagnostics.Sort(DocumentValidationDiagnosticComparer.Ordinal);
         return DocumentValidationResult.FromDiagnostics(diagnostics);
@@ -552,6 +554,314 @@ public static class ProcessCheckpointCompatibilityValidator
         }
     }
 
+    static void ValidateAdmittedReplyEvidence(
+        ProcessDurableCheckpoint checkpoint,
+        ICollection<DocumentValidationDiagnostic> diagnostics)
+    {
+        Dictionary<EmissionId, ProcessDurableInboxEntry> inbox = [];
+        foreach (var entry in checkpoint.Inbox)
+        {
+            if (entry?.Input?.Envelope?.Context is { } context
+                && !string.IsNullOrWhiteSpace(context.EmissionId.Value))
+            {
+                inbox.TryAdd(context.EmissionId, entry);
+            }
+        }
+        for (var operationIndex = 0;
+             operationIndex < checkpoint.DurableOperations.Length;
+             operationIndex++)
+        {
+            var operation = checkpoint.DurableOperations[operationIndex];
+            if (operation is null || operation.Admission is not { AdvancesTarget: true })
+            {
+                continue;
+            }
+
+            var replyId = ProcessDurableRuntimeIdentities.OperationReply(operation.OperationId);
+            var exactReply = TryCreateAcceptedReplyInput(operation, out var expectedReplyInput)
+                && expectedReplyInput is not null
+                && inbox.TryGetValue(replyId, out var entry)
+                && ProcessStorageContentFingerprints.Input(entry.Input)
+                    == ProcessStorageContentFingerprints.Input(expectedReplyInput);
+            if (exactReply)
+            {
+                continue;
+            }
+
+            diagnostics.Add(Error(
+                ProcessCheckpointDiagnosticCodes.InboxReceiptIncompatible,
+                "An accepted durable Request admission must retain its exact canonical Reply inbox projection.",
+                $"/durableOperations/{operationIndex}/admission"));
+        }
+    }
+
+    static bool TryCreateAcceptedReplyInput(
+        DurableOperationState? operation,
+        out ProcessActivationInput? input)
+    {
+        input = null;
+        if (operation is not
+            {
+                Admission.AdvancesTarget: true,
+                Acknowledgement: not null,
+                Request.ResponseTarget: ProcessTokenInteractionTarget target
+            })
+        {
+            return false;
+        }
+
+        input = new(
+            target,
+            operation.CreateReply(
+                ProcessDurableRuntimeIdentities.OperationReply(operation.OperationId),
+                ProcessDurableRuntimeIdentities.OperationReplyIdempotency(operation.OperationId),
+                operation.Request.Context.Ordering,
+                operation.Request.Context.Provenance));
+        return true;
+    }
+
+    static void ValidateChildRequestEvidence(
+        CompiledProcessPlan plan,
+        ProcessDurableCheckpoint checkpoint,
+        ICollection<DocumentValidationDiagnostic> diagnostics)
+    {
+        var continuation = checkpoint.Continuation;
+        Dictionary<EmissionId, ProcessEmissionRecord> outbox = [];
+        foreach (var record in checkpoint.Emissions)
+        {
+            if (record?.Envelope?.Context is { } context
+                && !string.IsNullOrWhiteSpace(context.EmissionId.Value))
+            {
+                outbox.TryAdd(context.EmissionId, record);
+            }
+        }
+        Dictionary<EmissionId, ProcessDurableInboxEntry> inbox = [];
+        foreach (var entry in checkpoint.Inbox)
+        {
+            if (entry?.Input?.Envelope?.Context is { } context
+                && !string.IsNullOrWhiteSpace(context.EmissionId.Value))
+            {
+                inbox.TryAdd(context.EmissionId, entry);
+            }
+        }
+        Dictionary<EmissionId, DurableOperationState> durableOperations = [];
+        foreach (var operation in checkpoint.DurableOperations)
+        {
+            if (operation is not null && !string.IsNullOrWhiteSpace(operation.OperationId.Value))
+            {
+                durableOperations.TryAdd(operation.OperationId, operation);
+            }
+        }
+
+        for (var emissionIndex = 0; emissionIndex < checkpoint.Emissions.Length; emissionIndex++)
+        {
+            var record = checkpoint.Emissions[emissionIndex];
+            if (record?.Envelope is not RequestEnvelope request
+                || request.Context.Origin is not ProcessInteractionOrigin origin
+                || plan.Definition.Nodes.FirstOrDefault(candidate => candidate.Id == origin.Node) is not { } node)
+            {
+                continue;
+            }
+
+            var childBearing = ProcessRequestSemantics.TryGetChildTarget(
+                node,
+                out _,
+                out var childOutcomeMapping);
+            var matchingChildren = continuation.Children.Where(child => child is not null
+                && child.Process is not null
+                && child.Continuation is not null
+                && child.RequestEmission == request.Context.EmissionId
+                && child.Token == origin.Token
+                && child.Node == origin.Node).ToArray();
+            var childTargetValid = childBearing
+                ? matchingChildren is [var child]
+                    && request.ChildTarget == new ProcessChildRequestTarget(
+                        child.Process,
+                        child.Continuation,
+                        childOutcomeMapping)
+                : request.ChildTarget is null;
+            if (!childTargetValid)
+            {
+                diagnostics.Add(Error(
+                    ProcessCheckpointDiagnosticCodes.EmissionLedgerIncompatible,
+                    childBearing
+                        ? "Child Request outbox evidence requires exactly one child occurrence and its exact start target."
+                        : "An ordinary Request outbox envelope cannot carry a child Process start target.",
+                    $"/emissions/{emissionIndex}/envelope/childTarget"));
+            }
+        }
+
+        for (var childIndex = 0; childIndex < continuation.Children.Length; childIndex++)
+        {
+            var child = continuation.Children[childIndex];
+            if (child is null
+                || child.Process is null
+                || child.Continuation is null
+                || child.RequestEmission is not { } requestEmission)
+            {
+                continue;
+            }
+
+            var childNode = plan.Definition.Nodes.FirstOrDefault(candidate => candidate.Id == child.Node);
+            ProcessChildRequestTarget? expectedChildTarget = null;
+            if (childNode is not null
+                && ProcessRequestSemantics.TryGetChildTarget(
+                    childNode,
+                    out _,
+                    out var childOutcomeMapping))
+            {
+                expectedChildTarget = new(child.Process, child.Continuation, childOutcomeMapping);
+            }
+            var requestEvidenceValid = expectedChildTarget is not null
+                && outbox.TryGetValue(requestEmission, out var outboxRecord)
+                && outboxRecord.Envelope is RequestEnvelope request
+                && request.ChildTarget == expectedChildTarget
+                && request.Context.Origin is ProcessInteractionOrigin origin
+                && origin.Definition == plan.DefinitionReference
+                && origin.Continuation == continuation.Continuation
+                && origin.Token == child.Token
+                && origin.Node == child.Node
+                && request.ResponseTarget is ProcessTokenInteractionTarget target
+                && target.Continuation == continuation.Continuation
+                && target.Token == child.Token
+                && target.WaitRegistrationId is { } registration
+                && continuation.Waits.Count(wait => wait is not null
+                    && wait.RegistrationId == registration
+                    && wait.Kind == ProcessWaitKind.Request
+                    && wait.Token == child.Token
+                    && wait.Node == child.Node
+                    && wait.ObligationEmission == requestEmission) == 1
+                && durableOperations.ContainsKey(requestEmission);
+            if (!requestEvidenceValid)
+            {
+                diagnostics.Add(Error(
+                    ProcessCheckpointDiagnosticCodes.EmissionLedgerIncompatible,
+                    "Started child state has no exact child-targeted Request outbox, wait, and durable operation evidence.",
+                    $"/continuation/children/{childIndex}/requestEmission"));
+            }
+
+            if (child.Disposition is not (ProcessChildDisposition.Completed or ProcessChildDisposition.Failed))
+            {
+                continue;
+            }
+
+            var terminalWaits = continuation.Waits.Where(wait => wait is not null
+                && !wait.Active
+                && wait.Kind == ProcessWaitKind.Request
+                && wait.Token == child.Token
+                && wait.Node == child.Node
+                && wait.ObligationEmission == requestEmission).ToArray();
+            var winner = terminalWaits is [var terminalWait] ? terminalWait.WinnerInput : null;
+            var matchingReceipts = winner is { } winnerEmission
+                ? continuation.InputReceipts.Where(candidate => candidate is not null
+                    && candidate.Input?.Envelope is not null
+                    && candidate.Emission == winnerEmission
+                    && candidate.Disposition == ProcessInputAdmissionDisposition.Consumed).ToArray()
+                : [];
+            var receipt = matchingReceipts is [var exactReceipt] ? exactReceipt : null;
+            ProcessActivationInput? expectedReplyInput = null;
+            if (durableOperations.TryGetValue(requestEmission, out var operation)
+                && TryCreateAcceptedReplyInput(operation, out var admittedReplyInput))
+            {
+                expectedReplyInput = admittedReplyInput;
+            }
+            var inboxEntry = receipt is not null
+                && inbox.TryGetValue(receipt.Emission, out var retainedEntry)
+                    ? retainedEntry
+                    : null;
+            var terminalEvidenceValid = receipt is not null
+                && inboxEntry is not null
+                && inboxEntry.Input == receipt.Input
+                && inboxEntry.Receipt == receipt
+                && inboxEntry.DispositionContinuation == continuation.Continuation;
+            if (!terminalEvidenceValid)
+            {
+                diagnostics.Add(Error(
+                    ProcessCheckpointDiagnosticCodes.InboxReceiptIncompatible,
+                    "Terminal child state has no exact durable inbox and deciding-attempt evidence for its consumed Reply.",
+                    $"/continuation/children/{childIndex}/result"));
+                continue;
+            }
+
+            var operationReplyEvidenceValid = receipt!.Emission
+                    == ProcessDurableRuntimeIdentities.OperationReply(requestEmission)
+                && expectedReplyInput is not null
+                && inboxEntry is not null
+                && ProcessStorageContentFingerprints.Input(inboxEntry.Input)
+                    == ProcessStorageContentFingerprints.Input(expectedReplyInput);
+            if (!operationReplyEvidenceValid)
+            {
+                diagnostics.Add(Error(
+                    ProcessCheckpointDiagnosticCodes.EmissionLedgerIncompatible,
+                    "Terminal child state requires the exact accepted operation and its deterministic canonical Reply.",
+                    $"/continuation/children/{childIndex}/result"));
+            }
+        }
+
+        Dictionary<(ExecutionNodeId Node, ActivationId Activation),
+            List<(int PartitionIndex, string Registration)>> partitionStarts = [];
+        for (var partitionIndex = 0; partitionIndex < continuation.Partitions.Length; partitionIndex++)
+        {
+            var partition = continuation.Partitions[partitionIndex];
+            if (partition is null
+                || plan.Definition.Nodes.FirstOrDefault(candidate => candidate.Id == partition.Node)
+                    is not ForEachPartitionProcessNode node
+                || node.Limits is null)
+            {
+                continue;
+            }
+
+            foreach (var work in partition.Work)
+            {
+                if (work is null || string.IsNullOrWhiteSpace(work.ChildRegistrationId))
+                {
+                    continue;
+                }
+
+                var child = continuation.Children.FirstOrDefault(candidate => candidate is not null
+                    && !string.IsNullOrWhiteSpace(candidate.RegistrationId)
+                    && candidate.RegistrationId == work.ChildRegistrationId);
+                if (child?.RequestEmission is not { } requestEmission
+                    || !outbox.TryGetValue(requestEmission, out var record)
+                    || record.Envelope is not RequestEnvelope
+                    {
+                        Context.Origin: ProcessInteractionOrigin origin
+                    }
+                    || origin.Definition != plan.DefinitionReference
+                    || origin.Continuation != continuation.Continuation
+                    || origin.Node != partition.Node
+                    || origin.Token != child.Token)
+                {
+                    continue;
+                }
+
+                var key = (partition.Node, origin.Activation);
+                if (!partitionStarts.TryGetValue(key, out var starts))
+                {
+                    starts = [];
+                    partitionStarts.Add(key, starts);
+                }
+                starts.Add((partitionIndex, partition.RegistrationId));
+            }
+        }
+
+        foreach (var (key, starts) in partitionStarts)
+        {
+            var node = (ForEachPartitionProcessNode)plan.GetNode(key.Node);
+            if (starts.Count <= node.Limits.MaximumStartsPerActivation
+                && starts.Select(static start => start.Registration).Distinct(StringComparer.Ordinal).Count() == 1)
+            {
+                continue;
+            }
+
+            var partitionIndex = starts.Min(static start => start.PartitionIndex);
+            diagnostics.Add(Error(
+                ProcessCheckpointDiagnosticCodes.EmissionLedgerIncompatible,
+                "Partition child Request evidence must come from one reachable occurrence per node and activation and stay within the authored maximum starts.",
+                $"/continuation/partitions/{partitionIndex}/work"));
+        }
+    }
+
     static bool TraceMatchesEnvelope(
         CompiledProcessPlan plan,
         ProcessTraceEvent trace,
@@ -575,8 +885,9 @@ public static class ProcessCheckpointCompatibilityValidator
         var node = plan.GetNode(trace.Node);
         var kind = (node, envelope) switch
         {
-            (RequestProcessNode requestNode, RequestEnvelope request) when
-                request.Contract == requestNode.Contract
+            (ProcessNode requestNode, RequestEnvelope request) when
+                TryGetRequestContract(requestNode, out var requestContract)
+                && request.Contract == requestContract
                 && request.ResponseTarget is ProcessTokenInteractionTarget target
                 && target.Continuation == trace.Continuation
                 && target.Token == trace.Token
@@ -594,6 +905,11 @@ public static class ProcessCheckpointCompatibilityValidator
             && trace.EmissionFingerprint
                 == InteractionEnvelopeJsonSerializer.ComputeContentFingerprint(envelope);
     }
+
+    static bool TryGetRequestContract(
+        ProcessNode node,
+        out RequestContractReference contract) =>
+        ProcessRequestSemantics.TryGetContract(node, out contract);
 
     static bool HostOperationOriginMatches(
         CompiledProcessPlan plan,
