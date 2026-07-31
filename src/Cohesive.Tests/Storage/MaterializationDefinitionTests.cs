@@ -32,6 +32,9 @@ public sealed class MaterializationDefinitionTests
         Assert.Contains(
             definition.GetTargetCapabilities(MaterializationSynchronizationMode.Incremental),
             static requirement => requirement.Capability == MaterializationCapabilityKind.TargetBulkDelete);
+        Assert.DoesNotContain(
+            definition.TargetCapabilities,
+            static requirement => requirement.Capability == MaterializationCapabilityKind.TargetContributorLedger);
         Assert.True(MaterializationDefinitionValidator.Validate(definition).IsValid);
     }
 
@@ -236,6 +239,42 @@ public sealed class MaterializationDefinitionTests
         Assert.Equal("operatingLimits", evidenceLimit.ParamName);
     }
 
+    [Fact]
+    public void ContributorLedgerCapability_OwnsItsBoundedReadAndWriteDimensions()
+    {
+        const MaterializationCapabilityKind Capability =
+            MaterializationCapabilityKind.TargetContributorLedger;
+
+        Assert.Equal(MaterializationEndpointRole.Target, MaterializationCapabilityCatalog.RoleOf(Capability));
+        Assert.True(MaterializationCapabilityCatalog.AllowsGuarantee(
+            Capability,
+            MaterializationGuaranteeKind.RequestLocalCompleteness));
+        Assert.True(MaterializationCapabilityCatalog.AllowsGuarantee(
+            Capability,
+            MaterializationGuaranteeKind.IdempotentWrite));
+        Assert.True(MaterializationCapabilityCatalog.AllowsGuarantee(
+            Capability,
+            MaterializationGuaranteeKind.VersionConditionalWrite));
+        Assert.True(MaterializationCapabilityCatalog.AllowsGuarantee(
+            Capability,
+            MaterializationGuaranteeKind.FencedMutation));
+        Assert.True(MaterializationCapabilityCatalog.AllowsGuarantee(
+            Capability,
+            MaterializationGuaranteeKind.AtomicWithMaterializationMutation));
+        Assert.True(MaterializationCapabilityCatalog.AllowsLimit(
+            Capability,
+            MaterializationLimitKind.ReadItems));
+        Assert.True(MaterializationCapabilityCatalog.AllowsLimit(
+            Capability,
+            MaterializationLimitKind.WriteItems));
+        Assert.True(MaterializationCapabilityCatalog.AllowsLimit(
+            Capability,
+            MaterializationLimitKind.Parallelism));
+        Assert.True(MaterializationCapabilityCatalog.AllowsLimit(
+            Capability,
+            MaterializationLimitKind.IndexedIdentityCharacters));
+    }
+
     [Theory]
     [InlineData(MaterializationCapabilityKind.SourceBatchedPointRead, MaterializationLimitKind.ReadItems)]
     [InlineData(MaterializationCapabilityKind.SourceParameterizedPredicateQuery, MaterializationLimitKind.ReadBytes)]
@@ -245,6 +284,10 @@ public sealed class MaterializationDefinitionTests
     [InlineData(MaterializationCapabilityKind.TargetBulkUpsert, MaterializationLimitKind.WriteBytes)]
     [InlineData(MaterializationCapabilityKind.TargetBulkDelete, MaterializationLimitKind.WriteItems)]
     [InlineData(MaterializationCapabilityKind.TargetPerItemOutcomes, MaterializationLimitKind.WriteBytes)]
+    [InlineData(MaterializationCapabilityKind.TargetContributorLedger, MaterializationLimitKind.ReadItems)]
+    [InlineData(MaterializationCapabilityKind.TargetContributorLedger, MaterializationLimitKind.ReadBytes)]
+    [InlineData(MaterializationCapabilityKind.TargetContributorLedger, MaterializationLimitKind.WriteItems)]
+    [InlineData(MaterializationCapabilityKind.TargetContributorLedger, MaterializationLimitKind.WriteBytes)]
     public void CapabilityEvidence_RequiresEveryHardOperationBound(
         MaterializationCapabilityKind capability,
         MaterializationLimitKind omittedLimit)
@@ -277,6 +320,81 @@ public sealed class MaterializationDefinitionTests
 
         Assert.Equal("operatingLimits", exception.ParamName);
         Assert.Contains(nameof(MaterializationLimitKind.WriteBytes), exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ContributorLedgerRequirement_MatchesOneCompleteTargetFacility()
+    {
+        MaterializationCapabilityRequirement requirement = new(
+            id: new("target/contributor-ledger"),
+            capability: MaterializationCapabilityKind.TargetContributorLedger,
+            guarantees:
+            [
+                MaterializationGuaranteeKind.RequestLocalCompleteness,
+                MaterializationGuaranteeKind.IdempotentWrite,
+                MaterializationGuaranteeKind.VersionConditionalWrite,
+                MaterializationGuaranteeKind.FencedMutation,
+                MaterializationGuaranteeKind.AtomicWithMaterializationMutation
+            ],
+            operatingLimits:
+            [
+                new(MaterializationLimitKind.ReadItems, 100),
+                new(MaterializationLimitKind.WriteItems, 100)
+            ],
+            modes: MaterializationSynchronizationMode.Incremental);
+        MaterializationCapabilityEvidence evidence = new(
+            id: new("evidence/contributor-ledger"),
+            capability: MaterializationCapabilityKind.TargetContributorLedger,
+            realization: MaterializationCapabilityRealizationKind.Native,
+            guarantees:
+            [
+                MaterializationGuaranteeKind.RequestLocalCompleteness,
+                MaterializationGuaranteeKind.IdempotentWrite,
+                MaterializationGuaranteeKind.VersionConditionalWrite,
+                MaterializationGuaranteeKind.FencedMutation,
+                MaterializationGuaranteeKind.AtomicWithMaterializationMutation
+            ],
+            operatingLimits:
+            [
+                new(MaterializationLimitKind.ReadItems, 128),
+                new(MaterializationLimitKind.ReadBytes, EvidenceReadBytes),
+                new(MaterializationLimitKind.WriteItems, 128),
+                new(MaterializationLimitKind.WriteBytes, DefinitionWriteBytes)
+            ],
+            sourceReferences: ["adapter/target/contributor-ledger/v1"]);
+        MaterializationCapabilityProfile profile = new(
+            id: new("profile/target/v1"),
+            role: MaterializationEndpointRole.Target,
+            subject: "target/search",
+            evidence: [evidence]);
+
+        var match = MaterializationCapabilityMatcher.MatchForMode(
+            requirements: [requirement],
+            profile,
+            mode: MaterializationSynchronizationMode.Incremental);
+        MaterializationCapabilityRequirement excessiveRequirement = new(
+            id: new("target/contributor-ledger/excessive"),
+            capability: MaterializationCapabilityKind.TargetContributorLedger,
+            guarantees: requirement.Guarantees,
+            operatingLimits:
+            [
+                new(MaterializationLimitKind.ReadItems, 3_000),
+                new(MaterializationLimitKind.WriteItems, 100)
+            ],
+            modes: MaterializationSynchronizationMode.Incremental);
+        var rejected = MaterializationCapabilityMatcher.MatchForMode(
+            requirements: [excessiveRequirement],
+            profile,
+            mode: MaterializationSynchronizationMode.Incremental);
+
+        Assert.True(match.IsSatisfied);
+        var decision = Assert.Single(match.Decisions);
+        Assert.Same(evidence, decision.Evidence);
+        Assert.False(rejected.IsSatisfied);
+        Assert.Contains(
+            rejected.Validation.Diagnostics,
+            static diagnostic => diagnostic.Code == MaterializationCapabilityDiagnosticCodes.LimitExceeded
+                && diagnostic.Evidence?.Subject == nameof(MaterializationCapabilityKind.TargetContributorLedger));
     }
 
     [Fact]
@@ -487,6 +605,86 @@ public sealed class MaterializationDefinitionTests
                 && diagnostic.Message.Contains(nameof(MaterializationGuaranteeKind.FencedPromotion), StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData(MaterializationGuaranteeKind.RequestLocalCompleteness)]
+    [InlineData(MaterializationGuaranteeKind.IdempotentWrite)]
+    [InlineData(MaterializationGuaranteeKind.VersionConditionalWrite)]
+    [InlineData(MaterializationGuaranteeKind.FencedMutation)]
+    [InlineData(MaterializationGuaranteeKind.AtomicWithMaterializationMutation)]
+    public void Validator_RejectsContributorLedgerWhenMandatoryGuaranteeIsOmitted(
+        MaterializationGuaranteeKind omittedGuarantee)
+    {
+        var valid = CreateDefinition(reverseDeclarations: false);
+        var completeLedger = Requirement(
+            id: "target/contributor-ledger",
+            capability: MaterializationCapabilityKind.TargetContributorLedger,
+            modes: MaterializationSynchronizationMode.Incremental);
+        MaterializationCapabilityRequirement weakenedLedger = new(
+            id: completeLedger.Id,
+            capability: completeLedger.Capability,
+            guarantees:
+            [
+                .. completeLedger.Guarantees.Where(guarantee => guarantee != omittedGuarantee)
+            ],
+            operatingLimits: completeLedger.OperatingLimits,
+            modes: completeLedger.Modes);
+        MaterializationDefinition invalid = new(
+            id: valid.Id,
+            relation: valid.Relation,
+            sources: valid.Sources,
+            targetCapabilities: [.. valid.TargetCapabilities, weakenedLedger],
+            updatePolicy: valid.UpdatePolicy,
+            failurePolicy: valid.FailurePolicy,
+            freshnessPolicy: valid.FreshnessPolicy,
+            controlLoops: valid.ControlLoops,
+            provenance: valid.Provenance);
+
+        var validation = MaterializationDefinitionValidator.Validate(invalid);
+
+        Assert.False(validation.IsValid);
+        Assert.Contains(
+            validation.Diagnostics,
+            diagnostic => diagnostic.Code == MaterializationDefinitionDiagnosticCodes.ProtocolGuaranteeMissing
+                && diagnostic.Message.Contains(omittedGuarantee.ToString(), StringComparison.Ordinal)
+                && diagnostic.Location?.Contains(
+                    Uri.EscapeDataString(completeLedger.Id.Value),
+                    StringComparison.Ordinal) == true);
+    }
+
+    [Theory]
+    [InlineData(
+        MaterializationConsistencyKind.CoordinatedSnapshot,
+        MaterializationGuaranteeKind.CoordinatedSnapshot)]
+    [InlineData(
+        MaterializationConsistencyKind.Reconciliation,
+        MaterializationGuaranteeKind.Reconciliation)]
+    public void Validator_RejectsOptionalIncrementalPredicateWithoutPolicyConsistencyGuarantee(
+        MaterializationConsistencyKind consistency,
+        MaterializationGuaranteeKind requiredGuarantee)
+    {
+        var complete = CreateDefinitionWithOptionalIncrementalPredicate(
+            consistency: consistency,
+            includePolicyGuarantee: true);
+        var validValidation = MaterializationDefinitionValidator.Validate(complete);
+        var incomplete = CreateDefinitionWithOptionalIncrementalPredicate(
+            consistency: consistency,
+            includePolicyGuarantee: false);
+
+        var validation = MaterializationDefinitionValidator.Validate(incomplete);
+
+        Assert.True(
+            validValidation.IsValid,
+            string.Join(Environment.NewLine, validValidation.Diagnostics.Select(static diagnostic => diagnostic.Message)));
+        Assert.False(validation.IsValid);
+        Assert.Contains(
+            validation.Diagnostics,
+            diagnostic => diagnostic.Code == MaterializationDefinitionDiagnosticCodes.ProtocolGuaranteeMissing
+                && diagnostic.Message.Contains(requiredGuarantee.ToString(), StringComparison.Ordinal)
+                && diagnostic.Message.Contains(
+                    nameof(MaterializationCapabilityKind.SourceParameterizedPredicateQuery),
+                    StringComparison.Ordinal));
+    }
+
     [Fact]
     public void Validator_AllowsSourcesWithoutOptionalSettlementCapability()
     {
@@ -673,6 +871,88 @@ public sealed class MaterializationDefinitionTests
                 DocumentOrigin.User));
     }
 
+    static MaterializationDefinition CreateDefinitionWithOptionalIncrementalPredicate(
+        MaterializationConsistencyKind consistency,
+        bool includePolicyGuarantee)
+    {
+        var template = CreateDefinition(reverseDeclarations: false);
+        var requiredGuarantee = consistency switch
+        {
+            MaterializationConsistencyKind.CoordinatedSnapshot =>
+                MaterializationGuaranteeKind.CoordinatedSnapshot,
+            MaterializationConsistencyKind.Reconciliation =>
+                MaterializationGuaranteeKind.Reconciliation,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(consistency),
+                consistency,
+                "The optional-predicate test requires a read-consistency guarantee.")
+        };
+        var rootSource = Assert.Single(
+            template.Sources,
+            static source => source.Capabilities.Any(static requirement =>
+                requirement.Capability == MaterializationCapabilityKind.SourceBoundedEnumeration));
+        var sources = template.Sources.Select(source =>
+        {
+            ImmutableArray<MaterializationCapabilityRequirement> capabilities =
+            [
+                .. source.Capabilities.Select(requirement =>
+                    IsBoundedSourceRead(requirement.Capability)
+                        ? new MaterializationCapabilityRequirement(
+                            id: requirement.Id,
+                            capability: requirement.Capability,
+                            guarantees: requirement.Guarantees.Contains(requiredGuarantee)
+                                ? requirement.Guarantees
+                                : [.. requirement.Guarantees, requiredGuarantee],
+                            operatingLimits: requirement.OperatingLimits,
+                            modes: requirement.Modes)
+                        : requirement)
+            ];
+            if (source.Input == rootSource.Input)
+            {
+                ImmutableArray<MaterializationGuaranteeKind> predicateGuarantees =
+                [
+                    MaterializationGuaranteeKind.StableOrdering,
+                    MaterializationGuaranteeKind.RequestLocalCompleteness
+                ];
+                if (includePolicyGuarantee)
+                {
+                    predicateGuarantees = [.. predicateGuarantees, requiredGuarantee];
+                }
+
+                capabilities = capabilities.Add(new(
+                    id: new($"{source.Input.Value}/impact-predicate"),
+                    capability: MaterializationCapabilityKind.SourceParameterizedPredicateQuery,
+                    guarantees: predicateGuarantees,
+                    operatingLimits: OperatingLimits(
+                        MaterializationCapabilityKind.SourceParameterizedPredicateQuery),
+                    modes: MaterializationSynchronizationMode.Incremental));
+            }
+
+            return new MaterializationSourceRequirement(
+                input: source.Input,
+                capabilities: capabilities);
+        }).ToImmutableArray();
+
+        return new(
+            id: template.Id,
+            relation: template.Relation,
+            sources: sources,
+            targetCapabilities: template.TargetCapabilities,
+            updatePolicy: new(
+                supportedModes: template.UpdatePolicy.SupportedModes,
+                consistency: consistency,
+                idempotency: template.UpdatePolicy.Idempotency),
+            failurePolicy: template.FailurePolicy,
+            freshnessPolicy: template.FreshnessPolicy,
+            controlLoops: template.ControlLoops,
+            provenance: template.Provenance);
+    }
+
+    static bool IsBoundedSourceRead(MaterializationCapabilityKind capability) => capability is
+        MaterializationCapabilityKind.SourceBatchedPointRead
+        or MaterializationCapabilityKind.SourceParameterizedPredicateQuery
+        or MaterializationCapabilityKind.SourceBoundedEnumeration;
+
     static MaterializationSourceRequirement SourceRequirement(
         RelationQueryInputId input,
         MaterializationCapabilityKind rebuildRead,
@@ -721,6 +1001,13 @@ public sealed class MaterializationDefinitionTests
                     new(MaterializationLimitKind.WriteItems, DefinitionWriteItems),
                     new(MaterializationLimitKind.WriteBytes, DefinitionWriteBytes)
                 ],
+            MaterializationCapabilityKind.TargetContributorLedger =>
+                [
+                    new(MaterializationLimitKind.ReadItems, 100),
+                    new(MaterializationLimitKind.ReadBytes, EvidenceReadBytes),
+                    new(MaterializationLimitKind.WriteItems, DefinitionWriteItems),
+                    new(MaterializationLimitKind.WriteBytes, DefinitionWriteBytes)
+                ],
             _ => []
         };
 
@@ -737,6 +1024,13 @@ public sealed class MaterializationDefinitionTests
                 or MaterializationCapabilityKind.TargetBulkDelete
                 or MaterializationCapabilityKind.TargetPerItemOutcomes =>
                 [MaterializationLimitKind.WriteItems, MaterializationLimitKind.WriteBytes],
+            MaterializationCapabilityKind.TargetContributorLedger =>
+                [
+                    MaterializationLimitKind.ReadItems,
+                    MaterializationLimitKind.ReadBytes,
+                    MaterializationLimitKind.WriteItems,
+                    MaterializationLimitKind.WriteBytes
+                ],
             _ => []
         };
 
@@ -802,6 +1096,14 @@ public sealed class MaterializationDefinitionTests
                 or MaterializationCapabilityKind.TargetRetirement
                 or MaterializationCapabilityKind.TargetCleanup =>
                 [MaterializationGuaranteeKind.FencedMutation],
+            MaterializationCapabilityKind.TargetContributorLedger =>
+                [
+                    MaterializationGuaranteeKind.RequestLocalCompleteness,
+                    MaterializationGuaranteeKind.IdempotentWrite,
+                    MaterializationGuaranteeKind.VersionConditionalWrite,
+                    MaterializationGuaranteeKind.FencedMutation,
+                    MaterializationGuaranteeKind.AtomicWithMaterializationMutation
+                ],
             _ => []
         };
 }

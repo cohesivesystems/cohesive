@@ -10,6 +10,8 @@ namespace Cohesive.Storage.Materialization;
 /// <summary>Shared validation and normalization for materialization wire and runtime contracts.</summary>
 public static class MaterializationContract
 {
+    internal const long MaximumPortableInteger = 9_007_199_254_740_991;
+
     /// <summary>Creates one complete, attributable materialization diagnostic.</summary>
     /// <param name="code">Stable machine-readable diagnostic code.</param>
     /// <param name="severity">Diagnostic severity.</param>
@@ -128,6 +130,19 @@ public static class MaterializationContract
             throw new ArgumentException(
                 "A required identity must not be default, empty, or white-space.",
                 parameterName);
+        }
+
+        return value;
+    }
+
+    internal static long RequirePortablePositiveBound(long value, string parameterName)
+    {
+        if (value is <= 0 or > MaximumPortableInteger)
+        {
+            throw new ArgumentOutOfRangeException(
+                parameterName,
+                value,
+                "A materialization bound must be positive and portable to JSON runtimes.");
         }
 
         return value;

@@ -96,7 +96,13 @@ public enum MaterializationCapabilityKind
     TargetRetirement = 13,
 
     /// <summary>Physically cleans up a non-active retired generation.</summary>
-    TargetCleanup = 14
+    TargetCleanup = 14,
+
+    /// <summary>
+    /// Resolves complete durable contributor-to-root associations and replaces them atomically with their target
+    /// materialization mutations before application progress may advance.
+    /// </summary>
+    TargetContributorLedger = 15
 }
 
 /// <summary>Semantic guarantee that a materialization endpoint may prove.</summary>
@@ -152,17 +158,22 @@ public enum MaterializationGuaranteeKind
     FencedMutation = 14,
 
     /// <summary>The source can capture an exclusive boundary before its earliest currently retained change.</summary>
-    RetainedHistoryStart = 15
+    RetainedHistoryStart = 15,
+
+    /// <summary>
+    /// Contributor associations and their corresponding materialized-item mutations commit as one atomic effect.
+    /// </summary>
+    AtomicWithMaterializationMutation = 16
 }
 
 /// <summary>Positive hard operating maximum advertised or required for a materialization operation.</summary>
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum MaterializationLimitKind
 {
-    /// <summary>Maximum observations returned by one source page.</summary>
+    /// <summary>Maximum items returned by one bounded read operation.</summary>
     ReadItems = 0,
 
-    /// <summary>Maximum encoded bytes returned by one source page.</summary>
+    /// <summary>Maximum encoded bytes returned by one bounded read operation.</summary>
     ReadBytes = 1,
 
     /// <summary>Maximum changes delivered by one source batch.</summary>
@@ -873,6 +884,13 @@ public static class MaterializationCapabilityCatalog
         [MaterializationLimitKind.ChangeItems, MaterializationLimitKind.ReadBytes];
     static readonly ImmutableArray<MaterializationLimitKind> WriteHardLimits =
         [MaterializationLimitKind.WriteItems, MaterializationLimitKind.WriteBytes];
+    static readonly ImmutableArray<MaterializationLimitKind> ContributorLedgerHardLimits =
+    [
+        MaterializationLimitKind.ReadItems,
+        MaterializationLimitKind.ReadBytes,
+        MaterializationLimitKind.WriteItems,
+        MaterializationLimitKind.WriteBytes
+    ];
 
     /// <summary>Gets the endpoint role that owns a capability.</summary>
     /// <param name="capability">Capability whose owner is requested.</param>
@@ -894,7 +912,8 @@ public static class MaterializationCapabilityCatalog
             or MaterializationCapabilityKind.TargetValidation
             or MaterializationCapabilityKind.TargetFencedPromotion
             or MaterializationCapabilityKind.TargetRetirement
-            or MaterializationCapabilityKind.TargetCleanup => MaterializationEndpointRole.Target,
+            or MaterializationCapabilityKind.TargetCleanup
+            or MaterializationCapabilityKind.TargetContributorLedger => MaterializationEndpointRole.Target,
         _ => throw new ArgumentOutOfRangeException(nameof(capability), capability, "Unsupported materialization capability.")
     };
 
@@ -919,8 +938,9 @@ public static class MaterializationCapabilityCatalog
         {
             MaterializationGuaranteeKind.StableOrdering => IsSourceRead(capability)
                 || capability == MaterializationCapabilityKind.SourceChangeDelivery,
-            MaterializationGuaranteeKind.RequestLocalCompleteness
-                or MaterializationGuaranteeKind.CoordinatedSnapshot
+            MaterializationGuaranteeKind.RequestLocalCompleteness => IsSourceRead(capability)
+                || capability == MaterializationCapabilityKind.TargetContributorLedger,
+            MaterializationGuaranteeKind.CoordinatedSnapshot
                 or MaterializationGuaranteeKind.Reconciliation => IsSourceRead(capability),
             MaterializationGuaranteeKind.BaselinePlusCatchUp
                 or MaterializationGuaranteeKind.AtLeastOnceDelivery
@@ -932,13 +952,16 @@ public static class MaterializationCapabilityCatalog
             MaterializationGuaranteeKind.GenerationIsolation =>
                 capability == MaterializationCapabilityKind.TargetGenerationIsolation,
             MaterializationGuaranteeKind.IdempotentWrite
-                or MaterializationGuaranteeKind.VersionConditionalWrite => IsBulkMutation(capability),
+                or MaterializationGuaranteeKind.VersionConditionalWrite => IsBulkMutation(capability)
+                    || capability == MaterializationCapabilityKind.TargetContributorLedger,
             MaterializationGuaranteeKind.ExactPerItemOutcome =>
                 capability == MaterializationCapabilityKind.TargetPerItemOutcomes,
             MaterializationGuaranteeKind.AtomicPromotion
                 or MaterializationGuaranteeKind.FencedPromotion =>
                 capability == MaterializationCapabilityKind.TargetFencedPromotion,
             MaterializationGuaranteeKind.FencedMutation => IsFencedGenerationMutation(capability),
+            MaterializationGuaranteeKind.AtomicWithMaterializationMutation =>
+                capability == MaterializationCapabilityKind.TargetContributorLedger,
             _ => false
         };
     }
@@ -962,19 +985,23 @@ public static class MaterializationCapabilityCatalog
 
         return limit switch
         {
-            MaterializationLimitKind.ReadItems => IsSourceRead(capability),
+            MaterializationLimitKind.ReadItems => IsSourceRead(capability)
+                || capability == MaterializationCapabilityKind.TargetContributorLedger,
             MaterializationLimitKind.ReadBytes => IsSourceRead(capability)
-                || capability == MaterializationCapabilityKind.SourceChangeDelivery,
+                || capability is MaterializationCapabilityKind.SourceChangeDelivery
+                    or MaterializationCapabilityKind.TargetContributorLedger,
             MaterializationLimitKind.ChangeItems =>
                 capability == MaterializationCapabilityKind.SourceChangeDelivery,
             MaterializationLimitKind.WriteItems or MaterializationLimitKind.WriteBytes =>
                 IsBulkMutation(capability)
-                || capability == MaterializationCapabilityKind.TargetPerItemOutcomes,
+                || capability is MaterializationCapabilityKind.TargetPerItemOutcomes
+                    or MaterializationCapabilityKind.TargetContributorLedger,
             MaterializationLimitKind.Parallelism => true,
             MaterializationLimitKind.IndexedIdentityCharacters =>
                 IsBulkMutation(capability)
                 || capability is MaterializationCapabilityKind.TargetPerItemOutcomes
-                    or MaterializationCapabilityKind.TargetGenerationIsolation,
+                    or MaterializationCapabilityKind.TargetGenerationIsolation
+                    or MaterializationCapabilityKind.TargetContributorLedger,
             _ => false
         };
     }
@@ -1044,6 +1071,7 @@ public static class MaterializationCapabilityCatalog
             MaterializationCapabilityKind.TargetBulkUpsert
                 or MaterializationCapabilityKind.TargetBulkDelete
                 or MaterializationCapabilityKind.TargetPerItemOutcomes => WriteHardLimits,
+            MaterializationCapabilityKind.TargetContributorLedger => ContributorLedgerHardLimits,
             _ => []
         };
 
@@ -1080,7 +1108,8 @@ public static class MaterializationCapabilityCatalog
             or MaterializationCapabilityKind.TargetSeal
             or MaterializationCapabilityKind.TargetValidation
             or MaterializationCapabilityKind.TargetRetirement
-            or MaterializationCapabilityKind.TargetCleanup;
+            or MaterializationCapabilityKind.TargetCleanup
+            or MaterializationCapabilityKind.TargetContributorLedger;
 }
 
 /// <summary>Shared validation of operation bounds against attributable materialization capability evidence.</summary>

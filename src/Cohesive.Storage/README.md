@@ -152,6 +152,45 @@ dependency manifest, and lineage remain the sole dependency authorities; Storage
 Definition validation covers both source-set and relationship-traversal acquisitions, deriving bounded enumeration,
 batched identity lookup, or parameterized predicate requirements from the canonical Relations acquisition kind.
 
+`MaterializationImpactPlanCompiler` projects that canonical dependency manifest into a fingerprinted
+`cohesive-materialization-impact-plan/v1` execution template. Routes retain only canonical Relations input and
+relationship identities; they never copy a relationship definition, dependency edge, effect, or provenance trace.
+`MaterializationImpactPlanLinker` must reproduce a persisted plan from the exact materialization definition before
+interpretation, and the strict JSON loader performs this definition-bound link automatically. Explain projections
+dereference route identities back to the original manifest entries, relationship inputs, and capability requirements.
+
+The v1 impact strategies are deliberately closed and bounded:
+
+- a non-set relation-root change maps exactly to that root;
+- contributor changes may follow canonical relationships toward roots using complete parameterized predicate reads
+  or before/after relationship references;
+- a contributor ledger is exact only as the explicit union of complete prior associations and roots resolved from
+  current canonical relationship state; and
+- bounded global invalidation is the only conservative strategy and always enumerates the complete admitted root set.
+
+Set-valued outputs cannot use root-local or ledger-local exactness. Unsupported relationship paths, missing before
+images, absent capabilities, and insufficient item/byte bounds fail compilation unless bounded global invalidation
+is explicitly permitted. A runtime must fail an operation that exceeds a compiled bound; it must never truncate an
+affected-root set and advance progress. Auxiliary predicate and root-enumeration reads inherit the definition's
+ordering, request-completeness, and coordinated-snapshot or reconciliation guarantees; an impact route cannot weaken
+the materialization consistency contract.
+
+A predicate impact step is a portable semantic read template. Materialization realization binds an auxiliary
+relationship-key lookup for the step's reference-bearing source role using its canonical relationship input and then
+proves the referenced source capability; the original relation-query physical plan is not assumed to already contain
+that reverse placement.
+
+Contributor-ledger keys use materialization, generation, definition, impact-plan, canonical input, semantic shape,
+and stable contributor identity—not evaluation-local occurrence identity. Entries retain complete root associations
+and prior emitted item identities so moves and deletes can remove stale outputs. Exact ledger capability additionally
+requires association replacement and corresponding target item mutations to commit atomically before an application
+checkpoint advances. The target-coordinated operation that realizes this declared capability belongs to incremental
+execution; a separate best-effort dual-write ledger would not satisfy the contract.
+
+`MaterializationImpactPlanCatalog` indexes independent plans by changed semantic shape without merging their routes,
+allowing one entity change to fan out to several materializations or several roles under distinct definition,
+generation, and plan fences.
+
 Definitions declare source and target capability requirements by synchronization mode. Requirements include hard
 item/byte/concurrency limits and semantic guarantees such as stable complete enumeration, at-least-once delivery,
 explicit settlement, fenced idempotent versioned writes, generation isolation, exact per-item outcomes, and atomic fenced
