@@ -522,6 +522,59 @@ relation/query semantics over that evidence.
 each provider response finite, while a future cross-adapter materialization budget should model cumulative byte
 memory as a canonical physical capability instead of introducing unrelated adapter-only semantics.
 
+## Materialization Source
+
+`CosmosMaterializationSource` composes the canonical Relations reader with Cosmos all-versions-and-deletes change
+feed consumption. The first profile is deliberately constrained to one fixed logical partition, the conventional
+`observationId`, `partitionKey`, and `observation.*` envelope, and a caller-attested Strong-consistency account.
+Both source-set enumeration and bounded relationship traversal placements are supported; traversal changes project
+correlation keys from current and previous observation envelopes. Baseline queries explicitly request
+`ConsistencyLevel.Strong`; a production
+change-feed client may inherit that account setting or request Strong, but an explicitly weaker client is rejected.
+This closes the cut-before-scan gap in which a stale baseline could otherwise omit a write committed before the
+captured change position.
+
+The deployment must also attest account-level continuous backup, its full-fidelity retention horizon, and previous
+image availability. Those references, the Strong-consistency evidence, physical affinity, placement, query limits,
+admission limits, and cursor bounds participate in the source capability fingerprint. The runtime should share one
+`CosmosMaterializationAdmissionIndex` across sources using the same physical resources so container and partition
+parallelism are enforced coherently.
+
+Baseline and change cursors are authenticated adapter-owned values. Persist the authentication secret for as long
+as a generation may resume; rotating it intentionally invalidates outstanding cursors and therefore requires a new
+generation. An intra-page resume replays the complete SDK response and verifies the consumed semantic prefix.
+Provider page resegmentation or ambiguous transactional ordering fails closed. Same-item records sharing an LSN
+are ordered only when their complete previous/current image chain proves a unique transition sequence. Distinct
+physical items sharing an LSN may not affect the same semantic observation identity because their relative order
+cannot be proven. In-scope replacements must also advance their Cohesive observation version.
+
+The profile advertises baseline-plus-catch-up convergence, stable bounded paging, at-least-once change delivery,
+and reconciliation. Full-fidelity previous images provide selected-field and correlation-key before images. The
+profile does not claim a cross-page MVCC snapshot, retained-history start, or explicit provider settlement. Batched
+point reads are currently a composed parameterized-query path;
+native `ReadManyItemsAsync` remains unavailable until the placement proves exact physical item-id and partition-key
+addresses.
+
+### Positions, Checkpoints, and Processor Leases
+
+`CosmosMaterializationSource` uses the Cosmos change-feed pull model. Each canonical change position is an
+authenticated adapter-owned value that retains an opaque Cosmos pull continuation and, when needed, intra-page
+prefix progress. Reading from a position does not persist application progress, update a lease, or acknowledge
+delivery. The owning Process decides whether and when to cover that position with a durable materialization
+checkpoint. The all-versions-and-deletes retention horizon remains an independently attested provider constraint.
+
+This is intentionally distinct from the Cosmos Change Feed Processor used by the existing `IObservationStream`
+implementation. That managed execution model stores progress in a lease container and can checkpoint automatically
+after successful handler completion or explicitly through the SDK's manual-checkpoint callback. Pull continuations
+and processor leases are distinct and are not contractually interchangeable; this adapter exposes no supported
+conversion between them. A future managed materialization runner should reuse the canonical change-delivery
+semantics, persist Cohesive application progress before manually advancing its processor lease, and treat that
+advancement as provider-owned source settlement—not as a second application checkpoint authority.
+
+See the Cosmos documentation for the
+[pull model](https://learn.microsoft.com/azure/cosmos-db/nosql/change-feed-pull-model) and
+[change feed processor](https://learn.microsoft.com/azure/cosmos-db/change-feed-processor).
+
 ## Query Authority
 
 Canonical relation/query IR is the sole semantic query authority for this adapter. Compile supported native

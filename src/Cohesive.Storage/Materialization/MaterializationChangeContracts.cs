@@ -346,22 +346,30 @@ public sealed record MaterializationChangeDelivery
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum MaterializationChangePageState
 {
-    /// <summary>The source had no further currently visible delivery for the requested dependency and partition.</summary>
+    /// <summary>The source had no further currently visible provider input for the requested scope.</summary>
     CaughtUp = 0,
 
-    /// <summary>At least one further currently visible delivery remains after this page.</summary>
-    MoreAvailable = 1
+    /// <summary>This page returned at least one delivery and another bounded read is required to prove catch-up.</summary>
+    MoreAvailable = 1,
+
+    /// <summary>
+    /// A bounded provider scan advanced the through-position without producing a delivery, and another bounded read
+    /// is required to prove catch-up.
+    /// </summary>
+    Progressed = 2
 }
 
-/// <summary>Bounded request for all dependency changes in one acquisition feed after an optional page boundary.</summary>
+/// <summary>Bounded request for all dependency changes in one acquisition feed after an explicit durable boundary.</summary>
 public sealed record MaterializationChangeReadRequest
 {
     /// <summary>Creates a bounded change request.</summary>
     /// <param name="scope">Exact acquisition input, source, partition, and ordering scope to observe.</param>
-    /// <param name="afterPosition">Exclusive page boundary, or <see langword="null"/> to start at the retained boundary.</param>
+    /// <param name="afterPosition">Exclusive durable page boundary previously captured or returned by the source.</param>
     /// <param name="maximumDeliveries">Positive maximum number of deliveries to return.</param>
     /// <param name="maximumBytes">Positive maximum sum of canonical encoded delivery bytes to return.</param>
-    /// <exception cref="ArgumentNullException"><paramref name="scope"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="scope"/> or <paramref name="afterPosition"/> is <see langword="null"/>.
+    /// </exception>
     /// <exception cref="ArgumentException">An identity or position scope is invalid.</exception>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <paramref name="maximumDeliveries"/> or <paramref name="maximumBytes"/> is not positive.
@@ -369,12 +377,13 @@ public sealed record MaterializationChangeReadRequest
     [JsonConstructor]
     public MaterializationChangeReadRequest(
         MaterializationSourceScope scope,
-        MaterializationSourcePosition? afterPosition,
+        MaterializationSourcePosition afterPosition,
         int maximumDeliveries,
         long maximumBytes)
     {
         Scope = Guard.RequireNotNull(scope);
-        if (afterPosition is not null && afterPosition.Scope != scope)
+        AfterPosition = Guard.RequireNotNull(afterPosition);
+        if (AfterPosition.Scope != scope)
         {
             throw new ArgumentException(
                 "A change-read position must belong to the exact requested source-feed scope.",
@@ -390,7 +399,6 @@ public sealed record MaterializationChangeReadRequest
             throw new ArgumentOutOfRangeException(nameof(maximumBytes), maximumBytes, "A change-read byte bound must be positive.");
         }
 
-        AfterPosition = afterPosition;
         MaximumDeliveries = maximumDeliveries;
         MaximumBytes = maximumBytes;
     }
@@ -398,8 +406,8 @@ public sealed record MaterializationChangeReadRequest
     /// <summary>Exact acquisition input, source, partition, and ordering scope to observe.</summary>
     public MaterializationSourceScope Scope { get; }
 
-    /// <summary>Exclusive page boundary, or <see langword="null"/> for the retained boundary.</summary>
-    public MaterializationSourcePosition? AfterPosition { get; }
+    /// <summary>Exclusive durable page boundary previously captured or returned by the source.</summary>
+    public MaterializationSourcePosition AfterPosition { get; }
 
     /// <summary>Positive maximum number of deliveries to return.</summary>
     public int MaximumDeliveries { get; }
@@ -414,11 +422,13 @@ public sealed record MaterializationChangePage
 {
     /// <summary>Creates a bounded change page.</summary>
     /// <param name="deliveries">Deliveries retained in source order.</param>
-    /// <param name="throughPosition">Opaque boundary immediately after every delivery returned in this page.</param>
-    /// <param name="state">Whether more currently visible deliveries remain.</param>
+    /// <param name="throughPosition">
+    /// Opaque boundary after the provider input examined for this page and at or after every returned delivery.
+    /// </param>
+    /// <param name="state">Whether the source is caught up or another bounded read is required to prove catch-up.</param>
     /// <exception cref="ArgumentException">
     /// <paramref name="deliveries"/> contains a null entry or duplicate delivery identity, a delivery belongs to a
-    /// different scope, or an empty page claims that more deliveries are available.
+    /// different scope, an empty page claims that deliveries are available, or a progressed page contains a delivery.
     /// </exception>
     /// <exception cref="ArgumentNullException"><paramref name="throughPosition"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="state"/> is unsupported.</exception>
@@ -438,6 +448,10 @@ public sealed record MaterializationChangePage
         if (state == MaterializationChangePageState.MoreAvailable && normalized.IsDefaultOrEmpty)
         {
             throw new ArgumentException("A page with more available changes must return at least one delivery.", nameof(deliveries));
+        }
+        if (state == MaterializationChangePageState.Progressed && !normalized.IsDefaultOrEmpty)
+        {
+            throw new ArgumentException("A progressed change page must be empty.", nameof(deliveries));
         }
 
         HashSet<MaterializationDeliveryId> ids = [];
@@ -466,9 +480,9 @@ public sealed record MaterializationChangePage
     /// <summary>Deliveries retained in source order.</summary>
     public ImmutableArray<MaterializationChangeDelivery> Deliveries { get; }
 
-    /// <summary>Opaque resumable boundary immediately after every delivery returned in this page.</summary>
+    /// <summary>Opaque resumable boundary after the provider input examined for this page.</summary>
     public MaterializationSourcePosition ThroughPosition { get; }
 
-    /// <summary>Whether more currently visible deliveries remain.</summary>
+    /// <summary>Whether the source is caught up or another bounded read is required to prove catch-up.</summary>
     public MaterializationChangePageState State { get; }
 }

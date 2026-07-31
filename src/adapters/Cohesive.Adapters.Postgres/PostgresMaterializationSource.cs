@@ -1,6 +1,5 @@
 using System.Collections.Immutable;
 using System.Globalization;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Cohesive.Model;
@@ -34,8 +33,6 @@ public sealed class PostgresMaterializationSource : IMaterializationSource
 
     const int ContinuationFormatVersion = 2;
     const string ContinuationPrefix = "postgres-keyset/v2/";
-    const int MinimumContinuationAuthenticationKeyBytes = 32;
-    const int AuthenticationTagBytes = 32;
     const int MaximumContinuationValueCharacters = 4 * 1024 * 1024;
     const string EvidencePrefix = "cohesive.adapters.postgres/materialization-source/v2";
     static ReadOnlySpan<byte> ContinuationAuthenticationDomain =>
@@ -43,7 +40,7 @@ public sealed class PostgresMaterializationSource : IMaterializationSource
     static readonly JsonSerializerOptions CanonicalJsonOptions = MaterializationJsonSerializer.CreateOptions();
     readonly PostgresRelationQuerySourceReader reader;
     readonly PostgresRelationQueryTableBinding table;
-    readonly byte[] continuationAuthenticationKey;
+    readonly MaterializationAuthenticatedValueCodec continuationCodec;
 
     /// <summary>Creates a materialization source for one exact canonical source-read placement.</summary>
     /// <param name="reader">Npgsql-backed canonical Relations reader.</param>
@@ -66,13 +63,17 @@ public sealed class PostgresMaterializationSource : IMaterializationSource
     {
         this.reader = Guard.RequireNotNull(reader);
         placement = Guard.RequireNotNull(placement);
-        if (continuationAuthenticationKey.Length < MinimumContinuationAuthenticationKeyBytes)
+        if (continuationAuthenticationKey.Length < MaterializationAuthenticatedValueCodec.MinimumAuthenticationKeyBytes)
         {
             throw new ArgumentException(
-                $"PostgreSQL continuation authentication requires at least {MinimumContinuationAuthenticationKeyBytes} secret bytes.",
+                $"PostgreSQL continuation authentication requires at least {MaterializationAuthenticatedValueCodec.MinimumAuthenticationKeyBytes} secret bytes.",
                 nameof(continuationAuthenticationKey));
         }
-        this.continuationAuthenticationKey = continuationAuthenticationKey.ToArray();
+        continuationCodec = new(
+            ContinuationPrefix,
+            ContinuationAuthenticationDomain,
+            continuationAuthenticationKey,
+            MaximumContinuationValueCharacters);
         RelationQuerySourcePlacementBinding authorized;
         try
         {
@@ -401,7 +402,6 @@ public sealed class PostgresMaterializationSource : IMaterializationSource
         if (continuation is null)
             return new(AfterIdentity: null, EmittedRows: 0, FanOut: []);
         if (continuation.FormatVersion != ContinuationFormatVersion
-            || !continuation.Value.StartsWith(ContinuationPrefix, StringComparison.Ordinal)
             || continuation.Value.Length > MaximumContinuationValueCharacters)
         {
             throw new ArgumentException(
@@ -409,29 +409,13 @@ public sealed class PostgresMaterializationSource : IMaterializationSource
                 parameterName);
         }
 
+        var payloadBytes = continuationCodec.Decode(continuation.Value, parameterName, "PostgreSQL continuation");
         ContinuationPayload payload;
         try
         {
-            var encoded = continuation.Value.AsSpan(ContinuationPrefix.Length);
-            var separator = encoded.IndexOf('.');
-            if (separator <= 0
-                || encoded[(separator + 1)..].Length != 43
-                || encoded[(separator + 1)..].IndexOf('.') >= 0)
-                throw new FormatException("The authenticated continuation framing is invalid.");
-            var payloadBytes = Convert.FromBase64String(FromBase64Url(encoded[..separator]));
-            var suppliedTag = Convert.FromBase64String(FromBase64Url(encoded[(separator + 1)..]));
-            if (suppliedTag.Length != AuthenticationTagBytes
-                || !CryptographicOperations.FixedTimeEquals(suppliedTag, Authenticate(payloadBytes)))
-            {
-                throw new CryptographicException("The continuation authentication tag is invalid.");
-            }
             ValidateContinuationPayloadBounds(payloadBytes, read.Constraint, reader.Policy.MaximumKeyBytes);
             payload = JsonSerializer.Deserialize<ContinuationPayload>(payloadBytes, CanonicalJsonOptions)
                 ?? throw new JsonException("The PostgreSQL continuation payload is null.");
-        }
-        catch (CryptographicException exception)
-        {
-            throw new ArgumentException("The PostgreSQL continuation failed authentication.", parameterName, exception);
         }
         catch (Exception exception) when (exception is FormatException or JsonException)
         {
@@ -508,19 +492,7 @@ public sealed class PostgresMaterializationSource : IMaterializationSource
             checked((int)emittedRows),
             identity,
             fanOut);
-        var payloadBytes = JsonSerializer.SerializeToUtf8Bytes(payload, CanonicalJsonOptions);
-        var authenticationTag = Authenticate(payloadBytes);
-        var value = string.Concat(
-            ContinuationPrefix,
-            ToBase64Url(Convert.ToBase64String(payloadBytes)),
-            ".",
-            ToBase64Url(Convert.ToBase64String(authenticationTag)));
-        if (value.Length > MaximumContinuationValueCharacters)
-        {
-            throw new InvalidOperationException(
-                "The PostgreSQL continuation exceeded its authenticated format bound.");
-        }
-        return value;
+        return continuationCodec.Encode(JsonSerializer.SerializeToUtf8Bytes(payload, CanonicalJsonOptions));
     }
 
     static ImmutableArray<PostgresRelationQueryFanOutCount> MergeFanOut(
@@ -575,16 +547,6 @@ public sealed class PostgresMaterializationSource : IMaterializationSource
                 return false;
         }
         return true;
-    }
-
-    byte[] Authenticate(ReadOnlySpan<byte> payload)
-    {
-        using var authentication = IncrementalHash.CreateHMAC(
-            HashAlgorithmName.SHA256,
-            continuationAuthenticationKey);
-        authentication.AppendData(ContinuationAuthenticationDomain);
-        authentication.AppendData(payload);
-        return authentication.GetHashAndReset();
     }
 
     static void ValidateContinuationPayloadBounds(
@@ -769,23 +731,6 @@ public sealed class PostgresMaterializationSource : IMaterializationSource
         if (read.EvidenceReference is { } readEvidence)
             references.Add(readEvidence);
         return references.MoveToImmutable();
-    }
-
-    static string ToBase64Url(string value) => value
-        .TrimEnd('=')
-        .Replace('+', '-')
-        .Replace('/', '_');
-
-    static string FromBase64Url(ReadOnlySpan<char> value)
-    {
-        var text = value.ToString().Replace('-', '+').Replace('_', '/');
-        return (text.Length % 4) switch
-        {
-            0 => text,
-            2 => string.Concat(text, "=="),
-            3 => string.Concat(text, "="),
-            _ => throw new FormatException("Invalid base64url length.")
-        };
     }
 
     sealed record Cursor(

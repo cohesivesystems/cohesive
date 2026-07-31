@@ -407,6 +407,14 @@ public sealed class MaterializationSourceContractsTests
             [],
             new MaterializationSourcePosition(1, Scope, "boundary-1"),
             MaterializationChangePageState.MoreAvailable));
+        var progressed = new MaterializationChangePage(
+            [],
+            new MaterializationSourcePosition(1, Scope, "boundary-2"),
+            MaterializationChangePageState.Progressed);
+        Assert.Throws<ArgumentException>(() => new MaterializationChangePage(
+            [DeleteDelivery("delivery-1", "change-1", "item-1", "position-1", Epoch)],
+            progressed.ThroughPosition,
+            MaterializationChangePageState.Progressed));
         var otherShape = new QualifiedShapeId(new("tests"), new("OtherItem"));
         Assert.Throws<ArgumentException>(() => new MaterializationSourcePage(
             Scope,
@@ -416,6 +424,8 @@ public sealed class MaterializationSourceContractsTests
                 [new RelationQuerySourceReadObservation("wrong-shape", otherShape, [])]),
             MaterializationSourcePageState.Exhausted));
         Assert.Throws<ArgumentException>(() => MaterializationSourceReadCompletion.FromPage(terminalPartial));
+        Assert.Empty(progressed.Deliveries);
+        Assert.Equal(MaterializationChangePageState.Progressed, progressed.State);
     }
 
     [Fact]
@@ -484,18 +494,55 @@ public sealed class MaterializationSourceContractsTests
     }
 
     [Fact]
+    public async Task CaptureCurrentPosition_ReturnsCurrentEndWithoutReadingOrSettlingChanges()
+    {
+        var fixture = CreateSource([
+            DeleteDelivery("delivery-1", "change-1", "item-1", "position-1", Epoch),
+            DeleteDelivery("delivery-2", "change-2", "item-2", "position-2", Epoch.AddSeconds(1))
+        ]);
+        var context = OperationContext.Create();
+
+        var position = await fixture.Source.CaptureCurrentPositionAsync(context, Scope);
+        var afterCut = await fixture.Source.ReadChangesAsync(
+            context,
+            new MaterializationChangeReadRequest(
+                Scope,
+                position,
+                maximumDeliveries: 10,
+                maximumBytes: MaximumPageBytes));
+
+        Assert.Equal(Scope, position.Scope);
+        Assert.Equal(MaterializationChangePageState.CaughtUp, afterCut.State);
+        Assert.Empty(afterCut.Deliveries);
+        Assert.Equal(position, afterCut.ThroughPosition);
+        Assert.Equal(0, fixture.Reader.ReadCount);
+    }
+
+    [Fact]
+    public void RetainedHistoryPort_IsExposedOnlyByTheCapabilitySpecificReferenceSource()
+    {
+        var fixture = CreateSource();
+        var exception = Assert.Throws<ArgumentException>(() =>
+            new InMemoryMaterializationSource(fixture.Source.Descriptor));
+
+        Assert.IsAssignableFrom<IMaterializationRetainedChangeSource>(fixture.Source);
+        Assert.Contains("retained-change-source interface", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task ChangeRead_PreservesSourceOrderAndResumesAfterPageBoundary()
     {
         var timestamp = new DateTimeOffset(2026, 7, 30, 12, 0, 0, TimeSpan.Zero);
         var first = DeleteDelivery("delivery-1", "change-1", "item-1", "position-1", timestamp);
         var second = DeleteDelivery("delivery-2", "change-2", "item-2", "position-2", timestamp.AddSeconds(1));
         var fixture = CreateSource([first, second]);
+        var retainedStart = await fixture.Source.CaptureRetainedStartPositionAsync(OperationContext.Create(), Scope);
 
         var initial = await fixture.Source.ReadChangesAsync(
             OperationContext.Create(),
             new MaterializationChangeReadRequest(
                 Scope,
-                afterPosition: null,
+                retainedStart,
                 maximumDeliveries: 1,
                 maximumBytes: MaximumPageBytes));
         var resumed = await fixture.Source.ReadChangesAsync(
@@ -521,12 +568,13 @@ public sealed class MaterializationSourceContractsTests
             firstDelivery,
             DeleteDelivery("delivery-2", "change-2", "item-2", "position-2", timestamp.AddSeconds(1))
         ]);
+        var retainedStart = await fixture.Source.CaptureRetainedStartPositionAsync(OperationContext.Create(), Scope);
 
         var page = await fixture.Source.ReadChangesAsync(
             OperationContext.Create(),
             new MaterializationChangeReadRequest(
                 Scope,
-                afterPosition: null,
+                retainedStart,
                 maximumDeliveries: 2,
                 maximumBytes: CanonicalByteCount(firstDelivery)));
 
@@ -540,26 +588,27 @@ public sealed class MaterializationSourceContractsTests
         var timestamp = new DateTimeOffset(2026, 7, 30, 12, 0, 0, TimeSpan.Zero);
         var firstDelivery = DeleteDelivery("delivery-1", "change-1", "item-1", "position-1", timestamp);
         var fixture = CreateSource([firstDelivery]);
+        var retainedStart = await fixture.Source.CaptureRetainedStartPositionAsync(OperationContext.Create(), Scope);
 
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => fixture.Source.ReadChangesAsync(
             OperationContext.Create(),
             new MaterializationChangeReadRequest(
                 Scope,
-                afterPosition: null,
+                retainedStart,
                 maximumDeliveries: MaximumProfileItems + 1,
                 maximumBytes: MaximumPageBytes)).AsTask());
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => fixture.Source.ReadChangesAsync(
             OperationContext.Create(),
             new MaterializationChangeReadRequest(
                 Scope,
-                afterPosition: null,
+                retainedStart,
                 maximumDeliveries: 1,
                 maximumBytes: MaximumPageBytes + 1)).AsTask());
         await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Source.ReadChangesAsync(
             OperationContext.Create(),
             new MaterializationChangeReadRequest(
                 Scope,
-                afterPosition: null,
+                retainedStart,
                 maximumDeliveries: 1,
                 maximumBytes: CanonicalByteCount(firstDelivery) - 1)).AsTask());
     }
@@ -571,12 +620,13 @@ public sealed class MaterializationSourceContractsTests
         var first = DeleteDelivery("delivery-1", "change-1", "item-1", "shared-position", timestamp);
         var second = DeleteDelivery("delivery-2", "change-2", "item-2", "shared-position", timestamp);
         var fixture = CreateSource([first, second]);
+        var retainedStart = await fixture.Source.CaptureRetainedStartPositionAsync(OperationContext.Create(), Scope);
 
         var initial = await fixture.Source.ReadChangesAsync(
             OperationContext.Create(),
             new MaterializationChangeReadRequest(
                 Scope,
-                afterPosition: null,
+                retainedStart,
                 maximumDeliveries: 1,
                 maximumBytes: MaximumPageBytes));
         var resumed = await fixture.Source.ReadChangesAsync(
@@ -596,12 +646,13 @@ public sealed class MaterializationSourceContractsTests
     public async Task EmptyCaughtUpPage_ProvidesCheckpointableBoundary()
     {
         var fixture = CreateSource();
+        var retainedStart = await fixture.Source.CaptureRetainedStartPositionAsync(OperationContext.Create(), Scope);
 
         var page = await fixture.Source.ReadChangesAsync(
             OperationContext.Create(),
             new MaterializationChangeReadRequest(
                 Scope,
-                afterPosition: null,
+                retainedStart,
                 maximumDeliveries: 10,
                 maximumBytes: MaximumPageBytes));
         MaterializationApplicationCheckpoint checkpoint = new(
@@ -654,6 +705,7 @@ public sealed class MaterializationSourceContractsTests
             new("generation-1"),
             Scope);
         var context = OperationContext.Create();
+        var retainedStart = await fixture.Source.CaptureRetainedStartPositionAsync(context, Scope);
         var claim = Assert.IsType<MaterializationProgressSnapshot>((await progress.AcquireFenceAsync(
             context,
             key,
@@ -664,7 +716,7 @@ public sealed class MaterializationSourceContractsTests
             context,
             new MaterializationChangeReadRequest(
                 Scope,
-                afterPosition: null,
+                retainedStart,
                 maximumDeliveries: 10,
                 maximumBytes: MaximumPageBytes));
         var position = changePage.ThroughPosition;
@@ -781,7 +833,8 @@ public sealed class MaterializationSourceContractsTests
                     [
                         MaterializationGuaranteeKind.StableOrdering,
                         MaterializationGuaranteeKind.AtLeastOnceDelivery,
-                        MaterializationGuaranteeKind.BaselinePlusCatchUp
+                        MaterializationGuaranteeKind.BaselinePlusCatchUp,
+                        MaterializationGuaranteeKind.RetainedHistoryStart
                     ],
                     [
                         new MaterializationOperatingLimit(MaterializationLimitKind.ChangeItems, MaximumProfileItems),
@@ -797,7 +850,7 @@ public sealed class MaterializationSourceContractsTests
                     ["tests/in-memory-reader"])
             ]);
         return new(
-            new InMemoryMaterializationSource(
+            new InMemoryRetainedMaterializationSource(
                 new MaterializationSourceDescriptor(reader, materializationProfile),
                 changes),
             reader);
@@ -852,7 +905,7 @@ public sealed class MaterializationSourceContractsTests
         Assert.False(string.IsNullOrWhiteSpace(evidence.Observed));
     }
 
-    sealed record SourceFixture(InMemoryMaterializationSource Source, RecordingReader Reader);
+    sealed record SourceFixture(InMemoryRetainedMaterializationSource Source, RecordingReader Reader);
 
     sealed class RecordingReader(
         RelationQuerySourceReaderDescriptor descriptor,

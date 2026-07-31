@@ -54,6 +54,11 @@ public sealed record CosmosRelationQuerySourcePolicy
     /// <param name="maximumKeysPerQuery">Maximum lookup keys placed in one Cosmos SQL query.</param>
     /// <param name="maximumQueryChunks">Maximum Cosmos SQL queries used to realize one batched lookup.</param>
     /// <param name="maximumSdkPageSize">Maximum item count requested for one Cosmos SDK feed page.</param>
+    /// <param name="readConsistencyLevel">
+    /// Optional request-level Cosmos consistency. Materialization sources require
+    /// <see cref="Microsoft.Azure.Cosmos.ConsistencyLevel.Strong"/> so a captured change-feed cut and
+    /// the subsequent baseline cannot leave a pre-cut write permanently unseen.
+    /// </param>
     /// <param name="requestSizeLimits">
     /// Explicit pre-I/O SQL-text and complete-request size boundaries, or <see langword="null"/> for Cosmos
     /// conventions.
@@ -61,8 +66,9 @@ public sealed record CosmosRelationQuerySourcePolicy
     /// <exception cref="ArgumentNullException"><paramref name="partitionSourceSelector"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException"><paramref name="partitionSourceSelector"/> is empty or is not a property-only path.</exception>
     /// <exception cref="ArgumentOutOfRangeException">
-    /// <paramref name="crossPartitionPolicy"/> is unsupported, a numeric limit is not positive, or
-    /// <paramref name="maximumKeysPerQuery"/> exceeds <see cref="MaximumSupportedKeysPerQuery"/>.
+    /// <paramref name="crossPartitionPolicy"/> or <paramref name="readConsistencyLevel"/> is unsupported, a
+    /// numeric limit is not positive, or <paramref name="maximumKeysPerQuery"/> exceeds
+    /// <see cref="MaximumSupportedKeysPerQuery"/>.
     /// </exception>
     public CosmosRelationQuerySourcePolicy(
         string partitionSourceSelector,
@@ -72,6 +78,7 @@ public sealed record CosmosRelationQuerySourcePolicy
         int maximumKeysPerQuery = 100,
         int maximumQueryChunks = 16,
         int maximumSdkPageSize = 256,
+        ConsistencyLevel? readConsistencyLevel = null,
         CosmosQueryRequestSizeLimits? requestSizeLimits = null)
     {
         if (!Enum.IsDefined(crossPartitionPolicy))
@@ -94,6 +101,13 @@ public sealed record CosmosRelationQuerySourcePolicy
             throw new ArgumentOutOfRangeException(nameof(maximumQueryChunks), maximumQueryChunks, "The query chunk limit must be positive.");
         if (maximumSdkPageSize <= 0)
             throw new ArgumentOutOfRangeException(nameof(maximumSdkPageSize), maximumSdkPageSize, "The SDK page-size limit must be positive.");
+        if (readConsistencyLevel is { } consistencyLevel && !Enum.IsDefined(consistencyLevel))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(readConsistencyLevel),
+                readConsistencyLevel,
+                "Unsupported Cosmos read-consistency level.");
+        }
 
         PartitionSourceSelector = CosmosRelationQuerySourceSelectors.RequirePropertyPath(
             partitionSourceSelector,
@@ -104,6 +118,7 @@ public sealed record CosmosRelationQuerySourcePolicy
         MaximumKeysPerQuery = maximumKeysPerQuery;
         MaximumQueryChunks = maximumQueryChunks;
         MaximumSdkPageSize = maximumSdkPageSize;
+        ReadConsistencyLevel = readConsistencyLevel;
         RequestSizeLimits = requestSizeLimits ?? new();
     }
 
@@ -133,6 +148,11 @@ public sealed record CosmosRelationQuerySourcePolicy
 
     /// <summary>Maximum item count requested for one Cosmos SDK feed page.</summary>
     public int MaximumSdkPageSize { get; }
+
+    /// <summary>
+    /// Request-level Cosmos read consistency, or <see langword="null"/> to inherit the client/account policy.
+    /// </summary>
+    public ConsistencyLevel? ReadConsistencyLevel { get; }
 
     /// <summary>Pre-I/O SQL-text and conservative complete-request size boundaries.</summary>
     public CosmosQueryRequestSizeLimits RequestSizeLimits { get; }

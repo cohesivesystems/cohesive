@@ -185,6 +185,9 @@ public static class CosmosEntityRelationQuerySourceRegistration
         Append(policy.MaximumKeysPerQuery.ToString(CultureInfo.InvariantCulture));
         Append(policy.MaximumQueryChunks.ToString(CultureInfo.InvariantCulture));
         Append(policy.MaximumSdkPageSize.ToString(CultureInfo.InvariantCulture));
+        Append(policy.ReadConsistencyLevel is { } consistencyLevel
+            ? ((int)consistencyLevel).ToString(CultureInfo.InvariantCulture)
+            : null);
         Append(policy.RequestSizeLimits.MaximumSqlQueryUtf8Bytes.ToString(CultureInfo.InvariantCulture));
         Append(policy.RequestSizeLimits.MaximumRequestUtf8Bytes.ToString(CultureInfo.InvariantCulture));
         Append(limits.MaximumBatchSize.ToString(CultureInfo.InvariantCulture));

@@ -31,14 +31,34 @@ public sealed class InMemoryMaterializationSource : IMaterializationSettlingSour
     /// <param name="changes">Source-ordered change deliveries available from the fake.</param>
     /// <exception cref="ArgumentNullException"><paramref name="descriptor"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
-    /// <paramref name="changes"/> contains a null entry, duplicate delivery identity, or a delivery from another
-    /// source.
+    /// The descriptor advertises retained-history start even though this base source does not expose its required
+    /// interface, or <paramref name="changes"/> contains a null entry, duplicate delivery identity, or a delivery
+    /// from another source.
     /// </exception>
     public InMemoryMaterializationSource(
         MaterializationSourceDescriptor descriptor,
         ImmutableArray<MaterializationChangeDelivery> changes = default)
+        : this(descriptor, changes, retainedStartExposed: false)
+    {
+    }
+
+    InMemoryMaterializationSource(
+        MaterializationSourceDescriptor descriptor,
+        ImmutableArray<MaterializationChangeDelivery> changes,
+        bool retainedStartExposed)
     {
         Descriptor = Guard.RequireNotNull(descriptor);
+        var advertisesRetainedStart = descriptor.CapabilityProfile.Evidence.Any(static evidence =>
+            evidence.Capability == MaterializationCapabilityKind.SourceChangeDelivery
+            && evidence.Guarantees.Contains(MaterializationGuaranteeKind.RetainedHistoryStart));
+        if (advertisesRetainedStart != retainedStartExposed)
+        {
+            throw new ArgumentException(
+                retainedStartExposed
+                    ? "A retained in-memory source must advertise retained-history start."
+                    : "The base in-memory source cannot advertise retained-history start without exposing the retained-change-source interface.",
+                nameof(descriptor));
+        }
         var normalized = changes.IsDefault ? [] : changes;
         HashSet<MaterializationDeliveryId> deliveryIds = [];
         foreach (var delivery in normalized)
@@ -61,6 +81,11 @@ public sealed class InMemoryMaterializationSource : IMaterializationSettlingSour
 
         this.changes = normalized;
     }
+
+    internal static InMemoryMaterializationSource CreateRetained(
+        MaterializationSourceDescriptor descriptor,
+        ImmutableArray<MaterializationChangeDelivery> changes) =>
+        new(descriptor, changes, retainedStartExposed: true);
 
     /// <inheritdoc />
     public MaterializationSourceDescriptor Descriptor { get; }
@@ -158,6 +183,35 @@ public sealed class InMemoryMaterializationSource : IMaterializationSettlingSour
             read,
             hasMore ? MaterializationSourcePageState.MoreAvailable : MaterializationSourcePageState.Exhausted,
             continuation);
+    }
+
+    /// <inheritdoc />
+    public ValueTask<MaterializationSourcePosition> CaptureCurrentPositionAsync(
+        OperationContext context,
+        MaterializationSourceScope scope)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(scope);
+        context.CancellationToken.ThrowIfCancellationRequested();
+        RequireSource(scope.Source, nameof(scope));
+        return ValueTask.FromResult(new MaterializationSourcePosition(
+            ChangePositionFormatVersion,
+            scope,
+            EncodeChangeOffset(changes.Length)));
+    }
+
+    internal ValueTask<MaterializationSourcePosition> CaptureRetainedStartPositionAsync(
+        OperationContext context,
+        MaterializationSourceScope scope)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(scope);
+        context.CancellationToken.ThrowIfCancellationRequested();
+        RequireSource(scope.Source, nameof(scope));
+        return ValueTask.FromResult(new MaterializationSourcePosition(
+            ChangePositionFormatVersion,
+            scope,
+            EncodeChangeOffset(0)));
     }
 
     /// <inheritdoc />
@@ -348,13 +402,8 @@ public sealed class InMemoryMaterializationSource : IMaterializationSettlingSour
     static string EncodeOffset(int offset) =>
         string.Concat(ContinuationPrefix, offset.ToString(CultureInfo.InvariantCulture));
 
-    static int DecodeChangeOffset(MaterializationSourcePosition? position, string parameterName)
+    static int DecodeChangeOffset(MaterializationSourcePosition position, string parameterName)
     {
-        if (position is null)
-        {
-            return 0;
-        }
-
         if (position.FormatVersion != ChangePositionFormatVersion
             || !position.Value.StartsWith(ChangePositionPrefix, StringComparison.Ordinal)
             || !int.TryParse(
@@ -397,4 +446,70 @@ public sealed class InMemoryMaterializationSource : IMaterializationSettlingSour
     sealed record SettlementRecord(
         MaterializationSourceSettlementRequest Request,
         MaterializationSourceSettlement Receipt);
+}
+
+/// <summary>
+/// Deterministic in-memory materialization source whose descriptor explicitly guarantees retained-history capture.
+/// </summary>
+/// <remarks>
+/// This capability-specific wrapper keeps interface discovery truthful: an in-memory source whose profile does not
+/// advertise <see cref="MaterializationGuaranteeKind.RetainedHistoryStart"/> does not implement
+/// <see cref="IMaterializationRetainedChangeSource"/>.
+/// </remarks>
+public sealed class InMemoryRetainedMaterializationSource : IMaterializationSettlingSource, IMaterializationRetainedChangeSource
+{
+    readonly InMemoryMaterializationSource source;
+
+    /// <summary>Creates a deterministic source with explicit retained-history-start support.</summary>
+    /// <param name="descriptor">Exact Relations reader and attributable source capability profile.</param>
+    /// <param name="changes">Source-ordered change deliveries available from the fake.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="descriptor"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// The profile does not advertise retained-history start, or <paramref name="changes"/> contains a null entry,
+    /// duplicate delivery identity, or a delivery from another source.
+    /// </exception>
+    public InMemoryRetainedMaterializationSource(
+        MaterializationSourceDescriptor descriptor,
+        ImmutableArray<MaterializationChangeDelivery> changes = default)
+    {
+        ArgumentNullException.ThrowIfNull(descriptor);
+        if (!descriptor.CapabilityProfile.Evidence.Any(static evidence =>
+                evidence.Capability == MaterializationCapabilityKind.SourceChangeDelivery
+                && evidence.Guarantees.Contains(MaterializationGuaranteeKind.RetainedHistoryStart)))
+        {
+            throw new ArgumentException(
+                "A retained in-memory source profile must advertise retained-history start.",
+                nameof(descriptor));
+        }
+
+        source = InMemoryMaterializationSource.CreateRetained(descriptor, changes);
+    }
+
+    /// <inheritdoc />
+    public MaterializationSourceDescriptor Descriptor => source.Descriptor;
+
+    /// <inheritdoc />
+    public ValueTask<MaterializationSourcePage> ReadPageAsync(
+        OperationContext context,
+        MaterializationSourcePageRequest request) => source.ReadPageAsync(context, request);
+
+    /// <inheritdoc />
+    public ValueTask<MaterializationSourcePosition> CaptureCurrentPositionAsync(
+        OperationContext context,
+        MaterializationSourceScope scope) => source.CaptureCurrentPositionAsync(context, scope);
+
+    /// <inheritdoc />
+    public ValueTask<MaterializationSourcePosition> CaptureRetainedStartPositionAsync(
+        OperationContext context,
+        MaterializationSourceScope scope) => source.CaptureRetainedStartPositionAsync(context, scope);
+
+    /// <inheritdoc />
+    public ValueTask<MaterializationChangePage> ReadChangesAsync(
+        OperationContext context,
+        MaterializationChangeReadRequest request) => source.ReadChangesAsync(context, request);
+
+    /// <inheritdoc />
+    public ValueTask<MaterializationSourceSettlementResult> SettleAsync(
+        OperationContext context,
+        MaterializationSourceSettlementRequest request) => source.SettleAsync(context, request);
 }
