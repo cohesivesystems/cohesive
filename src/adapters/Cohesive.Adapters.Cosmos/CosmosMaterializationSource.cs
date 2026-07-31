@@ -112,15 +112,15 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         ReadOnlySpan<byte> authenticationKey,
         ICosmosMaterializationSourceObserver? observer = null)
         : this(
-            reader,
-            physicalPlan,
-            placement,
-            policy,
-            admissionIndex,
-            new CosmosMaterializationChangeFeedReader(
-                ValidateContainer(reader, container)),
-            authenticationKey,
-            observer)
+            reader: reader,
+            physicalPlan: physicalPlan,
+            placement: placement,
+            policy: policy,
+            admissionIndex: admissionIndex,
+            changeFeedReader: new CosmosMaterializationChangeFeedReader(
+                container: ValidateContainer(reader: reader, container: container)),
+            authenticationKey: authenticationKey,
+            observer: observer)
     {
     }
 
@@ -144,8 +144,8 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         if (authenticationKey.Length < MaterializationAuthenticatedValueCodec.MinimumAuthenticationKeyBytes)
         {
             throw new ArgumentException(
-                $"Cosmos materialization cursor authentication requires at least {MaterializationAuthenticatedValueCodec.MinimumAuthenticationKeyBytes} secret bytes.",
-                nameof(authenticationKey));
+                message: $"Cosmos materialization cursor authentication requires at least {MaterializationAuthenticatedValueCodec.MinimumAuthenticationKeyBytes} secret bytes.",
+                paramName: nameof(authenticationKey));
         }
         if (placement.Source != reader.Descriptor.Source
             || placement.Shape != reader.Shape
@@ -156,8 +156,8 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
                 StringComparison.Ordinal))
         {
             throw new ArgumentException(
-                "The materialization placement must belong to the exact wrapped Cosmos reader source and shape and carry its exact observation-identity selector.",
-                nameof(placement));
+                message: "The materialization placement must belong to the exact wrapped Cosmos reader source and shape and carry its exact observation-identity selector.",
+                paramName: nameof(placement));
         }
         if (placement.Partition is { } placementPartition
             && !string.Equals(
@@ -166,14 +166,16 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
                 StringComparison.Ordinal))
         {
             throw new ArgumentException(
-                "The materialization placement partition selector conflicts with the wrapped Cosmos reader policy.",
-                nameof(placement));
+                message: "The materialization placement partition selector conflicts with the wrapped Cosmos reader policy.",
+                paramName: nameof(placement));
         }
         var projectedChangeFields = ImmutableArray.CreateBuilder<RelationQuerySourceReadField>(
             placement.Fields.Length);
         foreach (var field in placement.Fields)
         {
-            var canonicalSelector = CanonicalObservationFieldSelector(field.SemanticPath, nameof(placement));
+            var canonicalSelector = CanonicalObservationFieldSelector(
+                semanticPath: field.SemanticPath,
+                parameterName: nameof(placement));
             if (!string.Equals(
                     field.SourceSelector,
                     reader.FieldSourceSelector(field.SemanticPath),
@@ -181,22 +183,22 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
                 || !string.Equals(field.SourceSelector, canonicalSelector, StringComparison.Ordinal))
             {
                 throw new ArgumentException(
-                    "A materialization placement field selector must match the wrapped Cosmos reader and the canonical observation envelope represented by full-fidelity change images.",
-                    nameof(placement));
+                    message: "A materialization placement field selector must match the wrapped Cosmos reader and the canonical observation envelope represented by full-fidelity change images.",
+                    paramName: nameof(placement));
             }
 
             projectedChangeFields.Add(new(
-                field.Input,
-                field.SemanticPath,
-                field.SourceSelector,
-                RelationQuerySourceReadFieldPurpose.SemanticInput));
+                input: field.Input,
+                semanticPath: field.SemanticPath,
+                sourceSelector: field.SourceSelector,
+                purpose: RelationQuerySourceReadFieldPurpose.SemanticInput));
         }
         HashSet<FieldPath> projectedCorrelationPaths = [];
         foreach (var relationshipKey in placement.RelationshipKeys)
         {
             var canonicalSelector = CanonicalObservationFieldSelector(
-                relationshipKey.SemanticPath,
-                nameof(placement));
+                semanticPath: relationshipKey.SemanticPath,
+                parameterName: nameof(placement));
             if (!string.Equals(
                     relationshipKey.SourceSelector,
                     reader.RelationshipKeySourceSelector(relationshipKey.SemanticPath),
@@ -204,37 +206,37 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
                 || !string.Equals(relationshipKey.SourceSelector, canonicalSelector, StringComparison.Ordinal))
             {
                 throw new ArgumentException(
-                    "A materialization placement relationship-key selector must match the wrapped Cosmos reader and the canonical observation envelope represented by full-fidelity change images.",
-                    nameof(placement));
+                    message: "A materialization placement relationship-key selector must match the wrapped Cosmos reader and the canonical observation envelope represented by full-fidelity change images.",
+                    paramName: nameof(placement));
             }
             if (projectedCorrelationPaths.Add(relationshipKey.SemanticPath))
             {
                 projectedChangeFields.Add(new(
                     input: null,
-                    relationshipKey.SemanticPath,
-                    relationshipKey.SourceSelector,
-                    RelationQuerySourceReadFieldPurpose.Correlation));
+                    semanticPath: relationshipKey.SemanticPath,
+                    sourceSelector: relationshipKey.SourceSelector,
+                    purpose: RelationQuerySourceReadFieldPurpose.Correlation));
             }
         }
         if (placement.Acquisition == RelationQuerySourceAcquisitionKind.Supplied)
         {
             throw new ArgumentException(
-                "A Cosmos materialization placement must authorize external acquisition.",
-                nameof(placement));
+                message: "A Cosmos materialization placement must authorize external acquisition.",
+                paramName: nameof(placement));
         }
         if (reader.Policy.FixedPartitionKey is null)
         {
             throw new ArgumentException(
-                "The initial Cosmos materialization source requires one fixed logical partition; whole-container change delivery needs a composite per-range position model.",
-                nameof(reader));
+                message: "The initial Cosmos materialization source requires one fixed logical partition; whole-container change delivery needs a composite per-range position model.",
+                paramName: nameof(reader));
         }
         if (reader.Policy.ReadConsistencyLevel != ConsistencyLevel.Strong
             || reader.ClientConsistencyLevel is { } clientConsistency
                && clientConsistency != ConsistencyLevel.Strong)
         {
             throw new ArgumentException(
-                "Cosmos baseline-plus-catch-up materialization requires request-level Strong reads and no explicitly weaker Cosmos client override so the baseline cannot omit a write committed before the captured change-feed cut.",
-                nameof(reader));
+                message: "Cosmos baseline-plus-catch-up materialization requires request-level Strong reads and no explicitly weaker Cosmos client override so the baseline cannot omit a write committed before the captured change-feed cut.",
+                paramName: nameof(reader));
         }
         if (!string.Equals(
                 reader.Policy.PartitionSourceSelector,
@@ -242,8 +244,8 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
                 StringComparison.Ordinal))
         {
             throw new ArgumentException(
-                "Cosmos full-fidelity materialization currently requires the canonical partitionKey selector represented by change images.",
-                nameof(reader));
+                message: "Cosmos full-fidelity materialization currently requires the canonical partitionKey selector represented by change images.",
+                paramName: nameof(reader));
         }
         if (!string.Equals(
                 reader.IdentitySourceSelector,
@@ -251,23 +253,23 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
                 StringComparison.Ordinal))
         {
             throw new ArgumentException(
-                "Cosmos full-fidelity materialization currently requires the canonical observationId identity selector so baseline and change identities cannot diverge.",
-                nameof(reader));
+                message: "Cosmos full-fidelity materialization currently requires the canonical observationId identity selector so baseline and change identities cannot diverge.",
+                paramName: nameof(reader));
         }
 
         changeFields = projectedChangeFields.MoveToImmutable();
 
         this.observer = observer;
         continuationCodec = new(
-            ContinuationPrefix,
-            ContinuationAuthenticationDomain,
-            authenticationKey,
-            policy.MaximumCursorCharacters);
+            formatPrefix: ContinuationPrefix,
+            authenticationDomain: ContinuationAuthenticationDomain,
+            authenticationKey: authenticationKey,
+            maximumValueCharacters: policy.MaximumCursorCharacters);
         positionCodec = new(
-            PositionPrefix,
-            PositionAuthenticationDomain,
-            authenticationKey,
-            policy.MaximumCursorCharacters);
+            formatPrefix: PositionPrefix,
+            authenticationDomain: PositionAuthenticationDomain,
+            authenticationKey: authenticationKey,
+            maximumValueCharacters: policy.MaximumCursorCharacters);
         var partitionEvidence = reader.Policy.FixedPartitionKey is { } fixedPartition
             ? FeedRange.FromPartitionKey(fixedPartition).ToJsonString()
             : "whole-container";
@@ -278,34 +280,47 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         var accountFingerprint = CosmosPhysicalAffinity.Fingerprint(reader.AccountEndpoint);
         var maximumProviderConcurrency = checked((int)reader.Limits.MaximumConcurrency);
         admission = admissionIndex.Bind(
-            string.Concat(
+            containerIdentity: string.Concat(
                 accountFingerprint, "\0",
                 reader.DatabaseId, "\0",
                 reader.ContainerId),
-            reader.Policy.FixedPartitionKey is null ? null : partitionDigest,
-            Math.Min(policy.MaximumContainerParallelism, maximumProviderConcurrency),
-            Math.Min(policy.MaximumPartitionParallelism, maximumProviderConcurrency));
+            partitionIdentity: reader.Policy.FixedPartitionKey is null ? null : partitionDigest,
+            maximumContainerParallelism: Math.Min(
+                policy.MaximumContainerParallelism,
+                maximumProviderConcurrency),
+            maximumPartitionParallelism: Math.Min(
+                policy.MaximumPartitionParallelism,
+                maximumProviderConcurrency));
         Scope = new(
-            physicalPlan,
-            placement,
-            new MaterializationSourcePartitionId(string.Concat(
+            physicalPlan: physicalPlan,
+            placement: placement,
+            partition: new MaterializationSourcePartitionId(string.Concat(
                 "cosmos/container/", accountFingerprint,
                 "/database/", Uri.EscapeDataString(reader.DatabaseId),
                 "/container/", Uri.EscapeDataString(reader.ContainerId),
                 "/logical-scope/sha256/", partitionDigest)),
-            new MaterializationOrderingScopeId(string.Concat(
+            orderingScope: new MaterializationOrderingScopeId(string.Concat(
                 "cosmos/change-feed/logical-scope/sha256/", partitionDigest,
                 "/provider-continuation/v1")));
-        Descriptor = new(reader, CreateCapabilityProfile(reader, physicalPlan, placement, policy, partitionDigest));
-        scopeDigest = ComputeScopeDigest(Scope, Descriptor.CapabilityProfile.Id.Value);
+        Descriptor = new(
+            relationReader: reader,
+            capabilityProfile: CreateCapabilityProfile(
+                reader: reader,
+                physicalPlan: physicalPlan,
+                placement: placement,
+                policy: policy,
+                partitionDigest: partitionDigest));
+        scopeDigest = ComputeScopeDigest(
+            scope: Scope,
+            profile: Descriptor.CapabilityProfile.Id.Value);
         try
         {
             _ = Encode(
-                continuationCodec,
-                new BaselineCursorPayload(
-                    Descriptor.CapabilityProfile.Id.Value,
-                    scopeDigest,
-                    BaselineCursorKind.Enumeration,
+                codec: continuationCodec,
+                payload: new BaselineCursorPayload(
+                    SourceProfile: Descriptor.CapabilityProfile.Id.Value,
+                    ScopeDigest: scopeDigest,
+                    Kind: BaselineCursorKind.Enumeration,
                     ProviderContinuation: "provider-token",
                     ProviderPageSizeHint: 1,
                     Offset: 1,
@@ -313,10 +328,10 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
                     LastIdentity: "observation-id",
                     PrefixDigest: EmptyDigest));
             _ = Encode(
-                positionCodec,
-                new ChangeCursorPayload(
-                    Descriptor.CapabilityProfile.Id.Value,
-                    scopeDigest,
+                codec: positionCodec,
+                payload: new ChangeCursorPayload(
+                    SourceProfile: Descriptor.CapabilityProfile.Id.Value,
+                    ScopeDigest: scopeDigest,
                     ProviderContinuation: "provider-token",
                     ProviderPageSizeHint: 0,
                     Offset: 0,
@@ -325,9 +340,9 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         catch (InvalidOperationException exception)
         {
             throw new ArgumentException(
-                "The Cosmos cursor bound cannot contain the fixed authenticated source envelope.",
-                nameof(policy),
-                exception);
+                message: "The Cosmos cursor bound cannot contain the fixed authenticated source envelope.",
+                paramName: nameof(policy),
+                innerException: exception);
         }
     }
 
@@ -349,98 +364,111 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(request);
-        RequireScope(request.Scope, nameof(request));
-        MaterializationSourceAcquisitionCatalog.RequireCompatibleRead(request.Read, request.Scope);
+        RequireScope(scope: request.Scope, parameterName: nameof(request));
+        MaterializationSourceAcquisitionCatalog.RequireCompatibleRead(
+            read: request.Read,
+            scope: request.Scope);
         var capability = MaterializationSourceAcquisitionCatalog.GetReadCapability(request.Read.Constraint);
         MaterializationCapabilityLimits.RequireSupportedBounds(
-            Descriptor.CapabilityProfile,
-            capability,
-            MaterializationLimitKind.ReadItems,
-            request.MaximumItems,
-            MaterializationLimitKind.ReadBytes,
-            request.MaximumBytes,
-            nameof(request));
+            profile: Descriptor.CapabilityProfile,
+            capability: capability,
+            itemLimitKind: MaterializationLimitKind.ReadItems,
+            requestedItems: request.MaximumItems,
+            byteLimitKind: MaterializationLimitKind.ReadBytes,
+            requestedBytes: request.MaximumBytes,
+            parameterName: nameof(request));
         var started = context.UtcNow;
         using var admissionLease = await EnterObservedAsync(
-            context,
-            CosmosMaterializationSourceOperationKind.BaselineRead,
-            started,
-            "baseline-admission-canceled").ConfigureAwait(false);
+            context: context,
+            operation: CosmosMaterializationSourceOperationKind.BaselineRead,
+            started: started,
+            canceledEvidence: "baseline-admission-canceled").ConfigureAwait(false);
         try
         {
             var result = request.Read.Constraint is RelationQueryBoundedEnumeration
-                ? await ReadEnumerationPageAsync(context, request, started).ConfigureAwait(false)
-                : await ReadBufferedPageAsync(context, request, started).ConfigureAwait(false);
+                ? await ReadEnumerationPageAsync(
+                    context: context,
+                    request: request,
+                    startedAtUtc: started).ConfigureAwait(false)
+                : await ReadBufferedPageAsync(
+                    context: context,
+                    request: request,
+                    startedAtUtc: started).ConfigureAwait(false);
             var completed = context.UtcNow;
             var bytes = CanonicalByteCount(result.Page.Read.Observations);
             Observe(CreateObservation(
-                CosmosMaterializationSourceOperationKind.BaselineRead,
-                result.Disposition,
-                started,
-                completed,
-                result.Page.Read.Observations.Length,
-                bytes,
-                result.RequestCharge,
-                result.EvidenceReference,
-                result.StatusCode));
+                operation: CosmosMaterializationSourceOperationKind.BaselineRead,
+                disposition: result.Disposition,
+                started: started,
+                completed: completed,
+                itemCount: result.Page.Read.Observations.Length,
+                byteCount: bytes,
+                requestCharge: result.RequestCharge,
+                evidenceReference: result.EvidenceReference,
+                statusCode: result.StatusCode));
             return result.Page;
         }
         catch (OperationCanceledException exception) when (context.CancellationToken.IsCancellationRequested)
         {
-            var canceled = CancellationEvidence(started, context.UtcNow, exception);
+            var canceled = CancellationEvidence(
+                started: started,
+                completed: context.UtcNow,
+                exception: exception);
             Observe(CreateObservation(
-                CosmosMaterializationSourceOperationKind.BaselineRead,
-                CosmosMaterializationSourceDisposition.Canceled,
-                canceled.StartedAtUtc,
-                canceled.CompletedAtUtc,
-                0,
-                0,
-                canceled.RequestCharge,
-                FailureEvidence("baseline-canceled", canceled.ProviderEvidenceReference),
-                canceled.StatusCode));
+                operation: CosmosMaterializationSourceOperationKind.BaselineRead,
+                disposition: CosmosMaterializationSourceDisposition.Canceled,
+                started: canceled.StartedAtUtc,
+                completed: canceled.CompletedAtUtc,
+                itemCount: 0,
+                byteCount: 0,
+                requestCharge: canceled.RequestCharge,
+                evidenceReference: FailureEvidence(
+                    suffix: "baseline-canceled",
+                    providerEvidenceReference: canceled.ProviderEvidenceReference),
+                statusCode: canceled.StatusCode));
             throw;
         }
         catch (CosmosRelationQueryMaterializationProtocolException exception)
         {
             throw ProviderProtocolFailure(
-                CosmosMaterializationSourceOperationKind.BaselineRead,
-                started,
-                context.UtcNow,
-                exception.ProviderException,
+                operation: CosmosMaterializationSourceOperationKind.BaselineRead,
+                started: started,
+                completed: context.UtcNow,
+                exception: exception.ProviderException,
                 resumedPosition: false,
-                exception.CompletedRequestCharge,
-                exception.CompletedStatusCode,
-                exception.ProviderEvidenceReference);
+                requestCharge: exception.CompletedRequestCharge,
+                statusCode: exception.CompletedStatusCode,
+                providerEvidenceReference: exception.ProviderEvidenceReference);
         }
         catch (CosmosProviderProtocolException exception)
         {
             throw ProviderProtocolFailure(
-                CosmosMaterializationSourceOperationKind.BaselineRead,
-                started,
-                context.UtcNow,
-                exception,
+                operation: CosmosMaterializationSourceOperationKind.BaselineRead,
+                started: started,
+                completed: context.UtcNow,
+                exception: exception,
                 resumedPosition: false,
-                exception.RequestCharge ?? 0,
-                exception.StatusCode,
-                exception.ProviderEvidenceReference);
+                requestCharge: exception.RequestCharge ?? 0,
+                statusCode: exception.StatusCode,
+                providerEvidenceReference: exception.ProviderEvidenceReference);
         }
         catch (CosmosRelationQueryMaterializationProviderException exception)
         {
             throw ProviderFailure(
-                CosmosMaterializationSourceOperationKind.BaselineRead,
-                started,
-                context.UtcNow,
-                exception.ProviderException,
+                operation: CosmosMaterializationSourceOperationKind.BaselineRead,
+                started: started,
+                completed: context.UtcNow,
+                exception: exception.ProviderException,
                 resumedPosition: false,
-                exception.CompletedRequestCharge);
+                completedRequestCharge: exception.CompletedRequestCharge);
         }
         catch (CosmosException exception)
         {
             throw ProviderFailure(
-                CosmosMaterializationSourceOperationKind.BaselineRead,
-                started,
-                context.UtcNow,
-                exception,
+                operation: CosmosMaterializationSourceOperationKind.BaselineRead,
+                started: started,
+                completed: context.UtcNow,
+                exception: exception,
                 resumedPosition: false);
         }
     }
@@ -455,73 +483,78 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         MaterializationSourceScope scope)
     {
         ArgumentNullException.ThrowIfNull(context);
-        RequireScope(scope, nameof(scope));
+        RequireScope(scope: scope, parameterName: nameof(scope));
         var started = context.UtcNow;
         using var admissionLease = await EnterObservedAsync(
-            context,
-            CosmosMaterializationSourceOperationKind.CaptureCurrentPosition,
-            started,
-            "capture-admission-canceled").ConfigureAwait(false);
+            context: context,
+            operation: CosmosMaterializationSourceOperationKind.CaptureCurrentPosition,
+            started: started,
+            canceledEvidence: "capture-admission-canceled").ConfigureAwait(false);
         try
         {
             var page = await changeFeedReader.ReadPageAsync(
-                new(CosmosMaterializationChangeFeedStartKind.Now),
-                feedRange,
-                policy.MaximumProviderPageItems,
-                context.CancellationToken).ConfigureAwait(false);
-            var position = CreatePosition(new(
-                Descriptor.CapabilityProfile.Id.Value,
-                scopeDigest,
-                page.ContinuationToken,
+                start: new(kind: CosmosMaterializationChangeFeedStartKind.Now),
+                feedRange: feedRange,
+                pageSizeHint: policy.MaximumProviderPageItems,
+                cancellationToken: context.CancellationToken).ConfigureAwait(false);
+            var position = CreatePosition(payload: new(
+                SourceProfile: Descriptor.CapabilityProfile.Id.Value,
+                ScopeDigest: scopeDigest,
+                ProviderContinuation: page.ContinuationToken,
                 ProviderPageSizeHint: 0,
                 Offset: 0,
                 PrefixDigest: EmptyDigest));
             Observe(CreateObservation(
-                CosmosMaterializationSourceOperationKind.CaptureCurrentPosition,
-                CosmosMaterializationSourceDisposition.Complete,
-                started,
-                context.UtcNow,
-                0,
-                0,
-                page.RequestCharge,
-                page.ProviderEvidenceReference,
-                page.StatusCode));
+                operation: CosmosMaterializationSourceOperationKind.CaptureCurrentPosition,
+                disposition: CosmosMaterializationSourceDisposition.Complete,
+                started: started,
+                completed: context.UtcNow,
+                itemCount: 0,
+                byteCount: 0,
+                requestCharge: page.RequestCharge,
+                evidenceReference: page.ProviderEvidenceReference,
+                statusCode: page.StatusCode));
             return position;
         }
         catch (OperationCanceledException exception) when (context.CancellationToken.IsCancellationRequested)
         {
-            var canceled = CancellationEvidence(started, context.UtcNow, exception);
+            var canceled = CancellationEvidence(
+                started: started,
+                completed: context.UtcNow,
+                exception: exception);
             Observe(CreateObservation(
-                CosmosMaterializationSourceOperationKind.CaptureCurrentPosition,
-                CosmosMaterializationSourceDisposition.Canceled,
-                canceled.StartedAtUtc,
-                canceled.CompletedAtUtc,
-                0,
-                0,
-                canceled.RequestCharge,
-                FailureEvidence("capture-canceled", canceled.ProviderEvidenceReference),
-                canceled.StatusCode));
+                operation: CosmosMaterializationSourceOperationKind.CaptureCurrentPosition,
+                disposition: CosmosMaterializationSourceDisposition.Canceled,
+                started: canceled.StartedAtUtc,
+                completed: canceled.CompletedAtUtc,
+                itemCount: 0,
+                byteCount: 0,
+                requestCharge: canceled.RequestCharge,
+                evidenceReference: FailureEvidence(
+                    suffix: "capture-canceled",
+                    providerEvidenceReference: canceled.ProviderEvidenceReference),
+                statusCode: canceled.StatusCode));
             throw;
         }
         catch (CosmosProviderProtocolException exception)
         {
             throw ProviderProtocolFailure(
-                CosmosMaterializationSourceOperationKind.CaptureCurrentPosition,
-                started,
-                context.UtcNow,
-                exception,
+                operation: CosmosMaterializationSourceOperationKind.CaptureCurrentPosition,
+                started: started,
+                completed: context.UtcNow,
+                exception: exception,
                 resumedPosition: false,
-                exception.RequestCharge ?? 0,
-                exception.StatusCode,
-                exception.ProviderEvidenceReference);
+                requestCharge: exception.RequestCharge ?? 0,
+                statusCode: exception.StatusCode,
+                providerEvidenceReference: exception.ProviderEvidenceReference);
         }
         catch (CosmosException exception)
         {
             throw ProviderFailure(
-                CosmosMaterializationSourceOperationKind.CaptureCurrentPosition,
-                started,
-                context.UtcNow,
-                exception,
+                operation: CosmosMaterializationSourceOperationKind.CaptureCurrentPosition,
+                started: started,
+                completed: context.UtcNow,
+                exception: exception,
                 resumedPosition: false);
         }
     }
@@ -537,48 +570,61 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(request);
-        RequireScope(request.Scope, nameof(request));
+        RequireScope(scope: request.Scope, parameterName: nameof(request));
         MaterializationCapabilityLimits.RequireSupportedBounds(
-            Descriptor.CapabilityProfile,
-            MaterializationCapabilityKind.SourceChangeDelivery,
-            MaterializationLimitKind.ChangeItems,
-            request.MaximumDeliveries,
-            MaterializationLimitKind.ReadBytes,
-            request.MaximumBytes,
-            nameof(request));
+            profile: Descriptor.CapabilityProfile,
+            capability: MaterializationCapabilityKind.SourceChangeDelivery,
+            itemLimitKind: MaterializationLimitKind.ChangeItems,
+            requestedItems: request.MaximumDeliveries,
+            byteLimitKind: MaterializationLimitKind.ReadBytes,
+            requestedBytes: request.MaximumBytes,
+            parameterName: nameof(request));
         var started = context.UtcNow;
         using var admissionLease = await EnterObservedAsync(
-            context,
-            CosmosMaterializationSourceOperationKind.ChangeRead,
-            started,
-            "change-admission-canceled").ConfigureAwait(false);
+            context: context,
+            operation: CosmosMaterializationSourceOperationKind.ChangeRead,
+            started: started,
+            canceledEvidence: "change-admission-canceled").ConfigureAwait(false);
         ProviderOperationEvidence? completedProviderEvidence = null;
         try
         {
-            var cursor = DecodePosition(request.AfterPosition, nameof(request));
+            var cursor = DecodePosition(
+                position: request.AfterPosition,
+                parameterName: nameof(request));
             var providerPageSizeHint = cursor.Offset == 0
                 ? Math.Min(policy.MaximumProviderPageItems, request.MaximumDeliveries)
                 : cursor.ProviderPageSizeHint;
             var providerPage = await changeFeedReader.ReadPageAsync(
-                new(CosmosMaterializationChangeFeedStartKind.Continuation, cursor.ProviderContinuation),
+                start: new(
+                    kind: CosmosMaterializationChangeFeedStartKind.Continuation,
+                    continuationToken: cursor.ProviderContinuation),
                 feedRange: null,
-                providerPageSizeHint,
-                context.CancellationToken).ConfigureAwait(false);
+                pageSizeHint: providerPageSizeHint,
+                cancellationToken: context.CancellationToken).ConfigureAwait(false);
             ProviderOperationEvidence providerEvidence = new(
-                started,
-                context.UtcNow,
-                providerPage.RequestCharge,
-                providerPage.StatusCode,
-                providerPage.ProviderEvidenceReference);
+                StartedAtUtc: started,
+                CompletedAtUtc: context.UtcNow,
+                RequestCharge: providerPage.RequestCharge,
+                StatusCode: providerPage.StatusCode,
+                ProviderEvidenceReference: providerPage.ProviderEvidenceReference);
             completedProviderEvidence = providerEvidence;
             foreach (var providerChange in providerPage.Changes)
             {
                 context.CancellationToken.ThrowIfCancellationRequested();
-                ValidateChangeEvidence(providerChange, providerEvidence);
+                ValidateChangeEvidence(
+                    provider: providerChange,
+                    operationEvidence: providerEvidence);
             }
-            var canonicalChanges = CanonicalizeProviderChanges(providerPage.Changes, providerEvidence);
+            var canonicalChanges = CanonicalizeProviderChanges(
+                changes: providerPage.Changes,
+                providerEvidence: providerEvidence);
             var prefixDigests = BuildPrefixDigestChain(canonicalChanges);
-            VerifyPrefix(prefixDigests, cursor.Offset, cursor.PrefixDigest, "change position", providerEvidence);
+            VerifyPrefix(
+                prefixDigests: prefixDigests,
+                count: cursor.Offset,
+                expectedDigest: cursor.PrefixDigest,
+                cursorName: "change position",
+                providerEvidence: providerEvidence);
             var effectiveItems = Math.Min(request.MaximumDeliveries, policy.MaximumChangePageItems);
             var effectiveBytes = Math.Min(request.MaximumBytes, policy.MaximumChangePageBytes);
             var deliveries = ImmutableArray.CreateBuilder<MaterializationChangeDelivery>(
@@ -594,19 +640,19 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
                 }
 
                 var prefixCount = consumed + 1;
-                var nextPosition = CreatePosition(new(
-                    Descriptor.CapabilityProfile.Id.Value,
-                    scopeDigest,
-                    cursor.ProviderContinuation,
-                    providerPageSizeHint,
-                    prefixCount,
-                    prefixDigests[prefixCount]));
+                var nextPosition = CreatePosition(payload: new(
+                    SourceProfile: Descriptor.CapabilityProfile.Id.Value,
+                    ScopeDigest: scopeDigest,
+                    ProviderContinuation: cursor.ProviderContinuation,
+                    ProviderPageSizeHint: providerPageSizeHint,
+                    Offset: prefixCount,
+                    PrefixDigest: prefixDigests[prefixCount]));
                 var delivery = ProjectChange(
-                    canonicalChanges[consumed].Change,
-                    canonicalChanges[consumed].CanonicalBytes,
-                    nextPosition,
-                    providerPage.ProviderEvidenceReference,
-                    providerEvidence);
+                    provider: canonicalChanges[consumed].Change,
+                    canonicalProviderRecord: canonicalChanges[consumed].CanonicalBytes,
+                    position: nextPosition,
+                    providerEvidence: providerPage.ProviderEvidenceReference,
+                    operationEvidence: providerEvidence);
                 if (delivery is null)
                 {
                     continue;
@@ -633,20 +679,20 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
 
             var consumedWholeProviderPage = consumed >= canonicalChanges.Length;
             var through = consumedWholeProviderPage
-                ? CreatePosition(new(
-                    Descriptor.CapabilityProfile.Id.Value,
-                    scopeDigest,
-                    providerPage.ContinuationToken,
+                ? CreatePosition(payload: new(
+                    SourceProfile: Descriptor.CapabilityProfile.Id.Value,
+                    ScopeDigest: scopeDigest,
+                    ProviderContinuation: providerPage.ContinuationToken,
                     ProviderPageSizeHint: 0,
                     Offset: 0,
                     PrefixDigest: EmptyDigest))
-                : CreatePosition(new(
-                    Descriptor.CapabilityProfile.Id.Value,
-                    scopeDigest,
-                    cursor.ProviderContinuation,
-                    providerPageSizeHint,
-                    consumed,
-                    prefixDigests[consumed]));
+                : CreatePosition(payload: new(
+                    SourceProfile: Descriptor.CapabilityProfile.Id.Value,
+                    ScopeDigest: scopeDigest,
+                    ProviderContinuation: cursor.ProviderContinuation,
+                    ProviderPageSizeHint: providerPageSizeHint,
+                    Offset: consumed,
+                    PrefixDigest: prefixDigests[consumed]));
             var materialized = deliveries.Count == deliveries.Capacity
                 ? deliveries.MoveToImmutable()
                 : deliveries.ToImmutable();
@@ -664,34 +710,39 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
                 _ => CosmosMaterializationSourceDisposition.Partial
             };
             Observe(CreateObservation(
-                CosmosMaterializationSourceOperationKind.ChangeRead,
-                disposition,
-                started,
-                context.UtcNow,
-                materialized.Length,
-                canonicalBytes,
-                providerPage.RequestCharge,
-                providerPage.ProviderEvidenceReference,
-                providerPage.StatusCode));
-            return new(materialized, through, state);
+                operation: CosmosMaterializationSourceOperationKind.ChangeRead,
+                disposition: disposition,
+                started: started,
+                completed: context.UtcNow,
+                itemCount: materialized.Length,
+                byteCount: canonicalBytes,
+                requestCharge: providerPage.RequestCharge,
+                evidenceReference: providerPage.ProviderEvidenceReference,
+                statusCode: providerPage.StatusCode));
+            return new(
+                deliveries: materialized,
+                throughPosition: through,
+                state: state);
         }
         catch (OperationCanceledException exception) when (context.CancellationToken.IsCancellationRequested)
         {
             var canceled = CancellationEvidence(
-                started,
-                context.UtcNow,
-                exception,
-                completedProviderEvidence);
+                started: started,
+                completed: context.UtcNow,
+                exception: exception,
+                completedProviderEvidence: completedProviderEvidence);
             Observe(CreateObservation(
-                CosmosMaterializationSourceOperationKind.ChangeRead,
-                CosmosMaterializationSourceDisposition.Canceled,
-                canceled.StartedAtUtc,
-                canceled.CompletedAtUtc,
-                0,
-                0,
-                canceled.RequestCharge,
-                FailureEvidence("change-canceled", canceled.ProviderEvidenceReference),
-                canceled.StatusCode));
+                operation: CosmosMaterializationSourceOperationKind.ChangeRead,
+                disposition: CosmosMaterializationSourceDisposition.Canceled,
+                started: canceled.StartedAtUtc,
+                completed: canceled.CompletedAtUtc,
+                itemCount: 0,
+                byteCount: 0,
+                requestCharge: canceled.RequestCharge,
+                evidenceReference: FailureEvidence(
+                    suffix: "change-canceled",
+                    providerEvidenceReference: canceled.ProviderEvidenceReference),
+                statusCode: canceled.StatusCode));
             throw;
         }
         catch (CosmosMaterializationSourceException)
@@ -701,22 +752,22 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         catch (CosmosProviderProtocolException exception)
         {
             throw ProviderProtocolFailure(
-                CosmosMaterializationSourceOperationKind.ChangeRead,
-                started,
-                context.UtcNow,
-                exception,
+                operation: CosmosMaterializationSourceOperationKind.ChangeRead,
+                started: started,
+                completed: context.UtcNow,
+                exception: exception,
                 resumedPosition: true,
-                exception.RequestCharge ?? 0,
-                exception.StatusCode,
-                exception.ProviderEvidenceReference);
+                requestCharge: exception.RequestCharge ?? 0,
+                statusCode: exception.StatusCode,
+                providerEvidenceReference: exception.ProviderEvidenceReference);
         }
         catch (CosmosException exception)
         {
             throw ProviderFailure(
-                CosmosMaterializationSourceOperationKind.ChangeRead,
-                started,
-                context.UtcNow,
-                exception,
+                operation: CosmosMaterializationSourceOperationKind.ChangeRead,
+                started: started,
+                completed: context.UtcNow,
+                exception: exception,
                 resumedPosition: true);
         }
     }
@@ -727,12 +778,18 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         DateTimeOffset startedAtUtc)
     {
         var readFingerprint = MaterializationSourceReadFingerprinter.Compute(request.Read);
-        var cursor = DecodeContinuation(request.Continuation, readFingerprint, BaselineCursorKind.Enumeration, nameof(request));
+        var cursor = DecodeContinuation(
+            continuation: request.Continuation,
+            readFingerprint: readFingerprint,
+            kind: BaselineCursorKind.Enumeration,
+            parameterName: nameof(request));
         var readBoundary = EffectiveReadBoundary(request.Read);
         var remainingRows = readBoundary - cursor.EmittedRows;
         if (remainingRows <= 0)
         {
-            throw new ArgumentException("The Cosmos continuation has already reached the Relations read boundary.", nameof(request));
+            throw new ArgumentException(
+                message: "The Cosmos continuation has already reached the Relations read boundary.",
+                paramName: nameof(request));
         }
 
         var maximumItems = checked((int)Math.Min(
@@ -742,60 +799,70 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
             ? Math.Min(policy.MaximumProviderPageItems, maximumItems)
             : cursor.ProviderPageSizeHint;
         var providerPage = await reader.ReadMaterializationPageAsync(
-            request.Read,
-            cursor.ProviderContinuation,
-            providerPageSizeHint,
-            context.CancellationToken).ConfigureAwait(false);
+            request: request.Read,
+            providerContinuation: cursor.ProviderContinuation,
+            maximumProviderItems: providerPageSizeHint,
+            cancellationToken: context.CancellationToken).ConfigureAwait(false);
         ProviderOperationEvidence providerEvidence = new(
-            startedAtUtc,
-            context.UtcNow,
-            providerPage.RequestCharge,
-            providerPage.StatusCode,
-            providerPage.ProviderEvidenceReference);
+            StartedAtUtc: startedAtUtc,
+            CompletedAtUtc: context.UtcNow,
+            RequestCharge: providerPage.RequestCharge,
+            StatusCode: providerPage.StatusCode,
+            ProviderEvidenceReference: providerPage.ProviderEvidenceReference);
         if (providerPage.Read.State is RelationQuerySourceReadState.Failed
             or RelationQuerySourceReadState.Inconclusive)
         {
             if (cursor.Offset != 0)
             {
                 throw ReplayConflict(
-                    CosmosMaterializationSourceOperationKind.BaselineRead,
-                    providerEvidence,
-                    "A resumed baseline page no longer projected canonical provider rows.");
+                    operation: CosmosMaterializationSourceOperationKind.BaselineRead,
+                    providerEvidence: providerEvidence,
+                    message: "A resumed baseline page no longer projected canonical provider rows.");
             }
 
             var diagnostics = Diagnostics(providerPage.Read);
             return new(
-                new(Scope, readFingerprint, providerPage.Read, MaterializationSourcePageState.Exhausted, diagnostics: diagnostics),
-                providerPage.Read.State == RelationQuerySourceReadState.Failed
+                Page: new(
+                    scope: Scope,
+                    readFingerprint: readFingerprint,
+                    read: providerPage.Read,
+                    state: MaterializationSourcePageState.Exhausted,
+                    diagnostics: diagnostics),
+                Disposition: providerPage.Read.State == RelationQuerySourceReadState.Failed
                     ? CosmosMaterializationSourceDisposition.TerminalFailure
                     : CosmosMaterializationSourceDisposition.Partial,
-                providerPage.RequestCharge,
-                providerPage.StatusCode,
-                providerPage.ProviderEvidenceReference ?? Evidence("baseline-provider-result"));
+                RequestCharge: providerPage.RequestCharge,
+                StatusCode: providerPage.StatusCode,
+                EvidenceReference: providerPage.ProviderEvidenceReference ?? Evidence("baseline-provider-result"));
         }
 
         var observations = providerPage.Read.Observations;
         var prefixDigests = BuildPrefixDigestChain(observations);
-        VerifyPrefix(prefixDigests, cursor.Offset, cursor.PrefixDigest, "baseline continuation", providerEvidence);
+        VerifyPrefix(
+            prefixDigests: prefixDigests,
+            count: cursor.Offset,
+            expectedDigest: cursor.PrefixDigest,
+            cursorName: "baseline continuation",
+            providerEvidence: providerEvidence);
         if (cursor.LastIdentity is not null
             && cursor.Offset < observations.Length
             && StringComparer.Ordinal.Compare(observations[cursor.Offset].Identity, cursor.LastIdentity) <= 0)
         {
             throw ReplayConflict(
-                CosmosMaterializationSourceOperationKind.BaselineRead,
-                providerEvidence,
-                "A resumed Cosmos baseline violated strict cross-page observation-identity order.");
+                operation: CosmosMaterializationSourceOperationKind.BaselineRead,
+                providerEvidence: providerEvidence,
+                message: "A resumed Cosmos baseline violated strict cross-page observation-identity order.");
         }
         var maximumBytes = Math.Min(request.MaximumBytes, policy.MaximumScanPageBytes);
         var selected = SelectObservationsWithEvidence(
-            observations,
-            cursor.Offset,
-            maximumItems,
-            maximumBytes,
-            context.CancellationToken,
-            providerEvidence,
-            out var consumed,
-            out _);
+            observations: observations,
+            offset: cursor.Offset,
+            maximumItems: maximumItems,
+            maximumBytes: maximumBytes,
+            cancellationToken: context.CancellationToken,
+            providerEvidence: providerEvidence,
+            consumed: out var consumed,
+            encodedBytes: out _);
         var totalEmitted = checked(cursor.EmittedRows + selected.Length);
         var providerTailRemains = consumed < observations.Length || providerPage.HasMoreResults;
         var boundaryReached = providerTailRemains && totalEmitted >= readBoundary;
@@ -805,39 +872,46 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         {
             var consumedWholePage = consumed >= observations.Length;
             continuation = CreateContinuation(
-                readFingerprint,
-                new(
-                    Descriptor.CapabilityProfile.Id.Value,
-                    scopeDigest,
-                    BaselineCursorKind.Enumeration,
-                    consumedWholePage ? providerPage.NextContinuationToken : cursor.ProviderContinuation,
-                    consumedWholePage ? 0 : providerPageSizeHint,
-                    consumedWholePage ? 0 : consumed,
-                    totalEmitted,
-                    selected.IsDefaultOrEmpty ? cursor.LastIdentity : selected[^1].Identity,
-                    consumedWholePage ? EmptyDigest : prefixDigests[consumed]));
+                readFingerprint: readFingerprint,
+                payload: new(
+                    SourceProfile: Descriptor.CapabilityProfile.Id.Value,
+                    ScopeDigest: scopeDigest,
+                    Kind: BaselineCursorKind.Enumeration,
+                    ProviderContinuation: consumedWholePage
+                        ? providerPage.NextContinuationToken
+                        : cursor.ProviderContinuation,
+                    ProviderPageSizeHint: consumedWholePage ? 0 : providerPageSizeHint,
+                    Offset: consumedWholePage ? 0 : consumed,
+                    EmittedRows: totalEmitted,
+                    LastIdentity: selected.IsDefaultOrEmpty ? cursor.LastIdentity : selected[^1].Identity,
+                    PrefixDigest: consumedWholePage ? EmptyDigest : prefixDigests[consumed]));
         }
         var state = hasMore || boundaryReached
             ? RelationQuerySourceReadState.Partial
             : totalEmitted == 0
                 ? RelationQuerySourceReadState.NotFound
                 : RelationQuerySourceReadState.Complete;
-        var read = new RelationQuerySourceReadResult(state, selected, providerPage.Read.EvidenceReference);
+        var read = new RelationQuerySourceReadResult(
+            state: state,
+            observations: selected,
+            evidenceReference: providerPage.Read.EvidenceReference);
         var page = new MaterializationSourcePage(
-            Scope,
-            readFingerprint,
-            read,
-            hasMore ? MaterializationSourcePageState.MoreAvailable : MaterializationSourcePageState.Exhausted,
-            continuation,
-            boundaryReached ? BoundaryDiagnostics(read) : []);
+            scope: Scope,
+            readFingerprint: readFingerprint,
+            read: read,
+            state: hasMore
+                ? MaterializationSourcePageState.MoreAvailable
+                : MaterializationSourcePageState.Exhausted,
+            continuation: continuation,
+            diagnostics: boundaryReached ? BoundaryDiagnostics(read) : []);
         return new(
-            page,
-            hasMore || boundaryReached
+            Page: page,
+            Disposition: hasMore || boundaryReached
                 ? CosmosMaterializationSourceDisposition.Partial
                 : CosmosMaterializationSourceDisposition.Complete,
-            providerPage.RequestCharge,
-            providerPage.StatusCode,
-            providerPage.ProviderEvidenceReference ?? Evidence("baseline-enumeration"));
+            RequestCharge: providerPage.RequestCharge,
+            StatusCode: providerPage.StatusCode,
+            EvidenceReference: providerPage.ProviderEvidenceReference ?? Evidence("baseline-enumeration"));
     }
 
     async ValueTask<BaselineReadResult> ReadBufferedPageAsync(
@@ -846,21 +920,29 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         DateTimeOffset startedAtUtc)
     {
         var readFingerprint = MaterializationSourceReadFingerprinter.Compute(request.Read);
-        var cursor = DecodeContinuation(request.Continuation, readFingerprint, BaselineCursorKind.BufferedRead, nameof(request));
+        var cursor = DecodeContinuation(
+            continuation: request.Continuation,
+            readFingerprint: readFingerprint,
+            kind: BaselineCursorKind.BufferedRead,
+            parameterName: nameof(request));
         if (cursor.ProviderContinuation is not null)
         {
-            throw new ArgumentException("A buffered Cosmos continuation cannot carry a provider query token.", nameof(request));
+            throw new ArgumentException(
+                message: "A buffered Cosmos continuation cannot carry a provider query token.",
+                paramName: nameof(request));
         }
 
         var providerRead = await reader
-            .ReadMaterializationBufferedAsync(request.Read, context.CancellationToken)
+            .ReadMaterializationBufferedAsync(
+                request: request.Read,
+                cancellationToken: context.CancellationToken)
             .ConfigureAwait(false);
         ProviderOperationEvidence providerEvidence = new(
-            startedAtUtc,
-            context.UtcNow,
-            providerRead.RequestCharge,
-            providerRead.StatusCode,
-            providerRead.Read.EvidenceReference);
+            StartedAtUtc: startedAtUtc,
+            CompletedAtUtc: context.UtcNow,
+            RequestCharge: providerRead.RequestCharge,
+            StatusCode: providerRead.StatusCode,
+            ProviderEvidenceReference: providerRead.Read.EvidenceReference);
         var read = providerRead.Read;
         if (read.State is RelationQuerySourceReadState.Failed
             or RelationQuerySourceReadState.Inconclusive
@@ -869,71 +951,83 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
             if (cursor.Offset != 0)
             {
                 throw ReplayConflict(
-                    CosmosMaterializationSourceOperationKind.BaselineRead,
-                    providerEvidence,
-                    "A resumed buffered read no longer projects its prior canonical prefix.");
+                    operation: CosmosMaterializationSourceOperationKind.BaselineRead,
+                    providerEvidence: providerEvidence,
+                    message: "A resumed buffered read no longer projects its prior canonical prefix.");
             }
 
             return new(
-                new(Scope, readFingerprint, read, MaterializationSourcePageState.Exhausted, diagnostics: Diagnostics(read)),
-                read.State switch
+                Page: new(
+                    scope: Scope,
+                    readFingerprint: readFingerprint,
+                    read: read,
+                    state: MaterializationSourcePageState.Exhausted,
+                    diagnostics: Diagnostics(read)),
+                Disposition: read.State switch
                 {
                     RelationQuerySourceReadState.Failed => CosmosMaterializationSourceDisposition.TerminalFailure,
                     RelationQuerySourceReadState.Inconclusive => CosmosMaterializationSourceDisposition.Partial,
                     _ => CosmosMaterializationSourceDisposition.Complete
                 },
-                providerRead.RequestCharge,
-                providerRead.StatusCode,
-                read.EvidenceReference ?? Evidence("baseline-buffered-result"));
+                RequestCharge: providerRead.RequestCharge,
+                StatusCode: providerRead.StatusCode,
+                EvidenceReference: read.EvidenceReference ?? Evidence("baseline-buffered-result"));
         }
 
         var prefixDigests = BuildPrefixDigestChain(read.Observations);
-        VerifyPrefix(prefixDigests, cursor.Offset, cursor.PrefixDigest, "baseline continuation", providerEvidence);
+        VerifyPrefix(
+            prefixDigests: prefixDigests,
+            count: cursor.Offset,
+            expectedDigest: cursor.PrefixDigest,
+            cursorName: "baseline continuation",
+            providerEvidence: providerEvidence);
         var selected = SelectObservationsWithEvidence(
-            read.Observations,
-            cursor.Offset,
-            Math.Min(request.MaximumItems, policy.MaximumScanPageItems),
-            Math.Min(request.MaximumBytes, policy.MaximumScanPageBytes),
-            context.CancellationToken,
-            providerEvidence,
-            out var consumed,
-            out _);
+            observations: read.Observations,
+            offset: cursor.Offset,
+            maximumItems: Math.Min(request.MaximumItems, policy.MaximumScanPageItems),
+            maximumBytes: Math.Min(request.MaximumBytes, policy.MaximumScanPageBytes),
+            cancellationToken: context.CancellationToken,
+            providerEvidence: providerEvidence,
+            consumed: out var consumed,
+            encodedBytes: out _);
         var hasMore = consumed < read.Observations.Length;
         var totalEmitted = checked(cursor.EmittedRows + selected.Length);
         var continuation = hasMore
             ? CreateContinuation(
-                readFingerprint,
-                new(
-                    Descriptor.CapabilityProfile.Id.Value,
-                    scopeDigest,
-                    BaselineCursorKind.BufferedRead,
+                readFingerprint: readFingerprint,
+                payload: new(
+                    SourceProfile: Descriptor.CapabilityProfile.Id.Value,
+                    ScopeDigest: scopeDigest,
+                    Kind: BaselineCursorKind.BufferedRead,
                     ProviderContinuation: null,
                     ProviderPageSizeHint: 0,
-                    consumed,
-                    totalEmitted,
-                    selected.IsDefaultOrEmpty ? cursor.LastIdentity : selected[^1].Identity,
-                    prefixDigests[consumed]))
+                    Offset: consumed,
+                    EmittedRows: totalEmitted,
+                    LastIdentity: selected.IsDefaultOrEmpty ? cursor.LastIdentity : selected[^1].Identity,
+                    PrefixDigest: prefixDigests[consumed]))
             : null;
         var pageRead = new RelationQuerySourceReadResult(
-            hasMore ? RelationQuerySourceReadState.Partial : read.State,
-            selected,
-            read.EvidenceReference);
+            state: hasMore ? RelationQuerySourceReadState.Partial : read.State,
+            observations: selected,
+            evidenceReference: read.EvidenceReference);
         return new(
-            new(
-                Scope,
-                readFingerprint,
-                pageRead,
-                hasMore ? MaterializationSourcePageState.MoreAvailable : MaterializationSourcePageState.Exhausted,
-                continuation,
-                !hasMore && read.State == RelationQuerySourceReadState.Partial
+            Page: new(
+                scope: Scope,
+                readFingerprint: readFingerprint,
+                read: pageRead,
+                state: hasMore
+                    ? MaterializationSourcePageState.MoreAvailable
+                    : MaterializationSourcePageState.Exhausted,
+                continuation: continuation,
+                diagnostics: !hasMore && read.State == RelationQuerySourceReadState.Partial
                     ? BoundaryDiagnostics(pageRead)
                     : []),
-            hasMore || read.State == RelationQuerySourceReadState.Partial
+            Disposition: hasMore || read.State == RelationQuerySourceReadState.Partial
                 ? CosmosMaterializationSourceDisposition.Partial
                 : CosmosMaterializationSourceDisposition.Complete,
-            providerRead.RequestCharge,
-            providerRead.StatusCode,
-            read.EvidenceReference ?? Evidence("baseline-buffered"));
+            RequestCharge: providerRead.RequestCharge,
+            StatusCode: providerRead.StatusCode,
+            EvidenceReference: read.EvidenceReference ?? Evidence("baseline-buffered"));
     }
 
     MaterializationChangeDelivery? ProjectChange(
@@ -984,7 +1078,9 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
                 }
                 break;
             default:
-                throw ChangeEvidenceFailure(operationEvidence, "Cosmos returned an unsupported full-fidelity operation kind.");
+                throw ChangeEvidenceFailure(
+                    providerEvidence: operationEvidence,
+                    message: "Cosmos returned an unsupported full-fidelity operation kind.");
         }
         if (kind is null)
         {
@@ -992,8 +1088,12 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         }
 
         var identity = afterDocument?.ObservationId ?? beforeDocument!.ObservationId;
-        var before = beforeDocument is null ? null : Observation(beforeDocument, providerEvidence);
-        var after = afterDocument is null ? null : Observation(afterDocument, providerEvidence);
+        var before = beforeDocument is null
+            ? null
+            : Observation(document: beforeDocument, providerEvidence: providerEvidence);
+        var after = afterDocument is null
+            ? null
+            : Observation(document: afterDocument, providerEvidence: providerEvidence);
         var occurredAtUtc = ProviderTimestamp(provider.ConflictResolutionTimestamp);
         if (observedAtUtc < occurredAtUtc)
         {
@@ -1001,36 +1101,36 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         }
 
         var stable = StableChangeIdentity(
-            scopeDigest,
-            afterDocument?.PartitionKey ?? beforeDocument!.PartitionKey,
-            afterDocument?.Id ?? beforeDocument!.Id,
-            provider.Lsn,
-            provider.PreviousLsn,
-            provider.OperationType,
-            kind.Value,
-            identity,
-            canonicalProviderRecord);
+            sourceScopeDigest: scopeDigest,
+            partitionKey: afterDocument?.PartitionKey ?? beforeDocument!.PartitionKey,
+            physicalItemId: afterDocument?.Id ?? beforeDocument!.Id,
+            lsn: provider.Lsn,
+            previousLsn: provider.PreviousLsn,
+            providerKind: provider.OperationType,
+            kind: kind.Value,
+            identity: identity,
+            canonicalProviderRecord: canonicalProviderRecord);
         var evidence = string.Concat(
             providerEvidence,
             "/change/sha256/",
             stable);
         var change = new MaterializationChangeEnvelope(
-            new MaterializationChangeId(string.Concat("cosmos-change/sha256/", stable)),
-            identity,
-            Scope,
-            reader.Shape,
-            position,
-            kind.Value,
-            before,
-            after,
-            occurredAtUtc,
-            observedAtUtc,
-            evidence);
+            id: new MaterializationChangeId(string.Concat("cosmos-change/sha256/", stable)),
+            subjectIdentity: identity,
+            scope: Scope,
+            shape: reader.Shape,
+            position: position,
+            kind: kind.Value,
+            before: before,
+            after: after,
+            occurredAtUtc: occurredAtUtc,
+            observedAtUtc: observedAtUtc,
+            evidenceReference: evidence);
         return new(
-            new MaterializationDeliveryId(string.Concat("cosmos-delivery/sha256/", stable)),
-            change,
-            observedAtUtc,
-            evidence);
+            id: new MaterializationDeliveryId(string.Concat("cosmos-delivery/sha256/", stable)),
+            change: change,
+            deliveredAtUtc: observedAtUtc,
+            evidenceReference: evidence);
     }
 
     void ValidateChangeEvidence(
@@ -1043,66 +1143,92 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
                 if (provider.Current is null || provider.Previous is not null)
                 {
                     throw ChangeEvidenceFailure(
-                        operationEvidence,
-                        "A Cosmos create did not carry exactly one current image and no previous image.");
+                        providerEvidence: operationEvidence,
+                        message: "A Cosmos create did not carry exactly one current image and no previous image.");
                 }
-                ValidatePhysicalChangeImage(provider.Current, "current", operationEvidence);
-                ValidateSemanticIdentityWhenInScope(provider.Current, "current", operationEvidence);
+                ValidatePhysicalChangeImage(
+                    document: provider.Current,
+                    imageName: "current",
+                    operationEvidence: operationEvidence);
+                ValidateSemanticIdentityWhenInScope(
+                    document: provider.Current,
+                    imageName: "current",
+                    operationEvidence: operationEvidence);
                 break;
             case CosmosMaterializationProviderChangeKind.Replace:
                 if (provider.Current is null || provider.Previous is null)
                 {
                     throw ChangeEvidenceFailure(
-                        operationEvidence,
-                        "A Cosmos replace omitted its current image or the deployment-required previous image.");
+                        providerEvidence: operationEvidence,
+                        message: "A Cosmos replace omitted its current image or the deployment-required previous image.");
                 }
-                ValidatePhysicalChangeImage(provider.Previous, "previous", operationEvidence);
-                ValidatePhysicalChangeImage(provider.Current, "current", operationEvidence);
+                ValidatePhysicalChangeImage(
+                    document: provider.Previous,
+                    imageName: "previous",
+                    operationEvidence: operationEvidence);
+                ValidatePhysicalChangeImage(
+                    document: provider.Current,
+                    imageName: "current",
+                    operationEvidence: operationEvidence);
                 if (!string.Equals(provider.Previous.Id, provider.Current.Id, StringComparison.Ordinal)
                     || !string.Equals(provider.Previous.PartitionKey, provider.Current.PartitionKey, StringComparison.Ordinal))
                 {
                     throw ChangeEvidenceFailure(
-                        operationEvidence,
-                        "A Cosmos replace changed physical item identity or logical partition inside one provider change.");
+                        providerEvidence: operationEvidence,
+                        message: "A Cosmos replace changed physical item identity or logical partition inside one provider change.");
                 }
-                ValidateSemanticIdentityWhenInScope(provider.Previous, "previous", operationEvidence);
-                ValidateSemanticIdentityWhenInScope(provider.Current, "current", operationEvidence);
+                ValidateSemanticIdentityWhenInScope(
+                    document: provider.Previous,
+                    imageName: "previous",
+                    operationEvidence: operationEvidence);
+                ValidateSemanticIdentityWhenInScope(
+                    document: provider.Current,
+                    imageName: "current",
+                    operationEvidence: operationEvidence);
                 if (MatchesScope(provider.Previous)
                     && MatchesScope(provider.Current)
                     && !string.Equals(provider.Previous.ObservationId, provider.Current.ObservationId, StringComparison.Ordinal))
                 {
                     throw ChangeEvidenceFailure(
-                        operationEvidence,
-                        "A Cosmos replace changed semantic observation identity inside one provider change.");
+                        providerEvidence: operationEvidence,
+                        message: "A Cosmos replace changed semantic observation identity inside one provider change.");
                 }
                 if (MatchesScope(provider.Previous)
                     && MatchesScope(provider.Current)
                     && provider.Current.ObservationVersion <= provider.Previous.ObservationVersion)
                 {
                     throw ChangeEvidenceFailure(
-                        operationEvidence,
-                        "A Cosmos replace did not advance the Cohesive observation version required for same-item change ordering.");
+                        providerEvidence: operationEvidence,
+                        message: "A Cosmos replace did not advance the Cohesive observation version required for same-item change ordering.");
                 }
                 break;
             case CosmosMaterializationProviderChangeKind.Delete:
                 if (provider.Current is not null || provider.Previous is null)
                 {
                     throw ChangeEvidenceFailure(
-                        operationEvidence,
-                        "A Cosmos delete did not carry exactly the deployment-required previous image.");
+                        providerEvidence: operationEvidence,
+                        message: "A Cosmos delete did not carry exactly the deployment-required previous image.");
                 }
-                ValidatePhysicalChangeImage(provider.Previous, "previous", operationEvidence);
-                ValidateSemanticIdentityWhenInScope(provider.Previous, "previous", operationEvidence);
+                ValidatePhysicalChangeImage(
+                    document: provider.Previous,
+                    imageName: "previous",
+                    operationEvidence: operationEvidence);
+                ValidateSemanticIdentityWhenInScope(
+                    document: provider.Previous,
+                    imageName: "previous",
+                    operationEvidence: operationEvidence);
                 if (string.IsNullOrWhiteSpace(provider.DeletedItemId)
                     || !string.Equals(provider.DeletedItemId, provider.Previous.Id, StringComparison.Ordinal))
                 {
                     throw ChangeEvidenceFailure(
-                        operationEvidence,
-                        "A Cosmos delete omitted its physical item identity or conflicted with its previous image.");
+                        providerEvidence: operationEvidence,
+                        message: "A Cosmos delete omitted its physical item identity or conflicted with its previous image.");
                 }
                 break;
             default:
-                throw ChangeEvidenceFailure(operationEvidence, "Cosmos returned an unsupported full-fidelity operation kind.");
+                throw ChangeEvidenceFailure(
+                    providerEvidence: operationEvidence,
+                    message: "Cosmos returned an unsupported full-fidelity operation kind.");
         }
     }
 
@@ -1113,12 +1239,16 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
     {
         if (string.IsNullOrWhiteSpace(document.Id))
         {
-            throw ChangeEvidenceFailure(operationEvidence, $"A required Cosmos {imageName} image omitted its physical item id.");
+            throw ChangeEvidenceFailure(
+                providerEvidence: operationEvidence,
+                message: $"A required Cosmos {imageName} image omitted its physical item id.");
         }
 
         if (string.IsNullOrWhiteSpace(document.PartitionKey))
         {
-            throw ChangeEvidenceFailure(operationEvidence, $"A required Cosmos {imageName} image omitted its logical partition key.");
+            throw ChangeEvidenceFailure(
+                providerEvidence: operationEvidence,
+                message: $"A required Cosmos {imageName} image omitted its logical partition key.");
         }
 
     }
@@ -1131,14 +1261,14 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         if (MatchesScope(document) && string.IsNullOrWhiteSpace(document.ObservationId))
         {
             throw ChangeEvidenceFailure(
-                operationEvidence,
-                $"An in-scope Cosmos {imageName} image omitted its semantic observation identity.");
+                providerEvidence: operationEvidence,
+                message: $"An in-scope Cosmos {imageName} image omitted its semantic observation identity.");
         }
         if (MatchesScope(document) && document.ObservationVersion < 0)
         {
             throw ChangeEvidenceFailure(
-                operationEvidence,
-                $"An in-scope Cosmos {imageName} image carried a negative observation version.");
+                providerEvidence: operationEvidence,
+                message: $"An in-scope Cosmos {imageName} image carried a negative observation version.");
         }
     }
 
@@ -1158,35 +1288,38 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
                 providerEvidence,
                 "/field/",
                 Uri.EscapeDataString(field.SemanticPath.ToString()));
-            if (!TryGetObservationValue(document.Observation!, field.SemanticPath, out var value)
+            if (!TryGetObservationValue(
+                    observation: document.Observation!,
+                    path: field.SemanticPath,
+                    value: out var value)
                 || value.Kind == ObservationValueKind.Undefined)
             {
                 projected.Add(new(
-                    field,
-                    RelationQuerySourceReadFieldState.Missing,
+                    field: field,
+                    state: RelationQuerySourceReadFieldState.Missing,
                     evidenceReference: evidence));
             }
             else if (value.Kind == ObservationValueKind.Null)
             {
                 projected.Add(new(
-                    field,
-                    RelationQuerySourceReadFieldState.Null,
+                    field: field,
+                    state: RelationQuerySourceReadFieldState.Null,
                     evidenceReference: evidence));
             }
             else
             {
                 projected.Add(new(
-                    field,
-                    RelationQuerySourceReadFieldState.Value,
-                    value,
-                    evidence));
+                    field: field,
+                    state: RelationQuerySourceReadFieldState.Value,
+                    value: value,
+                    evidenceReference: evidence));
             }
         }
 
         return new(
-            document.ObservationId,
-            reader.Shape,
-            projected.MoveToImmutable());
+            identity: document.ObservationId,
+            shape: reader.Shape,
+            fields: projected.MoveToImmutable());
     }
 
     static bool TryGetObservationValue(
@@ -1201,7 +1334,9 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         }
 
         return segments.Length == 1
-            || value.TryGetFieldSegments(segments[1..], out value);
+            || value.TryGetFieldSegments(
+                path: segments[1..],
+                value: out value);
     }
 
     static string CanonicalObservationFieldSelector(FieldPath semanticPath, string parameterName)
@@ -1211,8 +1346,8 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
             if (segment.Kind != SegmentKind.Field)
             {
                 throw new ArgumentException(
-                    "Cosmos full-fidelity materialization currently supports only field-navigation paths represented by the canonical observation envelope.",
-                    parameterName);
+                    message: "Cosmos full-fidelity materialization currently supports only field-navigation paths represented by the canonical observation envelope.",
+                    paramName: parameterName);
             }
         }
 
@@ -1223,10 +1358,10 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         MaterializationSourceReadFingerprint readFingerprint,
         BaselineCursorPayload payload) =>
         new(
-            ContinuationFormatVersion,
-            readFingerprint,
-            Scope,
-            Encode(continuationCodec, payload));
+            formatVersion: ContinuationFormatVersion,
+            readFingerprint: readFingerprint,
+            scope: Scope,
+            value: Encode(codec: continuationCodec, payload: payload));
 
     BaselineCursorPayload DecodeContinuation(
         MaterializationSourceContinuation? continuation,
@@ -1237,9 +1372,9 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         if (continuation is null)
         {
             return new(
-                Descriptor.CapabilityProfile.Id.Value,
-                scopeDigest,
-                kind,
+                SourceProfile: Descriptor.CapabilityProfile.Id.Value,
+                ScopeDigest: scopeDigest,
+                Kind: kind,
                 ProviderContinuation: null,
                 ProviderPageSizeHint: 0,
                 Offset: 0,
@@ -1250,13 +1385,15 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         if (continuation.FormatVersion != ContinuationFormatVersion
             || continuation.Value.Length > policy.MaximumCursorCharacters)
         {
-            throw new ArgumentException("The Cosmos materialization continuation version or size is unsupported.", parameterName);
+            throw new ArgumentException(
+                message: "The Cosmos materialization continuation version or size is unsupported.",
+                paramName: parameterName);
         }
         var payload = Decode<BaselineCursorPayload>(
-            continuation.Value,
-            continuationCodec,
-            parameterName,
-            "continuation");
+            value: continuation.Value,
+            codec: continuationCodec,
+            parameterName: parameterName,
+            cursorName: "continuation");
         if (!string.Equals(payload.SourceProfile, Descriptor.CapabilityProfile.Id.Value, StringComparison.Ordinal)
             || !string.Equals(payload.ScopeDigest, scopeDigest, StringComparison.Ordinal)
             || payload.Kind != kind
@@ -1274,17 +1411,17 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
             || continuation.ReadFingerprint != readFingerprint)
         {
             throw new ArgumentException(
-                "The Cosmos continuation conflicts with the source profile, scope, read, or cursor progress.",
-                parameterName);
+                message: "The Cosmos continuation conflicts with the source profile, scope, read, or cursor progress.",
+                paramName: parameterName);
         }
         return payload;
     }
 
     MaterializationSourcePosition CreatePosition(ChangeCursorPayload payload) =>
         new(
-            PositionFormatVersion,
-            Scope,
-            Encode(positionCodec, payload));
+            formatVersion: PositionFormatVersion,
+            scope: Scope,
+            value: Encode(codec: positionCodec, payload: payload));
 
     ChangeCursorPayload DecodePosition(MaterializationSourcePosition position, string parameterName)
     {
@@ -1292,13 +1429,15 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
             || position.Scope != Scope
             || position.Value.Length > policy.MaximumCursorCharacters)
         {
-            throw new ArgumentException("The Cosmos source position version, scope, or size is unsupported.", parameterName);
+            throw new ArgumentException(
+                message: "The Cosmos source position version, scope, or size is unsupported.",
+                paramName: parameterName);
         }
         var payload = Decode<ChangeCursorPayload>(
-            position.Value,
-            positionCodec,
-            parameterName,
-            "position");
+            value: position.Value,
+            codec: positionCodec,
+            parameterName: parameterName,
+            cursorName: "position");
         if (!string.Equals(payload.SourceProfile, Descriptor.CapabilityProfile.Id.Value, StringComparison.Ordinal)
             || !string.Equals(payload.ScopeDigest, scopeDigest, StringComparison.Ordinal)
             || string.IsNullOrWhiteSpace(payload.ProviderContinuation)
@@ -1309,14 +1448,16 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
             || !IsDigest(payload.PrefixDigest))
         {
             throw new ArgumentException(
-                "The Cosmos source position conflicts with the exact profile, scope, provider boundary, or progress.",
-                parameterName);
+                message: "The Cosmos source position conflicts with the exact profile, scope, provider boundary, or progress.",
+                paramName: parameterName);
         }
         return payload;
     }
 
     static string Encode<T>(MaterializationAuthenticatedValueCodec codec, T payload) =>
-        codec.Encode(JsonSerializer.SerializeToUtf8Bytes(payload, CanonicalJsonOptions));
+        codec.Encode(JsonSerializer.SerializeToUtf8Bytes(
+            value: payload,
+            options: CanonicalJsonOptions));
 
     static T Decode<T>(
         string value,
@@ -1324,12 +1465,20 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         string parameterName,
         string cursorName)
     {
-        var payloadBytes = codec.Decode(value, parameterName, cursorName);
+        var payloadBytes = codec.Decode(
+            value: value,
+            parameterName: parameterName,
+            valueKind: cursorName);
         try
         {
-            var payload = JsonSerializer.Deserialize<T>(payloadBytes, CanonicalJsonOptions)
+            var payload = JsonSerializer.Deserialize<T>(
+                utf8Json: payloadBytes,
+                options: CanonicalJsonOptions)
                 ?? throw new JsonException("Authenticated cursor payload was null.");
-            if (!string.Equals(Encode(codec, payload), value, StringComparison.Ordinal))
+            if (!string.Equals(
+                    Encode(codec: codec, payload: payload),
+                    value,
+                    StringComparison.Ordinal))
             {
                 throw new JsonException("Authenticated cursor was not canonical.");
             }
@@ -1338,7 +1487,10 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         }
         catch (JsonException exception)
         {
-            throw new ArgumentException($"The Cosmos {cursorName} is malformed.", parameterName, exception);
+            throw new ArgumentException(
+                message: $"The Cosmos {cursorName} is malformed.",
+                paramName: parameterName,
+                innerException: exception);
         }
     }
 
@@ -1355,22 +1507,22 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         try
         {
             return SelectObservations(
-                observations,
-                offset,
-                maximumItems,
-                maximumBytes,
-                cancellationToken,
-                out consumed,
-                out encodedBytes);
+                observations: observations,
+                offset: offset,
+                maximumItems: maximumItems,
+                maximumBytes: maximumBytes,
+                cancellationToken: cancellationToken,
+                consumed: out consumed,
+                encodedBytes: out encodedBytes);
         }
         catch (OperationCanceledException exception) when (cancellationToken.IsCancellationRequested)
         {
             throw new CosmosRelationQueryMaterializationCanceledException(
-                exception,
-                providerEvidence.RequestCharge,
-                providerEvidence.StatusCode,
-                providerEvidence.ProviderEvidenceReference,
-                cancellationToken);
+                cancellation: exception,
+                completedRequestCharge: providerEvidence.RequestCharge,
+                completedStatusCode: providerEvidence.StatusCode,
+                providerEvidenceReference: providerEvidence.ProviderEvidenceReference,
+                cancellationToken: cancellationToken);
         }
     }
 
@@ -1424,11 +1576,11 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
             || !string.Equals(prefixDigests[count], expectedDigest, StringComparison.Ordinal))
         {
             throw ReplayConflict(
-                cursorName.Contains("change", StringComparison.Ordinal)
+                operation: cursorName.Contains("change", StringComparison.Ordinal)
                     ? CosmosMaterializationSourceOperationKind.ChangeRead
                     : CosmosMaterializationSourceOperationKind.BaselineRead,
-                providerEvidence,
-                $"The {cursorName} replay observed a different provider prefix and failed closed.");
+                providerEvidence: providerEvidence,
+                message: $"The {cursorName} replay observed a different provider prefix and failed closed.");
         }
     }
 
@@ -1466,20 +1618,27 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         }
         if (!containsOperationalEvidence)
         {
-            return StrictDocumentJson.GetCanonicalBytes(observation, CanonicalJsonOptions);
+            return StrictDocumentJson.GetCanonicalBytes(
+                value: observation,
+                options: CanonicalJsonOptions);
         }
 
         var stableFields = ImmutableArray.CreateBuilder<RelationQuerySourceReadFieldResult>(
             observation.Fields.Length);
         foreach (var field in observation.Fields)
         {
-            stableFields.Add(new(field.Field, field.State, field.Value));
+            stableFields.Add(new(
+                field: field.Field,
+                state: field.State,
+                value: field.Value));
         }
         var stableObservation = new RelationQuerySourceReadObservation(
-            observation.Identity,
-            observation.Shape,
-            stableFields.MoveToImmutable());
-        return StrictDocumentJson.GetCanonicalBytes(stableObservation, CanonicalJsonOptions);
+            identity: observation.Identity,
+            shape: observation.Shape,
+            fields: stableFields.MoveToImmutable());
+        return StrictDocumentJson.GetCanonicalBytes(
+            value: stableObservation,
+            options: CanonicalJsonOptions);
     }
 
     ImmutableArray<CanonicalProviderChange> CanonicalizeProviderChanges(
@@ -1505,21 +1664,23 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
                         ? change.Previous!.ObservationId
                         : null;
                 ordered.Add(new(
-                    change,
-                    physicalImage.Id,
-                    physicalImage.PartitionKey,
-                    ChangeStateFingerprint(change.Previous),
-                    ChangeStateFingerprint(change.Current),
-                    subjectIdentity,
-                    currentMatches || previousMatches,
-                    StrictDocumentJson.GetCanonicalBytes(change, CanonicalJsonOptions)));
+                    Change: change,
+                    PhysicalId: physicalImage.Id,
+                    PartitionKey: physicalImage.PartitionKey,
+                    FromStateFingerprint: ChangeStateFingerprint(change.Previous),
+                    ToStateFingerprint: ChangeStateFingerprint(change.Current),
+                    SubjectIdentity: subjectIdentity,
+                    AffectsScope: currentMatches || previousMatches,
+                    CanonicalBytes: StrictDocumentJson.GetCanonicalBytes(
+                        value: change,
+                        options: CanonicalJsonOptions)));
             }
         }
         catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
         {
             throw ChangeEvidenceFailure(
-                providerEvidence,
-                "A Cosmos full-fidelity record could not be canonicalized for deterministic delivery order.");
+                providerEvidence: providerEvidence,
+                message: "A Cosmos full-fidelity record could not be canonicalized for deterministic delivery order.");
         }
 
         ordered.Sort(static (left, right) =>
@@ -1550,15 +1711,24 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         {
             var count = 1;
             while (offset + count < ordered.Count
-                   && SameTransactionalItem(ordered[offset], ordered[offset + count]))
+                   && SameTransactionalItem(
+                       left: ordered[offset],
+                       right: ordered[offset + count]))
             {
                 count++;
             }
 
-            AppendTransactionalItemGroup(ordered, offset, count, chained, providerEvidence);
+            AppendTransactionalItemGroup(
+                ordered: ordered,
+                offset: offset,
+                count: count,
+                destination: chained,
+                providerEvidence: providerEvidence);
             offset += count;
         }
-        RequireUnambiguousSemanticSubjectOrder(chained, providerEvidence);
+        RequireUnambiguousSemanticSubjectOrder(
+            changes: chained,
+            providerEvidence: providerEvidence);
         return chained.MoveToImmutable();
     }
 
@@ -1592,8 +1762,8 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
                     StringComparison.Ordinal))
             {
                 throw ChangeEvidenceFailure(
-                    providerEvidence,
-                    "A Cosmos transactional page contained distinct physical items affecting the same semantic observation identity, so their relative materialization order cannot be proven.");
+                    providerEvidence: providerEvidence,
+                    message: "A Cosmos transactional page contained distinct physical items affecting the same semantic observation identity, so their relative materialization order cannot be proven.");
             }
         }
     }
@@ -1611,7 +1781,10 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         ImmutableArray<CanonicalProviderChange>.Builder destination,
         ProviderOperationEvidence providerEvidence)
     {
-        if (count == 1 || !GroupAffectsScope(ordered, offset, count))
+        if (count == 1 || !GroupAffectsScope(
+                changes: ordered,
+                offset: offset,
+                count: count))
         {
             for (var index = 0; index < count; index++)
             {
@@ -1708,8 +1881,8 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
 
     CosmosMaterializationSourceException AmbiguousTransactionalOrder(
         ProviderOperationEvidence providerEvidence) => ChangeEvidenceFailure(
-        providerEvidence,
-        "A Cosmos transactional page contained same-item changes whose previous/current image chain does not prove one unique transition order.");
+        providerEvidence: providerEvidence,
+        message: "A Cosmos transactional page contained same-item changes whose previous/current image chain does not prove one unique transition order.");
 
     static string ChangeStateFingerprint(CosmosObservationContainerDocument? document)
     {
@@ -1718,7 +1891,9 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
             return "absent";
         }
 
-        var canonical = StrictDocumentJson.GetCanonicalBytes(document, CanonicalJsonOptions);
+        var canonical = StrictDocumentJson.GetCanonicalBytes(
+            value: document,
+            options: CanonicalJsonOptions);
         return string.Concat("present/sha256/", Convert.ToHexStringLower(SHA256.HashData(canonical)));
     }
 
@@ -1764,32 +1939,32 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         return
         [
             MaterializationContract.CreateDiagnostic(
-                failed ? SourceReadFailedDiagnosticCode : SourceReadInconclusiveDiagnosticCode,
-                failed ? DiagnosticSeverity.Error : DiagnosticSeverity.Warning,
-                failed
+                code: failed ? SourceReadFailedDiagnosticCode : SourceReadInconclusiveDiagnosticCode,
+                severity: failed ? DiagnosticSeverity.Error : DiagnosticSeverity.Warning,
+                message: failed
                     ? "The Cosmos source read failed without producing attributable observations."
                     : "The Cosmos source read could not prove a complete bounded result.",
-                "$runtime.sourcePage",
-                "source-read",
-                Descriptor.Source.Value,
-                EvidenceReferences(read.EvidenceReference),
-                "one complete bounded canonical Cosmos result",
-                failed ? "failed" : "inconclusive")
+                location: "$runtime.sourcePage",
+                stage: "source-read",
+                subject: Descriptor.Source.Value,
+                sourceReferences: EvidenceReferences(read.EvidenceReference),
+                expected: "one complete bounded canonical Cosmos result",
+                observed: failed ? "failed" : "inconclusive")
         ];
     }
 
     ImmutableArray<DocumentValidationDiagnostic> BoundaryDiagnostics(RelationQuerySourceReadResult read) =>
     [
         MaterializationContract.CreateDiagnostic(
-            ReadBoundaryReachedDiagnosticCode,
-            DiagnosticSeverity.Warning,
-            "The Cosmos source has more matching provider rows, but the canonical Relations request reached its declared acquisition boundary.",
-            "$runtime.sourcePage",
-            "source-read",
-            Descriptor.Source.Value,
-            EvidenceReferences(read.EvidenceReference),
-            "authoritative exhaustion inside the declared Relations boundary",
-            "additional provider rows exist beyond that boundary")
+            code: ReadBoundaryReachedDiagnosticCode,
+            severity: DiagnosticSeverity.Warning,
+            message: "The Cosmos source has more matching provider rows, but the canonical Relations request reached its declared acquisition boundary.",
+            location: "$runtime.sourcePage",
+            stage: "source-read",
+            subject: Descriptor.Source.Value,
+            sourceReferences: EvidenceReferences(read.EvidenceReference),
+            expected: "authoritative exhaustion inside the declared Relations boundary",
+            observed: "additional provider rows exist beyond that boundary")
     ];
 
     ImmutableArray<string> EvidenceReferences(string? providerEvidence) => providerEvidence is null
@@ -1804,27 +1979,35 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         bool resumedPosition,
         double completedRequestCharge = 0)
     {
-        var kind = ClassifyProviderFailure(exception.StatusCode, resumedPosition);
+        var kind = ClassifyProviderFailure(
+            statusCode: exception.StatusCode,
+            resumedPosition: resumedPosition);
         var disposition = FailureDisposition(kind);
         var observation = CreateObservation(
-            operation,
-            disposition,
-            started,
-            completed,
-            0,
-            0,
-            AddRequestCharge(completedRequestCharge, Math.Max(0, exception.RequestCharge)),
-            Evidence(string.Concat("provider-failure/", (int)exception.StatusCode, "/", exception.SubStatusCode)),
-            exception.StatusCode,
-            exception.SubStatusCode,
-            exception.RetryAfter);
+            operation: operation,
+            disposition: disposition,
+            started: started,
+            completed: completed,
+            itemCount: 0,
+            byteCount: 0,
+            requestCharge: AddRequestCharge(
+                accumulated: completedRequestCharge,
+                response: Math.Max(0, exception.RequestCharge)),
+            evidenceReference: Evidence(string.Concat(
+                "provider-failure/",
+                (int)exception.StatusCode,
+                "/",
+                exception.SubStatusCode)),
+            statusCode: exception.StatusCode,
+            subStatusCode: exception.SubStatusCode,
+            retryAfter: exception.RetryAfter);
         Observe(observation);
         return new(
-            kind == CosmosMaterializationFailureKind.PositionUnavailable
+            message: kind == CosmosMaterializationFailureKind.PositionUnavailable
                 ? "The Cosmos full-fidelity position is unavailable inside the configured retention horizon."
                 : "The Cosmos materialization source operation failed; inspect typed provider evidence.",
-            kind,
-            observation);
+            failureKind: kind,
+            observation: observation);
     }
 
     CosmosMaterializationSourceException ProviderProtocolFailure(
@@ -1837,26 +2020,28 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         HttpStatusCode? statusCode,
         string? providerEvidenceReference)
     {
-        var kind = ClassifyProviderFailure(statusCode, resumedPosition);
+        var kind = ClassifyProviderFailure(
+            statusCode: statusCode,
+            resumedPosition: resumedPosition);
         var observation = CreateObservation(
-            operation,
-            FailureDisposition(kind),
-            started,
-            completed,
-            0,
-            0,
-            requestCharge,
-            FailureEvidence(
-                string.Concat("provider-protocol/", Uri.EscapeDataString(exception.Reason)),
-                providerEvidenceReference),
-            statusCode);
+            operation: operation,
+            disposition: FailureDisposition(kind),
+            started: started,
+            completed: completed,
+            itemCount: 0,
+            byteCount: 0,
+            requestCharge: requestCharge,
+            evidenceReference: FailureEvidence(
+                suffix: string.Concat("provider-protocol/", Uri.EscapeDataString(exception.Reason)),
+                providerEvidenceReference: providerEvidenceReference),
+            statusCode: statusCode);
         Observe(observation);
         return new(
-            kind == CosmosMaterializationFailureKind.PositionUnavailable
+            message: kind == CosmosMaterializationFailureKind.PositionUnavailable
                 ? "The Cosmos full-fidelity position was rejected by a completed provider response."
                 : "The Cosmos provider response violated the materialization transport contract; inspect typed evidence.",
-            kind,
-            observation);
+            failureKind: kind,
+            observation: observation);
     }
 
     static CosmosMaterializationFailureKind ClassifyProviderFailure(
@@ -1898,22 +2083,27 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         ProviderOperationEvidence? completedProviderEvidence = null) => exception switch
         {
             CosmosRelationQueryMaterializationCanceledException canceled => new(
-                started,
-                completed,
-                canceled.CompletedRequestCharge,
-                canceled.CompletedStatusCode,
-                canceled.ProviderEvidenceReference),
+                StartedAtUtc: started,
+                CompletedAtUtc: completed,
+                RequestCharge: canceled.CompletedRequestCharge,
+                StatusCode: canceled.CompletedStatusCode,
+                ProviderEvidenceReference: canceled.ProviderEvidenceReference),
             CosmosProviderResponseCanceledException canceled => new(
-                started,
-                completed,
-                canceled.RequestCharge,
-                canceled.StatusCode,
-                canceled.ProviderEvidenceReference),
+                StartedAtUtc: started,
+                CompletedAtUtc: completed,
+                RequestCharge: canceled.RequestCharge,
+                StatusCode: canceled.StatusCode,
+                ProviderEvidenceReference: canceled.ProviderEvidenceReference),
             _ when completedProviderEvidence is { } evidence => evidence with
             {
                 CompletedAtUtc = completed
             },
-            _ => new(started, completed, 0, null, null)
+            _ => new(
+                StartedAtUtc: started,
+                CompletedAtUtc: completed,
+                RequestCharge: 0,
+                StatusCode: null,
+                ProviderEvidenceReference: null)
         };
 
     CosmosMaterializationSourceException ReplayConflict(
@@ -1922,17 +2112,22 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         string message)
     {
         var observation = CreateObservation(
-            operation,
-            CosmosMaterializationSourceDisposition.TerminalFailure,
-            providerEvidence.StartedAtUtc,
-            providerEvidence.CompletedAtUtc,
-            0,
-            0,
-            providerEvidence.RequestCharge,
-            FailureEvidence("replay-conflict", providerEvidence.ProviderEvidenceReference),
-            providerEvidence.StatusCode);
+            operation: operation,
+            disposition: CosmosMaterializationSourceDisposition.TerminalFailure,
+            started: providerEvidence.StartedAtUtc,
+            completed: providerEvidence.CompletedAtUtc,
+            itemCount: 0,
+            byteCount: 0,
+            requestCharge: providerEvidence.RequestCharge,
+            evidenceReference: FailureEvidence(
+                suffix: "replay-conflict",
+                providerEvidenceReference: providerEvidence.ProviderEvidenceReference),
+            statusCode: providerEvidence.StatusCode);
         Observe(observation);
-        return new(message, CosmosMaterializationFailureKind.ReplayConflict, observation);
+        return new(
+            message: message,
+            failureKind: CosmosMaterializationFailureKind.ReplayConflict,
+            observation: observation);
     }
 
     CosmosMaterializationSourceException ChangeEvidenceFailure(
@@ -1940,17 +2135,22 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         string message)
     {
         var observation = CreateObservation(
-            CosmosMaterializationSourceOperationKind.ChangeRead,
-            CosmosMaterializationSourceDisposition.TerminalFailure,
-            providerEvidence.StartedAtUtc,
-            providerEvidence.CompletedAtUtc,
-            0,
-            0,
-            providerEvidence.RequestCharge,
-            FailureEvidence("change-evidence-unavailable", providerEvidence.ProviderEvidenceReference),
-            providerEvidence.StatusCode);
+            operation: CosmosMaterializationSourceOperationKind.ChangeRead,
+            disposition: CosmosMaterializationSourceDisposition.TerminalFailure,
+            started: providerEvidence.StartedAtUtc,
+            completed: providerEvidence.CompletedAtUtc,
+            itemCount: 0,
+            byteCount: 0,
+            requestCharge: providerEvidence.RequestCharge,
+            evidenceReference: FailureEvidence(
+                suffix: "change-evidence-unavailable",
+                providerEvidenceReference: providerEvidence.ProviderEvidenceReference),
+            statusCode: providerEvidence.StatusCode);
         Observe(observation);
-        return new(message, CosmosMaterializationFailureKind.ChangeEvidenceUnavailable, observation);
+        return new(
+            message: message,
+            failureKind: CosmosMaterializationFailureKind.ChangeEvidenceUnavailable,
+            observation: observation);
     }
 
     CosmosMaterializationSourceObservation CreateObservation(
@@ -1976,32 +2176,37 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
                 ? 10_000L
                 : 0L;
         return new(
-            operation,
-            disposition,
-            Scope,
-            started,
-            completed,
-            itemCount,
-            byteCount,
-            requestCharge,
+            operation: operation,
+            disposition: disposition,
+            scope: Scope,
+            startedAtUtc: started,
+            completedAtUtc: completed,
+            itemCount: itemCount,
+            canonicalByteCount: byteCount,
+            requestCharge: requestCharge,
+            measurements:
             [
                 new(
-                    ControlMetricKind.Latency,
-                    ControlStatisticKind.Last,
-                    ControlMeasurementAvailability.Available,
-                    new(latency, ControlUnit.Milliseconds),
+                    metric: ControlMetricKind.Latency,
+                    statistic: ControlStatisticKind.Last,
+                    availability: ControlMeasurementAvailability.Available,
+                    value: new(
+                        value: latency,
+                        unit: ControlUnit.Milliseconds),
                     sampleCount: 1),
                 new(
-                    ControlMetricKind.RejectionRatio,
-                    ControlStatisticKind.Last,
-                    ControlMeasurementAvailability.Available,
-                    new(rejected, ControlUnit.BasisPoints),
+                    metric: ControlMetricKind.RejectionRatio,
+                    statistic: ControlStatisticKind.Last,
+                    availability: ControlMeasurementAvailability.Available,
+                    value: new(
+                        value: rejected,
+                        unit: ControlUnit.BasisPoints),
                     sampleCount: 1)
             ],
-            evidenceReference,
-            statusCode,
-            subStatusCode,
-            retryAfter);
+            evidenceReference: evidenceReference,
+            statusCode: statusCode,
+            subStatusCode: subStatusCode,
+            retryAfter: retryAfter);
     }
 
     void Observe(CosmosMaterializationSourceObservation observation)
@@ -2023,10 +2228,14 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
 
     void RequireScope(MaterializationSourceScope scope, string parameterName)
     {
-        ArgumentNullException.ThrowIfNull(scope, parameterName);
+        ArgumentNullException.ThrowIfNull(
+            argument: scope,
+            paramName: parameterName);
         if (scope != Scope)
         {
-            throw new ArgumentException("The request targets a different Cosmos materialization scope.", parameterName);
+            throw new ArgumentException(
+                message: "The request targets a different Cosmos materialization scope.",
+                paramName: parameterName);
         }
     }
 
@@ -2050,14 +2259,14 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
         {
             Observe(CreateObservation(
-                operation,
-                CosmosMaterializationSourceDisposition.Canceled,
-                started,
-                context.UtcNow,
-                0,
-                0,
-                0,
-                Evidence(canceledEvidence)));
+                operation: operation,
+                disposition: CosmosMaterializationSourceDisposition.Canceled,
+                started: started,
+                completed: context.UtcNow,
+                itemCount: 0,
+                byteCount: 0,
+                requestCharge: 0,
+                evidenceReference: Evidence(canceledEvidence)));
             throw;
         }
     }
@@ -2079,7 +2288,9 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
             policy.MaximumScanPageItems,
             checked((int)Math.Min(int.MaxValue, reader.Limits.MaximumBufferedRows)));
         var placementFingerprint = Convert.ToHexStringLower(SHA256.HashData(
-            StrictDocumentJson.GetCanonicalBytes(placement, CanonicalJsonOptions)));
+            StrictDocumentJson.GetCanonicalBytes(
+                value: placement,
+                options: CanonicalJsonOptions)));
         var configurationReferences = ImmutableArray.Create(
             EvidencePrefix,
             string.Concat(
@@ -2137,9 +2348,15 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
             string.Concat("cosmos-materialization-profile/sha256/", profileFingerprint)
         ];
         var readLimits = ImmutableArray.Create(
-            new MaterializationOperatingLimit(MaterializationLimitKind.ReadItems, readItems),
-            new MaterializationOperatingLimit(MaterializationLimitKind.ReadBytes, policy.MaximumScanPageBytes),
-            new MaterializationOperatingLimit(MaterializationLimitKind.Parallelism, parallelism));
+            new MaterializationOperatingLimit(
+                kind: MaterializationLimitKind.ReadItems,
+                maximum: readItems),
+            new MaterializationOperatingLimit(
+                kind: MaterializationLimitKind.ReadBytes,
+                maximum: policy.MaximumScanPageBytes),
+            new MaterializationOperatingLimit(
+                kind: MaterializationLimitKind.Parallelism,
+                maximum: parallelism));
         var readCapabilities = ImmutableArray.CreateBuilder<MaterializationCapabilityKind>(2);
         if (placement.Kind == RelationQuerySourcePlacementBindingKind.SourceSet
             && placement.Acquisition == RelationQuerySourceAcquisitionKind.BoundedEnumeration)
@@ -2159,19 +2376,20 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
         foreach (var capability in readCapabilities)
         {
             evidence.Add(new(
-                new($"cohesive.adapters.cosmos/materialization/{(int)capability}/v1"),
-                capability,
-                capability == MaterializationCapabilityKind.SourceBatchedPointRead
+                id: new($"cohesive.adapters.cosmos/materialization/{(int)capability}/v1"),
+                capability: capability,
+                realization: capability == MaterializationCapabilityKind.SourceBatchedPointRead
                     ? MaterializationCapabilityRealizationKind.Composed
                     : MaterializationCapabilityRealizationKind.Constrained,
+                guarantees:
                 [
                     MaterializationGuaranteeKind.StableOrdering,
                     MaterializationGuaranteeKind.RequestLocalCompleteness,
                     MaterializationGuaranteeKind.Reconciliation
                 ],
-                readLimits,
-                sourceReferences,
-                capability == MaterializationCapabilityKind.SourceBatchedPointRead
+                operatingLimits: readLimits,
+                sourceReferences: sourceReferences,
+                description: capability == MaterializationCapabilityKind.SourceBatchedPointRead
                     ? "Bounded stable-identity acquisition composed as chunked parameterized Cosmos queries because the current binding does not prove native item-id and partition-key addresses; explicit item, byte, query, and hierarchical admission bounds apply."
                     : "Canonical Cosmos Relations acquisition with explicit item, byte, partition, provider-page, and runtime-owned hierarchical admission bounds; no cross-page snapshot claim."));
         }
@@ -2181,34 +2399,50 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
             MaterializationGuaranteeKind.AtLeastOnceDelivery,
             MaterializationGuaranteeKind.BeforeImage);
         evidence.Add(new(
-            new("cohesive.adapters.cosmos/materialization/continuation/v1"),
-            MaterializationCapabilityKind.SourceContinuation,
-            MaterializationCapabilityRealizationKind.Constrained,
-            [MaterializationGuaranteeKind.StableOrdering, MaterializationGuaranteeKind.Reconciliation],
-            [new MaterializationOperatingLimit(MaterializationLimitKind.Parallelism, parallelism)],
-            sourceReferences,
-            "Authenticated adapter-owned cursor retaining opaque Cosmos provider continuation and intra-page progress; a changed replay prefix fails closed and requires a new generation."));
-        evidence.Add(new(
-            new("cohesive.adapters.cosmos/materialization/change-delivery/v1"),
-            MaterializationCapabilityKind.SourceChangeDelivery,
-            MaterializationCapabilityRealizationKind.Constrained,
-            changeGuarantees,
+            id: new("cohesive.adapters.cosmos/materialization/continuation/v1"),
+            capability: MaterializationCapabilityKind.SourceContinuation,
+            realization: MaterializationCapabilityRealizationKind.Constrained,
+            guarantees:
             [
-                new MaterializationOperatingLimit(MaterializationLimitKind.ChangeItems, policy.MaximumChangePageItems),
-                new MaterializationOperatingLimit(MaterializationLimitKind.ReadBytes, policy.MaximumChangePageBytes),
-                new MaterializationOperatingLimit(MaterializationLimitKind.Parallelism, parallelism)
+                MaterializationGuaranteeKind.StableOrdering,
+                MaterializationGuaranteeKind.Reconciliation
             ],
-            sourceReferences,
-            "Full-fidelity create, replace, and delete delivery from captured current cuts within one fixed logical partition and the attested retention horizon; selected fields and correlation keys are projected from current and previous observation envelopes, same-item transaction order requires one unique full-image transition chain, cross-item semantic-subject collisions fail closed, and no settlement is claimed."));
+            operatingLimits:
+            [
+                new MaterializationOperatingLimit(
+                    kind: MaterializationLimitKind.Parallelism,
+                    maximum: parallelism)
+            ],
+            sourceReferences: sourceReferences,
+            description: "Authenticated adapter-owned cursor retaining opaque Cosmos provider continuation and intra-page progress; a changed replay prefix fails closed and requires a new generation."));
+        evidence.Add(new(
+            id: new("cohesive.adapters.cosmos/materialization/change-delivery/v1"),
+            capability: MaterializationCapabilityKind.SourceChangeDelivery,
+            realization: MaterializationCapabilityRealizationKind.Constrained,
+            guarantees: changeGuarantees,
+            operatingLimits:
+            [
+                new MaterializationOperatingLimit(
+                    kind: MaterializationLimitKind.ChangeItems,
+                    maximum: policy.MaximumChangePageItems),
+                new MaterializationOperatingLimit(
+                    kind: MaterializationLimitKind.ReadBytes,
+                    maximum: policy.MaximumChangePageBytes),
+                new MaterializationOperatingLimit(
+                    kind: MaterializationLimitKind.Parallelism,
+                    maximum: parallelism)
+            ],
+            sourceReferences: sourceReferences,
+            description: "Full-fidelity create, replace, and delete delivery from captured current cuts within one fixed logical partition and the attested retention horizon; selected fields and correlation keys are projected from current and previous observation envelopes, same-item transaction order requires one unique full-image transition chain, cross-item semantic-subject collisions fail closed, and no settlement is claimed."));
         var profileId = string.Concat(
             "cohesive.adapters.cosmos/materialization-source/v2/sha256/",
             profileFingerprint);
         return new(
-            new(profileId),
-            MaterializationEndpointRole.Source,
-            reader.Descriptor.Source.Value,
-            evidence.MoveToImmutable(),
-            "Cosmos baseline and full-fidelity catch-up source with durable adapter-owned positions, runtime-owned hierarchical admission, and explicit deployment evidence.");
+            id: new(profileId),
+            role: MaterializationEndpointRole.Source,
+            subject: reader.Descriptor.Source.Value,
+            evidence: evidence.MoveToImmutable(),
+            description: "Cosmos baseline and full-fidelity catch-up source with durable adapter-owned positions, runtime-owned hierarchical admission, and explicit deployment evidence.");
     }
 
     static Container ValidateContainer(CosmosRelationQuerySourceReader reader, Container container)
@@ -2223,15 +2457,15 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
                 StringComparison.Ordinal))
         {
             throw new ArgumentException(
-                "The Cosmos change-feed container must exactly match the wrapped canonical Relations reader.",
-                nameof(container));
+                message: "The Cosmos change-feed container must exactly match the wrapped canonical Relations reader.",
+                paramName: nameof(container));
         }
         if (container.Database.Client.ClientOptions.ConsistencyLevel is { } consistency
             && consistency != ConsistencyLevel.Strong)
         {
             throw new ArgumentException(
-                "The Cosmos change-feed client must inherit the caller-attested Strong account policy or explicitly request Strong consistency.",
-                nameof(container));
+                message: "The Cosmos change-feed client must inherit the caller-attested Strong account policy or explicitly request Strong consistency.",
+                paramName: nameof(container));
         }
         return container;
     }
@@ -2301,7 +2535,9 @@ public sealed class CosmosMaterializationSource : IMaterializationChangeSource
     }
 
     static long CanonicalByteCount<T>(T item) where T : class =>
-        StrictDocumentJson.GetCanonicalBytes(item, CanonicalJsonOptions).LongLength;
+        StrictDocumentJson.GetCanonicalBytes(
+            value: item,
+            options: CanonicalJsonOptions).LongLength;
 
     static long CanonicalByteCount(ImmutableArray<RelationQuerySourceReadObservation> observations)
     {
