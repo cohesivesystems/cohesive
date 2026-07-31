@@ -298,8 +298,17 @@ public static class MaterializationDefinitionValidator
 
         foreach (var source in definition.Sources)
         {
-            ValidateOptionalSourceCapabilities(definition, source, diagnostics);
+            ValidateDeclaredCapabilities(
+                definition,
+                source.Capabilities,
+                $"/sources/{Encode(source.Input.Value)}/capabilities",
+                diagnostics);
         }
+        ValidateDeclaredCapabilities(
+            definition,
+            definition.TargetCapabilities,
+            "/targetCapabilities",
+            diagnostics);
 
         if (definition.UpdatePolicy.Consistency == MaterializationConsistencyKind.BaselinePlusCatchUp
             && (definition.UpdatePolicy.SupportedModes & MaterializationSynchronizationMode.Rebuild) == 0)
@@ -392,7 +401,6 @@ public static class MaterializationDefinitionValidator
             var requirement = applicable.FirstOrDefault(candidate => candidate.Capability == capability);
             if (requirement is not null)
             {
-                RequireGuarantees(definition, mode, requirement, location, diagnostics);
                 continue;
             }
             diagnostics.Add(Error(
@@ -405,18 +413,14 @@ public static class MaterializationDefinitionValidator
         }
     }
 
-    static void ValidateOptionalSourceCapabilities(
+    static void ValidateDeclaredCapabilities(
         MaterializationDefinition definition,
-        MaterializationSourceRequirement source,
+        IEnumerable<MaterializationCapabilityRequirement> requirements,
+        string location,
         ICollection<DocumentValidationDiagnostic> diagnostics)
     {
-        foreach (var requirement in source.Capabilities)
+        foreach (var requirement in requirements)
         {
-            if (requirement.Capability != MaterializationCapabilityKind.SourceSettlement)
-            {
-                continue;
-            }
-
             var applicableModes = requirement.Modes & definition.UpdatePolicy.SupportedModes;
             if (applicableModes == 0)
             {
@@ -427,7 +431,7 @@ public static class MaterializationDefinitionValidator
                 definition,
                 applicableModes,
                 requirement,
-                $"/sources/{Encode(source.Input.Value)}/capabilities",
+                location,
                 diagnostics);
         }
     }
@@ -439,7 +443,7 @@ public static class MaterializationDefinitionValidator
         string location,
         ICollection<DocumentValidationDiagnostic> diagnostics)
     {
-        foreach (var guarantee in RequiredGuarantees(definition, mode, requirement.Capability))
+        foreach (var guarantee in GetRequiredGuarantees(definition, requirement.Capability))
         {
             if (requirement.Guarantees.Contains(guarantee))
             {
@@ -510,9 +514,8 @@ public static class MaterializationDefinitionValidator
         }
     }
 
-    static IEnumerable<MaterializationGuaranteeKind> RequiredGuarantees(
+    internal static IEnumerable<MaterializationGuaranteeKind> GetRequiredGuarantees(
         MaterializationDefinition definition,
-        MaterializationSynchronizationMode mode,
         MaterializationCapabilityKind capability)
     {
         if (capability is MaterializationCapabilityKind.SourceBatchedPointRead
@@ -561,6 +564,14 @@ public static class MaterializationDefinitionValidator
         else if (capability == MaterializationCapabilityKind.TargetPerItemOutcomes)
         {
             yield return MaterializationGuaranteeKind.ExactPerItemOutcome;
+        }
+        else if (capability == MaterializationCapabilityKind.TargetContributorLedger)
+        {
+            yield return MaterializationGuaranteeKind.RequestLocalCompleteness;
+            yield return MaterializationGuaranteeKind.IdempotentWrite;
+            yield return MaterializationGuaranteeKind.VersionConditionalWrite;
+            yield return MaterializationGuaranteeKind.FencedMutation;
+            yield return MaterializationGuaranteeKind.AtomicWithMaterializationMutation;
         }
         else if (capability == MaterializationCapabilityKind.TargetFencedPromotion)
         {

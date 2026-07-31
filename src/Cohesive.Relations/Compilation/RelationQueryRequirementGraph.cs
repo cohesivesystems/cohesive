@@ -475,6 +475,24 @@ public sealed record RelationQueryOutputReference
 
     /// <summary>Demanded output field, or <see langword="null"/> when the edge affects the complete output.</summary>
     public RelationQueryFieldReference? Field { get; }
+
+    /// <summary>Gets whether this selected output covers another canonical output reference.</summary>
+    /// <param name="candidate">Canonical output reference to test.</param>
+    /// <returns>
+    /// <see langword="true"/> when both references belong to the same relation or query-result output and this
+    /// reference either selects the complete output or selects the same field as <paramref name="candidate"/>.
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="candidate"/> is <see langword="null"/>.</exception>
+    public bool Covers(RelationQueryOutputReference candidate)
+    {
+        ArgumentNullException.ThrowIfNull(candidate);
+        return Kind == candidate.Kind
+            && Node == candidate.Node
+            && Shape == candidate.Shape
+            && Relation == candidate.Relation
+            && QueryResult == candidate.QueryResult
+            && (Field is null || Field == candidate.Field);
+    }
 }
 
 /// <summary>Semantic kind of one requirement-provenance step.</summary>
