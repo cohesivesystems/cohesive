@@ -252,19 +252,20 @@ internal sealed class FakeElasticMaterializationTransport : IElasticMaterializat
     public ValueTask<ElasticDocumentWriteResult> CreateDocumentAsync(
         string index,
         string id,
-        ReadOnlyMemory<byte> source,
+        ElasticJsonObject source,
         int maximumResponseBytes,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         index = ElasticMaterializationPhysicalNames.RequireConcreteIndex(index, nameof(index));
         id = ElasticMaterializationPhysicalNames.RequireValue(id, nameof(id));
+        ArgumentNullException.ThrowIfNull(source);
         ElasticMaterializationPhysicalNames.RequirePositive(maximumResponseBytes, nameof(maximumResponseBytes));
-        var normalized = NormalizeObject(source, nameof(source));
+        var retainedSource = source.ToArray();
         lock (gate)
         {
             Record(CreateDocumentOperation, index, id, itemCount: 1, source.Length, maximumResponseBytes);
-            if (TryConsumeCreateDocumentFault(normalized, out var failedDocumentKind))
+            if (TryConsumeCreateDocumentFault(retainedSource, out var failedDocumentKind))
             {
                 throw new ElasticMaterializationTransportException(
                     statusCode: null,
@@ -281,7 +282,7 @@ internal sealed class FakeElasticMaterializationTransport : IElasticMaterializat
 
             var document = existing ?? new FakeDocument();
             state.Documents[id] = document;
-            ApplyDocumentWrite(state, document, normalized, externalVersion: null);
+            ApplyDocumentWrite(state, document, retainedSource, externalVersion: null);
             return ValueTask.FromResult(AppliedDocumentWrite(document, statusCode: 201));
         }
     }
@@ -289,7 +290,7 @@ internal sealed class FakeElasticMaterializationTransport : IElasticMaterializat
     public ValueTask<ElasticDocumentWriteResult> ReplaceDocumentAsync(
         string index,
         string id,
-        ReadOnlyMemory<byte> source,
+        ElasticJsonObject source,
         ElasticDocumentConcurrencyToken expected,
         int maximumResponseBytes,
         CancellationToken cancellationToken)
@@ -297,9 +298,10 @@ internal sealed class FakeElasticMaterializationTransport : IElasticMaterializat
         cancellationToken.ThrowIfCancellationRequested();
         index = ElasticMaterializationPhysicalNames.RequireConcreteIndex(index, nameof(index));
         id = ElasticMaterializationPhysicalNames.RequireValue(id, nameof(id));
+        ArgumentNullException.ThrowIfNull(source);
         expected.Validate(nameof(expected));
         ElasticMaterializationPhysicalNames.RequirePositive(maximumResponseBytes, nameof(maximumResponseBytes));
-        var normalized = NormalizeObject(source, nameof(source));
+        var retainedSource = source.ToArray();
         lock (gate)
         {
             Record(ReplaceDocumentOperation, index, id, itemCount: 1, source.Length, maximumResponseBytes);
@@ -319,7 +321,7 @@ internal sealed class FakeElasticMaterializationTransport : IElasticMaterializat
                 return ValueTask.FromResult(ConflictDocumentWrite());
             }
 
-            ApplyDocumentWrite(state, document, normalized, externalVersion: null);
+            ApplyDocumentWrite(state, document, retainedSource, externalVersion: null);
             return ValueTask.FromResult(AppliedDocumentWrite(document, statusCode: 200));
         }
     }
@@ -362,15 +364,15 @@ internal sealed class FakeElasticMaterializationTransport : IElasticMaterializat
 
     public ValueTask<ElasticIndexCreateResult> CreateIndexAsync(
         string index,
-        ReadOnlyMemory<byte> body,
+        ElasticJsonObject body,
         int maximumResponseBytes,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         index = ElasticMaterializationPhysicalNames.RequireConcreteIndex(index, nameof(index));
+        ArgumentNullException.ThrowIfNull(body);
         ElasticMaterializationPhysicalNames.RequirePositive(maximumResponseBytes, nameof(maximumResponseBytes));
-        var normalized = NormalizeObject(body, nameof(body));
-        var prepared = ParseIndex(index, normalized);
+        var prepared = ParseIndex(index, body.Bytes);
         lock (gate)
         {
             Record(CreateIndexOperation, index, id: null, itemCount: 0, body.Length, maximumResponseBytes);
@@ -621,25 +623,19 @@ internal sealed class FakeElasticMaterializationTransport : IElasticMaterializat
             await release.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        var normalized = NormalizeBulkOperations(operations);
-        var wireBytes = MeasureBulkWireBytes(normalized);
-        if (wireBytes > maximumWireBytes)
-        {
-            throw new ArgumentException(
-                $"Elasticsearch bulk NDJSON exceeded its declared {maximumWireBytes.ToString(CultureInfo.InvariantCulture)}-byte wire bound.");
-        }
+        var wireBytes = ElasticBulkNdjson.Build(operations, maximumWireBytes).Length;
 
         lock (gate)
         {
             var requestOrdinal = bulkRequests.Count;
-            var captured = CloneBulkOperations(normalized);
+            var captured = CloneBulkOperations(operations);
             bulkRequests.Add(captured);
-            Record(BulkOperation, index: null, id: null, normalized.Length, maximumWireBytes, maximumResponseBytes);
-            var builder = ImmutableArray.CreateBuilder<ElasticBulkItemResult>(normalized.Length);
+            Record(BulkOperation, index: null, id: null, operations.Length, maximumWireBytes, maximumResponseBytes);
+            var builder = ImmutableArray.CreateBuilder<ElasticBulkItemResult>(operations.Length);
             var errors = false;
-            for (var ordinal = 0; ordinal < normalized.Length; ordinal++)
+            for (var ordinal = 0; ordinal < operations.Length; ordinal++)
             {
-                var operation = normalized[ordinal];
+                var operation = operations[ordinal];
                 ElasticBulkItemResult result;
                 if (TryTakeBulkFault(requestOrdinal, ordinal, operation.Index, operation.Id, out var fault))
                 {
@@ -760,12 +756,13 @@ internal sealed class FakeElasticMaterializationTransport : IElasticMaterializat
 
     public ValueTask<ElasticCountResult> CountAsync(
         string index,
-        ReadOnlyMemory<byte> query,
+        ElasticJsonObject query,
         int maximumResponseBytes,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         index = ElasticMaterializationPhysicalNames.RequireConcreteIndex(index, nameof(index));
+        ArgumentNullException.ThrowIfNull(query);
         ElasticMaterializationPhysicalNames.RequirePositive(maximumResponseBytes, nameof(maximumResponseBytes));
         var parsed = ParseQuery(query, nameof(query));
         lock (gate)
@@ -793,9 +790,7 @@ internal sealed class FakeElasticMaterializationTransport : IElasticMaterializat
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(request);
         var captured = CloneAliasRequest(request);
-        var normalizedFilter = request.ReadAliasFilter.IsEmpty
-            ? []
-            : NormalizeObject(request.ReadAliasFilter, nameof(request));
+        var retainedFilter = request.ReadAliasFilter?.ToArray() ?? [];
         lock (gate)
         {
             aliasRequests.Add(captured);
@@ -804,7 +799,7 @@ internal sealed class FakeElasticMaterializationTransport : IElasticMaterializat
                 request.MarkerIndex,
                 id: null,
                 itemCount: request.ReadAlias is null ? 1 : 2,
-                request.ReadAliasFilter.Length,
+                request.ReadAliasFilter?.Length ?? 0,
                 request.MaximumResponseBytes);
 
             if (request.ReadAlias is { } inspectedReadAlias)
@@ -832,7 +827,7 @@ internal sealed class FakeElasticMaterializationTransport : IElasticMaterializat
                         || readOwner.Routing != request.Routing
                         || readOwner.SearchRouting != request.SearchRouting
                         || readOwner.IndexRouting != request.IndexRouting
-                        || !readOwner.Filter.AsSpan().SequenceEqual(normalizedFilter);
+                        || !ElasticJsonObject.DeepEquals(readOwner.Filter, request.ReadAliasFilter?.Bytes ?? default);
                 if (readAliasConflict)
                 {
                     return ValueTask.FromResult(new ElasticAliasCasResult(
@@ -882,7 +877,7 @@ internal sealed class FakeElasticMaterializationTransport : IElasticMaterializat
                     request.Routing,
                     request.SearchRouting,
                     request.IndexRouting,
-                    normalizedFilter);
+                    retainedFilter);
             }
 
             markerIndex.Aliases[request.NextMarkerAlias] = new(
@@ -1085,7 +1080,7 @@ internal sealed class FakeElasticMaterializationTransport : IElasticMaterializat
         if (operation.Kind == ElasticBulkOperationKind.Index)
         {
             var created = !document.Exists;
-            ApplyDocumentWrite(state, document, operation.Source.ToArray(), operation.ExternalVersion);
+            ApplyDocumentWrite(state, document, operation.Source!.ToArray(), operation.ExternalVersion);
             return new(
                 ordinal,
                 operation.Kind,
@@ -1166,9 +1161,9 @@ internal sealed class FakeElasticMaterializationTransport : IElasticMaterializat
             maximumRequestBytes,
             maximumResponseBytes));
 
-    static FakeIndex ParseIndex(string index, byte[] normalized)
+    static FakeIndex ParseIndex(string index, ReadOnlyMemory<byte> body)
     {
-        using var document = JsonDocument.Parse(normalized);
+        using var document = JsonDocument.Parse(body);
         Dictionary<string, FakeAlias> aliases = new(StringComparer.Ordinal);
         if (document.RootElement.TryGetProperty("aliases", out var aliasObject))
         {
@@ -1190,7 +1185,7 @@ internal sealed class FakeElasticMaterializationTransport : IElasticMaterializat
         }
 
         var blocked = TryReadInitialWriteBlock(document.RootElement);
-        return new(index, normalized, aliases, blocked);
+        return new(index, body, aliases, blocked);
     }
 
     static FakeAlias ParseAlias(JsonElement value) => new(
@@ -1199,7 +1194,7 @@ internal sealed class FakeElasticMaterializationTransport : IElasticMaterializat
         ReadOptionalString(value, "routing"),
         ReadOptionalString(value, "search_routing"),
         ReadOptionalString(value, "index_routing"),
-        value.TryGetProperty("filter", out var filter) ? NormalizeObject(JsonBytes(filter), "filter") : []);
+        value.TryGetProperty("filter", out var filter) ? JsonBytes(filter) : []);
 
     static bool TryReadInitialWriteBlock(JsonElement root)
     {
@@ -1443,103 +1438,20 @@ internal sealed class FakeElasticMaterializationTransport : IElasticMaterializat
         return value.GetString()!;
     }
 
+    static JsonElement ParseQuery(ElasticJsonObject query, string parameterName)
+    {
+        ArgumentNullException.ThrowIfNull(query, parameterName);
+        return ParseQuery(query.Bytes, parameterName);
+    }
+
     static JsonElement ParseQuery(ReadOnlyMemory<byte> query, string parameterName)
     {
         if (query.IsEmpty)
         {
-            using var matchAll = JsonDocument.Parse("{\"match_all\":{}}");
-            return matchAll.RootElement.Clone();
+            throw new ArgumentException("A fake Elasticsearch query cannot be empty.", parameterName);
         }
-
-        var normalized = NormalizeObject(query, parameterName);
-        using var document = JsonDocument.Parse(normalized);
+        using var document = JsonDocument.Parse(query);
         return document.RootElement.Clone();
-    }
-
-    static ImmutableArray<ElasticBulkOperation> NormalizeBulkOperations(
-        ImmutableArray<ElasticBulkOperation> operations)
-    {
-        var builder = ImmutableArray.CreateBuilder<ElasticBulkOperation>(operations.Length);
-        foreach (var operation in operations)
-        {
-            builder.Add(operation.Kind == ElasticBulkOperationKind.Index
-                ? new(
-                    operation.Kind,
-                    operation.Index,
-                    operation.Id,
-                    operation.ExternalVersion,
-                    NormalizeObject(operation.Source, "bulk index source"))
-                : new(operation.Kind, operation.Index, operation.Id, operation.ExternalVersion));
-        }
-
-        return builder.MoveToImmutable();
-    }
-
-    static long MeasureBulkWireBytes(ImmutableArray<ElasticBulkOperation> operations)
-    {
-        ArrayBufferWriter<byte> buffer = new();
-        foreach (var operation in operations)
-        {
-            WriteJsonLine(buffer, writer =>
-            {
-                writer.WriteStartObject();
-                writer.WritePropertyName(operation.Kind == ElasticBulkOperationKind.Index ? "index" : "delete");
-                writer.WriteStartObject();
-                writer.WriteString("_index", operation.Index);
-                writer.WriteString("_id", operation.Id);
-                writer.WriteNumber("version", operation.ExternalVersion);
-                writer.WriteString("version_type", "external");
-                writer.WriteEndObject();
-                writer.WriteEndObject();
-            });
-            if (operation.Kind == ElasticBulkOperationKind.Index)
-            {
-                using var source = JsonDocument.Parse(operation.Source);
-                WriteJsonLine(buffer, source.RootElement.WriteTo);
-            }
-        }
-
-        return buffer.WrittenCount;
-    }
-
-    static void WriteJsonLine(ArrayBufferWriter<byte> buffer, Action<Utf8JsonWriter> write)
-    {
-        using (Utf8JsonWriter writer = new(buffer))
-        {
-            write(writer);
-        }
-
-        var newline = buffer.GetSpan(1);
-        newline[0] = (byte)'\n';
-        buffer.Advance(1);
-    }
-
-    static byte[] NormalizeObject(ReadOnlyMemory<byte> source, string parameterName)
-    {
-        if (source.IsEmpty)
-        {
-            throw new ArgumentException("A JSON object payload cannot be empty.", parameterName);
-        }
-
-        try
-        {
-            using var document = JsonDocument.Parse(source);
-            if (document.RootElement.ValueKind != JsonValueKind.Object)
-            {
-                throw Protocol($"{parameterName} must be a JSON object.");
-            }
-
-            return JsonSerializer.SerializeToUtf8Bytes(document.RootElement);
-        }
-        catch (JsonException exception)
-        {
-            throw new ElasticMaterializationTransportException(
-                statusCode: null,
-                ProtocolErrorType,
-                retryable: false,
-                $"{parameterName} was not valid bounded JSON.",
-                exception);
-        }
     }
 
     bool TryConsumeCreateDocumentFault(byte[] source, out string? documentKind)
@@ -1570,12 +1482,12 @@ internal sealed class FakeElasticMaterializationTransport : IElasticMaterializat
                 operation.Index,
                 operation.Id,
                 operation.ExternalVersion,
-                operation.Source.ToArray())
+                operation.Source)
             : new ElasticBulkOperation(operation.Kind, operation.Index, operation.Id, operation.ExternalVersion))];
 
     static ElasticScanRequest CloneScanRequest(ElasticScanRequest request) => new(
         request.Index,
-        request.Query.ToArray(),
+        request.Query,
         request.SortField,
         request.AfterSortValue,
         request.MaximumItems,
@@ -1589,7 +1501,7 @@ internal sealed class FakeElasticMaterializationTransport : IElasticMaterializat
         request.ExpectedReadIndex,
         request.NextReadIndex,
         request.MaximumResponseBytes,
-        request.ReadAliasFilter.ToArray(),
+        request.ReadAliasFilter,
         request.Routing,
         request.SearchRouting,
         request.IndexRouting,
@@ -1744,12 +1656,12 @@ internal sealed class FakeElasticMaterializationTransport : IElasticMaterializat
     {
         internal FakeIndex(
             string name,
-            byte[] createBody,
+            ReadOnlyMemory<byte> createBody,
             Dictionary<string, FakeAlias> aliases,
             bool writeBlocked)
         {
             Name = name;
-            CreateBody = [.. createBody];
+            CreateBody = createBody.ToArray();
             Aliases = aliases;
             WriteBlocked = writeBlocked;
         }

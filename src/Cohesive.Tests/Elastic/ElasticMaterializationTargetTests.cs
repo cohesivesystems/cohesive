@@ -64,7 +64,7 @@ public sealed class ElasticMaterializationTargetTests
         Assert.Equal(rig.Binding.ControlIndexName, publication.MarkerIndex);
         var visibleThroughRelationsAlias = await rig.Transport.CountAsync(
             rig.Binding.SearchBinding.IndexName,
-            "{\"match_all\":{}}"u8.ToArray(),
+            JsonObject("{\"match_all\":{}}"u8.ToArray()),
             rig.Policy.MaximumDiagnosticBytes,
             CancellationToken.None);
         Assert.Equal(1, visibleThroughRelationsAlias.Count);
@@ -803,7 +803,7 @@ public sealed class ElasticMaterializationTargetTests
         var replaced = await rig.Transport.ReplaceDocumentAsync(
             rig.Binding.ControlIndexName,
             control.Id,
-            Encoding.UTF8.GetBytes(interrupted.ToJsonString()),
+            JsonObject(Encoding.UTF8.GetBytes(interrupted.ToJsonString())),
             control.Token,
             rig.Policy.MaximumDiagnosticBytes,
             CancellationToken.None);
@@ -842,7 +842,7 @@ public sealed class ElasticMaterializationTargetTests
         var indexName = rig.Binding.GetGenerationIndexName(generationId);
         _ = await rig.Transport.CreateIndexAsync(
             indexName,
-            "{\"mappings\":{}}"u8.ToArray(),
+            JsonObject("{\"mappings\":{}}"u8.ToArray()),
             rig.Policy.MaximumDiagnosticBytes,
             CancellationToken.None);
         MaterializationBeginGenerationRequest request = new(
@@ -897,7 +897,7 @@ public sealed class ElasticMaterializationTargetTests
         Assert.True(cleaned.WasRemoved);
         var stillForeign = await rig.Transport.CreateIndexAsync(
             indexName,
-            "{\"mappings\":{}}"u8.ToArray(),
+            JsonObject("{\"mappings\":{}}"u8.ToArray()),
             rig.Policy.MaximumDiagnosticBytes,
             CancellationToken.None);
         Assert.Equal(ElasticIndexCreateDisposition.AlreadyExists, stillForeign.Disposition);
@@ -1018,7 +1018,7 @@ public sealed class ElasticMaterializationTargetTests
         var replaced = await rig.Transport.ReplaceDocumentAsync(
             rig.Binding.ControlIndexName,
             control.Id,
-            JsonSerializer.SerializeToUtf8Bytes(uncommitted),
+            JsonObject(JsonSerializer.SerializeToUtf8Bytes(uncommitted)),
             control.Token,
             rig.Policy.MaximumDiagnosticBytes,
             CancellationToken.None);
@@ -1088,7 +1088,7 @@ public sealed class ElasticMaterializationTargetTests
         _ = await rig.Transport.CreateDocumentAsync(
             index,
             "foreign-document-id",
-            stored.Source,
+            JsonObject(stored.Source),
             rig.Policy.MaximumDiagnosticBytes,
             CancellationToken.None);
 
@@ -1172,7 +1172,7 @@ public sealed class ElasticMaterializationTargetTests
             CancellationToken.None);
         _ = await rig.Transport.CreateIndexAsync(
             indexName,
-            "{\"mappings\":{}}"u8.ToArray(),
+            JsonObject("{\"mappings\":{}}"u8.ToArray()),
             rig.Policy.MaximumDiagnosticBytes,
             CancellationToken.None);
 
@@ -1211,7 +1211,7 @@ public sealed class ElasticMaterializationTargetTests
         const string victimIndex = "unrelated-user-index";
         _ = await rig.Transport.CreateIndexAsync(
             victimIndex,
-            "{\"mappings\":{}}"u8.ToArray(),
+            JsonObject("{\"mappings\":{}}"u8.ToArray()),
             rig.Policy.MaximumDiagnosticBytes,
             CancellationToken.None);
         var control = await FindGenerationControlAsync(rig, generationId);
@@ -1220,7 +1220,7 @@ public sealed class ElasticMaterializationTargetTests
         var replaced = await rig.Transport.ReplaceDocumentAsync(
             rig.Binding.ControlIndexName,
             control.Id,
-            JsonSerializer.SerializeToUtf8Bytes(tampered),
+            JsonObject(JsonSerializer.SerializeToUtf8Bytes(tampered)),
             control.Token,
             rig.Policy.MaximumDiagnosticBytes,
             CancellationToken.None);
@@ -1241,7 +1241,7 @@ public sealed class ElasticMaterializationTargetTests
                 && call.Index == victimIndex);
         var victimStillExists = await rig.Transport.CreateIndexAsync(
             victimIndex,
-            "{\"mappings\":{}}"u8.ToArray(),
+            JsonObject("{\"mappings\":{}}"u8.ToArray()),
             rig.Policy.MaximumDiagnosticBytes,
             CancellationToken.None);
         Assert.Equal(ElasticIndexCreateDisposition.AlreadyExists, victimStillExists.Disposition);
@@ -1253,7 +1253,7 @@ public sealed class ElasticMaterializationTargetTests
         var rig = CreateRig();
         _ = await rig.Transport.CreateIndexAsync(
             rig.Binding.ControlIndexName,
-            "{\"mappings\":{}}"u8.ToArray(),
+            JsonObject("{\"mappings\":{}}"u8.ToArray()),
             rig.Policy.MaximumDiagnosticBytes,
             CancellationToken.None);
 
@@ -1560,12 +1560,15 @@ public sealed class ElasticMaterializationTargetTests
         }
         var created = await rig.Transport.CreateIndexAsync(
             index,
-            stream.ToArray(),
+            JsonObject(stream.ToArray()),
             rig.Policy.MaximumDiagnosticBytes,
             CancellationToken.None);
         Assert.Equal(ElasticIndexCreateDisposition.Created, created.Disposition);
         Assert.True(created.Acknowledged);
     }
+
+    static ElasticJsonObject JsonObject(ReadOnlyMemory<byte> value) =>
+        ElasticJsonObject.Parse(value, nameof(value));
 
     static TargetRig CreateRig(ElasticMaterializationTargetPolicy? policy = null)
     {

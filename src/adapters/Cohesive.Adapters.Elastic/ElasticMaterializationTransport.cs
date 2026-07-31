@@ -17,14 +17,14 @@ internal interface IElasticMaterializationTransport
     ValueTask<ElasticDocumentWriteResult> CreateDocumentAsync(
         string index,
         string id,
-        ReadOnlyMemory<byte> source,
+        ElasticJsonObject source,
         int maximumResponseBytes,
         CancellationToken cancellationToken);
 
     ValueTask<ElasticDocumentWriteResult> ReplaceDocumentAsync(
         string index,
         string id,
-        ReadOnlyMemory<byte> source,
+        ElasticJsonObject source,
         ElasticDocumentConcurrencyToken expected,
         int maximumResponseBytes,
         CancellationToken cancellationToken);
@@ -38,7 +38,7 @@ internal interface IElasticMaterializationTransport
 
     ValueTask<ElasticIndexCreateResult> CreateIndexAsync(
         string index,
-        ReadOnlyMemory<byte> body,
+        ElasticJsonObject body,
         int maximumResponseBytes,
         CancellationToken cancellationToken);
 
@@ -92,7 +92,7 @@ internal interface IElasticMaterializationTransport
 
     ValueTask<ElasticCountResult> CountAsync(
         string index,
-        ReadOnlyMemory<byte> query,
+        ElasticJsonObject query,
         int maximumResponseBytes,
         CancellationToken cancellationToken);
 
@@ -201,7 +201,7 @@ internal sealed record ElasticBulkOperation
         string index,
         string id,
         long externalVersion,
-        ReadOnlyMemory<byte> source = default)
+        ElasticJsonObject? source = null)
     {
         if (!Enum.IsDefined(kind))
         {
@@ -218,8 +218,8 @@ internal sealed record ElasticBulkOperation
                 "An external Elasticsearch document version must be positive.");
         }
 
-        if ((kind == ElasticBulkOperationKind.Index && source.IsEmpty)
-            || (kind == ElasticBulkOperationKind.Delete && !source.IsEmpty))
+        if ((kind == ElasticBulkOperationKind.Index && source is null)
+            || (kind == ElasticBulkOperationKind.Delete && source is not null))
         {
             throw new ArgumentException(
                 "An index operation requires a JSON source and a delete operation must omit it.",
@@ -239,7 +239,7 @@ internal sealed record ElasticBulkOperation
 
     internal long ExternalVersion { get; }
 
-    internal ReadOnlyMemory<byte> Source { get; }
+    internal ElasticJsonObject? Source { get; }
 }
 
 internal sealed record ElasticBulkItemResult(
@@ -264,14 +264,14 @@ internal sealed record ElasticScanRequest
 {
     internal ElasticScanRequest(
         string index,
-        ReadOnlyMemory<byte> query,
+        ElasticJsonObject query,
         string sortField,
         string? afterSortValue,
         int maximumItems,
         int maximumResponseBytes)
     {
         Index = ElasticMaterializationPhysicalNames.RequireConcreteIndex(index, nameof(index));
-        Query = query;
+        Query = query ?? throw new ArgumentNullException(nameof(query));
         SortField = ElasticMaterializationPhysicalNames.RequireValue(sortField, nameof(sortField));
         AfterSortValue = afterSortValue is null
             ? null
@@ -292,7 +292,7 @@ internal sealed record ElasticScanRequest
 
     internal string Index { get; }
 
-    internal ReadOnlyMemory<byte> Query { get; }
+    internal ElasticJsonObject Query { get; }
 
     internal string SortField { get; }
 
@@ -322,7 +322,7 @@ internal sealed record ElasticAliasCasRequest
         string? expectedReadIndex,
         string? nextReadIndex,
         int maximumResponseBytes,
-        ReadOnlyMemory<byte> readAliasFilter = default,
+        ElasticJsonObject? readAliasFilter = null,
         string? routing = null,
         string? searchRouting = null,
         string? indexRouting = null,
@@ -345,7 +345,7 @@ internal sealed record ElasticAliasCasRequest
         if (hasReadPublication != (nextReadIndex is not null)
             || !hasReadPublication
             && (expectedReadIndex is not null
-                || !readAliasFilter.IsEmpty
+                || readAliasFilter is not null
                 || routing is not null
                 || searchRouting is not null
                 || indexRouting is not null
@@ -412,7 +412,7 @@ internal sealed record ElasticAliasCasRequest
 
     internal int MaximumResponseBytes { get; }
 
-    internal ReadOnlyMemory<byte> ReadAliasFilter { get; }
+    internal ElasticJsonObject? ReadAliasFilter { get; }
 
     internal string? Routing { get; }
 

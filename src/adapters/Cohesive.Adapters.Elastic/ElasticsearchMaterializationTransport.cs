@@ -19,8 +19,6 @@ internal sealed class ElasticsearchMaterializationTransport : IElasticMaterializ
     const string TransportErrorType = "cohesive.elasticsearch.transport";
     const int MaximumErrorTypeLength = 128;
     const int MaximumErrorTextLength = 1024;
-    static readonly byte[] RemoveWriteBlockBody = "{\"index.blocks.write\":null}"u8.ToArray();
-
     readonly ElasticsearchClient client;
 
     internal ElasticsearchMaterializationTransport(ElasticElasticsearchRuntimeBinding runtimeBinding)
@@ -72,7 +70,7 @@ internal sealed class ElasticsearchMaterializationTransport : IElasticMaterializ
     public ValueTask<ElasticDocumentWriteResult> CreateDocumentAsync(
         string index,
         string id,
-        ReadOnlyMemory<byte> source,
+        ElasticJsonObject source,
         int maximumResponseBytes,
         CancellationToken cancellationToken) =>
         WriteDocumentAsync(
@@ -86,7 +84,7 @@ internal sealed class ElasticsearchMaterializationTransport : IElasticMaterializ
     public ValueTask<ElasticDocumentWriteResult> ReplaceDocumentAsync(
         string index,
         string id,
-        ReadOnlyMemory<byte> source,
+        ElasticJsonObject source,
         ElasticDocumentConcurrencyToken expected,
         int maximumResponseBytes,
         CancellationToken cancellationToken)
@@ -126,16 +124,16 @@ internal sealed class ElasticsearchMaterializationTransport : IElasticMaterializ
 
     public async ValueTask<ElasticIndexCreateResult> CreateIndexAsync(
         string index,
-        ReadOnlyMemory<byte> body,
+        ElasticJsonObject body,
         int maximumResponseBytes,
         CancellationToken cancellationToken)
     {
         index = ElasticMaterializationPhysicalNames.RequireConcreteIndex(index, nameof(index));
-        var requestBody = NormalizeObject(body, nameof(body));
+        ArgumentNullException.ThrowIfNull(body);
         var response = await SendAsync(
             ElasticHttpMethod.PUT,
             $"/{Escape(index)}",
-            requestBody,
+            body.Bytes,
             maximumResponseBytes,
             "create-index",
             cancellationToken).ConfigureAwait(false);
@@ -218,7 +216,7 @@ internal sealed class ElasticsearchMaterializationTransport : IElasticMaterializ
             allowNotFound: true,
             "remove-write-block",
             cancellationToken,
-            RemoveWriteBlockBody);
+            ElasticMaterializationWireJson.RemoveWriteBlockBody.Bytes);
 
     public ValueTask<ElasticAcknowledgedResult> RefreshAsync(
         string index,
@@ -254,25 +252,11 @@ internal sealed class ElasticsearchMaterializationTransport : IElasticMaterializ
     {
         index = ElasticMaterializationPhysicalNames.RequireConcreteIndex(index, nameof(index));
         ownerAlias = ElasticMaterializationPhysicalNames.RequireConcreteAlias(ownerAlias, nameof(ownerAlias));
-        var body = BuildJson(writer =>
-        {
-            writer.WriteStartObject();
-            writer.WritePropertyName("actions");
-            writer.WriteStartArray();
-            WriteAliasRemove(writer, index, ownerAlias);
-            writer.WriteStartObject();
-            writer.WritePropertyName("remove_index");
-            writer.WriteStartObject();
-            writer.WriteString("index", index);
-            writer.WriteEndObject();
-            writer.WriteEndObject();
-            writer.WriteEndArray();
-            writer.WriteEndObject();
-        });
+        var body = ElasticMaterializationWireJson.CreateDeleteOwnedIndexBody(index, ownerAlias);
         var response = await SendAsync(
             ElasticHttpMethod.POST,
             "/_aliases",
-            body,
+            body.Bytes,
             maximumResponseBytes,
             "delete-owned-index",
             cancellationToken).ConfigureAwait(false);
@@ -318,29 +302,11 @@ internal sealed class ElasticsearchMaterializationTransport : IElasticMaterializ
             ElasticMaterializationPhysicalNames.RequireValue(id, nameof(ids));
         }
 
-        var body = BuildJson(writer =>
-        {
-            writer.WriteStartObject();
-            if (sourceProjection == ElasticMultiGetSourceProjection.MaterializationMetadata)
-            {
-                writer.WritePropertyName("_source");
-                writer.WriteStartArray();
-                writer.WriteStringValue(ElasticMaterializationTargetBinding.MetadataField);
-                writer.WriteEndArray();
-            }
-            writer.WritePropertyName("ids");
-            writer.WriteStartArray();
-            foreach (var id in ids)
-            {
-                writer.WriteStringValue(id);
-            }
-            writer.WriteEndArray();
-            writer.WriteEndObject();
-        });
+        var body = ElasticMaterializationWireJson.CreateMultiGetBody(ids, sourceProjection);
         var response = await SendAsync(
             ElasticHttpMethod.POST,
             $"/{Escape(index)}/_mget",
-            body,
+            body.Bytes,
             maximumResponseBytes,
             "multi-get",
             cancellationToken).ConfigureAwait(false);
@@ -419,7 +385,7 @@ internal sealed class ElasticsearchMaterializationTransport : IElasticMaterializ
                 $"A bulk wire bound must be between 1 and {Array.MaxLength} bytes.");
         }
 
-        var body = BuildBulkBody(operations, maximumWireBytes);
+        var body = ElasticBulkNdjson.Build(operations, maximumWireBytes);
         var response = await SendAsync(
             ElasticHttpMethod.POST,
             "/_bulk",
@@ -428,7 +394,7 @@ internal sealed class ElasticsearchMaterializationTransport : IElasticMaterializ
             "bulk",
             cancellationToken).ConfigureAwait(false);
         RequireSuccess(response, "bulk");
-        return ParseBulkResponse(response.Body, operations, body.LongLength);
+        return ParseBulkResponse(response.Body, operations, body.Length);
     }
 
     public async ValueTask<ElasticScanPage> ScanAsync(
@@ -436,34 +402,11 @@ internal sealed class ElasticsearchMaterializationTransport : IElasticMaterializ
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var query = ParseQuery(request.Query, nameof(request));
-        var body = BuildJson(writer =>
-        {
-            writer.WriteStartObject();
-            writer.WriteNumber("size", checked(request.MaximumItems + 1));
-            writer.WriteBoolean("track_total_hits", false);
-            writer.WriteBoolean("_source", true);
-            writer.WritePropertyName("query");
-            query.WriteTo(writer);
-            writer.WritePropertyName("sort");
-            writer.WriteStartArray();
-            writer.WriteStartObject();
-            writer.WriteString(request.SortField, "asc");
-            writer.WriteEndObject();
-            writer.WriteEndArray();
-            if (request.AfterSortValue is { } after)
-            {
-                writer.WritePropertyName("search_after");
-                writer.WriteStartArray();
-                writer.WriteStringValue(after);
-                writer.WriteEndArray();
-            }
-            writer.WriteEndObject();
-        });
+        var body = ElasticMaterializationWireJson.CreateScanBody(request);
         var response = await SendAsync(
             ElasticHttpMethod.POST,
             $"/{Escape(request.Index)}/_search",
-            body,
+            body.Bytes,
             request.MaximumResponseBytes,
             "scan",
             cancellationToken).ConfigureAwait(false);
@@ -524,23 +467,17 @@ internal sealed class ElasticsearchMaterializationTransport : IElasticMaterializ
 
     public async ValueTask<ElasticCountResult> CountAsync(
         string index,
-        ReadOnlyMemory<byte> query,
+        ElasticJsonObject query,
         int maximumResponseBytes,
         CancellationToken cancellationToken)
     {
         index = ElasticMaterializationPhysicalNames.RequireConcreteIndex(index, nameof(index));
-        var queryElement = ParseQuery(query, nameof(query));
-        var body = BuildJson(writer =>
-        {
-            writer.WriteStartObject();
-            writer.WritePropertyName("query");
-            queryElement.WriteTo(writer);
-            writer.WriteEndObject();
-        });
+        ArgumentNullException.ThrowIfNull(query);
+        var body = ElasticMaterializationWireJson.CreateCountBody(query);
         var response = await SendAsync(
             ElasticHttpMethod.POST,
             $"/{Escape(index)}/_count",
-            body,
+            body.Bytes,
             maximumResponseBytes,
             "count",
             cancellationToken).ConfigureAwait(false);
@@ -578,17 +515,17 @@ internal sealed class ElasticsearchMaterializationTransport : IElasticMaterializ
                 || existing.Routing != request.Routing
                 || existing.SearchRouting != request.SearchRouting
                 || existing.IndexRouting != request.IndexRouting
-                || !JsonEquivalent(existing.Filter, request.ReadAliasFilter))
+                || !ElasticJsonObject.DeepEquals(existing.Filter, request.ReadAliasFilter?.Bytes ?? default))
             {
                 return new(ElasticAliasCasDisposition.Conflict, StatusCode: 409, Acknowledged: false);
             }
         }
 
-        var body = BuildAliasBody(request);
+        var body = ElasticMaterializationWireJson.CreateAliasBody(request);
         var response = await SendAsync(
             ElasticHttpMethod.POST,
             "/_aliases",
-            body,
+            body.Bytes,
             request.MaximumResponseBytes,
             "alias-compare-exchange",
             cancellationToken).ConfigureAwait(false);
@@ -700,16 +637,16 @@ internal sealed class ElasticsearchMaterializationTransport : IElasticMaterializ
     async ValueTask<ElasticDocumentWriteResult> WriteDocumentAsync(
         ElasticHttpMethod method,
         string path,
-        ReadOnlyMemory<byte> source,
+        ElasticJsonObject source,
         int maximumResponseBytes,
         bool allowNotFound,
         CancellationToken cancellationToken)
     {
-        var body = NormalizeObject(source, nameof(source));
+        ArgumentNullException.ThrowIfNull(source);
         var response = await SendAsync(
             method,
             path,
-            body,
+            source.Bytes,
             maximumResponseBytes,
             "write-control-document",
             cancellationToken).ConfigureAwait(false);
@@ -749,7 +686,7 @@ internal sealed class ElasticsearchMaterializationTransport : IElasticMaterializ
         bool allowNotFound,
         string operation,
         CancellationToken cancellationToken,
-        byte[]? body = null,
+        ReadOnlyMemory<byte>? body = null,
         string? expectedIndex = null,
         string? expectedIndexState = null,
         bool requireAcknowledged = true,
@@ -831,7 +768,7 @@ internal sealed class ElasticsearchMaterializationTransport : IElasticMaterializ
     async ValueTask<RawResponse> SendAsync(
         ElasticHttpMethod method,
         string path,
-        byte[]? body,
+        ReadOnlyMemory<byte>? body,
         int maximumResponseBytes,
         string operation,
         CancellationToken cancellationToken)
@@ -846,7 +783,7 @@ internal sealed class ElasticsearchMaterializationTransport : IElasticMaterializ
                 : await client.Transport.RequestAsync<StreamResponse>(
                     method,
                     path,
-                    PostData.Bytes(body),
+                    PostData.ReadOnlyMemory(body.Value),
                     cancellationToken).ConfigureAwait(false);
             responseStatusCode = response.ApiCallDetails.HttpStatusCode;
             var statusCode = responseStatusCode ?? 0;
@@ -915,41 +852,6 @@ internal sealed class ElasticsearchMaterializationTransport : IElasticMaterializ
         {
             ArrayPool<byte>.Shared.Return(rented);
         }
-    }
-
-    static byte[] BuildBulkBody(ImmutableArray<ElasticBulkOperation> operations, long maximumWireBytes)
-    {
-        ArrayBufferWriter<byte> buffer = new(Math.Min((int)maximumWireBytes, 16 * 1024));
-        foreach (var operation in operations)
-        {
-            WriteJsonLine(buffer, writer =>
-            {
-                writer.WriteStartObject();
-                writer.WritePropertyName(operation.Kind == ElasticBulkOperationKind.Index ? "index" : "delete");
-                writer.WriteStartObject();
-                writer.WriteString("_index", operation.Index);
-                writer.WriteString("_id", operation.Id);
-                writer.WriteNumber("version", operation.ExternalVersion);
-                writer.WriteString("version_type", "external");
-                writer.WriteEndObject();
-                writer.WriteEndObject();
-            });
-            RequireWireBound(buffer.WrittenCount, maximumWireBytes);
-
-            if (operation.Kind == ElasticBulkOperationKind.Index)
-            {
-                if (operation.Source.Length > maximumWireBytes)
-                {
-                    throw BulkLimit(maximumWireBytes);
-                }
-
-                using var source = ParseObject(operation.Source, "bulk index source");
-                WriteJsonLine(buffer, source.RootElement.WriteTo);
-                RequireWireBound(buffer.WrittenCount, maximumWireBytes);
-            }
-        }
-
-        return buffer.WrittenMemory.ToArray();
     }
 
     static ElasticBulkResult ParseBulkResponse(
@@ -1032,147 +934,6 @@ internal sealed class ElasticsearchMaterializationTransport : IElasticMaterializ
             ReadInt64(root, "took", required: false, "bulk response") ?? 0,
             ReadBoolean(root, "errors", defaultValue: false, "bulk response"),
             builder.MoveToImmutable());
-    }
-
-    static byte[] BuildAliasBody(ElasticAliasCasRequest request) => BuildJson(writer =>
-    {
-        writer.WriteStartObject();
-        writer.WritePropertyName("actions");
-        writer.WriteStartArray();
-        WriteAliasRemove(writer, request.MarkerIndex, request.ExpectedMarkerAlias);
-        if (request.ExpectedNextOwnerAlias is { } ownerAlias
-            && request.NextReadIndex is { } ownedNextIndex)
-        {
-            WriteAliasRemove(writer, ownedNextIndex, ownerAlias);
-            WriteHiddenAliasAdd(writer, ownedNextIndex, ownerAlias);
-        }
-        if (request.ReadAlias is { } readAlias && request.ExpectedReadIndex is { } expectedReadIndex)
-        {
-            WriteAliasRemove(writer, expectedReadIndex, readAlias);
-        }
-
-        if (request.ReadAlias is { } publishedAlias && request.NextReadIndex is { } nextReadIndex)
-        {
-            writer.WriteStartObject();
-            writer.WritePropertyName("add");
-            writer.WriteStartObject();
-            writer.WriteString("index", nextReadIndex);
-            writer.WriteString("alias", publishedAlias);
-            if (!request.ReadAliasFilter.IsEmpty)
-            {
-                using var filter = ParseObject(request.ReadAliasFilter, "read alias filter");
-                writer.WritePropertyName("filter");
-                filter.RootElement.WriteTo(writer);
-            }
-            WriteOptionalString(writer, "routing", request.Routing);
-            WriteOptionalString(writer, "search_routing", request.SearchRouting);
-            WriteOptionalString(writer, "index_routing", request.IndexRouting);
-            if (request.IsWriteIndex is { } isWriteIndex)
-            {
-                writer.WriteBoolean("is_write_index", isWriteIndex);
-            }
-            writer.WriteEndObject();
-            writer.WriteEndObject();
-        }
-
-        WriteHiddenAliasAdd(writer, request.MarkerIndex, request.NextMarkerAlias);
-        writer.WriteEndArray();
-        writer.WriteEndObject();
-    });
-
-    static void WriteHiddenAliasAdd(Utf8JsonWriter writer, string index, string alias)
-    {
-        writer.WriteStartObject();
-        writer.WritePropertyName("add");
-        writer.WriteStartObject();
-        writer.WriteString("index", index);
-        writer.WriteString("alias", alias);
-        writer.WriteBoolean("is_hidden", true);
-        writer.WriteEndObject();
-        writer.WriteEndObject();
-    }
-
-    static bool JsonEquivalent(ReadOnlyMemory<byte> left, ReadOnlyMemory<byte> right)
-    {
-        if (left.IsEmpty || right.IsEmpty)
-        {
-            return left.IsEmpty && right.IsEmpty;
-        }
-        try
-        {
-            using var leftDocument = JsonDocument.Parse(left);
-            using var rightDocument = JsonDocument.Parse(right);
-            return JsonElement.DeepEquals(leftDocument.RootElement, rightDocument.RootElement);
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-    }
-
-    static void WriteAliasRemove(Utf8JsonWriter writer, string index, string alias)
-    {
-        writer.WriteStartObject();
-        writer.WritePropertyName("remove");
-        writer.WriteStartObject();
-        writer.WriteString("index", index);
-        writer.WriteString("alias", alias);
-        writer.WriteBoolean("must_exist", true);
-        writer.WriteEndObject();
-        writer.WriteEndObject();
-    }
-
-    static void WriteOptionalString(Utf8JsonWriter writer, string propertyName, string? value)
-    {
-        if (value is not null)
-        {
-            writer.WriteString(propertyName, value);
-        }
-    }
-
-    static void WriteJsonLine(ArrayBufferWriter<byte> buffer, Action<Utf8JsonWriter> write)
-    {
-        using (Utf8JsonWriter writer = new(buffer, new JsonWriterOptions { SkipValidation = false }))
-        {
-            write(writer);
-        }
-
-        var newline = buffer.GetSpan(1);
-        newline[0] = (byte)'\n';
-        buffer.Advance(1);
-    }
-
-    static byte[] BuildJson(Action<Utf8JsonWriter> write)
-    {
-        ArrayBufferWriter<byte> buffer = new();
-        using (Utf8JsonWriter writer = new(buffer))
-        {
-            write(writer);
-        }
-        return buffer.WrittenMemory.ToArray();
-    }
-
-    static byte[] NormalizeObject(ReadOnlyMemory<byte> value, string parameterName)
-    {
-        if (value.IsEmpty)
-        {
-            throw new ArgumentException("A JSON object payload cannot be empty.", parameterName);
-        }
-
-        using var document = ParseObject(value, parameterName);
-        return BuildJson(document.RootElement.WriteTo);
-    }
-
-    static JsonElement ParseQuery(ReadOnlyMemory<byte> query, string parameterName)
-    {
-        if (query.IsEmpty)
-        {
-            using var matchAll = JsonDocument.Parse("{\"match_all\":{}}");
-            return matchAll.RootElement.Clone();
-        }
-
-        using var document = ParseObject(query, parameterName);
-        return document.RootElement.Clone();
     }
 
     static JsonDocument ParseObject(ReadOnlyMemory<byte> value, string context)
@@ -1486,17 +1247,6 @@ internal sealed class ElasticsearchMaterializationTransport : IElasticMaterializ
     static string Escape(string value) => Uri.EscapeDataString(value);
 
     static string Invariant(long value) => value.ToString(CultureInfo.InvariantCulture);
-
-    static void RequireWireBound(long observed, long maximum)
-    {
-        if (observed > maximum)
-        {
-            throw BulkLimit(maximum);
-        }
-    }
-
-    static ArgumentException BulkLimit(long maximum) =>
-        new($"Elasticsearch bulk NDJSON exceeded its declared {maximum.ToString(CultureInfo.InvariantCulture)}-byte wire bound.");
 
     static ElasticMaterializationTransportException Protocol(string message) =>
         new(statusCode: null, ProtocolErrorType, retryable: false, message);

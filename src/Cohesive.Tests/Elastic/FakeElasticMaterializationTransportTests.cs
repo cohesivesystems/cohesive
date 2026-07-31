@@ -1,5 +1,6 @@
-using Cohesive.Adapters.Elastic;
+using System.Text;
 using System.Text.Json;
+using Cohesive.Adapters.Elastic;
 
 namespace Cohesive.Tests.Elastic;
 
@@ -27,7 +28,7 @@ public sealed class FakeElasticMaterializationTransportTests
             expectedReadIndex: "generation-expected",
             nextReadIndex: "generation-next",
             maximumResponseBytes: 4_096,
-            readAliasFilter: "{\"term\":{\"_cohesive.deleted\":false}}"u8.ToArray(),
+            readAliasFilter: JsonObject("{\"term\":{\"_cohesive.deleted\":false}}"u8.ToArray()),
             isWriteIndex: false);
 
         var result = await transport.CompareExchangeAliasAsync(request, CancellationToken.None);
@@ -96,7 +97,7 @@ public sealed class FakeElasticMaterializationTransportTests
         _ = await transport.CreateDocumentAsync(
             "generation-items",
             "item-1",
-            source,
+            JsonObject(source),
             maximumResponseBytes: 4_096,
             CancellationToken.None);
 
@@ -119,6 +120,28 @@ public sealed class FakeElasticMaterializationTransportTests
         Assert.False(projectedSource.RootElement.TryGetProperty("value", out _));
     }
 
+    [Fact]
+    public async Task BulkAsync_PreservesOwnedSourceBytesWhenCapturingRequests()
+    {
+        FakeElasticMaterializationTransport transport = new();
+        await CreateIndexAsync(transport, "generation-items", "{}"u8.ToArray());
+        var source = JsonObject(Encoding.UTF8.GetBytes("""{"escaped" : "\/", "number" : 1.00}"""));
+
+        var result = await transport.BulkAsync(
+            [new(ElasticBulkOperationKind.Index, "generation-items", "item-1", externalVersion: 1, source)],
+            maximumWireBytes: 4_096,
+            maximumResponseBytes: 4_096,
+            CancellationToken.None);
+
+        var captured = Assert.Single(Assert.Single(transport.BulkRequests));
+        Assert.Equal(source.ToArray(), captured.Source!.ToArray());
+        const string expectedAction =
+            "{\"index\":{\"_index\":\"generation-items\",\"_id\":\"item-1\",\"version\":1,\"version_type\":\"external\"}}\n";
+        Assert.Equal(
+            Encoding.UTF8.GetByteCount(expectedAction) + source.Length + 1L,
+            result.WireBytes);
+    }
+
     static async Task CreateIndexAsync(
         FakeElasticMaterializationTransport transport,
         string index,
@@ -126,10 +149,13 @@ public sealed class FakeElasticMaterializationTransportTests
     {
         var result = await transport.CreateIndexAsync(
             index,
-            body,
+            JsonObject(body),
             maximumResponseBytes: 4_096,
             CancellationToken.None);
         Assert.Equal(ElasticIndexCreateDisposition.Created, result.Disposition);
         Assert.True(result.Acknowledged);
     }
+
+    static ElasticJsonObject JsonObject(ReadOnlyMemory<byte> value) =>
+        ElasticJsonObject.Parse(value, nameof(value));
 }

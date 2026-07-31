@@ -9,9 +9,9 @@ namespace Cohesive.Tests.Elastic;
 public sealed class ElasticsearchMaterializationTransportTests
 {
     [Fact]
-    public async Task BulkAsync_ReportsExactStrictExternalVersionWireBytesAndOrderedMixedOutcomes()
+    public async Task BulkAsync_PreservesPreSerializedSourcesAndWritesExactNdjson()
     {
-        var transport = CreateTransport(
+        const string response =
             """
             {
               "took": 3,
@@ -41,7 +41,14 @@ public sealed class ElasticsearchMaterializationTransportTests
                 }
               ]
             }
-            """);
+            """;
+        InMemoryRequestInvoker invoker = CreateInvoker(response, statusCode: 200);
+        ApiCallDetails? observed = null;
+        var settings = new ElasticsearchClientSettings(invoker)
+            .DisableDirectStreaming()
+            .OnRequestCompleted(details => observed = details);
+        ElasticsearchMaterializationTransport transport = new(new ElasticsearchClient(settings));
+        const string source = """{"escaped" : "\/", "number" : 1.00}""";
         ImmutableArray<ElasticBulkOperation> operations =
         [
             new(
@@ -49,7 +56,7 @@ public sealed class ElasticsearchMaterializationTransportTests
                 "generation-a",
                 "item-a",
                 externalVersion: 7,
-                "{\"value\":1}"u8.ToArray()),
+                JsonObject(Encoding.UTF8.GetBytes(source))),
             new(
                 ElasticBulkOperationKind.Delete,
                 "generation-a",
@@ -65,9 +72,17 @@ public sealed class ElasticsearchMaterializationTransportTests
 
         const string expectedWireBody =
             "{\"index\":{\"_index\":\"generation-a\",\"_id\":\"item-a\",\"version\":7,\"version_type\":\"external\"}}\n"
-            + "{\"value\":1}\n"
+            + source + "\n"
             + "{\"delete\":{\"_index\":\"generation-a\",\"_id\":\"item-b\",\"version\":8,\"version_type\":\"external\"}}\n";
-        Assert.Equal(Encoding.UTF8.GetByteCount(expectedWireBody), result.WireBytes);
+        var request = observed ?? throw new Xunit.Sdk.XunitException("The Elasticsearch request was not observed.");
+        Assert.Equal(global::Elastic.Transport.HttpMethod.POST, request.HttpMethod);
+        Assert.Equal("/_bulk", request.Uri?.AbsolutePath);
+        var expectedBytes = Encoding.UTF8.GetBytes(expectedWireBody);
+        Assert.Equal(expectedBytes, request.RequestBodyInBytes);
+        Assert.Equal(expectedBytes.LongLength, result.WireBytes);
+        Assert.Equal((byte)'\n', request.RequestBodyInBytes![^1]);
+        Assert.DoesNotContain((byte)'\r', request.RequestBodyInBytes);
+        Assert.Equal(3, request.RequestBodyInBytes.Count(static value => value == (byte)'\n'));
         Assert.True(result.Errors);
         Assert.Collection(
             result.Items,
@@ -86,6 +101,166 @@ public sealed class ElasticsearchMaterializationTransportTests
                 Assert.Equal(429, item.StatusCode);
                 Assert.Equal("es_rejected_execution_exception", item.ErrorType);
             });
+    }
+
+    [Fact]
+    public async Task BulkAsync_EnforcesTheExactWireBoundBeforeSending()
+    {
+        const string source = "{\"value\":1}";
+        const string expectedWireBody =
+            "{\"index\":{\"_index\":\"generation-a\",\"_id\":\"item-a\",\"version\":7,\"version_type\":\"external\"}}\n"
+            + source + "\n";
+        var expectedWireBytes = Encoding.UTF8.GetByteCount(expectedWireBody);
+        ImmutableArray<ElasticBulkOperation> operations =
+        [
+            new(
+                ElasticBulkOperationKind.Index,
+                "generation-a",
+                "item-a",
+                externalVersion: 7,
+                JsonObject(Encoding.UTF8.GetBytes(source)))
+        ];
+        InMemoryRequestInvoker exactInvoker = CreateInvoker(
+            "{\"took\":0,\"errors\":false,\"items\":[{\"index\":{\"_index\":\"generation-a\",\"_id\":\"item-a\",\"_version\":7,\"result\":\"created\",\"status\":201}}]}",
+            statusCode: 200);
+        ApiCallDetails? exactCall = null;
+        ElasticsearchMaterializationTransport exactTransport = new(new ElasticsearchClient(
+            new ElasticsearchClientSettings(exactInvoker)
+                .DisableDirectStreaming()
+                .OnRequestCompleted(details => exactCall = details)));
+
+        var exactResult = await exactTransport.BulkAsync(
+            operations,
+            maximumWireBytes: expectedWireBytes,
+            maximumResponseBytes: 4_096,
+            CancellationToken.None);
+
+        Assert.Equal(expectedWireBytes, exactResult.WireBytes);
+        Assert.NotNull(exactCall);
+
+        InMemoryRequestInvoker rejectedInvoker = CreateInvoker("{}", statusCode: 200);
+        var rejectedCalls = 0;
+        ElasticsearchMaterializationTransport rejectedTransport = new(new ElasticsearchClient(
+            new ElasticsearchClientSettings(rejectedInvoker)
+                .OnRequestCompleted(_ => rejectedCalls++)));
+
+        await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await rejectedTransport.BulkAsync(
+                operations,
+                maximumWireBytes: expectedWireBytes - 1,
+                maximumResponseBytes: 4_096,
+                CancellationToken.None));
+        Assert.Equal(0, rejectedCalls);
+    }
+
+    [Fact]
+    public async Task CreateDocumentAsync_ForwardsOwnedJsonBytesWithoutNormalization()
+    {
+        InMemoryRequestInvoker invoker = CreateInvoker(
+            "{\"_seq_no\":1,\"_primary_term\":2,\"_version\":3,\"result\":\"created\"}",
+            statusCode: 201);
+        ApiCallDetails? observed = null;
+        var settings = new ElasticsearchClientSettings(invoker)
+            .DisableDirectStreaming()
+            .OnRequestCompleted(details => observed = details);
+        ElasticsearchMaterializationTransport transport = new(new ElasticsearchClient(settings));
+        const string source = """{"escaped" : "\/", "number" : 1.00}""";
+
+        var result = await transport.CreateDocumentAsync(
+            "control",
+            "document-a",
+            JsonObject(Encoding.UTF8.GetBytes(source)),
+            maximumResponseBytes: 1_024,
+            CancellationToken.None);
+
+        Assert.Equal(ElasticDocumentWriteDisposition.Applied, result.Disposition);
+        var request = observed ?? throw new Xunit.Sdk.XunitException("The Elasticsearch request was not observed.");
+        Assert.Equal(global::Elastic.Transport.HttpMethod.PUT, request.HttpMethod);
+        Assert.Equal("/control/_create/document-a", request.Uri?.AbsolutePath);
+        Assert.Equal(Encoding.UTF8.GetBytes(source), request.RequestBodyInBytes);
+    }
+
+    [Fact]
+    public async Task CreateIndexAsync_ForwardsOwnedJsonBytesWithoutNormalization()
+    {
+        InMemoryRequestInvoker invoker = CreateInvoker(
+            "{\"acknowledged\":true,\"shards_acknowledged\":true,\"index\":\"generation-a\"}",
+            statusCode: 200);
+        ApiCallDetails? observed = null;
+        var settings = new ElasticsearchClientSettings(invoker)
+            .DisableDirectStreaming()
+            .OnRequestCompleted(details => observed = details);
+        ElasticsearchMaterializationTransport transport = new(new ElasticsearchClient(settings));
+        const string source = """{"settings" : {"number_of_shards" : 1.00}}""";
+
+        var result = await transport.CreateIndexAsync(
+            "generation-a",
+            JsonObject(Encoding.UTF8.GetBytes(source)),
+            maximumResponseBytes: 1_024,
+            CancellationToken.None);
+
+        Assert.Equal(ElasticIndexCreateDisposition.Created, result.Disposition);
+        var request = observed ?? throw new Xunit.Sdk.XunitException("The Elasticsearch request was not observed.");
+        Assert.Equal(global::Elastic.Transport.HttpMethod.PUT, request.HttpMethod);
+        Assert.Equal("/generation-a", request.Uri?.AbsolutePath);
+        Assert.Equal(Encoding.UTF8.GetBytes(source), request.RequestBodyInBytes);
+    }
+
+    [Fact]
+    public async Task CountAsync_EmbedsOwnedQueryWithoutLexicalNormalization()
+    {
+        InMemoryRequestInvoker invoker = CreateInvoker("{\"count\":0,\"took\":1}", statusCode: 200);
+        ApiCallDetails? observed = null;
+        var settings = new ElasticsearchClientSettings(invoker)
+            .DisableDirectStreaming()
+            .OnRequestCompleted(details => observed = details);
+        ElasticsearchMaterializationTransport transport = new(new ElasticsearchClient(settings));
+        const string query = """{"provider_clause" : {"number" : 1.00}}""";
+
+        var result = await transport.CountAsync(
+            "generation-a",
+            JsonObject(Encoding.UTF8.GetBytes(query)),
+            maximumResponseBytes: 1_024,
+            CancellationToken.None);
+
+        Assert.Equal(0, result.Count);
+        var request = observed ?? throw new Xunit.Sdk.XunitException("The Elasticsearch request was not observed.");
+        Assert.Equal(global::Elastic.Transport.HttpMethod.POST, request.HttpMethod);
+        Assert.Equal("/generation-a/_count", request.Uri?.AbsolutePath);
+        Assert.Equal(Encoding.UTF8.GetBytes($"{{\"query\":{query}}}"), request.RequestBodyInBytes);
+    }
+
+    [Fact]
+    public async Task ScanAsync_EmbedsOwnedQueryWithoutLexicalNormalization()
+    {
+        InMemoryRequestInvoker invoker = CreateInvoker(
+            "{\"took\":0,\"timed_out\":false,\"hits\":{\"hits\":[]}}",
+            statusCode: 200);
+        ApiCallDetails? observed = null;
+        var settings = new ElasticsearchClientSettings(invoker)
+            .DisableDirectStreaming()
+            .OnRequestCompleted(details => observed = details);
+        ElasticsearchMaterializationTransport transport = new(new ElasticsearchClient(settings));
+        const string query = """{"provider_clause" : {"escaped" : "\/"}}""";
+        ElasticScanRequest scan = new(
+            "generation-a",
+            JsonObject(Encoding.UTF8.GetBytes(query)),
+            "_cohesive.itemId",
+            afterSortValue: "item-a",
+            maximumItems: 2,
+            maximumResponseBytes: 1_024);
+
+        var result = await transport.ScanAsync(scan, CancellationToken.None);
+
+        Assert.Empty(result.Hits);
+        var request = observed ?? throw new Xunit.Sdk.XunitException("The Elasticsearch request was not observed.");
+        Assert.Equal(global::Elastic.Transport.HttpMethod.POST, request.HttpMethod);
+        Assert.Equal("/generation-a/_search", request.Uri?.AbsolutePath);
+        const string expected =
+            "{\"size\":3,\"track_total_hits\":false,\"_source\":true,\"query\":"
+            + query
+            + ",\"sort\":[{\"_cohesive.itemId\":\"asc\"}],\"search_after\":[\"item-a\"]}";
+        Assert.Equal(Encoding.UTF8.GetBytes(expected), request.RequestBodyInBytes);
     }
 
     [Fact]
@@ -298,7 +473,7 @@ public sealed class ElasticsearchMaterializationTransportTests
             expectedReadIndex: "generation-old",
             nextReadIndex: "generation-new",
             maximumResponseBytes: 4_096,
-            readAliasFilter: "{\"term\":{\"_cohesive.deleted\":false}}"u8.ToArray(),
+            readAliasFilter: JsonObject("{\"term\":{\"_cohesive.deleted\":false}}"u8.ToArray()),
             isWriteIndex: false);
 
         var result = await transport.CompareExchangeAliasAsync(request, CancellationToken.None);
@@ -424,7 +599,7 @@ public sealed class ElasticsearchMaterializationTransportTests
             """);
         ElasticScanRequest request = new(
             "generation-a",
-            query: default,
+            query: ElasticMaterializationWireJson.MatchAllQuery,
             sortField: "_cohesive.itemId",
             afterSortValue: "item-a",
             maximumItems: 10,
@@ -462,6 +637,9 @@ public sealed class ElasticsearchMaterializationTransportTests
         ElasticsearchClient client = new(new ElasticsearchClientSettings(CreateInvoker(response, statusCode)));
         return new(client);
     }
+
+    static ElasticJsonObject JsonObject(ReadOnlyMemory<byte> value) =>
+        ElasticJsonObject.Parse(value, nameof(value));
 
     static InMemoryRequestInvoker CreateInvoker(string response, int statusCode) =>
         new(

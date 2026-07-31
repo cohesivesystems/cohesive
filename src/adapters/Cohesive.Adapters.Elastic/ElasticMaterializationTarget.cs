@@ -52,15 +52,19 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
     const string ResponseLimitErrorType = "cohesive.elasticsearch.response.limitExceeded";
 
     static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
-    static readonly ReadOnlyMemory<byte> MatchAllQuery = "{\"match_all\":{}}"u8.ToArray();
-    static readonly ReadOnlyMemory<byte> VisibleCountQuery =
-        "{\"term\":{\"_cohesive.deleted\":false}}"u8.ToArray();
-    static readonly ReadOnlyMemory<byte> TombstoneCountQuery =
-        "{\"term\":{\"_cohesive.deleted\":true}}"u8.ToArray();
-    static readonly ReadOnlyMemory<byte> RetainedGenerationCountQuery =
-        "{\"bool\":{\"filter\":[{\"term\":{\"documentKind\":\"generation\"}},{\"term\":{\"retained\":true}}]}}"u8.ToArray();
-    static readonly ReadOnlyMemory<byte> PendingMutationCountQuery =
-        "{\"term\":{\"documentKind\":\"pending-mutation\"}}"u8.ToArray();
+    static readonly ElasticJsonObject MatchAllQuery = ElasticMaterializationWireJson.MatchAllQuery;
+    static readonly ElasticJsonObject VisibleCountQuery = ElasticMaterializationWireJson.BooleanTermQuery(
+        $"{ElasticMaterializationTargetBinding.MetadataField}.deleted",
+        value: false);
+    static readonly ElasticJsonObject TombstoneCountQuery = ElasticMaterializationWireJson.BooleanTermQuery(
+        $"{ElasticMaterializationTargetBinding.MetadataField}.deleted",
+        value: true);
+    static readonly ElasticJsonObject RetainedGenerationCountQuery = ElasticMaterializationWireJson.FilteredQuery(
+        ElasticMaterializationWireJson.StringTermQuery("documentKind", GenerationDocumentKind),
+        ElasticMaterializationWireJson.BooleanTermQuery("retained", value: true));
+    static readonly ElasticJsonObject PendingMutationCountQuery = ElasticMaterializationWireJson.StringTermQuery(
+        "documentKind",
+        PendingMutationDocumentKind);
 
     readonly ElasticMaterializationTargetBinding binding;
     readonly ElasticMaterializationTargetPolicy policy;
@@ -1148,7 +1152,7 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
         return false;
     }
 
-    static ReadOnlyMemory<byte> SerializeItemDocument(
+    static ElasticJsonObject SerializeItemDocument(
         MaterializationGenerationId generationId,
         MaterializationItemMutation mutation,
         MaterializationTargetIntentFingerprint fingerprint)
@@ -1163,7 +1167,7 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
         ItemDocument document = new(
             metadata,
             mutation is MaterializationUpsert upsert ? upsert.Value : null);
-        return JsonSerializer.SerializeToUtf8Bytes(document, JsonOptions);
+        return ElasticJsonObject.Serialize(document, JsonOptions);
     }
 
     static bool TryReadItem(ElasticMultiGetDocument document, out ItemDocument item)
@@ -1435,10 +1439,10 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
             Math.Max(policy.MaximumDiagnosticBytes, expanded)));
     }
 
-    byte[] SerializeControlDocument<T>(T value)
+    ElasticJsonObject SerializeControlDocument<T>(T value)
         where T : class
     {
-        var source = JsonSerializer.SerializeToUtf8Bytes(value, JsonOptions);
+        var source = ElasticJsonObject.Serialize(value, JsonOptions);
         var maximumBytes = MaximumControlDocumentBytes();
         if (source.Length > maximumBytes)
         {
@@ -2808,7 +2812,7 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
                 "The Elasticsearch control index does not carry exact recoverable marker ownership evidence.");
         }
 
-        var expectedReadFilter = CreateReadAliasFilter();
+        var expectedReadFilter = VisibleCountQuery;
         bool readValid;
         if (target.PendingPromotion is { } pending)
         {
@@ -3063,7 +3067,7 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
                 publication,
                 binding.ReadAlias,
                 pending.NextReadIndex,
-                CreateReadAliasFilter()))
+                VisibleCountQuery))
         {
             throw new InvalidOperationException(
                 "The Elasticsearch read alias no longer carries the exact candidate publication.");
@@ -3153,7 +3157,7 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
             expectedReadIndex,
             nextReadIndex,
             policy.MaximumDiagnosticBytes,
-            readAlias is null ? default : CreateReadAliasFilter(),
+            readAlias is null ? null : VisibleCountQuery,
             isWriteIndex: readAlias is null ? null : false,
             expectedNextOwnerAlias: expectedNextOwnerAlias);
         var exchanged = await transport.CompareExchangeAliasAsync(request, cancellationToken).ConfigureAwait(false);
@@ -3181,7 +3185,7 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
             aliases,
             readAlias,
             nextReadIndex!,
-            CreateReadAliasFilter());
+            VisibleCountQuery);
         if (!expectedMarkerAbsent || !markerApplied || !readApplied)
         {
             throw new InvalidOperationException(
@@ -3193,7 +3197,7 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
         ElasticAliasSnapshot aliases,
         string readAlias,
         string nextReadIndex,
-        ReadOnlyMemory<byte> expectedFilter)
+        ElasticJsonObject expectedFilter)
     {
         var readBindings = aliases.Bindings.Where(alias => alias.Alias == readAlias).ToArray();
         return readBindings is
@@ -3208,21 +3212,7 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
                 }
             ]
             && index == nextReadIndex
-            && JsonEquivalent(filter, expectedFilter);
-    }
-
-    static bool JsonEquivalent(ReadOnlyMemory<byte> left, ReadOnlyMemory<byte> right)
-    {
-        try
-        {
-            using var leftDocument = JsonDocument.Parse(left);
-            using var rightDocument = JsonDocument.Parse(right);
-            return JsonElement.DeepEquals(leftDocument.RootElement, rightDocument.RootElement);
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
+            && ElasticJsonObject.DeepEquals(filter, expectedFilter.Bytes);
     }
 
     async ValueTask<Stored<TargetState>> AcceptPromotionFenceAsync(
@@ -3989,129 +3979,23 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
         _ => null
     };
 
-    ReadOnlyMemory<byte> CreateControlIndexBody()
-    {
-        using MemoryStream stream = new();
-        using (Utf8JsonWriter writer = new(stream))
-        {
-            writer.WriteStartObject();
-            writer.WritePropertyName("settings");
-            writer.WriteStartObject();
-            writer.WriteBoolean("index.hidden", true);
-            writer.WriteNumber("number_of_shards", 1);
-            writer.WriteEndObject();
-            writer.WritePropertyName("mappings");
-            writer.WriteStartObject();
-            writer.WriteBoolean("dynamic", false);
-            writer.WritePropertyName("properties");
-            writer.WriteStartObject();
-            WriteKeywordMapping(writer, "documentKind");
-            WriteKeywordMapping(
-                writer,
-                "generationId",
-                ElasticMaterializationTargetBinding.MaximumIndexedIdentityCharacters);
-            writer.WritePropertyName("retained");
-            writer.WriteStartObject();
-            writer.WriteString("type", "boolean");
-            writer.WriteEndObject();
-            writer.WriteEndObject();
-            writer.WriteEndObject();
-            writer.WritePropertyName("aliases");
-            writer.WriteStartObject();
-            writer.WritePropertyName(MarkerAlias(MaterializationTargetRevision.Initial, promotionFence: null));
-            writer.WriteStartObject();
-            writer.WriteBoolean("is_hidden", true);
-            writer.WriteEndObject();
-            writer.WriteEndObject();
-            writer.WriteEndObject();
-        }
-        return stream.ToArray();
-    }
+    ElasticJsonObject CreateControlIndexBody() => ElasticMaterializationWireJson.CreateControlIndexBody(
+        MarkerAlias(MaterializationTargetRevision.Initial, promotionFence: null),
+        ElasticMaterializationTargetBinding.MaximumIndexedIdentityCharacters);
 
-    ReadOnlyMemory<byte> CreateGenerationIndexBody(
+    ElasticJsonObject CreateGenerationIndexBody(
         MaterializationGenerationId generationId,
-        string ownerAlias)
-    {
-        using MemoryStream stream = new();
-        using (Utf8JsonWriter writer = new(stream))
-        {
-            writer.WriteStartObject();
-            writer.WritePropertyName("settings");
-            writer.WriteStartObject();
-            writer.WriteBoolean("index.hidden", true);
-            writer.WriteString("index.meta.cohesive_binding", binding.Fingerprint.Value);
-            writer.WriteString("index.meta.cohesive_template", binding.IndexTemplate.Fingerprint.Value);
-            writer.WriteString("index.meta.cohesive_generation", generationId.Value);
-            writer.WriteEndObject();
-            writer.WritePropertyName("mappings");
-            writer.WriteStartObject();
-            writer.WritePropertyName("properties");
-            writer.WriteStartObject();
-            writer.WritePropertyName(ElasticMaterializationTargetBinding.MetadataField);
-            writer.WriteStartObject();
-            writer.WriteString("type", "object");
-            writer.WriteBoolean("dynamic", false);
-            writer.WritePropertyName("properties");
-            writer.WriteStartObject();
-            WriteNonIndexedKeywordMapping(writer, "generationId");
-            WriteKeywordMapping(
-                writer,
-                "itemId",
-                ElasticMaterializationTargetBinding.MaximumIndexedIdentityCharacters);
-            WriteNonIndexedKeywordMapping(writer, "mutationId");
-            WriteNonIndexedKeywordMapping(writer, "mutationFingerprint");
-            writer.WritePropertyName("version");
-            writer.WriteStartObject();
-            writer.WriteString("type", "long");
-            writer.WriteEndObject();
-            writer.WritePropertyName("deleted");
-            writer.WriteStartObject();
-            writer.WriteString("type", "boolean");
-            writer.WriteEndObject();
-            writer.WriteEndObject();
-            writer.WriteEndObject();
-            writer.WriteEndObject();
-            writer.WriteEndObject();
-            writer.WritePropertyName("aliases");
-            writer.WriteStartObject();
-            writer.WritePropertyName(ownerAlias);
-            writer.WriteStartObject();
-            writer.WriteBoolean("is_hidden", true);
-            writer.WriteEndObject();
-            writer.WriteEndObject();
-            writer.WriteEndObject();
-        }
-        return stream.ToArray();
-    }
+        string ownerAlias) => ElasticMaterializationWireJson.CreateGenerationIndexBody(
+            binding.Fingerprint.Value,
+            binding.IndexTemplate.Fingerprint.Value,
+            generationId.Value,
+            ownerAlias,
+            ElasticMaterializationTargetBinding.MaximumIndexedIdentityCharacters);
 
-    static void WriteKeywordMapping(Utf8JsonWriter writer, string name, int? ignoreAbove = null)
-    {
-        writer.WritePropertyName(name);
-        writer.WriteStartObject();
-        writer.WriteString("type", "keyword");
-        if (ignoreAbove is { } maximumCharacters)
-        {
-            writer.WriteNumber("ignore_above", maximumCharacters);
-        }
-        writer.WriteEndObject();
-    }
-
-    static void WriteNonIndexedKeywordMapping(Utf8JsonWriter writer, string name)
-    {
-        writer.WritePropertyName(name);
-        writer.WriteStartObject();
-        writer.WriteString("type", "keyword");
-        writer.WriteBoolean("index", false);
-        writer.WriteBoolean("doc_values", false);
-        writer.WriteEndObject();
-    }
-
-    static ReadOnlyMemory<byte> CreateReadAliasFilter() =>
-        "{\"term\":{\"_cohesive.deleted\":false}}"u8.ToArray();
-
-    static ReadOnlyMemory<byte> PendingCountQuery(MaterializationGenerationId generationId) =>
-        Encoding.UTF8.GetBytes(
-            $"{{\"bool\":{{\"filter\":[{{\"term\":{{\"documentKind\":\"{PendingMutationDocumentKind}\"}}}},{{\"term\":{{\"generationId\":{JsonSerializer.Serialize(generationId.Value)}}}}}]}}}}");
+    static ElasticJsonObject PendingCountQuery(MaterializationGenerationId generationId) =>
+        ElasticMaterializationWireJson.FilteredQuery(
+            PendingMutationCountQuery,
+            ElasticMaterializationWireJson.StringTermQuery("generationId", generationId.Value));
 
     string TargetDocumentId() => DocumentId("target", Descriptor.Id.Value);
 
