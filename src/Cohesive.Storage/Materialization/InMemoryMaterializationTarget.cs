@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using System.Security.Cryptography;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 
@@ -192,8 +191,6 @@ public sealed class InMemoryMaterializationTarget : IMaterializationTarget
     const string ValidationCountCode = "materialization.target.validation.itemCountMismatch";
     const string ValidationInjectedCode = "materialization.target.validation.injectedFailure";
 
-    static readonly System.Text.Json.JsonSerializerOptions FingerprintOptions = StrictDocumentJson.CreateOptions();
-
     readonly Lock gate = new();
     readonly ImmutableHashSet<MaterializationItemId> permanentFailures;
     readonly ImmutableHashSet<MaterializationGenerationId> validationFailures;
@@ -320,11 +317,7 @@ public sealed class InMemoryMaterializationTarget : IMaterializationTarget
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(request);
         context.CancellationToken.ThrowIfCancellationRequested();
-        var requestFingerprint = Fingerprint(new BeginFingerprintInput(
-            request.MaterializationId.Value,
-            request.GenerationId.Value,
-            request.DefinitionFingerprint,
-            request.CreatedAtUtc));
+        var requestFingerprint = MaterializationTargetIntentFingerprinter.Compute(request);
 
         lock (gate)
         {
@@ -394,9 +387,8 @@ public sealed class InMemoryMaterializationTarget : IMaterializationTarget
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(request);
         context.CancellationToken.ThrowIfCancellationRequested();
-        var requestIntent = BatchFingerprintInput.From(request);
-        var requestBytes = StrictDocumentJson.GetCanonicalBytes(requestIntent, FingerprintOptions);
-        var requestFingerprint = FingerprintBytes(requestBytes);
+        var requestIntent = MaterializationTargetIntentFingerprinter.AnalyzeBatch(request);
+        var requestFingerprint = requestIntent.Fingerprint;
 
         lock (gate)
         {
@@ -455,8 +447,7 @@ public sealed class InMemoryMaterializationTarget : IMaterializationTarget
 
             if (!SupportsWriteBounds(
                     Descriptor.Capabilities,
-                    request.Mutations,
-                    requestBytes.LongLength))
+                    requestIntent))
             {
                 return ValueTask.FromResult(RejectedBatch(
                     request,
@@ -464,7 +455,7 @@ public sealed class InMemoryMaterializationTarget : IMaterializationTarget
                     generation.Revision,
                     MaterializationItemOutcomeDisposition.RetryableRejected,
                     BatchLimitCode,
-                    $"No single realization of every applicable target capability accepts the batch's {request.Mutations.Length} items and {requestBytes.LongLength} canonical bytes."));
+                    $"No single realization of every applicable target capability accepts the batch's {requestIntent.ItemCount} items and {requestIntent.CanonicalByteCount} canonical bytes."));
             }
 
             var items = generation.Items;
@@ -475,7 +466,7 @@ public sealed class InMemoryMaterializationTarget : IMaterializationTarget
             var hasPermanentFailures = generation.HasPermanentFailures;
             foreach (var mutation in request.Mutations)
             {
-                var mutationFingerprint = Fingerprint(MutationFingerprintInput.From(mutation));
+                var mutationFingerprint = MaterializationTargetIntentFingerprinter.Compute(mutation);
                 if (mutations.TryGetValue(mutation.MutationId, out var priorMutation))
                 {
                     if (priorMutation.Fingerprint == mutationFingerprint)
@@ -501,7 +492,7 @@ public sealed class InMemoryMaterializationTarget : IMaterializationTarget
                 if (hasPendingMutation
                     && (pendingMutation!.ItemId != mutation.ItemId
                         || pendingMutation.Version != mutation.Version
-                        || !string.Equals(pendingMutation.Fingerprint, mutationFingerprint, StringComparison.Ordinal)))
+                        || pendingMutation.Fingerprint != mutationFingerprint))
                 {
                     hasPermanentFailures = true;
                     outcomes.Add(Failure(
@@ -570,7 +561,12 @@ public sealed class InMemoryMaterializationTarget : IMaterializationTarget
                 pendingRetryableMutations = pendingRetryableMutations.Remove(mutation.MutationId);
                 items = items.SetItem(
                     mutation.ItemId,
-                    new StoredItem(mutation.ItemId, mutation.Version, mutation.MutationId, value));
+                    new StoredItem(
+                        mutation.ItemId,
+                        mutation.Version,
+                        mutation.MutationId,
+                        mutation.Kind,
+                        value));
                 mutations = mutations.Add(mutation.MutationId, new(mutationFingerprint));
                 outcomes.Add(Success(mutation, MaterializationItemOutcomeDisposition.Applied));
                 appliedAny = true;
@@ -608,7 +604,7 @@ public sealed class InMemoryMaterializationTarget : IMaterializationTarget
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(request);
         context.CancellationToken.ThrowIfCancellationRequested();
-        var requestFingerprint = Fingerprint(SealOperationFingerprintInput.From(request));
+        var requestFingerprint = MaterializationTargetIntentFingerprinter.Compute(request);
 
         lock (gate)
         {
@@ -690,8 +686,7 @@ public sealed class InMemoryMaterializationTarget : IMaterializationTarget
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(request);
         context.CancellationToken.ThrowIfCancellationRequested();
-        var requestIntent = ValidationOperationFingerprintInput.From(request);
-        var requestFingerprint = Fingerprint(requestIntent);
+        var requestFingerprint = MaterializationTargetIntentFingerprinter.Compute(request);
 
         lock (gate)
         {
@@ -827,8 +822,9 @@ public sealed class InMemoryMaterializationTarget : IMaterializationTarget
                 ? DocumentValidationResult.Valid
                 : new DocumentValidationResult(normalizedDiagnostics);
             var revision = generation.Revision.Next();
-            var validationFingerprint = new MaterializationValidationFingerprint(Fingerprint(
-                new ValidationFingerprintInput(requestIntent, validation)));
+            var validationFingerprint = MaterializationTargetIntentFingerprinter.ComputeValidationResult(
+                request,
+                validation);
             var receipt = new MaterializationValidationReceipt(
                 request.ValidationId,
                 request.GenerationId,
@@ -865,7 +861,7 @@ public sealed class InMemoryMaterializationTarget : IMaterializationTarget
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(request);
         context.CancellationToken.ThrowIfCancellationRequested();
-        var requestFingerprint = Fingerprint(PromotionOperationFingerprintInput.From(request));
+        var requestFingerprint = MaterializationTargetIntentFingerprinter.Compute(request);
 
         lock (gate)
         {
@@ -1003,7 +999,7 @@ public sealed class InMemoryMaterializationTarget : IMaterializationTarget
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(request);
         context.CancellationToken.ThrowIfCancellationRequested();
-        var requestFingerprint = Fingerprint(RetirementOperationFingerprintInput.From(request));
+        var requestFingerprint = MaterializationTargetIntentFingerprinter.Compute(request);
 
         lock (gate)
         {
@@ -1093,7 +1089,7 @@ public sealed class InMemoryMaterializationTarget : IMaterializationTarget
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(request);
         context.CancellationToken.ThrowIfCancellationRequested();
-        var requestFingerprint = Fingerprint(CleanupOperationFingerprintInput.From(request));
+        var requestFingerprint = MaterializationTargetIntentFingerprinter.Compute(request);
 
         lock (gate)
         {
@@ -1197,7 +1193,7 @@ public sealed class InMemoryMaterializationTarget : IMaterializationTarget
         var tombstoneCount = 0L;
         foreach (var item in generation.Items.Values)
         {
-            if (item.Value is null)
+            if (item.Kind == MaterializationItemMutationKind.Delete)
             {
                 tombstoneCount++;
             }
@@ -1331,73 +1327,37 @@ public sealed class InMemoryMaterializationTarget : IMaterializationTarget
     static MaterializationSealFingerprint ComputeSealFingerprint(
         ImmutableDictionary<MaterializationItemId, StoredItem> items)
     {
-        var builder = ImmutableArray.CreateBuilder<SealItemFingerprintInput>(items.Count);
-        foreach (var item in items.Values.OrderBy(static item => item.ItemId.Value, StringComparer.Ordinal))
+        var builder = ImmutableArray.CreateBuilder<MaterializationSealContentEntry>(items.Count);
+        foreach (var item in items.Values)
         {
             builder.Add(new(
-                item.ItemId.Value,
-                item.Version.Value,
-                item.MutationId.Value,
+                item.ItemId,
+                item.Version,
+                item.MutationId,
+                item.Kind,
                 item.Value));
         }
-        return new(Fingerprint(new SealFingerprintInput(builder.MoveToImmutable())));
+        return MaterializationSealFingerprinter.Compute(builder.MoveToImmutable());
     }
 
     static bool SupportsWriteBounds(
         MaterializationCapabilityProfile profile,
-        ImmutableArray<MaterializationItemMutation> mutations,
-        long canonicalBytes)
-    {
-        var hasUpserts = false;
-        var hasDeletes = false;
-        foreach (var mutation in mutations)
-        {
-            hasUpserts |= mutation.Kind == MaterializationItemMutationKind.Upsert;
-            hasDeletes |= mutation.Kind == MaterializationItemMutationKind.Delete;
-            if (hasUpserts && hasDeletes)
-            {
-                break;
-            }
-        }
-        var itemCount = mutations.Length;
-        return Supports(MaterializationCapabilityKind.TargetPerItemOutcomes)
-            && (!hasUpserts || Supports(MaterializationCapabilityKind.TargetBulkUpsert))
-            && (!hasDeletes || Supports(MaterializationCapabilityKind.TargetBulkDelete));
-
-        bool Supports(MaterializationCapabilityKind capability) =>
-            MaterializationCapabilityLimits.SupportsBounds(
-                profile,
-                capability,
-                MaterializationLimitKind.WriteItems,
-                itemCount,
-                MaterializationLimitKind.WriteBytes,
-                canonicalBytes);
-    }
-
-    static string Fingerprint<T>(T value) where T : class
-    {
-        var bytes = StrictDocumentJson.GetCanonicalBytes(value, FingerprintOptions);
-        return FingerprintBytes(bytes);
-    }
-
-    static string FingerprintBytes(ReadOnlySpan<byte> bytes)
-    {
-        var digest = SHA256.HashData(bytes);
-        return $"sha256-v1:{Convert.ToHexStringLower(digest)}";
-    }
+        MaterializationTargetBatchIntent intent) =>
+        MaterializationTargetBatchLimits.Supports(profile, intent);
 
     sealed record StoredItem(
         MaterializationItemId ItemId,
         MaterializationItemVersion Version,
         MaterializationItemMutationId MutationId,
+        MaterializationItemMutationKind Kind,
         ObservationValue? Value);
 
-    sealed record MutationReceipt(string Fingerprint);
+    sealed record MutationReceipt(MaterializationTargetIntentFingerprint Fingerprint);
 
     sealed record PendingRetryableMutation(
         MaterializationItemId ItemId,
         MaterializationItemVersion Version,
-        string Fingerprint);
+        MaterializationTargetIntentFingerprint Fingerprint);
 
     sealed record StoredGeneration(
         MaterializationId MaterializationId,
@@ -1416,146 +1376,31 @@ public sealed class InMemoryMaterializationTarget : IMaterializationTarget
         DateTimeOffset? RetiredAtUtc);
 
     sealed record GenerationIdentity(
-        string BeginRequestFingerprint,
+        MaterializationTargetIntentFingerprint BeginRequestFingerprint,
         MaterializationWorkerFence LatestWorkerFence);
 
-    sealed record BatchReceipt(string RequestFingerprint, MaterializationBatchResult Result);
+    sealed record BatchReceipt(
+        MaterializationTargetIntentFingerprint RequestFingerprint,
+        MaterializationBatchResult Result);
 
     sealed record SealOperationReceipt(
-        string RequestFingerprint,
+        MaterializationTargetIntentFingerprint RequestFingerprint,
         MaterializationSealReceipt Receipt,
         MaterializationGenerationSnapshot Generation);
 
     sealed record ValidationOperationReceipt(
-        string RequestFingerprint,
+        MaterializationTargetIntentFingerprint RequestFingerprint,
         MaterializationValidationReceipt Receipt,
         MaterializationGenerationSnapshot Generation);
 
-    sealed record PromotionOperationReceipt(string RequestFingerprint, MaterializationPromotionReceipt Receipt);
+    sealed record PromotionOperationReceipt(
+        MaterializationTargetIntentFingerprint RequestFingerprint,
+        MaterializationPromotionReceipt Receipt);
 
     sealed record RetirementOperationReceipt(
-        string RequestFingerprint,
+        MaterializationTargetIntentFingerprint RequestFingerprint,
         MaterializationGenerationSnapshot Generation);
 
-    sealed record CleanupOperationReceipt(string RequestFingerprint);
+    sealed record CleanupOperationReceipt(MaterializationTargetIntentFingerprint RequestFingerprint);
 
-    sealed record BeginFingerprintInput(
-        string MaterializationId,
-        string GenerationId,
-        ExecutionDefinitionFingerprint DefinitionFingerprint,
-        DateTimeOffset CreatedAtUtc);
-
-    sealed record SealOperationFingerprintInput(
-        string SealId,
-        string GenerationId,
-        string ExpectedRevision,
-        DateTimeOffset SealedAtUtc)
-    {
-        internal static SealOperationFingerprintInput From(MaterializationSealGenerationRequest request) =>
-            new(request.SealId.Value, request.GenerationId.Value, request.ExpectedRevision.Value, request.SealedAtUtc);
-    }
-
-    sealed record ValidationOperationFingerprintInput(
-        string ValidationId,
-        string GenerationId,
-        string ExpectedRevision,
-        string ExpectedSealFingerprint,
-        long? ExpectedVisibleItemCount,
-        string Validator,
-        DateTimeOffset ValidatedAtUtc)
-    {
-        internal static ValidationOperationFingerprintInput From(MaterializationValidateGenerationRequest request) =>
-            new(
-                request.ValidationId.Value,
-                request.GenerationId.Value,
-                request.ExpectedRevision.Value,
-                request.ExpectedSealFingerprint.Value,
-                request.ExpectedVisibleItemCount,
-                request.Validator,
-                request.ValidatedAtUtc);
-    }
-
-    sealed record PromotionOperationFingerprintInput(
-        string PromotionId,
-        string GenerationId,
-        string ExpectedGenerationRevision,
-        string ValidationFingerprint,
-        string? ExpectedActiveGenerationId,
-        string ExpectedTargetRevision,
-        DateTimeOffset PromotedAtUtc)
-    {
-        internal static PromotionOperationFingerprintInput From(MaterializationPromoteGenerationRequest request) =>
-            new(
-                request.PromotionId.Value,
-                request.GenerationId.Value,
-                request.ExpectedGenerationRevision.Value,
-                request.ValidationFingerprint.Value,
-                request.ExpectedActiveGenerationId?.Value,
-                request.ExpectedTargetRevision.Value,
-                request.PromotedAtUtc);
-    }
-
-    sealed record RetirementOperationFingerprintInput(
-        string RetirementId,
-        string GenerationId,
-        string ExpectedRevision,
-        DateTimeOffset RetiredAtUtc)
-    {
-        internal static RetirementOperationFingerprintInput From(MaterializationRetireGenerationRequest request) =>
-            new(request.RetirementId.Value, request.GenerationId.Value, request.ExpectedRevision.Value, request.RetiredAtUtc);
-    }
-
-    sealed record CleanupOperationFingerprintInput(
-        string CleanupId,
-        string GenerationId,
-        string ExpectedRevision,
-        DateTimeOffset CleanedAtUtc)
-    {
-        internal static CleanupOperationFingerprintInput From(MaterializationCleanupGenerationRequest request) =>
-            new(request.CleanupId.Value, request.GenerationId.Value, request.ExpectedRevision.Value, request.CleanedAtUtc);
-    }
-
-    sealed record MutationFingerprintInput(
-        MaterializationItemMutationKind Kind,
-        string ItemId,
-        string MutationId,
-        string Version,
-        ObservationValue? Value)
-    {
-        internal static MutationFingerprintInput From(MaterializationItemMutation mutation) => new(
-            mutation.Kind,
-            mutation.ItemId.Value,
-            mutation.MutationId.Value,
-            mutation.Version.Value,
-            mutation is MaterializationUpsert upsert ? upsert.Value : null);
-    }
-
-    sealed record BatchFingerprintInput(
-        string BatchId,
-        string GenerationId,
-        ImmutableArray<MutationFingerprintInput> Mutations)
-    {
-        internal static BatchFingerprintInput From(MaterializationApplyBatchRequest request)
-        {
-            var builder = ImmutableArray.CreateBuilder<MutationFingerprintInput>(request.Mutations.Length);
-            foreach (var mutation in request.Mutations)
-            {
-                builder.Add(MutationFingerprintInput.From(mutation));
-            }
-
-            return new(request.BatchId.Value, request.GenerationId.Value, builder.MoveToImmutable());
-        }
-    }
-
-    sealed record SealItemFingerprintInput(
-        string ItemId,
-        string Version,
-        string MutationId,
-        ObservationValue? Value);
-
-    sealed record SealFingerprintInput(ImmutableArray<SealItemFingerprintInput> Items);
-
-    sealed record ValidationFingerprintInput(
-        ValidationOperationFingerprintInput Request,
-        DocumentValidationResult Validation);
 }

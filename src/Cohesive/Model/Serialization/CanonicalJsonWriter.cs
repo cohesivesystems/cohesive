@@ -1,4 +1,6 @@
 using System.Buffers;
+using System.Buffers.Text;
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Numerics;
 using System.Text;
@@ -493,8 +495,22 @@ public static class CanonicalJsonWriter
         return scientificValue.ToString();
     }
 
-    static void WriteCanonicalObservationValue(Utf8JsonWriter writer, ObservationValue value)
+    /// <summary>Writes one observation value using canonical portable JSON scalar, object, and array semantics.</summary>
+    /// <param name="writer">Destination writer that owns JSON framing and output buffering.</param>
+    /// <param name="value">Observation value to encode.</param>
+    /// <param name="bytesEncoding">Canonical representation permitted for binary values.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="writer"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// A value is non-finite, binary values are forbidden by <paramref name="bytesEncoding"/>, or a value kind has
+    /// no canonical portable JSON representation.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="bytesEncoding"/> is unsupported.</exception>
+    public static void WriteCanonicalObservationValue(
+        Utf8JsonWriter writer,
+        ObservationValue value,
+        ObservationBytesJsonEncoding bytesEncoding = ObservationBytesJsonEncoding.Base64String)
     {
+        ArgumentNullException.ThrowIfNull(writer);
         switch (value.Kind)
         {
             case ObservationValueKind.Undefined:
@@ -534,8 +550,20 @@ public static class CanonicalJsonWriter
                 writer.WriteStringValue(value.String);
                 return;
             case ObservationValueKind.Bytes:
-                writer.WriteBase64StringValue(value.Bytes.Span);
-                return;
+                switch (bytesEncoding)
+                {
+                    case ObservationBytesJsonEncoding.Throw:
+                        throw new InvalidOperationException(
+                            "ObservationValue bytes cannot be encoded as JSON with the current policy.");
+                    case ObservationBytesJsonEncoding.Base64String:
+                        writer.WriteBase64StringValue(value.Bytes.Span);
+                        return;
+                    default:
+                        throw new ArgumentOutOfRangeException(
+                            nameof(bytesEncoding),
+                            bytesEncoding,
+                            "Unsupported observation bytes JSON encoding.");
+                }
             case ObservationValueKind.DateTimeOffset:
             case ObservationValueKind.DateOnly:
             case ObservationValueKind.TimeOnly:
@@ -551,7 +579,7 @@ public static class CanonicalJsonWriter
                                  StringComparer.Ordinal))
                     {
                         writer.WritePropertyName(property);
-                        WriteCanonicalObservationValue(writer, child);
+                        WriteCanonicalObservationValue(writer, child, bytesEncoding);
                     }
                 }
                 writer.WriteEndObject();
@@ -561,13 +589,429 @@ public static class CanonicalJsonWriter
                 if (!value.Array.IsDefault)
                 {
                     foreach (var item in value.Array)
-                        WriteCanonicalObservationValue(writer, item);
+                        WriteCanonicalObservationValue(writer, item, bytesEncoding);
                 }
                 writer.WriteEndArray();
                 return;
             default:
                 throw new InvalidOperationException(
                     $"Observation value kind '{value.Kind}' does not have a canonical portable JSON encoding.");
+        }
+    }
+
+    /// <summary>Streams one observation value as canonical portable UTF-8 JSON without token-sized buffering.</summary>
+    /// <param name="output">Destination that receives bounded chunks of canonical UTF-8 JSON.</param>
+    /// <param name="value">Observation value to encode.</param>
+    /// <param name="bytesEncoding">Canonical representation permitted for binary values.</param>
+    /// <remarks>
+    /// This overload preserves the same scalar, escaping, property-ordering, and collection semantics as the
+    /// <see cref="Utf8JsonWriter"/> overload while bounding each request to <paramref name="output"/>. It is intended
+    /// for hashing and counting representations that can be much larger than one contiguous buffer.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="output"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// A value is non-finite, binary values are forbidden by <paramref name="bytesEncoding"/>, or a value kind has
+    /// no canonical portable JSON representation.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="bytesEncoding"/> is unsupported.</exception>
+    public static void WriteCanonicalObservationValue(
+        IBufferWriter<byte> output,
+        ObservationValue value,
+        ObservationBytesJsonEncoding bytesEncoding = ObservationBytesJsonEncoding.Base64String)
+        => WriteCanonicalObservationValue(output, value, bytesEncoding, enclosingDepth: 0);
+
+    /// <summary>
+    /// Streams one observation value as a canonical portable UTF-8 JSON fragment within an existing JSON container
+    /// depth.
+    /// </summary>
+    /// <param name="output">Destination that receives bounded chunks of canonical UTF-8 JSON.</param>
+    /// <param name="value">Observation value to encode.</param>
+    /// <param name="bytesEncoding">Canonical representation permitted for binary values.</param>
+    /// <param name="enclosingDepth">
+    /// Number of open JSON objects or arrays surrounding <paramref name="value"/>. The default canonical JSON writer
+    /// permits at most 1,000 simultaneously open containers.
+    /// </param>
+    /// <exception cref="ArgumentNullException"><paramref name="output"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="bytesEncoding"/> is unsupported, or <paramref name="enclosingDepth"/> is outside the canonical
+    /// writer's supported range.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// The value exceeds the canonical JSON depth limit, is non-finite, contains forbidden binary data, or has no
+    /// canonical portable JSON representation.
+    /// </exception>
+    public static void WriteCanonicalObservationValue(
+        IBufferWriter<byte> output,
+        ObservationValue value,
+        ObservationBytesJsonEncoding bytesEncoding,
+        int enclosingDepth)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        if (enclosingDepth is < 0 or > CanonicalObservationUtf8Writer.MaximumDepth)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(enclosingDepth),
+                enclosingDepth,
+                $"A canonical JSON enclosing depth must be from 0 through {CanonicalObservationUtf8Writer.MaximumDepth}.");
+        }
+        new CanonicalObservationUtf8Writer(output, bytesEncoding).Write(value, enclosingDepth);
+    }
+
+    readonly struct CanonicalObservationUtf8Writer(
+        IBufferWriter<byte> output,
+        ObservationBytesJsonEncoding bytesEncoding)
+    {
+        const int MaximumChunkBytes = 4 * 1024;
+        internal const int MaximumDepth = 1_000;
+        static readonly JavaScriptEncoder Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
+
+        internal void Write(ObservationValue value, int enclosingDepth)
+        {
+            if (value.Kind is not (ObservationValueKind.Object or ObservationValueKind.Array))
+            {
+                WriteScalar(value);
+                return;
+            }
+
+            Stack<ContainerFrame> containers = new();
+            var current = value;
+            var currentDepth = enclosingDepth;
+            try
+            {
+                while (true)
+                {
+                    var descended = false;
+                    switch (current.Kind)
+                    {
+                        case ObservationValueKind.Object:
+                        {
+                            RequireContainerDepth(currentDepth);
+                            WriteRaw("{"u8);
+                            var frame = ContainerFrame.ForObject(current.Fields, checked(currentDepth + 1));
+                            if (frame.TryMoveNext(out var property, out var child))
+                            {
+                                containers.Push(frame);
+                                WriteString(property!);
+                                WriteRaw(":"u8);
+                                current = child;
+                                currentDepth = frame.ChildDepth;
+                                descended = true;
+                            }
+                            else
+                            {
+                                frame.Dispose();
+                                WriteRaw("}"u8);
+                            }
+                            break;
+                        }
+                        case ObservationValueKind.Array:
+                        {
+                            RequireContainerDepth(currentDepth);
+                            WriteRaw("["u8);
+                            var frame = ContainerFrame.ForArray(current.Array, checked(currentDepth + 1));
+                            if (frame.TryMoveNext(out _, out var child))
+                            {
+                                containers.Push(frame);
+                                current = child;
+                                currentDepth = frame.ChildDepth;
+                                descended = true;
+                            }
+                            else
+                            {
+                                WriteRaw("]"u8);
+                            }
+                            break;
+                        }
+                        default:
+                            WriteScalar(current);
+                            break;
+                    }
+
+                    if (descended)
+                    {
+                        continue;
+                    }
+
+                    while (containers.TryPeek(out var parent))
+                    {
+                        if (parent.TryMoveNext(out var property, out var child))
+                        {
+                            WriteRaw(","u8);
+                            if (parent.IsObject)
+                            {
+                                WriteString(property!);
+                                WriteRaw(":"u8);
+                            }
+                            current = child;
+                            currentDepth = parent.ChildDepth;
+                            descended = true;
+                            break;
+                        }
+
+                        _ = containers.Pop();
+                        parent.Dispose();
+                        WriteRaw(parent.IsObject ? "}"u8 : "]"u8);
+                    }
+
+                    if (!descended)
+                    {
+                        return;
+                    }
+                }
+            }
+            finally
+            {
+                while (containers.TryPop(out var frame))
+                {
+                    frame.Dispose();
+                }
+            }
+        }
+
+        void WriteScalar(ObservationValue value)
+        {
+            switch (value.Kind)
+            {
+                case ObservationValueKind.Undefined:
+                case ObservationValueKind.Null:
+                    WriteRaw("null"u8);
+                    return;
+                case ObservationValueKind.Int64:
+                {
+                    Span<byte> formatted = stackalloc byte[32];
+                    if (!Utf8Formatter.TryFormat(value.Int64, formatted, out var written))
+                        throw new InvalidOperationException("An Int64 value could not be canonically formatted.");
+                    WriteRaw(formatted[..written]);
+                    return;
+                }
+                case ObservationValueKind.Double:
+                {
+                    var normalized = value.Double == 0d ? 0d : value.Double;
+                    if (!double.IsFinite(normalized))
+                    {
+                        throw new InvalidOperationException(
+                            "A non-finite Double has no canonical portable JSON encoding.");
+                    }
+                    if (Math.TryGetCanonicalDecimalFromDouble(normalized, out var exactDecimal))
+                    {
+                        WriteDecimal(exactDecimal);
+                        return;
+                    }
+
+                    Span<byte> formatted = stackalloc byte[32];
+                    if (!Utf8Formatter.TryFormat(normalized, formatted, out var written))
+                        throw new InvalidOperationException("A Double value could not be canonically formatted.");
+                    WriteRaw(formatted[..written]);
+                    return;
+                }
+                case ObservationValueKind.Decimal:
+                    WriteDecimal(value.Decimal);
+                    return;
+                case ObservationValueKind.Bool:
+                    WriteRaw(value.Bool ? "true"u8 : "false"u8);
+                    return;
+                case ObservationValueKind.String:
+                case ObservationValueKind.DateTimeOffset:
+                case ObservationValueKind.DateOnly:
+                case ObservationValueKind.TimeOnly:
+                case ObservationValueKind.TimeSpan:
+                    WriteString(value.String
+                        ?? throw new InvalidOperationException(
+                            $"Observation value kind '{value.Kind}' has no retained string representation."));
+                    return;
+                case ObservationValueKind.Bytes:
+                    WriteBytes(value.Bytes.Span);
+                    return;
+                default:
+                    throw new InvalidOperationException(
+                        $"Observation value kind '{value.Kind}' does not have a canonical portable JSON scalar encoding.");
+            }
+        }
+
+        sealed class ContainerFrame : IDisposable
+        {
+            readonly ImmutableArray<ObservationValue> items;
+            readonly IEnumerator<KeyValuePair<string, ObservationValue>>? properties;
+            int nextItemIndex;
+
+            ContainerFrame(
+                bool isObject,
+                int childDepth,
+                ImmutableArray<ObservationValue> items,
+                IEnumerator<KeyValuePair<string, ObservationValue>>? properties)
+            {
+                IsObject = isObject;
+                ChildDepth = childDepth;
+                this.items = items;
+                this.properties = properties;
+            }
+
+            internal bool IsObject { get; }
+
+            internal int ChildDepth { get; }
+
+            internal static ContainerFrame ForArray(ImmutableArray<ObservationValue> items, int childDepth) =>
+                new(isObject: false, childDepth, items.IsDefault ? [] : items, properties: null);
+
+            internal static ContainerFrame ForObject(
+                IReadOnlyDictionary<string, ObservationValue>? properties,
+                int childDepth) =>
+                new(
+                    isObject: true,
+                    childDepth,
+                    items: [],
+                    properties?
+                        .OrderBy(static property => property.Key, StringComparer.Ordinal)
+                        .GetEnumerator());
+
+            internal bool TryMoveNext(out string? property, out ObservationValue value)
+            {
+                if (IsObject)
+                {
+                    if (properties is not null && properties.MoveNext())
+                    {
+                        property = properties.Current.Key;
+                        value = properties.Current.Value;
+                        return true;
+                    }
+
+                    property = null;
+                    value = default;
+                    return false;
+                }
+
+                property = null;
+                if (nextItemIndex >= items.Length)
+                {
+                    value = default;
+                    return false;
+                }
+
+                value = items[nextItemIndex++];
+                return true;
+            }
+
+            public void Dispose() => properties?.Dispose();
+        }
+
+        static void RequireContainerDepth(int enclosingDepth)
+        {
+            if (enclosingDepth >= MaximumDepth)
+            {
+                throw new InvalidOperationException(
+                    $"The observation value exceeds the canonical JSON maximum depth of {MaximumDepth}.");
+            }
+        }
+
+        void WriteDecimal(decimal value)
+        {
+            Span<char> formatted = stackalloc char[32];
+            if (!value.TryFormat(
+                    formatted,
+                    out var written,
+                    "G29",
+                    CultureInfo.InvariantCulture))
+            {
+                throw new InvalidOperationException("A Decimal value could not be canonically formatted.");
+            }
+            WriteAscii(formatted[..written]);
+        }
+
+        void WriteString(string value)
+        {
+            WriteRaw("\""u8);
+            var remaining = value.AsSpan();
+            Span<char> encoded = stackalloc char[1024];
+            do
+            {
+                var status = Encoder.Encode(
+                    remaining,
+                    encoded,
+                    out var consumed,
+                    out var written,
+                    isFinalBlock: true);
+                WriteUtf8(encoded[..written]);
+                remaining = remaining[consumed..];
+                if (status == OperationStatus.Done)
+                    break;
+                if (status != OperationStatus.DestinationTooSmall || consumed == 0 && written == 0)
+                {
+                    throw new InvalidOperationException(
+                        "A string value could not be canonically JSON-escaped.");
+                }
+            }
+            while (true);
+            WriteRaw("\""u8);
+        }
+
+        void WriteBytes(ReadOnlySpan<byte> value)
+        {
+            if (bytesEncoding == ObservationBytesJsonEncoding.Throw)
+            {
+                throw new InvalidOperationException(
+                    "ObservationValue bytes cannot be encoded as JSON with the current policy.");
+            }
+            if (bytesEncoding != ObservationBytesJsonEncoding.Base64String)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(bytesEncoding),
+                    bytesEncoding,
+                    "Unsupported observation bytes JSON encoding.");
+            }
+
+            WriteRaw("\""u8);
+            Span<byte> encoded = stackalloc byte[MaximumChunkBytes];
+            do
+            {
+                var status = Base64.EncodeToUtf8(
+                    value,
+                    encoded,
+                    out var consumed,
+                    out var written,
+                    isFinalBlock: true);
+                WriteRaw(encoded[..written]);
+                value = value[consumed..];
+                if (status == OperationStatus.Done)
+                    break;
+                if (status != OperationStatus.DestinationTooSmall || consumed == 0 && written == 0)
+                    throw new InvalidOperationException("A binary value could not be canonically Base64-encoded.");
+            }
+            while (true);
+            WriteRaw("\""u8);
+        }
+
+        void WriteAscii(ReadOnlySpan<char> value)
+        {
+            Span<byte> encoded = stackalloc byte[64];
+            if (value.Length > encoded.Length)
+                throw new InvalidOperationException("A canonical numeric token exceeded its bounded representation.");
+            for (var index = 0; index < value.Length; index++)
+                encoded[index] = checked((byte)value[index]);
+            WriteRaw(encoded[..value.Length]);
+        }
+
+        void WriteUtf8(ReadOnlySpan<char> value)
+        {
+            Span<byte> encoded = stackalloc byte[MaximumChunkBytes];
+            var written = Encoding.UTF8.GetBytes(value, encoded);
+            WriteRaw(encoded[..written]);
+        }
+
+        void WriteRaw(ReadOnlySpan<byte> value)
+        {
+            while (!value.IsEmpty)
+            {
+                var requested = Math.Min(value.Length, MaximumChunkBytes);
+                var destination = output.GetSpan(requested);
+                if (destination.Length < requested)
+                {
+                    throw new InvalidOperationException(
+                        "The canonical JSON destination returned a buffer smaller than requested.");
+                }
+                value[..requested].CopyTo(destination);
+                output.Advance(requested);
+                value = value[requested..];
+            }
         }
     }
 }

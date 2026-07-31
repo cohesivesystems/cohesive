@@ -190,6 +190,25 @@ public sealed record DocumentValidationResult
     /// </summary>
     public ImmutableArray<DocumentValidationDiagnostic> Diagnostics { get; }
 
+    /// <summary>Compares validation results using structural diagnostic value semantics.</summary>
+    /// <param name="other">Validation result to compare with this result.</param>
+    /// <returns><see langword="true"/> when every diagnostic is equal in canonical order; otherwise <see langword="false"/>.</returns>
+    public bool Equals(DocumentValidationResult? other) =>
+        ReferenceEquals(this, other)
+        || other is not null && Diagnostics.SequenceEqual(other.Diagnostics);
+
+    /// <summary>Returns a structural hash code for the ordered diagnostics.</summary>
+    /// <returns>A hash code derived from every diagnostic in canonical order.</returns>
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        foreach (var diagnostic in Diagnostics)
+        {
+            hash.Add(diagnostic);
+        }
+        return hash.ToHashCode();
+    }
+
     /// <summary>
     /// Returns true when there are no error diagnostics.
     /// </summary>

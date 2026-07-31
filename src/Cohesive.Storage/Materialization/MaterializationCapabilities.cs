@@ -169,7 +169,10 @@ public enum MaterializationLimitKind
     WriteBytes = 4,
 
     /// <summary>Maximum independently admitted operations.</summary>
-    Parallelism = 5
+    Parallelism = 5,
+
+    /// <summary>Maximum Unicode characters accepted by an identity encoded into a target index key.</summary>
+    IndexedIdentityCharacters = 6
 }
 
 /// <summary>How attributable endpoint evidence realizes one requested capability.</summary>
@@ -961,6 +964,10 @@ public static class MaterializationCapabilityCatalog
                 IsBulkMutation(capability)
                 || capability == MaterializationCapabilityKind.TargetPerItemOutcomes,
             MaterializationLimitKind.Parallelism => true,
+            MaterializationLimitKind.IndexedIdentityCharacters =>
+                IsBulkMutation(capability)
+                || capability is MaterializationCapabilityKind.TargetPerItemOutcomes
+                    or MaterializationCapabilityKind.TargetGenerationIsolation,
             _ => false
         };
     }

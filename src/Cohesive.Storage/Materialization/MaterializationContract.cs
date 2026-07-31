@@ -1,5 +1,7 @@
+using System.Buffers;
 using System.Collections.Immutable;
 using System.Globalization;
+using System.Text;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Physical;
 
@@ -99,6 +101,23 @@ public static class MaterializationContract
     internal static string RequireIdentity(string? value, string parameterName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value, parameterName);
+        return value;
+    }
+
+    internal static string RequireUnicodeIdentity(string? value, string parameterName)
+    {
+        value = RequireIdentity(value, parameterName);
+        var remaining = value.AsSpan();
+        while (!remaining.IsEmpty)
+        {
+            if (Rune.DecodeFromUtf16(remaining, out _, out var consumed) != OperationStatus.Done)
+            {
+                throw new ArgumentException(
+                    "A materialization identity must contain well-formed Unicode scalar values.",
+                    parameterName);
+            }
+            remaining = remaining[consumed..];
+        }
         return value;
     }
 

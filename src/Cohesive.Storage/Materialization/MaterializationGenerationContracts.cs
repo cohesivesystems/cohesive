@@ -13,9 +13,9 @@ public readonly record struct MaterializationTargetId
     /// <summary>Creates a materialization-target identity.</summary>
     /// <param name="value">Stable provider-neutral target identity.</param>
     /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="value"/> is empty or white-space.</exception>
+    /// <exception cref="ArgumentException"><paramref name="value"/> is empty, white-space, or contains ill-formed Unicode.</exception>
     [JsonConstructor]
-    public MaterializationTargetId(string value) => Value = MaterializationContract.RequireIdentity(value, nameof(value));
+    public MaterializationTargetId(string value) => Value = MaterializationContract.RequireUnicodeIdentity(value, nameof(value));
 
     /// <summary>Gets the stable provider-neutral target identity.</summary>
     public string Value { get; }
@@ -32,9 +32,9 @@ public readonly record struct MaterializationGenerationId
     /// <summary>Creates a materialization-generation identity.</summary>
     /// <param name="value">Stable identity that is never reused for different generation intent.</param>
     /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="value"/> is empty or white-space.</exception>
+    /// <exception cref="ArgumentException"><paramref name="value"/> is empty, white-space, or contains ill-formed Unicode.</exception>
     [JsonConstructor]
-    public MaterializationGenerationId(string value) => Value = MaterializationContract.RequireIdentity(value, nameof(value));
+    public MaterializationGenerationId(string value) => Value = MaterializationContract.RequireUnicodeIdentity(value, nameof(value));
 
     /// <summary>Gets the stable generation identity.</summary>
     public string Value { get; }
@@ -51,9 +51,9 @@ public readonly record struct MaterializationBatchId
     /// <summary>Creates a materialization batch identity.</summary>
     /// <param name="value">Idempotency identity retained across an ambiguous batch retry.</param>
     /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="value"/> is empty or white-space.</exception>
+    /// <exception cref="ArgumentException"><paramref name="value"/> is empty, white-space, or contains ill-formed Unicode.</exception>
     [JsonConstructor]
-    public MaterializationBatchId(string value) => Value = MaterializationContract.RequireIdentity(value, nameof(value));
+    public MaterializationBatchId(string value) => Value = MaterializationContract.RequireUnicodeIdentity(value, nameof(value));
 
     /// <summary>Gets the stable batch identity.</summary>
     public string Value { get; }
@@ -68,11 +68,14 @@ public readonly record struct MaterializationBatchId
 public readonly record struct MaterializationItemId
 {
     /// <summary>Creates a materialization-item identity.</summary>
-    /// <param name="value">Stable key interpreted ordinally by the target contract.</param>
+    /// <param name="value">Stable key ordered by Unicode scalar value in canonical seals.</param>
     /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="value"/> is empty or white-space.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="value"/> is empty, white-space, or contains ill-formed Unicode.
+    /// </exception>
     [JsonConstructor]
-    public MaterializationItemId(string value) => Value = MaterializationContract.RequireIdentity(value, nameof(value));
+    public MaterializationItemId(string value) =>
+        Value = MaterializationContract.RequireUnicodeIdentity(value, nameof(value));
 
     /// <summary>Gets the stable logical item key.</summary>
     public string Value { get; }
@@ -89,9 +92,9 @@ public readonly record struct MaterializationItemMutationId
     /// <summary>Creates an item-mutation identity.</summary>
     /// <param name="value">Identity reused only for an exact retry of the same mutation.</param>
     /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="value"/> is empty or white-space.</exception>
+    /// <exception cref="ArgumentException"><paramref name="value"/> is empty, white-space, or contains ill-formed Unicode.</exception>
     [JsonConstructor]
-    public MaterializationItemMutationId(string value) => Value = MaterializationContract.RequireIdentity(value, nameof(value));
+    public MaterializationItemMutationId(string value) => Value = MaterializationContract.RequireUnicodeIdentity(value, nameof(value));
 
     /// <summary>Gets the stable item-mutation identity.</summary>
     public string Value { get; }
@@ -264,9 +267,9 @@ public readonly record struct MaterializationSealId
     /// <summary>Creates a seal identity.</summary>
     /// <param name="value">Identity reused only for an exact retry of the same seal request.</param>
     /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="value"/> is empty or white-space.</exception>
+    /// <exception cref="ArgumentException"><paramref name="value"/> is empty, white-space, or contains ill-formed Unicode.</exception>
     [JsonConstructor]
-    public MaterializationSealId(string value) => Value = MaterializationContract.RequireIdentity(value, nameof(value));
+    public MaterializationSealId(string value) => Value = MaterializationContract.RequireUnicodeIdentity(value, nameof(value));
 
     /// <summary>Gets the seal identity.</summary>
     public string Value { get; }
@@ -283,9 +286,9 @@ public readonly record struct MaterializationSealFingerprint
     /// <summary>Creates a seal fingerprint.</summary>
     /// <param name="value">Versioned deterministic fingerprint value.</param>
     /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="value"/> is empty or white-space.</exception>
+    /// <exception cref="ArgumentException"><paramref name="value"/> is empty, white-space, or contains ill-formed Unicode.</exception>
     [JsonConstructor]
-    public MaterializationSealFingerprint(string value) => Value = MaterializationContract.RequireIdentity(value, nameof(value));
+    public MaterializationSealFingerprint(string value) => Value = MaterializationContract.RequireUnicodeIdentity(value, nameof(value));
 
     /// <summary>Gets the versioned deterministic fingerprint.</summary>
     public string Value { get; }
@@ -302,9 +305,9 @@ public readonly record struct MaterializationValidationId
     /// <summary>Creates a validation identity.</summary>
     /// <param name="value">Identity reused only for an exact retry of the same validation request.</param>
     /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="value"/> is empty or white-space.</exception>
+    /// <exception cref="ArgumentException"><paramref name="value"/> is empty, white-space, or contains ill-formed Unicode.</exception>
     [JsonConstructor]
-    public MaterializationValidationId(string value) => Value = MaterializationContract.RequireIdentity(value, nameof(value));
+    public MaterializationValidationId(string value) => Value = MaterializationContract.RequireUnicodeIdentity(value, nameof(value));
 
     /// <summary>Gets the validation identity.</summary>
     public string Value { get; }
@@ -321,9 +324,9 @@ public readonly record struct MaterializationValidationFingerprint
     /// <summary>Creates a validation fingerprint.</summary>
     /// <param name="value">Versioned deterministic fingerprint value.</param>
     /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="value"/> is empty or white-space.</exception>
+    /// <exception cref="ArgumentException"><paramref name="value"/> is empty, white-space, or contains ill-formed Unicode.</exception>
     [JsonConstructor]
-    public MaterializationValidationFingerprint(string value) => Value = MaterializationContract.RequireIdentity(value, nameof(value));
+    public MaterializationValidationFingerprint(string value) => Value = MaterializationContract.RequireUnicodeIdentity(value, nameof(value));
 
     /// <summary>Gets the versioned deterministic fingerprint.</summary>
     public string Value { get; }
@@ -340,9 +343,9 @@ public readonly record struct MaterializationPromotionId
     /// <summary>Creates a promotion identity.</summary>
     /// <param name="value">Identity reused only for an exact retry of the same promotion intent.</param>
     /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="value"/> is empty or white-space.</exception>
+    /// <exception cref="ArgumentException"><paramref name="value"/> is empty, white-space, or contains ill-formed Unicode.</exception>
     [JsonConstructor]
-    public MaterializationPromotionId(string value) => Value = MaterializationContract.RequireIdentity(value, nameof(value));
+    public MaterializationPromotionId(string value) => Value = MaterializationContract.RequireUnicodeIdentity(value, nameof(value));
 
     /// <summary>Gets the promotion identity.</summary>
     public string Value { get; }
@@ -359,9 +362,9 @@ public readonly record struct MaterializationRetirementId
     /// <summary>Creates a retirement identity.</summary>
     /// <param name="value">Identity reused only for an exact retry of the same retirement intent.</param>
     /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="value"/> is empty or white-space.</exception>
+    /// <exception cref="ArgumentException"><paramref name="value"/> is empty, white-space, or contains ill-formed Unicode.</exception>
     [JsonConstructor]
-    public MaterializationRetirementId(string value) => Value = MaterializationContract.RequireIdentity(value, nameof(value));
+    public MaterializationRetirementId(string value) => Value = MaterializationContract.RequireUnicodeIdentity(value, nameof(value));
 
     /// <summary>Gets the retirement identity.</summary>
     public string Value { get; }
@@ -378,9 +381,9 @@ public readonly record struct MaterializationCleanupId
     /// <summary>Creates a cleanup identity.</summary>
     /// <param name="value">Identity reused only for an exact retry of the same cleanup intent.</param>
     /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="value"/> is empty or white-space.</exception>
+    /// <exception cref="ArgumentException"><paramref name="value"/> is empty, white-space, or contains ill-formed Unicode.</exception>
     [JsonConstructor]
-    public MaterializationCleanupId(string value) => Value = MaterializationContract.RequireIdentity(value, nameof(value));
+    public MaterializationCleanupId(string value) => Value = MaterializationContract.RequireUnicodeIdentity(value, nameof(value));
 
     /// <summary>Gets the cleanup identity.</summary>
     public string Value { get; }
@@ -970,6 +973,34 @@ public sealed record MaterializationBatchResult
 
     /// <summary>Gets exactly one outcome per requested item in request order.</summary>
     public ImmutableArray<MaterializationItemOutcome> Outcomes { get; }
+
+    /// <summary>Compares batch results using structural ordered-outcome value semantics.</summary>
+    /// <param name="other">Batch result to compare with this result.</param>
+    /// <returns><see langword="true"/> when the batch envelope and every ordered outcome are equal; otherwise <see langword="false"/>.</returns>
+    public bool Equals(MaterializationBatchResult? other) =>
+        ReferenceEquals(this, other)
+        || other is not null
+        && BatchId == other.BatchId
+        && GenerationId == other.GenerationId
+        && Disposition == other.Disposition
+        && GenerationRevision == other.GenerationRevision
+        && Outcomes.SequenceEqual(other.Outcomes);
+
+    /// <summary>Returns a structural hash code for the batch envelope and ordered outcomes.</summary>
+    /// <returns>A hash code derived from the complete semantic batch result.</returns>
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(BatchId);
+        hash.Add(GenerationId);
+        hash.Add(Disposition);
+        hash.Add(GenerationRevision);
+        foreach (var outcome in Outcomes)
+        {
+            hash.Add(outcome);
+        }
+        return hash.ToHashCode();
+    }
 }
 
 /// <summary>Request to seal an immutable generation at a known write revision.</summary>
@@ -1089,7 +1120,7 @@ public sealed record MaterializationValidateGenerationRequest
     /// <param name="validator">Stable identity and version of the validation interpretation.</param>
     /// <param name="workerFence">Current monotonic ownership fence of the requesting worker.</param>
     /// <param name="validatedAtUtc">UTC validation-boundary time.</param>
-    /// <exception cref="ArgumentException">An identity is default, the expected count is negative, or the time is not UTC.</exception>
+    /// <exception cref="ArgumentException">An identity is default, <paramref name="validator"/> contains ill-formed Unicode, the expected count is negative, or the time is not UTC.</exception>
     public MaterializationValidateGenerationRequest(
         MaterializationValidationId validationId,
         MaterializationGenerationId generationId,
@@ -1114,7 +1145,7 @@ public sealed record MaterializationValidateGenerationRequest
         ExpectedRevision = expectedRevision;
         ExpectedSealFingerprint = expectedSealFingerprint;
         ExpectedVisibleItemCount = expectedVisibleItemCount;
-        Validator = MaterializationContract.RequireIdentity(validator, nameof(validator));
+        Validator = MaterializationContract.RequireUnicodeIdentity(validator, nameof(validator));
         MaterializationContract.RequireDefinedIdentity(workerFence.Value, nameof(workerFence));
         WorkerFence = workerFence;
         MaterializationContract.RequireUtc(validatedAtUtc, nameof(validatedAtUtc));
