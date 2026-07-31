@@ -118,7 +118,10 @@ public enum MaterializationGuaranteeKind
     /// <summary>Repeated reconciliation converges inside a declared bounded scope.</summary>
     Reconciliation = 4,
 
-    /// <summary>A delivered source change may be repeated until explicit settlement succeeds.</summary>
+    /// <summary>
+    /// A delivered source change may be repeated until the consumer durably advances its application checkpoint;
+    /// explicit provider settlement is required only when separately advertised.
+    /// </summary>
     AtLeastOnceDelivery = 5,
 
     /// <summary>Source retention or redelivery advances only through an explicit settlement request.</summary>
@@ -146,7 +149,10 @@ public enum MaterializationGuaranteeKind
     FencedPromotion = 13,
 
     /// <summary>Generation mutations reject workers superseded within that generation's ownership scope.</summary>
-    FencedMutation = 14
+    FencedMutation = 14,
+
+    /// <summary>The source can capture an exclusive boundary before its earliest currently retained change.</summary>
+    RetainedHistoryStart = 15
 }
 
 /// <summary>Positive hard operating maximum advertised or required for a materialization operation.</summary>
@@ -918,7 +924,8 @@ public static class MaterializationCapabilityCatalog
                 or MaterializationGuaranteeKind.Reconciliation => IsSourceRead(capability),
             MaterializationGuaranteeKind.BaselinePlusCatchUp
                 or MaterializationGuaranteeKind.AtLeastOnceDelivery
-                or MaterializationGuaranteeKind.BeforeImage =>
+                or MaterializationGuaranteeKind.BeforeImage
+                or MaterializationGuaranteeKind.RetainedHistoryStart =>
                 capability == MaterializationCapabilityKind.SourceChangeDelivery,
             MaterializationGuaranteeKind.ExplicitSettlement =>
                 capability == MaterializationCapabilityKind.SourceSettlement,

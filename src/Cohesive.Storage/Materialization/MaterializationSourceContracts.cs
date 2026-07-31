@@ -447,6 +447,26 @@ public interface IMaterializationSource
 /// <summary>Optional source port for bounded typed change delivery.</summary>
 public interface IMaterializationChangeSource : IMaterializationSource
 {
+    /// <summary>Captures the current opaque end position of one exact source-feed scope.</summary>
+    /// <remarks>
+    /// Capturing a position does not read, settle, or checkpoint changes and does not imply a coordinated snapshot
+    /// across other scopes. A subsequent change read may use the returned position as its exclusive boundary.
+    /// </remarks>
+    /// <param name="context">Operation context carrying time, identity, tracing, and cancellation.</param>
+    /// <param name="scope">Exact acquisition input, source, partition, and ordering scope whose end is captured.</param>
+    /// <returns>
+    /// An opaque resumable position at the source-feed boundary observed by this operation. Durability is bounded by
+    /// the source's declared retention and compatibility guarantees; expired or incompatible positions fail closed.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="context"/> or <paramref name="scope"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">The scope targets a different physical source.</exception>
+    /// <exception cref="OperationCanceledException">The context is canceled before the position is captured.</exception>
+    ValueTask<MaterializationSourcePosition> CaptureCurrentPositionAsync(
+        OperationContext context,
+        MaterializationSourceScope scope);
+
     /// <summary>Reads a bounded source-ordered page of changes without settling or checkpointing it.</summary>
     /// <param name="context">Operation context carrying time, identity, tracing, and cancellation.</param>
     /// <param name="request">Bounded change request.</param>
@@ -463,6 +483,32 @@ public interface IMaterializationChangeSource : IMaterializationSource
     ValueTask<MaterializationChangePage> ReadChangesAsync(
         OperationContext context,
         MaterializationChangeReadRequest request);
+}
+
+/// <summary>Optional change-source port that can capture the beginning of its currently retained history.</summary>
+/// <remarks>
+/// Implementers must advertise <see cref="MaterializationGuaranteeKind.RetainedHistoryStart"/> on their
+/// <see cref="MaterializationCapabilityKind.SourceChangeDelivery"/> evidence. Sources that can capture only a
+/// current cut do not implement this port.
+/// </remarks>
+public interface IMaterializationRetainedChangeSource : IMaterializationChangeSource
+{
+    /// <summary>Captures an exclusive resumable boundary immediately before the earliest currently retained change.</summary>
+    /// <param name="context">Operation context carrying time, identity, tracing, and cancellation.</param>
+    /// <param name="scope">Exact acquisition input, source, partition, and ordering scope whose retained start is captured.</param>
+    /// <returns>
+    /// An opaque position suitable as <see cref="MaterializationChangeReadRequest.AfterPosition"/> for reading all
+    /// changes retained at capture time and any changes that subsequently become visible, while the position remains
+    /// inside the source's declared retention and compatibility boundary. Expired positions fail closed.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="context"/> or <paramref name="scope"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">The scope targets a different physical source.</exception>
+    /// <exception cref="OperationCanceledException">The context is canceled before the position is captured.</exception>
+    ValueTask<MaterializationSourcePosition> CaptureRetainedStartPositionAsync(
+        OperationContext context,
+        MaterializationSourceScope scope);
 }
 
 /// <summary>Stable diagnostic codes emitted by source-side materialization operations.</summary>

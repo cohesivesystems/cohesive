@@ -59,8 +59,7 @@ public static class MaterializationDefinitionValidator
 {
     static readonly ImmutableArray<MaterializationCapabilityKind> IncrementalSourceCapabilities =
     [
-        MaterializationCapabilityKind.SourceChangeDelivery,
-        MaterializationCapabilityKind.SourceSettlement
+        MaterializationCapabilityKind.SourceChangeDelivery
     ];
 
     static readonly ImmutableArray<MaterializationCapabilityKind> RebuildTargetCapabilities =
@@ -77,8 +76,7 @@ public static class MaterializationDefinitionValidator
 
     static readonly ImmutableArray<MaterializationCapabilityKind> BaselineCatchUpSourceCapabilities =
     [
-        MaterializationCapabilityKind.SourceChangeDelivery,
-        MaterializationCapabilityKind.SourceSettlement
+        MaterializationCapabilityKind.SourceChangeDelivery
     ];
 
     static readonly ImmutableArray<MaterializationCapabilityKind> IncrementalTargetCapabilities =
@@ -298,6 +296,11 @@ public static class MaterializationDefinitionValidator
                 observed: requirement.Modes.ToString()));
         }
 
+        foreach (var source in definition.Sources)
+        {
+            ValidateOptionalSourceCapabilities(definition, source, diagnostics);
+        }
+
         if (definition.UpdatePolicy.Consistency == MaterializationConsistencyKind.BaselinePlusCatchUp
             && (definition.UpdatePolicy.SupportedModes & MaterializationSynchronizationMode.Rebuild) == 0)
         {
@@ -399,6 +402,33 @@ public static class MaterializationDefinitionValidator
                 location,
                 expected: capability.ToString(),
                 observed: "missing"));
+        }
+    }
+
+    static void ValidateOptionalSourceCapabilities(
+        MaterializationDefinition definition,
+        MaterializationSourceRequirement source,
+        ICollection<DocumentValidationDiagnostic> diagnostics)
+    {
+        foreach (var requirement in source.Capabilities)
+        {
+            if (requirement.Capability != MaterializationCapabilityKind.SourceSettlement)
+            {
+                continue;
+            }
+
+            var applicableModes = requirement.Modes & definition.UpdatePolicy.SupportedModes;
+            if (applicableModes == 0)
+            {
+                continue;
+            }
+
+            RequireGuarantees(
+                definition,
+                applicableModes,
+                requirement,
+                $"/sources/{Encode(source.Input.Value)}/capabilities",
+                diagnostics);
         }
     }
 

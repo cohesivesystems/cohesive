@@ -488,14 +488,78 @@ public sealed class MaterializationDefinitionTests
     }
 
     [Fact]
-    public void Validator_RequiresCatchUpSourceAndDeleteCapabilitiesDuringRebuild()
+    public void Validator_AllowsSourcesWithoutOptionalSettlementCapability()
+    {
+        var valid = CreateDefinition(reverseDeclarations: false);
+        var sourcesWithoutSettlement = valid.Sources.Select(source => new MaterializationSourceRequirement(
+            source.Input,
+            [.. source.Capabilities.Where(static requirement =>
+                requirement.Capability != MaterializationCapabilityKind.SourceSettlement)])).ToImmutableArray();
+        MaterializationDefinition withoutSettlement = new(
+            valid.Id,
+            valid.Relation,
+            sourcesWithoutSettlement,
+            valid.TargetCapabilities,
+            valid.UpdatePolicy,
+            valid.FailurePolicy,
+            valid.FreshnessPolicy,
+            valid.ControlLoops,
+            valid.Provenance);
+
+        var validation = MaterializationDefinitionValidator.Validate(withoutSettlement);
+
+        Assert.True(validation.IsValid);
+        Assert.DoesNotContain(
+            validation.Diagnostics,
+            static diagnostic => diagnostic.Message.Contains(
+                nameof(MaterializationCapabilityKind.SourceSettlement),
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validator_RequiresExplicitGuaranteeWhenOptionalSettlementIsDeclared()
+    {
+        var valid = CreateDefinition(reverseDeclarations: false);
+        var selectedSource = valid.Sources[0];
+        var weakenedSource = new MaterializationSourceRequirement(
+            selectedSource.Input,
+            [.. selectedSource.Capabilities.Select(static requirement =>
+                requirement.Capability == MaterializationCapabilityKind.SourceSettlement
+                    ? new MaterializationCapabilityRequirement(
+                        requirement.Id,
+                        requirement.Capability,
+                        guarantees: [],
+                        requirement.OperatingLimits,
+                        requirement.Modes)
+                    : requirement)]);
+        MaterializationDefinition invalid = new(
+            valid.Id,
+            valid.Relation,
+            [.. valid.Sources.Select(source => source == selectedSource ? weakenedSource : source)],
+            valid.TargetCapabilities,
+            valid.UpdatePolicy,
+            valid.FailurePolicy,
+            valid.FreshnessPolicy,
+            valid.ControlLoops,
+            valid.Provenance);
+
+        var validation = MaterializationDefinitionValidator.Validate(invalid);
+
+        Assert.False(validation.IsValid);
+        Assert.Contains(
+            validation.Diagnostics,
+            static diagnostic => diagnostic.Code == MaterializationDefinitionDiagnosticCodes.ProtocolGuaranteeMissing
+                && diagnostic.Message.Contains(nameof(MaterializationGuaranteeKind.ExplicitSettlement), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validator_RequiresCatchUpChangeAndDeleteCapabilitiesDuringRebuild()
     {
         var valid = CreateDefinition(reverseDeclarations: false);
         var weakenedSources = valid.Sources.Select(source => new MaterializationSourceRequirement(
             source.Input,
             [.. source.Capabilities.Select(requirement =>
-                requirement.Capability is MaterializationCapabilityKind.SourceChangeDelivery
-                    or MaterializationCapabilityKind.SourceSettlement
+                requirement.Capability == MaterializationCapabilityKind.SourceChangeDelivery
                     ? new MaterializationCapabilityRequirement(
                         requirement.Id,
                         requirement.Capability,
@@ -530,10 +594,6 @@ public sealed class MaterializationDefinitionTests
             validation.Diagnostics,
             diagnostic => diagnostic.Code == MaterializationDefinitionDiagnosticCodes.ProtocolCapabilityMissing
                 && diagnostic.Message.Contains(nameof(MaterializationCapabilityKind.SourceChangeDelivery), StringComparison.Ordinal));
-        Assert.Contains(
-            validation.Diagnostics,
-            diagnostic => diagnostic.Code == MaterializationDefinitionDiagnosticCodes.ProtocolCapabilityMissing
-                && diagnostic.Message.Contains(nameof(MaterializationCapabilityKind.SourceSettlement), StringComparison.Ordinal));
         Assert.Contains(
             validation.Diagnostics,
             diagnostic => diagnostic.Code == MaterializationDefinitionDiagnosticCodes.ProtocolCapabilityMissing

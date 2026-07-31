@@ -3,7 +3,6 @@ using System.Diagnostics;
 using System.Net;
 using System.Text.Json;
 using Cohesive.Adapters.Cosmos;
-using Cohesive.Model;
 using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
@@ -11,7 +10,6 @@ using Cohesive.Relations.Observability;
 using Cohesive.Relations.Physical;
 using Cohesive.Storage;
 using Microsoft.Azure.Cosmos;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Cohesive.Tests.Cosmos;
 
@@ -128,6 +126,15 @@ public sealed class CosmosRelationQuerySourceReaderTests
             "entities",
             otherPolicy);
         Assert.NotEqual(first.Source.Id, otherScope.Source.Id);
+        var inheritedConsistencyScope = CosmosEntityRelationQuerySourceRegistration.Create(
+            Shape,
+            container,
+            "operations",
+            "entities",
+            new CosmosRelationQuerySourcePolicy(
+                partitionSourceSelector: "partitionKey",
+                fixedPartitionKey: policy.FixedPartitionKey));
+        Assert.NotEqual(first.Source.Id, inheritedConsistencyScope.Source.Id);
         Assert.Throws<ArgumentException>(() => CosmosEntityRelationQuerySourceRegistration.Create(
             Shape,
             container,
@@ -226,6 +233,7 @@ public sealed class CosmosRelationQuerySourceReaderTests
         Assert.Equal(3, query.Options.MaxItemCount);
         Assert.Equal(3, query.Options.MaxBufferedItemCount);
         Assert.NotNull(query.Options.PartitionKey);
+        Assert.Equal(ConsistencyLevel.Strong, query.Options.ConsistencyLevel);
         Assert.Contains("/account/sha256/", result.EvidenceReference, StringComparison.Ordinal);
         Assert.Contains("physical-plan", result.EvidenceReference, StringComparison.Ordinal);
         Assert.Contains("placement-binding", result.EvidenceReference, StringComparison.Ordinal);
@@ -393,6 +401,37 @@ public sealed class CosmosRelationQuerySourceReaderTests
     }
 
     [Fact]
+    public async Task BufferedMaterializationRead_PreservesProviderThrottlingForTypedSourceEvidence()
+    {
+        CosmosException throttled = new(
+            "provider-secret",
+            HttpStatusCode.TooManyRequests,
+            subStatusCode: 3200,
+            activityId: "sensitive-activity",
+            requestCharge: 2.5);
+        RecordingFeedFactory feed = new()
+        {
+            ReadException = throttled,
+            ReturnResponseBeforeException = true
+        };
+        feed.Enqueue(Json("""{"_identity":"load-a","_field0":"Alpha"}"""));
+        var fixture = CreateFixture(feed, FixedPolicy());
+        var request = Request(
+            fixture,
+            [SemanticField(fixture, NamePath)],
+            new RelationQueryIdentityBatchLookup(["load-a"]));
+
+        var exception = await Assert.ThrowsAsync<CosmosRelationQueryMaterializationProviderException>(() => fixture.Reader
+            .ReadMaterializationBufferedAsync(request, CancellationToken.None)
+            .AsTask());
+
+        Assert.Same(throttled, exception.ProviderException);
+        Assert.Equal(HttpStatusCode.TooManyRequests, exception.ProviderException.StatusCode);
+        Assert.Equal(2.5, exception.ProviderException.RequestCharge);
+        Assert.Equal(1, exception.CompletedRequestCharge);
+    }
+
+    [Fact]
     public async Task ProviderCancellationWithoutInvocationCancellation_ReturnsFailedEvidence()
     {
         RecordingFeedFactory feed = new()
@@ -407,7 +446,8 @@ public sealed class CosmosRelationQuerySourceReaderTests
             new RelationQueryBoundedEnumeration(maximumRows: 10)));
 
         Assert.Equal(RelationQuerySourceReadState.Failed, result.State);
-        Assert.Contains("OperationCanceledException", result.EvidenceReference, StringComparison.Ordinal);
+        Assert.Contains("CosmosProviderProtocolException", result.EvidenceReference, StringComparison.Ordinal);
+        Assert.DoesNotContain("provider read canceled", result.EvidenceReference, StringComparison.Ordinal);
         Assert.Single(feed.Queries);
     }
 
@@ -609,9 +649,415 @@ public sealed class CosmosRelationQuerySourceReaderTests
                 new RelationQueryBoundedEnumeration(maximumRows: 10)), canceled.Token));
     }
 
+    [Fact]
+    public async Task FeedPage_PreservesTheCompleteSdkResponseAndProviderProgress()
+    {
+        JsonDocument document = JsonDocument.Parse(
+            """[{"_identity":"load-a"},{"_identity":"load-b"},{"_identity":"load-c"}]""");
+        CosmosJsonQueryFeedPageResult result;
+        try
+        {
+            RecordingPageFeedFactory feed = new(
+                [.. document.RootElement.EnumerateArray()],
+                nextContinuationToken: "provider/next",
+                hasMoreResultsAfterRead: true,
+                requestCharge: 7.25,
+                statusCode: HttpStatusCode.OK,
+                activityId: "provider-activity-must-not-leak");
+            CosmosJsonQueryFeedReader reader = new(
+                new Uri("https://tests.invalid"),
+                "operations",
+                "entities",
+                feed.Create);
+            QueryDefinition query = new("SELECT * FROM c");
+            QueryRequestOptions options = new() { MaxItemCount = 1 };
+            var request = reader.Prepare(query, options, new());
+            var feedRange = FeedRange.FromPartitionKey(new PartitionKey("tenant-a"));
+
+            result = await reader.ReadPageAsync(
+                request,
+                feedRange,
+                continuationToken: "provider/before",
+                CancellationToken.None);
+
+            var captured = Assert.Single(feed.Calls);
+            Assert.Same(feedRange, captured.FeedRange);
+            Assert.Same(query, captured.Query);
+            Assert.Equal("provider/before", captured.ContinuationToken);
+            Assert.Same(options, captured.Options);
+        }
+        finally
+        {
+            document.Dispose();
+        }
+
+        Assert.Equal(
+            ["load-a", "load-b", "load-c"],
+            [.. result.Rows.Select(row => row.GetProperty("_identity").GetString()!)]);
+        Assert.Equal("provider/next", result.NextContinuationToken);
+        Assert.True(result.HasMoreResults);
+        Assert.Equal(7.25, result.RequestCharge);
+        Assert.Equal(HttpStatusCode.OK, result.StatusCode);
+        Assert.StartsWith("cosmos-json-query-page/v1/sha256/", result.ProviderEvidenceReference, StringComparison.Ordinal);
+        Assert.DoesNotContain("provider-activity-must-not-leak", result.ProviderEvidenceReference, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FeedPageEvidence_AttestsRequestConsistencyLevel()
+    {
+        var strong = await ReadEvidence(ConsistencyLevel.Strong);
+        var eventual = await ReadEvidence(ConsistencyLevel.Eventual);
+        var strongBuffered = await ReadBufferedEvidence(ConsistencyLevel.Strong);
+        var eventualBuffered = await ReadBufferedEvidence(ConsistencyLevel.Eventual);
+
+        Assert.NotEqual(strong, eventual);
+        Assert.NotEqual(strongBuffered, eventualBuffered);
+
+        static async Task<string?> ReadEvidence(ConsistencyLevel consistencyLevel)
+        {
+            RecordingPageFeedFactory feed = new(
+                [Json("""{"_identity":"load-a"}""")],
+                nextContinuationToken: null,
+                hasMoreResultsAfterRead: false,
+                requestCharge: 1,
+                statusCode: HttpStatusCode.OK,
+                activityId: "same-provider-activity");
+            CosmosJsonQueryFeedReader reader = new(
+                new Uri("https://tests.invalid"),
+                "operations",
+                "entities",
+                feed.Create);
+            var request = reader.Prepare(
+                new("SELECT * FROM c"),
+                new QueryRequestOptions { ConsistencyLevel = consistencyLevel },
+                new());
+
+            var result = await reader.ReadPageAsync(
+                request,
+                feedRange: null,
+                continuationToken: null,
+                CancellationToken.None);
+            return result.ProviderEvidenceReference;
+        }
+
+        static async Task<string?> ReadBufferedEvidence(ConsistencyLevel consistencyLevel)
+        {
+            RecordingFeedFactory feed = new();
+            feed.Enqueue(Json("""{"_identity":"load-a"}"""));
+            CosmosJsonQueryFeedReader reader = new(
+                new Uri("https://tests.invalid"),
+                "operations",
+                "entities",
+                feed.Create);
+            var request = reader.Prepare(
+                new("SELECT * FROM c"),
+                new QueryRequestOptions { ConsistencyLevel = consistencyLevel },
+                new());
+
+            var result = await reader.ReadAllAsync(
+                request,
+                maximumRows: 10,
+                CancellationToken.None);
+            return result.ProviderEvidenceReference;
+        }
+    }
+
+    [Fact]
+    public async Task FeedPage_RejectsInvalidProgressAndCancellationBeforeProviderIo()
+    {
+        RecordingPageFeedFactory feed = new(
+            [],
+            nextContinuationToken: "provider/next",
+            hasMoreResultsAfterRead: false,
+            requestCharge: 0,
+            statusCode: HttpStatusCode.OK,
+            activityId: "tests/activity");
+        CosmosJsonQueryFeedReader reader = new(
+            new Uri("https://tests.invalid"),
+            "operations",
+            "entities",
+            feed.Create);
+        var request = reader.Prepare(new("SELECT * FROM c"), new(), new());
+
+        await Assert.ThrowsAsync<ArgumentNullException>(() =>
+            reader.ReadPageAsync(null!, null, null, CancellationToken.None).AsTask());
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            reader.ReadPageAsync(request, null, " \t", CancellationToken.None).AsTask());
+
+        using CancellationTokenSource cancellation = new();
+        await cancellation.CancelAsync();
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            reader.ReadPageAsync(request, null, null, cancellation.Token).AsTask());
+
+        Assert.Empty(feed.Calls);
+    }
+
+    [Fact]
+    public async Task FeedPage_RejectsInvalidStatusChargeProgressAndItemsWithTypedEvidence()
+    {
+        RecordingPageFeedFactory rejected = new(
+            [],
+            nextContinuationToken: null,
+            hasMoreResultsAfterRead: false,
+            requestCharge: 2.5,
+            statusCode: HttpStatusCode.Accepted,
+            activityId: "provider-activity-must-not-leak");
+        var statusException = await ReadProtocolFailure(rejected);
+
+        Assert.Equal("query-response-status-invalid", statusException.Reason);
+        Assert.Equal(HttpStatusCode.Accepted, statusException.StatusCode);
+        Assert.Equal(2.5, statusException.RequestCharge);
+        Assert.False(statusException.ResponseChargeAccounted);
+        Assert.StartsWith("cosmos-provider-protocol/v1/sha256/", statusException.ProviderEvidenceReference, StringComparison.Ordinal);
+        Assert.DoesNotContain("provider-activity-must-not-leak", statusException.ProviderEvidenceReference, StringComparison.Ordinal);
+
+        RecordingPageFeedFactory invalidCharge = new(
+            [],
+            nextContinuationToken: null,
+            hasMoreResultsAfterRead: false,
+            requestCharge: double.PositiveInfinity,
+            statusCode: HttpStatusCode.OK,
+            activityId: "tests/activity");
+        var chargeException = await ReadProtocolFailure(invalidCharge);
+        Assert.Equal("query-response-charge-invalid", chargeException.Reason);
+        Assert.Equal(HttpStatusCode.OK, chargeException.StatusCode);
+        Assert.Null(chargeException.RequestCharge);
+
+        RecordingPageFeedFactory inconsistentProgress = new(
+            [],
+            nextContinuationToken: null,
+            hasMoreResultsAfterRead: true,
+            requestCharge: 1,
+            statusCode: HttpStatusCode.OK,
+            activityId: "tests/activity");
+        var progressException = await ReadProtocolFailure(inconsistentProgress);
+        Assert.Equal("query-continuation-missing", progressException.Reason);
+        Assert.Equal(1, progressException.RequestCharge);
+
+        RecordingPageFeedFactory undefinedItem = new(
+            [default],
+            nextContinuationToken: null,
+            hasMoreResultsAfterRead: false,
+            requestCharge: 1,
+            statusCode: HttpStatusCode.OK,
+            activityId: "tests/activity");
+        var itemException = await ReadProtocolFailure(undefinedItem);
+        Assert.Equal("query-response-item-invalid", itemException.Reason);
+    }
+
+    [Fact]
+    public async Task FeedPage_RejectsNullIteratorAndNullResponse()
+    {
+        CosmosJsonQueryFeedReader nullIteratorReader = new(
+            new Uri("https://tests.invalid"),
+            "operations",
+            "entities",
+            static (FeedRange? _, QueryDefinition _, string? _, QueryRequestOptions _) => null!);
+        var request = nullIteratorReader.Prepare(new("SELECT * FROM c"), new(), new());
+        var nullIterator = await Assert.ThrowsAsync<CosmosProviderProtocolException>(() =>
+            nullIteratorReader.ReadPageAsync(request, null, null, CancellationToken.None).AsTask());
+        Assert.Equal("query-iterator-null", nullIterator.Reason);
+
+        CosmosJsonQueryFeedReader nullResponseReader = new(
+            new Uri("https://tests.invalid"),
+            "operations",
+            "entities",
+            static (FeedRange? _, QueryDefinition _, string? _, QueryRequestOptions _) =>
+                new NullJsonPageIterator());
+        request = nullResponseReader.Prepare(new("SELECT * FROM c"), new(), new());
+        var nullResponse = await Assert.ThrowsAsync<CosmosProviderProtocolException>(() =>
+            nullResponseReader.ReadPageAsync(request, null, null, CancellationToken.None).AsTask());
+        Assert.Equal("query-response-null", nullResponse.Reason);
+    }
+
+    [Fact]
+    public async Task FeedPage_NormalizesNonCosmosProjectionFailuresWithoutLeakingProviderDetails()
+    {
+        RecordingPageFeedFactory feed = new(
+            [Json("""{"_identity":"load-a"}""")],
+            nextContinuationToken: null,
+            hasMoreResultsAfterRead: false,
+            requestCharge: 3.25,
+            statusCode: HttpStatusCode.OK,
+            activityId: "provider-activity-must-not-leak",
+            resourceException: new JsonException("malformed-provider-payload-secret"));
+
+        var exception = await ReadProtocolFailure(feed);
+
+        Assert.Equal("query-response-projection-failed", exception.Reason);
+        Assert.Equal(HttpStatusCode.OK, exception.StatusCode);
+        Assert.Equal(3.25, exception.RequestCharge);
+        Assert.Null(exception.InnerException);
+        Assert.DoesNotContain("malformed-provider-payload-secret", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("provider-activity-must-not-leak", exception.ProviderEvidenceReference, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FeedPage_RetainsFiniteChargeWhenActivityEvidenceCannotBeRead()
+    {
+        RecordingPageFeedFactory feed = new(
+            [],
+            nextContinuationToken: null,
+            hasMoreResultsAfterRead: false,
+            requestCharge: 3.75,
+            statusCode: HttpStatusCode.OK,
+            activityId: "must-not-be-observed",
+            activityIdException: new InvalidOperationException("provider-activity-secret"));
+
+        var exception = await ReadProtocolFailure(feed);
+
+        Assert.Equal("query-response-projection-failed", exception.Reason);
+        Assert.Equal(HttpStatusCode.OK, exception.StatusCode);
+        Assert.Equal(3.75, exception.RequestCharge);
+        Assert.False(exception.ResponseChargeAccounted);
+        Assert.DoesNotContain("provider-activity-secret", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("provider-activity-secret", exception.ProviderEvidenceReference, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task BoundedFeed_RetainsUnaccountedFiniteChargeWhenActivityEvidenceCannotBeRead()
+    {
+        RecordingPageFeedFactory feed = new(
+            [],
+            nextContinuationToken: null,
+            hasMoreResultsAfterRead: false,
+            requestCharge: 4.75,
+            statusCode: HttpStatusCode.OK,
+            activityId: "must-not-be-observed",
+            activityIdException: new InvalidOperationException("provider-activity-secret"));
+        CosmosJsonQueryFeedReader reader = new(
+            new Uri("https://tests.invalid"),
+            "operations",
+            "entities",
+            feed.Create);
+        var request = reader.Prepare(new("SELECT * FROM c"), new(), new());
+        List<(double Charge, HttpStatusCode Status)> completed = [];
+
+        var exception = await Assert.ThrowsAsync<CosmosProviderProtocolException>(() =>
+            reader.ReadAllAsync(
+                request,
+                maximumRows: 10,
+                CancellationToken.None,
+                (charge, status) => completed.Add((charge, status))).AsTask());
+
+        Assert.Equal("query-response-evidence-invalid", exception.Reason);
+        Assert.Equal(HttpStatusCode.OK, exception.StatusCode);
+        Assert.Equal(4.75, exception.RequestCharge);
+        Assert.False(exception.ResponseChargeAccounted);
+        Assert.Empty(completed);
+        Assert.DoesNotContain("provider-activity-secret", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("provider-activity-secret", exception.ProviderEvidenceReference, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CompletedResponseCancellationCarriesEvidenceAndPrecedesProjection()
+    {
+        using CancellationTokenSource cancellation = new();
+        RecordingPageFeedFactory feed = new(
+            [Json("""{"_identity":"must-not-project"}""")],
+            nextContinuationToken: null,
+            hasMoreResultsAfterRead: false,
+            requestCharge: 4.25,
+            statusCode: HttpStatusCode.OK,
+            activityId: "provider-activity-must-not-leak",
+            afterRead: cancellation.Cancel);
+        CosmosJsonQueryFeedReader reader = new(
+            new Uri("https://tests.invalid"),
+            "operations",
+            "entities",
+            feed.Create);
+        var request = reader.Prepare(new("SELECT * FROM c"), new(), new());
+
+        var exception = await Assert.ThrowsAsync<CosmosProviderResponseCanceledException>(() =>
+            reader.ReadPageAsync(request, null, null, cancellation.Token).AsTask());
+
+        Assert.Equal(HttpStatusCode.OK, exception.StatusCode);
+        Assert.Equal(4.25, exception.RequestCharge);
+        Assert.False(exception.ResponseChargeAccounted);
+        Assert.Equal(cancellation.Token, exception.CancellationToken);
+        Assert.DoesNotContain("provider-activity-must-not-leak", exception.ProviderEvidenceReference, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task BoundedFeed_AccountsCompletedResponseBeforeCancellation()
+    {
+        using CancellationTokenSource cancellation = new();
+        RecordingPageFeedFactory feed = new(
+            [],
+            nextContinuationToken: null,
+            hasMoreResultsAfterRead: false,
+            requestCharge: 5.5,
+            statusCode: HttpStatusCode.OK,
+            activityId: "tests/activity",
+            afterRead: cancellation.Cancel);
+        CosmosJsonQueryFeedReader reader = new(
+            new Uri("https://tests.invalid"),
+            "operations",
+            "entities",
+            feed.Create);
+        var request = reader.Prepare(new("SELECT * FROM c"), new(), new());
+        List<(double Charge, HttpStatusCode Status)> completed = [];
+
+        var exception = await Assert.ThrowsAsync<CosmosProviderResponseCanceledException>(() =>
+            reader.ReadAllAsync(
+                request,
+                maximumRows: 10,
+                cancellation.Token,
+                (charge, status) => completed.Add((charge, status))).AsTask());
+
+        Assert.Equal(5.5, exception.RequestCharge);
+        Assert.True(exception.ResponseChargeAccounted);
+        Assert.Equal([(5.5, HttpStatusCode.OK)], completed);
+    }
+
+    [Fact]
+    public async Task BoundedFeed_AccountsCompletedChargeBeforeRejectingStatus()
+    {
+        RecordingPageFeedFactory feed = new(
+            [],
+            nextContinuationToken: null,
+            hasMoreResultsAfterRead: false,
+            requestCharge: 6.5,
+            statusCode: HttpStatusCode.BadRequest,
+            activityId: "provider-activity-must-not-leak");
+        CosmosJsonQueryFeedReader reader = new(
+            new Uri("https://tests.invalid"),
+            "operations",
+            "entities",
+            feed.Create);
+        var request = reader.Prepare(new("SELECT * FROM c"), new(), new());
+        List<(double Charge, HttpStatusCode Status)> completed = [];
+
+        var exception = await Assert.ThrowsAsync<CosmosProviderProtocolException>(() =>
+            reader.ReadAllAsync(
+                request,
+                maximumRows: 10,
+                CancellationToken.None,
+                (charge, status) => completed.Add((charge, status))).AsTask());
+
+        Assert.Equal("query-response-status-invalid", exception.Reason);
+        Assert.Equal(6.5, exception.RequestCharge);
+        Assert.True(exception.ResponseChargeAccounted);
+        Assert.Equal([(6.5, HttpStatusCode.BadRequest)], completed);
+        Assert.DoesNotContain("provider-activity-must-not-leak", exception.ProviderEvidenceReference, StringComparison.Ordinal);
+    }
+
+    static async Task<CosmosProviderProtocolException> ReadProtocolFailure(RecordingPageFeedFactory feed)
+    {
+        CosmosJsonQueryFeedReader reader = new(
+            new Uri("https://tests.invalid"),
+            "operations",
+            "entities",
+            feed.Create);
+        var request = reader.Prepare(new("SELECT * FROM c"), new(), new());
+        return await Assert.ThrowsAsync<CosmosProviderProtocolException>(() =>
+            reader.ReadPageAsync(request, null, null, CancellationToken.None).AsTask());
+    }
+
     static CosmosRelationQuerySourcePolicy FixedPolicy() => new(
         partitionSourceSelector: "partitionKey",
-        fixedPartitionKey: new("tenant-a"));
+        fixedPartitionKey: new("tenant-a"),
+        readConsistencyLevel: ConsistencyLevel.Strong);
 
     static ReaderFixture CreateFixture(
         RecordingFeedFactory feed,
@@ -687,6 +1133,8 @@ public sealed class CosmosRelationQuerySourceReaderTests
 
         public Exception? ReadException { get; init; }
 
+        public bool ReturnResponseBeforeException { get; init; }
+
         public void Enqueue(params JsonElement[] rows) => responses.Enqueue([.. rows]);
 
         public FeedIterator<JsonElement> Create(QueryDefinition query, QueryRequestOptions options)
@@ -694,27 +1142,70 @@ public sealed class CosmosRelationQuerySourceReaderTests
             Queries.Add(new(query, options));
             return new JsonFeedIterator(
                 responses.Count == 0 ? [] : responses.Dequeue(),
-                ReadException);
+                ReadException,
+                ReturnResponseBeforeException);
         }
     }
 
     sealed record CapturedQuery(QueryDefinition Query, QueryRequestOptions Options);
 
+    sealed record CapturedPageQuery(
+        FeedRange? FeedRange,
+        QueryDefinition Query,
+        string? ContinuationToken,
+        QueryRequestOptions Options);
+
+    sealed class RecordingPageFeedFactory(
+        ImmutableArray<JsonElement> rows,
+        string? nextContinuationToken,
+        bool hasMoreResultsAfterRead,
+        double requestCharge,
+        HttpStatusCode statusCode,
+        string activityId,
+        Action? afterRead = null,
+        Exception? resourceException = null,
+        Exception? activityIdException = null)
+    {
+        public List<CapturedPageQuery> Calls { get; } = [];
+
+        public FeedIterator<JsonElement> Create(
+            FeedRange? feedRange,
+            QueryDefinition query,
+            string? continuationToken,
+            QueryRequestOptions options)
+        {
+            Calls.Add(new(feedRange, query, continuationToken, options));
+            return new JsonPageFeedIterator(
+                new JsonPageFeedResponse(
+                    rows,
+                    nextContinuationToken,
+                    requestCharge,
+                    statusCode,
+                    activityId,
+                    resourceException,
+                    activityIdException),
+                hasMoreResultsAfterRead,
+                afterRead);
+        }
+    }
+
     sealed class JsonFeedIterator(
         ImmutableArray<JsonElement> rows,
-        Exception? readException) : FeedIterator<JsonElement>
+        Exception? readException,
+        bool returnResponseBeforeException) : FeedIterator<JsonElement>
     {
-        bool read;
+        int reads;
 
-        public override bool HasMoreResults => !read;
+        public override bool HasMoreResults => reads == 0
+            || (returnResponseBeforeException && readException is not null && reads == 1);
 
         public override Task<FeedResponse<JsonElement>> ReadNextAsync(CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (read)
+            if (!HasMoreResults)
                 throw new InvalidOperationException("The test feed was already exhausted.");
-            read = true;
-            if (readException is not null)
+            reads++;
+            if (readException is not null && (!returnResponseBeforeException || reads > 1))
                 return Task.FromException<FeedResponse<JsonElement>>(readException);
             return Task.FromResult<FeedResponse<JsonElement>>(new JsonFeedResponse(rows));
         }
@@ -745,5 +1236,79 @@ public sealed class CosmosRelationQuerySourceReaderTests
         public override string ETag => string.Empty;
 
         public override IEnumerator<JsonElement> GetEnumerator() => ((IEnumerable<JsonElement>)rows).GetEnumerator();
+    }
+
+    sealed class JsonPageFeedIterator(
+        FeedResponse<JsonElement> response,
+        bool hasMoreResultsAfterRead,
+        Action? afterRead) : FeedIterator<JsonElement>
+    {
+        bool read;
+
+        public override bool HasMoreResults => !read || hasMoreResultsAfterRead;
+
+        public override Task<FeedResponse<JsonElement>> ReadNextAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (read)
+                throw new InvalidOperationException("The test feed page was already read.");
+
+            read = true;
+            afterRead?.Invoke();
+            return Task.FromResult(response);
+        }
+    }
+
+    sealed class NullJsonPageIterator : FeedIterator<JsonElement>
+    {
+        public override bool HasMoreResults => true;
+
+        public override Task<FeedResponse<JsonElement>> ReadNextAsync(
+            CancellationToken cancellationToken = default) => Task.FromResult<FeedResponse<JsonElement>>(null!);
+    }
+
+    sealed class JsonPageFeedResponse(
+        ImmutableArray<JsonElement> rows,
+        string? continuationToken,
+        double requestCharge,
+        HttpStatusCode statusCode,
+        string activityId,
+        Exception? resourceException,
+        Exception? activityIdException) : FeedResponse<JsonElement>
+    {
+        public override string ContinuationToken => continuationToken!;
+
+        public override int Count => rows.Length;
+
+        public override string IndexMetrics => string.Empty;
+
+        public override string QueryAdvice => string.Empty;
+
+        public override Headers Headers { get; } = new();
+
+        public override IEnumerable<JsonElement> Resource => resourceException is null
+            ? rows
+            : new ThrowingEnumerable<JsonElement>(resourceException);
+
+        public override HttpStatusCode StatusCode => statusCode;
+
+        public override CosmosDiagnostics Diagnostics => null!;
+
+        public override double RequestCharge => requestCharge;
+
+        public override string ActivityId => activityIdException is null
+            ? activityId
+            : throw activityIdException;
+
+        public override string ETag => string.Empty;
+
+        public override IEnumerator<JsonElement> GetEnumerator() => ((IEnumerable<JsonElement>)rows).GetEnumerator();
+    }
+
+    sealed class ThrowingEnumerable<T>(Exception exception) : IEnumerable<T>
+    {
+        public IEnumerator<T> GetEnumerator() => throw exception;
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 }

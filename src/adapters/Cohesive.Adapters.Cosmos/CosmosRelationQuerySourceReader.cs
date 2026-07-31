@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Net;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -8,7 +9,6 @@ using Cohesive.Model;
 using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Compilation;
-using Cohesive.Relations.Model;
 using Cohesive.Relations.Observability;
 using Cohesive.Relations.Physical;
 using Cohesive.Relations.Realization;
@@ -33,6 +33,9 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
 {
     /// <summary>Conventional entity-envelope observation identity property.</summary>
     public const string ObservationIdentitySourceSelector = "observationId";
+
+    /// <summary>Conventional entity-envelope scalar partition-coordinate property.</summary>
+    public const string ObservationPartitionSourceSelector = "partitionKey";
 
     /// <summary>Conventional entity-envelope semantic observation property.</summary>
     public const string ObservationEnvelopeSourceSelector = "observation";
@@ -129,7 +132,8 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
             identitySourceSelector,
             fieldSourceSelector,
             relationshipKeySourceSelector,
-            entityDocumentKind)
+            entityDocumentKind,
+            container.Database.Client.ClientOptions.ConsistencyLevel)
     {
     }
 
@@ -144,7 +148,8 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
         string? identitySourceSelector = null,
         RelationQueryPlacementFieldSelector? fieldSourceSelector = null,
         RelationQueryPlacementFieldSelector? relationshipKeySourceSelector = null,
-        string? entityDocumentKind = null)
+        string? entityDocumentKind = null,
+        ConsistencyLevel? clientConsistencyLevel = null)
     {
         if (string.IsNullOrWhiteSpace(shape.GraphId.Value) || string.IsNullOrWhiteSpace(shape.ShapeId.Value))
             throw new ArgumentException("A Cosmos entity reader requires a graph-qualified shape.", nameof(shape));
@@ -215,11 +220,12 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
         identityPath = CosmosRelationQuerySourceSelectors.RequirePropertyPath(
             IdentitySourceSelector,
             nameof(identitySourceSelector));
-        FieldSourceSelector = fieldSourceSelector ?? SelectObservationField;
-        RelationshipKeySourceSelector = relationshipKeySourceSelector ?? SelectObservationField;
+        FieldSourceSelector = fieldSourceSelector ?? GetObservationFieldSourceSelector;
+        RelationshipKeySourceSelector = relationshipKeySourceSelector ?? GetObservationFieldSourceSelector;
         EntityDocumentKind = entityDocumentKind is null
             ? DefaultEntityDocumentKind
             : Guard.RequireNotNullOrWhiteSpace(entityDocumentKind);
+        ClientConsistencyLevel = clientConsistencyLevel;
     }
 
     /// <summary>Exact graph-qualified shape returned by this reader.</summary>
@@ -242,6 +248,15 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
     /// </summary>
     public CosmosRelationQuerySourcePolicy Policy { get; }
 
+    /// <summary>
+    /// Explicit consistency override configured on the production Cosmos client, or <see langword="null"/> when
+    /// the client inherits its account policy. Materialization sources reject an explicitly weaker override.
+    /// </summary>
+    internal ConsistencyLevel? ClientConsistencyLevel { get; }
+
+    /// <summary>Effective source limits already constrained by the Cosmos physical policy.</summary>
+    internal RelationQuerySourcePlacementLimits Limits => source.Limits;
+
     /// <summary>Entity-envelope discriminator required by every source query.</summary>
     public string EntityDocumentKind { get; }
 
@@ -262,6 +277,13 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
     /// </summary>
     public RelationQueryPlacementFieldSelector RelationshipKeySourceSelector { get; }
 
+    /// <summary>Projects one semantic field path into the conventional Cosmos observation-envelope selector.</summary>
+    /// <param name="semanticPath">Non-empty semantic field path to place below <c>observation</c>.</param>
+    /// <returns>The deterministic physical selector rooted at <c>observation</c>.</returns>
+    /// <exception cref="ArgumentException"><paramref name="semanticPath"/> is empty.</exception>
+    public static string GetObservationFieldSourceSelector(FieldPath semanticPath) => new FieldPath(
+        [FieldPathSegment.ForField(ObservationEnvelopeSourceSelector), .. semanticPath.Segments]).ToString();
+
     /// <inheritdoc />
     public ValueTask<RelationQuerySourceReadResult> ReadAsync(
         RelationQuerySourceReadRequest request,
@@ -274,9 +296,211 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
             : ReadCoreAsync(request, cancellationToken);
     }
 
-    async ValueTask<RelationQuerySourceReadResult> ReadCoreAsync(
+    /// <summary>
+    /// Reads one complete buffered materialization acquisition while preserving aggregate provider evidence and
+    /// provider failures for the owning materialization adapter.
+    /// </summary>
+    /// <param name="request">Exact canonical non-enumeration Relations source request.</param>
+    /// <param name="cancellationToken">Caller cancellation observed before I/O and throughout projection.</param>
+    /// <returns>The canonical read plus aggregate request charge and final provider status.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="request"/> is a bounded enumeration.</exception>
+    /// <exception cref="CosmosRelationQueryMaterializationProviderException">
+    /// The provider rejects an acquisition request; the exception retains the provider failure and request charge
+    /// from completed responses for the owning materialization adapter.
+    /// </exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> is canceled.</exception>
+    internal async ValueTask<CosmosRelationQueryMaterializationRead> ReadMaterializationBufferedAsync(
         RelationQuerySourceReadRequest request,
         CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.Constraint is RelationQueryBoundedEnumeration)
+        {
+            throw new ArgumentException(
+                "Buffered materialization acquisition requires an identity or relationship-key batch.",
+                nameof(request));
+        }
+
+        CosmosRelationQueryMaterializationAccumulator accumulator = new();
+        try
+        {
+            var read = await ReadCoreAsync(
+                request,
+                cancellationToken,
+                accumulator,
+                preserveProviderFailure: true).ConfigureAwait(false);
+            return new(read, accumulator.RequestCharge, accumulator.StatusCode);
+        }
+        catch (CosmosProviderProtocolException exception)
+        {
+            throw new CosmosRelationQueryMaterializationProtocolException(
+                exception,
+                AddUnaccountedResponseCharge(
+                    accumulator.RequestCharge,
+                    exception.RequestCharge,
+                    exception.ResponseChargeAccounted),
+                exception.StatusCode ?? accumulator.StatusCode,
+                CombineProviderEvidence(
+                    accumulator.ProviderEvidenceReference,
+                    exception.ProviderEvidenceReference));
+        }
+        catch (CosmosException exception)
+        {
+            throw new CosmosRelationQueryMaterializationProviderException(
+                exception,
+                accumulator.RequestCharge);
+        }
+        catch (OperationCanceledException exception) when (cancellationToken.IsCancellationRequested)
+        {
+            var responseCancellation = exception as CosmosProviderResponseCanceledException;
+            throw new CosmosRelationQueryMaterializationCanceledException(
+                exception,
+                AddUnaccountedResponseCharge(
+                    accumulator.RequestCharge,
+                    responseCancellation?.RequestCharge,
+                    responseCancellation?.ResponseChargeAccounted ?? true),
+                responseCancellation?.StatusCode ?? accumulator.StatusCode,
+                CombineProviderEvidence(
+                    accumulator.ProviderEvidenceReference,
+                    responseCancellation?.ProviderEvidenceReference),
+                cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Reads one complete provider page for a bounded-enumeration materialization without interpreting or
+    /// truncating the Cosmos continuation.
+    /// </summary>
+    /// <param name="request">Exact canonical Relations source-read request.</param>
+    /// <param name="providerContinuation">Opaque Cosmos continuation, or <see langword="null"/> for the first page.</param>
+    /// <param name="maximumProviderItems">Positive SDK page-size bound supplied for this response.</param>
+    /// <param name="cancellationToken">Caller cancellation observed before I/O and throughout projection.</param>
+    /// <returns>One complete projected Relations page plus provider continuation and operation evidence.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="request"/> is not a bounded enumeration or <paramref name="providerContinuation"/> is empty.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maximumProviderItems"/> is not positive.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> is canceled.</exception>
+    internal async ValueTask<CosmosRelationQueryMaterializationPage> ReadMaterializationPageAsync(
+        RelationQuerySourceReadRequest request,
+        string? providerContinuation,
+        int maximumProviderItems,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.Constraint is not RelationQueryBoundedEnumeration)
+        {
+            throw new ArgumentException(
+                "Provider-continuation materialization paging requires a bounded enumeration.",
+                nameof(request));
+        }
+        if (providerContinuation is not null && string.IsNullOrWhiteSpace(providerContinuation))
+            throw new ArgumentException("A provider continuation cannot be empty or white space.", nameof(providerContinuation));
+        if (maximumProviderItems <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maximumProviderItems),
+                maximumProviderItems,
+                "A materialization provider page must be bounded.");
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        if (ValidateRequest(request, cancellationToken) is { } invalid)
+        {
+            return CosmosRelationQueryMaterializationPage.FromRead(Failed(request, invalid));
+        }
+
+        var projection = CreateProjection(request, relationshipSelector: null);
+        var statement = BuildStatement(projection, predicate: null);
+        var providerItems = Math.Min(maximumProviderItems, Policy.MaximumSdkPageSize);
+        QueryRequestOptions options = new()
+        {
+            MaxItemCount = providerItems,
+            MaxBufferedItemCount = providerItems,
+            MaxConcurrency = checked((int)Math.Min(int.MaxValue, source.Limits.MaximumConcurrency)),
+            ConsistencyLevel = Policy.ReadConsistencyLevel
+        };
+        if (Policy.FixedPartitionKey is { } partitionKey)
+            options.PartitionKey = partitionKey;
+        var prepared = feedReader.Prepare(
+            statement.ToQueryDefinition(),
+            options,
+            Policy.RequestSizeLimits);
+        var feed = await feedReader.ReadPageAsync(
+            prepared,
+            feedRange: null,
+            providerContinuation,
+            cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var materialized = MaterializeRows(
+                request,
+                projection,
+                feed.Rows,
+                feed.ProviderEvidenceReference,
+                cancellationToken);
+            if (materialized.FailureReason is { } failure)
+            {
+                return new(
+                    Failed(request, failure, feed.ProviderEvidenceReference),
+                    feed.NextContinuationToken,
+                    feed.HasMoreResults,
+                    feed.RequestCharge,
+                    feed.StatusCode,
+                    feed.ProviderEvidenceReference);
+            }
+            if (HasDuplicateIdentity(materialized.Rows, allowRepeatedPhysicalRows: false, out _))
+            {
+                return new(
+                    Failed(request, "duplicate-observation-identity", feed.ProviderEvidenceReference),
+                    feed.NextContinuationToken,
+                    feed.HasMoreResults,
+                    feed.RequestCharge,
+                    feed.StatusCode,
+                    feed.ProviderEvidenceReference);
+            }
+
+            var observations = ProjectObservations(materialized.Rows.AsSpan());
+            var hasMore = feed.NextContinuationToken is not null;
+            if (feed.HasMoreResults && !hasMore)
+                throw new InvalidOperationException("The Cosmos query iterator reported more results without a resumable continuation.");
+            var state = hasMore
+                ? RelationQuerySourceReadState.Partial
+                : observations.IsDefaultOrEmpty
+                    ? RelationQuerySourceReadState.NotFound
+                    : RelationQuerySourceReadState.Complete;
+            return new(
+                new(
+                    state,
+                    observations,
+                    Evidence(
+                        request,
+                        hasMore ? "materialization-page-partial" : "materialization-page-complete",
+                        feed.ProviderEvidenceReference)),
+                feed.NextContinuationToken,
+                hasMore,
+                feed.RequestCharge,
+                feed.StatusCode,
+                feed.ProviderEvidenceReference);
+        }
+        catch (OperationCanceledException exception) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new CosmosRelationQueryMaterializationCanceledException(
+                exception,
+                feed.RequestCharge,
+                feed.StatusCode,
+                feed.ProviderEvidenceReference,
+                cancellationToken);
+        }
+    }
+
+    async ValueTask<RelationQuerySourceReadResult> ReadCoreAsync(
+        RelationQuerySourceReadRequest request,
+        CancellationToken cancellationToken,
+        CosmosRelationQueryMaterializationAccumulator? accumulator = null,
+        bool preserveProviderFailure = false)
     {
         try
         {
@@ -287,11 +511,11 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
             return request.Constraint switch
             {
                 RelationQueryBoundedEnumeration enumeration =>
-                    await ReadEnumerationAsync(request, enumeration, cancellationToken).ConfigureAwait(false),
+                    await ReadEnumerationAsync(request, enumeration, accumulator, cancellationToken).ConfigureAwait(false),
                 RelationQueryIdentityBatchLookup identity =>
-                    await ReadIdentityBatchAsync(request, identity, cancellationToken).ConfigureAwait(false),
+                    await ReadIdentityBatchAsync(request, identity, accumulator, cancellationToken).ConfigureAwait(false),
                 RelationQueryRelationshipKeyBatchLookup relationship =>
-                    await ReadRelationshipBatchAsync(request, relationship, cancellationToken).ConfigureAwait(false),
+                    await ReadRelationshipBatchAsync(request, relationship, accumulator, cancellationToken).ConfigureAwait(false),
                 _ => Failed(request, "unsupported-read-constraint")
             };
         }
@@ -303,13 +527,17 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
         {
             return Inconclusive(request, exception.Reason);
         }
-        catch (CosmosException exception)
+        catch (CosmosException exception) when (!preserveProviderFailure)
         {
             return Failed(
                 request,
                 $"provider-read-failed/status/{(int)exception.StatusCode}/substatus/{exception.SubStatusCode}");
         }
-        catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
+        catch (Exception exception) when (
+            (!preserveProviderFailure
+             || exception is not CosmosException and not CosmosProviderProtocolException)
+            && exception is not OutOfMemoryException
+            && exception is not StackOverflowException)
         {
             return Failed(
                 request,
@@ -379,6 +607,7 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
     async ValueTask<RelationQuerySourceReadResult> ReadEnumerationAsync(
         RelationQuerySourceReadRequest request,
         RelationQueryBoundedEnumeration enumeration,
+        CosmosRelationQueryMaterializationAccumulator? accumulator,
         CancellationToken cancellationToken)
     {
         var maximumRows = Math.Min(
@@ -389,7 +618,7 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
                 ));
         var projection = CreateProjection(request, relationshipSelector: null);
         var statement = BuildStatement(projection, predicate: null);
-        var feed = await ReadFeedAsync(statement, ProbeLimit(maximumRows), cancellationToken).ConfigureAwait(false);
+        var feed = await ReadFeedAsync(statement, ProbeLimit(maximumRows), accumulator, cancellationToken).ConfigureAwait(false);
         var materialized = MaterializeRows(
             request,
             projection,
@@ -426,6 +655,7 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
     async ValueTask<RelationQuerySourceReadResult> ReadIdentityBatchAsync(
         RelationQuerySourceReadRequest request,
         RelationQueryIdentityBatchLookup lookup,
+        CosmosRelationQueryMaterializationAccumulator? accumulator,
         CancellationToken cancellationToken)
     {
         var projection = CreateProjection(request, relationshipSelector: null);
@@ -445,6 +675,7 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
             var feed = await ReadFeedAsync(
                 BuildStatement(projection, predicate),
                 ProbeLimit(maximumRows - rows.Count),
+                accumulator,
                 cancellationToken).ConfigureAwait(false);
             providerEvidence = CombineProviderEvidence(providerEvidence, feed.ProviderEvidenceReference);
             var materialized = MaterializeRows(
@@ -509,6 +740,7 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
     async ValueTask<RelationQuerySourceReadResult> ReadRelationshipBatchAsync(
         RelationQuerySourceReadRequest request,
         RelationQueryRelationshipKeyBatchLookup lookup,
+        CosmosRelationQueryMaterializationAccumulator? accumulator,
         CancellationToken cancellationToken)
     {
         var projection = CreateProjection(request, lookup.SourceSelector);
@@ -529,6 +761,7 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
                 // complete unique-output boundary so already-retained rows cannot consume the evidence needed
                 // to prove that a later chunk is exhausted.
                 ProbeLimit(maximumRows),
+                accumulator,
                 cancellationToken).ConfigureAwait(false);
             providerEvidence = CombineProviderEvidence(providerEvidence, feed.ProviderEvidenceReference);
             var materialized = MaterializeRows(
@@ -868,6 +1101,7 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
     async ValueTask<CosmosJsonQueryFeedReadResult> ReadFeedAsync(
         CosmosSqlStatement statement,
         long maximumRows,
+        CosmosRelationQueryMaterializationAccumulator? accumulator,
         CancellationToken cancellationToken)
     {
         var maximumSdkRows = checked((int)Math.Min(int.MaxValue, maximumRows));
@@ -875,7 +1109,8 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
         {
             MaxItemCount = Math.Min(Policy.MaximumSdkPageSize, maximumSdkRows),
             MaxBufferedItemCount = maximumSdkRows,
-            MaxConcurrency = checked((int)Math.Min(int.MaxValue, source.Limits.MaximumConcurrency))
+            MaxConcurrency = checked((int)Math.Min(int.MaxValue, source.Limits.MaximumConcurrency)),
+            ConsistencyLevel = Policy.ReadConsistencyLevel
         };
         if (Policy.FixedPartitionKey is { } partitionKey)
             options.PartitionKey = partitionKey;
@@ -883,7 +1118,16 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
             statement.ToQueryDefinition(),
             options,
             Policy.RequestSizeLimits);
-        return await feedReader.ReadAllAsync(request, maximumRows, cancellationToken).ConfigureAwait(false);
+        Action<double, HttpStatusCode>? completedPageObserver = accumulator is null
+            ? null
+            : accumulator.Observe;
+        var result = await feedReader.ReadAllAsync(
+            request,
+            maximumRows,
+            cancellationToken,
+            completedPageObserver).ConfigureAwait(false);
+        accumulator?.ObserveEvidence(result.ProviderEvidenceReference);
+        return result;
     }
 
     string? ValidateRequest(
@@ -1121,6 +1365,26 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
         return $"cosmos-source-feed-chain/v1/sha256/{Convert.ToHexStringLower(digest)}";
     }
 
+    static double AddUnaccountedResponseCharge(
+        double accumulated,
+        double? responseCharge,
+        bool responseChargeAccounted)
+    {
+        if (responseChargeAccounted || responseCharge is null)
+        {
+            return accumulated;
+        }
+
+        var total = accumulated + responseCharge.Value;
+        if (!double.IsFinite(total) || total < 0)
+        {
+            throw new InvalidOperationException(
+                "Cosmos materialization request charge overflowed its finite range.");
+        }
+
+        return total;
+    }
+
     static Container ValidateContainer(Container container, string databaseId, string containerId)
     {
         ArgumentNullException.ThrowIfNull(container);
@@ -1140,9 +1404,6 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
         }
         return container;
     }
-
-    static string SelectObservationField(FieldPath semanticPath) => new FieldPath(
-        [FieldPathSegment.ForField(ObservationEnvelopeSourceSelector), .. semanticPath.Segments]).ToString();
 
     static RelationQueryTargetCapabilityProfile CreateTargetProfile()
     {
@@ -1189,4 +1450,218 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
         string? PartitionToken,
         int ChunkIndex,
         string? Signature);
+
+    sealed class CosmosRelationQueryMaterializationAccumulator
+    {
+        internal double RequestCharge { get; private set; }
+
+        internal HttpStatusCode? StatusCode { get; private set; }
+
+        internal string? ProviderEvidenceReference { get; private set; }
+
+        internal void Observe(double requestCharge, HttpStatusCode statusCode)
+        {
+            RequestCharge += requestCharge;
+            if (!double.IsFinite(RequestCharge) || RequestCharge < 0)
+                throw new InvalidOperationException("Cosmos materialization request charge overflowed its finite range.");
+            StatusCode = statusCode;
+        }
+
+        internal void ObserveEvidence(string? providerEvidenceReference) =>
+            ProviderEvidenceReference = CombineProviderEvidence(
+                ProviderEvidenceReference,
+                providerEvidenceReference);
+    }
+}
+
+/// <summary>One buffered canonical Relations acquisition with aggregate Cosmos provider evidence.</summary>
+internal sealed record CosmosRelationQueryMaterializationRead
+{
+    /// <summary>Creates one buffered materialization read.</summary>
+    /// <param name="read">Canonical Relations source result.</param>
+    /// <param name="requestCharge">Request units aggregated across completed provider pages and query chunks.</param>
+    /// <param name="statusCode">HTTP status from the final completed provider page, when I/O occurred.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="read"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="requestCharge"/> is negative or non-finite.</exception>
+    internal CosmosRelationQueryMaterializationRead(
+        RelationQuerySourceReadResult read,
+        double requestCharge,
+        HttpStatusCode? statusCode)
+    {
+        Read = Guard.RequireNotNull(read);
+        if (!double.IsFinite(requestCharge) || requestCharge < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(requestCharge),
+                requestCharge,
+                "A buffered Cosmos materialization request charge must be finite and non-negative.");
+        }
+        RequestCharge = requestCharge;
+        StatusCode = statusCode;
+    }
+
+    /// <summary>Canonical Relations source result.</summary>
+    internal RelationQuerySourceReadResult Read { get; }
+
+    /// <summary>Request units aggregated across completed provider pages and query chunks.</summary>
+    internal double RequestCharge { get; }
+
+    /// <summary>HTTP status from the final completed provider page, when I/O occurred.</summary>
+    internal HttpStatusCode? StatusCode { get; }
+}
+
+/// <summary>Provider failure retaining request charge from buffered query chunks completed before the failure.</summary>
+internal sealed class CosmosRelationQueryMaterializationProviderException : Exception
+{
+    internal CosmosRelationQueryMaterializationProviderException(
+        CosmosException providerException,
+        double completedRequestCharge)
+        : base("A buffered Cosmos materialization acquisition failed.", Guard.RequireNotNull(providerException))
+    {
+        if (!double.IsFinite(completedRequestCharge) || completedRequestCharge < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(completedRequestCharge),
+                completedRequestCharge,
+                "Completed Cosmos request charge must be finite and non-negative.");
+        }
+        ProviderException = providerException;
+        CompletedRequestCharge = completedRequestCharge;
+    }
+
+    internal CosmosException ProviderException { get; }
+
+    internal double CompletedRequestCharge { get; }
+}
+
+/// <summary>Provider-protocol failure retaining evidence from all completed buffered responses.</summary>
+internal sealed class CosmosRelationQueryMaterializationProtocolException : Exception
+{
+    internal CosmosRelationQueryMaterializationProtocolException(
+        CosmosProviderProtocolException providerException,
+        double completedRequestCharge,
+        HttpStatusCode? completedStatusCode,
+        string? providerEvidenceReference)
+        : base(
+            "A buffered Cosmos materialization acquisition received an invalid provider response.",
+            Guard.RequireNotNull(providerException))
+    {
+        if (!double.IsFinite(completedRequestCharge) || completedRequestCharge < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(completedRequestCharge),
+                completedRequestCharge,
+                "Completed Cosmos request charge must be finite and non-negative.");
+        }
+        if (providerEvidenceReference is not null)
+            ArgumentException.ThrowIfNullOrWhiteSpace(providerEvidenceReference);
+        ProviderException = providerException;
+        CompletedRequestCharge = completedRequestCharge;
+        CompletedStatusCode = completedStatusCode;
+        ProviderEvidenceReference = providerEvidenceReference;
+    }
+
+    internal CosmosProviderProtocolException ProviderException { get; }
+
+    internal double CompletedRequestCharge { get; }
+
+    internal HttpStatusCode? CompletedStatusCode { get; }
+
+    internal string? ProviderEvidenceReference { get; }
+}
+
+/// <summary>Caller cancellation retaining evidence from buffered provider responses completed before cancellation.</summary>
+internal sealed class CosmosRelationQueryMaterializationCanceledException : OperationCanceledException
+{
+    internal CosmosRelationQueryMaterializationCanceledException(
+        OperationCanceledException cancellation,
+        double completedRequestCharge,
+        HttpStatusCode? completedStatusCode,
+        string? providerEvidenceReference,
+        CancellationToken cancellationToken)
+        : base(
+            "A buffered Cosmos materialization acquisition was canceled after one or more provider responses may have completed.",
+            Guard.RequireNotNull(cancellation),
+            cancellationToken)
+    {
+        if (!double.IsFinite(completedRequestCharge) || completedRequestCharge < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(completedRequestCharge),
+                completedRequestCharge,
+                "Completed Cosmos request charge must be finite and non-negative.");
+        }
+        if (providerEvidenceReference is not null)
+            ArgumentException.ThrowIfNullOrWhiteSpace(providerEvidenceReference);
+        CompletedRequestCharge = completedRequestCharge;
+        CompletedStatusCode = completedStatusCode;
+        ProviderEvidenceReference = providerEvidenceReference;
+    }
+
+    internal double CompletedRequestCharge { get; }
+
+    internal HttpStatusCode? CompletedStatusCode { get; }
+
+    internal string? ProviderEvidenceReference { get; }
+}
+
+/// <summary>One complete provider page projected through the canonical Cosmos Relations source semantics.</summary>
+internal sealed record CosmosRelationQueryMaterializationPage
+{
+    /// <summary>Creates a projected materialization page.</summary>
+    /// <param name="read">Canonical Relations result for the complete provider page.</param>
+    /// <param name="nextContinuationToken">Opaque provider continuation, or <see langword="null"/> at exhaustion.</param>
+    /// <param name="hasMoreResults">Whether another provider page is resumable.</param>
+    /// <param name="requestCharge">Non-negative Cosmos request charge.</param>
+    /// <param name="statusCode">Successful provider status.</param>
+    /// <param name="providerEvidenceReference">Optional non-sensitive provider evidence digest.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="read"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">Continuation, progress, charge, or evidence invariants conflict.</exception>
+    internal CosmosRelationQueryMaterializationPage(
+        RelationQuerySourceReadResult read,
+        string? nextContinuationToken,
+        bool hasMoreResults,
+        double requestCharge,
+        HttpStatusCode statusCode,
+        string? providerEvidenceReference)
+    {
+        Read = Guard.RequireNotNull(read);
+        if (nextContinuationToken is not null && string.IsNullOrWhiteSpace(nextContinuationToken))
+            throw new ArgumentException("A provider continuation cannot be empty.", nameof(nextContinuationToken));
+        if (hasMoreResults != (nextContinuationToken is not null))
+            throw new ArgumentException("Provider progress requires exactly one non-empty continuation.", nameof(hasMoreResults));
+        if (!double.IsFinite(requestCharge) || requestCharge < 0)
+            throw new ArgumentOutOfRangeException(nameof(requestCharge), requestCharge, "A request charge must be finite and non-negative.");
+        if (providerEvidenceReference is not null && string.IsNullOrWhiteSpace(providerEvidenceReference))
+            throw new ArgumentException("Provider evidence cannot be empty.", nameof(providerEvidenceReference));
+        NextContinuationToken = nextContinuationToken;
+        HasMoreResults = hasMoreResults;
+        RequestCharge = requestCharge;
+        StatusCode = statusCode;
+        ProviderEvidenceReference = providerEvidenceReference;
+    }
+
+    /// <summary>Canonical Relations result for the complete provider page.</summary>
+    internal RelationQuerySourceReadResult Read { get; }
+
+    /// <summary>Opaque provider continuation, or <see langword="null"/> at exhaustion.</summary>
+    internal string? NextContinuationToken { get; }
+
+    /// <summary>Whether another provider page is resumable.</summary>
+    internal bool HasMoreResults { get; }
+
+    /// <summary>Cosmos request charge.</summary>
+    internal double RequestCharge { get; }
+
+    /// <summary>Successful provider status.</summary>
+    internal HttpStatusCode StatusCode { get; }
+
+    /// <summary>Optional non-sensitive provider evidence digest.</summary>
+    internal string? ProviderEvidenceReference { get; }
+
+    /// <summary>Creates a no-I/O page from canonical validation evidence.</summary>
+    /// <param name="read">Failed canonical Relations result.</param>
+    /// <returns>A terminal zero-charge page.</returns>
+    internal static CosmosRelationQueryMaterializationPage FromRead(RelationQuerySourceReadResult read) =>
+        new(read, null, hasMoreResults: false, requestCharge: 0, HttpStatusCode.OK, providerEvidenceReference: null);
 }

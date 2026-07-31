@@ -522,6 +522,39 @@ relation/query semantics over that evidence.
 each provider response finite, while a future cross-adapter materialization budget should model cumulative byte
 memory as a canonical physical capability instead of introducing unrelated adapter-only semantics.
 
+## Materialization Source
+
+`CosmosMaterializationSource` composes the canonical Relations reader with Cosmos all-versions-and-deletes change
+feed consumption. The first profile is deliberately constrained to one fixed logical partition, the conventional
+`observationId`, `partitionKey`, and `observation.*` envelope, and a caller-attested Strong-consistency account.
+Both source-set enumeration and bounded relationship traversal placements are supported; traversal changes project
+correlation keys from current and previous observation envelopes. Baseline queries explicitly request
+`ConsistencyLevel.Strong`; a production
+change-feed client may inherit that account setting or request Strong, but an explicitly weaker client is rejected.
+This closes the cut-before-scan gap in which a stale baseline could otherwise omit a write committed before the
+captured change position.
+
+The deployment must also attest account-level continuous backup, its full-fidelity retention horizon, and previous
+image availability. Those references, the Strong-consistency evidence, physical affinity, placement, query limits,
+admission limits, and cursor bounds participate in the source capability fingerprint. The runtime should share one
+`CosmosMaterializationAdmissionIndex` across sources using the same physical resources so container and partition
+parallelism are enforced coherently.
+
+Baseline and change cursors are authenticated adapter-owned values. Persist the authentication secret for as long
+as a generation may resume; rotating it intentionally invalidates outstanding cursors and therefore requires a new
+generation. An intra-page resume replays the complete SDK response and verifies the consumed semantic prefix.
+Provider page resegmentation or ambiguous transactional ordering fails closed. Same-item records sharing an LSN
+are ordered only when their complete previous/current image chain proves a unique transition sequence. Distinct
+physical items sharing an LSN may not affect the same semantic observation identity because their relative order
+cannot be proven. In-scope replacements must also advance their Cohesive observation version.
+
+The profile advertises baseline-plus-catch-up convergence, stable bounded paging, at-least-once change delivery,
+and reconciliation. Full-fidelity previous images provide selected-field and correlation-key before images. The
+profile does not claim a cross-page MVCC snapshot, retained-history start, or explicit provider settlement. Batched
+point reads are currently a composed parameterized-query path;
+native `ReadManyItemsAsync` remains unavailable until the placement proves exact physical item-id and partition-key
+addresses.
+
 ## Query Authority
 
 Canonical relation/query IR is the sole semantic query authority for this adapter. Compile supported native
