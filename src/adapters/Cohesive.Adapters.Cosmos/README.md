@@ -555,6 +555,26 @@ point reads are currently a composed parameterized-query path;
 native `ReadManyItemsAsync` remains unavailable until the placement proves exact physical item-id and partition-key
 addresses.
 
+### Positions, Checkpoints, and Processor Leases
+
+`CosmosMaterializationSource` uses the Cosmos change-feed pull model. Each canonical change position is an
+authenticated adapter-owned value that retains an opaque Cosmos pull continuation and, when needed, intra-page
+prefix progress. Reading from a position does not persist application progress, update a lease, or acknowledge
+delivery. The owning Process decides whether and when to cover that position with a durable materialization
+checkpoint. The all-versions-and-deletes retention horizon remains an independently attested provider constraint.
+
+This is intentionally distinct from the Cosmos Change Feed Processor used by the existing `IObservationStream`
+implementation. That managed execution model stores progress in a lease container and can checkpoint automatically
+after successful handler completion or explicitly through the SDK's manual-checkpoint callback. Pull continuations
+and processor leases are distinct and are not contractually interchangeable; this adapter exposes no supported
+conversion between them. A future managed materialization runner should reuse the canonical change-delivery
+semantics, persist Cohesive application progress before manually advancing its processor lease, and treat that
+advancement as provider-owned source settlement—not as a second application checkpoint authority.
+
+See the Cosmos documentation for the
+[pull model](https://learn.microsoft.com/azure/cosmos-db/nosql/change-feed-pull-model) and
+[change feed processor](https://learn.microsoft.com/azure/cosmos-db/change-feed-processor).
+
 ## Query Authority
 
 Canonical relation/query IR is the sole semantic query authority for this adapter. Compile supported native

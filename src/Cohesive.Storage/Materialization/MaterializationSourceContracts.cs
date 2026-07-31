@@ -445,6 +445,15 @@ public interface IMaterializationSource
 }
 
 /// <summary>Optional source port for bounded typed change delivery.</summary>
+/// <remarks>
+/// A source position, an application checkpoint, and source settlement are distinct progress concepts. Reads expose
+/// positions without mutating application progress or provider-owned acknowledgement state. The owning process may
+/// durably commit an application checkpoint covering a returned position through
+/// <see cref="IMaterializationProgressStore"/>; only then may it acknowledge the position through
+/// <see cref="IMaterializationSettlingSource"/>, when the source advertises settlement. A provider-managed lease or
+/// bookmark is an execution realization of source progress, not an application checkpoint or an additional semantic
+/// authority.
+/// </remarks>
 public interface IMaterializationChangeSource : IMaterializationSource
 {
     /// <summary>Captures the current opaque end position of one exact source-feed scope.</summary>
