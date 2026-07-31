@@ -220,7 +220,7 @@ public sealed class CosmosMaterializationSourceTests
             Context(),
             ChangeRequest(fixture, captured));
 
-        Assert.StartsWith("cosmos-materialization-change/v1/", captured.Value, StringComparison.Ordinal);
+        Assert.StartsWith("cosmos-materialization-change/v2/", captured.Value, StringComparison.Ordinal);
         Assert.NotEqual(captured, page.ThroughPosition);
         Assert.Equal("load-a", Assert.Single(page.Deliveries).Change.SubjectIdentity);
         Assert.Equal(
@@ -339,6 +339,99 @@ public sealed class CosmosMaterializationSourceTests
             firstPage.Deliveries.Select(static delivery => delivery.Change.Id),
             secondPage.Deliveries.Select(static delivery => delivery.Change.Id));
         Assert.Equal(firstPage.ThroughPosition, secondPage.ThroughPosition);
+    }
+
+    [Fact]
+    public async Task ChangeIdentity_IsIndependentOfCapabilityProfilePolicy()
+    {
+        static FakeChangeFeedReader Changes()
+        {
+            FakeChangeFeedReader changes = new()
+            {
+                Current = ChangePage([], "cut/profile-independent", HttpStatusCode.NotModified)
+            };
+            changes.Pages["cut/profile-independent"] = ChangePage(
+                [ProviderChange(
+                    CosmosMaterializationProviderChangeKind.Create,
+                    current: Document("load-a"),
+                    lsn: 55)],
+                "cut/profile-independent-next",
+                HttpStatusCode.OK);
+            return changes;
+        }
+
+        var first = CreateFixture(
+            baseline: StandardBaseline(),
+            changes: Changes(),
+            maximumContainerParallelism: 1);
+        var second = CreateFixture(
+            baseline: StandardBaseline(),
+            changes: Changes(),
+            maximumContainerParallelism: 2);
+
+        Assert.Equal(first.Source.Scope, second.Source.Scope);
+        Assert.NotEqual(
+            first.Source.Descriptor.CapabilityProfile.Id,
+            second.Source.Descriptor.CapabilityProfile.Id);
+
+        var firstCut = await first.Source.CaptureCurrentPositionAsync(Context(), first.Source.Scope);
+        var secondCut = await second.Source.CaptureCurrentPositionAsync(Context(), second.Source.Scope);
+        var firstDelivery = Assert.Single((await first.Source.ReadChangesAsync(
+            Context(),
+            ChangeRequest(first, firstCut))).Deliveries);
+        var secondDelivery = Assert.Single((await second.Source.ReadChangesAsync(
+            Context(),
+            ChangeRequest(second, secondCut))).Deliveries);
+
+        Assert.Equal(firstDelivery.Change.Id, secondDelivery.Change.Id);
+        Assert.Equal(firstDelivery.Id, secondDelivery.Id);
+    }
+
+    [Fact]
+    public async Task SemanticDocumentBinding_IsPartOfSourceScopeAndStableIdentity()
+    {
+        const string AlternateDocumentKind = "cohesive.tests.cosmos/alternate-entity/v1";
+
+        static FakeChangeFeedReader Changes(string documentKind)
+        {
+            FakeChangeFeedReader changes = new()
+            {
+                Current = ChangePage([], "cut/semantic-binding", HttpStatusCode.NotModified)
+            };
+            changes.Pages["cut/semantic-binding"] = ChangePage(
+                [ProviderChange(
+                    CosmosMaterializationProviderChangeKind.Create,
+                    current: Document("load-a", documentKind: documentKind),
+                    lsn: 56)],
+                "cut/semantic-binding-next",
+                HttpStatusCode.OK);
+            return changes;
+        }
+
+        var first = CreateFixture(
+            baseline: StandardBaseline(),
+            changes: Changes(CosmosRelationQuerySourceReader.DefaultEntityDocumentKind));
+        var second = CreateFixture(
+            baseline: StandardBaseline(),
+            changes: Changes(AlternateDocumentKind),
+            entityDocumentKind: AlternateDocumentKind);
+
+        Assert.NotEqual(first.Source.Scope, second.Source.Scope);
+        Assert.NotEqual(
+            first.Source.Descriptor.CapabilityProfile.Id,
+            second.Source.Descriptor.CapabilityProfile.Id);
+
+        var firstCut = await first.Source.CaptureCurrentPositionAsync(Context(), first.Source.Scope);
+        var secondCut = await second.Source.CaptureCurrentPositionAsync(Context(), second.Source.Scope);
+        var firstDelivery = Assert.Single((await first.Source.ReadChangesAsync(
+            Context(),
+            ChangeRequest(first, firstCut))).Deliveries);
+        var secondDelivery = Assert.Single((await second.Source.ReadChangesAsync(
+            Context(),
+            ChangeRequest(second, secondCut))).Deliveries);
+
+        Assert.NotEqual(firstDelivery.Change.Id, secondDelivery.Change.Id);
+        Assert.NotEqual(firstDelivery.Id, secondDelivery.Id);
     }
 
     [Fact]
@@ -607,6 +700,29 @@ public sealed class CosmosMaterializationSourceTests
 
         Assert.Contains("authentication", exception.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Single(changes.Calls);
+    }
+
+    [Fact]
+    public async Task LegacyV1ChangePosition_IsRejectedBeforeProviderIo()
+    {
+        FakeChangeFeedReader changes = new()
+        {
+            Current = ChangePage([], "cut/legacy-position", HttpStatusCode.NotModified)
+        };
+        var fixture = CreateFixture(
+            baseline: StandardBaseline(),
+            changes: changes);
+        MaterializationSourcePosition legacy = new(
+            formatVersion: 1,
+            scope: fixture.Source.Scope,
+            value: "cosmos-materialization-change/v1/obsolete.invalid");
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() => fixture.Source.ReadChangesAsync(
+            Context(),
+            ChangeRequest(fixture, legacy)).AsTask());
+
+        Assert.Contains("format", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(changes.Calls);
     }
 
     [Fact]
@@ -1433,7 +1549,9 @@ public sealed class CosmosMaterializationSourceTests
         RelationQueryPlacementFieldSelector? fieldSourceSelector = null,
         ConsistencyLevel? readConsistencyLevel = ConsistencyLevel.Strong,
         RelationQuerySourcePlacementBindingKind placementKind = RelationQuerySourcePlacementBindingKind.SourceSet,
-        string partitionSourceSelector = CosmosRelationQuerySourceReader.ObservationPartitionSourceSelector)
+        string partitionSourceSelector = CosmosRelationQuerySourceReader.ObservationPartitionSourceSelector,
+        int maximumContainerParallelism = CosmosMaterializationSourcePolicy.DefaultMaximumContainerParallelism,
+        string? entityDocumentKind = null)
     {
         CosmosRelationQuerySourcePolicy queryPolicy = new(
             partitionSourceSelector,
@@ -1465,7 +1583,8 @@ public sealed class CosmosMaterializationSourceTests
             "entities",
             queryPolicy,
             identitySourceSelector: identitySourceSelector,
-            fieldSourceSelector: fieldSourceSelector);
+            fieldSourceSelector: fieldSourceSelector,
+            entityDocumentKind: entityDocumentKind);
         RelationQuerySourcePlacementBinding placement = new(
             new("placement/source"),
             new("source/items"),
@@ -1497,7 +1616,8 @@ public sealed class CosmosMaterializationSourceTests
             maximumScanPageBytes: GenerousPageBytes,
             maximumChangePageItems: 10,
             maximumChangePageBytes: GenerousPageBytes,
-            maximumProviderPageItems: 4);
+            maximumProviderPageItems: 4,
+            maximumContainerParallelism: maximumContainerParallelism);
         changes ??= new FakeChangeFeedReader
         {
             Current = ChangePage([], "cut/default", HttpStatusCode.NotModified)
@@ -1621,10 +1741,11 @@ public sealed class CosmosMaterializationSourceTests
         string identity,
         string? observationType = null,
         long version = 1,
-        Dictionary<string, ObservationValue>? observation = null) => new(
+        Dictionary<string, ObservationValue>? observation = null,
+        string? documentKind = null) => new(
         $"entity/{identity}",
         "tenant-a",
-        CosmosRelationQuerySourceReader.DefaultEntityDocumentKind,
+        documentKind ?? CosmosRelationQuerySourceReader.DefaultEntityDocumentKind,
         observationType ?? Shape.ShapeId.Value,
         identity,
         version,

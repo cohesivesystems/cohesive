@@ -548,12 +548,25 @@ are ordered only when their complete previous/current image chain proves a uniqu
 physical items sharing an LSN may not affect the same semantic observation identity because their relative order
 cannot be proven. In-scope replacements must also advance their Cohesive observation version.
 
-The profile advertises baseline-plus-catch-up convergence, stable bounded paging, at-least-once change delivery,
-and reconciliation. Full-fidelity previous images provide selected-field and correlation-key before images. The
+ARI-187 introduces the v2 pull continuation, position, change-ID, and delivery-ID formats so cursor compatibility can
+remain bound to the capability profile while semantic change identity remains independent of that profile. Existing
+v1 cursors are intentionally rejected and require a new materialization generation; their provider continuations are
+not converted. The exact pull source scope includes a semantic binding digest covering the document discriminator,
+persisted observation type, identity and partition selectors, and fixed partition. Consequently different logical
+document families cannot share progress even when they occupy the same physical container, while operational page,
+parallelism, admission, retention, and cursor policy does not perturb stable change identity.
+
+The profile advertises baseline-plus-catch-up convergence, stable bounded paging, complete retained create/update/
+delete mutation delivery, at-least-once change delivery, and reconciliation. Full-fidelity previous images provide
+selected-field and correlation-key before images. The
 profile does not claim a cross-page MVCC snapshot, retained-history start, or explicit provider settlement. Batched
 point reads are currently a composed parameterized-query path;
 native `ReadManyItemsAsync` remains unavailable until the placement proves exact physical item-id and partition-key
 addresses.
+
+The full-fidelity pull realization currently requires the projected shape to equal the persisted observation type
+and does not support a top-level stream filter. Managed outbox projection is intentionally broader; attaching an
+outbox-shaped reader to the pull realization fails during construction instead of silently changing its source set.
 
 ### Positions, Checkpoints, and Processor Leases
 
@@ -563,13 +576,52 @@ prefix progress. Reading from a position does not persist application progress, 
 delivery. The owning Process decides whether and when to cover that position with a durable materialization
 checkpoint. The all-versions-and-deletes retention horizon remains an independently attested provider constraint.
 
-This is intentionally distinct from the Cosmos Change Feed Processor used by the existing `IObservationStream`
-implementation. That managed execution model stores progress in a lease container and can checkpoint automatically
-after successful handler completion or explicitly through the SDK's manual-checkpoint callback. Pull continuations
-and processor leases are distinct and are not contractually interchangeable; this adapter exposes no supported
-conversion between them. A future managed materialization runner should reuse the canonical change-delivery
-semantics, persist Cohesive application progress before manually advancing its processor lease, and treat that
-advancement as provider-owned source settlement—not as a second application checkpoint authority.
+`CosmosManagedMaterializationChangeSource` is the complementary Change Feed Processor realization. It projects the
+same canonical `MaterializationChangePage`, change envelope, delivery identity, source-position, application-
+checkpoint, and settlement contracts. Each latest-version callback is grouped by logical partition key, the ordering
+boundary Cosmos guarantees, and projected as upserts. The SDK manual checkpoint operation runs only after every group
+handler returns an applied or exact-replayed durable Cohesive checkpoint covering that group's authenticated callback
+continuation and delivery identities. One provider acknowledgement then emits one settlement observation per covered
+group. A callback filtered down to no relevant documents still commits one empty progressed page before lease
+advancement. Feed ranges, lease tokens, worker instances, and callback batching never participate in semantic change
+or delivery identity, so lease transfer, rebatching, and range splits retain revision identity. The adapter derives a
+binding-, lease-store-, and initial-boundary-specific processor namespace and then derives the effective deployment
+name from the materialization, execution-definition fingerprint, and generation. The lease container's account,
+database, and container affinity is capability/profile provenance; reopening the source against another lease store
+is a different deployment rather than an invisible checkpoint reset. The lease store must use a different database
+or container identifier from the monitored container so provider lease writes can never recursively enter the source
+feed. This synchronous boundary deliberately does not treat different account endpoint text as separation evidence:
+global and regional endpoints may address the same underlying account. Cross-account lease stores with matching
+database and container names must therefore choose a distinct database or container name until a future metadata-
+validated binding can prove resource identity. Beginning, current, and explicit-time start
+policies cannot race to initialize the same lease namespace. Workers for the same request and lease store therefore
+cooperate through the same leases, while independent entity, outbox, or stream bindings and new generations cannot
+share leases or checkpoint past one another's work. Pause/continue retains the same generation and deployment name;
+a restarted rebuild that allocates a new generation necessarily starts with a distinct provider lease namespace.
+
+Each authenticated managed source position retains the exact provider feed-range representation and continuation,
+so it remains independently inspectable as a resumable source boundary even though the running SDK processor realizes
+ordinary recovery through its lease container. Neither value is projected as a Cohesive application checkpoint.
+The current managed envelope requires the canonical top-level `partitionKey` selector because grouping and ordering
+are derived from that persisted wire field. A reader declaring another partition selector is rejected during source
+construction rather than allowing relevant changes to be mistaken for filtered provider input.
+
+The installed Cosmos SDK exposes manual checkpointing only for latest-version change feed. Its public
+all-versions-and-deletes builder completion-gates automatic checkpointing, and its mode setter is internal. The
+adapter therefore does not claim previous images, delete delivery, or full-fidelity semantics for the managed
+realization. Its capability evidence carries `LatestVersionUpsertDelivery`, which cannot satisfy a requirement for
+`CompleteMutationDelivery`. `CosmosMaterializationSource` remains the full-fidelity bounded pull realization. Pull continuations and
+processor leases are distinct and are not contractually interchangeable; the adapter exposes no conversion between
+them. A managed callback continuation is recorded as its exact source boundary, while the lease document remains a
+provider-owned settlement realization rather than a second application-checkpoint authority.
+
+The former Cosmos `IObservationStream` surface was removed. Entity and outbox consumption now binds an explicit
+document discriminator, graph-qualified persisted observation type, and optional outbox stream to the managed
+materialization source. `CosmosRelationQuerySourceReader` separately declares its projected semantic shape and its
+persisted envelope type, so an outbox message shape can retain message identity and metadata while projecting an
+embedded entity payload.
+`CosmosEntityOutboxRepository` owns only entity/outbox persistence and atomic write behavior; it no longer owns a
+lease container or a change processor.
 
 See the Cosmos documentation for the
 [pull model](https://learn.microsoft.com/azure/cosmos-db/nosql/change-feed-pull-model) and
@@ -582,8 +634,8 @@ branches with `CosmosRelationQueryCompiler`, execute the resulting artifacts thr
 `CosmosRelationQuerySourceReader` for bounded physical acquisition selected by the canonical planner.
 `CosmosSqlConstruction` remains available as an adapter-local construction layer for intentionally hand-crafted
 Cosmos SQL, but direct statements carry Cosmos semantics and do not provide canonical equivalence or provenance.
-`CosmosEntityOutboxRepository` is limited to persistence, point reads, concurrency, change streams, and outbox
-behavior; it is not a semantic query execution surface.
+`CosmosEntityOutboxRepository` is limited to persistence, point reads, concurrency, and atomic outbox writes; it is
+not a semantic query execution or change-delivery surface.
 
 The former parallel predicate and aggregation compilers were removed intentionally. The adapter provides no
 automatic translation bridge from their deleted model to canonical relation/query IR.

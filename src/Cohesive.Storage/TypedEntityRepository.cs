@@ -77,12 +77,4 @@ public sealed class TypedEntityOutboxRepository<TEntity>(
     /// <summary>Upserts with outbox.</summary>
     public Task<EntityCommitResult> UpsertWithOutbox(OperationContext context, EntityOutboxCommit commit) =>
         outboxRepository.UpsertWithOutbox(context, commit);
-
-    /// <summary>Gets change stream.</summary>
-    public IObservationStream GetChangeStream(string processorName, DateTimeOffset? startTime = null) =>
-        outboxRepository.GetChangeStream(processorName, startTime);
-
-    /// <summary>Gets outbox stream.</summary>
-    public IObservationStream GetOutboxStream(string processorName, string? streamName = null, DateTimeOffset? startTime = null) =>
-        outboxRepository.GetOutboxStream(processorName, streamName, startTime);
 }

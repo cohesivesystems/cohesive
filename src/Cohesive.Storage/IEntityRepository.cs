@@ -79,31 +79,28 @@ public interface IEntityRepository<TEntity> : IEntityRepository where TEntity : 
     /// Upserts one entity value by mapping it into the repository's semantic entity definition.
     /// </summary>
     Task<EntitySnapshot> Upsert(OperationContext context, TEntity entity, EntityConcurrencyToken? expectedConcurrencyToken = null);
-    
+
     /// <summary>
     /// Upserts a batch of observations.
     /// </summary>
     /// <param name="context"></param>
     /// <param name="writes"></param>
     /// <returns></returns>
-    async Task<IReadOnlyList<EntitySnapshot>> UpsertBatch(OperationContext context, IReadOnlyList<TEntity> writes) =>
+    async Task<IReadOnlyList<EntitySnapshot>> UpsertBatch(
+        OperationContext context,
+        IReadOnlyList<TEntity> writes) =>
         await Task.WhenAllThrottled(writes, w => Upsert(context, w), new(maxConcurrency: 5), context.CancellationToken);
 }
 
 /// <summary>
 /// Entity repository that can atomically persist entity state together with outbox events.
 /// </summary>
-public interface IEntityOutboxRepository : IEntityRepository, IChangeStreamRepository
+public interface IEntityOutboxRepository : IEntityRepository
 {
     /// <summary>
     /// Upserts one entity observation and appends zero or more outbox messages atomically.
     /// </summary>
     Task<EntityCommitResult> UpsertWithOutbox(OperationContext context, EntityOutboxCommit commit);
-
-    /// <summary>
-    /// Returns the outbox stream, optionally narrowed to a named logical stream.
-    /// </summary>
-    IObservationStream GetOutboxStream(string processorName, string? streamName = null, DateTimeOffset? startTime = null);
 }
 
 /// <summary>

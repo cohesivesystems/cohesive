@@ -66,6 +66,13 @@ public enum MaterializationCapabilityKind
     SourceContinuation = 3,
 
     /// <summary>Delivers typed source changes from a durable position.</summary>
+    /// <remarks>
+    /// Every requirement and evidence declaration selects exactly one change-coverage guarantee:
+    /// <see cref="MaterializationGuaranteeKind.CompleteMutationDelivery"/> or
+    /// <see cref="MaterializationGuaranteeKind.LatestVersionUpsertDelivery"/>.
+    /// Pull realizations may advertise hard change-item and byte limits. Managed realizations whose provider exposes
+    /// only advisory callback-size hints omit those limits; they cannot satisfy requirements that demand hard bounds.
+    /// </remarks>
     SourceChangeDelivery = 4,
 
     /// <summary>Explicitly settles a delivered source position.</summary>
@@ -163,7 +170,19 @@ public enum MaterializationGuaranteeKind
     /// <summary>
     /// Contributor associations and their corresponding materialized-item mutations commit as one atomic effect.
     /// </summary>
-    AtomicWithMaterializationMutation = 16
+    AtomicWithMaterializationMutation = 16,
+
+    /// <summary>
+    /// Every retained create, update, and delete mutation is delivered without latest-version coalescing. This does
+    /// not itself imply that a before image is available.
+    /// </summary>
+    CompleteMutationDelivery = 17,
+
+    /// <summary>
+    /// Currently visible latest versions are delivered as upserts, without claiming deletes or intermediate
+    /// versions.
+    /// </summary>
+    LatestVersionUpsertDelivery = 18
 }
 
 /// <summary>Positive hard operating maximum advertised or required for a materialization operation.</summary>
@@ -318,8 +337,8 @@ public sealed record MaterializationCapabilityRequirement
     /// <param name="modes">Synchronization modes for which the requirement applies.</param>
     /// <exception cref="ArgumentException">
     /// An identity is default, a collection contains duplicates, a limit kind is repeated, or a guarantee or operating
-    /// limit does not apply to <paramref name="capability"/>, or per-item outcome coverage omits a required write
-    /// bound.
+    /// limit does not apply to <paramref name="capability"/>, source change delivery does not declare exactly one
+    /// change-coverage guarantee, or per-item outcome coverage omits a required write bound.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="capability"/> or a guarantee is unsupported.</exception>
     [JsonConstructor]
@@ -392,7 +411,8 @@ public sealed record MaterializationCapabilityEvidence
     /// <exception cref="ArgumentException">
     /// An identity or source reference is invalid, a collection contains duplicates, a limit kind is repeated, or a
     /// guarantee or operating limit does not apply to <paramref name="capability"/>, or bounded operation evidence
-    /// omits a required item or byte hard limit.
+    /// omits a required item or byte hard limit, or source change delivery does not declare exactly one
+    /// change-coverage guarantee.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="capability"/>, <paramref name="realization"/>, or a guarantee is unsupported.</exception>
     [JsonConstructor]
@@ -880,8 +900,6 @@ public static class MaterializationCapabilityCatalog
 {
     static readonly ImmutableArray<MaterializationLimitKind> ReadHardLimits =
         [MaterializationLimitKind.ReadItems, MaterializationLimitKind.ReadBytes];
-    static readonly ImmutableArray<MaterializationLimitKind> ChangeHardLimits =
-        [MaterializationLimitKind.ChangeItems, MaterializationLimitKind.ReadBytes];
     static readonly ImmutableArray<MaterializationLimitKind> WriteHardLimits =
         [MaterializationLimitKind.WriteItems, MaterializationLimitKind.WriteBytes];
     static readonly ImmutableArray<MaterializationLimitKind> ContributorLedgerHardLimits =
@@ -945,7 +963,9 @@ public static class MaterializationCapabilityCatalog
             MaterializationGuaranteeKind.BaselinePlusCatchUp
                 or MaterializationGuaranteeKind.AtLeastOnceDelivery
                 or MaterializationGuaranteeKind.BeforeImage
-                or MaterializationGuaranteeKind.RetainedHistoryStart =>
+                or MaterializationGuaranteeKind.RetainedHistoryStart
+                or MaterializationGuaranteeKind.CompleteMutationDelivery
+                or MaterializationGuaranteeKind.LatestVersionUpsertDelivery =>
                 capability == MaterializationCapabilityKind.SourceChangeDelivery,
             MaterializationGuaranteeKind.ExplicitSettlement =>
                 capability == MaterializationCapabilityKind.SourceSettlement,
@@ -1023,6 +1043,22 @@ public static class MaterializationCapabilityCatalog
             }
         }
 
+        if (capability == MaterializationCapabilityKind.SourceChangeDelivery)
+        {
+            var declaresCompleteMutations = guarantees.Contains(
+                MaterializationGuaranteeKind.CompleteMutationDelivery);
+            var declaresLatestVersionUpserts = guarantees.Contains(
+                MaterializationGuaranteeKind.LatestVersionUpsertDelivery);
+            if (declaresCompleteMutations == declaresLatestVersionUpserts)
+            {
+                throw new ArgumentException(
+                    $"Capability '{capability}' must declare exactly one change-coverage guarantee: "
+                    + $"'{MaterializationGuaranteeKind.CompleteMutationDelivery}' or "
+                    + $"'{MaterializationGuaranteeKind.LatestVersionUpsertDelivery}'.",
+                    guaranteesParameterName);
+            }
+        }
+
         foreach (var limit in operatingLimits)
         {
             if (!AllowsLimit(capability, limit.Kind))
@@ -1067,7 +1103,6 @@ public static class MaterializationCapabilityCatalog
             MaterializationCapabilityKind.SourceBatchedPointRead
                 or MaterializationCapabilityKind.SourceParameterizedPredicateQuery
                 or MaterializationCapabilityKind.SourceBoundedEnumeration => ReadHardLimits,
-            MaterializationCapabilityKind.SourceChangeDelivery => ChangeHardLimits,
             MaterializationCapabilityKind.TargetBulkUpsert
                 or MaterializationCapabilityKind.TargetBulkDelete
                 or MaterializationCapabilityKind.TargetPerItemOutcomes => WriteHardLimits,

@@ -171,6 +171,32 @@ public sealed class MaterializationImpactPlanTests
     }
 
     [Fact]
+    public void Compiler_RejectsLatestVersionUpsertsForExactIncrementalImpact()
+    {
+        var document = CreateDocument(
+            materializationId: "loads/latest-upserts",
+            inverseLookup: true,
+            contributorLedger: false,
+            globalEnumeration: false,
+            reverseDeclarations: false,
+            changeCoverage: MaterializationGuaranteeKind.LatestVersionUpsertDelivery);
+        var definitionValidation = MaterializationDefinitionValidator.Validate(document.Definition);
+
+        var compilation = MaterializationImpactPlanCompiler.Compile(
+            document,
+            Policy(MaterializationImpactStrategyKind.InverseTraversal));
+
+        Assert.True(definitionValidation.IsValid);
+        Assert.False(compilation.IsSuccessful);
+        Assert.Null(compilation.Plan);
+        Assert.Contains(
+            compilation.Diagnostics,
+            static diagnostic => diagnostic.Code == MaterializationImpactDiagnosticCodes.CapabilityUnavailable
+                && diagnostic.Evidence?.Expected
+                    == nameof(MaterializationGuaranteeKind.CompleteMutationDelivery));
+    }
+
+    [Fact]
     public void Compiler_RejectsUnsupportedMaterializationDocumentSchema()
     {
         var current = CreateDocument(
@@ -677,7 +703,8 @@ public sealed class MaterializationImpactPlanTests
         bool inverseLookup,
         bool contributorLedger,
         bool globalEnumeration,
-        bool reverseDeclarations)
+        bool reverseDeclarations,
+        MaterializationGuaranteeKind changeCoverage = MaterializationGuaranteeKind.CompleteMutationDelivery)
     {
         RelationQueryCompilationRequest request = new(
             definitionDocument: FederatedLoadRelationFixture.RelationDocument,
@@ -700,7 +727,8 @@ public sealed class MaterializationImpactPlanTests
                 isRoot: source.Input.Id == rootInput,
                 inverseLookup,
                 globalEnumeration,
-                reverseDeclarations)),
+                reverseDeclarations,
+                changeCoverage)),
             .. relationPlan.InputContract.Traversals.Select(traversal => SourceRequirement(
                 input: traversal.Input.Id,
                 rebuildRead: traversal.Input.Direction == RelationshipTraversalDirection.Forward
@@ -709,7 +737,8 @@ public sealed class MaterializationImpactPlanTests
                 isRoot: false,
                 inverseLookup,
                 globalEnumeration,
-                reverseDeclarations))
+                reverseDeclarations,
+                changeCoverage))
         ];
         ImmutableArray<MaterializationCapabilityRequirement> targets =
         [
@@ -766,7 +795,8 @@ public sealed class MaterializationImpactPlanTests
         bool isRoot,
         bool inverseLookup,
         bool globalEnumeration,
-        bool reverseDeclarations)
+        bool reverseDeclarations,
+        MaterializationGuaranteeKind changeCoverage)
     {
         var readModes = isRoot && globalEnumeration
             ? MaterializationSynchronizationMode.All
@@ -775,7 +805,11 @@ public sealed class MaterializationImpactPlanTests
         [
             Requirement($"{input.Value}/read", rebuildRead, readModes),
             Requirement($"{input.Value}/continuation", MaterializationCapabilityKind.SourceContinuation, MaterializationSynchronizationMode.Rebuild),
-            Requirement($"{input.Value}/changes", MaterializationCapabilityKind.SourceChangeDelivery, MaterializationSynchronizationMode.All),
+            Requirement(
+                $"{input.Value}/changes",
+                MaterializationCapabilityKind.SourceChangeDelivery,
+                MaterializationSynchronizationMode.All,
+                changeCoverage),
             Requirement($"{input.Value}/settlement", MaterializationCapabilityKind.SourceSettlement, MaterializationSynchronizationMode.All)
         ];
         if (isRoot && inverseLookup)
@@ -797,15 +831,17 @@ public sealed class MaterializationImpactPlanTests
     static MaterializationCapabilityRequirement Requirement(
         string id,
         MaterializationCapabilityKind capability,
-        MaterializationSynchronizationMode modes) => new(
+        MaterializationSynchronizationMode modes,
+        MaterializationGuaranteeKind changeCoverage = MaterializationGuaranteeKind.CompleteMutationDelivery) => new(
             id: new(id),
             capability,
-            guarantees: Guarantees(capability),
+            guarantees: Guarantees(capability, changeCoverage),
             operatingLimits: OperatingLimits(capability),
             modes);
 
     static ImmutableArray<MaterializationGuaranteeKind> Guarantees(
-        MaterializationCapabilityKind capability) => capability switch
+        MaterializationCapabilityKind capability,
+        MaterializationGuaranteeKind changeCoverage) => capability switch
         {
             MaterializationCapabilityKind.SourceBatchedPointRead
                 or MaterializationCapabilityKind.SourceParameterizedPredicateQuery
@@ -818,7 +854,8 @@ public sealed class MaterializationImpactPlanTests
                 [
                     MaterializationGuaranteeKind.StableOrdering,
                     MaterializationGuaranteeKind.AtLeastOnceDelivery,
-                    MaterializationGuaranteeKind.BaselinePlusCatchUp
+                    MaterializationGuaranteeKind.BaselinePlusCatchUp,
+                    changeCoverage
                 ],
             MaterializationCapabilityKind.SourceSettlement => [MaterializationGuaranteeKind.ExplicitSettlement],
             MaterializationCapabilityKind.TargetGenerationIsolation =>

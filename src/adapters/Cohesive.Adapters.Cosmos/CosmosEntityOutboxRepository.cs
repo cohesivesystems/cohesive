@@ -1,8 +1,5 @@
 using System.Net;
-using System.Runtime.CompilerServices;
 using System.Text;
-using System.Threading.Channels;
-using System.Text.Json.Serialization;
 using Cohesive.Model;
 using Cohesive.Relations.Mapping;
 using Cohesive.Relations.Model;
@@ -20,7 +17,6 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
     readonly EntityDefinition entityDefinition;
     readonly string observationType;
     readonly Container container;
-    readonly Container leaseContainer;
     readonly EntityPartitionKeyPolicy partitionKeyPolicy;
     readonly Func<Observation, string> itemIdSelector;
     readonly CosmosObservationOutboxRepositoryOptions options;
@@ -30,7 +26,6 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
     /// </summary>
     /// <param name="entityDefinition">Entity shape and semantic identity persisted by this repository.</param>
     /// <param name="container">Cosmos container containing entity and optional outbox documents.</param>
-    /// <param name="leaseContainer">Cosmos container used by entity and outbox change-feed processors.</param>
     /// <param name="partitionKeySelector">
     /// Legacy observation-to-partition selector, or <see langword="null"/> to use <paramref name="partitionKeyPolicy"/>
     /// or the entity-identity convention.
@@ -39,14 +34,13 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
     /// Legacy entity-identity-to-partition selector, or <see langword="null"/> when unavailable.
     /// </param>
     /// <param name="itemIdSelector">Observation-to-item-id selector, or <see langword="null"/> for the default.</param>
-    /// <param name="options">Repository and change-feed options, or <see langword="null"/> for conventions.</param>
+    /// <param name="options">Repository persistence options, or <see langword="null"/> for conventions.</param>
     /// <param name="mappingContext">Object/observation mapping context, or <see langword="null"/> for the default.</param>
     /// <param name="partitionKeyPolicy">
     /// Explicit read/write partition policy. It is mutually exclusive with either legacy partition selector.
     /// </param>
     /// <exception cref="ArgumentNullException">
-    /// <paramref name="entityDefinition"/>, <paramref name="container"/>, or <paramref name="leaseContainer"/> is
-    /// <see langword="null"/>.
+    /// <paramref name="entityDefinition"/> or <paramref name="container"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
     /// Explicit and legacy partition policies are combined, the legacy selectors are incomplete, or the entity and
@@ -55,7 +49,6 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
     public CosmosEntityOutboxRepository(
         EntityDefinition entityDefinition,
         Container container,
-        Container leaseContainer,
         Func<Observation, string>? partitionKeySelector = null,
         Func<string, string?>? pointReadPartitionKeySelector = null,
         Func<Observation, string>? itemIdSelector = null,
@@ -67,12 +60,10 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
         this.entityDefinition = Guard.RequireNotNull(entityDefinition);
         this.observationType = entityDefinition.Shape.Id.Value;
         this.container = Guard.RequireNotNull(container);
-        this.leaseContainer = Guard.RequireNotNull(leaseContainer);
         this.partitionKeyPolicy = ResolvePartitionKeyPolicy(
             partitionKeyPolicy,
             partitionKeySelector,
-            pointReadPartitionKeySelector
-            );
+            pointReadPartitionKeySelector);
         this.itemIdSelector = itemIdSelector ?? DefaultItemIdSelector;
         this.options = CosmosObservationOutboxRepositoryOptions.RequireValid(options ?? new());
         MappingContext = mappingContext ?? ShapeMappingContext.Default;
@@ -82,7 +73,7 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
     /// Gets the underlying Cosmos container.
     /// </summary>
     public Container Container => container;
-    
+
     /// <inheritdoc />
     public EntityDefinition EntityDefinition => entityDefinition;
 
@@ -212,30 +203,6 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
         return new(snapshot, commit.Messages);
     }
 
-    /// <inheritdoc />
-    public IObservationStream GetChangeStream(string processorName, DateTimeOffset? startTime = null) => new CosmosObservationStream(
-        processorName: ComposeProcessorName(processorName, "changes"),
-        streamName: $"{observationType}:changes",
-        container: container,
-        leaseContainer: leaseContainer,
-        options: options,
-        startTime: startTime,
-        filter: IsEntityDocument,
-        projection: document => CreateRecord(ObservationStreamRecordKind.EntityChange, document)
-        );
-
-    /// <inheritdoc />
-    public IObservationStream GetOutboxStream(string processorName, string? streamName = null, DateTimeOffset? startTime = null) => new CosmosObservationStream(
-        processorName: ComposeProcessorName(processorName, string.IsNullOrWhiteSpace(streamName) ? "outbox" : $"outbox:{streamName}"),
-        streamName: string.IsNullOrWhiteSpace(streamName) ? $"{observationType}:outbox" : streamName!,
-        container: container,
-        leaseContainer: leaseContainer,
-        options: options,
-        startTime: startTime,
-        filter: document => IsOutboxDocument(document) && (string.IsNullOrWhiteSpace(streamName) || string.Equals(document.StreamName, streamName, StringComparison.Ordinal)),
-        projection: document => CreateRecord(ObservationStreamRecordKind.OutboxEvent, document)
-        );
-
     /// <summary>
     /// Counts outbox documents in this repository's container associated with the supplied subject id.
     /// </summary>
@@ -305,19 +272,6 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
             );
     }
 
-    string ComposeProcessorName(string processorName, string suffix)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(processorName);
-        return $"{processorName}:{observationType}:{suffix}";
-    }
-
-    bool IsEntityDocument(CosmosObservationContainerDocument document) =>
-        string.Equals(document.DocumentKind, options.EntityDocumentKind, StringComparison.Ordinal)
-        && string.Equals(document.ObservationType, observationType, StringComparison.Ordinal);
-
-    bool IsOutboxDocument(CosmosObservationContainerDocument document) =>
-        string.Equals(document.DocumentKind, options.OutboxDocumentKind, StringComparison.Ordinal);
-
     void EnsureEntityType(Observation observation)
     {
         ArgumentNullException.ThrowIfNull(observation);
@@ -347,13 +301,12 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
             WHERE c.documentKind = @documentKind
               AND c.observationType = @observationType
               AND c.observationId = @observationId
-            """
-            );
+            """);
         var query = new QueryDefinition(queryText.ToString())
             .WithParameter("@documentKind", options.EntityDocumentKind)
             .WithParameter("@observationType", observationType)
             .WithParameter("@observationId", observationId);
-        
+
         QueryRequestOptions requestOptions = new() { MaxItemCount = 2 };
         if (!string.IsNullOrWhiteSpace(partitionKey))
         {
@@ -495,24 +448,6 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
             );
     }
 
-    static ObservationRecord CreateRecord(ObservationStreamRecordKind kind, CosmosObservationContainerDocument document)
-    {
-        ArgumentNullException.ThrowIfNull(document);
-        return new(
-            Kind: kind,
-            Observation: BuildObservation(document),
-            PartitionKey: document.PartitionKey,
-            DocumentId: document.Id,
-            StreamName: document.StreamName,
-            SubjectType: document.SubjectType,
-            SubjectId: document.SubjectId,
-            SubjectVersion: document.SubjectVersion,
-            CorrelationId: document.CorrelationId,
-            OccurredAtUtc: document.OccurredAtUtc,
-            ConcurrencyToken: string.IsNullOrWhiteSpace(document.ETag) ? null : new(document.ETag)
-            );
-    }
-
     string? GetTraceId(OperationContext context)
     {
         if (!options.WriteTraceId || !context.TraceContext.HasValue)
@@ -531,158 +466,4 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
         return traceContext.SpanId == default ? null : traceContext.SpanId.ToString();
     }
 
-    sealed class CosmosObservationStream(
-        string processorName,
-        string streamName,
-        Container container,
-        Container leaseContainer,
-        CosmosObservationOutboxRepositoryOptions options,
-        DateTimeOffset? startTime,
-        Func<CosmosObservationContainerDocument, bool> filter,
-        Func<CosmosObservationContainerDocument, ObservationRecord> projection
-        ) : IObservationStream
-    {
-        readonly string processorName = Guard.RequireNotNullOrWhiteSpace(processorName);
-        readonly string streamName = Guard.RequireNotNullOrWhiteSpace(streamName);
-        readonly Container container = Guard.RequireNotNull(container);
-        readonly Container leaseContainer = Guard.RequireNotNull(leaseContainer);
-        readonly CosmosObservationOutboxRepositoryOptions options = Guard.RequireNotNull(options);
-        readonly Func<CosmosObservationContainerDocument, bool> filter = Guard.RequireNotNull(filter);
-        readonly Func<CosmosObservationContainerDocument, ObservationRecord> projection = Guard.RequireNotNull(projection);
-
-        public string StreamName => streamName;
-
-        public async Task Process(Func<ObservationBatchContext, IReadOnlyCollection<ObservationRecord>, CancellationToken, Task> handle, CancellationToken ct = default)
-        {
-            ArgumentNullException.ThrowIfNull(handle);
-
-            var builder = container.GetChangeFeedProcessorBuilder<CosmosObservationContainerDocument>(
-                processorName: processorName,
-                onChangesDelegate: async (context, changes, cancellationToken) =>
-                {
-                    var records = changes
-                        .Where(filter)
-                        .Select(projection)
-                        .ToArray();
-
-                    if (records.Length == 0)
-                        return;
-
-                    await handle(
-                        new(
-                            StreamName: streamName,
-                            ProcessorName: processorName,
-                            LeaseToken: context.LeaseToken,
-                            NativeContext: context),
-                        records,
-                        cancellationToken).ConfigureAwait(false);
-                })
-                .WithInstanceName(options.InstanceName)
-                .WithLeaseContainer(leaseContainer);
-
-            if (startTime.HasValue)
-                builder = builder.WithStartTime(startTime.Value.UtcDateTime);
-
-            var processor = builder.Build();
-            await processor.StartAsync().ConfigureAwait(false);
-            try
-            {
-                await Task.Delay(Timeout.InfiniteTimeSpan, ct).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-            }
-            finally
-            {
-                await processor.StopAsync().ConfigureAwait(false);
-            }
-        }
-
-        public async IAsyncEnumerable<IReadOnlyList<ObservationStreamLagSnapshot>> LagStream([EnumeratorCancellation] CancellationToken ct = default)
-        {
-            var channel = Channel.CreateUnbounded<IReadOnlyList<ObservationStreamLagSnapshot>>();
-            var estimator = container.GetChangeFeedEstimatorBuilder(
-                    processorName: processorName,
-                    estimationDelegate: (estimation, cancellationToken) =>
-                        channel.Writer.WriteAsync(
-                            [
-                                new(
-                                    StreamName: streamName,
-                                    EstimatedLag: estimation,
-                                    SampledAtUtc: DateTimeOffset.UtcNow)
-                            ],
-                            cancellationToken).AsTask(),
-                    estimationPeriod: options.LagPollingInterval)
-                .WithLeaseContainer(leaseContainer)
-                .Build();
-
-            await estimator.StartAsync().ConfigureAwait(false);
-            try
-            {
-                await foreach (var sample in channel.Reader.ReadAllAsync(ct).ConfigureAwait(false))
-                    yield return sample;
-            }
-            finally
-            {
-                channel.Writer.TryComplete();
-                await estimator.StopAsync().ConfigureAwait(false);
-            }
-        }
-    }
 }
-
-[JsonSerializable(typeof(CosmosObservationContainerDocument))]
-sealed record CosmosObservationContainerDocument(
-    
-    [property: JsonPropertyName("id")] string Id,
-    
-    [property: JsonPropertyName("partitionKey")] string PartitionKey,
-    
-    [property: JsonPropertyName("documentKind")] string DocumentKind,
-    
-    [property: JsonPropertyName("observationType")] string ObservationType,
-    
-    [property: JsonPropertyName("observationId")] string ObservationId,
-    
-    [property: JsonPropertyName("observationVersion")] long ObservationVersion,
-    
-    [property: JsonPropertyName("observation")]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    Dictionary<string, ObservationValue>? Observation = null,
-    
-    [property: JsonPropertyName("streamName")]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    string? StreamName = null,
-    
-    [property: JsonPropertyName("subjectType")]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    string? SubjectType = null,
-    
-    [property: JsonPropertyName("subjectId")]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    string? SubjectId = null,
-    
-    [property: JsonPropertyName("subjectVersion")]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    long? SubjectVersion = null,
-    
-    [property: JsonPropertyName("correlationId")]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    string? CorrelationId = null,
-    
-    [property: JsonPropertyName("occurredAtUtc")]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    DateTimeOffset? OccurredAtUtc = null,
-    
-    [property: JsonPropertyName("traceId")]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    string? TraceId = null,
-    
-    [property: JsonPropertyName("spanId")]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    string? SpanId = null,
-    
-    [property: JsonPropertyName("_etag")]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    string? ETag = null
-    );

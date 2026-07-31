@@ -485,4 +485,108 @@ public sealed record MaterializationChangePage
 
     /// <summary>Whether the source is caught up or another bounded read is required to prove catch-up.</summary>
     public MaterializationChangePageState State { get; }
+
+    /// <summary>
+    /// Requires exact durable application-checkpoint evidence before a managed provider may settle this page.
+    /// </summary>
+    /// <param name="progress">Exact definition, generation, and source-feed progress key supplied to the handler.</param>
+    /// <param name="result">Durable progress mutation result returned by the handler.</param>
+    /// <returns>The exact durable change checkpoint that authorizes provider settlement.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="progress"/> or <paramref name="result"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// The mutation was not applied or replayed, the snapshot belongs to another progress key, the latest checkpoint
+    /// is not a change-position checkpoint through this page, or its applied delivery identities do not exactly equal
+    /// this page's delivery set.
+    /// </exception>
+    public MaterializationApplicationCheckpoint RequireDurableCheckpointForSettlement(
+        MaterializationProgressKey progress,
+        MaterializationProgressMutationResult result)
+    {
+        ArgumentNullException.ThrowIfNull(progress);
+        ArgumentNullException.ThrowIfNull(result);
+        if (result.Disposition is not (MaterializationProgressMutationDisposition.Applied
+            or MaterializationProgressMutationDisposition.Replayed))
+        {
+            throw new InvalidOperationException(
+                $"Provider settlement requires applied or replayed application progress; the handler returned '{result.Disposition}'.");
+        }
+
+        var snapshot = result.Snapshot
+            ?? throw new InvalidOperationException("Provider settlement requires a durable progress snapshot.");
+        if (snapshot.Key != progress)
+        {
+            throw new InvalidOperationException(
+                "Provider settlement requires progress from the exact materialization definition, generation, and source-feed scope supplied to the handler.");
+        }
+
+        var checkpoint = snapshot.LatestCheckpoint
+            ?? throw new InvalidOperationException("Provider settlement requires a durable application checkpoint.");
+        if (checkpoint.Kind != MaterializationCheckpointKind.ChangePosition)
+        {
+            throw new InvalidOperationException(
+                $"Provider settlement requires a '{MaterializationCheckpointKind.ChangePosition}' checkpoint; the latest checkpoint is '{checkpoint.Kind}'.");
+        }
+
+        if (checkpoint.Position != ThroughPosition)
+        {
+            throw new InvalidOperationException(
+                "Provider settlement requires a durable application checkpoint through the exact delivered page position.");
+        }
+
+        if (!HasExactAppliedDeliverySet(checkpoint.AppliedDeliveries))
+        {
+            throw new InvalidOperationException(
+                "Provider settlement requires a durable application checkpoint covering exactly the delivered page identities.");
+        }
+
+        return checkpoint;
+    }
+
+    bool HasExactAppliedDeliverySet(ImmutableArray<MaterializationDeliveryId> appliedDeliveries)
+    {
+        if (appliedDeliveries.Length != Deliveries.Length)
+        {
+            return false;
+        }
+
+        foreach (var delivery in Deliveries)
+        {
+            if (!ContainsCanonical(appliedDeliveries, delivery.Id))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    static bool ContainsCanonical(
+        ImmutableArray<MaterializationDeliveryId> deliveries,
+        MaterializationDeliveryId sought)
+    {
+        var lower = 0;
+        var upper = deliveries.Length - 1;
+        while (lower <= upper)
+        {
+            var middle = lower + ((upper - lower) / 2);
+            var comparison = StringComparer.Ordinal.Compare(deliveries[middle].Value, sought.Value);
+            if (comparison == 0)
+            {
+                return true;
+            }
+
+            if (comparison < 0)
+            {
+                lower = middle + 1;
+            }
+            else
+            {
+                upper = middle - 1;
+            }
+        }
+
+        return false;
+    }
 }

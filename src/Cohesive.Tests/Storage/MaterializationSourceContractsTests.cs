@@ -834,7 +834,8 @@ public sealed class MaterializationSourceContractsTests
                         MaterializationGuaranteeKind.StableOrdering,
                         MaterializationGuaranteeKind.AtLeastOnceDelivery,
                         MaterializationGuaranteeKind.BaselinePlusCatchUp,
-                        MaterializationGuaranteeKind.RetainedHistoryStart
+                        MaterializationGuaranteeKind.RetainedHistoryStart,
+                        MaterializationGuaranteeKind.CompleteMutationDelivery
                     ],
                     [
                         new MaterializationOperatingLimit(MaterializationLimitKind.ChangeItems, MaximumProfileItems),

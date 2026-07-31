@@ -184,14 +184,6 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository
             return ([.. snapshotsByKey.Values], nextConcurrencyVersion);
     }
 
-    /// <summary>Gets change stream.</summary>
-    public IObservationStream GetChangeStream(string processorName, DateTimeOffset? startTime = null) =>
-        throw new NotSupportedException("In-memory observation repository does not implement change streams.");
-
-    /// <summary>Gets outbox stream.</summary>
-    public IObservationStream GetOutboxStream(string processorName, string? streamName = null, DateTimeOffset? startTime = null) =>
-        throw new NotSupportedException("In-memory observation repository does not implement outbox streams.");
-
     void SeedSnapshot(EntitySnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);

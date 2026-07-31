@@ -14,7 +14,7 @@ namespace Cohesive.Storage.Materialization;
 /// checkpoint or settle them. The wrapped Relations reader should itself be deterministic while a multi-page read
 /// is in progress; this reference fake does not claim a cross-request snapshot guarantee.
 /// </remarks>
-public sealed class InMemoryMaterializationSource : IMaterializationSettlingSource
+public sealed class InMemoryMaterializationSource : IMaterializationPullChangeSource, IMaterializationSettlingSource
 {
     const int ContinuationFormatVersion = 1;
     const string ContinuationPrefix = "in-memory-offset/";

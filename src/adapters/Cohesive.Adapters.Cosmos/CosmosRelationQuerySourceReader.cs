@@ -17,7 +17,7 @@ using Microsoft.Azure.Cosmos;
 
 namespace Cohesive.Adapters.Cosmos;
 
-/// <summary>Bounded canonical entity-source acquisition over one Cosmos container.</summary>
+/// <summary>Bounded canonical observation-envelope acquisition over one Cosmos container.</summary>
 /// <remarks>
 /// This reader retrieves identity plus the exact semantic and correlation fields requested by a physical plan.
 /// Semantic filtering, joining, projection, aggregation, and paging remain owned by the relation/query interpreter.
@@ -45,6 +45,9 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
 
     /// <summary>Entity-envelope observation-type property.</summary>
     public const string ObservationTypeSourceSelector = "observationType";
+
+    /// <summary>Observation-envelope logical stream property.</summary>
+    public const string StreamNameSourceSelector = "streamName";
 
     const string EvidencePrefix = "cohesive.adapters.cosmos/entity-source/v1";
     const string IdentityAlias = "_identity";
@@ -75,8 +78,8 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
     public const string DefaultEntityDocumentKind =
         CosmosObservationOutboxRepositoryOptions.DefaultEntityDocumentKind;
 
-    /// <summary>Creates a canonical Cosmos entity-source reader.</summary>
-    /// <param name="shape">Exact graph-qualified entity shape stored in the container.</param>
+    /// <summary>Creates a canonical Cosmos observation-envelope reader.</summary>
+    /// <param name="shape">Exact graph-qualified semantic shape projected by the reader.</param>
     /// <param name="source">Canonical source identity, capability profile, and execution limits.</param>
     /// <param name="container">Cosmos SDK container used for bounded acquisition.</param>
     /// <param name="databaseId">Exact Cosmos database identity retained as binding provenance.</param>
@@ -99,16 +102,25 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
     /// <param name="entityDocumentKind">
     /// Entity-document discriminator, or <see langword="null"/> for <see cref="DefaultEntityDocumentKind"/>.
     /// </param>
+    /// <param name="persistedObservationType">
+    /// Exact graph-qualified observation type stored in matching envelopes, or <see langword="null"/> to use
+    /// <paramref name="shape"/>. This may differ from the projected shape when, for example, an outbox envelope
+    /// projects an embedded entity observation and message metadata into a dedicated message shape.
+    /// </param>
+    /// <param name="persistedStreamName">
+    /// Optional exact top-level stream name required of matching envelopes. This keeps an outbox baseline query
+    /// identical to a stream-filtered managed change binding.
+    /// </param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="source"/>, <paramref name="container"/>, <paramref name="databaseId"/>,
     /// <paramref name="containerId"/>, or <paramref name="policy"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
     /// An affinity identity is incomplete or disagrees with the SDK container; the effective identity selector is
-    /// not a property-only path; the entity discriminator is empty; cross-partition reads are prohibited without a
-    /// fixed partition scope; or <paramref name="source"/> does not use <see cref="TargetProfile"/>, advertises limits
-    /// wider than <paramref name="policy"/> can honor, or advertises a row buffer larger than the runtime can
-    /// materialize.
+    /// not a property-only path; a document discriminator, persisted observation type, or persisted stream name is
+    /// invalid; cross-partition reads are prohibited without a fixed partition scope; or <paramref name="source"/> does not use
+    /// <see cref="TargetProfile"/>, advertises limits wider than <paramref name="policy"/> can honor, or advertises a
+    /// row buffer larger than the runtime can materialize.
     /// </exception>
     public CosmosRelationQuerySourceReader(
         QualifiedShapeId shape,
@@ -120,20 +132,24 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
         string? identitySourceSelector = null,
         RelationQueryPlacementFieldSelector? fieldSourceSelector = null,
         RelationQueryPlacementFieldSelector? relationshipKeySourceSelector = null,
-        string? entityDocumentKind = null)
+        string? entityDocumentKind = null,
+        QualifiedShapeId? persistedObservationType = null,
+        string? persistedStreamName = null)
         : this(
-            shape,
-            source,
-            new CosmosJsonQueryFeedReader(ValidateContainer(container, databaseId, containerId)),
-            CosmosPhysicalAffinity.CanonicalAccountEndpointText(container.Database.Client.Endpoint),
-            databaseId,
-            containerId,
-            policy,
-            identitySourceSelector,
-            fieldSourceSelector,
-            relationshipKeySourceSelector,
-            entityDocumentKind,
-            container.Database.Client.ClientOptions.ConsistencyLevel)
+            shape: shape,
+            source: source,
+            feedReader: new CosmosJsonQueryFeedReader(ValidateContainer(container, databaseId, containerId)),
+            accountEndpoint: CosmosPhysicalAffinity.CanonicalAccountEndpointText(container.Database.Client.Endpoint),
+            databaseId: databaseId,
+            containerId: containerId,
+            policy: policy,
+            identitySourceSelector: identitySourceSelector,
+            fieldSourceSelector: fieldSourceSelector,
+            relationshipKeySourceSelector: relationshipKeySourceSelector,
+            entityDocumentKind: entityDocumentKind,
+            clientConsistencyLevel: container.Database.Client.ClientOptions.ConsistencyLevel,
+            persistedObservationType: persistedObservationType,
+            persistedStreamName: persistedStreamName)
     {
     }
 
@@ -149,7 +165,9 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
         RelationQueryPlacementFieldSelector? fieldSourceSelector = null,
         RelationQueryPlacementFieldSelector? relationshipKeySourceSelector = null,
         string? entityDocumentKind = null,
-        ConsistencyLevel? clientConsistencyLevel = null)
+        ConsistencyLevel? clientConsistencyLevel = null,
+        QualifiedShapeId? persistedObservationType = null,
+        string? persistedStreamName = null)
     {
         if (string.IsNullOrWhiteSpace(shape.GraphId.Value) || string.IsNullOrWhiteSpace(shape.ShapeId.Value))
             throw new ArgumentException("A Cosmos entity reader requires a graph-qualified shape.", nameof(shape));
@@ -225,6 +243,22 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
         EntityDocumentKind = entityDocumentKind is null
             ? DefaultEntityDocumentKind
             : Guard.RequireNotNullOrWhiteSpace(entityDocumentKind);
+        var effectivePersistedObservationType = persistedObservationType ?? shape;
+        if (string.IsNullOrWhiteSpace(effectivePersistedObservationType.GraphId.Value)
+            || string.IsNullOrWhiteSpace(effectivePersistedObservationType.ShapeId.Value))
+        {
+            throw new ArgumentException(
+                "A Cosmos reader requires a graph-qualified persisted observation type.",
+                nameof(persistedObservationType));
+        }
+
+        PersistedObservationType = effectivePersistedObservationType;
+        if (persistedStreamName is not null)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(persistedStreamName);
+        }
+
+        PersistedStreamName = persistedStreamName;
         ClientConsistencyLevel = clientConsistencyLevel;
     }
 
@@ -259,6 +293,15 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
 
     /// <summary>Entity-envelope discriminator required by every source query.</summary>
     public string EntityDocumentKind { get; }
+
+    /// <summary>
+    /// Exact graph-qualified observation type stored in envelopes selected by this reader. It may differ from
+    /// <see cref="Shape"/>, which is the semantic shape projected from those envelopes.
+    /// </summary>
+    public QualifiedShapeId PersistedObservationType { get; }
+
+    /// <summary>Optional exact top-level stream name required of every selected Cosmos envelope.</summary>
+    public string? PersistedStreamName { get; }
 
     /// <summary>
     /// Stable property-only path interpreted as a nonempty JSON-string semantic observation identity and used as
@@ -873,13 +916,20 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
             .Where(CosmosSqlExpression.Binary(
                 CosmosSqlBinaryOperator.Equal,
                 CosmosSqlExpression.Property(RootAlias, FieldPath.FromField(ObservationTypeSourceSelector)),
-                CosmosSqlExpression.Parameter(Shape.ShapeId.Value)))
+                CosmosSqlExpression.Parameter(PersistedObservationType.ShapeId.Value)))
             .Where(CosmosSqlExpression.Function(
                 CosmosSqlFunction.IsDefined,
                 CosmosSqlExpression.Property(RootAlias, FieldPath.FromField(ObservationEnvelopeSourceSelector))))
             .Where(CosmosSqlExpression.Function(
                 CosmosSqlFunction.IsObject,
                 CosmosSqlExpression.Property(RootAlias, FieldPath.FromField(ObservationEnvelopeSourceSelector))));
+        if (PersistedStreamName is not null)
+        {
+            builder.Where(CosmosSqlExpression.Binary(
+                CosmosSqlBinaryOperator.Equal,
+                CosmosSqlExpression.Property(RootAlias, FieldPath.FromField(StreamNameSourceSelector)),
+                CosmosSqlExpression.Parameter(PersistedStreamName)));
+        }
         if (predicate is not null)
             builder.Where(predicate);
         builder.OrderBy(CosmosSqlExpression.Property(RootAlias, identityPath));
@@ -1329,6 +1379,14 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
         Uri.EscapeDataString(DatabaseId),
         "/container/",
         Uri.EscapeDataString(ContainerId),
+        "/document-kind/",
+        Uri.EscapeDataString(EntityDocumentKind),
+        "/persisted-observation-type/",
+        Uri.EscapeDataString(PersistedObservationType.GraphId.Value),
+        "/",
+        Uri.EscapeDataString(PersistedObservationType.ShapeId.Value),
+        "/persisted-stream/",
+        Uri.EscapeDataString(PersistedStreamName ?? "none"),
         "/source/",
         Uri.EscapeDataString(source.Id.Value),
         "/physical-plan/",

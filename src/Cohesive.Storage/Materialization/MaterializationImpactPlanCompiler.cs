@@ -258,9 +258,9 @@ public static class MaterializationImpactPlanCompiler
                 {
                     Error(
                         MaterializationImpactDiagnosticCodes.CapabilityUnavailable,
-                        $"Direct-root change input '{source.Input.Id.Value}' lacks bounded incremental delivery.",
+                        $"Direct-root change input '{source.Input.Id.Value}' lacks complete-mutation bounded incremental delivery.",
                         $"/definition/sources/{Encode(source.Input.Id.Value)}",
-                        expected: nameof(MaterializationCapabilityKind.SourceChangeDelivery),
+                        expected: nameof(MaterializationGuaranteeKind.CompleteMutationDelivery),
                         observed: "missing complete incremental change-delivery requirement");
                     return;
                 }
@@ -767,7 +767,8 @@ public static class MaterializationImpactPlanCompiler
             bool requireBeforeImage,
             out MaterializationImpactCapabilityReference? reference)
         {
-            var guarantees = RequiredGuarantees(MaterializationCapabilityKind.SourceChangeDelivery);
+            var guarantees = RequiredGuarantees(MaterializationCapabilityKind.SourceChangeDelivery)
+                .Add(MaterializationGuaranteeKind.CompleteMutationDelivery);
             if (requireBeforeImage)
             {
                 guarantees = guarantees.Add(MaterializationGuaranteeKind.BeforeImage);
