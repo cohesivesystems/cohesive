@@ -594,13 +594,15 @@ public sealed class MaterializationInverseImpactTests
             MaterializationGuaranteeKind.StableOrdering,
             MaterializationGuaranteeKind.AtLeastOnceDelivery,
             MaterializationGuaranteeKind.BaselinePlusCatchUp,
-            MaterializationGuaranteeKind.BeforeImage
+            MaterializationGuaranteeKind.BeforeImage,
+            MaterializationGuaranteeKind.CompleteMutationDelivery
         ]
         :
         [
             MaterializationGuaranteeKind.StableOrdering,
             MaterializationGuaranteeKind.AtLeastOnceDelivery,
-            MaterializationGuaranteeKind.BaselinePlusCatchUp
+            MaterializationGuaranteeKind.BaselinePlusCatchUp,
+            MaterializationGuaranteeKind.CompleteMutationDelivery
         ];
 
     static ImmutableArray<MaterializationOperatingLimit> ReadLimits =>

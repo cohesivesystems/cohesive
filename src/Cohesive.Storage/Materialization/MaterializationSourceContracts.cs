@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Text.Json.Serialization;
+using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Compilation;
@@ -444,18 +445,34 @@ public interface IMaterializationSource
         MaterializationSourcePageRequest request);
 }
 
-/// <summary>Optional source port for bounded typed change delivery.</summary>
+/// <summary>Common authority for canonical materialization change delivery.</summary>
 /// <remarks>
-/// A source position, an application checkpoint, and source settlement are distinct progress concepts. Reads expose
-/// positions without mutating application progress or provider-owned acknowledgement state. The owning process may
-/// durably commit an application checkpoint covering a returned position through
-/// <see cref="IMaterializationProgressStore"/>; only then may it acknowledge the position through
-/// <see cref="IMaterializationSettlingSource"/>, when the source advertises settlement. A provider-managed lease or
-/// bookmark is an execution realization of source progress, not an application checkpoint or an additional semantic
-/// authority.
+/// Pull and provider-managed delivery are execution realizations of the same canonical change authority. A source
+/// position, an application checkpoint, and source settlement remain distinct progress concepts. Provider-managed
+/// leases, bookmarks, processor names, and native callback contexts do not cross this boundary and are not
+/// application checkpoints.
 /// </remarks>
-public interface IMaterializationChangeSource : IMaterializationSource
+public interface IMaterializationChangeSource
 {
+    /// <summary>Exact canonical Relations reader and attributable materialization capability profile.</summary>
+    MaterializationSourceDescriptor Descriptor { get; }
+}
+
+/// <summary>Optional source port for bounded pull-based typed change delivery.</summary>
+/// <remarks>
+/// Reads expose positions without mutating application progress or provider-owned acknowledgement state. The owning
+/// process may durably commit an application checkpoint covering a returned position through
+/// <see cref="IMaterializationProgressStore"/>; only then may it acknowledge the position through
+/// <see cref="IMaterializationSettlingSource"/>, when the source advertises settlement.
+/// </remarks>
+public interface IMaterializationPullChangeSource : IMaterializationSource, IMaterializationChangeSource
+{
+    /// <summary>
+    /// Exact canonical Relations reader and attributable materialization capability profile shared by the paged and
+    /// change-delivery source views.
+    /// </summary>
+    new MaterializationSourceDescriptor Descriptor { get; }
+
     /// <summary>Captures the current opaque end position of one exact source-feed scope.</summary>
     /// <remarks>
     /// Capturing a position does not read, settle, or checkpoint changes and does not imply a coordinated snapshot
@@ -494,13 +511,297 @@ public interface IMaterializationChangeSource : IMaterializationSource
         MaterializationChangeReadRequest request);
 }
 
+/// <summary>
+/// Exact materialization definition and generation binding for one provider-managed change execution.
+/// </summary>
+public sealed record MaterializationManagedChangeRequest
+{
+    /// <summary>Creates a provider-managed change execution binding.</summary>
+    /// <param name="materialization">Logical materialization definition receiving the changes.</param>
+    /// <param name="definitionFingerprint">Exact canonical execution-definition content being applied.</param>
+    /// <param name="generation">Candidate or active target generation receiving the changes.</param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="definitionFingerprint"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="materialization"/> or <paramref name="generation"/> is default.
+    /// </exception>
+    [JsonConstructor]
+    public MaterializationManagedChangeRequest(
+        MaterializationId materialization,
+        ExecutionDefinitionFingerprint definitionFingerprint,
+        MaterializationGenerationId generation)
+    {
+        MaterializationContract.RequireDefinedIdentity(materialization.Value, nameof(materialization));
+        DefinitionFingerprint = Guard.RequireNotNull(definitionFingerprint);
+        MaterializationContract.RequireDefinedIdentity(generation.Value, nameof(generation));
+        Materialization = materialization;
+        Generation = generation;
+    }
+
+    /// <summary>Logical materialization definition receiving the changes.</summary>
+    public MaterializationId Materialization { get; }
+
+    /// <summary>Exact canonical execution-definition content being applied.</summary>
+    public ExecutionDefinitionFingerprint DefinitionFingerprint { get; }
+
+    /// <summary>Candidate or active target generation receiving the changes.</summary>
+    public MaterializationGenerationId Generation { get; }
+
+    /// <summary>Creates the exact durable progress key for one delivered source-feed scope.</summary>
+    /// <param name="scope">Exact scope of the provider-managed batch.</param>
+    /// <returns>
+    /// A progress key retaining this request's materialization, definition, and generation with
+    /// <paramref name="scope"/>.
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="scope"/> is <see langword="null"/>.</exception>
+    public MaterializationProgressKey CreateProgressKey(MaterializationSourceScope scope) =>
+        new(Materialization, DefinitionFingerprint, Generation, Guard.RequireNotNull(scope));
+}
+
+/// <summary>Availability of one provider-defined managed change lag estimate.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum MaterializationChangeLagEstimateState
+{
+    /// <summary>The provider supplied a non-negative approximate pending-work estimate.</summary>
+    Estimated = 0,
+
+    /// <summary>The provider could not supply a meaningful pending-work estimate.</summary>
+    Unavailable = 1
+}
+
+/// <summary>Provider-neutral lag observation for one managed materialization change execution.</summary>
+public sealed record MaterializationChangeLagObservation
+{
+    /// <summary>Creates one attributable managed-source lag observation.</summary>
+    /// <param name="request">Exact materialization definition and generation being observed.</param>
+    /// <param name="source">Physical source instance whose managed processor supplied the observation.</param>
+    /// <param name="scope">
+    /// Exact materialization source-feed scope when the provider can attribute the estimate, or
+    /// <see langword="null"/> for an intentionally source-wide estimate.
+    /// </param>
+    /// <param name="estimateState">Whether an approximate provider-work estimate is available.</param>
+    /// <param name="estimatedPendingProviderWork">
+    /// Non-negative source-defined estimate of pending provider work when <paramref name="estimateState"/> is
+    /// <see cref="MaterializationChangeLagEstimateState.Estimated"/>. This is not an exact item or delivery count.
+    /// </param>
+    /// <param name="observedAtUtc">UTC time at which the estimate was observed.</param>
+    /// <param name="evidenceReference">Optional opaque provider-neutral evidence reference.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="estimateState"/> is unsupported or <paramref name="estimatedPendingProviderWork"/> is
+    /// negative.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="source"/> is default, <paramref name="scope"/> belongs to another source, estimate presence
+    /// conflicts with <paramref name="estimateState"/>, <paramref name="observedAtUtc"/> is not UTC, or
+    /// <paramref name="evidenceReference"/> is empty.
+    /// </exception>
+    [JsonConstructor]
+    public MaterializationChangeLagObservation(
+        MaterializationManagedChangeRequest request,
+        RelationQuerySourceInstanceId source,
+        MaterializationSourceScope? scope,
+        MaterializationChangeLagEstimateState estimateState,
+        long? estimatedPendingProviderWork,
+        DateTimeOffset observedAtUtc,
+        string? evidenceReference = null)
+    {
+        Request = Guard.RequireNotNull(request);
+        MaterializationContract.RequireDefinedIdentity(source.Value, nameof(source));
+        if (scope is not null && scope.Source != source)
+        {
+            throw new ArgumentException(
+                "A scoped managed-source lag observation must belong to its declared physical source.",
+                nameof(scope));
+        }
+
+        if (!Enum.IsDefined(estimateState))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(estimateState),
+                estimateState,
+                "Unsupported managed-source lag estimate state.");
+        }
+
+        var hasEstimate = estimatedPendingProviderWork.HasValue;
+        if ((estimateState == MaterializationChangeLagEstimateState.Estimated) != hasEstimate)
+        {
+            throw new ArgumentException(
+                "An estimated lag observation requires provider work, while an unavailable observation must omit it.",
+                nameof(estimatedPendingProviderWork));
+        }
+
+        if (estimatedPendingProviderWork < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(estimatedPendingProviderWork),
+                estimatedPendingProviderWork,
+                "A managed-source lag estimate cannot be negative.");
+        }
+
+        MaterializationContract.RequireUtc(observedAtUtc, nameof(observedAtUtc));
+        if (evidenceReference is not null)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(evidenceReference);
+        }
+
+        Source = source;
+        Scope = scope;
+        EstimateState = estimateState;
+        EstimatedPendingProviderWork = estimatedPendingProviderWork;
+        ObservedAtUtc = observedAtUtc;
+        EvidenceReference = evidenceReference;
+    }
+
+    /// <summary>Exact materialization definition and generation being observed.</summary>
+    public MaterializationManagedChangeRequest Request { get; }
+
+    /// <summary>Physical source instance whose managed processor supplied the observation.</summary>
+    public RelationQuerySourceInstanceId Source { get; }
+
+    /// <summary>
+    /// Exact source-feed scope, or <see langword="null"/> when this is intentionally a source-wide estimate that
+    /// must not be projected as exact per-scope lag.
+    /// </summary>
+    public MaterializationSourceScope? Scope { get; }
+
+    /// <summary>Whether an approximate provider-work estimate is available.</summary>
+    public MaterializationChangeLagEstimateState EstimateState { get; }
+
+    /// <summary>Source-defined approximate pending provider work, not an exact item or delivery count.</summary>
+    [JsonConverter(typeof(StringEncodedInt64JsonConverter))]
+    public long? EstimatedPendingProviderWork { get; }
+
+    /// <summary>UTC time at which the estimate was observed.</summary>
+    public DateTimeOffset ObservedAtUtc { get; }
+
+    /// <summary>Optional opaque provider-neutral evidence reference.</summary>
+    public string? EvidenceReference { get; }
+}
+
+/// <summary>
+/// Provider-neutral observation that source settlement followed one exact durable application checkpoint.
+/// </summary>
+public sealed record MaterializationChangeSettlementObservation
+{
+    /// <summary>Creates one checkpoint-attributed managed source settlement observation.</summary>
+    /// <param name="progress">Durable application progress that authorized provider settlement.</param>
+    /// <param name="settlement">Provider acknowledgement of the checkpoint's exact source position.</param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="progress"/> or <paramref name="settlement"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// The progress lacks the cited change checkpoint, the checkpoint or position differs, the source scope differs,
+    /// or settlement predates the durable application commit.
+    /// </exception>
+    [JsonConstructor]
+    public MaterializationChangeSettlementObservation(
+        MaterializationProgressSnapshot progress,
+        MaterializationSourceSettlement settlement)
+    {
+        Progress = Guard.RequireNotNull(progress);
+        Settlement = Guard.RequireNotNull(settlement);
+        var checkpoint = progress.LatestCheckpoint;
+        if (checkpoint is null
+            || checkpoint.Kind != MaterializationCheckpointKind.ChangePosition
+            || checkpoint.Id != settlement.Checkpoint
+            || checkpoint.Position != settlement.Position
+            || progress.Key.Scope != settlement.Position.Scope
+            || settlement.SettledAtUtc < checkpoint.CommittedAtUtc)
+        {
+            throw new ArgumentException(
+                "A managed settlement observation must cite the exact durable change checkpoint, position, source scope, and causal commit boundary.",
+                nameof(settlement));
+        }
+    }
+
+    /// <summary>Durable application progress that authorized provider settlement.</summary>
+    public MaterializationProgressSnapshot Progress { get; }
+
+    /// <summary>Provider acknowledgement of the checkpoint's exact source position.</summary>
+    public MaterializationSourceSettlement Settlement { get; }
+}
+
+/// <summary>
+/// Applies one canonical managed change page and durably commits its exact application checkpoint.
+/// </summary>
+/// <remarks>
+/// A managed source may invoke this delegate concurrently for independent source scopes; no transaction spans those
+/// calls. Lease transfer may also overlap attempts carrying the same stable delivery identities. Implementations
+/// must therefore be thread-safe and use durable progress fencing plus idempotent effects. They return only after
+/// both application effects and the exact supplied progress key are durable. Cancellation signals lost ownership or
+/// run shutdown, but work that became durable before cancellation may be replayed; after this delegate returns, the
+/// adapter rechecks cancellation and durable proof before requesting provider settlement. Once a provider settlement
+/// operation that cannot accept cancellation is in flight, its authoritative outcome wins: success is recorded even
+/// if cancellation arrives concurrently, while failure leaves the stable deliveries replayable.
+/// </remarks>
+/// <param name="context">Operation context carrying provider callback cancellation and attribution.</param>
+/// <param name="progress">Exact definition, generation, and source-feed progress key for <paramref name="page"/>.</param>
+/// <param name="page">Canonical bounded page delivered by the managed source.</param>
+/// <returns>
+/// Durable progress evidence. Only an applied or replayed exact change checkpoint accepted by
+/// <see cref="MaterializationChangePage.RequireDurableCheckpointForSettlement"/> authorizes provider settlement.
+/// </returns>
+public delegate ValueTask<MaterializationProgressMutationResult> MaterializationManagedChangeHandler(
+    OperationContext context,
+    MaterializationProgressKey progress,
+    MaterializationChangePage page);
+
+/// <summary>Optional source port for provider-managed canonical change delivery.</summary>
+/// <remarks>
+/// The adapter retains provider leases, bookmarks, native callback contexts, and acknowledgement functions. For each
+/// delivered page it creates an exact progress key from the run request and page scope, invokes the handler, validates
+/// the returned durable evidence through
+/// <see cref="MaterializationChangePage.RequireDurableCheckpointForSettlement"/>, and only then settles the provider.
+/// A handler failure, cancellation observed before settlement is requested, rejected progress mutation, or mismatched
+/// checkpoint must leave the provider position unsettled so the same stable deliveries can be replayed. Once a
+/// non-cancellable provider settlement is in flight, the adapter records its authoritative success despite concurrent
+/// cancellation; a failed settlement remains replayable.
+/// Managed callbacks may run concurrently across independent scopes, and no all-scope transaction is implied. A
+/// handler must fence durable progress and make stable delivery replay idempotent rather than relying on callback
+/// serialization or lease ownership as application state.
+/// </remarks>
+public interface IMaterializationManagedChangeSource : IMaterializationChangeSource
+{
+    /// <summary>Runs provider-managed delivery until completion or cancellation.</summary>
+    /// <param name="context">Operation context carrying execution attribution and cancellation.</param>
+    /// <param name="request">Exact materialization definition and generation receiving managed changes.</param>
+    /// <param name="handler">Application work and durable-checkpoint handler.</param>
+    /// <returns>A task that completes when managed delivery stops.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="context"/>, <paramref name="request"/>, or <paramref name="handler"/> is
+    /// <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// The handler returns progress that does not exactly authorize settlement of its delivered page.
+    /// </exception>
+    /// <exception cref="OperationCanceledException">Managed delivery is canceled.</exception>
+    Task RunAsync(
+        OperationContext context,
+        MaterializationManagedChangeRequest request,
+        MaterializationManagedChangeHandler handler);
+
+    /// <summary>Observes provider-neutral lag for the managed materialization execution.</summary>
+    /// <param name="context">Operation context carrying observation attribution and cancellation.</param>
+    /// <param name="request">Exact materialization definition and generation whose lag is observed.</param>
+    /// <returns>An asynchronous sequence of source-wide or exact source-scope lag estimates.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="context"/> or <paramref name="request"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="OperationCanceledException">Lag observation is canceled.</exception>
+    IAsyncEnumerable<MaterializationChangeLagObservation> ObserveLagAsync(
+        OperationContext context,
+        MaterializationManagedChangeRequest request);
+}
+
 /// <summary>Optional change-source port that can capture the beginning of its currently retained history.</summary>
 /// <remarks>
 /// Implementers must advertise <see cref="MaterializationGuaranteeKind.RetainedHistoryStart"/> on their
 /// <see cref="MaterializationCapabilityKind.SourceChangeDelivery"/> evidence. Sources that can capture only a
 /// current cut do not implement this port.
 /// </remarks>
-public interface IMaterializationRetainedChangeSource : IMaterializationChangeSource
+public interface IMaterializationRetainedChangeSource : IMaterializationPullChangeSource
 {
     /// <summary>Captures an exclusive resumable boundary immediately before the earliest currently retained change.</summary>
     /// <param name="context">Operation context carrying time, identity, tracing, and cancellation.</param>

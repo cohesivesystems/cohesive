@@ -197,6 +197,13 @@ explicit settlement, fenced idempotent versioned writes, generation isolation, e
 promotion. `MaterializationCapabilityMatcher` resolves those requirements against attributable adapter evidence and
 returns structured diagnostics instead of weakening a guarantee.
 
+Change-delivery evidence may omit item or byte maxima when a provider exposes only advisory callback hints. Such
+evidence can satisfy an unbounded managed-execution requirement but cannot satisfy a definition that requires hard
+change-item or read-byte limits. Bounded pull sources continue to advertise and enforce their exact limits.
+Definitions also distinguish `CompleteMutationDelivery`—every retained create, update, and delete without
+latest-version coalescing—from `LatestVersionUpsertDelivery`, which promises only currently visible upserts. These
+typed guarantees are not interchangeable during capability matching.
+
 Capability matching establishes whether a binding can satisfy the declared consistency strategy; it is not proof
 that a particular run acquired a coordinated snapshot or baseline/change-feed cut. The later execution planner must
 persist the concrete run-scoped snapshot, feed-position, and retention evidence before it authorizes work.
@@ -215,7 +222,34 @@ The runtime ports keep three progress concepts separate:
   read fingerprint, and authoritative complete/not-found Relations evidence instead of an unattributed completion
   flag.
 - `MaterializationSourceSettlement` records a source acknowledgement. The engine must first persist its application
-  checkpoint, then call `IMaterializationSettlingSource`, and finally persist the returned receipt.
+  checkpoint, then settle the source, and finally persist or emit the returned receipt. Pull sources may expose
+  `IMaterializationSettlingSource` for an out-of-band acknowledgement. A managed source instead owns its
+  callback-scoped acknowledgement and may invoke it only after the handler returns an applied or exact-replayed
+  `MaterializationProgressMutationResult` whose change checkpoint covers the batch's exact through-position and
+  delivery identities.
+
+`IMaterializationChangeSource` is the common descriptor-bearing authority for change delivery.
+`IMaterializationPullChangeSource` reads bounded pages from caller-owned positions without changing source state;
+`IMaterializationManagedChangeSource` runs provider-managed delivery and retains the settlement operation inside the
+adapter boundary. Both deliver `MaterializationChangePage` and `MaterializationChangeDelivery`; there is no second
+observation-stream envelope. Provider lease, bookmark, consumer-group, and worker-owner identities are execution
+evidence only. They are neither application checkpoints nor interchangeable with source positions.
+
+A managed adapter must bind provider checkpoint ownership to the exact `MaterializationManagedChangeRequest`:
+materialization identity, execution-definition fingerprint, and generation. Workers resuming that same request may
+share provider ownership, but a new generation must receive an isolated provider checkpoint namespace so it cannot
+begin after a prior generation's acknowledged input.
+
+The former `IObservationStream`, `ObservationBatchContext`, `ObservationRecord`, and `IChangeStreamRepository`
+contracts were removed. Entity/outbox repositories remain write-side persistence ports. Consumers migrate by
+binding the persisted entity or outbox shape to a materialization change source and handling its canonical change
+pages. The handler must apply effects and durably save the supplied progress key before returning its progress-store
+result; callback success alone is not durable application evidence.
+
+The invariant order is `apply effects → commit application checkpoint → settle source → record settlement
+observation`. A crash after the application commit and before source settlement may redeliver the batch; stable
+change and delivery identities plus an exact replayed checkpoint make that safe. A crash after source settlement
+cannot expose uncommitted application work because settlement was not reachable before the durable proof.
 
 `IMaterializationProgressStore` returns a bounded snapshot containing only the latest checkpoint and settlement.
 Implementations may retain additional idempotency and audit evidence internally without making unbounded history part

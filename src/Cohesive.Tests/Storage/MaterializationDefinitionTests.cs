@@ -240,6 +240,103 @@ public sealed class MaterializationDefinitionTests
     }
 
     [Fact]
+    public void ChangeCoverageGuarantees_AreSourceChangeSpecificAndDoNotSatisfyEachOther()
+    {
+        Assert.True(MaterializationCapabilityCatalog.AllowsGuarantee(
+            MaterializationCapabilityKind.SourceChangeDelivery,
+            MaterializationGuaranteeKind.CompleteMutationDelivery));
+        Assert.True(MaterializationCapabilityCatalog.AllowsGuarantee(
+            MaterializationCapabilityKind.SourceChangeDelivery,
+            MaterializationGuaranteeKind.LatestVersionUpsertDelivery));
+        Assert.False(MaterializationCapabilityCatalog.AllowsGuarantee(
+            MaterializationCapabilityKind.SourceBoundedEnumeration,
+            MaterializationGuaranteeKind.CompleteMutationDelivery));
+        Assert.False(MaterializationCapabilityCatalog.AllowsGuarantee(
+            MaterializationCapabilityKind.TargetBulkUpsert,
+            MaterializationGuaranteeKind.LatestVersionUpsertDelivery));
+
+        MaterializationCapabilityEvidence completeMutations = new(
+            new("evidence/complete-mutations"),
+            MaterializationCapabilityKind.SourceChangeDelivery,
+            MaterializationCapabilityRealizationKind.Native,
+            [MaterializationGuaranteeKind.CompleteMutationDelivery],
+            operatingLimits: [],
+            sourceReferences: ["adapter/complete-mutations/v1"]);
+        MaterializationCapabilityEvidence latestUpserts = new(
+            new("evidence/latest-upserts"),
+            MaterializationCapabilityKind.SourceChangeDelivery,
+            MaterializationCapabilityRealizationKind.Native,
+            [MaterializationGuaranteeKind.LatestVersionUpsertDelivery],
+            operatingLimits: [],
+            sourceReferences: ["adapter/latest-upserts/v1"]);
+        MaterializationCapabilityRequirement requiresCompleteMutations = new(
+            new("source/complete-mutations"),
+            MaterializationCapabilityKind.SourceChangeDelivery,
+            [MaterializationGuaranteeKind.CompleteMutationDelivery]);
+        MaterializationCapabilityRequirement requiresLatestUpserts = new(
+            new("source/latest-upserts"),
+            MaterializationCapabilityKind.SourceChangeDelivery,
+            [MaterializationGuaranteeKind.LatestVersionUpsertDelivery]);
+
+        Assert.True(MaterializationCapabilityMatcher.Match(
+            [requiresCompleteMutations],
+            Profile(completeMutations)).IsSatisfied);
+        Assert.True(MaterializationCapabilityMatcher.Match(
+            [requiresLatestUpserts],
+            Profile(latestUpserts)).IsSatisfied);
+        Assert.False(MaterializationCapabilityMatcher.Match(
+            [requiresCompleteMutations],
+            Profile(latestUpserts)).IsSatisfied);
+        Assert.False(MaterializationCapabilityMatcher.Match(
+            [requiresLatestUpserts],
+            Profile(completeMutations)).IsSatisfied);
+    }
+
+    [Fact]
+    public void ChangeDeliveryContracts_RequireExactlyOneCoverageGuarantee()
+    {
+        var missingRequirement = Assert.Throws<ArgumentException>(() =>
+            new MaterializationCapabilityRequirement(
+                new("source/missing-coverage"),
+                MaterializationCapabilityKind.SourceChangeDelivery,
+                [MaterializationGuaranteeKind.AtLeastOnceDelivery]));
+        var ambiguousRequirement = Assert.Throws<ArgumentException>(() =>
+            new MaterializationCapabilityRequirement(
+                new("source/ambiguous-coverage"),
+                MaterializationCapabilityKind.SourceChangeDelivery,
+                [
+                    MaterializationGuaranteeKind.CompleteMutationDelivery,
+                    MaterializationGuaranteeKind.LatestVersionUpsertDelivery
+                ]));
+        var missingEvidence = Assert.Throws<ArgumentException>(() =>
+            new MaterializationCapabilityEvidence(
+                new("evidence/missing-coverage"),
+                MaterializationCapabilityKind.SourceChangeDelivery,
+                MaterializationCapabilityRealizationKind.Native,
+                [MaterializationGuaranteeKind.AtLeastOnceDelivery],
+                operatingLimits: [],
+                sourceReferences: ["adapter/missing-coverage/v1"]));
+        var ambiguousEvidence = Assert.Throws<ArgumentException>(() =>
+            new MaterializationCapabilityEvidence(
+                new("evidence/ambiguous-coverage"),
+                MaterializationCapabilityKind.SourceChangeDelivery,
+                MaterializationCapabilityRealizationKind.Native,
+                [
+                    MaterializationGuaranteeKind.CompleteMutationDelivery,
+                    MaterializationGuaranteeKind.LatestVersionUpsertDelivery
+                ],
+                operatingLimits: [],
+                sourceReferences: ["adapter/ambiguous-coverage/v1"]));
+
+        Assert.Equal("guarantees", missingRequirement.ParamName);
+        Assert.Equal("guarantees", ambiguousRequirement.ParamName);
+        Assert.Equal("guarantees", missingEvidence.ParamName);
+        Assert.Equal("guarantees", ambiguousEvidence.ParamName);
+        Assert.Contains("exactly one", missingRequirement.Message, StringComparison.Ordinal);
+        Assert.Contains("exactly one", ambiguousRequirement.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ContributorLedgerCapability_OwnsItsBoundedReadAndWriteDimensions()
     {
         const MaterializationCapabilityKind Capability =
@@ -279,8 +376,6 @@ public sealed class MaterializationDefinitionTests
     [InlineData(MaterializationCapabilityKind.SourceBatchedPointRead, MaterializationLimitKind.ReadItems)]
     [InlineData(MaterializationCapabilityKind.SourceParameterizedPredicateQuery, MaterializationLimitKind.ReadBytes)]
     [InlineData(MaterializationCapabilityKind.SourceBoundedEnumeration, MaterializationLimitKind.ReadBytes)]
-    [InlineData(MaterializationCapabilityKind.SourceChangeDelivery, MaterializationLimitKind.ChangeItems)]
-    [InlineData(MaterializationCapabilityKind.SourceChangeDelivery, MaterializationLimitKind.ReadBytes)]
     [InlineData(MaterializationCapabilityKind.TargetBulkUpsert, MaterializationLimitKind.WriteBytes)]
     [InlineData(MaterializationCapabilityKind.TargetBulkDelete, MaterializationLimitKind.WriteItems)]
     [InlineData(MaterializationCapabilityKind.TargetPerItemOutcomes, MaterializationLimitKind.WriteBytes)]
@@ -307,6 +402,50 @@ public sealed class MaterializationDefinitionTests
 
         Assert.Equal("operatingLimits", exception.ParamName);
         Assert.Contains(omittedLimit.ToString(), exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChangeDeliveryEvidence_MayOmitAdvisoryBatchLimits_ButCannotSatisfyBoundedRequirements()
+    {
+        MaterializationCapabilityEvidence managed = new(
+            new("evidence/managed-changes"),
+            MaterializationCapabilityKind.SourceChangeDelivery,
+            MaterializationCapabilityRealizationKind.Native,
+            [
+                MaterializationGuaranteeKind.AtLeastOnceDelivery,
+                MaterializationGuaranteeKind.LatestVersionUpsertDelivery
+            ],
+            operatingLimits: [],
+            sourceReferences: ["adapter/managed-source/v1"]);
+        var profile = Profile(managed);
+        MaterializationCapabilityRequirement unbounded = new(
+            new("source/managed-changes"),
+            MaterializationCapabilityKind.SourceChangeDelivery,
+            [
+                MaterializationGuaranteeKind.AtLeastOnceDelivery,
+                MaterializationGuaranteeKind.LatestVersionUpsertDelivery
+            ]);
+        MaterializationCapabilityRequirement bounded = new(
+            new("source/pull-changes"),
+            MaterializationCapabilityKind.SourceChangeDelivery,
+            [
+                MaterializationGuaranteeKind.AtLeastOnceDelivery,
+                MaterializationGuaranteeKind.LatestVersionUpsertDelivery
+            ],
+            [
+                new(MaterializationLimitKind.ChangeItems, 100),
+                new(MaterializationLimitKind.ReadBytes, EvidenceReadBytes)
+            ]);
+
+        var unboundedMatch = MaterializationCapabilityMatcher.Match([unbounded], profile);
+        var boundedMatch = MaterializationCapabilityMatcher.Match([bounded], profile);
+
+        Assert.True(unboundedMatch.IsSatisfied);
+        Assert.False(boundedMatch.IsSatisfied);
+        Assert.Collection(
+            boundedMatch.Validation.Diagnostics,
+            diagnostic => Assert.Equal(MaterializationCapabilityDiagnosticCodes.LimitUnavailable, diagnostic.Code),
+            diagnostic => Assert.Equal(MaterializationCapabilityDiagnosticCodes.LimitUnavailable, diagnostic.Code));
     }
 
     [Fact]
@@ -1018,8 +1157,6 @@ public sealed class MaterializationDefinitionTests
                 or MaterializationCapabilityKind.SourceParameterizedPredicateQuery
                 or MaterializationCapabilityKind.SourceBoundedEnumeration =>
                 [MaterializationLimitKind.ReadItems, MaterializationLimitKind.ReadBytes],
-            MaterializationCapabilityKind.SourceChangeDelivery =>
-                [MaterializationLimitKind.ChangeItems, MaterializationLimitKind.ReadBytes],
             MaterializationCapabilityKind.TargetBulkUpsert
                 or MaterializationCapabilityKind.TargetBulkDelete
                 or MaterializationCapabilityKind.TargetPerItemOutcomes =>
@@ -1070,8 +1207,9 @@ public sealed class MaterializationDefinitionTests
             MaterializationCapabilityKind.SourceChangeDelivery =>
                 [
                     MaterializationGuaranteeKind.StableOrdering,
-                MaterializationGuaranteeKind.AtLeastOnceDelivery,
-                MaterializationGuaranteeKind.BaselinePlusCatchUp
+                    MaterializationGuaranteeKind.AtLeastOnceDelivery,
+                    MaterializationGuaranteeKind.BaselinePlusCatchUp,
+                    MaterializationGuaranteeKind.CompleteMutationDelivery
                 ],
             MaterializationCapabilityKind.SourceSettlement => [MaterializationGuaranteeKind.ExplicitSettlement],
             MaterializationCapabilityKind.TargetGenerationIsolation =>

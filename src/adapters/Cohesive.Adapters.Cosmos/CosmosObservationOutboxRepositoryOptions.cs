@@ -1,7 +1,7 @@
 namespace Cohesive.Adapters.Cosmos;
 
 /// <summary>
-/// Options for Cosmos-backed observation repositories and streams.
+/// Options for Cosmos-backed observation and outbox persistence.
 /// </summary>
 public sealed record CosmosObservationOutboxRepositoryOptions
 {
@@ -10,16 +10,6 @@ public sealed record CosmosObservationOutboxRepositoryOptions
 
     /// <summary>Conventional discriminator for persisted outbox documents.</summary>
     public const string DefaultOutboxDocumentKind = "outbox";
-
-    /// <summary>
-    /// Logical worker instance name used by the Cosmos change-feed processor.
-    /// </summary>
-    public string InstanceName { get; init; } = Environment.MachineName;
-
-    /// <summary>
-    /// Polling interval for lag estimation.
-    /// </summary>
-    public TimeSpan LagPollingInterval { get; init; } = TimeSpan.FromSeconds(15);
 
     /// <summary>
     /// Non-empty entity document discriminator. It must differ ordinally from <see cref="OutboxDocumentKind"/> and
