@@ -9,6 +9,35 @@ public sealed class DocumentValidationDiagnosticTests
     static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     [Fact]
+    public void ValidationResult_HasStructuralEqualityHashingAndJsonRoundTrip()
+    {
+        DocumentValidationResult original = new(
+        [
+            new(
+                "transition.branch.missing",
+                DiagnosticSeverity.Error,
+                "A branch is missing.",
+                "/nodes/choice",
+                "transition-static/v1",
+                new(
+                    stage: "flow",
+                    subject: "node/choice",
+                    relatedLocations: ["/nodes/fallback", "/nodes/choice"],
+                    sourceReferences: ["definition/v1"],
+                    resolutionOptions: ["add-branch"],
+                    expected: "exhaustive",
+                    observed: "fallthrough"))
+        ]);
+        var roundTripped = JsonSerializer.Deserialize<DocumentValidationResult>(
+            JsonSerializer.Serialize(original, JsonOptions),
+            JsonOptions)!;
+
+        Assert.NotSame(original, roundTripped);
+        Assert.Equal(original, roundTripped);
+        Assert.Equal(original.GetHashCode(), roundTripped.GetHashCode());
+    }
+
+    [Fact]
     public void Evidence_NormalizesOrdinalSetsAndRetainsCanonicalStorage()
     {
         ImmutableArray<string> canonicalLocations = ["/definition/a", "/definition/b"];

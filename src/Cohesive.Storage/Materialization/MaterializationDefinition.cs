@@ -14,9 +14,10 @@ public readonly record struct MaterializationId
     /// <summary>Creates a materialization identity.</summary>
     /// <param name="value">Stable identity independent of a source, target, generation, or Process attempt.</param>
     /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="value"/> is empty or white space.</exception>
+    /// <exception cref="ArgumentException"><paramref name="value"/> is empty, white space, or contains ill-formed Unicode.</exception>
     [JsonConstructor]
-    public MaterializationId(string value) => Value = Guard.RequireNotNullOrWhiteSpace(value);
+    public MaterializationId(string value) =>
+        Value = MaterializationContract.RequireUnicodeIdentity(value, nameof(value));
 
     /// <summary>Raw stable materialization identity.</summary>
     public string Value { get; }

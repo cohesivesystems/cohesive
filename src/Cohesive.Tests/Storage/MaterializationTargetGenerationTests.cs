@@ -1266,6 +1266,33 @@ public sealed class MaterializationTargetGenerationTests
     }
 
     [Fact]
+    public void BatchResult_HasStructuralEqualityHashingAndJsonRoundTrip()
+    {
+        MaterializationBatchResult original = new(
+            new("batch/round-trip"),
+            new("generation/round-trip"),
+            MaterializationBatchDisposition.Applied,
+            new("7"),
+            [
+                new(new("item/a"), new("mutation/a"), MaterializationItemOutcomeDisposition.Applied),
+                new(
+                    new("item/b"),
+                    new("mutation/b"),
+                    MaterializationItemOutcomeDisposition.RetryableRejected,
+                    "target.busy",
+                    "The target is busy.")
+            ]);
+        var options = StrictDocumentJson.CreateOptions();
+        var roundTripped = JsonSerializer.Deserialize<MaterializationBatchResult>(
+            JsonSerializer.Serialize(original, options),
+            options)!;
+
+        Assert.NotSame(original, roundTripped);
+        Assert.Equal(original, roundTripped);
+        Assert.Equal(original.GetHashCode(), roundTripped.GetHashCode());
+    }
+
+    [Fact]
     public void MutationWire_UsesSubtypeAsAuthorityAndStringEncodesOperationalEnums()
     {
         MaterializationApplyBatchRequest request = new(

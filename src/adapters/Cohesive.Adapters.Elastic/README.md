@@ -1,6 +1,7 @@
 # Cohesive.Adapters.Elastic
 
-Elasticsearch query and aggregation compilers for Cohesive relation plans.
+Elasticsearch query, aggregation, and durable generation-materialization interpretations for Cohesive relation and
+storage semantics.
 
 Start with the [`Cohesive.Relations` quick start](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Relations/docs/GETTING_STARTED.md),
 then use this
@@ -18,7 +19,51 @@ dotnet add package Cohesive.Adapters.Elastic
 
 - You want Cohesive relation queries projected to Elasticsearch requests.
 - You need aggregation plans interpreted against Elasticsearch.
+- You need an Elasticsearch-backed `IMaterializationTarget` for durable, generation-isolated index rebuilds and
+  incremental writes.
 - You want search infrastructure to attach to Cohesive relation semantics instead of shaping application code around Elasticsearch APIs.
+
+## Generation Materialization Target
+
+`ElasticMaterializationTarget` realizes the provider-neutral `Cohesive.Storage` materialization lifecycle as one
+Elasticsearch index per generation. A candidate is durably identified before its physical index is claimed, remains
+outside the stable Relations read alias while loading, becomes write-blocked when sealed, and can be published only
+after successful validation. Promotion atomically exchanges a hidden fence marker and the stable read alias. The
+published alias filters retained delete tombstones, while the underlying generation preserves their versions so
+retries do not depend on Elasticsearch's bounded delete-version history.
+
+Construction requires three explicit inputs:
+
+- `ElasticMaterializationTargetBinding` persists the cluster, target, materialization, index namespace, stable read
+  alias, canonical Relations search binding, template fingerprint provenance, and external single-writer authority.
+- `ElasticElasticsearchRuntimeBinding` attests the exact caller-owned `ElasticsearchClient` and cluster identity.
+- `ElasticMaterializationTargetPolicy` supplies the item, canonical-byte, concurrency, and diagnostic bounds that are
+  projected into the target's capability evidence and enforced before bulk mutation I/O. Durable identity lookup may
+  occur first so an exact admitted operation can replay even after policy is tightened.
+
+The target rejects any Relations physical path outside the materialized `value` envelope. Adapter-owned idempotency,
+version, and tombstone fields live under `_cohesive` and cannot be queried through the canonical binding. Generation
+and control indexes carry hidden ownership aliases, and durable control state is checked against names derived from
+the binding before lifecycle or cleanup effects are attempted.
+
+Elasticsearch-indexed generation and item identities are limited to 8,191 UTF-16 characters, matching the emitted
+keyword `ignore_above` mapping and advertised capability evidence. Other operation identities remain durable control
+keys and are hashed into physical document IDs. All materialization identities must contain well-formed Unicode.
+
+The template fingerprint is persisted provenance, not a live cluster-template attestation. Deployments must verify
+template drift before registering the target. They must also enforce the `ElasticMaterializationSingleWriterEvidence`
+scope across runtime instances; local admission serializes operations within one generation and applies the configured
+parallelism bound, but it is not a distributed lease.
+
+Register `ElasticMaterializationTelemetry.InstrumentationName` with OpenTelemetry to collect lifecycle activities,
+operation duration, bounded batch size, and terminal per-item outcome pressure. Provider response bodies and reasons
+are not emitted; diagnostics retain only sanitized error type and status evidence.
+Public operations may throw `ElasticMaterializationTransportException`; its sanitized `ErrorType`, optional status,
+and `Retryable` flag are the supported provider-failure contract.
+
+The stable read alias provides an atomic generation swap, but it does not by itself provide a stable multi-request
+search view. Relations keyset and composite continuations that require `StableSearchView` remain unavailable unless
+the caller supplies the corresponding refresh/immutability evidence; PIT-backed leases are deferred.
 
 ## Complete Query and Aggregation Example
 
@@ -448,4 +493,4 @@ metadata are represented in the artifact contract.
 ## Related Packages
 
 - `Cohesive.Relations` for query and aggregation plan definitions.
-- `Cohesive.Storage` for read repository abstractions.
+- `Cohesive.Storage` for provider-neutral source, target, generation, and materialization lifecycle semantics.

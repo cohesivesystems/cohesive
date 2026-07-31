@@ -18,13 +18,13 @@ public sealed record MaterializationSourceReadFingerprint
     /// <paramref name="algorithm"/>, <paramref name="canonicalization"/>, or <paramref name="value"/> is
     /// <see langword="null"/>.
     /// </exception>
-    /// <exception cref="ArgumentException">A component is empty or <paramref name="value"/> is not lower-case hexadecimal.</exception>
+    /// <exception cref="ArgumentException">A component is empty or contains ill-formed Unicode, or <paramref name="value"/> is not lower-case hexadecimal.</exception>
     [JsonConstructor]
     public MaterializationSourceReadFingerprint(string algorithm, string canonicalization, string value)
     {
-        Algorithm = MaterializationContract.RequireIdentity(algorithm, nameof(algorithm));
-        Canonicalization = MaterializationContract.RequireIdentity(canonicalization, nameof(canonicalization));
-        Value = MaterializationContract.RequireIdentity(value, nameof(value));
+        Algorithm = MaterializationContract.RequireUnicodeIdentity(algorithm, nameof(algorithm));
+        Canonicalization = MaterializationContract.RequireUnicodeIdentity(canonicalization, nameof(canonicalization));
+        Value = MaterializationContract.RequireUnicodeIdentity(value, nameof(value));
         if (value.Any(static character => character is not (>= '0' and <= '9') and not (>= 'a' and <= 'f')))
         {
             throw new ArgumentException("A source-read fingerprint value must be lower-case hexadecimal.", nameof(value));
