@@ -151,7 +151,10 @@ public sealed class MaterializationGenerationActivationExecutor
     {
         this.resolved = resolved ?? throw new ArgumentNullException(nameof(resolved));
         this.workStore = workStore ?? throw new ArgumentNullException(nameof(workStore));
-        synchronization = new(resolved, workStore);
+        synchronization = new(
+            resolved,
+            workStore,
+            MaterializationIndexSyncWorkloadKind.Rebuild);
     }
 
     /// <summary>Exact persisted plan interpreted by this executor.</summary>
@@ -532,10 +535,27 @@ public sealed class MaterializationGenerationActivationExecutor
             promotionRequest: request,
             promotionReceipt: result.Receipt);
         var saved = await SaveActivationAsync(context, work, next, stage: "promotion-receipt").ConfigureAwait(false);
-        return saved.Disposition is MaterializationSynchronizationWorkMutationDisposition.Applied
-            or MaterializationSynchronizationWorkMutationDisposition.Replayed
-            ? new(saved.Snapshot, null)
-            : new(null, WorkStoreFailure(generation, synchronizationResult, activation, saved, acquisition: false));
+        if (saved.Disposition is not (MaterializationSynchronizationWorkMutationDisposition.Applied
+            or MaterializationSynchronizationWorkMutationDisposition.Replayed))
+        {
+            return new(
+                null,
+                WorkStoreFailure(generation, synchronizationResult, activation, saved, acquisition: false));
+        }
+
+        if (resolved.ControlRuntimeProvider is { } controlProvider)
+        {
+            controlProvider.RetireAdmissionContributions(
+                generation,
+                MaterializationIndexSyncWorkloadKind.Rebuild);
+            if (result.Receipt!.PreviousGenerationId is { } previousGeneration)
+            {
+                controlProvider.RetireAdmissionContributions(
+                    previousGeneration,
+                    MaterializationIndexSyncWorkloadKind.Realtime);
+            }
+        }
+        return new(saved.Snapshot, null);
     }
 
     async Task<MaterializationSynchronizationWorkMutationResult> SaveActivationAsync(

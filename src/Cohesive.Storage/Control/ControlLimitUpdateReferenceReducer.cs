@@ -26,7 +26,7 @@ public static class ControlLimitUpdateReferenceReducer
     /// <exception cref="ArgumentException"><paramref name="decidedAtUtc"/> is not UTC.</exception>
     public static ControlLimitUpdateDecision Submit(
         ControlLoopDefinition definition,
-        ControlLimitUpdateState state,
+        ControlLoopState state,
         ControlLimitUpdateCommand command,
         DateTimeOffset decidedAtUtc)
     {
@@ -39,10 +39,6 @@ public static class ControlLimitUpdateReferenceReducer
         if (!validation.IsValid)
             return Reject(state, ControlLimitUpdateDecisionDisposition.Invalid, validation.Diagnostics);
 
-        var replay = ResolveReplay(state, command);
-        if (replay is not null)
-            return replay;
-
         if (command.Authorization.AuthorityScope != state.AuthorityScope)
         {
             return Reject(
@@ -53,6 +49,10 @@ public static class ControlLimitUpdateReferenceReducer
                     "The command authorization scope does not own this controlled loop.",
                     "/authorization/authorityScope"));
         }
+
+        var replay = ResolveReplay(state, command);
+        if (replay is not null)
+            return replay;
 
         var stale = ValidateCommandFence(state, command);
         if (stale is not null)
@@ -79,7 +79,7 @@ public static class ControlLimitUpdateReferenceReducer
                     observed: command.IssuedAtUtc.ToString("O")));
         }
 
-        if (state.PendingUpdate is not null)
+        if (state.PendingLimitUpdate is not null)
         {
             return Reject(
                 state,
@@ -89,7 +89,7 @@ public static class ControlLimitUpdateReferenceReducer
                     "Another accepted manual update is awaiting an invariant-preserving application point.",
                     "/state/pendingUpdate",
                     expected: "no pending update",
-                    observed: state.PendingUpdate.Command.CommandId.Value));
+                    observed: state.PendingLimitUpdate.Command.CommandId.Value));
         }
 
         var pointValidation = definition.ValidateOperatingPoint(command.RequestedOperatingPoint);
@@ -115,19 +115,27 @@ public static class ControlLimitUpdateReferenceReducer
 
         var acceptedRevision = state.Revision.Next();
         var receipt = new ControlLimitUpdateReceipt(command, acceptedRevision, decidedAtUtc);
-        var next = new ControlLimitUpdateState(
+        var next = new ControlLoopState(
             ControlLoopDefinition.CurrentSchemaVersion,
             state.LoopId,
             state.Target,
             state.Epoch,
             acceptedRevision,
             state.DefinitionFingerprint,
-            state.AuthorityScope,
             state.OperatingPoint,
-            state.Actuations,
+            healthyObservationCount: 0,
             state.CreatedAtUtc,
-            decidedAtUtc,
-            pendingUpdate: receipt);
+            updatedAtUtc: decidedAtUtc,
+            lastEvaluatedAtUtc: state.LastEvaluatedAtUtc,
+            lastClassification: state.LastClassification,
+            cooldownUntilUtc: state.CooldownUntilUtc,
+            lastObservation: state.LastObservation,
+            pendingRecommendation: null,
+            lastActuation: state.LastActuation,
+            lastApplicationFence: state.LastApplicationFence,
+            authorityScope: state.AuthorityScope,
+            limitUpdateActuations: state.LimitUpdateActuations,
+            pendingLimitUpdate: receipt);
 
         return new(
             ControlLoopDefinition.CurrentSchemaVersion,
@@ -149,7 +157,7 @@ public static class ControlLimitUpdateReferenceReducer
     /// <exception cref="ArgumentException"><paramref name="appliedAtUtc"/> is not UTC.</exception>
     public static ControlLimitUpdateActuationResult Apply(
         ControlLoopDefinition definition,
-        ControlLimitUpdateState state,
+        ControlLoopState state,
         ControlApplicationPoint applicationPoint,
         DateTimeOffset appliedAtUtc)
     {
@@ -162,7 +170,7 @@ public static class ControlLimitUpdateReferenceReducer
         if (!validation.IsValid)
             return RejectedActuation(state, validation.Diagnostics);
 
-        foreach (var priorActuation in state.Actuations)
+        foreach (var priorActuation in state.LimitUpdateActuations)
         {
             if (!HasSameApplicationPointScope(priorActuation.ApplicationPoint, applicationPoint))
                 continue;
@@ -186,7 +194,7 @@ public static class ControlLimitUpdateReferenceReducer
         if (state.Revision.Ordinal == long.MaxValue)
             return RejectedActuation(state, RevisionExhaustedDiagnostic(state));
 
-        var pending = state.PendingUpdate;
+        var pending = state.PendingLimitUpdate;
         if (pending is null)
         {
             return new(
@@ -258,22 +266,30 @@ public static class ControlLimitUpdateReferenceReducer
             state.OperatingPoint,
             nextRevision,
             appliedAtUtc);
-        var nextActuations = ImmutableArray.CreateBuilder<ControlLimitUpdateActuation>(state.Actuations.Length + 1);
-        nextActuations.AddRange(state.Actuations);
+        var nextActuations = ImmutableArray.CreateBuilder<ControlLimitUpdateActuation>(state.LimitUpdateActuations.Length + 1);
+        nextActuations.AddRange(state.LimitUpdateActuations);
         nextActuations.Add(actuation);
-        var next = new ControlLimitUpdateState(
+        var next = new ControlLoopState(
             ControlLoopDefinition.CurrentSchemaVersion,
             state.LoopId,
             state.Target,
             state.Epoch,
             nextRevision,
             state.DefinitionFingerprint,
-            state.AuthorityScope,
             pending.Command.RequestedOperatingPoint,
-            nextActuations.MoveToImmutable(),
+            healthyObservationCount: 0,
             state.CreatedAtUtc,
-            appliedAtUtc,
-            pendingUpdate: null);
+            updatedAtUtc: appliedAtUtc,
+            lastEvaluatedAtUtc: state.LastEvaluatedAtUtc,
+            lastClassification: state.LastClassification,
+            cooldownUntilUtc: null,
+            lastObservation: state.LastObservation,
+            pendingRecommendation: null,
+            lastActuation: state.LastActuation,
+            lastApplicationFence: applicationPoint.Fence,
+            authorityScope: state.AuthorityScope,
+            limitUpdateActuations: nextActuations.MoveToImmutable(),
+            pendingLimitUpdate: null);
 
         return new(
             ControlLoopDefinition.CurrentSchemaVersion,
@@ -291,89 +307,17 @@ public static class ControlLimitUpdateReferenceReducer
     /// </exception>
     public static DocumentValidationResult ValidateState(
         ControlLoopDefinition definition,
-        ControlLimitUpdateState state)
-    {
-        ArgumentNullException.ThrowIfNull(definition);
-        ArgumentNullException.ThrowIfNull(state);
-        List<DocumentValidationDiagnostic> diagnostics = [];
-
-        if (definition.SchemaVersion != ControlLoopDefinition.CurrentSchemaVersion
-            || state.SchemaVersion != ControlLoopDefinition.CurrentSchemaVersion
-            || state.LoopId != definition.Id
-            || state.DefinitionFingerprint != definition.Fingerprint
-            || !string.Equals(state.Target, definition.Target, StringComparison.Ordinal))
-        {
-            diagnostics.Add(CreateDiagnostic(
-                state.DefinitionFingerprint != definition.Fingerprint
-                    ? ControlDiagnosticCodes.DefinitionFingerprintMismatch
-                    : ControlDiagnosticCodes.StateInvalid,
-                "Manual limit-update state does not belong to the supplied current-version loop definition.",
-                "/state",
-                expected: $"{definition.Id.Value}/{definition.Target}/{definition.Fingerprint.Value}/{ControlLoopDefinition.CurrentSchemaVersion.Value}",
-                observed: $"{state.LoopId.Value}/{state.Target}/{state.DefinitionFingerprint.Value}/{state.SchemaVersion.Value}"));
-        }
-
-        diagnostics.AddRange(definition.ValidateOperatingPoint(state.OperatingPoint).Diagnostics);
-        var effectivePoint = definition.InitialOperatingPoint;
-        for (var index = 0; index < state.Receipts.Length; index++)
-        {
-            var receipt = state.Receipts[index];
-            var command = receipt.Command;
-            diagnostics.AddRange(definition.ValidateOperatingPoint(command.RequestedOperatingPoint).Diagnostics);
-            var transitionValid = TryGetApplicationKind(
-                effectivePoint,
-                command.RequestedOperatingPoint,
-                out var expectedKind,
-                out var transitionDiagnostic);
-            if (!transitionValid)
-            {
-                diagnostics.Add(transitionDiagnostic! with { Location = $"/state/receipts/{index}/command/requestedOperatingPoint" });
-            }
-
-            if (index >= state.Actuations.Length)
-                continue;
-
-            var actuation = state.Actuations[index];
-            var expectedId = ControlDerivedIdentity.LimitUpdateActuation(
-                receipt,
-                actuation.ApplicationPoint);
-            if (actuation.Receipt != receipt
-                || actuation.Id != expectedId
-                || !string.Equals(actuation.ApplicationPoint.Authority, definition.ApplicationAuthority, StringComparison.Ordinal)
-                || transitionValid && actuation.ApplicationPoint.Kind != expectedKind
-                || actuation.PriorOperatingPoint != effectivePoint
-                || actuation.OperatingPoint != command.RequestedOperatingPoint)
-            {
-                diagnostics.Add(CreateDiagnostic(
-                    ControlDiagnosticCodes.ActuationInvalid,
-                    "The retained manual actuation is not the exact definition-authorized transition it claims.",
-                    $"/state/actuations/{index}"));
-            }
-
-            effectivePoint = command.RequestedOperatingPoint;
-        }
-
-        if (state.OperatingPoint != effectivePoint)
-        {
-            diagnostics.Add(CreateDiagnostic(
-                ControlDiagnosticCodes.StateInvalid,
-                "The effective point must be the definition's initial point advanced only by retained safe-point actuations.",
-                "/state/operatingPoint"));
-        }
-
-        return DocumentValidationResult.FromDiagnostics(diagnostics);
-    }
+        ControlLoopState state) =>
+        AimdControlReferenceRegulator.ValidateState(definition, state);
 
     static ControlLimitUpdateDecision? ResolveReplay(
-        ControlLimitUpdateState state,
+        ControlLoopState state,
         ControlLimitUpdateCommand command)
     {
-        ControlLimitUpdateReceipt? sameIdentity = null;
+        var sameIdentity = state.FindLimitUpdateReceipt(command.CommandId);
         ControlLimitUpdateReceipt? sameIdempotency = null;
-        foreach (var receipt in state.Receipts)
+        foreach (var receipt in state.LimitUpdateReceipts)
         {
-            if (receipt.Command.CommandId == command.CommandId)
-                sameIdentity = receipt;
             if (receipt.Command.IdempotencyKey == command.IdempotencyKey)
                 sameIdempotency = receipt;
         }
@@ -416,7 +360,7 @@ public static class ControlLimitUpdateReferenceReducer
     }
 
     static ControlLimitUpdateDecision? ValidateCommandFence(
-        ControlLimitUpdateState state,
+        ControlLoopState state,
         ControlLimitUpdateCommand command)
     {
         string? location = null;
@@ -466,10 +410,21 @@ public static class ControlLimitUpdateReferenceReducer
                     observed));
     }
 
-    static bool HasSameIdempotentIntent(
+    /// <summary>Compares the complete semantic intent covered by a command's idempotency key.</summary>
+    /// <param name="prior">Retained canonical command.</param>
+    /// <param name="candidate">Candidate command to compare.</param>
+    /// <returns>
+    /// <see langword="true"/> when both commands have the same idempotency key, exact address, optimistic fence,
+    /// requested point, authorization, and provenance; command occurrence identity and issuance time are excluded.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">A command is <see langword="null"/>.</exception>
+    public static bool HasSameIdempotentIntent(
         ControlLimitUpdateCommand prior,
-        ControlLimitUpdateCommand candidate) =>
-        prior.SchemaVersion == candidate.SchemaVersion
+        ControlLimitUpdateCommand candidate)
+    {
+        ArgumentNullException.ThrowIfNull(prior);
+        ArgumentNullException.ThrowIfNull(candidate);
+        return prior.SchemaVersion == candidate.SchemaVersion
         && prior.IdempotencyKey == candidate.IdempotencyKey
         && prior.LoopId == candidate.LoopId
         && prior.DefinitionFingerprint == candidate.DefinitionFingerprint
@@ -479,8 +434,9 @@ public static class ControlLimitUpdateReferenceReducer
         && prior.RequestedOperatingPoint == candidate.RequestedOperatingPoint
         && prior.Authorization == candidate.Authorization
         && prior.Provenance == candidate.Provenance;
+    }
 
-    static bool TryGetApplicationKind(
+    internal static bool TryGetApplicationKind(
         ControlOperatingPoint prior,
         ControlOperatingPoint requested,
         out ControlApplicationPointKind kind,
@@ -549,7 +505,7 @@ public static class ControlLimitUpdateReferenceReducer
         && prior.Id == candidate.Id;
 
     static ControlLimitUpdateDecision Reject(
-        ControlLimitUpdateState state,
+        ControlLoopState state,
         ControlLimitUpdateDecisionDisposition disposition,
         ImmutableArray<DocumentValidationDiagnostic> diagnostics) =>
         new(
@@ -559,7 +515,7 @@ public static class ControlLimitUpdateReferenceReducer
             diagnostics: diagnostics);
 
     static ControlLimitUpdateActuationResult RejectedActuation(
-        ControlLimitUpdateState state,
+        ControlLoopState state,
         ImmutableArray<DocumentValidationDiagnostic> diagnostics) =>
         new(
             ControlLoopDefinition.CurrentSchemaVersion,
@@ -583,7 +539,7 @@ public static class ControlLimitUpdateReferenceReducer
         [CreateDiagnostic(code, message, location, severity: severity)];
 
     static ImmutableArray<DocumentValidationDiagnostic> RevisionExhaustedDiagnostic(
-        ControlLimitUpdateState state) =>
+        ControlLoopState state) =>
         Diagnostic(
             ControlDiagnosticCodes.RevisionExhausted,
             "The control revision space is exhausted; begin a new control epoch before accepting another update.",

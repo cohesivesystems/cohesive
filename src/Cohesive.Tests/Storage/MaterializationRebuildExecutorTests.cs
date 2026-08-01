@@ -594,6 +594,52 @@ public sealed partial class MaterializationRebuildExecutorTests
             mismatchedHydrator));
     }
 
+    [Fact]
+    public async Task TargetWriter_DecreasedBoundRechunksOnlyRetryableFailuresWithContentDerivedIdentities()
+    {
+        var fixture = CreateFixture();
+        MaterializationGenerationId generation = new("generation/failed-only-rechunk");
+        var begun = await fixture.Target.BeginGenerationAsync(
+            OperationContext.Create(),
+            new(
+                fixture.Plan.Materialization.Definition.Id,
+                generation,
+                fixture.Plan.Materialization.DefinitionFingerprint,
+                MaterializationWorkerFence.Initial,
+                Epoch));
+        Assert.Equal(MaterializationTargetOperationDisposition.Applied, begun.Disposition);
+
+        RetrySubsetRecordingTarget target = new(fixture.Target);
+        ImmutableArray<MaterializationItemMutation> mutations =
+        [
+            new MaterializationDelete(new("item-a"), new("mutation-a"), new("1")),
+            new MaterializationDelete(new("item-b"), new("mutation-b"), new("1")),
+            new MaterializationDelete(new("item-c"), new("mutation-c"), new("1"))
+        ];
+        var result = await MaterializationTargetBatchWriter.ApplyAsync(
+            OperationContext.Create(),
+            target,
+            generation,
+            MaterializationWorkerFence.Initial,
+            mutations,
+            _ => ValueTask.FromResult(target.Requests.Count == 0
+                ? new MaterializationTargetBatchOperatingLimits(3, WriteBytes)
+                : new MaterializationTargetBatchOperatingLimits(1, WriteBytes)),
+            maximumAttempts: 3,
+            createBatchId: contentIdentity => new($"batch/{contentIdentity}"));
+
+        Assert.Equal(MaterializationTargetWriteDisposition.Applied, result.Disposition);
+        Assert.Equal([3, 1, 1], target.Requests.Select(static request => request.Mutations.Length));
+        Assert.Equal(
+            ["mutation-b", "mutation-c"],
+            target.Requests.Skip(1).SelectMany(static request => request.Mutations)
+                .Select(static mutation => mutation.MutationId.Value));
+        Assert.DoesNotContain(
+            target.Requests.Skip(1).SelectMany(static request => request.Mutations),
+            static mutation => mutation.MutationId.Value == "mutation-a");
+        Assert.Equal(3, target.Requests.Select(static request => request.BatchId).Distinct().Count());
+    }
+
     static RebuildFixture CreateFixture(
         bool reversePlanDeclarations = false,
         IMaterializationRebuildCrashInjector? crashInjector = null,
@@ -1044,6 +1090,78 @@ public sealed partial class MaterializationRebuildExecutorTests
         RelationQuerySourceInputContract Root,
         ImmutableArray<IRelationQuerySourceReader> Readers,
         ImmutableDictionary<MaterializationRebuildShardId, StaticReader> ScanReaders);
+
+    sealed class RetrySubsetRecordingTarget(InMemoryMaterializationTarget inner) : IMaterializationTarget
+    {
+        readonly List<MaterializationApplyBatchRequest> requests = [];
+
+        public MaterializationTargetDescriptor Descriptor => inner.Descriptor;
+
+        public IReadOnlyList<MaterializationApplyBatchRequest> Requests => requests;
+
+        public ValueTask<MaterializationTargetSnapshot> InspectAsync(OperationContext context) =>
+            inner.InspectAsync(context);
+
+        public ValueTask<MaterializationGenerationSnapshot?> InspectGenerationAsync(
+            OperationContext context,
+            MaterializationGenerationId generationId) => inner.InspectGenerationAsync(context, generationId);
+
+        public ValueTask<MaterializationGenerationOperationResult> BeginGenerationAsync(
+            OperationContext context,
+            MaterializationBeginGenerationRequest request) => inner.BeginGenerationAsync(context, request);
+
+        public async ValueTask<MaterializationBatchResult> ApplyBatchAsync(
+            OperationContext context,
+            MaterializationApplyBatchRequest request)
+        {
+            requests.Add(request);
+            var result = await inner.ApplyBatchAsync(context, request);
+            if (requests.Count != 1)
+                return result;
+
+            var outcomes = ImmutableArray.CreateBuilder<MaterializationItemOutcome>(request.Mutations.Length);
+            outcomes.Add(result.Outcomes[0]);
+            for (var index = 1; index < request.Mutations.Length; index++)
+            {
+                var mutation = request.Mutations[index];
+                outcomes.Add(new(
+                    mutation.ItemId,
+                    mutation.MutationId,
+                    MaterializationItemOutcomeDisposition.RetryableRejected,
+                    "tests.retryable",
+                    "Injected retryable rejection."));
+            }
+            return MaterializationBatchResult.ForRequest(
+                request,
+                MaterializationBatchDisposition.Applied,
+                result.GenerationRevision,
+                outcomes.MoveToImmutable());
+        }
+
+        public ValueTask<MaterializationSealResult> SealGenerationAsync(
+            OperationContext context,
+            MaterializationSealGenerationRequest request) => inner.SealGenerationAsync(context, request);
+
+        public ValueTask<MaterializationValidationResult> ValidateGenerationAsync(
+            OperationContext context,
+            MaterializationValidateGenerationRequest request) => inner.ValidateGenerationAsync(context, request);
+
+        public ValueTask<MaterializationPromotionResult> PromoteGenerationAsync(
+            OperationContext context,
+            MaterializationPromoteGenerationRequest request) => inner.PromoteGenerationAsync(context, request);
+
+        public ValueTask<MaterializationAbandonmentResult> AbandonGenerationAsync(
+            OperationContext context,
+            MaterializationAbandonGenerationRequest request) => inner.AbandonGenerationAsync(context, request);
+
+        public ValueTask<MaterializationGenerationOperationResult> RetireGenerationAsync(
+            OperationContext context,
+            MaterializationRetireGenerationRequest request) => inner.RetireGenerationAsync(context, request);
+
+        public ValueTask<MaterializationCleanupResult> CleanupGenerationAsync(
+            OperationContext context,
+            MaterializationCleanupGenerationRequest request) => inner.CleanupGenerationAsync(context, request);
+    }
 
     sealed class StaticReader(
         RelationQuerySourceReaderDescriptor descriptor,

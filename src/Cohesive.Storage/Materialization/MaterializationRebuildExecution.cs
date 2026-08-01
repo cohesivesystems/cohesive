@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Cohesive.Control;
 using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
@@ -173,14 +174,15 @@ public static class MaterializationRebuildIdentities
             continuation?.ReadFingerprint.Value ?? "start",
             continuation?.Value ?? "start")}";
 
-    internal static MaterializationBatchId Batch(string page, int chunk, int retry) =>
+    internal static MaterializationBatchId Batch(string page, string contentIdentity) =>
         new($"{Prefix}/batch/{MaterializationStableIdentity.Digest(
             page,
-            chunk.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            retry.ToString(System.Globalization.CultureInfo.InvariantCulture))}");
+            contentIdentity)}");
 
-    internal static MaterializationItemMutationId Mutation(string page, string itemIdentity) =>
-        new($"{Prefix}/mutation/{MaterializationStableIdentity.Digest(page, itemIdentity)}");
+    internal static MaterializationItemMutationId Mutation(string page, int ordinal) =>
+        new($"{Prefix}/mutation/{MaterializationStableIdentity.Digest(
+            page,
+            ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture))}");
 
     internal static MaterializationCheckpointId BaselineCheckpoint(string page) =>
         new($"{Prefix}/baseline-checkpoint/{MaterializationStableIdentity.Digest(page)}");
@@ -485,6 +487,7 @@ public sealed class ResolvedMaterializationRebuildPlan
     /// <param name="progressStore">Durable application-progress authority.</param>
     /// <param name="shardBindings">One runtime binding for every persisted shard.</param>
     /// <param name="changeFeedBindings">One runtime binding for every persisted dependency feed.</param>
+    /// <param name="controlRuntimeProvider">Shared durable Control runtime provider required by controlled plans.</param>
     /// <exception cref="ArgumentNullException">A required argument or collection is null.</exception>
     /// <exception cref="ArgumentException">A binding is missing, duplicated, stale, or incompatible.</exception>
     public ResolvedMaterializationRebuildPlan(
@@ -492,7 +495,8 @@ public sealed class ResolvedMaterializationRebuildPlan
         IMaterializationTarget target,
         IMaterializationProgressStore progressStore,
         IEnumerable<MaterializationRebuildShardBinding> shardBindings,
-        IEnumerable<MaterializationChangeFeedBinding> changeFeedBindings)
+        IEnumerable<MaterializationChangeFeedBinding> changeFeedBindings,
+        MaterializationIndexSyncControlRuntimeProvider? controlRuntimeProvider = null)
     {
         Plan = Guard.RequireNotNull(plan);
         Target = Guard.RequireNotNull(target);
@@ -559,6 +563,21 @@ public sealed class ResolvedMaterializationRebuildPlan
             }
         }
         changeFeeds = normalizedFeeds.ToImmutableDictionary(static binding => binding.Feed.Id);
+
+        if (controlRuntimeProvider is not null
+            && controlRuntimeProvider.Plan.Fingerprint != plan.Fingerprint)
+        {
+            throw new ArgumentException(
+                "A Control runtime provider must implement the exact persisted rebuild plan.",
+                nameof(controlRuntimeProvider));
+        }
+        if (!plan.ControlRealizations.IsEmpty && controlRuntimeProvider is null)
+        {
+            throw new ArgumentException(
+                "A plan with Control realizations requires a durable Control runtime provider.",
+                nameof(controlRuntimeProvider));
+        }
+        ControlRuntimeProvider = controlRuntimeProvider;
     }
 
     /// <summary>Exact persisted rebuild realization plan.</summary>
@@ -569,6 +588,15 @@ public sealed class ResolvedMaterializationRebuildPlan
 
     /// <summary>Durable application-progress authority.</summary>
     public IMaterializationProgressStore ProgressStore { get; }
+
+    /// <summary>Shared durable Control runtime provider, or <see langword="null"/> for an uncontrolled plan.</summary>
+    public MaterializationIndexSyncControlRuntimeProvider? ControlRuntimeProvider { get; }
+
+    /// <summary>Creates the Control runtime for one exact generation when the plan is controlled.</summary>
+    /// <param name="generation">Exact new or resumed materialization generation.</param>
+    /// <returns>A generation-scoped Control runtime, or <see langword="null"/> for an uncontrolled plan.</returns>
+    internal MaterializationIndexSyncControlRuntime? GetControlRuntime(MaterializationGenerationId generation) =>
+        ControlRuntimeProvider?.ForGeneration(generation);
 
     /// <summary>Gets the exact runtime binding of one persisted shard.</summary>
     /// <param name="shard">Stable shard identity.</param>
@@ -1109,6 +1137,7 @@ public sealed class MaterializationRebuildExecutor
         var binding = resolved.GetShard(shardId);
         var shard = binding.Shard;
         var generation = MaterializationRebuildIdentities.Generation(plan, attempt);
+        var control = resolved.GetControlRuntime(generation);
         var key = ProgressKey(plan, generation, shard.Scope);
         var owner = Owner(attempt, shard.Scope);
         var progress = await resolved.ProgressStore.LoadAsync(context, key).ConfigureAwait(false)
@@ -1168,17 +1197,50 @@ public sealed class MaterializationRebuildExecutor
         {
             var continuation = progress.LatestBatchCheckpoint?.Continuation;
             var pageIdentity = MaterializationRebuildIdentities.Page(plan, attempt, shard, continuation);
+            var maximumPageItems = plan.Limits.MaximumPageItems;
+            var maximumPageBytes = plan.Limits.MaximumPageBytes;
+            if (control is not null)
+            {
+                var sourcePoint = await control.AtSafePointAsync(
+                        context,
+                        MaterializationIndexSyncWorkloadKind.Rebuild,
+                        ControlStageKind.Source,
+                        ControlApplicationPointKind.BatchBoundary,
+                        $"{pageIdentity}/source-batch")
+                    .ConfigureAwait(false);
+                var transformPoint = await control.AtSafePointAsync(
+                        context,
+                        MaterializationIndexSyncWorkloadKind.Rebuild,
+                        ControlStageKind.Transform,
+                        ControlApplicationPointKind.BatchBoundary,
+                        $"{pageIdentity}/transform-batch")
+                    .ConfigureAwait(false);
+                maximumPageItems = Math.Min(
+                    maximumPageItems,
+                    Math.Min(sourcePoint.MaximumBatchItems, transformPoint.MaximumBatchItems));
+                maximumPageBytes = Math.Min(
+                    maximumPageBytes,
+                    Math.Min(sourcePoint.MaximumBatchBytes, transformPoint.MaximumBatchBytes));
+            }
             MaterializationSourcePage page;
             try
             {
+                await using var sourceAdmission = control is null
+                    ? null
+                    : await control.AcquireStageAsync(
+                        context,
+                        MaterializationIndexSyncWorkloadKind.Rebuild,
+                        ControlStageKind.Source,
+                        binding.Source.Descriptor.Source.Value,
+                        $"{pageIdentity}/source-admission").ConfigureAwait(false);
                 page = await binding.Source.ReadPageAsync(
                         context,
                         new MaterializationSourcePageRequest(
                             read: shard.Read,
                             scope: shard.Scope,
                             continuation: continuation,
-                            maximumItems: plan.Limits.MaximumPageItems,
-                            maximumBytes: plan.Limits.MaximumPageBytes))
+                            maximumItems: maximumPageItems,
+                            maximumBytes: maximumPageBytes))
                     .ConfigureAwait(false);
             }
             catch (OperationCanceledException)
@@ -1240,6 +1302,14 @@ public sealed class MaterializationRebuildExecutor
             MaterializationRebuildHydrationResult hydrated;
             try
             {
+                await using var transformAdmission = control is null
+                    ? null
+                    : await control.AcquireStageAsync(
+                        context,
+                        MaterializationIndexSyncWorkloadKind.Rebuild,
+                        ControlStageKind.Transform,
+                        $"{plan.Materialization.Definition.Id.Value}/transform",
+                        $"{pageIdentity}/transform-admission").ConfigureAwait(false);
                 hydrated = await binding.Hydrator.HydrateAsync(
                         context,
                         new MaterializationRebuildHydrationRequest(
@@ -1508,12 +1578,22 @@ public sealed class MaterializationRebuildExecutor
                     generationId: generation,
                     abandonedAtUtc: abandonedAtUtc))
             .ConfigureAwait(false);
-        return abandoned.Disposition is MaterializationTargetOperationDisposition.Applied
+        var confirmed = abandoned.Disposition is MaterializationTargetOperationDisposition.Applied
                 or MaterializationTargetOperationDisposition.Replayed
             && abandoned.Receipt is { } receipt
             && receipt.AbandonmentId == MaterializationRebuildIdentities.Abandonment(plan, attempt)
             && receipt.GenerationId == generation
             && receipt.AbandonedAtUtc == abandonedAtUtc;
+        if (confirmed && resolved.ControlRuntimeProvider is { } controlProvider)
+        {
+            controlProvider.RetireAdmissionContributions(
+                generation,
+                MaterializationIndexSyncWorkloadKind.Rebuild);
+            controlProvider.RetireAdmissionContributions(
+                generation,
+                MaterializationIndexSyncWorkloadKind.Realtime);
+        }
+        return confirmed;
     }
 
     async Task<(
@@ -1529,18 +1609,33 @@ public sealed class MaterializationRebuildExecutor
         int crashOccurrence)
     {
         var nextCrashOccurrence = crashOccurrence;
+        var control = resolved.GetControlRuntime(generation);
         var write = await MaterializationTargetBatchWriter.ApplyAsync(
                 context: context,
                 target: resolved.Target,
                 generation: generation,
                 workerFence: MaterializationWorkerFence.Initial,
                 mutations: mutations,
-                maximumBulkItems: resolved.Plan.Limits.MaximumBulkItems,
-                maximumBulkBytes: resolved.Plan.Limits.MaximumBulkBytes,
+                resolveLimits: control is null
+                    ? _ => ValueTask.FromResult(new MaterializationTargetBatchOperatingLimits(
+                        resolved.Plan.Limits.MaximumBulkItems,
+                        resolved.Plan.Limits.MaximumBulkBytes))
+                    : operation => control.ResolveTargetBatchLimitsAsync(
+                        operation,
+                        MaterializationIndexSyncWorkloadKind.Rebuild,
+                        $"{pageIdentity}/target-batch"),
                 maximumAttempts: resolved.Plan.Materialization.Definition.FailurePolicy.MaximumAttempts,
-                createBatchId: (chunkIndex, retry) =>
-                    MaterializationRebuildIdentities.Batch(pageIdentity, chunkIndex, retry),
-                afterBulkObservation: ObserveBulkAsync)
+                createBatchId: contentIdentity =>
+                    MaterializationRebuildIdentities.Batch(pageIdentity, contentIdentity),
+                afterBulkObservation: ObserveBulkAsync,
+                acquireAdmission: control is null
+                    ? null
+                    : async operation => await control.AcquireStageAsync(
+                        operation,
+                        MaterializationIndexSyncWorkloadKind.Rebuild,
+                        ControlStageKind.Target,
+                        resolved.Target.Descriptor.Id.Value,
+                        $"{pageIdentity}/target-admission").ConfigureAwait(false))
             .ConfigureAwait(false);
         return write.Disposition switch
         {
@@ -1621,6 +1716,7 @@ public sealed class MaterializationRebuildExecutor
         }
 
         var builder = ImmutableArray.CreateBuilder<MaterializationItemMutation>(outputCount);
+        var outputOrdinal = 0;
         foreach (var projection in projections)
         {
             if (projection.Row is not { } row)
@@ -1628,7 +1724,7 @@ public sealed class MaterializationRebuildExecutor
             var item = MaterializationItemIdentity.FromRootIdentity(projection.Root.Identity);
             builder.Add(new MaterializationUpsert(
                 itemId: item,
-                mutationId: MaterializationRebuildIdentities.Mutation(pageIdentity, item.Value),
+                mutationId: MaterializationRebuildIdentities.Mutation(pageIdentity, outputOrdinal++),
                 version: MaterializationRebuildIdentities.BaselineItemVersion,
                 value: row.Value));
         }

@@ -118,8 +118,8 @@ public sealed class MaterializationDefinitionTests
         var json = MaterializationJsonSerializer.Serialize(document, PortableDocumentJsonFormatting.Compact);
         var unknown = json.Insert(1, "\"unknown\":true,");
         var duplicate = json.Replace(
-            "\"schemaVersion\":\"cohesive-materialization/v1\"",
-            "\"schemaVersion\":\"cohesive-materialization/v1\",\"schemaVersion\":\"cohesive-materialization/v1\"",
+            "\"schemaVersion\":\"cohesive-materialization/v2\"",
+            "\"schemaVersion\":\"cohesive-materialization/v2\",\"schemaVersion\":\"cohesive-materialization/v2\"",
             StringComparison.Ordinal);
 
         var unknownValidation = MaterializationJsonSerializer.TryDeserialize(unknown, out _);
@@ -139,7 +139,7 @@ public sealed class MaterializationDefinitionTests
     public void StrictReader_DispatchesUnsupportedSchemaBeforeCurrentContractDeserialization()
     {
         const string DocumentJson = """
-            {"schemaVersion":"cohesive-materialization/v2","futureField":true}
+            {"schemaVersion":"cohesive-materialization/v3","futureField":true}
             """;
 
         var validation = MaterializationJsonSerializer.TryDeserialize(DocumentJson, out var restored);

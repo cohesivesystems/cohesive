@@ -64,7 +64,7 @@ public static class ControlJsonSerializer
     /// <exception cref="JsonException">The state cannot be serialized under the strict wire contract.</exception>
     /// <exception cref="NotSupportedException">The state contains an unsupported runtime value.</exception>
     /// <exception cref="InvalidOperationException">The state has no canonical JSON representation.</exception>
-    public static string Serialize(AimdControlState value, PortableDocumentJsonFormatting formatting = PortableDocumentJsonFormatting.Compact) =>
+    public static string Serialize(ControlLoopState value, PortableDocumentJsonFormatting formatting = PortableDocumentJsonFormatting.Compact) =>
         SerializeCore(value, formatting);
 
     /// <summary>Serializes a pure controller decision.</summary>
@@ -140,7 +140,7 @@ public static class ControlJsonSerializer
     /// <exception cref="JsonException">The state cannot be serialized under the strict wire contract.</exception>
     /// <exception cref="NotSupportedException">The state contains an unsupported runtime value.</exception>
     /// <exception cref="InvalidOperationException">The state has no canonical JSON representation.</exception>
-    public static byte[] GetCanonicalBytes(AimdControlState value) => GetCanonicalBytesCore(value);
+    public static byte[] GetCanonicalBytes(ControlLoopState value) => GetCanonicalBytesCore(value);
 
     /// <summary>Gets deterministic canonical UTF-8 JSON for a controller decision.</summary>
     /// <param name="value">Decision to encode.</param>
@@ -199,10 +199,10 @@ public static class ControlJsonSerializer
     /// <returns>The validated durable state.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="definition"/> is <see langword="null"/>.</exception>
     /// <exception cref="JsonException">The wire or state is invalid.</exception>
-    public static AimdControlState DeserializeState(string json, ControlLoopDefinition definition)
+    public static ControlLoopState DeserializeState(string json, ControlLoopDefinition definition)
     {
         ArgumentNullException.ThrowIfNull(definition);
-        return DeserializeCore<AimdControlState>(json, "Control state", state =>
+        return DeserializeCore<ControlLoopState>(json, "Control state", state =>
         {
             RequireCurrent(state.SchemaVersion.Value, "/schemaVersion");
             RequireValid(AimdControlReferenceRegulator.ValidateState(definition, state));

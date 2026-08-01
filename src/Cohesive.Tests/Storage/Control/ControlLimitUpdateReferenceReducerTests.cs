@@ -31,7 +31,7 @@ public sealed class ControlLimitUpdateReferenceReducerTests
         Assert.Equal(ControlLimitUpdateDecisionDisposition.Accepted, accepted.Disposition);
         Assert.Equal(new ControlRevision("2"), accepted.State.Revision);
         Assert.Same(initial.OperatingPoint, accepted.State.OperatingPoint);
-        Assert.Same(accepted.Receipt, accepted.State.PendingUpdate);
+        Assert.Same(accepted.Receipt, accepted.State.PendingLimitUpdate);
         Assert.Equal(
             10,
             definition.HardLimits.GetEffectiveRange(ControlActuatorKind.Concurrency).Maximum.Value);
@@ -52,8 +52,8 @@ public sealed class ControlLimitUpdateReferenceReducerTests
         Assert.Equal(ControlActuationDisposition.Applied, applied.Disposition);
         Assert.Equal(new ControlRevision("3"), applied.State.Revision);
         Assert.Equal(command.RequestedOperatingPoint, applied.State.OperatingPoint);
-        Assert.Null(applied.State.PendingUpdate);
-        Assert.Same(applied.Actuation, applied.State.LastActuation);
+        Assert.Null(applied.State.PendingLimitUpdate);
+        Assert.Same(applied.Actuation, applied.State.LastLimitUpdateActuation);
         Assert.Same(point, applied.Actuation?.ApplicationPoint);
         Assert.Equal(initial.OperatingPoint, applied.Actuation?.PriorOperatingPoint);
         Assert.Equal(point.Fence, applied.State.LastApplicationFence);
@@ -94,6 +94,52 @@ public sealed class ControlLimitUpdateReferenceReducerTests
         Assert.Equal(ControlLimitUpdateDecisionDisposition.Replayed, semanticReplay.Disposition);
         Assert.Same(accepted.State, semanticReplay.State);
         Assert.Same(accepted.Receipt, semanticReplay.Receipt);
+    }
+
+    [Fact]
+    public void CrossScopeExactAndIdempotentReplaysAreUnauthorizedBeforeReceiptResolution()
+    {
+        var definition = Definition();
+        var initial = State(definition);
+        var command = Command(definition, initial, Point(concurrency: 6));
+        var accepted = ControlLimitUpdateReferenceReducer.Submit(
+            definition,
+            initial,
+            command,
+            CreatedAtUtc.AddSeconds(2));
+        var otherScope = Authorization("another-authority");
+        var exactCrossScope = Command(
+            definition,
+            initial,
+            Point(concurrency: 6),
+            commandId: command.CommandId.Value,
+            idempotencyKey: command.IdempotencyKey.Value,
+            authorization: otherScope);
+        var idempotentCrossScope = Command(
+            definition,
+            initial,
+            Point(concurrency: 6),
+            commandId: "limit-update/cross-scope-retry",
+            idempotencyKey: command.IdempotencyKey.Value,
+            authorization: otherScope);
+
+        var exact = ControlLimitUpdateReferenceReducer.Submit(
+            definition,
+            accepted.State,
+            exactCrossScope,
+            CreatedAtUtc.AddSeconds(3));
+        var idempotent = ControlLimitUpdateReferenceReducer.Submit(
+            definition,
+            accepted.State,
+            idempotentCrossScope,
+            CreatedAtUtc.AddSeconds(3));
+
+        Assert.Equal(ControlLimitUpdateDecisionDisposition.Unauthorized, exact.Disposition);
+        Assert.Null(exact.Receipt);
+        Assert.Same(accepted.State, exact.State);
+        Assert.Equal(ControlLimitUpdateDecisionDisposition.Unauthorized, idempotent.Disposition);
+        Assert.Null(idempotent.Receipt);
+        Assert.Same(accepted.State, idempotent.State);
     }
 
     [Fact]
@@ -370,10 +416,10 @@ public sealed class ControlLimitUpdateReferenceReducerTests
             alteredReuse,
             secondPoint.ObservedAtUtc.AddMilliseconds(1));
 
-        Assert.Equal(2, secondApplied.State.Actuations.Length);
-        Assert.Same(firstApplied.Actuation, secondApplied.State.Actuations[0]);
-        Assert.Same(secondApplied.Actuation, secondApplied.State.Actuations[1]);
-        Assert.Same(secondApplied.Actuation, secondApplied.State.LastActuation);
+        Assert.Equal(2, secondApplied.State.LimitUpdateActuations.Length);
+        Assert.Same(firstApplied.Actuation, secondApplied.State.LimitUpdateActuations[0]);
+        Assert.Same(secondApplied.Actuation, secondApplied.State.LimitUpdateActuations[1]);
+        Assert.Same(secondApplied.Actuation, secondApplied.State.LastLimitUpdateActuation);
         Assert.Equal(ControlActuationDisposition.Replayed, replayed.Disposition);
         Assert.Same(secondApplied.State, replayed.State);
         Assert.Same(firstApplied.Actuation, replayed.Actuation);
@@ -382,44 +428,48 @@ public sealed class ControlLimitUpdateReferenceReducerTests
         Assert.Contains(conflicted.Diagnostics, diagnostic =>
             diagnostic.Code == ControlDiagnosticCodes.LimitUpdateApplicationPointConflict);
 
-        var structuralClone = new ControlLimitUpdateState(
+        var structuralClone = new ControlLoopState(
             secondApplied.State.SchemaVersion,
             secondApplied.State.LoopId,
             secondApplied.State.Target,
             secondApplied.State.Epoch,
             secondApplied.State.Revision,
             secondApplied.State.DefinitionFingerprint,
-            secondApplied.State.AuthorityScope,
             secondApplied.State.OperatingPoint,
-            secondApplied.State.Actuations,
+            healthyObservationCount: 0,
             secondApplied.State.CreatedAtUtc,
             secondApplied.State.UpdatedAtUtc,
-            secondApplied.State.PendingUpdate);
+            lastApplicationFence: secondApplied.State.LastApplicationFence,
+            authorityScope: secondApplied.State.AuthorityScope,
+            limitUpdateActuations: secondApplied.State.LimitUpdateActuations,
+            pendingLimitUpdate: secondApplied.State.PendingLimitUpdate);
         Assert.Equal(secondApplied.State, structuralClone);
         Assert.Equal(secondApplied.State.GetHashCode(), structuralClone.GetHashCode());
 
         var json = JsonSerializer.Serialize(secondApplied.State, ControlJsonSerializer.CreateOptions());
-        Assert.Contains("\"actuations\"", json, StringComparison.Ordinal);
-        Assert.DoesNotContain("\"receipts\"", json, StringComparison.Ordinal);
-        Assert.DoesNotContain("\"lastActuation\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"limitUpdateActuations\"", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"limitUpdateReceipts\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"lastActuation\":null", json, StringComparison.Ordinal);
         Assert.Equal(
             secondApplied.State,
-            JsonSerializer.Deserialize<ControlLimitUpdateState>(
+            JsonSerializer.Deserialize<ControlLoopState>(
                 json,
                 ControlJsonSerializer.CreateOptions()));
 
-        Assert.Throws<ArgumentException>(() => new ControlLimitUpdateState(
+        Assert.Throws<ArgumentException>(() => new ControlLoopState(
             secondApplied.State.SchemaVersion,
             secondApplied.State.LoopId,
             secondApplied.State.Target,
             secondApplied.State.Epoch,
             secondApplied.State.Revision,
             secondApplied.State.DefinitionFingerprint,
-            secondApplied.State.AuthorityScope,
             secondApplied.State.OperatingPoint,
-            [secondApplied.State.Actuations[1]],
+            healthyObservationCount: 0,
             secondApplied.State.CreatedAtUtc,
-            secondApplied.State.UpdatedAtUtc));
+            secondApplied.State.UpdatedAtUtc,
+            lastApplicationFence: secondApplied.State.LastApplicationFence,
+            authorityScope: secondApplied.State.AuthorityScope,
+            limitUpdateActuations: [secondApplied.State.LimitUpdateActuations[1]]));
     }
 
     [Fact]
@@ -468,6 +518,153 @@ public sealed class ControlLimitUpdateReferenceReducerTests
             diagnostic.Code == ControlDiagnosticCodes.LimitUpdateInvalid);
     }
 
+    [Fact]
+    public void AcceptedOperatorOverrideSupersedesAdaptiveAdviceAndFreshEvidenceMayResumeAfterApply()
+    {
+        var definition = Definition();
+        var initial = State(definition);
+        var congestion = ControlRegulatorFixture.Observation(
+            initial,
+            id: "observation/congested-before-override",
+            value: 300,
+            observedAtUtc: CreatedAtUtc.AddMinutes(1),
+            metric: ControlMetricKind.Latency);
+        var adaptive = AimdControlReferenceRegulator.Evaluate(
+            definition,
+            initial,
+            congestion,
+            congestion.ObservedAtUtc);
+        Assert.Equal(ControlDecisionDisposition.Recommended, adaptive.Disposition);
+
+        var staleAdaptivePoint = ControlRegulatorFixture.ApplicationPoint(
+            adaptive.State,
+            id: "safe-point/stale-adaptive",
+            fence: 1,
+            observedAtUtc: adaptive.EvaluatedAtUtc.AddMilliseconds(1),
+            authority: definition.ApplicationAuthority);
+        var accepted = ControlLimitUpdateReferenceReducer.Submit(
+            definition,
+            adaptive.State,
+            Command(
+                definition,
+                adaptive.State,
+                Point(concurrency: 6),
+                issuedAtUtc: adaptive.EvaluatedAtUtc.AddMilliseconds(1)),
+            adaptive.EvaluatedAtUtc.AddMilliseconds(2));
+
+        Assert.Equal(ControlLimitUpdateDecisionDisposition.Accepted, accepted.Disposition);
+        Assert.Null(accepted.State.PendingRecommendation);
+        Assert.Equal(0, accepted.State.HealthyObservationCount);
+        Assert.Equal(adaptive.State.Revision.Ordinal + 1, accepted.State.Revision.Ordinal);
+        Assert.Equal(adaptive.State.OperatingPoint, accepted.State.OperatingPoint);
+
+        var staleApplication = AimdControlReferenceRegulator.Apply(
+            definition,
+            accepted.State,
+            staleAdaptivePoint,
+            accepted.Receipt!.AcceptedAtUtc.AddMilliseconds(1));
+        Assert.Equal(ControlActuationDisposition.Rejected, staleApplication.Disposition);
+        Assert.Same(accepted.State, staleApplication.State);
+        Assert.Contains(staleApplication.Diagnostics, diagnostic =>
+            diagnostic.Code == ControlDiagnosticCodes.LimitUpdatePending);
+
+        var resumedPending = ControlJsonSerializer.DeserializeState(
+            ControlJsonSerializer.Serialize(accepted.State),
+            definition);
+        Assert.Equal(accepted.State, resumedPending);
+
+        var operatorPoint = ApplicationPoint(
+            definition,
+            resumedPending,
+            id: "safe-point/operator",
+            fence: 2,
+            observedAtUtc: accepted.Receipt.AcceptedAtUtc.AddMilliseconds(1));
+        var applied = ControlLimitUpdateReferenceReducer.Apply(
+            definition,
+            resumedPending,
+            operatorPoint,
+            operatorPoint.ObservedAtUtc);
+        Assert.Equal(ControlActuationDisposition.Applied, applied.Disposition);
+        Assert.Equal(Point(concurrency: 6), applied.State.OperatingPoint);
+        Assert.Equal(applied.Actuation!.Id, applied.State.LastAppliedActuationId);
+
+        var freshObservedAt = applied.Actuation.AppliedAtUtc.AddMilliseconds(
+            definition.Policy.MinimumDwellMilliseconds + 1);
+        var fresh = ControlRegulatorFixture.Observation(
+            applied.State,
+            id: "observation/fresh-after-override",
+            value: 50,
+            observedAtUtc: freshObservedAt,
+            metric: ControlMetricKind.Latency);
+        var resumedAdaptive = AimdControlReferenceRegulator.Evaluate(
+            definition,
+            applied.State,
+            fresh,
+            fresh.ObservedAtUtc);
+
+        Assert.NotEqual(ControlDecisionDisposition.Rejected, resumedAdaptive.Disposition);
+        Assert.Equal(applied.State.Revision.Ordinal + 1, resumedAdaptive.State.Revision.Ordinal);
+        Assert.Equal(applied.State.OperatingPoint, resumedAdaptive.State.OperatingPoint);
+        Assert.Equal(1, resumedAdaptive.State.HealthyObservationCount);
+    }
+
+    [Fact]
+    public void PendingOperatorOverrideBlocksNewAutomaticObservationUntilItsExactSafePoint()
+    {
+        var definition = Definition();
+        var initial = State(definition);
+        var accepted = ControlLimitUpdateReferenceReducer.Submit(
+            definition,
+            initial,
+            Command(definition, initial, Point(concurrency: 6)),
+            CreatedAtUtc.AddSeconds(2));
+        var blockedObservation = ControlRegulatorFixture.Observation(
+            accepted.State,
+            id: "observation/while-operator-pending",
+            value: 300,
+            observedAtUtc: CreatedAtUtc.AddSeconds(3),
+            metric: ControlMetricKind.Latency);
+
+        var blocked = AimdControlReferenceRegulator.Evaluate(
+            definition,
+            accepted.State,
+            blockedObservation,
+            blockedObservation.ObservedAtUtc);
+
+        Assert.Equal(ControlDecisionDisposition.Rejected, blocked.Disposition);
+        Assert.Same(accepted.State, blocked.State);
+        Assert.Contains(blocked.Diagnostics, diagnostic =>
+            diagnostic.Code == ControlDiagnosticCodes.LimitUpdatePending);
+
+        var point = ApplicationPoint(
+            definition,
+            accepted.State,
+            id: "safe-point/operator-before-adaptive",
+            fence: 1,
+            observedAtUtc: CreatedAtUtc.AddSeconds(4));
+        var applied = ControlLimitUpdateReferenceReducer.Apply(
+            definition,
+            accepted.State,
+            point,
+            point.ObservedAtUtc);
+        var fresh = ControlRegulatorFixture.Observation(
+            applied.State,
+            id: "observation/after-operator",
+            value: 50,
+            observedAtUtc: point.ObservedAtUtc.AddMilliseconds(
+                definition.Policy.MinimumDwellMilliseconds + 1),
+            metric: ControlMetricKind.Latency);
+        var resumed = AimdControlReferenceRegulator.Evaluate(
+            definition,
+            applied.State,
+            fresh,
+            fresh.ObservedAtUtc);
+
+        Assert.Equal(ControlActuationDisposition.Applied, applied.Disposition);
+        Assert.NotEqual(ControlDecisionDisposition.Rejected, resumed.Disposition);
+        Assert.Equal(applied.State.Revision.Ordinal + 1, resumed.State.Revision.Ordinal);
+    }
+
     static ControlLoopDefinition Definition() =>
         ControlTestFixture.Definition(
             ControlTestFixture.Limits(
@@ -496,8 +693,8 @@ public sealed class ControlLimitUpdateReferenceReducerTests
             (ControlActuatorKind.Concurrency, concurrency),
             (ControlActuatorKind.BatchItems, 20));
 
-    static ControlLimitUpdateState State(ControlLoopDefinition definition) =>
-        ControlLimitUpdateState.Create(
+    static ControlLoopState State(ControlLoopDefinition definition) =>
+        ControlLoopState.Create(
             definition,
             new ControlEpochId("generation-1"),
             Authorization().AuthorityScope,
@@ -505,7 +702,7 @@ public sealed class ControlLimitUpdateReferenceReducerTests
 
     static ControlLimitUpdateCommand Command(
         ControlLoopDefinition definition,
-        ControlLimitUpdateState state,
+        ControlLoopState state,
         ControlOperatingPoint point,
         string commandId = "limit-update/1",
         string idempotencyKey = "limit-update/logical-1",
@@ -534,7 +731,7 @@ public sealed class ControlLimitUpdateReferenceReducerTests
 
     static ControlApplicationPoint ApplicationPoint(
         ControlLoopDefinition definition,
-        ControlLimitUpdateState state,
+        ControlLoopState state,
         string id,
         long fence,
         DateTimeOffset observedAtUtc) =>

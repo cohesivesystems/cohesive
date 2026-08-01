@@ -242,6 +242,17 @@ public static class MaterializationIndexSyncStatusProjector
     static readonly EnumTypeRef GenerationHealthType = EnumType<MaterializationIndexSyncGenerationHealth>();
     static readonly EnumTypeRef ControlActuatorType = EnumType<ControlActuatorKind>();
     static readonly EnumTypeRef ControlUnitType = EnumType<ControlUnit>();
+    static readonly EnumTypeRef ControlStageType = EnumType<ControlStageKind>();
+    static readonly EnumTypeRef ControlWorkloadType = EnumType<MaterializationIndexSyncWorkloadKind>();
+    static readonly EnumTypeRef ControlHardLimitOriginType = EnumType<ControlHardLimitOrigin>();
+    static readonly EnumTypeRef ControlPressureType = EnumType<ControlPressureClassification>();
+    static readonly EnumTypeRef ControlMetricType = EnumType<ControlMetricKind>();
+    static readonly EnumTypeRef ControlStatisticType = EnumType<ControlStatisticKind>();
+    static readonly EnumTypeRef ControlObjectiveDirectionType = EnumType<ControlObjectiveDirection>();
+    static readonly EnumTypeRef ControlMeasurementAvailabilityType = EnumType<ControlMeasurementAvailability>();
+    static readonly EnumTypeRef ControlApplicationPointType = EnumType<ControlApplicationPointKind>();
+    static readonly EnumTypeRef ControlRecommendationDirectionType = EnumType<ControlRecommendationDirection>();
+    static readonly EnumTypeRef DocumentOriginType = EnumType<DocumentOrigin>();
     static readonly EnumTypeRef ConfigurationOriginType = EnumType<EffectiveConfigurationOrigin>();
     static readonly EnumTypeRef RoutingSettingType = new(
         "MaterializationBackendRoutingSetting",
@@ -310,13 +321,183 @@ public static class MaterializationIndexSyncStatusProjector
         new("hasPermanentFailures", BooleanType)
     ]);
 
-    static readonly ObjectTypeRef LimitType = new(
+    static readonly ObjectTypeRef ProvenanceType = new(
     [
-        new("loop", StringType),
+        new("producer", StringType),
+        new("producerVersion", StringType, nullability: FieldNullability.Nullable),
+        new("sourceReference", StringType),
+        new("sourcePath", StringType, cardinality: FieldCardinality.Many),
+        new("sourceDescription", StringType, nullability: FieldNullability.Nullable),
+        new("origin", DocumentOriginType)
+    ]);
+
+    static readonly ObjectTypeRef OperatingValueType = new(
+    [
         new("actuator", ControlActuatorType),
         new("value", IntegerType),
+        new("unit", ControlUnitType)
+    ]);
+
+    static readonly ObjectTypeRef HardLimitType = new(
+    [
+        new("actuator", ControlActuatorType),
+        new("minimum", IntegerType),
+        new("maximum", IntegerType),
         new("unit", ControlUnitType),
-        new("pendingUpdate", BooleanType)
+        new("origin", ControlHardLimitOriginType),
+        new("authority", StringType)
+    ]);
+
+    static readonly ObjectTypeRef EffectiveRangeType = new(
+    [
+        new("actuator", ControlActuatorType),
+        new("minimum", IntegerType),
+        new("maximum", IntegerType),
+        new("unit", ControlUnitType)
+    ]);
+
+    static readonly ObjectTypeRef WorkloadBudgetType = new(
+    [
+        new("actuator", ControlActuatorType),
+        new("capacity", IntegerType),
+        new("reserved", IntegerType),
+        new("available", IntegerType),
+        new("unit", ControlUnitType),
+        new("origin", ControlHardLimitOriginType),
+        new("authority", StringType)
+    ]);
+
+    static readonly ObjectTypeRef PolicyConfigurationType = new(
+    [
+        new("setting", StringType),
+        new("origin", ConfigurationOriginType),
+        new("authority", StringType)
+    ]);
+
+    static readonly ObjectTypeRef ControlPolicyType = new(
+    [
+        new("actuator", ControlActuatorType),
+        new("additiveIncrease", IntegerType),
+        new("unit", ControlUnitType),
+        new("multiplicativeDecreaseBasisPoints", IntegerType),
+        new("healthyObservationCount", IntegerType),
+        new("recoveryCooldownMilliseconds", IntegerType),
+        new("minimumDwellMilliseconds", IntegerType),
+        new("maximumObservationAgeMilliseconds", IntegerType),
+        new("minimumSampleCount", IntegerType),
+        new("configuration", PolicyConfigurationType, cardinality: FieldCardinality.Many)
+    ]);
+
+    static readonly ObjectTypeRef ControlObjectiveType = new(
+    [
+        new("metric", ControlMetricType),
+        new("statistic", ControlStatisticType),
+        new("direction", ControlObjectiveDirectionType),
+        new("recoveryBoundary", IntegerType),
+        new("congestionBoundary", IntegerType),
+        new("unit", ControlUnitType)
+    ]);
+
+    static readonly ObjectTypeRef MeasurementType = new(
+    [
+        new("metric", ControlMetricType),
+        new("statistic", ControlStatisticType),
+        new("availability", ControlMeasurementAvailabilityType),
+        new("value", IntegerType, nullability: FieldNullability.Nullable),
+        new("unit", ControlUnitType, nullability: FieldNullability.Nullable),
+        new("sampleCount", IntegerType),
+        new("failureCode", StringType, nullability: FieldNullability.Nullable)
+    ]);
+
+    static readonly ObjectTypeRef ControlObservationType = new(
+    [
+        new("id", StringType),
+        new("source", StringType),
+        new("expectedRevision", IntegerType),
+        new("windowStartedAtUtc", InstantType),
+        new("windowEndedAtUtc", InstantType),
+        new("observedAtUtc", InstantType),
+        new("measurements", MeasurementType, cardinality: FieldCardinality.Many)
+    ]);
+
+    static readonly ObjectTypeRef ControlRecommendationType = new(
+    [
+        new("id", StringType),
+        new("direction", ControlRecommendationDirectionType),
+        new("actuator", ControlActuatorType),
+        new("expectedRevision", IntegerType),
+        new("observationId", StringType),
+        new("issuedAtUtc", InstantType),
+        new("priorActuationId", StringType, nullability: FieldNullability.Nullable),
+        new("priorActuationRevision", IntegerType, nullability: FieldNullability.Nullable),
+        new("authorizingHealthyObservationCount", IntegerType),
+        new("priorOperatingPoint", OperatingValueType, cardinality: FieldCardinality.Many),
+        new("proposedOperatingPoint", OperatingValueType, cardinality: FieldCardinality.Many)
+    ]);
+
+    static readonly ObjectTypeRef OperatorOverrideType = new(
+    [
+        new("commandId", StringType),
+        new("idempotencyKey", StringType),
+        new("expectedRevision", IntegerType),
+        new("issuedAtUtc", InstantType),
+        new("acceptedRevision", IntegerType),
+        new("acceptedAtUtc", InstantType),
+        new("authority", StringType),
+        new("provenance", ProvenanceType),
+        new("requestedOperatingPoint", OperatingValueType, cardinality: FieldCardinality.Many)
+    ]);
+
+    static readonly EnumTypeRef ControlActuationSourceType = new(
+        "MaterializationIndexSyncControlActuationSource",
+        ["Adaptive", "Operator"]);
+
+    static readonly ObjectTypeRef AppliedControlType = new(
+    [
+        new("operatingPoint", OperatingValueType, cardinality: FieldCardinality.Many),
+        new("actuationSource", ControlActuationSourceType, nullability: FieldNullability.Nullable),
+        new("actuationId", StringType, nullability: FieldNullability.Nullable),
+        new("actuationRevision", IntegerType, nullability: FieldNullability.Nullable),
+        new("appliedAtUtc", InstantType, nullability: FieldNullability.Nullable),
+        new("applicationFence", StringType, nullability: FieldNullability.Nullable),
+        new("applicationPointId", StringType, nullability: FieldNullability.Nullable),
+        new("applicationPointKind", ControlApplicationPointType, nullability: FieldNullability.Nullable),
+        new("applicationPointObservedAtUtc", InstantType, nullability: FieldNullability.Nullable),
+        new("applicationAuthority", StringType, nullability: FieldNullability.Nullable),
+        new("applicationSourceReference", StringType, nullability: FieldNullability.Nullable),
+        new("adaptiveRecommendation", ControlRecommendationType, nullability: FieldNullability.Nullable),
+        new("adaptiveObservation", ControlObservationType, nullability: FieldNullability.Nullable),
+        new("operatorOverride", OperatorOverrideType, nullability: FieldNullability.Nullable)
+    ]);
+
+    static readonly ObjectTypeRef ControlType = new(
+    [
+        new("loop", StringType),
+        new("stage", ControlStageType),
+        new("workload", ControlWorkloadType),
+        new("target", StringType),
+        new("backendTarget", StringType),
+        new("generation", StringType),
+        new("epoch", StringType),
+        new("revision", IntegerType),
+        new("materializationDefinitionFingerprint", DefinitionFingerprintType),
+        new("planFingerprint", DefinitionFingerprintType),
+        new("authoredDefinitionFingerprint", DefinitionFingerprintType),
+        new("effectiveDefinitionFingerprint", DefinitionFingerprintType),
+        new("definitionProvenance", ProvenanceType),
+        new("hardLimits", HardLimitType, cardinality: FieldCardinality.Many),
+        new("effectiveRanges", EffectiveRangeType, cardinality: FieldCardinality.Many),
+        new("initialOperatingPoint", OperatingValueType, cardinality: FieldCardinality.Many),
+        new("workloadBudgets", WorkloadBudgetType, cardinality: FieldCardinality.Many),
+        new("objectives", ControlObjectiveType, cardinality: FieldCardinality.Many),
+        new("policy", ControlPolicyType),
+        new("lastObservation", ControlObservationType, nullability: FieldNullability.Nullable),
+        new("lastClassification", ControlPressureType, nullability: FieldNullability.Nullable),
+        new("pendingRecommendation", ControlRecommendationType, nullability: FieldNullability.Nullable),
+        new("pendingOperatorOverride", OperatorOverrideType, nullability: FieldNullability.Nullable),
+        new("applied", AppliedControlType),
+        new("healthyObservationCount", IntegerType),
+        new("cooldownUntilUtc", InstantType, nullability: FieldNullability.Nullable)
     ]);
 
     static readonly ObjectTypeRef FailureType = new(
@@ -375,7 +556,7 @@ public static class MaterializationIndexSyncStatusProjector
         new("changeLag", ChangeLagType, cardinality: FieldCardinality.Many),
         new("shards", ShardType, cardinality: FieldCardinality.Many),
         new("generations", GenerationType, cardinality: FieldCardinality.Many),
-        new("limits", LimitType, cardinality: FieldCardinality.Many),
+        new("controls", ControlType, cardinality: FieldCardinality.Many),
         new("failures", FailureType, cardinality: FieldCardinality.Many),
         new("etaInputs", EtaType, nullability: FieldNullability.Nullable)
     ]));
@@ -388,7 +569,7 @@ public static class MaterializationIndexSyncStatusProjector
     /// <param name="routing">Current backend-pool routing authority.</param>
     /// <param name="progress">Current bounded per-source progress snapshots.</param>
     /// <param name="generations">Current exact backend coordinates and bounded target generation snapshots.</param>
-    /// <param name="control">Current bounded Control limit state.</param>
+    /// <param name="control">Current compiled Control realizations paired with their exact durable loop state.</param>
     /// <param name="observation">Supplemental lag, failure, and estimator observations.</param>
     /// <param name="provenance">Attributable runtime producer and source evidence.</param>
     /// <returns>A disclosed versioned index-sync status extension.</returns>
@@ -401,7 +582,7 @@ public static class MaterializationIndexSyncStatusProjector
         MaterializationBackendRoutingSnapshot routing,
         ImmutableArray<MaterializationIndexSyncProgressStatus> progress,
         ImmutableArray<MaterializationIndexSyncGenerationStatus> generations,
-        ImmutableArray<ControlLimitUpdateState> control,
+        ImmutableArray<MaterializationIndexSyncControlSnapshot> control,
         MaterializationIndexSyncRuntimeObservation observation,
         ExecutionProvenance provenance)
     {
@@ -431,7 +612,7 @@ public static class MaterializationIndexSyncStatusProjector
         root.Add("changeLag", ProjectChangeLag(observation.ChangeLag, generations));
         root.Add("shards", ProjectShards(progress));
         root.Add("generations", ProjectGenerations(generations));
-        root.Add("limits", ProjectLimits(control));
+        root.Add("controls", ProjectControls(control));
         root.Add("failures", ProjectFailures(observation.Failures));
         root.Add("etaInputs", ProjectEta(observation.EtaInputs));
 
@@ -455,7 +636,7 @@ public static class MaterializationIndexSyncStatusProjector
         MaterializationBackendRoutingSnapshot routing,
         ImmutableArray<MaterializationIndexSyncProgressStatus> progress,
         ImmutableArray<MaterializationIndexSyncGenerationStatus> generations,
-        ImmutableArray<ControlLimitUpdateState> control,
+        ImmutableArray<MaterializationIndexSyncControlSnapshot> control,
         ImmutableArray<MaterializationIndexSyncChangeLagStatus> changeLag)
     {
         if (progress.IsDefault || progress.Any(static value => value is null))
@@ -491,8 +672,35 @@ public static class MaterializationIndexSyncStatusProjector
         }
         if (generations.GroupBy(static value => value.Generation).Any(static group => group.Count() > 1))
             throw new ArgumentException("Index-sync status cannot repeat a backend-generation coordinate.", nameof(generations));
-        if (control.GroupBy(static value => value.LoopId).Any(static group => group.Count() > 1))
-            throw new ArgumentException("Index-sync status cannot repeat a Control loop identity.", nameof(control));
+        if (control.GroupBy(static value => (
+                value.Key.TargetId,
+                value.Key.GenerationId,
+                value.Key.Workload,
+                value.Key.LoopId))
+            .Any(static group => group.Count() > 1))
+        {
+            throw new ArgumentException(
+                "Index-sync status cannot attribute one backend-generation workload loop to multiple plans.",
+                nameof(control));
+        }
+
+        foreach (var snapshot in control)
+        {
+            MaterializationBackendGenerationReference coordinate = new(
+                snapshot.Key.TargetId,
+                snapshot.Key.GenerationId,
+                snapshot.Key.DefinitionFingerprint);
+            var routed = routedGenerations.Contains(coordinate);
+            var described = generations.Any(generation =>
+                generation.Generation == coordinate
+                && generation.Snapshot.MaterializationId == snapshot.Key.MaterializationId);
+            if (!routed || !described)
+            {
+                throw new ArgumentException(
+                    "Control status must belong to an exact routed and described materialization generation.",
+                    nameof(control));
+            }
+        }
 
         foreach (var item in progress)
         {
@@ -679,24 +887,302 @@ public static class MaterializationIndexSyncStatusProjector
         return ObservationValue.FromImmutableArray(values.MoveToImmutable());
     }
 
-    static ObservationValue ProjectLimits(ImmutableArray<ControlLimitUpdateState> control)
+    static ObservationValue ProjectControls(ImmutableArray<MaterializationIndexSyncControlSnapshot> control)
     {
-        var count = control.Sum(static state => state.OperatingPoint.Values.Length);
-        var values = ImmutableArray.CreateBuilder<ObservationValue>(count);
-        foreach (var state in control.OrderBy(static value => value.LoopId.Value, StringComparer.Ordinal))
+        var values = ImmutableArray.CreateBuilder<ObservationValue>(control.Length);
+        foreach (var snapshot in control
+                     .OrderBy(static value => value.Key.TargetId.Value, StringComparer.Ordinal)
+                     .ThenBy(static value => value.Key.GenerationId.Value, StringComparer.Ordinal)
+                     .ThenBy(static value => value.Key.Workload)
+                     .ThenBy(static value => value.Key.LoopId.Value, StringComparer.Ordinal))
         {
-            foreach (var limit in state.OperatingPoint.Values)
-            {
-                var fields = ImmutableDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
-                fields.Add("loop", ObservationValue.FromString(state.LoopId.Value));
-                fields.Add("actuator", ObservationValue.FromString(limit.Actuator.ToString()));
-                fields.Add("value", ObservationValue.FromInt64(limit.Quantity.Value));
-                fields.Add("unit", ObservationValue.FromString(limit.Quantity.Unit.ToString()));
-                fields.Add("pendingUpdate", ObservationValue.FromBool(state.PendingUpdate is not null));
-                values.Add(ObservationValue.FromObject(fields.ToImmutable()));
-            }
+            var realization = snapshot.Realization;
+            var definition = realization.EffectiveDefinition;
+            var state = snapshot.State;
+            var fields = ImmutableDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
+            fields.Add("loop", ObservationValue.FromString(state.LoopId.Value));
+            fields.Add("stage", ObservationValue.FromString(definition.Stage.ToString()));
+            fields.Add("workload", ObservationValue.FromString(realization.Workload.ToString()));
+            fields.Add("target", ObservationValue.FromString(state.Target));
+            fields.Add("backendTarget", ObservationValue.FromString(snapshot.Key.TargetId.Value));
+            fields.Add("generation", ObservationValue.FromString(snapshot.Key.GenerationId.Value));
+            fields.Add("epoch", ObservationValue.FromString(state.Epoch.Value));
+            fields.Add("revision", ObservationValue.FromInt64(state.Revision.Ordinal));
+            fields.Add(
+                "materializationDefinitionFingerprint",
+                ProjectFingerprint(snapshot.Key.DefinitionFingerprint));
+            fields.Add("planFingerprint", ProjectFingerprint(snapshot.Key.PlanFingerprint));
+            fields.Add(
+                "authoredDefinitionFingerprint",
+                ProjectFingerprint(realization.AuthoredDefinitionFingerprint));
+            fields.Add("effectiveDefinitionFingerprint", ProjectFingerprint(definition.Fingerprint));
+            fields.Add("definitionProvenance", ProjectProvenance(definition.Provenance));
+            fields.Add("hardLimits", ProjectHardLimits(definition.HardLimits));
+            fields.Add("effectiveRanges", ProjectEffectiveRanges(definition));
+            fields.Add("initialOperatingPoint", ProjectOperatingPoint(definition.InitialOperatingPoint));
+            fields.Add("workloadBudgets", ProjectWorkloadBudgets(definition.Budgets));
+            fields.Add("objectives", ProjectObjectives(definition.Objectives));
+            fields.Add("policy", ProjectPolicy(definition.Policy));
+            fields.Add("lastObservation", ProjectControlObservation(state.LastObservation));
+            fields.Add("lastClassification", StringOrNull(state.LastClassification?.ToString()));
+            fields.Add("pendingRecommendation", ProjectRecommendation(state.PendingRecommendation));
+            fields.Add("pendingOperatorOverride", ProjectOperatorOverride(state.PendingLimitUpdate));
+            fields.Add("applied", ProjectAppliedControl(state));
+            fields.Add("healthyObservationCount", ObservationValue.FromInt64(state.HealthyObservationCount));
+            fields.Add("cooldownUntilUtc", InstantOrNull(state.CooldownUntilUtc));
+            values.Add(ObservationValue.FromObject(fields.ToImmutable()));
+        }
+
+        return ObservationValue.FromImmutableArray(values.MoveToImmutable());
+    }
+
+    static ObservationValue ProjectHardLimits(ControlHardLimits hardLimits)
+    {
+        var values = ImmutableArray.CreateBuilder<ObservationValue>(hardLimits.Constraints.Length);
+        foreach (var constraint in hardLimits.Constraints)
+        {
+            var fields = ImmutableDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
+            fields.Add("actuator", ObservationValue.FromString(constraint.Range.Actuator.ToString()));
+            fields.Add("minimum", ObservationValue.FromInt64(constraint.Range.Minimum.Value));
+            fields.Add("maximum", ObservationValue.FromInt64(constraint.Range.Maximum.Value));
+            fields.Add("unit", ObservationValue.FromString(constraint.Range.Minimum.Unit.ToString()));
+            fields.Add("origin", ObservationValue.FromString(constraint.Origin.ToString()));
+            fields.Add("authority", ObservationValue.FromString(constraint.Authority));
+            values.Add(ObservationValue.FromObject(fields.ToImmutable()));
         }
         return ObservationValue.FromImmutableArray(values.MoveToImmutable());
+    }
+
+    static ObservationValue ProjectEffectiveRanges(ControlLoopDefinition definition)
+    {
+        var values = ImmutableArray.CreateBuilder<ObservationValue>(definition.InitialOperatingPoint.Values.Length);
+        foreach (var operatingValue in definition.InitialOperatingPoint.Values)
+        {
+            var range = definition.GetEffectiveRange(operatingValue.Actuator);
+            var fields = ImmutableDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
+            fields.Add("actuator", ObservationValue.FromString(range.Actuator.ToString()));
+            fields.Add("minimum", ObservationValue.FromInt64(range.Minimum.Value));
+            fields.Add("maximum", ObservationValue.FromInt64(range.Maximum.Value));
+            fields.Add("unit", ObservationValue.FromString(range.Minimum.Unit.ToString()));
+            values.Add(ObservationValue.FromObject(fields.ToImmutable()));
+        }
+        return ObservationValue.FromImmutableArray(values.MoveToImmutable());
+    }
+
+    static ObservationValue ProjectOperatingPoint(ControlOperatingPoint point)
+    {
+        var values = ImmutableArray.CreateBuilder<ObservationValue>(point.Values.Length);
+        foreach (var value in point.Values)
+        {
+            var fields = ImmutableDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
+            fields.Add("actuator", ObservationValue.FromString(value.Actuator.ToString()));
+            fields.Add("value", ObservationValue.FromInt64(value.Quantity.Value));
+            fields.Add("unit", ObservationValue.FromString(value.Quantity.Unit.ToString()));
+            values.Add(ObservationValue.FromObject(fields.ToImmutable()));
+        }
+        return ObservationValue.FromImmutableArray(values.MoveToImmutable());
+    }
+
+    static ObservationValue ProjectWorkloadBudgets(ImmutableArray<ControlWorkloadBudget> budgets)
+    {
+        var values = ImmutableArray.CreateBuilder<ObservationValue>(budgets.Length);
+        foreach (var budget in budgets)
+        {
+            var fields = ImmutableDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
+            fields.Add("actuator", ObservationValue.FromString(budget.Actuator.ToString()));
+            fields.Add("capacity", ObservationValue.FromInt64(budget.Capacity.Value));
+            fields.Add("reserved", ObservationValue.FromInt64(budget.Reserved.Value));
+            fields.Add("available", ObservationValue.FromInt64(budget.Available.Value));
+            fields.Add("unit", ObservationValue.FromString(budget.Capacity.Unit.ToString()));
+            fields.Add("origin", ObservationValue.FromString(budget.Origin.ToString()));
+            fields.Add("authority", ObservationValue.FromString(budget.Authority));
+            values.Add(ObservationValue.FromObject(fields.ToImmutable()));
+        }
+        return ObservationValue.FromImmutableArray(values.MoveToImmutable());
+    }
+
+    static ObservationValue ProjectPolicy(AimdControlPolicy policy)
+    {
+        var configuration = ImmutableArray.CreateBuilder<ObservationValue>(policy.Configuration.Length);
+        foreach (var decision in policy.Configuration)
+        {
+            var fields = ImmutableDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
+            fields.Add("setting", ObservationValue.FromString(decision.Setting));
+            fields.Add("origin", ObservationValue.FromString(decision.Origin.ToString()));
+            fields.Add("authority", ObservationValue.FromString(decision.Authority));
+            configuration.Add(ObservationValue.FromObject(fields.ToImmutable()));
+        }
+
+        var result = ImmutableDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
+        result.Add("actuator", ObservationValue.FromString(policy.Actuator.ToString()));
+        result.Add("additiveIncrease", ObservationValue.FromInt64(policy.AdditiveIncrease.Value));
+        result.Add("unit", ObservationValue.FromString(policy.AdditiveIncrease.Unit.ToString()));
+        result.Add(
+            "multiplicativeDecreaseBasisPoints",
+            ObservationValue.FromInt64(policy.MultiplicativeDecreaseBasisPoints));
+        result.Add("healthyObservationCount", ObservationValue.FromInt64(policy.HealthyObservationCount));
+        result.Add(
+            "recoveryCooldownMilliseconds",
+            ObservationValue.FromInt64(policy.RecoveryCooldownMilliseconds));
+        result.Add("minimumDwellMilliseconds", ObservationValue.FromInt64(policy.MinimumDwellMilliseconds));
+        result.Add(
+            "maximumObservationAgeMilliseconds",
+            ObservationValue.FromInt64(policy.MaximumObservationAgeMilliseconds));
+        result.Add("minimumSampleCount", ObservationValue.FromInt64(policy.MinimumSampleCount));
+        result.Add("configuration", ObservationValue.FromImmutableArray(configuration.MoveToImmutable()));
+        return ObservationValue.FromObject(result.ToImmutable());
+    }
+
+    static ObservationValue ProjectObjectives(ImmutableArray<ControlObjective> objectives)
+    {
+        var values = ImmutableArray.CreateBuilder<ObservationValue>(objectives.Length);
+        foreach (var objective in objectives)
+        {
+            var fields = ImmutableDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
+            fields.Add("metric", ObservationValue.FromString(objective.Metric.ToString()));
+            fields.Add("statistic", ObservationValue.FromString(objective.Statistic.ToString()));
+            fields.Add("direction", ObservationValue.FromString(objective.Direction.ToString()));
+            fields.Add("recoveryBoundary", ObservationValue.FromInt64(objective.RecoveryBoundary.Value));
+            fields.Add("congestionBoundary", ObservationValue.FromInt64(objective.CongestionBoundary.Value));
+            fields.Add("unit", ObservationValue.FromString(objective.RecoveryBoundary.Unit.ToString()));
+            values.Add(ObservationValue.FromObject(fields.ToImmutable()));
+        }
+        return ObservationValue.FromImmutableArray(values.MoveToImmutable());
+    }
+
+    static ObservationValue ProjectControlObservation(ControlObservation? observation)
+    {
+        if (observation is null)
+            return ObservationValue.Null;
+
+        var measurements = ImmutableArray.CreateBuilder<ObservationValue>(observation.Measurements.Length);
+        foreach (var measurement in observation.Measurements)
+        {
+            var fields = ImmutableDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
+            fields.Add("metric", ObservationValue.FromString(measurement.Metric.ToString()));
+            fields.Add("statistic", ObservationValue.FromString(measurement.Statistic.ToString()));
+            fields.Add("availability", ObservationValue.FromString(measurement.Availability.ToString()));
+            fields.Add(
+                "value",
+                measurement.Value is { } value
+                    ? ObservationValue.FromInt64(value.Value)
+                    : ObservationValue.Null);
+            fields.Add("unit", StringOrNull(measurement.Value?.Unit.ToString()));
+            fields.Add("sampleCount", ObservationValue.FromInt64(measurement.SampleCount));
+            fields.Add("failureCode", StringOrNull(measurement.FailureCode));
+            measurements.Add(ObservationValue.FromObject(fields.ToImmutable()));
+        }
+
+        var result = ImmutableDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
+        result.Add("id", ObservationValue.FromString(observation.Id.Value));
+        result.Add("source", ObservationValue.FromString(observation.Source));
+        result.Add("expectedRevision", ObservationValue.FromInt64(observation.ExpectedRevision.Ordinal));
+        result.Add("windowStartedAtUtc", ObservationValue.FromDateTimeOffset(observation.WindowStartedAtUtc));
+        result.Add("windowEndedAtUtc", ObservationValue.FromDateTimeOffset(observation.WindowEndedAtUtc));
+        result.Add("observedAtUtc", ObservationValue.FromDateTimeOffset(observation.ObservedAtUtc));
+        result.Add("measurements", ObservationValue.FromImmutableArray(measurements.MoveToImmutable()));
+        return ObservationValue.FromObject(result.ToImmutable());
+    }
+
+    static ObservationValue ProjectRecommendation(ControlRecommendation? recommendation)
+    {
+        if (recommendation is null)
+            return ObservationValue.Null;
+
+        var fields = ImmutableDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
+        fields.Add("id", ObservationValue.FromString(recommendation.Id.Value));
+        fields.Add("direction", ObservationValue.FromString(recommendation.Direction.ToString()));
+        fields.Add("actuator", ObservationValue.FromString(recommendation.Actuator.ToString()));
+        fields.Add("expectedRevision", ObservationValue.FromInt64(recommendation.ExpectedRevision.Ordinal));
+        fields.Add("observationId", ObservationValue.FromString(recommendation.ObservationId.Value));
+        fields.Add("issuedAtUtc", ObservationValue.FromDateTimeOffset(recommendation.IssuedAtUtc));
+        fields.Add("priorActuationId", StringOrNull(recommendation.PriorActuationId?.Value));
+        fields.Add("priorActuationRevision", IntOrNull(recommendation.PriorActuationRevision?.Ordinal));
+        fields.Add(
+            "authorizingHealthyObservationCount",
+            ObservationValue.FromInt64(recommendation.AuthorizingHealthyObservationCount));
+        fields.Add("priorOperatingPoint", ProjectOperatingPoint(recommendation.PriorOperatingPoint));
+        fields.Add("proposedOperatingPoint", ProjectOperatingPoint(recommendation.ProposedOperatingPoint));
+        return ObservationValue.FromObject(fields.ToImmutable());
+    }
+
+    static ObservationValue ProjectOperatorOverride(ControlLimitUpdateReceipt? receipt)
+    {
+        if (receipt is null)
+            return ObservationValue.Null;
+
+        var command = receipt.Command;
+        var fields = ImmutableDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
+        fields.Add("commandId", ObservationValue.FromString(command.CommandId.Value));
+        fields.Add("idempotencyKey", ObservationValue.FromString(command.IdempotencyKey.Value));
+        fields.Add("expectedRevision", ObservationValue.FromInt64(command.ExpectedRevision.Ordinal));
+        fields.Add("issuedAtUtc", ObservationValue.FromDateTimeOffset(command.IssuedAtUtc));
+        fields.Add("acceptedRevision", ObservationValue.FromInt64(receipt.AcceptedRevision.Ordinal));
+        fields.Add("acceptedAtUtc", ObservationValue.FromDateTimeOffset(receipt.AcceptedAtUtc));
+        fields.Add(
+            "authority",
+            ObservationValue.FromString(command.Authorization.AuthorityScope.Authority));
+        fields.Add("provenance", ProjectProvenance(command.Provenance));
+        fields.Add("requestedOperatingPoint", ProjectOperatingPoint(command.RequestedOperatingPoint));
+        return ObservationValue.FromObject(fields.ToImmutable());
+    }
+
+    static ObservationValue ProjectAppliedControl(ControlLoopState state)
+    {
+        ControlApplicationPoint? applicationPoint = null;
+        string? source = null;
+        if (state.LastAppliedActuationRevision is { } lastRevision)
+        {
+            if (state.LastActuation?.Revision == lastRevision)
+            {
+                source = "Adaptive";
+                applicationPoint = state.LastActuation.ApplicationPoint;
+            }
+            else if (state.LastLimitUpdateActuation?.Revision == lastRevision)
+            {
+                source = "Operator";
+                applicationPoint = state.LastLimitUpdateActuation.ApplicationPoint;
+            }
+        }
+
+        var fields = ImmutableDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
+        fields.Add("operatingPoint", ProjectOperatingPoint(state.OperatingPoint));
+        fields.Add("actuationSource", StringOrNull(source));
+        fields.Add("actuationId", StringOrNull(state.LastAppliedActuationId?.Value));
+        fields.Add("actuationRevision", IntOrNull(state.LastAppliedActuationRevision?.Ordinal));
+        fields.Add("appliedAtUtc", InstantOrNull(state.LastAppliedAtUtc));
+        fields.Add("applicationFence", StringOrNull(applicationPoint?.Fence.Value));
+        fields.Add("applicationPointId", StringOrNull(applicationPoint?.Id.Value));
+        fields.Add("applicationPointKind", StringOrNull(applicationPoint?.Kind.ToString()));
+        fields.Add("applicationPointObservedAtUtc", InstantOrNull(applicationPoint?.ObservedAtUtc));
+        fields.Add("applicationAuthority", StringOrNull(applicationPoint?.Authority));
+        fields.Add("applicationSourceReference", StringOrNull(applicationPoint?.SourceReference));
+        fields.Add(
+            "adaptiveRecommendation",
+            source == "Adaptive" ? ProjectRecommendation(state.LastActuation?.Recommendation) : ObservationValue.Null);
+        fields.Add(
+            "adaptiveObservation",
+            source == "Adaptive" ? ProjectControlObservation(state.LastActuation?.Observation) : ObservationValue.Null);
+        fields.Add(
+            "operatorOverride",
+            source == "Operator" ? ProjectOperatorOverride(state.LastLimitUpdateActuation?.Receipt) : ObservationValue.Null);
+        return ObservationValue.FromObject(fields.ToImmutable());
+    }
+
+    static ObservationValue ProjectProvenance(ExecutionProvenance provenance)
+    {
+        var path = provenance.Source.SemanticPath?.Segments ?? [];
+        var fields = ImmutableDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
+        fields.Add("producer", ObservationValue.FromString(provenance.Producer.Producer));
+        fields.Add("producerVersion", StringOrNull(provenance.Producer.Version));
+        fields.Add("sourceReference", ObservationValue.FromString(provenance.Source.Reference));
+        fields.Add(
+            "sourcePath",
+            ObservationValue.FromImmutableArray(
+                [.. path.Select(static segment => ObservationValue.FromString(segment))]));
+        fields.Add("sourceDescription", StringOrNull(provenance.Source.Description));
+        fields.Add("origin", ObservationValue.FromString(provenance.Origin.ToString()));
+        return ObservationValue.FromObject(fields.ToImmutable());
     }
 
     static ObservationValue ProjectFailures(ImmutableArray<DocumentValidationDiagnostic> failures)
@@ -763,11 +1249,17 @@ public static class MaterializationIndexSyncStatusProjector
     }
 
     static ObservationValue ProjectFingerprint(ExecutionDefinitionFingerprint fingerprint)
+        => ProjectFingerprint(fingerprint.Algorithm, fingerprint.Canonicalization, fingerprint.Value);
+
+    static ObservationValue ProjectFingerprint(MaterializationRebuildPlanFingerprint fingerprint)
+        => ProjectFingerprint(fingerprint.Algorithm, fingerprint.Canonicalization, fingerprint.Value);
+
+    static ObservationValue ProjectFingerprint(string algorithm, string canonicalization, string value)
     {
         var fields = ImmutableDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
-        fields.Add("algorithm", ObservationValue.FromString(fingerprint.Algorithm));
-        fields.Add("canonicalization", ObservationValue.FromString(fingerprint.Canonicalization));
-        fields.Add("value", ObservationValue.FromString(fingerprint.Value));
+        fields.Add("algorithm", ObservationValue.FromString(algorithm));
+        fields.Add("canonicalization", ObservationValue.FromString(canonicalization));
+        fields.Add("value", ObservationValue.FromString(value));
         return ObservationValue.FromObject(fields.ToImmutable());
     }
 
@@ -793,6 +1285,12 @@ public static class MaterializationIndexSyncStatusProjector
 
     static ObservationValue StringOrNull(string? value) =>
         value is null ? ObservationValue.Null : ObservationValue.FromString(value);
+
+    static ObservationValue IntOrNull(long? value) =>
+        value is null ? ObservationValue.Null : ObservationValue.FromInt64(value.Value);
+
+    static ObservationValue InstantOrNull(DateTimeOffset? value) =>
+        value is null ? ObservationValue.Null : ObservationValue.FromDateTimeOffset(value.Value);
 
     static MaterializationIndexSyncGenerationHealth Health(MaterializationGenerationSnapshot generation)
     {

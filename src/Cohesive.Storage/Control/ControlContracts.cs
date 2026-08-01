@@ -101,7 +101,7 @@ public static class ControlDiagnosticCodes
 public sealed record ControlLoopDefinition
 {
     /// <summary>Current exact schema version of portable Control contracts.</summary>
-    public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } = new("cohesive-control/v1");
+    public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } = new("cohesive-control/v2");
 
     /// <summary>Creates a canonical bounded control-loop definition.</summary>
     /// <param name="schemaVersion">Exact portable Control schema version.</param>

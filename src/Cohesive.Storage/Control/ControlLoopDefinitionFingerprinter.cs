@@ -13,8 +13,8 @@ public static class ControlLoopDefinitionFingerprinter
     /// <summary>Cryptographic hash algorithm used by the v1 profile.</summary>
     public const string Algorithm = "sha256";
 
-    /// <summary>Canonicalization profile used by the v1 definition-content fence.</summary>
-    public const string Canonicalization = "cohesive-control-loop-definition/v1-c14n/v1";
+    /// <summary>Canonicalization profile used by the v2 definition-content fence.</summary>
+    public const string Canonicalization = "cohesive-control-loop-definition/v2-c14n/v1";
 
     /// <summary>Computes the exact canonical-content fingerprint of a Control loop definition.</summary>
     /// <param name="definition">Canonical definition to fingerprint.</param>

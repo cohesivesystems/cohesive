@@ -110,15 +110,64 @@ public sealed class MaterializationIndexSyncStatusProjectionTests
         Assert.Equal("generation/z", generations[1].GetProperty("generation").GetRequiredString());
         Assert.Equal("Healthy", generations[1].GetProperty("health").GetRequiredString());
 
-        var limits = root.GetProperty("limits").Array;
-        Assert.Equal(2, limits.Length);
-        Assert.All(limits, static limit => Assert.False(limit.GetProperty("pendingUpdate").Bool));
-        Assert.Contains(limits, static limit =>
-            limit.GetProperty("actuator").GetRequiredString() == ControlActuatorKind.Concurrency.ToString()
-            && limit.GetProperty("value").Int64 == 4);
-        Assert.Contains(limits, static limit =>
-            limit.GetProperty("actuator").GetRequiredString() == ControlActuatorKind.BatchItems.ToString()
-            && limit.GetProperty("value").Int64 == 20);
+        var control = Assert.Single(root.GetProperty("controls").Array);
+        Assert.Equal("index-sync/target-write", control.GetProperty("loop").GetRequiredString());
+        Assert.Equal("Target", control.GetProperty("stage").GetRequiredString());
+        Assert.Equal("Rebuild", control.GetProperty("workload").GetRequiredString());
+        Assert.Equal("target/a", control.GetProperty("backendTarget").GetRequiredString());
+        Assert.Equal("generation/a", control.GetProperty("generation").GetRequiredString());
+        Assert.Equal(2L, control.GetProperty("revision").Int64);
+        var materializationFingerprint = control.GetProperty("materializationDefinitionFingerprint");
+        Assert.Equal(
+            fixture.Control[0].Key.DefinitionFingerprint.Algorithm,
+            materializationFingerprint.GetProperty("algorithm").GetRequiredString());
+        Assert.Equal(
+            fixture.Control[0].Key.DefinitionFingerprint.Canonicalization,
+            materializationFingerprint.GetProperty("canonicalization").GetRequiredString());
+        Assert.Equal(
+            fixture.Control[0].Key.DefinitionFingerprint.Value,
+            materializationFingerprint.GetProperty("value").GetRequiredString());
+        var planFingerprint = control.GetProperty("planFingerprint");
+        Assert.Equal(
+            fixture.Control[0].Key.PlanFingerprint.Algorithm,
+            planFingerprint.GetProperty("algorithm").GetRequiredString());
+        Assert.Equal(
+            fixture.Control[0].Key.PlanFingerprint.Canonicalization,
+            planFingerprint.GetProperty("canonicalization").GetRequiredString());
+        Assert.Equal(
+            fixture.Control[0].Key.PlanFingerprint.Value,
+            planFingerprint.GetProperty("value").GetRequiredString());
+        Assert.Equal(
+            fixture.Control[0].Realization.AuthoredDefinitionFingerprint.Value,
+            control.GetProperty("authoredDefinitionFingerprint").GetProperty("value").GetRequiredString());
+        var appliedPoint = control.GetProperty("applied").GetProperty("operatingPoint").Array;
+        Assert.Contains(appliedPoint, static value =>
+            value.GetProperty("actuator").GetRequiredString() == ControlActuatorKind.Concurrency.ToString()
+            && value.GetProperty("value").Int64 == 4);
+        Assert.Contains(appliedPoint, static value =>
+            value.GetProperty("actuator").GetRequiredString() == ControlActuatorKind.BatchItems.ToString()
+            && value.GetProperty("value").Int64 == 20);
+        var objective = Assert.Single(control.GetProperty("objectives").Array);
+        Assert.Equal("Latency", objective.GetProperty("metric").GetRequiredString());
+        Assert.Equal("P95", objective.GetProperty("statistic").GetRequiredString());
+        Assert.Equal("HigherIsCongested", objective.GetProperty("direction").GetRequiredString());
+        Assert.Equal(100L, objective.GetProperty("recoveryBoundary").Int64);
+        Assert.Equal(200L, objective.GetProperty("congestionBoundary").Int64);
+        Assert.Equal("Milliseconds", objective.GetProperty("unit").GetRequiredString());
+        var lastObservation = control.GetProperty("lastObservation");
+        Assert.Equal("runtime/status-sampler/v1", lastObservation.GetProperty("source").GetRequiredString());
+        var measurement = Assert.Single(lastObservation.GetProperty("measurements").Array);
+        Assert.Equal("Latency", measurement.GetProperty("metric").GetRequiredString());
+        Assert.Equal(250L, measurement.GetProperty("value").Int64);
+        var recommendation = control.GetProperty("pendingRecommendation");
+        Assert.Equal("Decrease", recommendation.GetProperty("direction").GetRequiredString());
+        Assert.Equal(2L, recommendation.GetProperty("expectedRevision").Int64);
+        Assert.Equal(0L, recommendation.GetProperty("authorizingHealthyObservationCount").Int64);
+        Assert.Contains(
+            recommendation.GetProperty("priorOperatingPoint").Array,
+            static value => value.GetProperty("actuator").GetRequiredString() == "Concurrency"
+                && value.GetProperty("value").Int64 == 4);
+        Assert.Equal(ObservationValueKind.Null, control.GetProperty("pendingOperatorOverride").Kind);
 
         var failures = root.GetProperty("failures").Array;
         Assert.Equal(["status.a", "status.z"], failures.Select(static failure => failure.GetProperty("code").GetRequiredString()));
@@ -160,7 +209,11 @@ public sealed class MaterializationIndexSyncStatusProjectionTests
         var shard = ObjectField(contract, "shards");
         var changeLag = ObjectField(contract, "changeLag");
         var generation = ObjectField(contract, "generations");
-        var limit = ObjectField(contract, "limits");
+        var control = ObjectField(contract, "controls");
+        var hardLimit = ObjectField(control, "hardLimits");
+        var objective = ObjectField(control, "objectives");
+        var applied = ObjectField(control, "applied");
+        var appliedValue = ObjectField(applied, "operatingPoint");
         var configuration = ObjectField(contract, "configuration");
         var decision = ObjectField(configuration, "decisions");
 
@@ -170,8 +223,17 @@ public sealed class MaterializationIndexSyncStatusProjectionTests
         AssertEnum<MaterializationChangeLagEstimateState>(changeLag, "estimateState");
         AssertEnum<MaterializationGenerationState>(generation, "state");
         AssertEnum<MaterializationIndexSyncGenerationHealth>(generation, "health");
-        AssertEnum<ControlActuatorKind>(limit, "actuator");
-        AssertEnum<ControlUnit>(limit, "unit");
+        AssertEnum<ControlStageKind>(control, "stage");
+        AssertEnum<MaterializationIndexSyncWorkloadKind>(control, "workload");
+        AssertEnum<ControlActuatorKind>(hardLimit, "actuator");
+        AssertEnum<ControlHardLimitOrigin>(hardLimit, "origin");
+        AssertEnum<ControlMetricKind>(objective, "metric");
+        AssertEnum<ControlStatisticKind>(objective, "statistic");
+        AssertEnum<ControlObjectiveDirection>(objective, "direction");
+        AssertEnum<ControlUnit>(objective, "unit");
+        AssertEnum<ControlActuatorKind>(appliedValue, "actuator");
+        AssertEnum<ControlUnit>(appliedValue, "unit");
+        AssertEnum<ControlApplicationPointKind>(applied, "applicationPointKind");
         AssertEnum<EffectiveConfigurationOrigin>(decision, "origin");
         Assert.Equal<string>(
             [
@@ -189,8 +251,10 @@ public sealed class MaterializationIndexSyncStatusProjectionTests
             ("changeLag.estimateState", ReplaceArrayField(root, "changeLag", "estimateState", "FutureLagState")),
             ("generations.state", ReplaceArrayField(root, "generations", "state", "FutureGenerationState")),
             ("generations.health", ReplaceArrayField(root, "generations", "health", "FutureHealth")),
-            ("limits.actuator", ReplaceArrayField(root, "limits", "actuator", "FutureActuator")),
-            ("limits.unit", ReplaceArrayField(root, "limits", "unit", "FutureUnit")),
+            ("controls.stage", ReplaceArrayField(root, "controls", "stage", "FutureStage")),
+            ("controls.workload", ReplaceArrayField(root, "controls", "workload", "FutureWorkload")),
+            ("controls.hardLimits.actuator", ReplaceNestedArrayField(root, "controls", "hardLimits", "actuator", "FutureActuator")),
+            ("controls.applied.operatingPoint.unit", ReplaceAppliedPointField(root, "unit", "FutureUnit")),
             ("configuration.decisions.setting", ReplaceConfigurationDecisionField(root, "setting", "futureTarget")),
             ("configuration.decisions.origin", ReplaceConfigurationDecisionField(root, "origin", "FutureOrigin"))
         ];
@@ -205,6 +269,149 @@ public sealed class MaterializationIndexSyncStatusProjectionTests
                 invalid.Diagnostics,
                 static diagnostic => diagnostic.Code == PortableExecutionDiagnosticCodes.ConcreteTypeMismatch);
         }
+    }
+
+    [Fact]
+    public void CreateExtension_ExplainsPendingAndAppliedOperatorOverrideWithSupersededAdaptiveAdvice()
+    {
+        var fixture = CreateFixture();
+        var snapshot = Assert.Single(fixture.Control);
+        var state = snapshot.State;
+        var authority = Assert.IsType<InteractionAuthorityScope>(state.AuthorityScope);
+        ControlLimitUpdateCommand command = new(
+            ControlLoopDefinition.CurrentSchemaVersion,
+            new("command/status/operator"),
+            new("idempotency/status/operator"),
+            state.LoopId,
+            state.DefinitionFingerprint,
+            state.Target,
+            state.Epoch,
+            state.Revision,
+            ControlTestFixture.Point(
+                (ControlActuatorKind.Concurrency, 3),
+                (ControlActuatorKind.BatchItems, 20)),
+            new("operator/status", authority, "authorization/status/operator"),
+            Epoch.AddSeconds(5),
+            fixture.Provenance);
+        var decision = ControlLimitUpdateReferenceReducer.Submit(
+            snapshot.Realization.EffectiveDefinition,
+            state,
+            command,
+            Epoch.AddSeconds(6));
+        Assert.Equal(ControlLimitUpdateDecisionDisposition.Accepted, decision.Disposition);
+
+        MaterializationIndexSyncControlSnapshot updated = new(
+            snapshot.Key,
+            snapshot.Realization,
+            decision.State);
+        var extension = MaterializationIndexSyncStatusProjector.CreateExtension(
+            fixture.Routing,
+            fixture.Progress,
+            fixture.Generations,
+            [updated],
+            fixture.Observation,
+            fixture.Provenance);
+        var control = Assert.Single(Root(extension).GetProperty("controls").Array);
+
+        Assert.Equal(3L, control.GetProperty("revision").Int64);
+        Assert.Equal(ObservationValueKind.Null, control.GetProperty("pendingRecommendation").Kind);
+        var pending = control.GetProperty("pendingOperatorOverride");
+        Assert.Equal("command/status/operator", pending.GetProperty("commandId").GetRequiredString());
+        Assert.Equal("cohesive/control", pending.GetProperty("authority").GetRequiredString());
+        Assert.Equal(3L, pending.GetProperty("acceptedRevision").Int64);
+        Assert.Equal(
+            "tests/index-sync-status-projection",
+            pending.GetProperty("provenance").GetProperty("sourceReference").GetRequiredString());
+        Assert.Contains(
+            pending.GetProperty("requestedOperatingPoint").Array,
+            static value => value.GetProperty("actuator").GetRequiredString() == "Concurrency"
+                && value.GetProperty("value").Int64 == 3);
+        Assert.Contains(
+            control.GetProperty("applied").GetProperty("operatingPoint").Array,
+            static value => value.GetProperty("actuator").GetRequiredString() == "Concurrency"
+                && value.GetProperty("value").Int64 == 4);
+
+        ControlApplicationPoint applicationPoint = new(
+            ControlLoopDefinition.CurrentSchemaVersion,
+            new("application/status/operator"),
+            decision.State.LoopId,
+            decision.State.DefinitionFingerprint,
+            decision.State.Target,
+            decision.State.Epoch,
+            decision.State.Revision,
+            new("1"),
+            ControlApplicationPointKind.WorkAdmissionBoundary,
+            Epoch.AddSeconds(7),
+            snapshot.Realization.EffectiveDefinition.ApplicationAuthority,
+            "tests/status/operator-safe-point");
+        var appliedDecision = ControlLimitUpdateReferenceReducer.Apply(
+            snapshot.Realization.EffectiveDefinition,
+            decision.State,
+            applicationPoint,
+            Epoch.AddSeconds(7));
+        Assert.Equal(ControlActuationDisposition.Applied, appliedDecision.Disposition);
+
+        var appliedExtension = MaterializationIndexSyncStatusProjector.CreateExtension(
+            fixture.Routing,
+            fixture.Progress,
+            fixture.Generations,
+            [new(snapshot.Key, snapshot.Realization, appliedDecision.State)],
+            fixture.Observation,
+            fixture.Provenance);
+        var applied = Assert.Single(Root(appliedExtension).GetProperty("controls").Array)
+            .GetProperty("applied");
+        Assert.Equal("Operator", applied.GetProperty("actuationSource").GetRequiredString());
+        Assert.Equal(ObservationValueKind.Null, applied.GetProperty("adaptiveRecommendation").Kind);
+        Assert.Equal(ObservationValueKind.Null, applied.GetProperty("adaptiveObservation").Kind);
+        Assert.Equal(
+            "command/status/operator",
+            applied.GetProperty("operatorOverride").GetProperty("commandId").GetRequiredString());
+    }
+
+    [Fact]
+    public void CreateExtension_ExplainsExactAppliedAdaptiveRecommendationAndObservation()
+    {
+        var fixture = CreateFixture();
+        var snapshot = Assert.Single(fixture.Control);
+        var recommendation = Assert.IsType<ControlRecommendation>(snapshot.State.PendingRecommendation);
+        ControlApplicationPoint applicationPoint = new(
+            ControlLoopDefinition.CurrentSchemaVersion,
+            new("application/status/adaptive"),
+            snapshot.State.LoopId,
+            snapshot.State.DefinitionFingerprint,
+            snapshot.State.Target,
+            snapshot.State.Epoch,
+            snapshot.State.Revision,
+            new("1"),
+            ControlApplicationPointKind.WorkAdmissionBoundary,
+            Epoch.AddSeconds(5),
+            snapshot.Realization.EffectiveDefinition.ApplicationAuthority,
+            "tests/status/adaptive-safe-point");
+        var decision = AimdControlReferenceRegulator.Apply(
+            snapshot.Realization.EffectiveDefinition,
+            snapshot.State,
+            applicationPoint,
+            Epoch.AddSeconds(5));
+        Assert.Equal(ControlActuationDisposition.Applied, decision.Disposition);
+
+        var extension = MaterializationIndexSyncStatusProjector.CreateExtension(
+            fixture.Routing,
+            fixture.Progress,
+            fixture.Generations,
+            [new(snapshot.Key, snapshot.Realization, decision.State)],
+            fixture.Observation,
+            fixture.Provenance);
+        var applied = Assert.Single(Root(extension).GetProperty("controls").Array)
+            .GetProperty("applied");
+
+        Assert.Equal("Adaptive", applied.GetProperty("actuationSource").GetRequiredString());
+        Assert.Equal(
+            recommendation.Id.Value,
+            applied.GetProperty("adaptiveRecommendation").GetProperty("id").GetRequiredString());
+        Assert.Equal(
+            snapshot.State.LastObservation!.Id.Value,
+            applied.GetProperty("adaptiveObservation").GetProperty("id").GetRequiredString());
+        Assert.Equal(ObservationValueKind.Null, applied.GetProperty("operatorOverride").Kind);
     }
 
     [Fact]
@@ -274,6 +481,93 @@ public sealed class MaterializationIndexSyncStatusProjectionTests
             fixture.Generations,
             fixture.Control,
             new(changeLag: [new(foreignGeneration, foreignLag)]),
+            fixture.Provenance));
+
+        var existingControl = Assert.Single(fixture.Control);
+        MaterializationIndexSyncControlStateKey unroutedControlKey = new(
+            existingControl.Key.MaterializationId,
+            existingControl.Key.DefinitionFingerprint,
+            existingControl.Key.ControlDefinitionFingerprint,
+            existingControl.Key.PlanFingerprint,
+            existingControl.Key.TargetId,
+            new("generation/not-routed"),
+            existingControl.Key.Workload,
+            existingControl.Key.LoopId);
+        MaterializationIndexSyncControlSnapshot unroutedControl = new(
+            unroutedControlKey,
+            existingControl.Realization,
+            ControlLoopState.Create(
+                existingControl.Realization.EffectiveDefinition,
+                unroutedControlKey.Epoch,
+                Epoch));
+        Assert.Throws<ArgumentException>(() => MaterializationIndexSyncStatusProjector.CreateExtension(
+            fixture.Routing,
+            fixture.Progress,
+            fixture.Generations,
+            [unroutedControl],
+            fixture.Observation,
+            fixture.Provenance));
+    }
+
+    [Fact]
+    public void CreateExtension_RejectsControlForAnUnroutedBackendWithTheSameGenerationAndDefinition()
+    {
+        var fixture = CreateFixture();
+        var existing = Assert.Single(fixture.Control);
+        MaterializationIndexSyncControlStateKey wrongBackendKey = new(
+            existing.Key.MaterializationId,
+            existing.Key.DefinitionFingerprint,
+            existing.Key.ControlDefinitionFingerprint,
+            existing.Key.PlanFingerprint,
+            new("target/not-routed"),
+            existing.Key.GenerationId,
+            existing.Key.Workload,
+            existing.Key.LoopId);
+        MaterializationIndexSyncControlSnapshot wrongBackend = new(
+            wrongBackendKey,
+            existing.Realization,
+            ControlLoopState.Create(
+                existing.Realization.EffectiveDefinition,
+                wrongBackendKey.Epoch,
+                Epoch));
+
+        Assert.Throws<ArgumentException>(() => MaterializationIndexSyncStatusProjector.CreateExtension(
+            fixture.Routing,
+            fixture.Progress,
+            fixture.Generations,
+            [wrongBackend],
+            fixture.Observation,
+            fixture.Provenance));
+    }
+
+    [Fact]
+    public void CreateExtension_RejectsMultiplePlansForTheSameBackendGenerationWorkloadLoop()
+    {
+        var fixture = CreateFixture();
+        var existing = Assert.Single(fixture.Control);
+        MaterializationIndexSyncControlStateKey conflictingPlanKey = new(
+            existing.Key.MaterializationId,
+            existing.Key.DefinitionFingerprint,
+            existing.Key.ControlDefinitionFingerprint,
+            new("sha256", "tests/index-sync-control-plan/v1", new string('d', 64)),
+            existing.Key.TargetId,
+            existing.Key.GenerationId,
+            existing.Key.Workload,
+            existing.Key.LoopId);
+        MaterializationIndexSyncControlSnapshot conflictingPlan = new(
+            conflictingPlanKey,
+            existing.Realization,
+            ControlLoopState.Create(
+                existing.Realization.EffectiveDefinition,
+                conflictingPlanKey.Epoch,
+                Epoch));
+
+        Assert.Throws<ArgumentException>(() => MaterializationIndexSyncStatusProjector.CreateExtension(
+            fixture.Routing,
+            fixture.Progress,
+            fixture.Generations,
+            [existing, conflictingPlan],
+            fixture.Observation,
             fixture.Provenance));
     }
 
@@ -475,7 +769,7 @@ public sealed class MaterializationIndexSyncStatusProjectionTests
             new(candidate, Progress(candidate.GenerationId, pool.DefinitionFingerprint, scopeA, "a", batchPageOrdinal: 4))
         ];
 
-        var controlDefinition = ControlTestFixture.Definition(
+        var controlTemplate = ControlTestFixture.Definition(
             ControlTestFixture.Limits(
                 ControlTestFixture.Limit(
                     ControlActuatorKind.Concurrency,
@@ -492,11 +786,67 @@ public sealed class MaterializationIndexSyncStatusProjectionTests
             ControlTestFixture.Point(
                 (ControlActuatorKind.Concurrency, 4),
                 (ControlActuatorKind.BatchItems, 20)));
-        ControlLimitUpdateState control = ControlLimitUpdateState.Create(
+        ControlLoopDefinition controlDefinition = new(
+            controlTemplate.SchemaVersion,
+            controlTemplate.Id,
+            pool.MaterializationId.Value,
+            MaterializationIndexSyncControlCompiler.ApplicationAuthority,
+            controlTemplate.Stage,
+            controlTemplate.HardLimits,
+            controlTemplate.InitialOperatingPoint,
+            controlTemplate.Objectives,
+            controlTemplate.Policy,
+            controlTemplate.Budgets,
+            controlTemplate.Provenance);
+        MaterializationIndexSyncControlRealization controlRealization = new(
+            controlDefinition.Fingerprint,
+            MaterializationIndexSyncWorkloadKind.Rebuild,
+            controlDefinition);
+        MaterializationIndexSyncControlStateKey controlKey = new(
+            pool.MaterializationId,
+            pool.DefinitionFingerprint,
+            controlDefinition.Fingerprint,
+            new("sha256", "tests/index-sync-control-plan/v1", new string('c', 64)),
+            candidate.TargetId,
+            candidate.GenerationId,
+            MaterializationIndexSyncWorkloadKind.Rebuild,
+            controlDefinition.Id);
+        ControlLoopState controlState = ControlLoopState.Create(
             controlDefinition,
-            new("generation/a"),
+            controlKey.Epoch,
             new("cohesive/control", "tenant-a"),
             Epoch);
+        ControlObservation controlObservation = new(
+            ControlLoopDefinition.CurrentSchemaVersion,
+            new("observation/status/congested"),
+            controlDefinition.Id,
+            controlDefinition.Fingerprint,
+            controlDefinition.Target,
+            controlKey.Epoch,
+            controlState.Revision,
+            Epoch.AddSeconds(1),
+            Epoch.AddSeconds(2),
+            Epoch.AddSeconds(3),
+            "runtime/status-sampler/v1",
+            [
+                new(
+                    ControlMetricKind.Latency,
+                    ControlStatisticKind.P95,
+                    ControlMeasurementAvailability.Available,
+                    new(250, ControlUnit.Milliseconds),
+                    sampleCount: 3)
+            ]);
+        var controlDecision = AimdControlReferenceRegulator.Evaluate(
+            controlDefinition,
+            controlState,
+            controlObservation,
+            Epoch.AddSeconds(4));
+        Assert.Equal(ControlDecisionDisposition.Recommended, controlDecision.Disposition);
+        controlState = controlDecision.State;
+        MaterializationIndexSyncControlSnapshot control = new(
+            controlKey,
+            controlRealization,
+            controlState);
 
         MaterializationChangeLagObservation candidateLag = new(
             new(pool.MaterializationId, pool.DefinitionFingerprint, candidate.GenerationId),
@@ -724,6 +1074,54 @@ public sealed class MaterializationIndexSyncStatusProjectionTests
         return ReplaceObjectField(root, "configuration", changedConfiguration);
     }
 
+    static ObservationValue ReplaceNestedArrayField(
+        ObservationValue root,
+        string outerArrayField,
+        string innerArrayField,
+        string itemField,
+        string value)
+    {
+        var outerItems = root.GetProperty(outerArrayField).Array;
+        var outerItem = outerItems[0];
+        var innerItems = outerItem.GetProperty(innerArrayField).Array;
+        var changedInnerItem = ReplaceObjectField(
+            innerItems[0],
+            itemField,
+            ObservationValue.FromString(value));
+        var changedOuterItem = ReplaceObjectField(
+            outerItem,
+            innerArrayField,
+            ObservationValue.FromImmutableArray(innerItems.SetItem(0, changedInnerItem)));
+        return ReplaceObjectField(
+            root,
+            outerArrayField,
+            ObservationValue.FromImmutableArray(outerItems.SetItem(0, changedOuterItem)));
+    }
+
+    static ObservationValue ReplaceAppliedPointField(
+        ObservationValue root,
+        string itemField,
+        string value)
+    {
+        var controls = root.GetProperty("controls").Array;
+        var control = controls[0];
+        var applied = control.GetProperty("applied");
+        var operatingPoint = applied.GetProperty("operatingPoint").Array;
+        var changedValue = ReplaceObjectField(
+            operatingPoint[0],
+            itemField,
+            ObservationValue.FromString(value));
+        var changedApplied = ReplaceObjectField(
+            applied,
+            "operatingPoint",
+            ObservationValue.FromImmutableArray(operatingPoint.SetItem(0, changedValue)));
+        var changedControl = ReplaceObjectField(control, "applied", changedApplied);
+        return ReplaceObjectField(
+            root,
+            "controls",
+            ObservationValue.FromImmutableArray(controls.SetItem(0, changedControl)));
+    }
+
     static ObservationValue ReplaceObjectField(
         ObservationValue value,
         string fieldName,
@@ -737,7 +1135,7 @@ public sealed class MaterializationIndexSyncStatusProjectionTests
         MaterializationBackendRoutingSnapshot Routing,
         ImmutableArray<MaterializationIndexSyncProgressStatus> Progress,
         ImmutableArray<MaterializationIndexSyncGenerationStatus> Generations,
-        ImmutableArray<ControlLimitUpdateState> Control,
+        ImmutableArray<MaterializationIndexSyncControlSnapshot> Control,
         MaterializationIndexSyncRuntimeObservation Observation,
         ExecutionProvenance Provenance);
 }

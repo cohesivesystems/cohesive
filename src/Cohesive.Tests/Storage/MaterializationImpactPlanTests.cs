@@ -197,7 +197,7 @@ public sealed class MaterializationImpactPlanTests
     }
 
     [Fact]
-    public void Compiler_RejectsUnsupportedMaterializationDocumentSchema()
+    public void Document_RejectsUnsupportedMaterializationSchemaBeforeCompilation()
     {
         var current = CreateDocument(
             materializationId: "loads/search",
@@ -205,21 +205,13 @@ public sealed class MaterializationImpactPlanTests
             contributorLedger: false,
             globalEnumeration: false,
             reverseDeclarations: false);
-        MaterializationDocument unsupported = new(
+        var exception = Assert.Throws<ArgumentException>(() => new MaterializationDocument(
             schemaVersion: "cohesive-materialization/unsupported",
             definition: current.Definition,
-            definitionFingerprint: current.DefinitionFingerprint);
+            definitionFingerprint: current.DefinitionFingerprint));
 
-        var compilation = MaterializationImpactPlanCompiler.Compile(
-            unsupported,
-            Policy(MaterializationImpactStrategyKind.InverseTraversal));
-
-        Assert.False(compilation.IsSuccessful);
-        Assert.Null(compilation.Plan);
-        Assert.Contains(
-            compilation.Diagnostics,
-            static diagnostic => diagnostic.Code == MaterializationImpactDiagnosticCodes.DefinitionInvalid
-                && diagnostic.Location == "/schemaVersion");
+        Assert.Equal("schemaVersion", exception.ParamName);
+        Assert.Contains(MaterializationDocument.CurrentSchemaVersion, exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

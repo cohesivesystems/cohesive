@@ -58,6 +58,12 @@ public sealed class CosmosMaterializationSource : IMaterializationPullChangeSour
     const string ContinuationPrefix = "cosmos-materialization-read/v2/";
     const string PositionPrefix = "cosmos-materialization-change/v2/";
     const string EvidencePrefix = "cohesive.adapters.cosmos/materialization-source/v2";
+    const string CanceledControlMeasurementCode =
+        "cosmos.materialization.control-evidence.canceled";
+    const string TerminalControlMeasurementCode =
+        "cosmos.materialization.control-evidence.terminal-failure";
+    const string RequestChargeUnavailableControlMeasurementCode =
+        "cosmos.materialization.control-evidence.request-charge-unavailable";
     static ReadOnlySpan<byte> ContinuationAuthenticationDomain =>
         "cohesive.adapters.cosmos/materialization-read/v2\0"u8;
     static ReadOnlySpan<byte> PositionAuthenticationDomain =>
@@ -461,7 +467,7 @@ public sealed class CosmosMaterializationSource : IMaterializationPullChangeSour
                 completed: context.UtcNow,
                 exception: exception,
                 resumedPosition: false,
-                requestCharge: exception.RequestCharge ?? 0,
+                requestCharge: exception.RequestCharge,
                 statusCode: exception.StatusCode,
                 providerEvidenceReference: exception.ProviderEvidenceReference);
         }
@@ -557,7 +563,7 @@ public sealed class CosmosMaterializationSource : IMaterializationPullChangeSour
                 completed: context.UtcNow,
                 exception: exception,
                 resumedPosition: false,
-                requestCharge: exception.RequestCharge ?? 0,
+                requestCharge: exception.RequestCharge,
                 statusCode: exception.StatusCode,
                 providerEvidenceReference: exception.ProviderEvidenceReference);
         }
@@ -770,7 +776,7 @@ public sealed class CosmosMaterializationSource : IMaterializationPullChangeSour
                 completed: context.UtcNow,
                 exception: exception,
                 resumedPosition: true,
-                requestCharge: exception.RequestCharge ?? 0,
+                requestCharge: exception.RequestCharge,
                 statusCode: exception.StatusCode,
                 providerEvidenceReference: exception.ProviderEvidenceReference);
         }
@@ -2032,7 +2038,7 @@ public sealed class CosmosMaterializationSource : IMaterializationPullChangeSour
         DateTimeOffset completed,
         CosmosProviderProtocolException exception,
         bool resumedPosition,
-        double requestCharge,
+        double? requestCharge,
         HttpStatusCode? statusCode,
         string? providerEvidenceReference)
     {
@@ -2176,7 +2182,7 @@ public sealed class CosmosMaterializationSource : IMaterializationPullChangeSour
         DateTimeOffset completed,
         long itemCount,
         long byteCount,
-        double requestCharge,
+        double? requestCharge,
         string evidenceReference,
         HttpStatusCode? statusCode = null,
         int? subStatusCode = null,
@@ -2188,19 +2194,22 @@ public sealed class CosmosMaterializationSource : IMaterializationPullChangeSour
             : (long)Math.Ceiling(elapsedMilliseconds);
         var rejected = disposition is CosmosMaterializationSourceDisposition.Throttled
             or CosmosMaterializationSourceDisposition.RetryableFailure
-            or CosmosMaterializationSourceDisposition.TerminalFailure
                 ? 10_000L
                 : 0L;
-        return new(
-            operation: operation,
-            disposition: disposition,
-            scope: Scope,
-            startedAtUtc: started,
-            completedAtUtc: completed,
-            itemCount: itemCount,
-            canonicalByteCount: byteCount,
-            requestCharge: requestCharge,
-            measurements:
+        var requestUnitsInMilliUnits = requestCharge is { } observedRequestCharge
+            ? observedRequestCharge >= ControlQuantity.MaximumPortableValue / 1_000d
+                ? ControlQuantity.MaximumPortableValue
+                : (long)Math.Round(observedRequestCharge * 1_000d, MidpointRounding.AwayFromZero)
+            : (long?)null;
+        var portableItemCount = Math.Min(itemCount, ControlQuantity.MaximumPortableValue);
+        var portableByteCount = Math.Min(byteCount, ControlQuantity.MaximumPortableValue);
+        var measurements = disposition switch
+        {
+            CosmosMaterializationSourceDisposition.Canceled =>
+                UnavailableMeasurements(CanceledControlMeasurementCode),
+            CosmosMaterializationSourceDisposition.TerminalFailure =>
+                UnavailableMeasurements(TerminalControlMeasurementCode),
+            _ =>
             [
                 new(
                     metric: ControlMetricKind.Latency,
@@ -2217,13 +2226,88 @@ public sealed class CosmosMaterializationSource : IMaterializationPullChangeSour
                     value: new(
                         value: rejected,
                         unit: ControlUnit.BasisPoints),
+                    sampleCount: 1),
+                new(
+                    metric: ControlMetricKind.RequestUnitConsumption,
+                    statistic: ControlStatisticKind.Sum,
+                    availability: requestUnitsInMilliUnits is null
+                        ? ControlMeasurementAvailability.Unavailable
+                        : ControlMeasurementAvailability.Available,
+                    value: requestUnitsInMilliUnits is { } requestUnits
+                        ? new(
+                            value: requestUnits,
+                            unit: ControlUnit.MilliRequestUnits)
+                        : null,
+                    sampleCount: requestUnitsInMilliUnits is null ? 0 : 1,
+                    failureCode: requestUnitsInMilliUnits is null
+                        ? RequestChargeUnavailableControlMeasurementCode
+                        : null),
+                new(
+                    metric: ControlMetricKind.BatchItems,
+                    statistic: ControlStatisticKind.Last,
+                    availability: ControlMeasurementAvailability.Available,
+                    value: new(
+                        value: portableItemCount,
+                        unit: ControlUnit.Count),
+                    sampleCount: 1),
+                new(
+                    metric: ControlMetricKind.BatchBytes,
+                    statistic: ControlStatisticKind.Last,
+                    availability: ControlMeasurementAvailability.Available,
+                    value: new(
+                        value: portableByteCount,
+                        unit: ControlUnit.Bytes),
                     sampleCount: 1)
-            ],
+            ]
+        };
+        return new(
+            operation: operation,
+            disposition: disposition,
+            scope: Scope,
+            startedAtUtc: started,
+            completedAtUtc: completed,
+            itemCount: itemCount,
+            canonicalByteCount: byteCount,
+            requestCharge: requestCharge,
+            measurements: measurements,
             evidenceReference: evidenceReference,
+            controlEvidenceReference: string.Concat(
+                EvidencePrefix,
+                "/control-occurrence/",
+                Guid.NewGuid().ToString("N")),
             statusCode: statusCode,
             subStatusCode: subStatusCode,
             retryAfter: retryAfter);
     }
+
+    static ImmutableArray<ControlMeasurement> UnavailableMeasurements(string failureCode) =>
+    [
+        new(
+            ControlMetricKind.Latency,
+            ControlStatisticKind.Last,
+            ControlMeasurementAvailability.Unavailable,
+            failureCode: failureCode),
+        new(
+            ControlMetricKind.RejectionRatio,
+            ControlStatisticKind.Last,
+            ControlMeasurementAvailability.Unavailable,
+            failureCode: failureCode),
+        new(
+            ControlMetricKind.RequestUnitConsumption,
+            ControlStatisticKind.Sum,
+            ControlMeasurementAvailability.Unavailable,
+            failureCode: failureCode),
+        new(
+            ControlMetricKind.BatchItems,
+            ControlStatisticKind.Last,
+            ControlMeasurementAvailability.Unavailable,
+            failureCode: failureCode),
+        new(
+            ControlMetricKind.BatchBytes,
+            ControlStatisticKind.Last,
+            ControlMeasurementAvailability.Unavailable,
+            failureCode: failureCode)
+    ];
 
     void Observe(CosmosMaterializationSourceObservation observation)
     {

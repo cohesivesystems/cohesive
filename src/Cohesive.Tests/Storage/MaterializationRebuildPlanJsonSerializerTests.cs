@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using Cohesive.Control;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Acquisition;
@@ -35,8 +37,8 @@ public sealed class MaterializationRebuildPlanJsonSerializerTests
         Assert.Equal(
             MaterializationRebuildPlanJsonSerializer.GetCanonicalBytes(plan),
             MaterializationRebuildPlanJsonSerializer.GetCanonicalBytes(restored));
-        Assert.Equal("cohesive-materialization-rebuild-plan/v3", restored.SchemaVersion);
-        Assert.Equal("cohesive-materialization-rebuild-plan/v3-c14n/v1", restored.Fingerprint.Canonicalization);
+        Assert.Equal("cohesive-materialization-rebuild-plan/v4", restored.SchemaVersion);
+        Assert.Equal("cohesive-materialization-rebuild-plan/v4-c14n/v1", restored.Fingerprint.Canonicalization);
         Assert.Equal(
             plan.ChangeFeedCatalogs.Select(static catalog => catalog.EvidenceReference),
             restored.ChangeFeedCatalogs.Select(static catalog => catalog.EvidenceReference));
@@ -48,6 +50,18 @@ public sealed class MaterializationRebuildPlanJsonSerializerTests
         Assert.Equal(
             plan.Limits.MaximumChangeFeedsPerConvergenceActivation,
             restored.Limits.MaximumChangeFeedsPerConvergenceActivation);
+    }
+
+    [Fact]
+    public void PlanJson_RejectsMissingControlRealizationsEvenWhenTheCanonicalCatalogIsEmpty()
+    {
+        var plan = CreatePlan();
+        Assert.Empty(plan.ControlRealizations);
+        var root = JsonNode.Parse(MaterializationRebuildPlanJsonSerializer.Serialize(plan))!.AsObject();
+        Assert.True(root.Remove("controlRealizations"));
+
+        Assert.Throws<JsonException>(() =>
+            MaterializationRebuildPlanJsonSerializer.Deserialize(root.ToJsonString()));
     }
 
     [Fact]
@@ -425,16 +439,29 @@ public sealed class MaterializationRebuildPlanJsonSerializerTests
                     : step)
         ];
 
+    internal static MaterializationRebuildPlan CreateControlledPlan(
+        ImmutableArray<ControlLoopDefinition> controlLoops,
+        ImmutableArray<MaterializationIndexSyncControlWorkloadBinding> controlWorkloads,
+        int maximumPageItems = 100) =>
+        CreatePlan(
+            maximumPageItems: maximumPageItems,
+            controlLoops: controlLoops,
+            controlWorkloads: controlWorkloads);
+
     static MaterializationRebuildPlan CreatePlan(
         MaterializationFailureDisposition exhaustedDisposition = MaterializationFailureDisposition.Stop,
         RelationOutputMode outputMode = RelationOutputMode.OnePerRoot,
         int maximumPageItems = 100,
-        long targetDeleteWriteItems = WriteItems)
+        long targetDeleteWriteItems = WriteItems,
+        ImmutableArray<ControlLoopDefinition> controlLoops = default,
+        ImmutableArray<MaterializationIndexSyncControlWorkloadBinding> controlWorkloads = default)
     {
         var materialization = MaterializationDocument.FromDefinition(CreateDefinition(
             exhaustedDisposition,
             outputMode,
-            targetDeleteWriteItems));
+            targetDeleteWriteItems,
+            controlLoops,
+            controlWorkloads));
         var compiled = materialization.Definition.Relation.Compile().Plan
             ?? throw new InvalidOperationException("The test materialization relation did not compile.");
         var sourcePlans = materialization.Definition.Sources.Select(source =>
@@ -526,7 +553,9 @@ public sealed class MaterializationRebuildPlanJsonSerializerTests
             ? MaterializationDocument.FromDefinition(CreateDefinition(
                 exhaustedDisposition,
                 RelationOutputMode.OnePerRoot,
-                targetDeleteWriteItems))
+                targetDeleteWriteItems,
+                controlLoops,
+                controlWorkloads))
             : materialization;
         var impactPlan = MaterializationRebuildTestPlan.CompileImpactPlan(
             impactMaterialization,
@@ -582,7 +611,9 @@ public sealed class MaterializationRebuildPlanJsonSerializerTests
     static MaterializationDefinition CreateDefinition(
         MaterializationFailureDisposition exhaustedDisposition,
         RelationOutputMode outputMode,
-        long targetDeleteWriteItems)
+        long targetDeleteWriteItems,
+        ImmutableArray<ControlLoopDefinition> controlLoops = default,
+        ImmutableArray<MaterializationIndexSyncControlWorkloadBinding> controlWorkloads = default)
     {
         var fixtureDefinition = Assert.IsType<RelationDefinition>(FederatedLoadRelationFixture.RelationDocument.Definition);
         var relationDocument = outputMode == fixtureDefinition.Output.Mode
@@ -678,8 +709,9 @@ public sealed class MaterializationRebuildPlanJsonSerializerTests
             freshnessPolicy: new(
                 maximumLagMilliseconds: 30_000,
                 maximumUnsettledMilliseconds: 10_000),
-            controlLoops: [],
-            provenance: Provenance());
+            controlLoops: controlLoops.IsDefault ? [] : controlLoops,
+            provenance: Provenance(),
+            controlWorkloads: controlWorkloads);
     }
 
     static MaterializationSourceRequirement SourceRequirement(

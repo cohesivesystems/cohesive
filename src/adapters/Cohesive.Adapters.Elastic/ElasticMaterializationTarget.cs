@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Cohesive.Control;
 using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
@@ -51,6 +52,14 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
     const string IdentityLimitCode = "cohesive.adapters.elastic.materialization.indexedIdentityLimitExceeded";
     const string ConcurrentBatchCode = "cohesive.adapters.elastic.materialization.concurrentBatch";
     const string ResponseLimitErrorType = "cohesive.elasticsearch.response.limitExceeded";
+    const string CanceledControlMeasurementCode = "elastic.materialization.control-evidence.canceled";
+    const string ReplayedControlMeasurementCode = "elastic.materialization.control-evidence.batch-replayed";
+    const string MixedReplayControlMeasurementCode = "elastic.materialization.control-evidence.item-replayed";
+    const string IneligibleOperationControlMeasurementCode =
+        "elastic.materialization.control-evidence.ineligible-operation";
+    const string MissingResultThroughputMeasurementCode = "elastic.materialization.batch-throughput.no-result";
+    const string ZeroWindowThroughputMeasurementCode = "elastic.materialization.batch-throughput.zero-window";
+    const string UnexpectedBatchFailureCode = "cohesive.adapters.elastic.materialization.unexpectedBatchFailure";
 
     static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
     static readonly ElasticJsonObject MatchAllQuery = ElasticMaterializationWireJson.MatchAllQuery;
@@ -70,6 +79,7 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
     readonly ElasticMaterializationTargetBinding binding;
     readonly ElasticMaterializationTargetPolicy policy;
     readonly IElasticMaterializationTransport transport;
+    readonly IElasticMaterializationTargetObserver? observer;
     readonly SemaphoreSlim localAdmission;
     readonly SemaphoreSlim controlInitialization = new(initialCount: 1, maxCount: 1);
     readonly SemaphoreSlim promotionAdmission = new(initialCount: 1, maxCount: 1);
@@ -81,18 +91,21 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
     /// <param name="binding">Persisted physical generation, alias, template, and coordination evidence.</param>
     /// <param name="policy">Bounded operation policy advertised by the target.</param>
     /// <param name="runtimeBinding">Exact borrowed Elasticsearch client runtime attestation.</param>
+    /// <param name="observer">Optional loop-agnostic sink for typed batch-operation evidence.</param>
     /// <exception cref="ArgumentNullException">A parameter is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">The persisted and runtime bindings address different clusters.</exception>
     public ElasticMaterializationTarget(
         ElasticMaterializationTargetBinding binding,
         ElasticMaterializationTargetPolicy policy,
-        ElasticElasticsearchRuntimeBinding runtimeBinding)
+        ElasticElasticsearchRuntimeBinding runtimeBinding,
+        IElasticMaterializationTargetObserver? observer = null)
         : this(
-            binding,
-            policy,
-            runtimeBinding,
-            new ElasticsearchMaterializationTransport(
-                runtimeBinding ?? throw new ArgumentNullException(nameof(runtimeBinding))))
+            binding: binding,
+            policy: policy,
+            runtimeBinding: runtimeBinding,
+            transport: new ElasticsearchMaterializationTransport(
+                runtimeBinding ?? throw new ArgumentNullException(nameof(runtimeBinding))),
+            observer: observer)
     {
     }
 
@@ -100,12 +113,14 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
         ElasticMaterializationTargetBinding binding,
         ElasticMaterializationTargetPolicy policy,
         ElasticElasticsearchRuntimeBinding runtimeBinding,
-        IElasticMaterializationTransport transport)
+        IElasticMaterializationTransport transport,
+        IElasticMaterializationTargetObserver? observer = null)
     {
         this.binding = binding ?? throw new ArgumentNullException(nameof(binding));
         this.policy = policy ?? throw new ArgumentNullException(nameof(policy));
         ArgumentNullException.ThrowIfNull(runtimeBinding);
         this.transport = transport ?? throw new ArgumentNullException(nameof(transport));
+        this.observer = observer;
         Descriptor = ElasticMaterializationTargetProfile.CreateDescriptor(binding, policy, runtimeBinding);
         localAdmission = new SemaphoreSlim(policy.MaximumParallelism, policy.MaximumParallelism);
         var generationAdmissionCount = (int)Math.Min(256L, (long)policy.MaximumParallelism * 4L);
@@ -183,11 +198,59 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(request);
-        return await ExecuteAsync(
-            context,
-            operation: "apply-batch",
-            request.GenerationId,
-            cancellationToken => ApplyBatchCoreAsync(request, cancellationToken)).ConfigureAwait(false);
+        context.CancellationToken.ThrowIfCancellationRequested();
+        var intent = MaterializationTargetIntentFingerprinter.AnalyzeBatch(request);
+        var startedAtUtc = observer is null ? default : context.UtcNow;
+        try
+        {
+            var result = await ExecuteAsync(
+                context: context,
+                operation: "apply-batch",
+                generationId: request.GenerationId,
+                body: cancellationToken => ApplyBatchCoreAsync(request, intent, cancellationToken)).ConfigureAwait(false);
+            if (observer is not null)
+            {
+                ObserveBatch(
+                    request: request,
+                    intent: intent,
+                    startedAtUtc: startedAtUtc,
+                    completedAtUtc: Later(context.UtcNow, startedAtUtc),
+                    result: result,
+                    exception: null,
+                    canceled: false);
+            }
+            return result;
+        }
+        catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+        {
+            if (observer is not null)
+            {
+                ObserveBatch(
+                    request: request,
+                    intent: intent,
+                    startedAtUtc: startedAtUtc,
+                    completedAtUtc: Later(context.UtcNow, startedAtUtc),
+                    result: null,
+                    exception: null,
+                    canceled: true);
+            }
+            throw;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
+        {
+            if (observer is not null)
+            {
+                ObserveBatch(
+                    request: request,
+                    intent: intent,
+                    startedAtUtc: startedAtUtc,
+                    completedAtUtc: Later(context.UtcNow, startedAtUtc),
+                    result: null,
+                    exception: exception,
+                    canceled: false);
+            }
+            throw;
+        }
     }
 
     /// <inheritdoc />
@@ -438,10 +501,10 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
 
     async ValueTask<MaterializationBatchResult> ApplyBatchCoreAsync(
         MaterializationApplyBatchRequest request,
+        MaterializationTargetBatchIntent intent,
         CancellationToken cancellationToken)
     {
         _ = await LoadTargetAsync(cancellationToken).ConfigureAwait(false);
-        var intent = MaterializationTargetIntentFingerprinter.AnalyzeBatch(request);
         var maximumBatchResponseBytes = MaximumBatchResponseBytes();
         RecordBatchInput(intent);
         var receiptId = OperationDocumentId(BatchReceiptDocumentKind, request.BatchId.Value);
@@ -4362,6 +4425,263 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
             localAdmission.Release();
         }
     }
+
+    void ObserveBatch(
+        MaterializationApplyBatchRequest request,
+        MaterializationTargetBatchIntent intent,
+        DateTimeOffset startedAtUtc,
+        DateTimeOffset completedAtUtc,
+        MaterializationBatchResult? result,
+        Exception? exception,
+        bool canceled)
+    {
+        if (observer is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var successful = 0L;
+            var rejected = 0L;
+            var containsReplayedItem = false;
+            var containsNonPressureFailure = false;
+            string? failureCode = null;
+            if (result is not null)
+            {
+                foreach (var outcome in result.Outcomes)
+                {
+                    if (outcome.Disposition is MaterializationItemOutcomeDisposition.Applied
+                        or MaterializationItemOutcomeDisposition.Replayed)
+                    {
+                        successful++;
+                        containsReplayedItem |= outcome.Disposition == MaterializationItemOutcomeDisposition.Replayed;
+                    }
+                    else
+                    {
+                        rejected++;
+                        containsNonPressureFailure |=
+                            outcome.Disposition != MaterializationItemOutcomeDisposition.RetryableRejected;
+                        failureCode ??= outcome.Code;
+                    }
+                }
+            }
+            long? successfulItemCount = result is null ? null : successful;
+            long? rejectedItemCount = result is null ? null : rejected;
+
+            var disposition = BatchObservationDisposition(
+                result: result,
+                rejectedItemCount: rejectedItemCount,
+                exception: exception,
+                canceled: canceled);
+            var statusCode = exception is ElasticMaterializationTransportException transportFailure
+                ? transportFailure.StatusCode
+                : null;
+            failureCode ??= exception switch
+            {
+                ElasticMaterializationTransportException providerFailure => providerFailure.ErrorType,
+                not null => UnexpectedBatchFailureCode,
+                _ => null
+            };
+
+            var elapsed = completedAtUtc - startedAtUtc;
+            var latency = elapsed.TotalMilliseconds >= ControlQuantity.MaximumPortableValue
+                ? ControlQuantity.MaximumPortableValue
+                : (long)Math.Ceiling(elapsed.TotalMilliseconds);
+            var portableItemCount = Math.Min((long)intent.ItemCount, ControlQuantity.MaximumPortableValue);
+            var portableByteCount = Math.Min(intent.CanonicalByteCount, ControlQuantity.MaximumPortableValue);
+            var ineligibleOperation = canceled
+                || disposition == ElasticMaterializationTargetDisposition.TerminalFailure
+                || containsNonPressureFailure
+                || disposition is (
+                    ElasticMaterializationTargetDisposition.IdentityConflict
+                        or ElasticMaterializationTargetDisposition.GenerationNotFound
+                        or ElasticMaterializationTargetDisposition.GenerationNotWritable
+                        or ElasticMaterializationTargetDisposition.LimitExceeded
+                        or ElasticMaterializationTargetDisposition.StaleFence);
+            var ineligibleCode = canceled
+                ? CanceledControlMeasurementCode
+                : ineligibleOperation
+                    ? IneligibleOperationControlMeasurementCode
+                    : disposition == ElasticMaterializationTargetDisposition.Replayed
+                        ? ReplayedControlMeasurementCode
+                        : containsReplayedItem
+                            ? MixedReplayControlMeasurementCode
+                            : null;
+            var controlEvidenceKind = ineligibleOperation
+                ? ElasticMaterializationTargetControlEvidenceKind.IneligibleOperation
+                : disposition == ElasticMaterializationTargetDisposition.Replayed
+                    ? ElasticMaterializationTargetControlEvidenceKind.BatchReplay
+                    : containsReplayedItem
+                        ? ElasticMaterializationTargetControlEvidenceKind.MixedItemReplay
+                        : ElasticMaterializationTargetControlEvidenceKind.PressureSample;
+            ImmutableArray<ControlMeasurement> measurements;
+            if (ineligibleCode is not null)
+            {
+                measurements = UnavailableBatchMeasurements(ineligibleCode);
+            }
+            else
+            {
+                var builder = ImmutableArray.CreateBuilder<ControlMeasurement>(initialCapacity: 5);
+                builder.Add(new(
+                    metric: ControlMetricKind.Latency,
+                    statistic: ControlStatisticKind.Last,
+                    availability: ControlMeasurementAvailability.Available,
+                    value: new(
+                        value: latency,
+                        unit: ControlUnit.Milliseconds),
+                    sampleCount: 1));
+                var rejectionRatio = rejectedItemCount is { } observedRejected
+                    ? RatioInBasisPoints(observedRejected, intent.ItemCount)
+                    : 10_000;
+                builder.Add(new(
+                    metric: ControlMetricKind.RejectionRatio,
+                    statistic: ControlStatisticKind.Last,
+                    availability: ControlMeasurementAvailability.Available,
+                    value: new(
+                        value: rejectionRatio,
+                        unit: ControlUnit.BasisPoints),
+                    sampleCount: 1));
+                builder.Add(new(
+                    metric: ControlMetricKind.BatchItems,
+                    statistic: ControlStatisticKind.Last,
+                    availability: ControlMeasurementAvailability.Available,
+                    value: new(
+                        value: portableItemCount,
+                        unit: ControlUnit.Count),
+                    sampleCount: 1));
+                builder.Add(new(
+                    metric: ControlMetricKind.BatchBytes,
+                    statistic: ControlStatisticKind.Last,
+                    availability: ControlMeasurementAvailability.Available,
+                    value: new(
+                        value: portableByteCount,
+                        unit: ControlUnit.Bytes),
+                    sampleCount: 1));
+                if (successfulItemCount is { } completedItems && elapsed.Ticks > 0)
+                {
+                    var itemsPerSecond = completedItems * TimeSpan.TicksPerSecond / elapsed.Ticks;
+                    builder.Add(new(
+                        metric: ControlMetricKind.ItemThroughput,
+                        statistic: ControlStatisticKind.Mean,
+                        availability: ControlMeasurementAvailability.Available,
+                        value: new(
+                            value: Math.Min(itemsPerSecond, ControlQuantity.MaximumPortableValue),
+                            unit: ControlUnit.ItemsPerSecond),
+                        sampleCount: 1));
+                }
+                else
+                {
+                    builder.Add(new(
+                        metric: ControlMetricKind.ItemThroughput,
+                        statistic: ControlStatisticKind.Mean,
+                        availability: ControlMeasurementAvailability.Unavailable,
+                        failureCode: result is null
+                            ? MissingResultThroughputMeasurementCode
+                            : ZeroWindowThroughputMeasurementCode));
+                }
+                measurements = builder.MoveToImmutable();
+            }
+
+            observer.Observe(new(
+                disposition: disposition,
+                targetId: Descriptor.Id,
+                materializationId: Descriptor.MaterializationId,
+                generationId: request.GenerationId,
+                batchId: request.BatchId,
+                startedAtUtc: startedAtUtc,
+                completedAtUtc: completedAtUtc,
+                itemCount: intent.ItemCount,
+                canonicalByteCount: intent.CanonicalByteCount,
+                successfulItemCount: successfulItemCount,
+                measurements: measurements,
+                controlEvidenceKind: controlEvidenceKind,
+                evidenceReference: $"elastic-materialization-target/{binding.Fingerprint.Value}/batch-intent/{intent.Fingerprint.Value}",
+                controlEvidenceReference: $"elastic-materialization-target/{binding.Fingerprint.Value}/control-occurrence/{Guid.NewGuid():N}",
+                failureCode: failureCode,
+                statusCode: statusCode));
+        }
+        catch (Exception observationFailure) when (observationFailure is not OutOfMemoryException and not StackOverflowException)
+        {
+            // Observation is advisory. An observer cannot alter batch semantics or durable idempotency evidence.
+        }
+    }
+
+    static ImmutableArray<ControlMeasurement> UnavailableBatchMeasurements(string failureCode) =>
+    [
+        new(
+            ControlMetricKind.Latency,
+            ControlStatisticKind.Last,
+            ControlMeasurementAvailability.Unavailable,
+            failureCode: failureCode),
+        new(
+            ControlMetricKind.RejectionRatio,
+            ControlStatisticKind.Last,
+            ControlMeasurementAvailability.Unavailable,
+            failureCode: failureCode),
+        new(
+            ControlMetricKind.BatchItems,
+            ControlStatisticKind.Last,
+            ControlMeasurementAvailability.Unavailable,
+            failureCode: failureCode),
+        new(
+            ControlMetricKind.BatchBytes,
+            ControlStatisticKind.Last,
+            ControlMeasurementAvailability.Unavailable,
+            failureCode: failureCode),
+        new(
+            ControlMetricKind.ItemThroughput,
+            ControlStatisticKind.Mean,
+            ControlMeasurementAvailability.Unavailable,
+            failureCode: failureCode)
+    ];
+
+    static ElasticMaterializationTargetDisposition BatchObservationDisposition(
+        MaterializationBatchResult? result,
+        long? rejectedItemCount,
+        Exception? exception,
+        bool canceled)
+    {
+        if (canceled)
+        {
+            return ElasticMaterializationTargetDisposition.Canceled;
+        }
+        if (exception is ElasticMaterializationTransportException { Retryable: true })
+        {
+            return ElasticMaterializationTargetDisposition.RetryableFailure;
+        }
+        if (exception is not null)
+        {
+            return ElasticMaterializationTargetDisposition.TerminalFailure;
+        }
+        if (rejectedItemCount > 0
+            && result!.Disposition is (MaterializationBatchDisposition.Applied
+                or MaterializationBatchDisposition.Replayed))
+        {
+            return ElasticMaterializationTargetDisposition.PartiallyRejected;
+        }
+
+        return result!.Disposition switch
+        {
+            MaterializationBatchDisposition.Applied => ElasticMaterializationTargetDisposition.Complete,
+            MaterializationBatchDisposition.Replayed => ElasticMaterializationTargetDisposition.Replayed,
+            MaterializationBatchDisposition.IdentityConflict => ElasticMaterializationTargetDisposition.IdentityConflict,
+            MaterializationBatchDisposition.GenerationNotFound => ElasticMaterializationTargetDisposition.GenerationNotFound,
+            MaterializationBatchDisposition.GenerationNotWritable => ElasticMaterializationTargetDisposition.GenerationNotWritable,
+            MaterializationBatchDisposition.LimitExceeded => ElasticMaterializationTargetDisposition.LimitExceeded,
+            MaterializationBatchDisposition.StaleFence => ElasticMaterializationTargetDisposition.StaleFence,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(result),
+                result.Disposition,
+                "Unsupported materialization batch disposition.")
+        };
+    }
+
+    static long RatioInBasisPoints(long numerator, long denominator) =>
+        checked((numerator * 10_000L + denominator / 2L) / denominator);
+
+    static DateTimeOffset Later(DateTimeOffset candidate, DateTimeOffset minimum) =>
+        candidate < minimum ? minimum : candidate;
 
     int GenerationAdmissionIndex(MaterializationGenerationId generationId)
     {

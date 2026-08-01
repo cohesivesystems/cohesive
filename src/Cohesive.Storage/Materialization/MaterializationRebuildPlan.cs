@@ -385,7 +385,7 @@ public sealed record MaterializationChangeFeedPlan
 public sealed record MaterializationRebuildPlan
 {
     /// <summary>Current persisted rebuild-plan schema version.</summary>
-    public const string CurrentSchemaVersion = "cohesive-materialization-rebuild-plan/v3";
+    public const string CurrentSchemaVersion = "cohesive-materialization-rebuild-plan/v4";
 
     /// <summary>Creates and fingerprints a rebuild realization plan.</summary>
     /// <param name="materialization">Exact canonical materialization document.</param>
@@ -400,6 +400,7 @@ public sealed record MaterializationRebuildPlan
     /// <param name="changeFeeds">Exact physical feeds selected from the complete source-attributed catalogs.</param>
     /// <param name="limits">Explicit finite page, bulk, activation, and parallelism bounds.</param>
     /// <param name="provenance">Compiler and source attribution for this realization.</param>
+    /// <param name="controlRealizations">Persisted effective Control realizations, or default to compile them.</param>
     /// <exception cref="ArgumentNullException">A required reference is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">A definition, capability, source, shard, or fingerprint invariant is invalid.</exception>
     public MaterializationRebuildPlan(
@@ -412,7 +413,8 @@ public sealed record MaterializationRebuildPlan
         ImmutableArray<MaterializationChangeFeedCatalogEvidence> changeFeedCatalogs,
         ImmutableArray<MaterializationChangeFeedPlan> changeFeeds,
         MaterializationRebuildLimits limits,
-        ExecutionProvenance provenance)
+        ExecutionProvenance provenance,
+        ImmutableArray<MaterializationIndexSyncControlRealization> controlRealizations = default)
         : this(
             schemaVersion: CurrentSchemaVersion,
             materialization: materialization,
@@ -425,6 +427,7 @@ public sealed record MaterializationRebuildPlan
             changeFeeds: changeFeeds,
             limits: limits,
             provenance: provenance,
+            controlRealizations: controlRealizations,
             fingerprint: null)
     {
     }
@@ -443,6 +446,7 @@ public sealed record MaterializationRebuildPlan
     /// <param name="changeFeeds">Exact physical feeds selected from the complete source-attributed catalogs.</param>
     /// <param name="limits">Explicit finite page, bulk, activation, and parallelism bounds.</param>
     /// <param name="provenance">Compiler and source attribution for this realization.</param>
+    /// <param name="controlRealizations">Persisted effective Control realizations, or default to compile them.</param>
     /// <param name="fingerprint">Persisted exact fingerprint, or <see langword="null"/> to compute it.</param>
     /// <exception cref="ArgumentNullException">A required reference is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">A definition, capability, source, shard, or fingerprint invariant is invalid.</exception>
@@ -459,7 +463,8 @@ public sealed record MaterializationRebuildPlan
         ImmutableArray<MaterializationChangeFeedPlan> changeFeeds,
         MaterializationRebuildLimits limits,
         ExecutionProvenance provenance,
-        MaterializationRebuildPlanFingerprint? fingerprint)
+        ImmutableArray<MaterializationIndexSyncControlRealization> controlRealizations = default,
+        MaterializationRebuildPlanFingerprint? fingerprint = null)
     {
         SchemaVersion = Guard.RequireNotNullOrWhiteSpace(schemaVersion);
         if (!string.Equals(schemaVersion, CurrentSchemaVersion, StringComparison.Ordinal))
@@ -504,6 +509,19 @@ public sealed record MaterializationRebuildPlan
         }
         ValidateOperatingLimits(Sources, Target, Shards, ChangeFeeds, Limits);
 
+        ControlRealizations = controlRealizations.IsDefault
+            ? MaterializationIndexSyncControlCompiler.Compile(
+                materialization.Definition,
+                Sources,
+                Target,
+                Limits)
+            : MaterializationIndexSyncControlCompiler.Link(
+                materialization.Definition,
+                Sources,
+                Target,
+                Limits,
+                controlRealizations);
+
         var computed = MaterializationRebuildPlanFingerprinter.Compute(
             SchemaVersion,
             Materialization,
@@ -515,7 +533,8 @@ public sealed record MaterializationRebuildPlan
             ChangeFeedCatalogs,
             ChangeFeeds,
             Limits,
-            Provenance);
+            Provenance,
+            ControlRealizations);
         if (fingerprint is not null && fingerprint != computed)
             throw new ArgumentException("The supplied rebuild-plan fingerprint is not canonical.", nameof(fingerprint));
         Fingerprint = computed;
@@ -553,6 +572,9 @@ public sealed record MaterializationRebuildPlan
 
     /// <summary>Compiler and source attribution.</summary>
     public ExecutionProvenance Provenance { get; }
+
+    /// <summary>Effective Control realizations in canonical loop-identity order.</summary>
+    public ImmutableArray<MaterializationIndexSyncControlRealization> ControlRealizations { get; }
 
     /// <summary>Deterministic fingerprint of every execution-affecting plan field.</summary>
     public MaterializationRebuildPlanFingerprint Fingerprint { get; }
@@ -934,7 +956,7 @@ public static class MaterializationRebuildPlanFingerprinter
     public const string Algorithm = "sha256";
 
     /// <summary>Canonicalization profile used by the current synchronization-plan fence.</summary>
-    public const string Canonicalization = "cohesive-materialization-rebuild-plan/v3-c14n/v1";
+    public const string Canonicalization = "cohesive-materialization-rebuild-plan/v4-c14n/v1";
 
     /// <summary>Computes the fingerprint of one complete persisted rebuild plan.</summary>
     /// <param name="plan">Plan whose canonical content is fingerprinted.</param>
@@ -954,7 +976,8 @@ public static class MaterializationRebuildPlanFingerprinter
             plan.ChangeFeedCatalogs,
             plan.ChangeFeeds,
             plan.Limits,
-            plan.Provenance);
+            plan.Provenance,
+            plan.ControlRealizations);
     }
 
     internal static MaterializationRebuildPlanFingerprint Compute(
@@ -968,7 +991,8 @@ public static class MaterializationRebuildPlanFingerprinter
         ImmutableArray<MaterializationChangeFeedCatalogEvidence> changeFeedCatalogs,
         ImmutableArray<MaterializationChangeFeedPlan> changeFeeds,
         MaterializationRebuildLimits limits,
-        ExecutionProvenance provenance)
+        ExecutionProvenance provenance,
+        ImmutableArray<MaterializationIndexSyncControlRealization> controlRealizations)
     {
         var content = new FingerprintContent(
             schemaVersion,
@@ -981,7 +1005,8 @@ public static class MaterializationRebuildPlanFingerprinter
             changeFeedCatalogs,
             changeFeeds,
             limits,
-            provenance);
+            provenance,
+            controlRealizations);
         var canonical = StrictDocumentJson.GetCanonicalBytes(content, MaterializationJsonSerializer.CreateOptions());
         return new(Algorithm, Canonicalization, Convert.ToHexStringLower(SHA256.HashData(canonical)));
     }
@@ -997,5 +1022,6 @@ public static class MaterializationRebuildPlanFingerprinter
         ImmutableArray<MaterializationChangeFeedCatalogEvidence> ChangeFeedCatalogs,
         ImmutableArray<MaterializationChangeFeedPlan> ChangeFeeds,
         MaterializationRebuildLimits Limits,
-        ExecutionProvenance Provenance);
+        ExecutionProvenance Provenance,
+        ImmutableArray<MaterializationIndexSyncControlRealization> ControlRealizations);
 }
