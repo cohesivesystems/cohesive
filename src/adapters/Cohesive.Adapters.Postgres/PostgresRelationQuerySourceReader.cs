@@ -29,6 +29,7 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
 
     readonly RelationQueryPhysicalPlanFingerprint physicalPlan;
     readonly CompiledRelationQueryPhysicalPlan? compiledPhysicalPlan;
+    readonly CompiledRelationQueryPlan? semanticPlan;
     readonly RelationQuerySourcePlacement placement;
     readonly RelationQuerySourceInstance source;
     readonly PostgresRelationQueryStorageBinding storage;
@@ -140,6 +141,7 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
     {
         this.physicalPlan = Guard.RequireNotNull(physicalPlan);
         this.compiledPhysicalPlan = compiledPhysicalPlan;
+        this.semanticPlan = semanticPlan;
         this.placement = Guard.RequireNotNull(placement);
         this.source = Guard.RequireNotNull(source);
         this.storage = Guard.RequireNotNull(storage);
@@ -191,6 +193,20 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
 
     /// <summary>Exact physical-plan fingerprint authorized by this reader.</summary>
     public RelationQueryPhysicalPlanFingerprint PhysicalPlan => physicalPlan;
+
+    internal PostgresRelationQuerySourceReader WithCommandExecutor(
+        PostgresNpgsqlCommandExecutor commandExecutor) => new(
+        physicalPlan,
+        compiledPhysicalPlan,
+        semanticPlan,
+        placement,
+        source,
+        storage,
+        runtimeBinding,
+        Guard.RequireNotNull(commandExecutor),
+        Policy);
+
+    internal PostgresNpgsqlRuntimeBinding? RuntimeBinding => runtimeBinding;
 
     internal string? RuntimeEvidenceReference => runtimeBinding is null
         ? null
@@ -268,7 +284,10 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
                 nameof(plan));
         }
         if (string.IsNullOrWhiteSpace(source.Value))
+        {
             throw new ArgumentException("A PostgreSQL source reader requires a source identity.", nameof(source));
+        }
+
         var instance = physicalPlan.Placement.SourceInstances.SingleOrDefault(candidate => candidate.Id == source)
             ?? throw new ArgumentException(
                 $"Physical plan '{physicalPlan.Fingerprint.Value}' has no source '{source.Value}'.",
@@ -344,17 +363,35 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
         PostgresRelationQueryTableBinding? table)
     {
         if (table is null)
+        {
             return "no table binding exists";
+        }
+
         if (table.Input != binding.Input)
+        {
             return "the compiled input identity differs";
+        }
+
         if (table.Source != binding.Source)
+        {
             return "the physical source identity differs";
+        }
+
         if (table.Shape != binding.Shape)
+        {
             return "the semantic shape differs";
+        }
+
         if (binding.Identity is not { } canonicalIdentity || canonicalIdentity.Shape != binding.Shape)
+        {
             return "the placement lacks shape-affine identity evidence";
+        }
+
         if (table.Identity is null)
+        {
             return "the table lacks identity-column evidence";
+        }
+
         if (table.Fields.Length != binding.Fields.Length)
         {
             return string.Create(
@@ -365,7 +402,10 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
             candidate.Input == field.Input
             && candidate.SemanticPath == field.SemanticPath));
         if (missingField is not null)
+        {
             return $"field '{missingField.Input.Value}' at '{missingField.SemanticPath}' is absent";
+        }
+
         var missingRelationship = binding.RelationshipKeys.FirstOrDefault(key =>
             !table.RelationshipReferences.Any(candidate =>
                 candidate.Input == key.Input
@@ -417,11 +457,19 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
                     out var projection,
                     out var relationship,
                     out var stage) is { } invalid)
+            {
                 return FailedWindow(request, invalid);
+            }
+
             if (Transaction.Current is not null)
+            {
                 return FailedWindow(request, "ambient-transaction-not-supported");
+            }
+
             if (BatchBoundaryExceeded(request.Constraint, stage))
+            {
                 return InconclusiveWindow(request, "batch-boundary-exceeded");
+            }
 
             var command = BuildCommand(
                 request,
@@ -497,13 +545,21 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
         relationship = null;
         stage = null;
         if (request.PhysicalPlan != physicalPlan)
+        {
             return "physical-plan-mismatch";
+        }
+
         if (request.Source != source.Id)
+        {
             return "source-mismatch";
+        }
 
         var canonical = placement.Bindings.SingleOrDefault(binding => binding.Id == request.PlacementBinding);
         if (canonical is null || canonical.Source != source.Id || canonical.Shape != request.Shape)
+        {
             return "placement-binding-mismatch";
+        }
+
         var expectedStageKind = request.Constraint switch
         {
             RelationQueryBoundedEnumeration => RelationQueryPhysicalStageKind.SourceRead,
@@ -525,7 +581,10 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
             return "constraint-placement-mismatch";
         }
         if (!AuthorizesStage(canonical.Id, expectedStageKind.Value))
+        {
             return "physical-stage-mismatch";
+        }
+
         if (compiledPhysicalPlan is not null)
         {
             stage = compiledPhysicalPlan.Stages.SingleOrDefault(candidate => candidate.Id == request.Stage);
@@ -536,7 +595,9 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
                 return "physical-stage-mismatch";
             }
             if (!HasExactRequestedFields(request.Fields, stage.RequestedFields))
+            {
                 return "physical-stage-fields-mismatch";
+            }
         }
 
         try
@@ -548,12 +609,21 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
             return "placement-binding-mismatch";
         }
         if (table.Source != source.Id || table.Shape != request.Shape)
+        {
             return "table-affinity-mismatch";
+        }
+
         if (table.Identity is not { } identity)
+        {
             return "identity-binding-missing";
+        }
+
         if (canonical.Identity is not { } canonicalIdentity
             || !string.Equals(request.IdentitySelector, canonicalIdentity.SourceSelector, StringComparison.Ordinal))
+        {
             return "identity-selector-mismatch";
+        }
+
         if (identity.ScalarType == PostgresRelationQueryScalarType.Text
             && identity.TextSemantics?.Equality != PostgresRelationQueryTextEqualitySemantics.Ordinal)
         {
@@ -596,7 +666,9 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
                 _ => false
             };
             if (!valid)
+            {
                 return "field-selector-mismatch";
+            }
 
             fields.Add(semantic is not null
                 ? new(
@@ -627,7 +699,10 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
                     candidate.Input == canonicalRelationship.Input
                     && candidate.SemanticPath == canonicalRelationship.SemanticPath);
             if (canonicalRelationship is null || relationship is null)
+            {
                 return "relationship-selector-mismatch";
+            }
+
             if (relationship.ScalarType == PostgresRelationQueryScalarType.Text
                 && relationship.TextSemantics?.Equality != PostgresRelationQueryTextEqualitySemantics.Ordinal)
             {
@@ -644,7 +719,9 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
             _ => null
         };
         if (keyValidationFailure is not null)
+        {
             return keyValidationFailure;
+        }
 
         return null;
     }
@@ -742,7 +819,10 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
         var resultTypes = ImmutableArray.CreateBuilder<PostgresRelationQueryScalarType>(1 + projection.Length);
         resultTypes.Add(identity.ScalarType);
         foreach (var item in projection)
+        {
             resultTypes.Add(item.ScalarType);
+        }
+
         return new(
             template.Text,
             parameters.MoveToImmutable(),
@@ -844,7 +924,10 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
         var resultTypes = ImmutableArray.CreateBuilder<PostgresRelationQueryScalarType>(2 + projection.Length);
         resultTypes.Add(identity.ScalarType);
         foreach (var item in projection)
+        {
             resultTypes.Add(item.ScalarType);
+        }
+
         resultTypes.Add(relationship.ScalarType);
         return new(
             template.Text,
@@ -901,17 +984,29 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
                 return FailedWindow(request, "observation-identity-invalid");
             }
             if (string.IsNullOrWhiteSpace(identity) || !identities.Add(identity))
+            {
                 return FailedWindow(request, "duplicate-or-empty-observation-identity");
+            }
+
             if (requestedIdentities is not null && !requestedIdentities.Contains(identity))
+            {
                 return FailedWindow(request, "identity-query-returned-unrequested-row");
+            }
+
             if (relationship is not null)
             {
                 var rawReference = row[projection.Length + 1];
                 if (rawReference is null)
+                {
                     return FailedWindow(request, "relationship-query-returned-null-reference");
+                }
+
                 var reference = PostgresRelationQueryScalarCatalog.FormatKey(rawReference, relationship.ScalarType);
                 if (!relationshipKeys!.Contains(reference))
+                {
                     return FailedWindow(request, "relationship-query-returned-unrequested-row");
+                }
+
                 var previouslyEmitted = priorFanOutByKey!.GetValueOrDefault(reference);
                 var observedInWindow = windowFanOut!.GetValueOrDefault(reference);
                 if (previouslyEmitted >= source.Limits.MaximumFanOut
@@ -921,11 +1016,15 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
                 }
                 windowFanOut![reference] = observedInWindow + 1;
                 if (rowIndex < selectedCount)
+                {
                     correlationKeys.Add(reference);
+                }
             }
 
             if (rowIndex >= selectedCount)
+            {
                 continue;
+            }
 
             var fields = ImmutableArray.CreateBuilder<RelationQuerySourceReadFieldResult>(projection.Length);
             for (var fieldIndex = 0; fieldIndex < projection.Length; fieldIndex++)
@@ -967,9 +1066,15 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
         if (value is null)
         {
             if (binding.MissingValueEncoding == PostgresRelationQueryMissingValueEncoding.SqlNull)
+            {
                 return new(binding.Field, RelationQuerySourceReadFieldState.Missing, evidenceReference: evidence);
+            }
+
             if (binding.NullValueEncoding == PostgresRelationQueryNullValueEncoding.SqlNull)
+            {
                 return new(binding.Field, RelationQuerySourceReadFieldState.Null, evidenceReference: evidence);
+            }
+
             return new(binding.Field, RelationQuerySourceReadFieldState.Failed, evidenceReference: evidence);
         }
 
@@ -993,7 +1098,9 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
     {
         var maximumBatchSize = Math.Min(source.Limits.MaximumBatchSize, Policy.MaximumBatchKeys);
         if (stage?.BatchSize is { } compiledBatchSize)
+        {
             maximumBatchSize = Math.Min(maximumBatchSize, compiledBatchSize);
+        }
 
         return constraint switch
         {
@@ -1011,9 +1118,15 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
         foreach (var field in fields)
         {
             if (field.Input is not { } input)
+            {
                 continue;
+            }
+
             if (requestedIndex >= requestedFields.Length || input != requestedFields[requestedIndex])
+            {
                 return false;
+            }
+
             requestedIndex++;
         }
         return requestedIndex == requestedFields.Length;
@@ -1057,7 +1170,9 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
                 return "key-encoding-noncanonical";
             }
             if (byteCount > maximumKeyBytes)
+            {
                 return "key-boundary-exceeded";
+            }
         }
 
         try

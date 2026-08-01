@@ -464,6 +464,10 @@ public interface IMaterializationChangeSource
 /// process may durably commit an application checkpoint covering a returned position through
 /// <see cref="IMaterializationProgressStore"/>; only then may it acknowledge the position through
 /// <see cref="IMaterializationSettlingSource"/>, when the source advertises settlement.
+/// Change-item and read-byte request bounds are hard page ceilings unless the descriptor's selected change-delivery
+/// evidence advertises <see cref="MaterializationGuaranteeKind.TransactionAlignedDelivery"/>. Transaction-aligned
+/// sources preserve each source transaction as one indivisible unit and may cross a preferred page budget only by the
+/// final admitted transaction, which remains subject to separately advertised hard transaction limits.
 /// </remarks>
 public interface IMaterializationPullChangeSource : IMaterializationSource, IMaterializationChangeSource
 {
@@ -493,7 +497,18 @@ public interface IMaterializationPullChangeSource : IMaterializationSource, IMat
         OperationContext context,
         MaterializationSourceScope scope);
 
-    /// <summary>Reads a bounded source-ordered page of changes without settling or checkpointing it.</summary>
+    /// <summary>Reads a safety-bounded source-ordered page of changes without settling or checkpointing it.</summary>
+    /// <remarks>
+    /// For ordinary sources, the returned page never exceeds
+    /// <see cref="MaterializationChangeReadRequest.MaximumDeliveries"/> or
+    /// <see cref="MaterializationChangeReadRequest.MaximumBytes"/>. For a source advertising
+    /// <see cref="MaterializationGuaranteeKind.TransactionAlignedDelivery"/>, those values are preferred page budgets:
+    /// one complete source transaction may make the page exceed either budget, no later transaction may be admitted,
+    /// and the indivisible transaction may not exceed the evidence's
+    /// <see cref="MaterializationLimitKind.TransactionItems"/> or
+    /// <see cref="MaterializationLimitKind.TransactionBytes"/> hard safety limit. Reading never settles the returned
+    /// through-position.
+    /// </remarks>
     /// <param name="context">Operation context carrying time, identity, tracing, and cancellation.</param>
     /// <param name="request">Bounded change request.</param>
     /// <returns>Currently visible deliveries, an opaque through-position, and catch-up state.</returns>
@@ -502,8 +517,9 @@ public interface IMaterializationPullChangeSource : IMaterializationSource, IMat
     /// </exception>
     /// <exception cref="ArgumentException">The request targets a different source or an unknown source position.</exception>
     /// <exception cref="InvalidOperationException">
-    /// One canonical change delivery exceeds <see cref="MaterializationChangeReadRequest.MaximumBytes"/> and therefore
-    /// cannot be represented in any valid page for this request.
+    /// An ordinary canonical change delivery exceeds <see cref="MaterializationChangeReadRequest.MaximumBytes"/> and
+    /// therefore cannot be represented in a valid ordinary page, or an indivisible transaction exceeds the selected
+    /// transaction-aligned evidence's hard transaction-item or transaction-byte safety limit.
     /// </exception>
     /// <exception cref="OperationCanceledException">The context is canceled before completion.</exception>
     ValueTask<MaterializationChangePage> ReadChangesAsync(

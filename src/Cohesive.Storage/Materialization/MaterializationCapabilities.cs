@@ -19,7 +19,7 @@ public static class MaterializationCapabilityDiagnosticCodes
     /// <summary>Advertised evidence omits a required operating limit.</summary>
     public const string LimitUnavailable = "materialization.capability.limitUnavailable";
 
-    /// <summary>An advertised hard limit is below the required operating bound.</summary>
+    /// <summary>An advertised operating bound is below the required operating bound.</summary>
     public const string LimitExceeded = "materialization.capability.limitExceeded";
 }
 
@@ -70,8 +70,12 @@ public enum MaterializationCapabilityKind
     /// Every requirement and evidence declaration selects exactly one change-coverage guarantee:
     /// <see cref="MaterializationGuaranteeKind.CompleteMutationDelivery"/> or
     /// <see cref="MaterializationGuaranteeKind.LatestVersionUpsertDelivery"/>.
-    /// Pull realizations may advertise hard change-item and byte limits. Managed realizations whose provider exposes
-    /// only advisory callback-size hints omit those limits; they cannot satisfy requirements that demand hard bounds.
+    /// Pull realizations may advertise change-item and byte page budgets. Those budgets are hard page bounds unless
+    /// <see cref="MaterializationGuaranteeKind.TransactionAlignedDelivery"/> is also advertised. A
+    /// transaction-aligned realization preserves each indivisible source transaction in one page and may therefore
+    /// exceed a requested page budget by that one transaction, but it must advertise separate hard transaction-item
+    /// and transaction-byte safety limits. Managed realizations whose provider exposes only advisory callback-size
+    /// hints omit page limits; they cannot satisfy requirements that demand those operating dimensions.
     /// </remarks>
     SourceChangeDelivery = 4,
 
@@ -182,20 +186,41 @@ public enum MaterializationGuaranteeKind
     /// Currently visible latest versions are delivered as upserts, without claiming deletes or intermediate
     /// versions.
     /// </summary>
-    LatestVersionUpsertDelivery = 18
+    LatestVersionUpsertDelivery = 18,
+
+    /// <summary>
+    /// Every delivered source transaction remains indivisible: page boundaries occur only between transactions and
+    /// all canonical changes produced by one transaction are delivered together in source order.
+    /// </summary>
+    /// <remarks>
+    /// For this realization, change-item and read-byte request bounds are preferred page budgets rather than hard
+    /// output ceilings. A page may cross either budget only by admitting one complete transaction, and that
+    /// transaction remains bounded by the evidence's
+    /// <see cref="MaterializationLimitKind.TransactionItems"/> and
+    /// <see cref="MaterializationLimitKind.TransactionBytes"/> hard safety limits.
+    /// </remarks>
+    TransactionAlignedDelivery = 19
 }
 
-/// <summary>Positive hard operating maximum advertised or required for a materialization operation.</summary>
+/// <summary>Positive operating bound advertised or required for a materialization operation.</summary>
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum MaterializationLimitKind
 {
     /// <summary>Maximum items returned by one bounded read operation.</summary>
     ReadItems = 0,
 
-    /// <summary>Maximum encoded bytes returned by one bounded read operation.</summary>
+    /// <summary>
+    /// Maximum encoded bytes returned by one bounded read operation. For source change delivery carrying
+    /// <see cref="MaterializationGuaranteeKind.TransactionAlignedDelivery"/>, this is instead the preferred page-byte
+    /// budget and may be crossed only by one indivisible transaction within the declared transaction-byte limit.
+    /// </summary>
     ReadBytes = 1,
 
-    /// <summary>Maximum changes delivered by one source batch.</summary>
+    /// <summary>
+    /// Maximum changes delivered by one source page. For delivery carrying
+    /// <see cref="MaterializationGuaranteeKind.TransactionAlignedDelivery"/>, this is instead the preferred page-item
+    /// budget and may be crossed only by one indivisible transaction within the declared transaction-item limit.
+    /// </summary>
     ChangeItems = 2,
 
     /// <summary>Maximum target mutations accepted by one bulk request.</summary>
@@ -208,7 +233,17 @@ public enum MaterializationLimitKind
     Parallelism = 5,
 
     /// <summary>Maximum Unicode characters accepted by an identity encoded into a target index key.</summary>
-    IndexedIdentityCharacters = 6
+    IndexedIdentityCharacters = 6,
+
+    /// <summary>
+    /// Hard maximum canonical change deliveries produced by one indivisible source transaction.
+    /// </summary>
+    TransactionItems = 7,
+
+    /// <summary>
+    /// Hard maximum canonical encoded delivery bytes produced by one indivisible source transaction.
+    /// </summary>
+    TransactionBytes = 8
 }
 
 /// <summary>How attributable endpoint evidence realizes one requested capability.</summary>
@@ -294,12 +329,19 @@ public readonly record struct MaterializationCapabilityProfileId
     public override string ToString() => Value;
 }
 
-/// <summary>One positive operating maximum attached to a capability requirement or assertion.</summary>
+/// <summary>One positive operating bound attached to a capability requirement or assertion.</summary>
+/// <remarks>
+/// Limits are hard maxima unless their kind explicitly defines preferred-budget semantics under a named guarantee.
+/// In particular, source-change <see cref="MaterializationLimitKind.ChangeItems"/> and
+/// <see cref="MaterializationLimitKind.ReadBytes"/> limits become preferred page budgets only when paired with
+/// <see cref="MaterializationGuaranteeKind.TransactionAlignedDelivery"/>; the corresponding transaction limits remain
+/// hard safety maxima.
+/// </remarks>
 public readonly record struct MaterializationOperatingLimit
 {
     /// <summary>Creates an operating limit.</summary>
     /// <param name="kind">Bounded operational dimension.</param>
-    /// <param name="maximum">Positive maximum value in the canonical unit implied by <paramref name="kind"/>.</param>
+    /// <param name="maximum">Positive bound in the canonical unit implied by <paramref name="kind"/>.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="kind"/> is unsupported or <paramref name="maximum"/> is not positive.</exception>
     [JsonConstructor]
     public MaterializationOperatingLimit(MaterializationLimitKind kind, long maximum)
@@ -321,7 +363,7 @@ public readonly record struct MaterializationOperatingLimit
     /// <summary>Bounded operational dimension.</summary>
     public MaterializationLimitKind Kind { get; }
 
-    /// <summary>Positive maximum value in the kind's canonical unit.</summary>
+    /// <summary>Positive bound in the kind's canonical unit.</summary>
     [JsonConverter(typeof(StringEncodedInt64JsonConverter))]
     public long Maximum { get; }
 }
@@ -333,12 +375,16 @@ public sealed record MaterializationCapabilityRequirement
     /// <param name="id">Stable requirement identity.</param>
     /// <param name="capability">Required source or target facility.</param>
     /// <param name="guarantees">Required semantic guarantees.</param>
-    /// <param name="operatingLimits">Largest operation sizes the selected realization must accept.</param>
+    /// <param name="operatingLimits">
+    /// Largest requested operation bounds the selected realization must accept, including any explicitly required
+    /// hard transaction safety limits.
+    /// </param>
     /// <param name="modes">Synchronization modes for which the requirement applies.</param>
     /// <exception cref="ArgumentException">
     /// An identity is default, a collection contains duplicates, a limit kind is repeated, or a guarantee or operating
     /// limit does not apply to <paramref name="capability"/>, source change delivery does not declare exactly one
-    /// change-coverage guarantee, or per-item outcome coverage omits a required write bound.
+    /// change-coverage guarantee, transaction safety limits are incomplete or lack transaction alignment, or per-item
+    /// outcome coverage omits a required write bound.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="capability"/> or a guarantee is unsupported.</exception>
     [JsonConstructor]
@@ -390,7 +436,7 @@ public sealed record MaterializationCapabilityRequirement
     /// <summary>Required semantic guarantees in canonical order.</summary>
     public ImmutableArray<MaterializationGuaranteeKind> Guarantees { get; }
 
-    /// <summary>Required maximum operation sizes in canonical limit order.</summary>
+    /// <summary>Required operating bounds in canonical limit order.</summary>
     public ImmutableArray<MaterializationOperatingLimit> OperatingLimits { get; }
 
     /// <summary>Synchronization modes for which this requirement applies.</summary>
@@ -405,14 +451,18 @@ public sealed record MaterializationCapabilityEvidence
     /// <param name="capability">Facility supplied by the endpoint.</param>
     /// <param name="realization">How the endpoint realizes the facility.</param>
     /// <param name="guarantees">Semantic guarantees preserved by the realization.</param>
-    /// <param name="operatingLimits">Hard positive maxima under which the evidence holds.</param>
+    /// <param name="operatingLimits">
+    /// Positive operating bounds under which the evidence holds. Bounds are hard unless their kind explicitly defines
+    /// preferred-budget semantics under one of <paramref name="guarantees"/>.
+    /// </param>
     /// <param name="sourceReferences">One or more adapter, deployment, compiler, or override evidence references.</param>
     /// <param name="description">Optional human-facing explanation excluded from matching.</param>
     /// <exception cref="ArgumentException">
     /// An identity or source reference is invalid, a collection contains duplicates, a limit kind is repeated, or a
     /// guarantee or operating limit does not apply to <paramref name="capability"/>, or bounded operation evidence
     /// omits a required item or byte hard limit, or source change delivery does not declare exactly one
-    /// change-coverage guarantee.
+    /// change-coverage guarantee, or transaction-aligned change delivery omits a transaction-item or transaction-byte
+    /// hard safety limit.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="capability"/>, <paramref name="realization"/>, or a guarantee is unsupported.</exception>
     [JsonConstructor]
@@ -450,6 +500,7 @@ public sealed record MaterializationCapabilityEvidence
             nameof(operatingLimits));
         MaterializationCapabilityCatalog.RequireEvidenceLimits(
             capability,
+            normalizedGuarantees,
             normalizedLimits,
             nameof(operatingLimits));
 
@@ -479,7 +530,7 @@ public sealed record MaterializationCapabilityEvidence
     /// <summary>Preserved semantic guarantees in canonical order.</summary>
     public ImmutableArray<MaterializationGuaranteeKind> Guarantees { get; }
 
-    /// <summary>Hard positive maxima in canonical limit order.</summary>
+    /// <summary>Positive operating bounds in canonical limit order.</summary>
     public ImmutableArray<MaterializationOperatingLimit> OperatingLimits { get; }
 
     /// <summary>Attributable evidence references in canonical ordinal order.</summary>
@@ -965,7 +1016,8 @@ public static class MaterializationCapabilityCatalog
                 or MaterializationGuaranteeKind.BeforeImage
                 or MaterializationGuaranteeKind.RetainedHistoryStart
                 or MaterializationGuaranteeKind.CompleteMutationDelivery
-                or MaterializationGuaranteeKind.LatestVersionUpsertDelivery =>
+                or MaterializationGuaranteeKind.LatestVersionUpsertDelivery
+                or MaterializationGuaranteeKind.TransactionAlignedDelivery =>
                 capability == MaterializationCapabilityKind.SourceChangeDelivery,
             MaterializationGuaranteeKind.ExplicitSettlement =>
                 capability == MaterializationCapabilityKind.SourceSettlement,
@@ -1012,6 +1064,8 @@ public static class MaterializationCapabilityCatalog
                     or MaterializationCapabilityKind.TargetContributorLedger,
             MaterializationLimitKind.ChangeItems =>
                 capability == MaterializationCapabilityKind.SourceChangeDelivery,
+            MaterializationLimitKind.TransactionItems or MaterializationLimitKind.TransactionBytes =>
+                capability == MaterializationCapabilityKind.SourceChangeDelivery,
             MaterializationLimitKind.WriteItems or MaterializationLimitKind.WriteBytes =>
                 IsBulkMutation(capability)
                 || capability is MaterializationCapabilityKind.TargetPerItemOutcomes
@@ -1057,6 +1111,28 @@ public static class MaterializationCapabilityCatalog
                     + $"'{MaterializationGuaranteeKind.LatestVersionUpsertDelivery}'.",
                     guaranteesParameterName);
             }
+
+            var isTransactionAligned = guarantees.Contains(
+                MaterializationGuaranteeKind.TransactionAlignedDelivery);
+            var declaresTransactionItems = operatingLimits.Any(
+                static limit => limit.Kind == MaterializationLimitKind.TransactionItems);
+            var declaresTransactionBytes = operatingLimits.Any(
+                static limit => limit.Kind == MaterializationLimitKind.TransactionBytes);
+            if ((declaresTransactionItems || declaresTransactionBytes) && !isTransactionAligned)
+            {
+                throw new ArgumentException(
+                    $"Transaction safety limits apply only when capability '{capability}' declares "
+                    + $"'{MaterializationGuaranteeKind.TransactionAlignedDelivery}'.",
+                    operatingLimitsParameterName);
+            }
+            if (declaresTransactionItems != declaresTransactionBytes)
+            {
+                throw new ArgumentException(
+                    $"Transaction-aligned capability '{capability}' must declare both "
+                    + $"'{MaterializationLimitKind.TransactionItems}' and "
+                    + $"'{MaterializationLimitKind.TransactionBytes}' when either transaction safety limit is declared.",
+                    operatingLimitsParameterName);
+            }
         }
 
         foreach (var limit in operatingLimits)
@@ -1072,12 +1148,30 @@ public static class MaterializationCapabilityCatalog
 
     internal static void RequireEvidenceLimits(
         MaterializationCapabilityKind capability,
+        ImmutableArray<MaterializationGuaranteeKind> guarantees,
         ImmutableArray<MaterializationOperatingLimit> operatingLimits,
         string parameterName)
     {
         foreach (var required in RequiredHardLimits(capability))
         {
             RequireLimit(capability, operatingLimits, required, parameterName, "Capability evidence");
+        }
+
+        if (capability == MaterializationCapabilityKind.SourceChangeDelivery
+            && guarantees.Contains(MaterializationGuaranteeKind.TransactionAlignedDelivery))
+        {
+            RequireLimit(
+                capability,
+                operatingLimits,
+                MaterializationLimitKind.TransactionItems,
+                parameterName,
+                "Transaction-aligned capability evidence");
+            RequireLimit(
+                capability,
+                operatingLimits,
+                MaterializationLimitKind.TransactionBytes,
+                parameterName,
+                "Transaction-aligned capability evidence");
         }
     }
 
@@ -1260,10 +1354,12 @@ public static class MaterializationCapabilityLimits
     static bool IsItemLimit(MaterializationLimitKind kind) => kind is
         MaterializationLimitKind.ReadItems
         or MaterializationLimitKind.ChangeItems
+        or MaterializationLimitKind.TransactionItems
         or MaterializationLimitKind.WriteItems;
 
     static bool IsByteLimit(MaterializationLimitKind kind) => kind is
         MaterializationLimitKind.ReadBytes
+        or MaterializationLimitKind.TransactionBytes
         or MaterializationLimitKind.WriteBytes;
 
     static long Maximum(

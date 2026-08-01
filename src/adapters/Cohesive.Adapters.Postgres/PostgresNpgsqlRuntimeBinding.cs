@@ -1,7 +1,9 @@
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using Npgsql;
+using Npgsql.Replication;
 
 namespace Cohesive.Adapters.Postgres;
 
@@ -33,6 +35,18 @@ public sealed record PostgresNpgsqlDataSourceFingerprint
     public string Value { get; }
 }
 
+/// <summary>Creates a fresh, unopened Npgsql logical-replication connection for one attested runtime.</summary>
+/// <remarks>
+/// Logical replication connections cannot be created by <see cref="NpgsqlDataSource"/> and therefore do not inherit
+/// its password, certificate, or other runtime callbacks. The caller must configure equivalent callbacks explicitly
+/// in every connection returned by this factory. The runtime binding verifies sanitized connection settings and
+/// rejects a connection instance returned more than once.
+/// </remarks>
+/// <returns>
+/// A fresh, unopened logical-replication connection. Ownership transfers to the adapter operation that requests it.
+/// </returns>
+public delegate LogicalReplicationConnection PostgresLogicalReplicationConnectionFactory();
+
 /// <summary>
 /// Runtime attestation binding a persisted PostgreSQL database identity to one exact single-host
 /// <see cref="NpgsqlDataSource"/> instance.
@@ -47,6 +61,10 @@ public sealed record PostgresNpgsqlDataSourceFingerprint
 public sealed class PostgresNpgsqlRuntimeBinding
 {
     readonly NpgsqlDataSource dataSource;
+    readonly ConditionalWeakTable<LogicalReplicationConnection, IssuedLogicalReplicationConnection>
+        issuedLogicalReplicationConnections = new();
+    readonly PostgresLogicalReplicationConnectionFactory? logicalReplicationConnectionFactory;
+    readonly PostgresNpgsqlDataSourceFingerprint logicalReplicationAffinityFingerprint;
 
     /// <summary>Creates an exact runtime binding for a PostgreSQL database identity and Npgsql data source.</summary>
     /// <param name="database">Persisted physical database identity attested by the runtime owner.</param>
@@ -64,7 +82,10 @@ public sealed class PostgresNpgsqlRuntimeBinding
         string authority)
     {
         if (string.IsNullOrWhiteSpace(database.Value))
+        {
             throw new ArgumentException("A PostgreSQL runtime binding requires a persisted database identity.", nameof(database));
+        }
+
         ArgumentNullException.ThrowIfNull(dataSource);
         if (dataSource is NpgsqlMultiHostDataSource)
         {
@@ -77,6 +98,42 @@ public sealed class PostgresNpgsqlRuntimeBinding
         this.dataSource = dataSource;
         Authority = RequireNonSecretAuthority(authority);
         DataSourceFingerprint = PostgresNpgsqlDataSourceFingerprinter.Compute(dataSource);
+        logicalReplicationAffinityFingerprint =
+            PostgresNpgsqlDataSourceFingerprinter.ComputeLogicalReplicationAffinity(
+                dataSource.ConnectionString);
+    }
+
+    /// <summary>
+    /// Creates an exact runtime binding with an explicit factory for fresh logical-replication connections.
+    /// </summary>
+    /// <param name="database">Persisted physical database identity attested by the runtime owner.</param>
+    /// <param name="dataSource">Caller-owned, single-host Npgsql data source covered by the attestation.</param>
+    /// <param name="authority">Stable, non-secret identity of the configuration or deployment authority.</param>
+    /// <param name="logicalReplicationConnectionFactory">
+    /// Factory returning a fresh, unopened logical-replication connection on every invocation. Its sanitized
+    /// connection settings must equal those of <paramref name="dataSource"/>. Because Npgsql data-source callbacks
+    /// are not inherited, the factory owner must configure equivalent credential and certificate behavior itself.
+    /// </param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="dataSource"/>, <paramref name="authority"/>, or
+    /// <paramref name="logicalReplicationConnectionFactory"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="database"/> is the default empty identity, <paramref name="dataSource"/> is multi-host, or
+    /// <paramref name="authority"/> is not a bounded canonical non-secret provenance identity.
+    /// </exception>
+    public PostgresNpgsqlRuntimeBinding(
+        PostgresRelationQueryDatabaseId database,
+        NpgsqlDataSource dataSource,
+        string authority,
+        PostgresLogicalReplicationConnectionFactory logicalReplicationConnectionFactory)
+        : this(
+            database: database,
+            dataSource: dataSource,
+            authority: authority)
+    {
+        this.logicalReplicationConnectionFactory = Guard.RequireNotNull(
+            logicalReplicationConnectionFactory);
     }
 
     /// <summary>Persisted physical PostgreSQL database identity attested by this runtime binding.</summary>
@@ -92,6 +149,64 @@ public sealed class PostgresNpgsqlRuntimeBinding
         ReferenceEquals(dataSource, candidate)
         && Equals(DataSourceFingerprint, PostgresNpgsqlDataSourceFingerprinter.Compute(candidate));
 
+    internal NpgsqlDataSource DataSource => dataSource;
+
+    internal bool SupportsLogicalReplication => logicalReplicationConnectionFactory is not null;
+
+    internal async ValueTask<LogicalReplicationConnection> CreateLogicalReplicationConnectionAsync()
+    {
+        var factory = logicalReplicationConnectionFactory
+            ?? throw new InvalidOperationException(
+                "The PostgreSQL runtime binding has no logical-replication connection factory.");
+        var connection = factory();
+        if (connection is null)
+        {
+            throw new InvalidOperationException(
+                "The PostgreSQL logical-replication connection factory returned null.");
+        }
+        try
+        {
+            var settings = new NpgsqlConnectionStringBuilder(connection.ConnectionString);
+            if (string.IsNullOrWhiteSpace(settings.Host)
+                || settings.Host.Contains(',', StringComparison.Ordinal)
+                || !Equals(
+                    logicalReplicationAffinityFingerprint,
+                    PostgresNpgsqlDataSourceFingerprinter.ComputeLogicalReplicationAffinity(
+                        connection.ConnectionString)))
+            {
+                throw new InvalidOperationException(
+                    "The logical-replication connection does not match the runtime binding's attested single-host data source.");
+            }
+
+            lock (issuedLogicalReplicationConnections)
+            {
+                if (issuedLogicalReplicationConnections.TryGetValue(connection, out _))
+                {
+                    throw new InvalidOperationException(
+                        "The PostgreSQL logical-replication connection factory must return a fresh connection instance for every operation.");
+                }
+
+                issuedLogicalReplicationConnections.Add(
+                    connection,
+                    IssuedLogicalReplicationConnection.Instance);
+            }
+
+            return connection;
+        }
+        catch
+        {
+            try
+            {
+                await connection.DisposeAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+                // Affinity/freshness is the primary failure; cleanup must not replace it.
+            }
+            throw;
+        }
+    }
+
     static string RequireNonSecretAuthority(string authority)
     {
         var value = Guard.RequireNotNullOrWhiteSpace(authority);
@@ -105,23 +220,55 @@ public sealed class PostgresNpgsqlRuntimeBinding
         }
         return value;
     }
+
+    sealed class IssuedLogicalReplicationConnection
+    {
+        internal static IssuedLogicalReplicationConnection Instance { get; } = new();
+    }
 }
 
 static class PostgresNpgsqlDataSourceFingerprinter
 {
     const string Algorithm = "sha256";
     const string Canonicalization = "cohesive.adapters.postgres/npgsql-data-source-sanitized/v1";
+    const string LogicalReplicationAffinityCanonicalization =
+        "cohesive.adapters.postgres/npgsql-logical-replication-affinity-sanitized/v1";
 
     internal static PostgresNpgsqlDataSourceFingerprint Compute(NpgsqlDataSource dataSource)
     {
         ArgumentNullException.ThrowIfNull(dataSource);
-        var settings = new NpgsqlConnectionStringBuilder(dataSource.ConnectionString);
+        return Compute(dataSource.ConnectionString);
+    }
+
+    internal static PostgresNpgsqlDataSourceFingerprint Compute(string connectionString)
+    {
+        ArgumentNullException.ThrowIfNull(connectionString);
+        var settings = new NpgsqlConnectionStringBuilder(connectionString);
+        return Compute(settings, Canonicalization);
+    }
+
+    internal static PostgresNpgsqlDataSourceFingerprint ComputeLogicalReplicationAffinity(
+        string connectionString)
+    {
+        ArgumentNullException.ThrowIfNull(connectionString);
+        var settings = new NpgsqlConnectionStringBuilder(connectionString);
+        RemoveSetting(settings, "Pooling");
+        RemoveSetting(settings, "Enlist");
+        RemoveSetting(settings, "Multiplexing");
+        RemoveSetting(settings, "Keepalive");
+        return Compute(settings, LogicalReplicationAffinityCanonicalization);
+    }
+
+    static PostgresNpgsqlDataSourceFingerprint Compute(
+        NpgsqlConnectionStringBuilder settings,
+        string canonicalization)
+    {
         RemoveSensitiveSetting(settings, "Password");
         RemoveSensitiveSetting(settings, "Passfile");
         RemoveSensitiveSetting(settings, "SSL Password");
 
-        var canonical = new StringBuilder(Canonicalization.Length + settings.ConnectionString.Length + 64);
-        Append(canonical, Canonicalization);
+        var canonical = new StringBuilder(canonicalization.Length + settings.ConnectionString.Length + 64);
+        Append(canonical, canonicalization);
         foreach (var key in settings.Keys.Cast<string>().Order(StringComparer.Ordinal))
         {
             Append(canonical, key);
@@ -130,7 +277,7 @@ static class PostgresNpgsqlDataSourceFingerprinter
 
         return new(
             Algorithm,
-            Canonicalization,
+            canonicalization,
             Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString())))
                 .ToLowerInvariant());
     }
@@ -138,7 +285,17 @@ static class PostgresNpgsqlDataSourceFingerprinter
     static void RemoveSensitiveSetting(NpgsqlConnectionStringBuilder settings, string key)
     {
         if (settings.ContainsKey(key))
+        {
             settings.Remove(key);
+        }
+    }
+
+    static void RemoveSetting(NpgsqlConnectionStringBuilder settings, string key)
+    {
+        if (settings.ContainsKey(key))
+        {
+            settings.Remove(key);
+        }
     }
 
     static string Format(object? value) => value switch

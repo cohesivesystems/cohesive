@@ -95,6 +95,81 @@ public sealed class PostgresNpgsqlExecutionTests
             maximumKeyBytes: 11));
     }
 
+    [Fact]
+    public void PgOutputTextParserProducesCanonicalClrScalars()
+    {
+        Assert.True((bool)PostgresRelationQueryScalarCatalog.ParsePgOutputText(
+            "t",
+            PostgresRelationQueryScalarType.Boolean));
+        Assert.Equal(-123, PostgresRelationQueryScalarCatalog.ParsePgOutputText(
+            "-123",
+            PostgresRelationQueryScalarType.Int32));
+        Assert.Equal(long.MaxValue, PostgresRelationQueryScalarCatalog.ParsePgOutputText(
+            long.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            PostgresRelationQueryScalarType.Int64));
+        Assert.Equal(123.4500m, PostgresRelationQueryScalarCatalog.ParsePgOutputText(
+            "123.4500",
+            PostgresRelationQueryScalarType.Numeric));
+        Assert.Equal("value", PostgresRelationQueryScalarCatalog.ParsePgOutputText(
+            "value",
+            PostgresRelationQueryScalarType.Text));
+        Assert.Equal(
+            Guid.Parse("11111111-2222-3333-4444-555555555555"),
+            PostgresRelationQueryScalarCatalog.ParsePgOutputText(
+                "11111111-2222-3333-4444-555555555555",
+                PostgresRelationQueryScalarType.Uuid));
+        Assert.Equal(
+            new DateOnly(2026, 7, 31),
+            PostgresRelationQueryScalarCatalog.ParsePgOutputText(
+                "2026-07-31",
+                PostgresRelationQueryScalarType.Date));
+        Assert.Equal(
+            new DateTime(2026, 7, 31, 12, 34, 56, DateTimeKind.Unspecified)
+                .AddTicks(123_400 * TimeSpan.TicksPerMicrosecond),
+            PostgresRelationQueryScalarCatalog.ParsePgOutputText(
+                "2026-07-31 12:34:56.1234",
+                PostgresRelationQueryScalarType.Timestamp));
+        Assert.Equal(
+            new DateTimeOffset(2026, 7, 31, 12, 34, 56, TimeSpan.Zero)
+                .AddTicks(123_400 * TimeSpan.TicksPerMicrosecond),
+            PostgresRelationQueryScalarCatalog.ParsePgOutputText(
+                "2026-07-31 05:34:56.1234-07",
+                PostgresRelationQueryScalarType.TimestampWithTimeZone));
+        Assert.Equal(
+            [0x00, 0xaf, 0xff],
+            Assert.IsType<byte[]>(PostgresRelationQueryScalarCatalog.ParsePgOutputText(
+                "\\x00afff",
+                PostgresRelationQueryScalarType.Bytea)));
+        Assert.Equal(
+            [(byte)'A', 0x01],
+            Assert.IsType<byte[]>(PostgresRelationQueryScalarCatalog.ParsePgOutputText(
+                "A\\001",
+                PostgresRelationQueryScalarType.Bytea)));
+        Assert.Equal(
+            [(byte)'\\'],
+            Assert.IsType<byte[]>(PostgresRelationQueryScalarCatalog.ParsePgOutputText(
+                "\\\\",
+                PostgresRelationQueryScalarType.Bytea)));
+    }
+
+    [Theory]
+    [InlineData(PostgresRelationQueryScalarType.Boolean, "true")]
+    [InlineData(PostgresRelationQueryScalarType.Int32, "+1")]
+    [InlineData(PostgresRelationQueryScalarType.Int64, "01")]
+    [InlineData(PostgresRelationQueryScalarType.Numeric, "1e2")]
+    [InlineData(PostgresRelationQueryScalarType.Numeric, "NaN")]
+    [InlineData(PostgresRelationQueryScalarType.Numeric, "1.23456789012345678901234567890")]
+    [InlineData(PostgresRelationQueryScalarType.Uuid, "11111111-2222-3333-4444-55555555555A")]
+    [InlineData(PostgresRelationQueryScalarType.Date, "infinity")]
+    [InlineData(PostgresRelationQueryScalarType.Timestamp, "2026-07-31T12:34:56")]
+    [InlineData(PostgresRelationQueryScalarType.TimestampWithTimeZone, "2026-07-31 12:34:56")]
+    [InlineData(PostgresRelationQueryScalarType.TimestampWithTimeZone, "2026-07-31 12:34:56-00")]
+    [InlineData(PostgresRelationQueryScalarType.Bytea, "\\x00AF")]
+    public void PgOutputTextParserRejectsNonCanonicalProviderText(
+        PostgresRelationQueryScalarType scalarType,
+        string value) => Assert.Throws<FormatException>(() =>
+            PostgresRelationQueryScalarCatalog.ParsePgOutputText(value, scalarType));
+
     sealed class ChunkedTextReader(string value, int maximumCharactersPerRead) : TextReader
     {
         int offset;

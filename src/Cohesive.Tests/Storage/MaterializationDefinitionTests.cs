@@ -337,6 +337,202 @@ public sealed class MaterializationDefinitionTests
     }
 
     [Fact]
+    public void TransactionAlignedDimensions_AreOwnedOnlyBySourceChangeDelivery()
+    {
+        Assert.True(MaterializationCapabilityCatalog.AllowsGuarantee(
+            MaterializationCapabilityKind.SourceChangeDelivery,
+            MaterializationGuaranteeKind.TransactionAlignedDelivery));
+        Assert.True(MaterializationCapabilityCatalog.AllowsLimit(
+            MaterializationCapabilityKind.SourceChangeDelivery,
+            MaterializationLimitKind.TransactionItems));
+        Assert.True(MaterializationCapabilityCatalog.AllowsLimit(
+            MaterializationCapabilityKind.SourceChangeDelivery,
+            MaterializationLimitKind.TransactionBytes));
+        Assert.False(MaterializationCapabilityCatalog.AllowsGuarantee(
+            MaterializationCapabilityKind.SourceBoundedEnumeration,
+            MaterializationGuaranteeKind.TransactionAlignedDelivery));
+        Assert.False(MaterializationCapabilityCatalog.AllowsLimit(
+            MaterializationCapabilityKind.SourceSettlement,
+            MaterializationLimitKind.TransactionItems));
+        Assert.False(MaterializationCapabilityCatalog.AllowsLimit(
+            MaterializationCapabilityKind.TargetBulkUpsert,
+            MaterializationLimitKind.TransactionBytes));
+
+        var guaranteeException = Assert.Throws<ArgumentException>(() =>
+            new MaterializationCapabilityRequirement(
+                id: new("source/enumeration/transaction-aligned"),
+                capability: MaterializationCapabilityKind.SourceBoundedEnumeration,
+                guarantees: [MaterializationGuaranteeKind.TransactionAlignedDelivery]));
+        var limitException = Assert.Throws<ArgumentException>(() =>
+            new MaterializationCapabilityRequirement(
+                id: new("source/settlement/transaction-limit"),
+                capability: MaterializationCapabilityKind.SourceSettlement,
+                operatingLimits:
+                [
+                    new(
+                        kind: MaterializationLimitKind.TransactionItems,
+                        maximum: 100)
+                ]));
+
+        Assert.Equal("guarantees", guaranteeException.ParamName);
+        Assert.Equal("operatingLimits", limitException.ParamName);
+    }
+
+    [Fact]
+    public void TransactionAlignedEvidence_RequiresPairedHardTransactionSafetyLimits()
+    {
+        var missingLimits = Assert.Throws<ArgumentException>(() =>
+            new MaterializationCapabilityEvidence(
+                id: new("evidence/transaction-aligned/missing-limits"),
+                capability: MaterializationCapabilityKind.SourceChangeDelivery,
+                realization: MaterializationCapabilityRealizationKind.Constrained,
+                guarantees:
+                [
+                    MaterializationGuaranteeKind.CompleteMutationDelivery,
+                    MaterializationGuaranteeKind.TransactionAlignedDelivery
+                ],
+                operatingLimits: [],
+                sourceReferences: ["adapter/transaction-aligned/v1"]));
+        var incompleteLimits = Assert.Throws<ArgumentException>(() =>
+            new MaterializationCapabilityEvidence(
+                id: new("evidence/transaction-aligned/incomplete-limits"),
+                capability: MaterializationCapabilityKind.SourceChangeDelivery,
+                realization: MaterializationCapabilityRealizationKind.Constrained,
+                guarantees:
+                [
+                    MaterializationGuaranteeKind.CompleteMutationDelivery,
+                    MaterializationGuaranteeKind.TransactionAlignedDelivery
+                ],
+                operatingLimits:
+                [
+                    new(
+                        kind: MaterializationLimitKind.TransactionItems,
+                        maximum: 100)
+                ],
+                sourceReferences: ["adapter/transaction-aligned/v1"]));
+        var ordinaryWithTransactionLimits = Assert.Throws<ArgumentException>(() =>
+            new MaterializationCapabilityEvidence(
+                id: new("evidence/ordinary/transaction-limits"),
+                capability: MaterializationCapabilityKind.SourceChangeDelivery,
+                realization: MaterializationCapabilityRealizationKind.Constrained,
+                guarantees: [MaterializationGuaranteeKind.CompleteMutationDelivery],
+                operatingLimits:
+                [
+                    new(
+                        kind: MaterializationLimitKind.TransactionItems,
+                        maximum: 100),
+                    new(
+                        kind: MaterializationLimitKind.TransactionBytes,
+                        maximum: 10_000)
+                ],
+                sourceReferences: ["adapter/ordinary/v1"]));
+
+        Assert.Equal("operatingLimits", missingLimits.ParamName);
+        Assert.Contains(nameof(MaterializationLimitKind.TransactionItems), missingLimits.Message, StringComparison.Ordinal);
+        Assert.Equal("operatingLimits", incompleteLimits.ParamName);
+        Assert.Contains(nameof(MaterializationLimitKind.TransactionBytes), incompleteLimits.Message, StringComparison.Ordinal);
+        Assert.Equal("operatingLimits", ordinaryWithTransactionLimits.ParamName);
+        Assert.Contains(nameof(MaterializationGuaranteeKind.TransactionAlignedDelivery), ordinaryWithTransactionLimits.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TransactionAlignedMatching_KeepsPageBudgetsDistinctFromTransactionSafetyLimits()
+    {
+        const long PreferredPageItems = 10;
+        const long PreferredPageBytes = 1_000;
+        const long RequiredTransactionItems = 100;
+        const long RequiredTransactionBytes = 100_000;
+        MaterializationCapabilityRequirement requirement = new(
+            id: new("source/transaction-aligned"),
+            capability: MaterializationCapabilityKind.SourceChangeDelivery,
+            guarantees:
+            [
+                MaterializationGuaranteeKind.CompleteMutationDelivery,
+                MaterializationGuaranteeKind.TransactionAlignedDelivery
+            ],
+            operatingLimits:
+            [
+                new(
+                    kind: MaterializationLimitKind.ChangeItems,
+                    maximum: PreferredPageItems),
+                new(
+                    kind: MaterializationLimitKind.ReadBytes,
+                    maximum: PreferredPageBytes),
+                new(
+                    kind: MaterializationLimitKind.TransactionItems,
+                    maximum: RequiredTransactionItems),
+                new(
+                    kind: MaterializationLimitKind.TransactionBytes,
+                    maximum: RequiredTransactionBytes)
+            ]);
+        MaterializationCapabilityEvidence sufficient = TransactionAlignedEvidence(
+            id: "evidence/transaction-aligned/sufficient",
+            maximumTransactionItems: RequiredTransactionItems,
+            maximumTransactionBytes: RequiredTransactionBytes);
+        MaterializationCapabilityEvidence insufficient = TransactionAlignedEvidence(
+            id: "evidence/transaction-aligned/insufficient",
+            maximumTransactionItems: RequiredTransactionItems - 1,
+            maximumTransactionBytes: RequiredTransactionBytes);
+
+        var accepted = MaterializationCapabilityMatcher.Match([requirement], Profile(sufficient));
+        var rejected = MaterializationCapabilityMatcher.Match([requirement], Profile(insufficient));
+
+        Assert.True(accepted.IsSatisfied);
+        Assert.True(PreferredPageItems < RequiredTransactionItems);
+        Assert.True(PreferredPageBytes < RequiredTransactionBytes);
+        Assert.False(rejected.IsSatisfied);
+        var diagnostic = Assert.Single(rejected.Validation.Diagnostics);
+        Assert.Equal(MaterializationCapabilityDiagnosticCodes.LimitExceeded, diagnostic.Code);
+        var evidence = Assert.IsType<DocumentDiagnosticEvidence>(diagnostic.Evidence);
+        Assert.Equal(
+            $"{MaterializationLimitKind.TransactionItems}>={RequiredTransactionItems}",
+            evidence.Expected);
+    }
+
+    [Fact]
+    public void OrdinaryChangeDelivery_PageBudgetsRemainHardMatchingBounds()
+    {
+        MaterializationCapabilityEvidence ordinary = new(
+            id: new("evidence/ordinary/bounded"),
+            capability: MaterializationCapabilityKind.SourceChangeDelivery,
+            realization: MaterializationCapabilityRealizationKind.Constrained,
+            guarantees: [MaterializationGuaranteeKind.CompleteMutationDelivery],
+            operatingLimits:
+            [
+                new(
+                    kind: MaterializationLimitKind.ChangeItems,
+                    maximum: 10),
+                new(
+                    kind: MaterializationLimitKind.ReadBytes,
+                    maximum: 1_000)
+            ],
+            sourceReferences: ["adapter/ordinary/v1"]);
+        var profile = Profile(ordinary);
+
+        Assert.True(MaterializationCapabilityLimits.SupportsBounds(
+            profile: profile,
+            capability: MaterializationCapabilityKind.SourceChangeDelivery,
+            itemLimitKind: MaterializationLimitKind.ChangeItems,
+            requestedItems: 10,
+            byteLimitKind: MaterializationLimitKind.ReadBytes,
+            requestedBytes: 1_000));
+        Assert.False(MaterializationCapabilityLimits.SupportsBounds(
+            profile: profile,
+            capability: MaterializationCapabilityKind.SourceChangeDelivery,
+            itemLimitKind: MaterializationLimitKind.ChangeItems,
+            requestedItems: 11,
+            byteLimitKind: MaterializationLimitKind.ReadBytes,
+            requestedBytes: 1_000));
+        Assert.False(MaterializationCapabilityLimits.SupportsBounds(
+            profile: profile,
+            capability: MaterializationCapabilityKind.SourceChangeDelivery,
+            itemLimitKind: MaterializationLimitKind.ChangeItems,
+            requestedItems: 10,
+            byteLimitKind: MaterializationLimitKind.ReadBytes,
+            requestedBytes: 1_001));
+    }
+
+    [Fact]
     public void ContributorLedgerCapability_OwnsItsBoundedReadAndWriteDimensions()
     {
         const MaterializationCapabilityKind Capability =
@@ -943,6 +1139,36 @@ public sealed class MaterializationDefinitionTests
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             MaterializationJsonSerializer.CreateOptions((PortableDocumentJsonFormatting)999));
     }
+
+    static MaterializationCapabilityEvidence TransactionAlignedEvidence(
+        string id,
+        long maximumTransactionItems,
+        long maximumTransactionBytes) =>
+        new(
+            id: new(id),
+            capability: MaterializationCapabilityKind.SourceChangeDelivery,
+            realization: MaterializationCapabilityRealizationKind.Constrained,
+            guarantees:
+            [
+                MaterializationGuaranteeKind.CompleteMutationDelivery,
+                MaterializationGuaranteeKind.TransactionAlignedDelivery
+            ],
+            operatingLimits:
+            [
+                new(
+                    kind: MaterializationLimitKind.ChangeItems,
+                    maximum: 10),
+                new(
+                    kind: MaterializationLimitKind.ReadBytes,
+                    maximum: 1_000),
+                new(
+                    kind: MaterializationLimitKind.TransactionItems,
+                    maximum: maximumTransactionItems),
+                new(
+                    kind: MaterializationLimitKind.TransactionBytes,
+                    maximum: maximumTransactionBytes)
+            ],
+            sourceReferences: ["adapter/transaction-aligned/v1"]);
 
     static MaterializationCapabilityProfile Profile(MaterializationCapabilityEvidence evidence) =>
         new(

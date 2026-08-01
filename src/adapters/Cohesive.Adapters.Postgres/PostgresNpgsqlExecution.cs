@@ -2,7 +2,6 @@ using System.Buffers;
 using System.Collections.Immutable;
 using System.Data;
 using System.Globalization;
-using System.Text;
 using Cohesive.Model;
 using Npgsql;
 using NpgsqlTypes;
@@ -36,6 +35,43 @@ internal static class PostgresNpgsqlExecution
         PostgresNpgsqlCommand sourceCommand,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(dataSource);
+        await using var command = dataSource.CreateCommand(sourceCommand.Text);
+        return await ExecuteCommandAsync(
+            command,
+            sourceCommand,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    internal static PostgresNpgsqlCommandExecutor CreateTransactionExecutor(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction)
+    {
+        RequireActiveTransaction(connection, transaction);
+        return ExecuteInTransactionAsync;
+
+        async ValueTask<PostgresNpgsqlCommandResult> ExecuteInTransactionAsync(
+            PostgresNpgsqlCommand sourceCommand,
+            CancellationToken cancellationToken)
+        {
+            RequireActiveTransaction(connection, transaction);
+            await using var command = connection.CreateCommand();
+            command.CommandText = sourceCommand.Text;
+            command.Transaction = transaction;
+            return await ExecuteCommandAsync(
+                command,
+                sourceCommand,
+                cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    static async ValueTask<PostgresNpgsqlCommandResult> ExecuteCommandAsync(
+        NpgsqlCommand command,
+        PostgresNpgsqlCommand sourceCommand,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ArgumentNullException.ThrowIfNull(sourceCommand);
         cancellationToken.ThrowIfCancellationRequested();
         if (sourceCommand.MaximumResultBytes <= 0)
         {
@@ -49,7 +85,6 @@ internal static class PostgresNpgsqlExecution
         {
             RequireExactTemporalSwitch();
         }
-        await using var command = dataSource.CreateCommand(sourceCommand.Text);
         foreach (var parameter in sourceCommand.Parameters)
         {
             command.Parameters.Add(new NpgsqlParameter
@@ -90,6 +125,25 @@ internal static class PostgresNpgsqlExecution
         }
 
         return new(rows.ToImmutable());
+    }
+
+    static void RequireActiveTransaction(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        if (!ReferenceEquals(transaction.Connection, connection))
+        {
+            throw new ArgumentException(
+                "The PostgreSQL transaction must be active on the supplied connection.",
+                nameof(transaction));
+        }
+        if (connection.State != ConnectionState.Open)
+        {
+            throw new InvalidOperationException(
+                "A transaction-bound PostgreSQL executor requires an open caller-owned connection.");
+        }
     }
 
     internal static void RequireExactTemporalSemantics(PostgresNpgsqlTemporalSemantics temporalSemantics)
@@ -309,6 +363,55 @@ internal static class PostgresNpgsqlBoundedResult
 
 internal static class PostgresRelationQueryScalarCatalog
 {
+    const uint BooleanTypeId = 16;
+    const uint ByteaTypeId = 17;
+    const uint Int64TypeId = 20;
+    const uint Int32TypeId = 23;
+    const uint TextTypeId = 25;
+    const uint CharacterTypeId = 1042;
+    const uint CharacterVaryingTypeId = 1043;
+    const uint DateTypeId = 1082;
+    const uint TimestampTypeId = 1114;
+    const uint TimestampWithTimeZoneTypeId = 1184;
+    const uint NumericTypeId = 1700;
+    const uint UuidTypeId = 2950;
+
+    internal static bool MayUseUnchangedToast(
+        PostgresRelationQueryScalarType scalarType) => scalarType switch
+        {
+            PostgresRelationQueryScalarType.Numeric
+                or PostgresRelationQueryScalarType.Text
+                or PostgresRelationQueryScalarType.Bytea => true,
+            PostgresRelationQueryScalarType.Boolean
+                or PostgresRelationQueryScalarType.Int32
+                or PostgresRelationQueryScalarType.Int64
+                or PostgresRelationQueryScalarType.Uuid
+                or PostgresRelationQueryScalarType.Date
+                or PostgresRelationQueryScalarType.Timestamp
+                or PostgresRelationQueryScalarType.TimestampWithTimeZone => false,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(scalarType),
+                scalarType,
+                "Unsupported PostgreSQL scalar type.")
+        };
+
+    internal static bool HasProjectedPayloadThatMayUseUnchangedToast(
+        PostgresRelationQueryTableBinding table)
+    {
+        ArgumentNullException.ThrowIfNull(table);
+        foreach (var field in table.Fields)
+        {
+            if (MayUseUnchangedToast(field.ScalarType))
+                return true;
+        }
+        foreach (var reference in table.RelationshipReferences)
+        {
+            if (MayUseUnchangedToast(reference.ScalarType))
+                return true;
+        }
+        return false;
+    }
+
     internal static bool TryFromSemanticType(
         TypeRef? type,
         out PostgresRelationQueryScalarType scalarType)
@@ -364,6 +467,329 @@ internal static class PostgresRelationQueryScalarCatalog
             PostgresRelationQueryScalarType.Bytea => NpgsqlDbType.Bytea,
             _ => throw new ArgumentOutOfRangeException(nameof(scalarType), scalarType, "Unsupported PostgreSQL scalar type.")
         };
+
+    internal static bool AcceptsPostgresType(
+        PostgresRelationQueryScalarType scalarType,
+        uint effectiveDataTypeId) => scalarType switch
+        {
+            PostgresRelationQueryScalarType.Boolean => effectiveDataTypeId == BooleanTypeId,
+            PostgresRelationQueryScalarType.Int32 => effectiveDataTypeId == Int32TypeId,
+            PostgresRelationQueryScalarType.Int64 => effectiveDataTypeId == Int64TypeId,
+            PostgresRelationQueryScalarType.Numeric => effectiveDataTypeId == NumericTypeId,
+            PostgresRelationQueryScalarType.Text => effectiveDataTypeId is
+                TextTypeId or CharacterTypeId or CharacterVaryingTypeId,
+            PostgresRelationQueryScalarType.Uuid => effectiveDataTypeId == UuidTypeId,
+            PostgresRelationQueryScalarType.Date => effectiveDataTypeId == DateTypeId,
+            PostgresRelationQueryScalarType.Timestamp => effectiveDataTypeId == TimestampTypeId,
+            PostgresRelationQueryScalarType.TimestampWithTimeZone =>
+                effectiveDataTypeId == TimestampWithTimeZoneTypeId,
+            PostgresRelationQueryScalarType.Bytea => effectiveDataTypeId == ByteaTypeId,
+            _ => false
+        };
+
+    internal static async ValueTask<object> ReadPgOutputAsync(
+        Npgsql.Replication.PgOutput.ReplicationValue value,
+        PostgresRelationQueryScalarType scalarType,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        cancellationToken.ThrowIfCancellationRequested();
+        var text = await value.Get<string>(cancellationToken).ConfigureAwait(false);
+        return ParsePgOutputText(text, scalarType);
+    }
+
+    internal static object ParsePgOutputText(
+        string value,
+        PostgresRelationQueryScalarType scalarType)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        return scalarType switch
+        {
+            PostgresRelationQueryScalarType.Boolean => value switch
+            {
+                "t" => true,
+                "f" => false,
+                _ => throw InvalidPgOutputText(scalarType)
+            },
+            PostgresRelationQueryScalarType.Int32 => ParseCanonicalInt32(value, scalarType),
+            PostgresRelationQueryScalarType.Int64 => ParseCanonicalInt64(value, scalarType),
+            PostgresRelationQueryScalarType.Numeric => ParseCanonicalNumeric(value, scalarType),
+            PostgresRelationQueryScalarType.Text => PostgresSqlUtf8.RequireText(value, nameof(value)),
+            PostgresRelationQueryScalarType.Uuid => ParseCanonicalUuid(value, scalarType),
+            PostgresRelationQueryScalarType.Date => ParseCanonicalDate(value, scalarType),
+            PostgresRelationQueryScalarType.Timestamp =>
+                ParseCanonicalTimestamp(value.AsSpan(), scalarType),
+            PostgresRelationQueryScalarType.TimestampWithTimeZone =>
+                ParseCanonicalTimestampWithTimeZone(value, scalarType),
+            PostgresRelationQueryScalarType.Bytea => ParseCanonicalBytea(value, scalarType),
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(scalarType),
+                scalarType,
+                "Unsupported PostgreSQL scalar type.")
+        };
+    }
+
+    static int ParseCanonicalInt32(
+        string value,
+        PostgresRelationQueryScalarType scalarType) =>
+        int.TryParse(value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var parsed)
+        && string.Equals(parsed.ToString(CultureInfo.InvariantCulture), value, StringComparison.Ordinal)
+            ? parsed
+            : throw InvalidPgOutputText(scalarType);
+
+    static long ParseCanonicalInt64(
+        string value,
+        PostgresRelationQueryScalarType scalarType) =>
+        long.TryParse(value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var parsed)
+        && string.Equals(parsed.ToString(CultureInfo.InvariantCulture), value, StringComparison.Ordinal)
+            ? parsed
+            : throw InvalidPgOutputText(scalarType);
+
+    static decimal ParseCanonicalNumeric(
+        string value,
+        PostgresRelationQueryScalarType scalarType)
+    {
+        if (!IsCanonicalNumeric(value)
+            || !decimal.TryParse(
+                value,
+                NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint,
+                CultureInfo.InvariantCulture,
+                out var parsed)
+            || !string.Equals(
+                parsed.ToString(CultureInfo.InvariantCulture),
+                value,
+                StringComparison.Ordinal))
+        {
+            throw InvalidPgOutputText(scalarType);
+        }
+        return parsed;
+    }
+
+    static bool IsCanonicalNumeric(string value)
+    {
+        if (value.Length == 0 || value[0] == '+')
+            return false;
+        var index = value[0] == '-' ? 1 : 0;
+        if (index == value.Length)
+            return false;
+        if (value[index] == '0' && index + 1 < value.Length && value[index + 1] != '.')
+            return false;
+        var integralDigits = 0;
+        while (index < value.Length && value[index] is >= '0' and <= '9')
+        {
+            integralDigits++;
+            index++;
+        }
+        if (integralDigits == 0)
+            return false;
+        if (index == value.Length)
+            return value[0] != '-' || value != "-0";
+        if (value[index++] != '.' || index == value.Length)
+            return false;
+        while (index < value.Length)
+        {
+            if (value[index] is < '0' or > '9')
+                return false;
+            index++;
+        }
+        return value[0] != '-' || decimal.TryParse(
+            value,
+            NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint,
+            CultureInfo.InvariantCulture,
+            out var parsed) && parsed != decimal.Zero;
+    }
+
+    static Guid ParseCanonicalUuid(
+        string value,
+        PostgresRelationQueryScalarType scalarType) =>
+        Guid.TryParseExact(value, "D", out var parsed)
+        && string.Equals(parsed.ToString("D", CultureInfo.InvariantCulture), value, StringComparison.Ordinal)
+            ? parsed
+            : throw InvalidPgOutputText(scalarType);
+
+    static DateOnly ParseCanonicalDate(
+        string value,
+        PostgresRelationQueryScalarType scalarType) =>
+        value.Length == 10
+        && DateOnly.TryParseExact(
+            value,
+            "yyyy-MM-dd",
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.None,
+            out var parsed)
+        && string.Equals(parsed.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), value, StringComparison.Ordinal)
+            ? parsed
+            : throw InvalidPgOutputText(scalarType);
+
+    static DateTime ParseCanonicalTimestamp(
+        ReadOnlySpan<char> value,
+        PostgresRelationQueryScalarType scalarType)
+    {
+        if (value.Length < 19
+            || !DateTime.TryParseExact(
+                value[..19],
+                "yyyy-MM-dd HH:mm:ss",
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out var parsed))
+        {
+            throw InvalidPgOutputText(scalarType);
+        }
+        parsed = DateTime.SpecifyKind(parsed, DateTimeKind.Unspecified);
+        if (value.Length == 19)
+            return parsed;
+        if (value[19] != '.' || value.Length is < 21 or > 26 || value[^1] == '0')
+            throw InvalidPgOutputText(scalarType);
+        var microseconds = 0;
+        for (var index = 20; index < value.Length; index++)
+        {
+            if (value[index] is < '0' or > '9')
+                throw InvalidPgOutputText(scalarType);
+            microseconds = checked((microseconds * 10) + value[index] - '0');
+        }
+        for (var index = value.Length - 20; index < 6; index++)
+            microseconds *= 10;
+        return parsed.AddTicks(microseconds * TimeSpan.TicksPerMicrosecond);
+    }
+
+    static DateTimeOffset ParseCanonicalTimestampWithTimeZone(
+        string value,
+        PostgresRelationQueryScalarType scalarType)
+    {
+        var offsetStart = -1;
+        for (var index = 19; index < value.Length; index++)
+        {
+            if (value[index] is '+' or '-')
+            {
+                offsetStart = index;
+                break;
+            }
+        }
+        if (offsetStart < 0)
+            throw InvalidPgOutputText(scalarType);
+        var timestamp = ParseCanonicalTimestamp(value.AsSpan(0, offsetStart), scalarType);
+        var offset = ParseCanonicalOffset(value.AsSpan(offsetStart), scalarType);
+        try
+        {
+            return RequireInstant(new DateTimeOffset(timestamp, offset).ToUniversalTime());
+        }
+        catch (ArgumentException)
+        {
+            throw InvalidPgOutputText(scalarType);
+        }
+    }
+
+    static TimeSpan ParseCanonicalOffset(
+        ReadOnlySpan<char> value,
+        PostgresRelationQueryScalarType scalarType)
+    {
+        if (value.Length is not (3 or 6 or 9)
+            || value[0] is not ('+' or '-')
+            || !TryParseTwoDigits(value[1..3], out var hours)
+            || value.Length >= 6
+                && (value[3] != ':' || !TryParseTwoDigits(value[4..6], out _))
+            || value.Length == 9
+                && (value[6] != ':' || !TryParseTwoDigits(value[7..9], out _)))
+        {
+            throw InvalidPgOutputText(scalarType);
+        }
+        var minutes = value.Length >= 6
+            ? ((value[4] - '0') * 10) + value[5] - '0'
+            : 0;
+        var seconds = value.Length == 9
+            ? ((value[7] - '0') * 10) + value[8] - '0'
+            : 0;
+        if (minutes >= 60
+            || seconds >= 60
+            || value[0] == '-' && hours == 0 && minutes == 0 && seconds == 0
+            || value.Length == 6 && minutes == 0
+            || value.Length == 9 && seconds == 0)
+        {
+            throw InvalidPgOutputText(scalarType);
+        }
+        try
+        {
+            var offset = new TimeSpan(hours, minutes, seconds);
+            return value[0] == '-' ? -offset : offset;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            throw InvalidPgOutputText(scalarType);
+        }
+    }
+
+    static bool TryParseTwoDigits(ReadOnlySpan<char> value, out int result)
+    {
+        result = 0;
+        if (value.Length != 2
+            || value[0] is < '0' or > '9'
+            || value[1] is < '0' or > '9')
+        {
+            return false;
+        }
+        result = ((value[0] - '0') * 10) + value[1] - '0';
+        return true;
+    }
+
+    static byte[] ParseCanonicalBytea(
+        string value,
+        PostgresRelationQueryScalarType scalarType)
+    {
+        if (value.StartsWith("\\x", StringComparison.Ordinal))
+        {
+            if ((value.Length & 1) != 0)
+                throw InvalidPgOutputText(scalarType);
+            for (var index = 2; index < value.Length; index++)
+            {
+                if (value[index] is not (>= '0' and <= '9')
+                    and not (>= 'a' and <= 'f'))
+                {
+                    throw InvalidPgOutputText(scalarType);
+                }
+            }
+            return Convert.FromHexString(value.AsSpan(2));
+        }
+
+        var result = new byte[value.Length];
+        var outputIndex = 0;
+        for (var index = 0; index < value.Length; index++)
+        {
+            var character = value[index];
+            if (character != '\\')
+            {
+                if (character is < (char)0x20 or > (char)0x7e)
+                    throw InvalidPgOutputText(scalarType);
+                result[outputIndex++] = checked((byte)character);
+                continue;
+            }
+            if (++index >= value.Length)
+                throw InvalidPgOutputText(scalarType);
+            if (value[index] == '\\')
+            {
+                result[outputIndex++] = (byte)'\\';
+                continue;
+            }
+            if (index + 2 >= value.Length
+                || value[index] is < '0' or > '3'
+                || value[index + 1] is < '0' or > '7'
+                || value[index + 2] is < '0' or > '7')
+            {
+                throw InvalidPgOutputText(scalarType);
+            }
+            result[outputIndex++] = checked((byte)(
+                ((value[index] - '0') << 6)
+                | ((value[index + 1] - '0') << 3)
+                | value[index + 2] - '0'));
+            index += 2;
+        }
+        return outputIndex == result.Length
+            ? result
+            : result.AsSpan(0, outputIndex).ToArray();
+    }
+
+    static FormatException InvalidPgOutputText(
+        PostgresRelationQueryScalarType scalarType) => new(
+        $"pgoutput text is not canonical for PostgreSQL scalar '{scalarType}'.");
 
     internal static async ValueTask<object> ReadAsync(
         NpgsqlDataReader reader,
