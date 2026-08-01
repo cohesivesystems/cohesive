@@ -35,6 +35,132 @@ public sealed class MaterializationRebuildPlanJsonSerializerTests
         Assert.Equal(
             MaterializationRebuildPlanJsonSerializer.GetCanonicalBytes(plan),
             MaterializationRebuildPlanJsonSerializer.GetCanonicalBytes(restored));
+        Assert.Equal("cohesive-materialization-rebuild-plan/v3", restored.SchemaVersion);
+        Assert.Equal("cohesive-materialization-rebuild-plan/v3-c14n/v1", restored.Fingerprint.Canonicalization);
+        Assert.Equal(
+            plan.ChangeFeedCatalogs.Select(static catalog => catalog.EvidenceReference),
+            restored.ChangeFeedCatalogs.Select(static catalog => catalog.EvidenceReference));
+        Assert.Equal(
+            plan.ChangeFeedCatalogs.SelectMany(static catalog => catalog.Scopes)
+                .Select(scope => MaterializationChannelSemantics.ToChannelScopeId(scope).Value),
+            restored.ChangeFeedCatalogs.SelectMany(static catalog => catalog.Scopes)
+                .Select(scope => MaterializationChannelSemantics.ToChannelScopeId(scope).Value));
+        Assert.Equal(
+            plan.Limits.MaximumChangeFeedsPerConvergenceActivation,
+            restored.Limits.MaximumChangeFeedsPerConvergenceActivation);
+    }
+
+    [Fact]
+    public void Plan_RequiresRootFeedScopesToExactlyEqualBaselineShardsAndEveryCatalog()
+    {
+        var plan = CreatePlan();
+        var (expandedCatalogs, expandedFeeds) = ExpandRootFeedCatalog(plan);
+
+        var baselineMismatch = Assert.Throws<ArgumentException>(() =>
+            RebuildPlan(plan, expandedCatalogs, expandedFeeds, plan.Limits));
+        var omitted = Assert.Throws<ArgumentException>(() =>
+            RebuildPlan(plan, expandedCatalogs, plan.ChangeFeeds, plan.Limits));
+        var unreported = Assert.Throws<ArgumentException>(() =>
+            RebuildPlan(plan, plan.ChangeFeedCatalogs, expandedFeeds, plan.Limits));
+        Assert.Contains("Baseline shard scopes", baselineMismatch.Message, StringComparison.Ordinal);
+        Assert.Contains("exactly equal", baselineMismatch.Message, StringComparison.Ordinal);
+        Assert.Contains("exactly equal", omitted.Message, StringComparison.Ordinal);
+        Assert.Contains("exactly equal", unreported.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PlanJson_RejectsARootFeedScopeWithoutAnExactBaselineShard()
+    {
+        var plan = CreatePlan();
+        var (expandedCatalogs, expandedFeeds) = ExpandRootFeedCatalog(plan);
+        var options = MaterializationRebuildPlanJsonSerializer.CreateOptions(
+            formatting: PortableDocumentJsonFormatting.Compact);
+        var json = MaterializationRebuildPlanJsonSerializer.Serialize(
+            plan,
+            PortableDocumentJsonFormatting.Compact);
+        using var document = JsonDocument.Parse(json);
+        var originalCatalogsJson = document.RootElement
+            .GetProperty("changeFeedCatalogs")
+            .GetRawText();
+        var expandedCatalogsJson = JsonSerializer.Serialize(expandedCatalogs, options);
+        var originalFeedsJson = document.RootElement
+            .GetProperty("changeFeeds")
+            .GetRawText();
+        var expandedFeedsJson = JsonSerializer.Serialize(expandedFeeds, options);
+        var unsupported = json
+            .Replace(originalCatalogsJson, expandedCatalogsJson, StringComparison.Ordinal)
+            .Replace(originalFeedsJson, expandedFeedsJson, StringComparison.Ordinal);
+
+        Assert.NotEqual(json, unsupported);
+        var exception = Assert.Throws<JsonException>(() =>
+            MaterializationRebuildPlanJsonSerializer.Deserialize(unsupported));
+        Assert.Contains("Baseline shard scopes", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("exactly equal", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CatalogEvidence_RejectsScopesFromAnotherSourceAtTheEvidenceBoundary()
+    {
+        var plan = CreatePlan();
+        var catalog = plan.ChangeFeedCatalogs[0];
+
+        var exception = Assert.Throws<ArgumentException>(() => new MaterializationChangeFeedCatalogEvidence(
+            input: catalog.Input,
+            source: new("source/forged"),
+            scopes: catalog.Scopes,
+            evidenceReference: "catalog/forged"));
+
+        Assert.Contains("attributed input and source", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Limits_RequireAPositiveConvergenceFeedBoundAndRejectAnOversizedPlan()
+    {
+        var plan = CreatePlan();
+        var invalid = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            CopyLimits(plan.Limits, maximumChangeFeedsPerConvergenceActivation: 0));
+        var tooSmall = CopyLimits(
+            plan.Limits,
+            maximumChangeFeedsPerConvergenceActivation: plan.ChangeFeeds.Length - 1);
+
+        var oversized = Assert.Throws<ArgumentException>(() =>
+            RebuildPlan(plan, plan.ChangeFeedCatalogs, plan.ChangeFeeds, tooSmall));
+
+        Assert.Equal("maximumChangeFeedsPerConvergenceActivation", invalid.ParamName);
+        Assert.Contains("per-convergence-activation feed bound", oversized.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Plan_RejectsABulkLimitAboveDeleteCapabilityEvidence()
+    {
+        var exception = Assert.ThrowsAny<ArgumentException>(() =>
+            CreatePlan(targetDeleteWriteItems: WriteItems - 1));
+
+        Assert.Contains(nameof(MaterializationCapabilityKind.TargetBulkDelete), exception.Message, StringComparison.Ordinal);
+        Assert.Contains(nameof(MaterializationLimitKind.WriteItems), exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Plan_FingerprintIncludesCatalogEvidenceAndTheConvergenceFeedBound()
+    {
+        var plan = CreatePlan();
+        var firstCatalog = plan.ChangeFeedCatalogs[0];
+        MaterializationChangeFeedCatalogEvidence changedEvidence = new(
+            input: firstCatalog.Input,
+            source: firstCatalog.Source,
+            scopes: firstCatalog.Scopes,
+            evidenceReference: firstCatalog.EvidenceReference + "/new-evidence");
+        var changedCatalogs = plan.ChangeFeedCatalogs.SetItem(index: 0, changedEvidence);
+        var changedLimit = CopyLimits(
+            plan.Limits,
+            maximumChangeFeedsPerConvergenceActivation:
+                plan.Limits.MaximumChangeFeedsPerConvergenceActivation + 1);
+
+        var evidencePlan = RebuildPlan(plan, changedCatalogs, plan.ChangeFeeds, plan.Limits);
+        var limitPlan = RebuildPlan(plan, plan.ChangeFeedCatalogs, plan.ChangeFeeds, changedLimit);
+
+        Assert.NotEqual(plan.Fingerprint, evidencePlan.Fingerprint);
+        Assert.NotEqual(plan.Fingerprint, limitPlan.Fingerprint);
     }
 
     [Fact]
@@ -74,6 +200,52 @@ public sealed class MaterializationRebuildPlanJsonSerializerTests
             CreatePlan(MaterializationFailureDisposition.QuarantineAndContinue));
 
         Assert.Contains("stop-on-exhaustion", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Plan_RejectsContributorLedgerRoutesUntilExecutionPopulatesTheLedgerAtomically()
+    {
+        var plan = CreatePlan();
+        var ledgerImpactPlan = CreateContributorLedgerImpactPlan(plan.ImpactPlan);
+
+        var exception = Assert.Throws<ArgumentException>(() => new MaterializationRebuildPlan(
+            materialization: plan.Materialization,
+            impactPlan: ledgerImpactPlan,
+            sources: plan.Sources,
+            target: plan.Target,
+            targetCapabilityMatch: plan.TargetCapabilityMatch,
+            shards: plan.Shards,
+            changeFeedCatalogs: plan.ChangeFeedCatalogs,
+            changeFeeds: plan.ChangeFeeds,
+            limits: plan.Limits,
+            provenance: plan.Provenance));
+
+        Assert.Equal("impactPlan", exception.ParamName);
+        Assert.Contains("contributor-ledger", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("atomic baseline and incremental", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PlanJson_RejectsContributorLedgerRoutesAtTheExecutablePlanBoundary()
+    {
+        var plan = CreatePlan();
+        var ledgerImpactPlan = CreateContributorLedgerImpactPlan(plan.ImpactPlan);
+        var json = MaterializationRebuildPlanJsonSerializer.Serialize(
+            plan,
+            PortableDocumentJsonFormatting.Compact);
+        var originalImpactJson = MaterializationImpactJsonSerializer.Serialize(
+            plan.ImpactPlan,
+            PortableDocumentJsonFormatting.Compact);
+        var ledgerImpactJson = MaterializationImpactJsonSerializer.Serialize(
+            ledgerImpactPlan,
+            PortableDocumentJsonFormatting.Compact);
+        var unsupported = json.Replace(originalImpactJson, ledgerImpactJson, StringComparison.Ordinal);
+
+        Assert.NotEqual(json, unsupported);
+        var exception = Assert.Throws<JsonException>(() =>
+            MaterializationRebuildPlanJsonSerializer.Deserialize(unsupported));
+        Assert.Contains("contributor-ledger", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("atomic baseline and incremental", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -128,10 +300,13 @@ public sealed class MaterializationRebuildPlanJsonSerializerTests
 
         var exception = Assert.Throws<ArgumentException>(() => new MaterializationRebuildPlan(
             forgedDocument,
+            valid.ImpactPlan,
             valid.Sources,
             valid.Target,
             valid.TargetCapabilityMatch,
             valid.Shards,
+            valid.ChangeFeedCatalogs,
+            valid.ChangeFeeds,
             valid.Limits,
             valid.Provenance));
 
@@ -142,12 +317,124 @@ public sealed class MaterializationRebuildPlanJsonSerializerTests
         Assert.Contains("TargetGenerationAbandonment", exception.Message, StringComparison.Ordinal);
     }
 
+    static MaterializationRebuildPlan RebuildPlan(
+        MaterializationRebuildPlan plan,
+        ImmutableArray<MaterializationChangeFeedCatalogEvidence> changeFeedCatalogs,
+        ImmutableArray<MaterializationChangeFeedPlan> changeFeeds,
+        MaterializationRebuildLimits limits) =>
+        new(
+            materialization: plan.Materialization,
+            impactPlan: plan.ImpactPlan,
+            sources: plan.Sources,
+            target: plan.Target,
+            targetCapabilityMatch: plan.TargetCapabilityMatch,
+            shards: plan.Shards,
+            changeFeedCatalogs: changeFeedCatalogs,
+            changeFeeds: changeFeeds,
+            limits: limits,
+            provenance: plan.Provenance);
+
+    static (
+        ImmutableArray<MaterializationChangeFeedCatalogEvidence> Catalogs,
+        ImmutableArray<MaterializationChangeFeedPlan> Feeds) ExpandRootFeedCatalog(
+            MaterializationRebuildPlan plan)
+    {
+        var shard = Assert.Single(plan.Shards);
+        var rootCatalog = plan.ChangeFeedCatalogs.Single(catalog => catalog.Input == shard.Scope.Input);
+        var rootFeed = plan.ChangeFeeds.Single(feed => feed.Scope == shard.Scope);
+        MaterializationSourceScope additionalScope = new(
+            physicalPlan: shard.Scope.PhysicalPlan,
+            placement: shard.Scope.Placement,
+            partition: new("partition/additional"),
+            orderingScope: new("ordering/additional"));
+        MaterializationChangeFeedCatalogEvidence expandedRootCatalog = new(
+            input: rootCatalog.Input,
+            source: rootCatalog.Source,
+            scopes: [.. rootCatalog.Scopes, additionalScope],
+            evidenceReference: rootCatalog.EvidenceReference + "/expanded");
+        var catalogs = plan.ChangeFeedCatalogs
+            .Select(catalog => catalog.Input == rootCatalog.Input ? expandedRootCatalog : catalog)
+            .ToImmutableArray();
+        MaterializationChangeFeedPlan additionalFeed = new(
+            id: new("feed/additional"),
+            scope: additionalScope,
+            channel: rootFeed.Channel);
+
+        return (catalogs, plan.ChangeFeeds.Add(additionalFeed));
+    }
+
+    static MaterializationRebuildLimits CopyLimits(
+        MaterializationRebuildLimits limits,
+        int maximumChangeFeedsPerConvergenceActivation) =>
+        new(
+            maximumPageItems: limits.MaximumPageItems,
+            maximumPageBytes: limits.MaximumPageBytes,
+            maximumBulkItems: limits.MaximumBulkItems,
+            maximumBulkBytes: limits.MaximumBulkBytes,
+            maximumPagesPerShard: limits.MaximumPagesPerShard,
+            maximumStartsPerActivation: limits.MaximumStartsPerActivation,
+            maximumParallelism: limits.MaximumParallelism,
+            maximumChangeFeedsPerConvergenceActivation: maximumChangeFeedsPerConvergenceActivation);
+
+    static MaterializationImpactPlan CreateContributorLedgerImpactPlan(MaterializationImpactPlan impactPlan)
+    {
+        MaterializationImpactPlanningPolicy policy = new(
+            id: new("tests/materialization-rebuild-json-contributor-ledger/v1"),
+            strategyPreference: [MaterializationImpactStrategyKind.ContributorLedger],
+            maximumAffectedRoots: impactPlan.Policy.MaximumAffectedRoots,
+            maximumReadBytes: impactPlan.Policy.MaximumReadBytes,
+            maximumLedgerWriteBytes: ReadBytes);
+        var routes = impactPlan.Routes.Select(route => route.Strategy switch
+        {
+            MaterializationInverseTraversalImpactStrategy inverse => new MaterializationImpactRoute(
+                changeInput: route.ChangeInput,
+                changeShape: route.ChangeShape,
+                dependencyInputs: route.DependencyInputs,
+                strategy: new MaterializationContributorLedgerImpactStrategy(
+                    contributorInput: route.ChangeInput,
+                    currentRootSteps: ToCurrentRootSteps(inverse.Steps)),
+                precision: route.Precision,
+                capabilities: route.Capabilities,
+                maximumAffectedRoots: route.MaximumAffectedRoots,
+                maximumReadBytes: route.MaximumReadBytes),
+            _ => route
+        }).ToImmutableArray();
+
+        Assert.Contains(
+            routes,
+            static route => route.Strategy is MaterializationContributorLedgerImpactStrategy);
+        return new(
+            schemaVersion: impactPlan.SchemaVersion,
+            materialization: impactPlan.Materialization,
+            definitionFingerprint: impactPlan.DefinitionFingerprint,
+            relationPlan: impactPlan.RelationPlan,
+            output: impactPlan.Output,
+            policy: policy,
+            routes: routes);
+    }
+
+    static ImmutableArray<MaterializationInverseImpactStep> ToCurrentRootSteps(
+        ImmutableArray<MaterializationInverseImpactStep> steps) =>
+        [
+            .. steps.Select((step, index) => index == 0
+                && step.Operation == MaterializationInverseImpactOperationKind.BeforeAndAfterReferenceExtraction
+                    ? new MaterializationInverseImpactStep(
+                        relationshipInput: step.RelationshipInput,
+                        referenceSourceInput: step.ReferenceSourceInput,
+                        operation: MaterializationInverseImpactOperationKind.AfterRelationshipReferenceExtraction)
+                    : step)
+        ];
+
     static MaterializationRebuildPlan CreatePlan(
         MaterializationFailureDisposition exhaustedDisposition = MaterializationFailureDisposition.Stop,
         RelationOutputMode outputMode = RelationOutputMode.OnePerRoot,
-        int maximumPageItems = 100)
+        int maximumPageItems = 100,
+        long targetDeleteWriteItems = WriteItems)
     {
-        var materialization = MaterializationDocument.FromDefinition(CreateDefinition(exhaustedDisposition, outputMode));
+        var materialization = MaterializationDocument.FromDefinition(CreateDefinition(
+            exhaustedDisposition,
+            outputMode,
+            targetDeleteWriteItems));
         var compiled = materialization.Definition.Relation.Compile().Plan
             ?? throw new InvalidOperationException("The test materialization relation did not compile.");
         var sourcePlans = materialization.Definition.Sources.Select(source =>
@@ -235,13 +522,51 @@ public sealed class MaterializationRebuildPlanJsonSerializerTests
                 algorithm: "sha256",
                 canonicalization: "tests/materialization-rebuild-hydration-plan/v1",
                 value: new string('e', 64)));
+        var impactMaterialization = outputMode is RelationOutputMode.Set or RelationOutputMode.ManyPerRoot
+            ? MaterializationDocument.FromDefinition(CreateDefinition(
+                exhaustedDisposition,
+                RelationOutputMode.OnePerRoot,
+                targetDeleteWriteItems))
+            : materialization;
+        var impactPlan = MaterializationRebuildTestPlan.CompileImpactPlan(
+            impactMaterialization,
+            policyId: "tests/materialization-rebuild-json-impact/v1",
+            maximumAffectedRoots: 100,
+            maximumReadBytes: ReadBytes);
+        var changeFeedCatalog = MaterializationRebuildTestPlan.CreateChangeFeedCatalog(
+            compiled,
+            physicalPlan,
+            impactPlan,
+            sourcePlans,
+            shards: [shard],
+            contributorPlacement: route =>
+            {
+                var traversal = compiled.InputContract.Traversals.Single(candidate =>
+                    candidate.Input.Id == route.ChangeInput);
+                var source = sourcePlans.Single(candidate => candidate.Input == route.ChangeInput);
+                return new RelationQuerySourcePlacementBinding(
+                    id: new($"placement/change-feed/{route.ChangeInput.Value}"),
+                    input: route.ChangeInput,
+                    node: traversal.Input.Traversal,
+                    binding: traversal.Result,
+                    shape: traversal.ResultShape,
+                    source: source.Source,
+                    kind: RelationQuerySourcePlacementBindingKind.RelationshipTraversal,
+                    acquisition: RelationQuerySourceAcquisitionKind.BoundedLookup,
+                    origin: RelationQuerySourcePlacementOrigin.Explicit,
+                    identity: new(traversal.ResultShape, sourceSelector: "$identity"));
+            },
+            channelCanonicalization: "tests/materialization-rebuild-json-channel/v1");
 
         return new(
             materialization,
+            impactPlan,
             sourcePlans,
             target,
             targetMatch,
             shards: [shard],
+            changeFeedCatalogs: changeFeedCatalog.Evidence,
+            changeFeeds: changeFeedCatalog.Feeds,
             limits: new(
                 maximumPageItems: maximumPageItems,
                 maximumPageBytes: ReadBytes,
@@ -249,13 +574,15 @@ public sealed class MaterializationRebuildPlanJsonSerializerTests
                 maximumBulkBytes: WriteBytes,
                 maximumPagesPerShard: 100,
                 maximumStartsPerActivation: 2,
-                maximumParallelism: 2),
+                maximumParallelism: 2,
+                maximumChangeFeedsPerConvergenceActivation: 16),
             provenance: Provenance());
     }
 
     static MaterializationDefinition CreateDefinition(
         MaterializationFailureDisposition exhaustedDisposition,
-        RelationOutputMode outputMode)
+        RelationOutputMode outputMode,
+        long targetDeleteWriteItems)
     {
         var fixtureDefinition = Assert.IsType<RelationDefinition>(FederatedLoadRelationFixture.RelationDocument.Definition);
         var relationDocument = outputMode == fixtureDefinition.Output.Mode
@@ -282,12 +609,14 @@ public sealed class MaterializationRebuildPlanJsonSerializerTests
         [
             .. plan.InputContract.Sources.Select(source => SourceRequirement(
                 source.Input.Id,
-                MaterializationCapabilityKind.SourceBoundedEnumeration)),
+                MaterializationCapabilityKind.SourceBoundedEnumeration,
+                isRoot: source.Role == RelationQuerySourceInputRole.RelationRoot)),
             .. plan.InputContract.Traversals.Select(traversal => SourceRequirement(
                 traversal.Input.Id,
                 traversal.Input.Direction == RelationshipTraversalDirection.Forward
                     ? MaterializationCapabilityKind.SourceBatchedPointRead
-                    : MaterializationCapabilityKind.SourceParameterizedPredicateQuery))
+                    : MaterializationCapabilityKind.SourceParameterizedPredicateQuery,
+                isRoot: false))
         ];
         ImmutableArray<MaterializationCapabilityRequirement> targets =
         [
@@ -302,7 +631,8 @@ public sealed class MaterializationRebuildPlanJsonSerializerTests
             Requirement(
                 id: "target/delete",
                 capability: MaterializationCapabilityKind.TargetBulkDelete,
-                modes: MaterializationSynchronizationMode.All),
+                modes: MaterializationSynchronizationMode.All,
+                writeItems: targetDeleteWriteItems),
             Requirement(
                 id: "target/outcomes",
                 capability: MaterializationCapabilityKind.TargetPerItemOutcomes,
@@ -354,8 +684,10 @@ public sealed class MaterializationRebuildPlanJsonSerializerTests
 
     static MaterializationSourceRequirement SourceRequirement(
         RelationQueryInputId input,
-        MaterializationCapabilityKind rebuildRead) => new(
-        input,
+        MaterializationCapabilityKind rebuildRead,
+        bool isRoot)
+    {
+        ImmutableArray<MaterializationCapabilityRequirement> capabilities =
         [
             Requirement(
                 id: $"{input.Value}/read",
@@ -373,16 +705,27 @@ public sealed class MaterializationRebuildPlanJsonSerializerTests
                 id: $"{input.Value}/settlement",
                 capability: MaterializationCapabilityKind.SourceSettlement,
                 modes: MaterializationSynchronizationMode.All)
-        ]);
+        ];
+        if (isRoot)
+        {
+            capabilities = capabilities.Add(Requirement(
+                id: $"{input.Value}/inverse",
+                capability: MaterializationCapabilityKind.SourceParameterizedPredicateQuery,
+                modes: MaterializationSynchronizationMode.Incremental));
+        }
+
+        return new(input, capabilities);
+    }
 
     static MaterializationCapabilityRequirement Requirement(
         string id,
         MaterializationCapabilityKind capability,
-        MaterializationSynchronizationMode modes) => new(
+        MaterializationSynchronizationMode modes,
+        long? writeItems = null) => new(
         id: new(id),
         capability,
         guarantees: Guarantees(capability),
-        operatingLimits: OperatingLimits(capability),
+        operatingLimits: OperatingLimits(capability, writeItems),
         modes);
 
     static MaterializationCapabilityProfile Profile(
@@ -404,7 +747,8 @@ public sealed class MaterializationRebuildPlanJsonSerializerTests
         ]);
 
     static ImmutableArray<MaterializationOperatingLimit> OperatingLimits(
-        MaterializationCapabilityKind capability) => capability switch
+        MaterializationCapabilityKind capability,
+        long? writeItems = null) => capability switch
         {
             MaterializationCapabilityKind.SourceBatchedPointRead
                 or MaterializationCapabilityKind.SourceParameterizedPredicateQuery
@@ -422,7 +766,7 @@ public sealed class MaterializationRebuildPlanJsonSerializerTests
                 or MaterializationCapabilityKind.TargetBulkDelete
                 or MaterializationCapabilityKind.TargetPerItemOutcomes =>
                 [
-                    new(MaterializationLimitKind.WriteItems, WriteItems),
+                    new(MaterializationLimitKind.WriteItems, writeItems ?? WriteItems),
                     new(MaterializationLimitKind.WriteBytes, WriteBytes)
                 ],
             _ => []

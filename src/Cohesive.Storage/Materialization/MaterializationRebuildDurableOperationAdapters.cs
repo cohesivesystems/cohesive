@@ -47,6 +47,132 @@ public static class MaterializationRebuildDurableOperationDiagnosticCodes
 
     /// <summary>The exact executor returned a terminal failed shard disposition.</summary>
     public const string ShardRejected = "storage.materialization.rebuild.adapter.shard.rejected";
+
+    /// <summary>The synchronization-and-activation interpreter returned a terminal non-active disposition.</summary>
+    public const string ActivationRejected = "storage.materialization.rebuild.adapter.activation.rejected";
+}
+
+/// <summary>Schema-versioned durable Process result identifying one exact active materialization generation.</summary>
+public sealed record MaterializationActiveGenerationReference
+{
+    /// <summary>Current active-generation-reference wire schema.</summary>
+    public const string CurrentSchemaVersion = "cohesive-materialization-active-generation-reference/v1";
+
+    /// <summary>Creates one exact active-generation reference.</summary>
+    /// <param name="schemaVersion">Exact supported wire schema version.</param>
+    /// <param name="plan">Pinned rebuild plan whose candidate became active.</param>
+    /// <param name="materialization">Logical materialization served by the target.</param>
+    /// <param name="target">Physical target whose active pointer changed.</param>
+    /// <param name="generation">Exact newly active generation.</param>
+    /// <param name="targetRevision">Committed target-pointer revision.</param>
+    /// <param name="promotion">Stable promotion operation identity.</param>
+    /// <param name="promotionFence">Accepted independent target-pointer fence.</param>
+    /// <param name="validation">Validation evidence authorizing promotion.</param>
+    /// <param name="activatedAtUtc">UTC promotion boundary.</param>
+    /// <exception cref="ArgumentException">An identity is invalid, the schema is unsupported, or time is not UTC.</exception>
+    [JsonConstructor]
+    public MaterializationActiveGenerationReference(
+        string schemaVersion,
+        MaterializationRebuildPlanFingerprint plan,
+        MaterializationId materialization,
+        MaterializationTargetId target,
+        MaterializationGenerationId generation,
+        MaterializationTargetRevision targetRevision,
+        MaterializationPromotionId promotion,
+        MaterializationPromotionFence promotionFence,
+        MaterializationValidationFingerprint validation,
+        DateTimeOffset activatedAtUtc)
+    {
+        if (!string.Equals(schemaVersion, CurrentSchemaVersion, StringComparison.Ordinal))
+            throw new ArgumentException("The active-generation reference schema is unsupported.", nameof(schemaVersion));
+        Plan = plan ?? throw new ArgumentNullException(nameof(plan));
+        MaterializationContract.RequireDefinedIdentity(materialization.Value, nameof(materialization));
+        MaterializationContract.RequireDefinedIdentity(target.Value, nameof(target));
+        MaterializationContract.RequireDefinedIdentity(generation.Value, nameof(generation));
+        if (targetRevision.Ordinal <= 0)
+            throw new ArgumentException("An active generation requires a committed target revision.", nameof(targetRevision));
+        MaterializationContract.RequireDefinedIdentity(promotion.Value, nameof(promotion));
+        MaterializationContract.RequireDefinedIdentity(promotionFence.Value, nameof(promotionFence));
+        MaterializationContract.RequireDefinedIdentity(validation.Value, nameof(validation));
+        MaterializationContract.RequireUtc(activatedAtUtc, nameof(activatedAtUtc));
+        SchemaVersion = schemaVersion;
+        Materialization = materialization;
+        Target = target;
+        Generation = generation;
+        TargetRevision = targetRevision;
+        Promotion = promotion;
+        PromotionFence = promotionFence;
+        Validation = validation;
+        ActivatedAtUtc = activatedAtUtc;
+    }
+
+    /// <summary>Exact wire schema version.</summary>
+    public string SchemaVersion { get; }
+
+    /// <summary>Pinned rebuild plan whose candidate became active.</summary>
+    public MaterializationRebuildPlanFingerprint Plan { get; }
+
+    /// <summary>Logical materialization served by the target.</summary>
+    public MaterializationId Materialization { get; }
+
+    /// <summary>Physical target whose active pointer changed.</summary>
+    public MaterializationTargetId Target { get; }
+
+    /// <summary>Exact newly active generation.</summary>
+    public MaterializationGenerationId Generation { get; }
+
+    /// <summary>Committed target-pointer revision.</summary>
+    public MaterializationTargetRevision TargetRevision { get; }
+
+    /// <summary>Stable promotion operation identity.</summary>
+    public MaterializationPromotionId Promotion { get; }
+
+    /// <summary>Accepted independent target-pointer fence.</summary>
+    public MaterializationPromotionFence PromotionFence { get; }
+
+    /// <summary>Validation evidence authorizing promotion.</summary>
+    public MaterializationValidationFingerprint Validation { get; }
+
+    /// <summary>UTC promotion boundary.</summary>
+    public DateTimeOffset ActivatedAtUtc { get; }
+}
+
+/// <summary>Strict canonical JSON serialization for <see cref="MaterializationActiveGenerationReference"/>.</summary>
+public static class MaterializationActiveGenerationReferenceJsonSerializer
+{
+    static readonly JsonSerializerOptions Options = StrictDocumentJson.CreateOptions();
+
+    /// <summary>Serializes one active-generation reference to canonical UTF-8 JSON represented as a String.</summary>
+    /// <param name="reference">Exact active-generation reference.</param>
+    /// <returns>Canonical JSON preserving the complete reference.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="reference"/> is <see langword="null"/>.</exception>
+    public static string Serialize(MaterializationActiveGenerationReference reference)
+    {
+        ArgumentNullException.ThrowIfNull(reference);
+        return Encoding.UTF8.GetString(StrictDocumentJson.GetCanonicalBytes(reference, Options));
+    }
+
+    /// <summary>Deserializes and validates one exact active-generation reference.</summary>
+    /// <param name="json">Strict JSON document.</param>
+    /// <returns>The validated reference.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="json"/> is <see langword="null"/>.</exception>
+    /// <exception cref="JsonException">The document is malformed, noncanonical in shape, or uses another schema.</exception>
+    public static MaterializationActiveGenerationReference Deserialize(string json)
+    {
+        ArgumentNullException.ThrowIfNull(json);
+        if (StrictDocumentJson.TryReadCanonicalObject(
+                json,
+                Options,
+                "active-generation reference",
+                out MaterializationActiveGenerationReference? reference,
+                out var error)
+            && reference is not null)
+        {
+            return reference;
+        }
+
+        throw new JsonException(error.Message);
+    }
 }
 
 /// <summary>
@@ -61,28 +187,44 @@ public sealed class MaterializationRebuildExecution
 {
     readonly Func<OperationContext, Task<MaterializationRebuildInitializationResult>> beginAttempt;
     readonly Func<OperationContext, MaterializationRebuildShardId, Task<MaterializationRebuildShardResult>> runShard;
+    readonly Func<OperationContext, MaterializationSynchronizationInvocationId, MaterializationSynchronizationWorkerId,
+        Task<MaterializationGenerationActivationResult>> synchronizeAndActivate;
     readonly Func<OperationContext, DateTimeOffset, Task<bool>> abandonAttempt;
 
     /// <summary>Creates one exact attempt-scoped reference execution binding.</summary>
     /// <param name="resolved">Exact persisted plan and runtime ports.</param>
     /// <param name="attempt">Exact coordinator Process attempt and its stable UTC start time.</param>
+    /// <param name="synchronizationWorkStore">
+    /// Shared durable generation-wide synchronization, version-allocation, and activation authority.
+    /// </param>
     /// <param name="crashInjector">Optional deterministic conformance and crash-injection hook.</param>
     /// <exception cref="ArgumentNullException">
-    /// <paramref name="resolved"/> or <paramref name="attempt"/> is <see langword="null"/>.
+    /// <paramref name="resolved"/>, <paramref name="attempt"/>, or <paramref name="synchronizationWorkStore"/> is
+    /// <see langword="null"/>.
     /// </exception>
     public MaterializationRebuildExecution(
         ResolvedMaterializationRebuildPlan resolved,
         MaterializationRebuildAttempt attempt,
+        IMaterializationSynchronizationWorkStore synchronizationWorkStore,
         IMaterializationRebuildCrashInjector? crashInjector = null)
     {
         ArgumentNullException.ThrowIfNull(resolved);
+        ArgumentNullException.ThrowIfNull(synchronizationWorkStore);
         Attempt = Guard.RequireNotNull(attempt);
         PlanFingerprint = resolved.Plan.Fingerprint;
         Shards = NormalizeShards(resolved.Plan.Shards.Select(static shard => shard.Id));
+        ChangeFeedCount = resolved.Plan.ChangeFeeds.Length;
         Generation = MaterializationRebuildIdentities.Generation(resolved.Plan, attempt);
+        Materialization = resolved.Plan.Materialization.Definition.Id;
+        Target = resolved.Plan.Target.Id;
         var executor = new MaterializationRebuildExecutor(resolved, crashInjector);
+        var activationExecutor = new MaterializationGenerationActivationExecutor(
+            resolved,
+            synchronizationWorkStore);
         beginAttempt = context => executor.BeginAttemptAsync(context, attempt);
         runShard = (context, shard) => executor.RunShardAsync(context, attempt, shard);
+        synchronizeAndActivate = (context, invocation, worker) =>
+            activationExecutor.ActivateAsync(context, attempt, invocation, worker);
         abandonAttempt = (context, abandonedAtUtc) =>
             executor.AbandonAttemptAsync(context, attempt, abandonedAtUtc);
     }
@@ -92,17 +234,31 @@ public sealed class MaterializationRebuildExecution
         ImmutableArray<MaterializationRebuildShardId> shards,
         MaterializationRebuildAttempt attempt,
         MaterializationGenerationId generation,
+        MaterializationId materialization,
+        MaterializationTargetId target,
         Func<OperationContext, Task<MaterializationRebuildInitializationResult>> beginAttempt,
         Func<OperationContext, MaterializationRebuildShardId, Task<MaterializationRebuildShardResult>> runShard,
-        Func<OperationContext, DateTimeOffset, Task<bool>>? abandonAttempt = null)
+        Func<OperationContext, MaterializationSynchronizationInvocationId, MaterializationSynchronizationWorkerId,
+            Task<MaterializationGenerationActivationResult>> synchronizeAndActivate,
+        Func<OperationContext, DateTimeOffset, Task<bool>>? abandonAttempt = null,
+        int? changeFeedCount = null)
     {
         PlanFingerprint = Guard.RequireNotNull(planFingerprint);
         Shards = NormalizeShards(shards);
         Attempt = Guard.RequireNotNull(attempt);
         MaterializationContract.RequireDefinedIdentity(generation.Value, nameof(generation));
         Generation = generation;
+        MaterializationContract.RequireDefinedIdentity(materialization.Value, nameof(materialization));
+        Materialization = materialization;
+        MaterializationContract.RequireDefinedIdentity(target.Value, nameof(target));
+        Target = target;
+        ChangeFeedCount = changeFeedCount ?? Shards.Length;
+        if (ChangeFeedCount <= 0)
+            throw new ArgumentOutOfRangeException(nameof(changeFeedCount), changeFeedCount, "A rebuild execution requires a change feed.");
         this.beginAttempt = beginAttempt ?? throw new ArgumentNullException(nameof(beginAttempt));
         this.runShard = runShard ?? throw new ArgumentNullException(nameof(runShard));
+        this.synchronizeAndActivate = synchronizeAndActivate
+            ?? throw new ArgumentNullException(nameof(synchronizeAndActivate));
         this.abandonAttempt = abandonAttempt ?? ((_, _) => Task.FromResult(false));
     }
 
@@ -112,13 +268,22 @@ public sealed class MaterializationRebuildExecution
     /// <summary>Finite canonical shard catalog projected from the exact persisted plan.</summary>
     public ImmutableArray<MaterializationRebuildShardId> Shards { get; }
 
+    /// <summary>Number of independently captured dependency feeds in the exact persisted plan.</summary>
+    public int ChangeFeedCount { get; }
+
     /// <summary>Exact coordinator Process attempt and stable UTC start time.</summary>
     public MaterializationRebuildAttempt Attempt { get; }
 
     /// <summary>Deterministic candidate generation owned by <see cref="Attempt"/>.</summary>
     public MaterializationGenerationId Generation { get; }
 
-    /// <summary>Idempotently establishes the candidate generation and one initial change cut per shard.</summary>
+    /// <summary>Logical materialization served by this execution's exact target.</summary>
+    public MaterializationId Materialization { get; }
+
+    /// <summary>Exact physical target receiving this execution.</summary>
+    public MaterializationTargetId Target { get; }
+
+    /// <summary>Idempotently establishes the candidate generation and one initial cut per dependency feed.</summary>
     /// <param name="context">Explicit cancellation, time, identity, and tracing context.</param>
     /// <returns>Ready or deterministic rejected initialization evidence from the exact executor.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="context"/> is <see langword="null"/>.</exception>
@@ -142,6 +307,25 @@ public sealed class MaterializationRebuildExecution
     {
         ArgumentNullException.ThrowIfNull(context);
         return runShard(context, shard);
+    }
+
+    /// <summary>Runs or resumes one bounded synchronization-and-generation-activation occurrence.</summary>
+    /// <param name="context">Explicit cancellation, time, identity, and tracing context.</param>
+    /// <param name="invocation">Stable logical durable-Request identity retained across exact retry.</param>
+    /// <param name="worker">Explicit physical attempt and operation-fence authority.</param>
+    /// <returns>Active, work-remaining, or deterministic terminal failure evidence.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="context"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="invocation"/> or <paramref name="worker"/> is default.</exception>
+    /// <exception cref="OperationCanceledException">The operation is cancelled.</exception>
+    public Task<MaterializationGenerationActivationResult> SynchronizeAndActivateAsync(
+        OperationContext context,
+        MaterializationSynchronizationInvocationId invocation,
+        MaterializationSynchronizationWorkerId worker)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        MaterializationContract.RequireDefinedIdentity(invocation.Value, nameof(invocation));
+        MaterializationContract.RequireDefinedIdentity(worker.Value, nameof(worker));
+        return synchronizeAndActivate(context, invocation, worker);
     }
 
     /// <summary>Idempotently abandons or reconciles this attempt's unreadable candidate generation.</summary>
@@ -337,7 +521,7 @@ public sealed class MaterializationRebuildInitializationDurableOperationAdapter 
         if (result.Generation != execution.Generation
             || result.Disposition == MaterializationRebuildInitializationDisposition.Ready
             && (result.GenerationSnapshot?.GenerationId != execution.Generation
-                || result.Progress.Length != execution.Shards.Length
+                || result.Progress.Length != execution.ChangeFeedCount
                 || result.Progress.Any(progress => progress.Key.Generation != execution.Generation)))
         {
             return MaterializationRebuildDurableOperationProjection.Failure(
@@ -522,6 +706,225 @@ public sealed class MaterializationRebuildShardDurableOperationAdapter : IDurabl
     }
 }
 
+/// <summary>
+/// Durable-operation adapter for one bounded incremental synchronization and candidate-activation occurrence.
+/// </summary>
+/// <remarks>
+/// The logical Request emission becomes the synchronization invocation identity. The exact durable-operation
+/// attempt and fence become the physical worker identity. Execute and Reconcile therefore reuse the same authority
+/// for one ambiguous attempt, while a later physical attempt is explicit and can be fenced by the shared Storage
+/// work authority. A completed retained promotion is reconciled as Active rather than reconstructed or abandoned.
+/// </remarks>
+public sealed class MaterializationSynchronizationActivationDurableOperationAdapter : IDurableOperationAdapter
+{
+    const string ProgressFingerprintPrefix = "cohesive-materialization-synchronization-progress/v1:sha256:";
+
+    readonly IMaterializationRebuildExecutionResolver resolver;
+
+    /// <summary>Creates an adapter for one exact synchronization-and-activation Request contract.</summary>
+    /// <param name="request">Exact coordinator Request contract.</param>
+    /// <param name="resolver">Resolver for exact attempt-scoped plans and Storage executors.</param>
+    /// <exception cref="ArgumentNullException">An argument is <see langword="null"/>.</exception>
+    public MaterializationSynchronizationActivationDurableOperationAdapter(
+        RequestContractReference request,
+        IMaterializationRebuildExecutionResolver resolver)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        this.resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
+        Capabilities = new(
+            idempotencyEvidence: DurableOperationIdempotencyEvidence.TargetDeduplication,
+            reconciliation: DurableOperationReconciliationCapability.Supported,
+            supportedRequests: [request]);
+    }
+
+    /// <inheritdoc />
+    public DurableOperationAdapterCapabilities Capabilities { get; }
+
+    /// <inheritdoc />
+    public async ValueTask<DurableOperationAttemptObservation> ExecuteAsync(
+        OperationContext context,
+        DurableOperationInvocation invocation)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(invocation);
+        context.ThrowIfCancellationRequested();
+        var outcome = await RunAsync(
+                context,
+                invocation.Request,
+                invocation.AttemptId,
+                invocation.Fence,
+                MaterializationRebuildExecutionResolutionFailureMode.ProjectFailure)
+            .ConfigureAwait(false)
+            ?? throw new InvalidOperationException("Execute resolution failures must project a terminal Request outcome.");
+        return new DurableOperationOutcomeObservation(outcome);
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<DurableOperationReconciliationObservation> ReconcileAsync(
+        OperationContext context,
+        DurableOperationReconciliationRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(request);
+        context.ThrowIfCancellationRequested();
+        var outcome = await RunAsync(
+                context,
+                request.Request,
+                request.Identity.SourceAttemptId,
+                request.Identity.SourceFence,
+                MaterializationRebuildExecutionResolutionFailureMode.RemainUnresolved)
+            .ConfigureAwait(false);
+        return outcome is null
+            ? new DurableOperationUnresolved()
+            : new DurableOperationReconciledOutcome(outcome);
+    }
+
+    async Task<RequestTerminalOutcome?> RunAsync(
+        OperationContext context,
+        RequestEnvelope request,
+        OperationAttemptId physicalAttempt,
+        OperationFence physicalFence,
+        MaterializationRebuildExecutionResolutionFailureMode resolutionFailureMode)
+    {
+        if (!Capabilities.Supports(request.Contract))
+        {
+            return MaterializationRebuildDurableOperationProjection.Failure(
+                MaterializationRebuildDurableOperationDiagnosticCodes.RequestUnsupported);
+        }
+        if (!MaterializationRebuildDurableOperationProjection.TryReadStringPayload(request, out var payload))
+        {
+            return MaterializationRebuildDurableOperationProjection.Failure(
+                MaterializationRebuildDurableOperationDiagnosticCodes.RequestPayloadInvalid);
+        }
+        if (!MaterializationRebuildWorkReferenceJsonSerializer.TryDeserializePlan(
+                payload,
+                out var reference,
+                out _)
+            || reference is null)
+        {
+            return MaterializationRebuildDurableOperationProjection.Failure(
+                MaterializationRebuildDurableOperationDiagnosticCodes.WorkReferenceInvalid);
+        }
+        if (request.Context.Origin is not ProcessInteractionOrigin origin)
+        {
+            return MaterializationRebuildDurableOperationProjection.Failure(
+                MaterializationRebuildDurableOperationDiagnosticCodes.RequestOriginInvalid,
+                plan: reference.Plan);
+        }
+        if (!resolver.TryResolve(reference.Plan, origin.Continuation, out var execution)
+            || execution is null)
+        {
+            if (resolutionFailureMode == MaterializationRebuildExecutionResolutionFailureMode.RemainUnresolved)
+                return null;
+            return MaterializationRebuildDurableOperationProjection.Failure(
+                MaterializationRebuildDurableOperationDiagnosticCodes.ExecutionUnavailable,
+                plan: reference.Plan,
+                continuation: origin.Continuation);
+        }
+        if (execution.PlanFingerprint != reference.Plan
+            || execution.Attempt.Continuation != origin.Continuation)
+        {
+            if (resolutionFailureMode == MaterializationRebuildExecutionResolutionFailureMode.RemainUnresolved)
+                return null;
+            return MaterializationRebuildDurableOperationProjection.Failure(
+                MaterializationRebuildDurableOperationDiagnosticCodes.ExecutionInexact,
+                plan: reference.Plan,
+                continuation: origin.Continuation);
+        }
+
+        MaterializationSynchronizationInvocationId synchronizationInvocation = new(
+            $"durable-operation/{request.Context.EmissionId.Value}");
+        MaterializationSynchronizationWorkerId worker = new(
+            $"durable-operation-attempt/{physicalAttempt.Value}/fence/{physicalFence.Value.ToString(CultureInfo.InvariantCulture)}");
+        var result = await execution.SynchronizeAndActivateAsync(
+                context,
+                synchronizationInvocation,
+                worker)
+            .ConfigureAwait(false);
+        if (result.Generation != execution.Generation)
+        {
+            return MaterializationRebuildDurableOperationProjection.Failure(
+                MaterializationRebuildDurableOperationDiagnosticCodes.ResultInexact,
+                execution,
+                generation: result.Generation,
+                disposition: result.Disposition.ToString());
+        }
+
+        if (result.Disposition == MaterializationGenerationActivationDisposition.WorkRemaining)
+        {
+            var progress = ProgressFingerprint(execution, result.Synchronization!);
+            return new RequestResultOutcome(
+                MaterializationRebuildProcessFactory.WorkRemainingOutcome,
+                MaterializationRebuildDurableOperationProjection.StringValue(progress));
+        }
+
+        if (result.Disposition == MaterializationGenerationActivationDisposition.Active)
+        {
+            var activation = result.Activation!;
+            var target = result.Target!;
+            var promotion = activation.PromotionReceipt!;
+            if (promotion.TargetId != execution.Target
+                || target.TargetId != execution.Target
+                || target.MaterializationId != execution.Materialization
+                || target.Revision != promotion.TargetRevision
+                || target.ActiveGenerationId != execution.Generation)
+            {
+                return MaterializationRebuildDurableOperationProjection.Failure(
+                    MaterializationRebuildDurableOperationDiagnosticCodes.ResultInexact,
+                    execution,
+                    generation: result.Generation,
+                    disposition: result.Disposition.ToString());
+            }
+
+            var active = new MaterializationActiveGenerationReference(
+                schemaVersion: MaterializationActiveGenerationReference.CurrentSchemaVersion,
+                plan: execution.PlanFingerprint,
+                materialization: execution.Materialization,
+                target: execution.Target,
+                generation: execution.Generation,
+                targetRevision: promotion.TargetRevision,
+                promotion: promotion.PromotionId,
+                promotionFence: promotion.PromotionFence,
+                validation: promotion.ValidationFingerprint,
+                activatedAtUtc: promotion.PromotedAtUtc);
+            return new RequestResultOutcome(
+                MaterializationRebuildProcessFactory.ActiveOutcome,
+                MaterializationRebuildDurableOperationProjection.StringValue(
+                    MaterializationActiveGenerationReferenceJsonSerializer.Serialize(active)));
+        }
+
+        return MaterializationRebuildDurableOperationProjection.Failure(
+            MaterializationRebuildDurableOperationProjection.FirstDiagnosticCode(
+                result.Diagnostics,
+                MaterializationRebuildDurableOperationDiagnosticCodes.ActivationRejected),
+            execution,
+            generation: result.Generation,
+            disposition: result.Disposition.ToString(),
+            diagnostics: result.Diagnostics);
+    }
+
+    static string ProgressFingerprint(
+        MaterializationRebuildExecution execution,
+        MaterializationSynchronizationRunResult synchronization)
+    {
+        var values = new string[4 + synchronization.Feeds.Length * 4];
+        var index = 0;
+        values[index++] = execution.PlanFingerprint.Value;
+        values[index++] = execution.Generation.Value;
+        values[index++] = execution.Attempt.Continuation.ProcessInstanceId.Value;
+        values[index++] = execution.Attempt.Continuation.ProcessAttemptId.Value;
+        foreach (var feed in synchronization.Feeds.OrderBy(static feed => feed.Feed.Value, StringComparer.Ordinal))
+        {
+            values[index++] = feed.Feed.Value;
+            values[index++] = feed.Progress?.LatestChangeCheckpoint?.Id.Value ?? "change-absent";
+            values[index++] = feed.Progress?.LatestSettlement?.Id.Value ?? "settlement-absent";
+            values[index++] = feed.Progress?.LatestBatchCheckpoint?.Id.Value ?? "baseline-absent";
+        }
+
+        return ProgressFingerprintPrefix + MaterializationStableIdentity.Digest(values);
+    }
+}
+
 static class MaterializationRebuildDurableOperationProjection
 {
     const string EvidenceSchemaVersion = "cohesive-materialization-rebuild-durable-operation-evidence/v1";
@@ -547,6 +950,10 @@ static class MaterializationRebuildDurableOperationProjection
         payload = string.Empty;
         return false;
     }
+
+    internal static PortableValue StringValue(string value) => PortableValue.Concrete(
+        StringContract,
+        ObservationValue.FromString(value));
 
     internal static RequestFailureOutcome Failure(
         string code,

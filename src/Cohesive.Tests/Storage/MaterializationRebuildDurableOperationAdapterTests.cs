@@ -29,6 +29,10 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
 
     static readonly MaterializationGenerationId Generation = new("generation/materialization-rebuild/1");
 
+    static readonly MaterializationId Materialization = new("materialization/test");
+
+    static readonly MaterializationTargetId Target = new("target/test");
+
     static readonly ImmutableArray<MaterializationRebuildShardId> Shards =
         [new("shard-b"), new("shard-a")];
 
@@ -193,6 +197,149 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
     }
 
     [Fact]
+    public async Task SynchronizationWorkRemaining_UsesLogicalEmissionAndExplicitPhysicalAttemptFenceEvidence()
+    {
+        var artifacts = MaterializationRebuildProcessFactory.Create();
+        List<(MaterializationSynchronizationInvocationId Invocation,
+            MaterializationSynchronizationWorkerId Worker)> calls = [];
+        var synchronization = new MaterializationSynchronizationRunResult(
+            MaterializationSynchronizationRunDisposition.WorkRemaining,
+            Generation,
+            feeds: [],
+            receipt: null);
+        var result = new MaterializationGenerationActivationResult(
+            MaterializationGenerationActivationDisposition.WorkRemaining,
+            Generation,
+            synchronization);
+        var execution = Execution(activate: (_, invocation, worker) =>
+        {
+            calls.Add((invocation, worker));
+            return Task.FromResult(result);
+        });
+        var adapter = new MaterializationSynchronizationActivationDurableOperationAdapter(
+            artifacts.SynchronizationActivationRequest,
+            new ExactResolver(execution));
+        var request = Request(
+            artifacts.SynchronizationActivationRequest,
+            MaterializationRebuildWorkReferenceJsonSerializer.SerializePlan(new(PlanFingerprint)),
+            CoordinatorAttempt.Continuation,
+            artifacts.CoordinatorPlan.DefinitionReference,
+            MaterializationRebuildProcessFactory.CoordinatorSynchronizationActivationNodeId);
+
+        var executed = Assert.IsType<DurableOperationOutcomeObservation>(
+            await adapter.ExecuteAsync(
+                OperationContext.Create(),
+                Invocation(request, artifacts.SynchronizationActivationBinding, artifacts.InteractionCatalog)));
+        var reconciled = Assert.IsType<DurableOperationReconciledOutcome>(
+            await ReconcileAsync(
+                request,
+                artifacts.SynchronizationActivationBinding,
+                artifacts.InteractionCatalog,
+                adapter));
+
+        Assert.Equal(2, calls.Count);
+        Assert.All(calls, static call => Assert.Equal(
+            "durable-operation/emission/materialization-rebuild",
+            call.Invocation.Value));
+        Assert.Equal(
+            "durable-operation-attempt/operation-attempt/1/fence/1",
+            calls[0].Worker.Value);
+        Assert.Equal(
+            "durable-operation-attempt/operation-attempt/failed/fence/1",
+            calls[1].Worker.Value);
+        var executedOutcome = Assert.IsType<RequestResultOutcome>(executed.Outcome);
+        var reconciledOutcome = Assert.IsType<RequestResultOutcome>(reconciled.Outcome);
+        Assert.Equal(MaterializationRebuildProcessFactory.WorkRemainingOutcome, executedOutcome.Id);
+        Assert.Equal(executedOutcome, reconciledOutcome);
+        Assert.StartsWith(
+            "cohesive-materialization-synchronization-progress/v1:sha256:",
+            Assert.IsType<ObservationValue>(executedOutcome.Value.Value).GetRequiredString(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SynchronizationAmbiguousException_PropagatesAndReconcileRetriesTheLogicalRequest()
+    {
+        var artifacts = MaterializationRebuildProcessFactory.Create();
+        List<(MaterializationSynchronizationInvocationId Invocation,
+            MaterializationSynchronizationWorkerId Worker)> calls = [];
+        var synchronization = new MaterializationSynchronizationRunResult(
+            MaterializationSynchronizationRunDisposition.WorkRemaining,
+            Generation,
+            feeds: [],
+            receipt: null);
+        var retained = new MaterializationGenerationActivationResult(
+            MaterializationGenerationActivationDisposition.WorkRemaining,
+            Generation,
+            synchronization);
+        var execution = Execution(activate: (_, invocation, worker) =>
+        {
+            calls.Add((invocation, worker));
+            return calls.Count == 1
+                ? Task.FromException<MaterializationGenerationActivationResult>(
+                    new InjectedAmbiguousActivationException())
+                : Task.FromResult(retained);
+        });
+        var adapter = new MaterializationSynchronizationActivationDurableOperationAdapter(
+            artifacts.SynchronizationActivationRequest,
+            new ExactResolver(execution));
+        var request = Request(
+            artifacts.SynchronizationActivationRequest,
+            MaterializationRebuildWorkReferenceJsonSerializer.SerializePlan(new(PlanFingerprint)),
+            CoordinatorAttempt.Continuation,
+            artifacts.CoordinatorPlan.DefinitionReference,
+            MaterializationRebuildProcessFactory.CoordinatorSynchronizationActivationNodeId);
+
+        await Assert.ThrowsAsync<InjectedAmbiguousActivationException>(async () =>
+            await adapter.ExecuteAsync(
+                OperationContext.Create(),
+                Invocation(request, artifacts.SynchronizationActivationBinding, artifacts.InteractionCatalog)));
+        var reconciled = Assert.IsType<DurableOperationReconciledOutcome>(
+            await ReconcileAsync(
+                request,
+                artifacts.SynchronizationActivationBinding,
+                artifacts.InteractionCatalog,
+                adapter));
+
+        Assert.Equal(2, calls.Count);
+        Assert.Equal(calls[0].Invocation, calls[1].Invocation);
+        Assert.NotEqual(calls[0].Worker, calls[1].Worker);
+        Assert.Equal(
+            MaterializationRebuildProcessFactory.WorkRemainingOutcome,
+            Assert.IsType<RequestResultOutcome>(reconciled.Outcome).Id);
+    }
+
+    [Fact]
+    public void ActiveGenerationReference_RoundTripsCanonicalVersionedPromotionEvidence()
+    {
+        var reference = new MaterializationActiveGenerationReference(
+            schemaVersion: MaterializationActiveGenerationReference.CurrentSchemaVersion,
+            plan: PlanFingerprint,
+            materialization: Materialization,
+            target: Target,
+            generation: Generation,
+            targetRevision: new("3"),
+            promotion: new("promotion/test"),
+            promotionFence: new("7"),
+            validation: new("validation/test"),
+            activatedAtUtc: StartedAtUtc);
+
+        var json = MaterializationActiveGenerationReferenceJsonSerializer.Serialize(reference);
+        var restored = MaterializationActiveGenerationReferenceJsonSerializer.Deserialize(json);
+
+        Assert.Equal(reference, restored);
+        Assert.Equal(
+            json,
+            MaterializationActiveGenerationReferenceJsonSerializer.Serialize(restored));
+        Assert.Throws<JsonException>(() =>
+            MaterializationActiveGenerationReferenceJsonSerializer.Deserialize(
+                json.Replace(
+                    MaterializationActiveGenerationReference.CurrentSchemaVersion,
+                    "cohesive-materialization-active-generation-reference/v2",
+                    StringComparison.Ordinal)));
+    }
+
+    [Fact]
     public async Task StaleAttemptResolution_FailsTypedWithoutRunningShard()
     {
         var artifacts = MaterializationRebuildProcessFactory.Create();
@@ -207,6 +354,8 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
             Shards,
             replacementAttempt,
             new("generation/replacement"),
+            Materialization,
+            Target,
             _ => Task.FromResult(InitializationResult()),
             (_, _) =>
             {
@@ -214,7 +363,9 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
                 return Task.FromResult(ShardResult(
                     MaterializationRebuildShardDisposition.BaselineCompleteCatchUpRequired,
                     diagnostics: []));
-            });
+            },
+            (_, _, _) => Task.FromException<MaterializationGenerationActivationResult>(
+                new InvalidOperationException("This test does not activate a generation.")));
         var adapter = new MaterializationRebuildShardDurableOperationAdapter(
             artifacts.ShardRebuildRequest,
             new PermissiveResolver(execution));
@@ -311,16 +462,25 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
 
     static MaterializationRebuildExecution Execution(
         Func<OperationContext, Task<MaterializationRebuildInitializationResult>>? begin = null,
-        Func<OperationContext, MaterializationRebuildShardId, Task<MaterializationRebuildShardResult>>? run = null) =>
+        Func<OperationContext, MaterializationRebuildShardId, Task<MaterializationRebuildShardResult>>? run = null,
+        Func<OperationContext, MaterializationSynchronizationInvocationId, MaterializationSynchronizationWorkerId,
+            Task<MaterializationGenerationActivationResult>>? activate = null) =>
         new(
             PlanFingerprint,
             Shards,
             CoordinatorAttempt,
             Generation,
+            Materialization,
+            Target,
             begin ?? (_ => Task.FromResult(InitializationResult())),
             run ?? ((_, _) => Task.FromResult(ShardResult(
                 MaterializationRebuildShardDisposition.BaselineCompleteCatchUpRequired,
-                diagnostics: []))));
+                diagnostics: []))),
+            activate ?? ((_, _, _) => Task.FromException<MaterializationGenerationActivationResult>(
+                new InvalidOperationException("This test does not activate a generation."))));
+
+    sealed class InjectedAmbiguousActivationException()
+        : Exception("Injected ambiguous synchronization-and-activation I/O failure.");
 
     static MaterializationRebuildInitializationResult InitializationResult()
     {

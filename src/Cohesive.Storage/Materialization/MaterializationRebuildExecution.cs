@@ -1,8 +1,4 @@
-using System.Buffers;
-using System.Buffers.Binary;
 using System.Collections.Immutable;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cohesive.Execution;
@@ -39,6 +35,9 @@ public static class MaterializationRebuildDiagnosticCodes
 
     /// <summary>A stale worker, revision, or attempt tried to advance authoritative progress.</summary>
     public const string ProgressFenced = "materialization.rebuild.progress.fenced";
+
+    /// <summary>Not every persisted change feed has an exact attempt-owned pre-baseline cut.</summary>
+    public const string InitializationIncomplete = "materialization.rebuild.initialization.incomplete";
 
     /// <summary>A shard exceeded a finite page or target-bulk operating boundary.</summary>
     public const string OperatingBoundaryExceeded = "materialization.rebuild.boundary.exceeded";
@@ -87,7 +86,7 @@ public static class MaterializationRebuildIdentities
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(attempt);
-        return new($"{Prefix}/generation/{Digest(
+        return new($"{Prefix}/generation/{MaterializationStableIdentity.Digest(
             plan.Materialization.Definition.Id.Value,
             plan.Materialization.DefinitionFingerprint.Value,
             plan.Fingerprint.Value,
@@ -131,41 +130,41 @@ public static class MaterializationRebuildIdentities
     internal static MaterializationProgressMutationId Fence(
         MaterializationRebuildPlan plan,
         MaterializationRebuildAttempt attempt,
-        MaterializationRebuildShardId shard,
+        MaterializationSourceScope scope,
         MaterializationProgressRevision? revision) =>
-        new($"{Prefix}/progress-fence/{Digest(
+        new($"{Prefix}/progress-fence/{MaterializationStableIdentity.Digest(
             plan.Fingerprint.Value,
             attempt.Continuation.ProcessInstanceId.Value,
             attempt.Continuation.ProcessAttemptId.Value,
-            shard.Value,
+            MaterializationChannelSemantics.ToChannelScopeId(scope).Value,
             revision?.Value ?? "absent")}");
 
     internal static MaterializationCheckpointId ChangeCut(
         MaterializationRebuildPlan plan,
         MaterializationRebuildAttempt attempt,
-        MaterializationRebuildShardId shard) =>
-        new($"{Prefix}/change-cut/{Digest(
+        MaterializationChangeFeedId feed) =>
+        new($"{Prefix}/change-cut/{MaterializationStableIdentity.Digest(
             plan.Fingerprint.Value,
             attempt.Continuation.ProcessInstanceId.Value,
             attempt.Continuation.ProcessAttemptId.Value,
-            shard.Value)}");
+            feed.Value)}");
 
     internal static MaterializationProgressMutationId ChangeCutMutation(
         MaterializationRebuildPlan plan,
         MaterializationRebuildAttempt attempt,
-        MaterializationRebuildShardId shard) =>
-        new($"{Prefix}/change-cut-mutation/{Digest(
+        MaterializationChangeFeedId feed) =>
+        new($"{Prefix}/change-cut-mutation/{MaterializationStableIdentity.Digest(
             plan.Fingerprint.Value,
             attempt.Continuation.ProcessInstanceId.Value,
             attempt.Continuation.ProcessAttemptId.Value,
-            shard.Value)}");
+            feed.Value)}");
 
     internal static string Page(
         MaterializationRebuildPlan plan,
         MaterializationRebuildAttempt attempt,
         MaterializationRebuildShardPlan shard,
         MaterializationSourceContinuation? continuation) =>
-        $"{Prefix}/page/{Digest(
+        $"{Prefix}/page/{MaterializationStableIdentity.Digest(
             plan.Fingerprint.Value,
             attempt.Continuation.ProcessInstanceId.Value,
             attempt.Continuation.ProcessAttemptId.Value,
@@ -175,116 +174,28 @@ public static class MaterializationRebuildIdentities
             continuation?.Value ?? "start")}";
 
     internal static MaterializationBatchId Batch(string page, int chunk, int retry) =>
-        new($"{Prefix}/batch/{Digest(
+        new($"{Prefix}/batch/{MaterializationStableIdentity.Digest(
             page,
             chunk.ToString(System.Globalization.CultureInfo.InvariantCulture),
             retry.ToString(System.Globalization.CultureInfo.InvariantCulture))}");
 
     internal static MaterializationItemMutationId Mutation(string page, string itemIdentity) =>
-        new($"{Prefix}/mutation/{Digest(page, itemIdentity)}");
+        new($"{Prefix}/mutation/{MaterializationStableIdentity.Digest(page, itemIdentity)}");
 
     internal static MaterializationCheckpointId BaselineCheckpoint(string page) =>
-        new($"{Prefix}/baseline-checkpoint/{Digest(page)}");
+        new($"{Prefix}/baseline-checkpoint/{MaterializationStableIdentity.Digest(page)}");
 
     internal static MaterializationProgressMutationId BaselineCheckpointMutation(string page) =>
-        new($"{Prefix}/baseline-checkpoint-mutation/{Digest(page)}");
+        new($"{Prefix}/baseline-checkpoint-mutation/{MaterializationStableIdentity.Digest(page)}");
 
     internal static MaterializationAbandonmentId Abandonment(
         MaterializationRebuildPlan plan,
         MaterializationRebuildAttempt attempt) =>
-        new($"{Prefix}/abandonment/{Digest(
+        new($"{Prefix}/abandonment/{MaterializationStableIdentity.Digest(
             plan.Fingerprint.Value,
             attempt.Continuation.ProcessInstanceId.Value,
             attempt.Continuation.ProcessAttemptId.Value)}");
 
-    static string Digest(string first)
-    {
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        Append(hash, first);
-        return Convert.ToHexStringLower(hash.GetHashAndReset());
-    }
-
-    static string Digest(string first, string second)
-    {
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        Append(hash, first);
-        Append(hash, second);
-        return Convert.ToHexStringLower(hash.GetHashAndReset());
-    }
-
-    static string Digest(string first, string second, string third)
-    {
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        Append(hash, first);
-        Append(hash, second);
-        Append(hash, third);
-        return Convert.ToHexStringLower(hash.GetHashAndReset());
-    }
-
-    static string Digest(string first, string second, string third, string fourth)
-    {
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        Append(hash, first);
-        Append(hash, second);
-        Append(hash, third);
-        Append(hash, fourth);
-        return Convert.ToHexStringLower(hash.GetHashAndReset());
-    }
-
-    static string Digest(string first, string second, string third, string fourth, string fifth)
-    {
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        Append(hash, first);
-        Append(hash, second);
-        Append(hash, third);
-        Append(hash, fourth);
-        Append(hash, fifth);
-        return Convert.ToHexStringLower(hash.GetHashAndReset());
-    }
-
-    static string Digest(
-        string first,
-        string second,
-        string third,
-        string fourth,
-        string fifth,
-        string sixth,
-        string seventh)
-    {
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        Append(hash, first);
-        Append(hash, second);
-        Append(hash, third);
-        Append(hash, fourth);
-        Append(hash, fifth);
-        Append(hash, sixth);
-        Append(hash, seventh);
-        return Convert.ToHexStringLower(hash.GetHashAndReset());
-    }
-
-    static void Append(IncrementalHash hash, string value)
-    {
-        const int StackBufferSize = 256;
-        var byteCount = Encoding.UTF8.GetByteCount(value);
-        Span<byte> length = stackalloc byte[sizeof(int)];
-        BinaryPrimitives.WriteInt32BigEndian(length, byteCount);
-        hash.AppendData(length);
-
-        byte[]? rented = null;
-        Span<byte> bytes = byteCount <= StackBufferSize
-            ? stackalloc byte[byteCount]
-            : (rented = ArrayPool<byte>.Shared.Rent(byteCount)).AsSpan(0, byteCount);
-        try
-        {
-            Encoding.UTF8.GetBytes(value, bytes);
-            hash.AppendData(bytes);
-        }
-        finally
-        {
-            if (rented is not null)
-                ArrayPool<byte>.Shared.Return(rented);
-        }
-    }
 }
 
 /// <summary>One exact bounded page supplied to canonical Relations hydration.</summary>
@@ -523,23 +434,65 @@ public sealed class MaterializationRebuildShardBinding
     public IMaterializationRebuildHydrator Hydrator { get; }
 }
 
+/// <summary>Runtime binding of one persisted dependency feed to exact source and impact interpretations.</summary>
+public sealed class MaterializationChangeFeedBinding
+{
+    /// <summary>Creates one exact runtime change-feed binding.</summary>
+    /// <param name="feed">Persisted physical feed realization.</param>
+    /// <param name="channel">Exact runtime Channel realization-plan fingerprint.</param>
+    /// <param name="source">Bounded positioned change source.</param>
+    /// <param name="interpreter">Definition-linked impact-plan interpreter.</param>
+    /// <exception cref="ArgumentNullException">A required argument is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">A source or impact plan differs from the persisted feed.</exception>
+    public MaterializationChangeFeedBinding(
+        MaterializationChangeFeedPlan feed,
+        ChannelRealizationPlanFingerprint channel,
+        IMaterializationPullChangeSource source,
+        MaterializationImpactPlanInterpreter interpreter)
+    {
+        Feed = Guard.RequireNotNull(feed);
+        Source = Guard.RequireNotNull(source);
+        Interpreter = Guard.RequireNotNull(interpreter);
+        Channel = Guard.RequireNotNull(channel);
+        if (source.Descriptor.Source != feed.Scope.Source)
+            throw new ArgumentException("A runtime source must implement the exact persisted change feed.", nameof(source));
+        if (channel != feed.Channel)
+            throw new ArgumentException("A runtime Channel must implement the exact persisted feed realization.", nameof(channel));
+    }
+
+    /// <summary>Persisted physical feed realization.</summary>
+    public MaterializationChangeFeedPlan Feed { get; }
+
+    /// <summary>Exact runtime Channel realization-plan fingerprint.</summary>
+    public ChannelRealizationPlanFingerprint Channel { get; }
+
+    /// <summary>Bounded positioned change source.</summary>
+    public IMaterializationPullChangeSource Source { get; }
+
+    /// <summary>Definition-linked impact-plan interpreter.</summary>
+    public MaterializationImpactPlanInterpreter Interpreter { get; }
+}
+
 /// <summary>Exact-context runtime bindings for one persisted rebuild realization plan.</summary>
 public sealed class ResolvedMaterializationRebuildPlan
 {
     readonly ImmutableDictionary<MaterializationRebuildShardId, MaterializationRebuildShardBinding> shards;
+    readonly ImmutableDictionary<MaterializationChangeFeedId, MaterializationChangeFeedBinding> changeFeeds;
 
     /// <summary>Resolves a persisted plan against exact runtime ports.</summary>
     /// <param name="plan">Persisted rebuild realization plan.</param>
     /// <param name="target">Exact candidate-generation target.</param>
     /// <param name="progressStore">Durable application-progress authority.</param>
     /// <param name="shardBindings">One runtime binding for every persisted shard.</param>
+    /// <param name="changeFeedBindings">One runtime binding for every persisted dependency feed.</param>
     /// <exception cref="ArgumentNullException">A required argument or collection is null.</exception>
     /// <exception cref="ArgumentException">A binding is missing, duplicated, stale, or incompatible.</exception>
     public ResolvedMaterializationRebuildPlan(
         MaterializationRebuildPlan plan,
         IMaterializationTarget target,
         IMaterializationProgressStore progressStore,
-        IEnumerable<MaterializationRebuildShardBinding> shardBindings)
+        IEnumerable<MaterializationRebuildShardBinding> shardBindings,
+        IEnumerable<MaterializationChangeFeedBinding> changeFeedBindings)
     {
         Plan = Guard.RequireNotNull(plan);
         Target = Guard.RequireNotNull(target);
@@ -577,6 +530,35 @@ public sealed class ResolvedMaterializationRebuildPlan
         }
 
         shards = normalized.ToImmutableDictionary(static binding => binding.Shard.Id);
+
+        ArgumentNullException.ThrowIfNull(changeFeedBindings);
+        var normalizedFeeds = changeFeedBindings.ToArray();
+        if (normalizedFeeds.Any(static binding => binding is null))
+            throw new ArgumentException("Runtime change-feed bindings cannot contain null entries.", nameof(changeFeedBindings));
+        if (normalizedFeeds.GroupBy(static binding => binding.Feed.Id).Any(static group => group.Count() > 1))
+            throw new ArgumentException("Runtime change-feed bindings cannot repeat a feed identity.", nameof(changeFeedBindings));
+        if (!plan.ChangeFeeds.Select(static feed => feed.Id)
+                .SequenceEqual(normalizedFeeds.Select(static binding => binding.Feed.Id)
+                    .OrderBy(static id => id.Value, StringComparer.Ordinal)))
+        {
+            throw new ArgumentException("Runtime bindings must cover every exact persisted change feed once.", nameof(changeFeedBindings));
+        }
+        foreach (var binding in normalizedFeeds)
+        {
+            var persisted = plan.ChangeFeeds.Single(candidate => candidate.Id == binding.Feed.Id);
+            if (!SameCanonical(persisted, binding.Feed)
+                || binding.Interpreter.Plan != plan.ImpactPlan.Fingerprint)
+            {
+                throw new ArgumentException("A runtime change-feed binding differs from its persisted semantics.", nameof(changeFeedBindings));
+            }
+            var source = plan.Sources.Single(candidate => candidate.Input == persisted.Scope.Input);
+            if (binding.Source.Descriptor.Source != source.Source
+                || !SameCanonical(binding.Source.Descriptor.CapabilityProfile, source.Profile))
+            {
+                throw new ArgumentException("A runtime change source differs from its pinned capability evidence.", nameof(changeFeedBindings));
+            }
+        }
+        changeFeeds = normalizedFeeds.ToImmutableDictionary(static binding => binding.Feed.Id);
     }
 
     /// <summary>Exact persisted rebuild realization plan.</summary>
@@ -593,6 +575,12 @@ public sealed class ResolvedMaterializationRebuildPlan
     /// <returns>The exact resolved binding.</returns>
     /// <exception cref="KeyNotFoundException"><paramref name="shard"/> is absent.</exception>
     public MaterializationRebuildShardBinding GetShard(MaterializationRebuildShardId shard) => shards[shard];
+
+    /// <summary>Gets the exact runtime binding of one persisted change feed.</summary>
+    /// <param name="feed">Stable feed identity.</param>
+    /// <returns>The exact resolved binding.</returns>
+    /// <exception cref="KeyNotFoundException"><paramref name="feed"/> is absent.</exception>
+    public MaterializationChangeFeedBinding GetChangeFeed(MaterializationChangeFeedId feed) => changeFeeds[feed];
 
     static bool SameCanonical<T>(T left, T right) where T : class =>
         StrictDocumentJson.GetCanonicalBytes(left, MaterializationJsonSerializer.CreateOptions())
@@ -684,7 +672,7 @@ public sealed record MaterializationRebuildInitializationResult
     /// <param name="disposition">Observable initialization disposition.</param>
     /// <param name="generation">Deterministic attempt-owned candidate generation.</param>
     /// <param name="generationSnapshot">Current candidate metadata when retained by the target.</param>
-    /// <param name="progress">One progress snapshot per established shard.</param>
+    /// <param name="progress">One progress snapshot per established change feed.</param>
     /// <param name="diagnostics">Structured deterministic rejection diagnostics.</param>
     /// <exception cref="ArgumentException">Result evidence contradicts its disposition.</exception>
     public MaterializationRebuildInitializationResult(
@@ -753,7 +741,7 @@ public sealed record MaterializationRebuildInitializationResult
     /// <summary>Current candidate metadata when retained by the target.</summary>
     public MaterializationGenerationSnapshot? GenerationSnapshot { get; }
 
-    /// <summary>Established progress snapshots in shard order.</summary>
+    /// <summary>Established progress snapshots in canonical change-feed order.</summary>
     public ImmutableArray<MaterializationProgressSnapshot> Progress { get; }
 
     /// <summary>Structured deterministic rejection diagnostics.</summary>
@@ -783,7 +771,10 @@ public enum MaterializationRebuildShardDisposition
     /// Continuing the same attempt is unsafe; external control must issue RestartAttempt so lifecycle coordination
     /// durably abandons it and starts a new generation.
     /// </summary>
-    RestartRequired = 5
+    RestartRequired = 5,
+
+    /// <summary>The attempt has not durably captured every pre-baseline change-feed cut.</summary>
+    NotReady = 6
 }
 
 /// <summary>Terminal evidence for one Storage-owned shard rebuild operation.</summary>
@@ -964,8 +955,6 @@ public sealed record MaterializationBaselineCompleteCatchUpRequired
 /// </summary>
 public sealed class MaterializationRebuildExecutor
 {
-    static readonly JsonSerializerOptions IdentityJsonOptions = MaterializationJsonSerializer.CreateOptions();
-
     readonly ResolvedMaterializationRebuildPlan resolved;
     readonly IMaterializationRebuildCrashInjector crashInjector;
 
@@ -1026,19 +1015,19 @@ public sealed class MaterializationRebuildExecutor
                     subject: generation.Value)]);
         }
 
-        var progress = ImmutableArray.CreateBuilder<MaterializationProgressSnapshot>(plan.Shards.Length);
-        foreach (var shard in plan.Shards)
+        var progress = ImmutableArray.CreateBuilder<MaterializationProgressSnapshot>(plan.ChangeFeeds.Length);
+        foreach (var feed in plan.ChangeFeeds)
         {
-            var binding = resolved.GetShard(shard.Id);
-            var key = ProgressKey(plan, generation, shard);
-            var owner = Owner(attempt, shard);
+            var binding = resolved.GetChangeFeed(feed.Id);
+            var key = ProgressKey(plan, generation, feed.Scope);
+            var owner = Owner(attempt, feed.Scope);
             var current = await resolved.ProgressStore.LoadAsync(context, key).ConfigureAwait(false);
             if (current is null || !string.Equals(current.FenceOwner, owner, StringComparison.Ordinal))
             {
                 var acquired = await resolved.ProgressStore.AcquireFenceAsync(
                         context,
                         key,
-                        MaterializationRebuildIdentities.Fence(plan, attempt, shard.Id, current?.Revision),
+                        MaterializationRebuildIdentities.Fence(plan, attempt, feed.Scope, current?.Revision),
                         current?.Revision,
                         owner)
                     .ConfigureAwait(false);
@@ -1050,29 +1039,29 @@ public sealed class MaterializationRebuildExecutor
                         begun.Generation,
                         progress,
                         acquired.Diagnostics,
-                        $"Could not acquire progress for shard '{shard.Id.Value}'.");
+                        $"Could not acquire progress for change feed '{feed.Id.Value}'.");
                 }
                 current = acquired.Snapshot!;
             }
 
             if (current.LatestChangeCheckpoint is null)
             {
-                var position = await binding.Source.CaptureCurrentPositionAsync(context, shard.Scope)
+                var position = await binding.Source.CaptureCurrentPositionAsync(context, feed.Scope)
                     .ConfigureAwait(false);
                 var checkpoint = new MaterializationApplicationCheckpoint(
-                    id: MaterializationRebuildIdentities.ChangeCut(plan, attempt, shard.Id),
+                    id: MaterializationRebuildIdentities.ChangeCut(plan, attempt, feed.Id),
                     kind: MaterializationCheckpointKind.ChangeProgress,
                     continuation: null,
                     completion: null,
                     position: position,
                     appliedDeliveries: [],
                     committedAtUtc: context.UtcNow,
-                    evidenceReference: shard.ChangeChannel?.Value,
+                    evidenceReference: feed.Channel.Value,
                     channelProgress: MaterializationChannelSemantics.CreatePositionedDurableProgress(position));
                 var saved = await resolved.ProgressStore.SaveCheckpointAsync(
                         context,
                         key,
-                        MaterializationRebuildIdentities.ChangeCutMutation(plan, attempt, shard.Id),
+                        MaterializationRebuildIdentities.ChangeCutMutation(plan, attempt, feed.Id),
                         current.Revision,
                         owner,
                         current.Fence,
@@ -1086,7 +1075,7 @@ public sealed class MaterializationRebuildExecutor
                         begun.Generation,
                         progress,
                         saved.Diagnostics,
-                        $"Could not persist the initial change cut for shard '{shard.Id.Value}'.");
+                        $"Could not persist the initial change cut for change feed '{feed.Id.Value}'.");
                 }
                 current = saved.Snapshot!;
             }
@@ -1120,8 +1109,8 @@ public sealed class MaterializationRebuildExecutor
         var binding = resolved.GetShard(shardId);
         var shard = binding.Shard;
         var generation = MaterializationRebuildIdentities.Generation(plan, attempt);
-        var key = ProgressKey(plan, generation, shard);
-        var owner = Owner(attempt, shard);
+        var key = ProgressKey(plan, generation, shard.Scope);
+        var owner = Owner(attempt, shard.Scope);
         var progress = await resolved.ProgressStore.LoadAsync(context, key).ConfigureAwait(false)
             ?? throw new InvalidOperationException(
                 $"Rebuild shard '{shard.Id.Value}' was not initialized for generation '{generation.Value}'.");
@@ -1155,6 +1144,20 @@ public sealed class MaterializationRebuildExecutor
                     progress,
                     MaterializationRebuildDiagnosticCodes.ProgressFenced,
                     "Retained baseline completion does not match the exact shard read or operating boundary.");
+        }
+
+        if (await FindIncompleteChangeCutAsync(context, plan, attempt, generation).ConfigureAwait(false)
+            is { } incompleteFeed)
+        {
+            return Failure(
+                MaterializationRebuildShardDisposition.NotReady,
+                shard,
+                generation,
+                pages: 0,
+                outputs: 0,
+                progress,
+                MaterializationRebuildDiagnosticCodes.InitializationIncomplete,
+                $"Change feed '{incompleteFeed.Value}' lacks its exact attempt-owned pre-baseline cut.");
         }
 
         var pages = 0;
@@ -1271,7 +1274,14 @@ public sealed class MaterializationRebuildExecutor
                     crashOccurrence++)
                 .ConfigureAwait(false);
 
-            if (!TryProjectMutations(pageIdentity, hydrated.Rows, out var mutations, out var projectionMessage))
+            if (!TryProjectMutations(
+                    pageIdentity,
+                    shard.Scope.Input,
+                    page.Read.Observations,
+                    plan.Materialization.Definition.Relation.Output.Shape,
+                    hydrated.Rows,
+                    out var mutations,
+                    out var projectionMessage))
             {
                 return Failure(
                     MaterializationRebuildShardDisposition.SourceOrHydrationFailed,
@@ -1418,7 +1428,7 @@ public sealed class MaterializationRebuildExecutor
         {
             var snapshot = await resolved.ProgressStore.LoadAsync(
                     context,
-                    ProgressKey(plan, generation, shard))
+                    ProgressKey(plan, generation, shard.Scope))
                 .ConfigureAwait(false);
             if (snapshot is null
                 || !MaterializationRebuildProgressSemantics.IsExactCompletedBaseline(
@@ -1432,6 +1442,41 @@ public sealed class MaterializationRebuildExecutor
             snapshots.Add(snapshot);
         }
         return new(attempt, plan, generation, snapshots.MoveToImmutable());
+    }
+
+    async Task<MaterializationChangeFeedId?> FindIncompleteChangeCutAsync(
+        OperationContext context,
+        MaterializationRebuildPlan plan,
+        MaterializationRebuildAttempt attempt,
+        MaterializationGenerationId generation)
+    {
+        foreach (var feed in plan.ChangeFeeds)
+        {
+            var owner = Owner(attempt, feed.Scope);
+            var snapshot = await resolved.ProgressStore.LoadAsync(
+                    context,
+                    ProgressKey(plan, generation, feed.Scope))
+                .ConfigureAwait(false);
+            var checkpoint = snapshot?.LatestChangeCheckpoint;
+            if (snapshot is null
+                || !string.Equals(snapshot.FenceOwner, owner, StringComparison.Ordinal)
+                || checkpoint is not
+                {
+                    Kind: MaterializationCheckpointKind.ChangeProgress,
+                    Position: { } position
+                }
+                || checkpoint.Id != MaterializationRebuildIdentities.ChangeCut(plan, attempt, feed.Id)
+                || position.Scope != feed.Scope
+                || !checkpoint.AppliedDeliveries.IsDefaultOrEmpty
+                || !string.Equals(checkpoint.EvidenceReference, feed.Channel.Value, StringComparison.Ordinal)
+                || checkpoint.ChannelProgress
+                    != MaterializationChannelSemantics.CreatePositionedDurableProgress(position))
+            {
+                return feed.Id;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -1483,181 +1528,107 @@ public sealed class MaterializationRebuildExecutor
         ImmutableArray<MaterializationItemMutation> mutations,
         int crashOccurrence)
     {
-        if (mutations.IsDefaultOrEmpty)
-            return (null, null, crashOccurrence);
-        var offset = 0;
-        var chunkIndex = 0;
-        var maximumAttempts = resolved.Plan.Materialization.Definition.FailurePolicy.MaximumAttempts;
-        while (offset < mutations.Length)
+        var nextCrashOccurrence = crashOccurrence;
+        var write = await MaterializationTargetBatchWriter.ApplyAsync(
+                context: context,
+                target: resolved.Target,
+                generation: generation,
+                workerFence: MaterializationWorkerFence.Initial,
+                mutations: mutations,
+                maximumBulkItems: resolved.Plan.Limits.MaximumBulkItems,
+                maximumBulkBytes: resolved.Plan.Limits.MaximumBulkBytes,
+                maximumAttempts: resolved.Plan.Materialization.Definition.FailurePolicy.MaximumAttempts,
+                createBatchId: (chunkIndex, retry) =>
+                    MaterializationRebuildIdentities.Batch(pageIdentity, chunkIndex, retry),
+                afterBulkObservation: ObserveBulkAsync)
+            .ConfigureAwait(false);
+        return write.Disposition switch
         {
-            var lowerCount = 1;
-            var upperCount = Math.Min(resolved.Plan.Limits.MaximumBulkItems, mutations.Length - offset);
-            ImmutableArray<MaterializationItemMutation>? selected = null;
-            while (lowerCount <= upperCount)
-            {
-                var count = lowerCount + ((upperCount - lowerCount) / 2);
-                var candidate = mutations.Slice(offset, count);
-                var request = new MaterializationApplyBatchRequest(
-                    batchId: MaterializationRebuildIdentities.Batch(pageIdentity, chunkIndex, retry: 0),
-                    generationId: generation,
-                    workerFence: MaterializationWorkerFence.Initial,
-                    mutations: candidate);
-                if (MaterializationTargetIntentFingerprinter.TryAnalyzeBatch(
-                        request,
-                        resolved.Plan.Limits.MaximumBulkBytes,
-                        out _,
-                        out _))
-                {
-                    selected = candidate;
-                    lowerCount = count + 1;
-                }
-                else
-                {
-                    upperCount = count - 1;
-                }
-            }
-            if (selected is null)
-            {
-                return (
-                    MaterializationRebuildShardDisposition.BoundaryExceeded,
-                    $"One output mutation cannot fit the {resolved.Plan.Limits.MaximumBulkBytes}-byte target bound.",
-                    crashOccurrence);
-            }
-            var chunk = selected.Value;
-            var pending = chunk;
-            for (var retry = 0; retry < maximumAttempts; retry++)
-            {
-                var request = new MaterializationApplyBatchRequest(
-                    batchId: MaterializationRebuildIdentities.Batch(pageIdentity, chunkIndex, retry),
-                    generationId: generation,
-                    workerFence: MaterializationWorkerFence.Initial,
-                    mutations: pending);
-                var result = await resolved.Target.ApplyBatchAsync(context, request).ConfigureAwait(false);
-                try
-                {
-                    result.ValidateAgainst(request);
-                }
-                catch (ArgumentException exception)
-                {
-                    return (
-                        MaterializationRebuildShardDisposition.TargetFailed,
-                        $"The target returned inexact per-item evidence: {exception.Message}",
-                        crashOccurrence);
-                }
-                await ObserveCrashAsync(
-                        context,
-                        attempt,
-                        generation,
-                        shard.Id,
-                        pageIdentity,
-                        MaterializationRebuildCrashPoint.AfterBulk,
-                        crashOccurrence++)
-                    .ConfigureAwait(false);
-                if (result.Disposition == MaterializationBatchDisposition.IdentityConflict)
-                {
-                    return (
-                        MaterializationRebuildShardDisposition.RestartRequired,
-                        $"The target found different canonical content for replayed page '{pageIdentity}' "
-                        + $"and batch '{request.BatchId.Value}'; continuing this Process attempt is unsafe.",
-                        crashOccurrence);
-                }
-                if (result.Disposition == MaterializationBatchDisposition.StaleFence)
-                {
-                    return (
-                        MaterializationRebuildShardDisposition.Fenced,
-                        "The target rejected a stale generation worker fence.",
-                        crashOccurrence);
-                }
+            MaterializationTargetWriteDisposition.Applied => (null, null, nextCrashOccurrence),
+            MaterializationTargetWriteDisposition.BoundaryExceeded => (
+                MaterializationRebuildShardDisposition.BoundaryExceeded,
+                write.Message,
+                nextCrashOccurrence),
+            MaterializationTargetWriteDisposition.IdentityConflict => (
+                MaterializationRebuildShardDisposition.RestartRequired,
+                $"Page '{pageIdentity}' cannot be replayed safely. {write.Message} "
+                + "Continuing this Process attempt is unsafe.",
+                nextCrashOccurrence),
+            MaterializationTargetWriteDisposition.StaleFence => (
+                MaterializationRebuildShardDisposition.Fenced,
+                write.Message,
+                nextCrashOccurrence),
+            MaterializationTargetWriteDisposition.Failed => (
+                MaterializationRebuildShardDisposition.TargetFailed,
+                write.Message,
+                nextCrashOccurrence),
+            _ => throw new InvalidOperationException($"Unsupported target write disposition '{write.Disposition}'.")
+        };
 
-                HashSet<MaterializationItemMutationId>? retryable = null;
-                StringBuilder? permanentFailures = null;
-                foreach (var outcome in result.Outcomes)
-                {
-                    if (outcome.Disposition is MaterializationItemOutcomeDisposition.Applied
-                        or MaterializationItemOutcomeDisposition.Replayed)
-                    {
-                        continue;
-                    }
-                    if (outcome.Disposition == MaterializationItemOutcomeDisposition.RetryableRejected)
-                    {
-                        retryable ??= new(result.Outcomes.Length);
-                        retryable.Add(outcome.MutationId);
-                        continue;
-                    }
-
-                    permanentFailures ??= new();
-                    if (permanentFailures.Length > 0)
-                        permanentFailures.Append(' ');
-                    permanentFailures.Append(outcome.Code).Append(": ").Append(outcome.Message);
-                }
-
-                if (retryable is null && permanentFailures is null)
-                    break;
-                if (permanentFailures is not null)
-                {
-                    return (
-                        MaterializationRebuildShardDisposition.TargetFailed,
-                        permanentFailures.ToString(),
-                        crashOccurrence);
-                }
-                if (retry + 1 >= maximumAttempts)
-                {
-                    return (
-                        MaterializationRebuildShardDisposition.TargetFailed,
-                        "The target retry budget was exhausted for one or more output mutations.",
-                        crashOccurrence);
-                }
-                var retryBuilder = ImmutableArray.CreateBuilder<MaterializationItemMutation>(retryable!.Count);
-                foreach (var mutation in pending)
-                {
-                    if (retryable.Contains(mutation.MutationId))
-                        retryBuilder.Add(mutation);
-                }
-                pending = retryBuilder.MoveToImmutable();
-            }
-            offset += chunk.Length;
-            chunkIndex++;
+        async ValueTask ObserveBulkAsync(
+            OperationContext observationContext,
+            MaterializationApplyBatchRequest _,
+            MaterializationBatchResult __)
+        {
+            await ObserveCrashAsync(
+                    observationContext,
+                    attempt,
+                    generation,
+                    shard.Id,
+                    pageIdentity,
+                    MaterializationRebuildCrashPoint.AfterBulk,
+                    nextCrashOccurrence++)
+                .ConfigureAwait(false);
         }
-        return (null, null, crashOccurrence);
     }
 
     static bool TryProjectMutations(
         string pageIdentity,
+        RelationQueryInputId rootInput,
+        ImmutableArray<RelationQuerySourceReadObservation> observations,
+        QualifiedShapeId expectedOutputShape,
         ImmutableArray<RelationQueryOutputRow> rows,
         out ImmutableArray<MaterializationItemMutation> mutations,
         out string? message)
     {
-        if (rows.IsDefaultOrEmpty)
+        ImmutableArray<MaterializationRootProjection> projections;
+        try
+        {
+            projections = MaterializationRootProjectionSemantics.FromBaselinePage(
+                rootInput: rootInput,
+                observations: observations,
+                expectedOutputShape: expectedOutputShape,
+                rows: rows);
+        }
+        catch (ArgumentException exception)
+        {
+            mutations = [];
+            message = exception.Message;
+            return false;
+        }
+
+        var outputCount = 0;
+        foreach (var projection in projections)
+        {
+            if (projection.Row is not null)
+                outputCount++;
+        }
+        if (outputCount == 0)
         {
             mutations = [];
             message = null;
             return true;
         }
-        var builder = ImmutableArray.CreateBuilder<MaterializationItemMutation>(rows.Length);
-        HashSet<MaterializationItemId> items = new(rows.Length);
-        foreach (var row in rows)
+
+        var builder = ImmutableArray.CreateBuilder<MaterializationItemMutation>(outputCount);
+        foreach (var projection in projections)
         {
-            if (row.Identity is not { } identity
-                || identity.Kind is ObservationValueKind.Undefined
-                    or ObservationValueKind.Null
-                    or ObservationValueKind.Array
-                    or ObservationValueKind.Object)
-            {
-                mutations = [];
-                message = "Every materialized Relations row requires one concrete scalar identity.";
-                return false;
-            }
-            var encodedIdentity = EncodeIdentity(identity);
-            var item = new MaterializationItemId(encodedIdentity);
-            if (!items.Add(item))
-            {
-                mutations = [];
-                message = $"Materialized output identity '{encodedIdentity}' occurred more than once in one page.";
-                return false;
-            }
+            if (projection.Row is not { } row)
+                continue;
+            var item = MaterializationItemIdentity.FromRootIdentity(projection.Root.Identity);
             builder.Add(new MaterializationUpsert(
                 itemId: item,
-                mutationId: MaterializationRebuildIdentities.Mutation(pageIdentity, encodedIdentity),
+                mutationId: MaterializationRebuildIdentities.Mutation(pageIdentity, item.Value),
                 version: MaterializationRebuildIdentities.BaselineItemVersion,
                 value: row.Value));
         }
@@ -1665,16 +1636,6 @@ public sealed class MaterializationRebuildExecutor
         message = null;
         return true;
     }
-
-    static string EncodeIdentity(ObservationValue identity)
-    {
-        var canonical = StrictDocumentJson.GetCanonicalBytes(
-            new IdentityContent(identity),
-            IdentityJsonOptions);
-        return $"materialization-rebuild-item/v1/{Convert.ToHexStringLower(SHA256.HashData(canonical))}";
-    }
-
-    sealed record IdentityContent(ObservationValue Value);
 
     async ValueTask ObserveCrashAsync(
         OperationContext context,
@@ -1689,18 +1650,19 @@ public sealed class MaterializationRebuildExecutor
                 new(attempt, generation, shard, pageIdentity, point, occurrence))
             .ConfigureAwait(false);
 
-    static MaterializationProgressKey ProgressKey(
+    internal static MaterializationProgressKey ProgressKey(
         MaterializationRebuildPlan plan,
         MaterializationGenerationId generation,
-        MaterializationRebuildShardPlan shard) =>
+        MaterializationSourceScope scope) =>
         new(
             materialization: plan.Materialization.Definition.Id,
             definitionFingerprint: plan.Materialization.DefinitionFingerprint,
             generation: generation,
-            scope: shard.Scope);
+            scope: scope);
 
-    static string Owner(MaterializationRebuildAttempt attempt, MaterializationRebuildShardPlan shard) =>
-        $"{attempt.Continuation.ProcessInstanceId.Value}/{attempt.Continuation.ProcessAttemptId.Value}/{shard.Id.Value}";
+    internal static string Owner(MaterializationRebuildAttempt attempt, MaterializationSourceScope scope) =>
+        $"{attempt.Continuation.ProcessInstanceId.Value}/{attempt.Continuation.ProcessAttemptId.Value}/"
+        + MaterializationChannelSemantics.ToChannelScopeId(scope).Value;
 
     MaterializationRebuildInitializationResult RejectedInitialization(
         MaterializationGenerationId generation,

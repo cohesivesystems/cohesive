@@ -29,6 +29,25 @@ public readonly record struct MaterializationRebuildShardId
     public override string ToString() => Value;
 }
 
+/// <summary>Stable identity of one independently checkpointed materialization change feed.</summary>
+[JsonConverter(typeof(SingleValueWrapperJsonConverter))]
+public readonly record struct MaterializationChangeFeedId
+{
+    /// <summary>Creates a change-feed identity.</summary>
+    /// <param name="value">Stable identity retained across replay and retry of one synchronization plan.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="value"/> is empty or white space.</exception>
+    [JsonConstructor]
+    public MaterializationChangeFeedId(string value) => Value = Guard.RequireNotNullOrWhiteSpace(value);
+
+    /// <summary>Raw stable change-feed identity.</summary>
+    public string Value { get; }
+
+    /// <summary>Returns the raw stable change-feed identity.</summary>
+    /// <returns>The value supplied at construction.</returns>
+    public override string ToString() => Value;
+}
+
 /// <summary>Deterministic fingerprint of one complete persisted rebuild realization plan.</summary>
 public sealed record MaterializationRebuildPlanFingerprint
 {
@@ -59,7 +78,7 @@ public sealed record MaterializationRebuildPlanFingerprint
     public string Value { get; }
 }
 
-/// <summary>Explicit finite operating bounds for one baseline rebuild Process.</summary>
+/// <summary>Explicit finite operating bounds for one baseline-plus-catch-up rebuild Process.</summary>
 public sealed record MaterializationRebuildLimits
 {
     /// <summary>Creates finite rebuild operating bounds.</summary>
@@ -70,6 +89,9 @@ public sealed record MaterializationRebuildLimits
     /// <param name="maximumPagesPerShard">Maximum pages one shard may traverse before failing closed.</param>
     /// <param name="maximumStartsPerActivation">Maximum shard children the coordinator may start in one activation.</param>
     /// <param name="maximumParallelism">Maximum simultaneously active shard children.</param>
+    /// <param name="maximumChangeFeedsPerConvergenceActivation">
+    /// Maximum total physical change feeds interpreted by one convergence activation.
+    /// </param>
     /// <exception cref="ArgumentOutOfRangeException">A supplied bound is not positive.</exception>
     [JsonConstructor]
     public MaterializationRebuildLimits(
@@ -79,7 +101,8 @@ public sealed record MaterializationRebuildLimits
         long maximumBulkBytes,
         int maximumPagesPerShard,
         int maximumStartsPerActivation,
-        int maximumParallelism)
+        int maximumParallelism,
+        int maximumChangeFeedsPerConvergenceActivation)
     {
         if (maximumPageItems <= 0)
             throw new ArgumentOutOfRangeException(nameof(maximumPageItems), maximumPageItems, "A page item bound must be positive.");
@@ -100,6 +123,13 @@ public sealed record MaterializationRebuildLimits
         }
         if (maximumParallelism <= 0)
             throw new ArgumentOutOfRangeException(nameof(maximumParallelism), maximumParallelism, "A parallelism bound must be positive.");
+        if (maximumChangeFeedsPerConvergenceActivation <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maximumChangeFeedsPerConvergenceActivation),
+                maximumChangeFeedsPerConvergenceActivation,
+                "A per-activation change-feed bound must be positive.");
+        }
 
         MaximumPageItems = maximumPageItems;
         MaximumPageBytes = maximumPageBytes;
@@ -108,6 +138,7 @@ public sealed record MaterializationRebuildLimits
         MaximumPagesPerShard = maximumPagesPerShard;
         MaximumStartsPerActivation = maximumStartsPerActivation;
         MaximumParallelism = maximumParallelism;
+        MaximumChangeFeedsPerConvergenceActivation = maximumChangeFeedsPerConvergenceActivation;
     }
 
     /// <summary>Maximum source observations in one page.</summary>
@@ -132,6 +163,9 @@ public sealed record MaterializationRebuildLimits
 
     /// <summary>Maximum simultaneously active shard children.</summary>
     public int MaximumParallelism { get; }
+
+    /// <summary>Maximum total physical change feeds interpreted by one convergence activation.</summary>
+    public int MaximumChangeFeedsPerConvergenceActivation { get; }
 }
 
 /// <summary>Exact capability realization of one canonical Relations acquisition input.</summary>
@@ -192,9 +226,6 @@ public sealed record MaterializationRebuildShardPlan
     /// <param name="hydrationPhysicalPlan">
     /// Exact Relations physical lowering, realization, placements, and policy used to hydrate each root page.
     /// </param>
-    /// <param name="changeChannel">
-    /// Optional exact Channel realization-plan fingerprint governing the captured change boundary.
-    /// </param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="scope"/>, <paramref name="read"/>, or <paramref name="hydrationPhysicalPlan"/> is
     /// <see langword="null"/>.
@@ -205,8 +236,7 @@ public sealed record MaterializationRebuildShardPlan
         MaterializationRebuildShardId id,
         MaterializationSourceScope scope,
         RelationQuerySourceReadRequest read,
-        RelationQueryPhysicalPlanFingerprint hydrationPhysicalPlan,
-        ChannelRealizationPlanFingerprint? changeChannel = null)
+        RelationQueryPhysicalPlanFingerprint hydrationPhysicalPlan)
     {
         MaterializationContract.RequireDefinedIdentity(id.Value, nameof(id));
         Scope = Guard.RequireNotNull(scope);
@@ -214,7 +244,6 @@ public sealed record MaterializationRebuildShardPlan
         HydrationPhysicalPlan = Guard.RequireNotNull(hydrationPhysicalPlan);
         MaterializationSourceAcquisitionCatalog.RequireCompatibleRead(read, scope);
         Id = id;
-        ChangeChannel = changeChannel;
     }
 
     /// <summary>Stable Process partition and progress identity.</summary>
@@ -231,8 +260,119 @@ public sealed record MaterializationRebuildShardPlan
     /// </summary>
     public RelationQueryPhysicalPlanFingerprint HydrationPhysicalPlan { get; }
 
-    /// <summary>Optional exact Channel realization-plan fingerprint for catch-up delivery.</summary>
-    public ChannelRealizationPlanFingerprint? ChangeChannel { get; }
+}
+
+/// <summary>
+/// Source-attributed evidence of the complete finite physical change-feed scope catalog for one impact input.
+/// </summary>
+/// <remarks>
+/// The evidence is captured while compiling a rebuild realization and is part of its durable fingerprint. A
+/// synchronization plan must select exactly these scopes for the input: omitting a source partition loses changes,
+/// while selecting an unreported partition has no source-backed completeness evidence.
+/// </remarks>
+public sealed record MaterializationChangeFeedCatalogEvidence
+{
+    /// <summary>Creates complete finite physical change-feed catalog evidence for one impact input.</summary>
+    /// <param name="input">Canonical Relations acquisition input whose changes are cataloged.</param>
+    /// <param name="source">Exact physical source that reported the catalog.</param>
+    /// <param name="scopes">Complete finite set of physical feed scopes reported for the input.</param>
+    /// <param name="evidenceReference">Stable source-issued reference identifying the catalog evidence.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="evidenceReference"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// An identity or evidence reference is empty; the catalog is empty or contains <see langword="null"/>; a scope
+    /// is repeated; or a scope does not belong to the attributed input and source.
+    /// </exception>
+    [JsonConstructor]
+    public MaterializationChangeFeedCatalogEvidence(
+        RelationQueryInputId input,
+        RelationQuerySourceInstanceId source,
+        ImmutableArray<MaterializationSourceScope> scopes,
+        string evidenceReference)
+    {
+        MaterializationContract.RequireDefinedIdentity(input.Value, nameof(input));
+        MaterializationContract.RequireDefinedIdentity(source.Value, nameof(source));
+        EvidenceReference = Guard.RequireNotNullOrWhiteSpace(evidenceReference);
+
+        var normalized = scopes.IsDefault ? [] : scopes;
+        if (normalized.IsDefaultOrEmpty || normalized.Any(static scope => scope is null))
+        {
+            throw new ArgumentException(
+                "Change-feed catalog evidence requires a finite non-empty physical scope set.",
+                nameof(scopes));
+        }
+        if (normalized.Any(scope => scope.Input != input || scope.Source != source))
+        {
+            throw new ArgumentException(
+                "Every cataloged change-feed scope must belong to the exact attributed input and source.",
+                nameof(scopes));
+        }
+        if (normalized
+            .Select(static scope => MaterializationChannelSemantics.ToChannelScopeId(scope))
+            .GroupBy(static scope => scope)
+            .Any(static group => group.Count() > 1))
+        {
+            throw new ArgumentException("Change-feed catalog evidence cannot repeat an exact scope.", nameof(scopes));
+        }
+
+        Input = input;
+        Source = source;
+        Scopes =
+        [
+            .. normalized.OrderBy(
+                static scope => MaterializationChannelSemantics.ToChannelScopeId(scope).Value,
+                StringComparer.Ordinal)
+        ];
+    }
+
+    /// <summary>Canonical Relations acquisition input whose changes are cataloged.</summary>
+    public RelationQueryInputId Input { get; }
+
+    /// <summary>Exact physical source that reported the catalog.</summary>
+    public RelationQuerySourceInstanceId Source { get; }
+
+    /// <summary>Complete finite physical feed scopes in canonical Channel-scope order.</summary>
+    public ImmutableArray<MaterializationSourceScope> Scopes { get; }
+
+    /// <summary>Stable source-issued reference identifying the catalog evidence.</summary>
+    public string EvidenceReference { get; }
+}
+
+/// <summary>One physical dependency feed whose pre-baseline cut and incremental progress are durable.</summary>
+/// <remarks>
+/// Change feeds are independent from baseline root-enumeration shards. A contributor or relationship input may
+/// affect a materialized root without itself being enumerable as a root shard, so synchronization completeness is
+/// defined by this catalog rather than inferred from <see cref="MaterializationRebuildShardPlan"/>.
+/// </remarks>
+public sealed record MaterializationChangeFeedPlan
+{
+    /// <summary>Creates one exact change-feed realization.</summary>
+    /// <param name="id">Stable Process work and evidence identity.</param>
+    /// <param name="scope">Exact physical source, dependency input, partition, and ordering scope.</param>
+    /// <param name="channel">Exact Channel realization-plan fingerprint governing delivery semantics.</param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="scope"/> or <paramref name="channel"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="id"/> is default.</exception>
+    [JsonConstructor]
+    public MaterializationChangeFeedPlan(
+        MaterializationChangeFeedId id,
+        MaterializationSourceScope scope,
+        ChannelRealizationPlanFingerprint channel)
+    {
+        MaterializationContract.RequireDefinedIdentity(id.Value, nameof(id));
+        Scope = Guard.RequireNotNull(scope);
+        Channel = Guard.RequireNotNull(channel);
+        Id = id;
+    }
+
+    /// <summary>Stable Process work and evidence identity.</summary>
+    public MaterializationChangeFeedId Id { get; }
+
+    /// <summary>Exact physical source, dependency input, partition, and ordering scope.</summary>
+    public MaterializationSourceScope Scope { get; }
+
+    /// <summary>Exact Channel realization-plan fingerprint governing delivery semantics.</summary>
+    public ChannelRealizationPlanFingerprint Channel { get; }
 }
 
 /// <summary>
@@ -245,33 +385,44 @@ public sealed record MaterializationRebuildShardPlan
 public sealed record MaterializationRebuildPlan
 {
     /// <summary>Current persisted rebuild-plan schema version.</summary>
-    public const string CurrentSchemaVersion = "cohesive-materialization-rebuild-plan/v1";
+    public const string CurrentSchemaVersion = "cohesive-materialization-rebuild-plan/v3";
 
     /// <summary>Creates and fingerprints a rebuild realization plan.</summary>
     /// <param name="materialization">Exact canonical materialization document.</param>
+    /// <param name="impactPlan">Exact compiled change-impact semantics interpreted during catch-up and maintenance.</param>
     /// <param name="sources">One rebuild-mode capability realization for every declared Relations source input.</param>
     /// <param name="target">Exact candidate-generation target descriptor.</param>
     /// <param name="targetCapabilityMatch">Deterministic rebuild-mode target capability decisions.</param>
     /// <param name="shards">Finite stable root-enumeration shard catalog.</param>
+    /// <param name="changeFeedCatalogs">
+    /// Source-attributed finite physical scope evidence covering every impact-plan input.
+    /// </param>
+    /// <param name="changeFeeds">Exact physical feeds selected from the complete source-attributed catalogs.</param>
     /// <param name="limits">Explicit finite page, bulk, activation, and parallelism bounds.</param>
     /// <param name="provenance">Compiler and source attribution for this realization.</param>
     /// <exception cref="ArgumentNullException">A required reference is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">A definition, capability, source, shard, or fingerprint invariant is invalid.</exception>
     public MaterializationRebuildPlan(
         MaterializationDocument materialization,
+        MaterializationImpactPlan impactPlan,
         ImmutableArray<MaterializationRebuildSourcePlan> sources,
         MaterializationTargetDescriptor target,
         MaterializationCapabilityMatch targetCapabilityMatch,
         ImmutableArray<MaterializationRebuildShardPlan> shards,
+        ImmutableArray<MaterializationChangeFeedCatalogEvidence> changeFeedCatalogs,
+        ImmutableArray<MaterializationChangeFeedPlan> changeFeeds,
         MaterializationRebuildLimits limits,
         ExecutionProvenance provenance)
         : this(
             schemaVersion: CurrentSchemaVersion,
             materialization: materialization,
+            impactPlan: impactPlan,
             sources: sources,
             target: target,
             targetCapabilityMatch: targetCapabilityMatch,
             shards: shards,
+            changeFeedCatalogs: changeFeedCatalogs,
+            changeFeeds: changeFeeds,
             limits: limits,
             provenance: provenance,
             fingerprint: null)
@@ -281,10 +432,15 @@ public sealed record MaterializationRebuildPlan
     /// <summary>Creates or deserializes an exactly fingerprinted rebuild realization plan.</summary>
     /// <param name="schemaVersion">Exact persisted plan schema version.</param>
     /// <param name="materialization">Exact canonical materialization document.</param>
+    /// <param name="impactPlan">Exact compiled change-impact semantics interpreted during catch-up and maintenance.</param>
     /// <param name="sources">One rebuild-mode capability realization for every declared Relations source input.</param>
     /// <param name="target">Exact candidate-generation target descriptor.</param>
     /// <param name="targetCapabilityMatch">Deterministic rebuild-mode target capability decisions.</param>
     /// <param name="shards">Finite stable root-enumeration shard catalog.</param>
+    /// <param name="changeFeedCatalogs">
+    /// Source-attributed finite physical scope evidence covering every impact-plan input.
+    /// </param>
+    /// <param name="changeFeeds">Exact physical feeds selected from the complete source-attributed catalogs.</param>
     /// <param name="limits">Explicit finite page, bulk, activation, and parallelism bounds.</param>
     /// <param name="provenance">Compiler and source attribution for this realization.</param>
     /// <param name="fingerprint">Persisted exact fingerprint, or <see langword="null"/> to compute it.</param>
@@ -294,10 +450,13 @@ public sealed record MaterializationRebuildPlan
     public MaterializationRebuildPlan(
         string schemaVersion,
         MaterializationDocument materialization,
+        MaterializationImpactPlan impactPlan,
         ImmutableArray<MaterializationRebuildSourcePlan> sources,
         MaterializationTargetDescriptor target,
         MaterializationCapabilityMatch targetCapabilityMatch,
         ImmutableArray<MaterializationRebuildShardPlan> shards,
+        ImmutableArray<MaterializationChangeFeedCatalogEvidence> changeFeedCatalogs,
+        ImmutableArray<MaterializationChangeFeedPlan> changeFeeds,
         MaterializationRebuildLimits limits,
         ExecutionProvenance provenance,
         MaterializationRebuildPlanFingerprint? fingerprint)
@@ -311,6 +470,7 @@ public sealed record MaterializationRebuildPlan
         }
 
         Materialization = Guard.RequireNotNull(materialization);
+        ImpactPlan = Guard.RequireNotNull(impactPlan);
         Target = Guard.RequireNotNull(target);
         TargetCapabilityMatch = Guard.RequireNotNull(targetCapabilityMatch);
         Limits = Guard.RequireNotNull(limits);
@@ -323,6 +483,8 @@ public sealed record MaterializationRebuildPlan
                 nameof(limits));
         }
         ValidateMaterialization(materialization);
+        ValidateExecutableImpactStrategies(impactPlan);
+        _ = MaterializationImpactPlanLinker.Link(impactPlan, materialization.Definition);
         if (target.MaterializationId != materialization.Definition.Id)
             throw new ArgumentException("The selected target must belong to the exact materialization.", nameof(target));
         if (!targetCapabilityMatch.IsSatisfied)
@@ -332,21 +494,26 @@ public sealed record MaterializationRebuildPlan
         ValidateSourceMatches(materialization.Definition, Sources);
         ValidateTargetMatch(materialization.Definition, target, targetCapabilityMatch);
         Shards = NormalizeShards(materialization.Definition, Sources, shards);
+        ChangeFeedCatalogs = NormalizeChangeFeedCatalogs(impactPlan, Sources, changeFeedCatalogs);
+        ChangeFeeds = NormalizeChangeFeeds(impactPlan, Sources, Shards, ChangeFeedCatalogs, changeFeeds);
         if (Shards.Length > MaterializationRebuildProcessFactory.MaximumPartitions)
         {
             throw new ArgumentException(
                 $"The v1 rebuild Process supports at most {MaterializationRebuildProcessFactory.MaximumPartitions} shards.",
                 nameof(shards));
         }
-        ValidateOperatingLimits(Sources, Target, Shards, Limits);
+        ValidateOperatingLimits(Sources, Target, Shards, ChangeFeeds, Limits);
 
         var computed = MaterializationRebuildPlanFingerprinter.Compute(
             SchemaVersion,
             Materialization,
+            ImpactPlan,
             Sources,
             Target,
             TargetCapabilityMatch,
             Shards,
+            ChangeFeedCatalogs,
+            ChangeFeeds,
             Limits,
             Provenance);
         if (fingerprint is not null && fingerprint != computed)
@@ -360,6 +527,9 @@ public sealed record MaterializationRebuildPlan
     /// <summary>Exact canonical materialization document.</summary>
     public MaterializationDocument Materialization { get; }
 
+    /// <summary>Exact definition-linked impact plan interpreted for every source change.</summary>
+    public MaterializationImpactPlan ImpactPlan { get; }
+
     /// <summary>Source realizations in canonical Relations input order.</summary>
     public ImmutableArray<MaterializationRebuildSourcePlan> Sources { get; }
 
@@ -371,6 +541,12 @@ public sealed record MaterializationRebuildPlan
 
     /// <summary>Finite stable shard catalog in ordinal shard-identity order.</summary>
     public ImmutableArray<MaterializationRebuildShardPlan> Shards { get; }
+
+    /// <summary>Complete source-attributed change-feed scope catalogs in canonical input order.</summary>
+    public ImmutableArray<MaterializationChangeFeedCatalogEvidence> ChangeFeedCatalogs { get; }
+
+    /// <summary>Exact selected change feeds in canonical feed-identity order.</summary>
+    public ImmutableArray<MaterializationChangeFeedPlan> ChangeFeeds { get; }
 
     /// <summary>Explicit finite operating bounds.</summary>
     public MaterializationRebuildLimits Limits { get; }
@@ -410,8 +586,13 @@ public sealed record MaterializationRebuildPlan
                         $"{diagnostic.Code}: {diagnostic.Message}")),
                 nameof(materialization));
         }
-        if ((materialization.Definition.UpdatePolicy.SupportedModes & MaterializationSynchronizationMode.Rebuild) == 0)
-            throw new ArgumentException("The materialization definition does not support rebuild execution.", nameof(materialization));
+        if ((materialization.Definition.UpdatePolicy.SupportedModes & MaterializationSynchronizationMode.All)
+            != MaterializationSynchronizationMode.All)
+        {
+            throw new ArgumentException(
+                "A baseline-plus-catch-up plan requires both rebuild and incremental synchronization modes.",
+                nameof(materialization));
+        }
         if (materialization.Definition.UpdatePolicy.Consistency != MaterializationConsistencyKind.BaselinePlusCatchUp)
         {
             throw new ArgumentException(
@@ -440,6 +621,18 @@ public sealed record MaterializationRebuildPlan
             throw new ArgumentException(
                 "The v1 rebuild Process cannot finitely bound many-per-root hydration output expansion.",
                 nameof(materialization));
+        }
+    }
+
+    static void ValidateExecutableImpactStrategies(MaterializationImpactPlan impactPlan)
+    {
+        if (impactPlan.Routes.Any(static route =>
+                route.Strategy is MaterializationContributorLedgerImpactStrategy))
+        {
+            throw new ArgumentException(
+                "The v1 rebuild execution cannot realize contributor-ledger impact routes because atomic "
+                + "baseline and incremental contributor-ledger population is not yet implemented.",
+                nameof(impactPlan));
         }
     }
 
@@ -472,6 +665,16 @@ public sealed record MaterializationRebuildPlan
                 MaterializationSynchronizationMode.Rebuild);
             if (!SameMatch(expected, source.CapabilityMatch))
                 throw new ArgumentException("A rebuild source capability match is stale or forged.", nameof(sources));
+            var incremental = MaterializationCapabilityMatcher.MatchForMode(
+                requirements,
+                source.Profile,
+                MaterializationSynchronizationMode.Incremental);
+            if (!incremental.IsSatisfied)
+            {
+                throw new ArgumentException(
+                    "A rebuild source cannot continue as the exact post-promotion incremental source.",
+                    nameof(sources));
+            }
         }
     }
 
@@ -486,6 +689,16 @@ public sealed record MaterializationRebuildPlan
             MaterializationSynchronizationMode.Rebuild);
         if (!SameMatch(expected, targetCapabilityMatch))
             throw new ArgumentException("The rebuild target capability match is stale or forged.", nameof(targetCapabilityMatch));
+        var incremental = MaterializationCapabilityMatcher.MatchForMode(
+            definition.TargetCapabilities,
+            target.Capabilities,
+            MaterializationSynchronizationMode.Incremental);
+        if (!incremental.IsSatisfied)
+        {
+            throw new ArgumentException(
+                "A rebuild target cannot continue as the exact post-promotion incremental target.",
+                nameof(targetCapabilityMatch));
+        }
     }
 
     static ImmutableArray<MaterializationRebuildShardPlan> NormalizeShards(
@@ -526,12 +739,143 @@ public sealed record MaterializationRebuildPlan
         return [.. normalized.OrderBy(static shard => shard.Id.Value, StringComparer.Ordinal)];
     }
 
+    static ImmutableArray<MaterializationChangeFeedCatalogEvidence> NormalizeChangeFeedCatalogs(
+        MaterializationImpactPlan impactPlan,
+        ImmutableArray<MaterializationRebuildSourcePlan> sources,
+        ImmutableArray<MaterializationChangeFeedCatalogEvidence> changeFeedCatalogs)
+    {
+        var normalized = changeFeedCatalogs.IsDefault ? [] : changeFeedCatalogs;
+        if (normalized.IsDefaultOrEmpty || normalized.Any(static catalog => catalog is null))
+        {
+            throw new ArgumentException(
+                "A synchronization plan requires source-attributed finite change-feed catalog evidence.",
+                nameof(changeFeedCatalogs));
+        }
+        if (normalized.GroupBy(static catalog => catalog.Input).Any(static group => group.Count() > 1))
+        {
+            throw new ArgumentException(
+                "A synchronization plan cannot repeat change-feed catalog evidence for an impact input.",
+                nameof(changeFeedCatalogs));
+        }
+
+        var expectedInputs = impactPlan.Routes.Select(static route => route.ChangeInput).ToHashSet();
+        var catalogedInputs = normalized.Select(static catalog => catalog.Input).ToHashSet();
+        if (!expectedInputs.SetEquals(catalogedInputs))
+        {
+            throw new ArgumentException(
+                "A synchronization plan requires exactly one complete physical change-feed catalog for every impact input.",
+                nameof(changeFeedCatalogs));
+        }
+
+        foreach (var catalog in normalized)
+        {
+            if (!sources.Any(source => source.Input == catalog.Input && source.Source == catalog.Source))
+            {
+                throw new ArgumentException(
+                    "Every change-feed catalog must be attributed to the exact pinned source realization.",
+                    nameof(changeFeedCatalogs));
+            }
+
+            var routes = impactPlan.Routes.Where(route => route.ChangeInput == catalog.Input).ToArray();
+            if (routes.Length == 0
+                || catalog.Scopes.Any(scope => routes.All(route => route.ChangeShape != scope.Shape)))
+            {
+                throw new ArgumentException(
+                    "Every cataloged change-feed scope must realize the shape of its exact impact-plan input.",
+                    nameof(changeFeedCatalogs));
+            }
+        }
+
+        return [.. normalized.OrderBy(static catalog => catalog.Input.Value, StringComparer.Ordinal)];
+    }
+
+    static ImmutableArray<MaterializationChangeFeedPlan> NormalizeChangeFeeds(
+        MaterializationImpactPlan impactPlan,
+        ImmutableArray<MaterializationRebuildSourcePlan> sources,
+        ImmutableArray<MaterializationRebuildShardPlan> shards,
+        ImmutableArray<MaterializationChangeFeedCatalogEvidence> changeFeedCatalogs,
+        ImmutableArray<MaterializationChangeFeedPlan> changeFeeds)
+    {
+        var normalized = changeFeeds.IsDefault ? [] : changeFeeds;
+        if (normalized.IsDefaultOrEmpty || normalized.Any(static feed => feed is null))
+            throw new ArgumentException("A synchronization plan requires a finite non-empty change-feed catalog.", nameof(changeFeeds));
+        if (normalized.GroupBy(static feed => feed.Id).Any(static group => group.Count() > 1))
+            throw new ArgumentException("A synchronization plan cannot repeat a change-feed identity.", nameof(changeFeeds));
+        if (normalized
+            .Select(static feed => MaterializationChannelSemantics.ToChannelScopeId(feed.Scope))
+            .GroupBy(static scope => scope)
+            .Any(static group => group.Count() > 1))
+        {
+            throw new ArgumentException("A synchronization plan cannot repeat an exact change-feed scope.", nameof(changeFeeds));
+        }
+
+        foreach (var feed in normalized)
+        {
+            var route = impactPlan.Routes.SingleOrDefault(candidate => candidate.ChangeInput == feed.Scope.Input);
+            if (route is null || route.ChangeShape != feed.Scope.Shape)
+            {
+                throw new ArgumentException(
+                    "Every change feed must realize one exact impact-plan route and shape.",
+                    nameof(changeFeeds));
+            }
+            if (!sources.Any(source => source.Input == feed.Scope.Input && source.Source == feed.Scope.Source))
+            {
+                throw new ArgumentException(
+                    "Every change feed must use one exact pinned source realization.",
+                    nameof(changeFeeds));
+            }
+        }
+
+        foreach (var catalog in changeFeedCatalogs)
+        {
+            var selectedScopes = normalized
+                .Where(feed => feed.Scope.Input == catalog.Input)
+                .Select(static feed => MaterializationChannelSemantics.ToChannelScopeId(feed.Scope))
+                .ToHashSet();
+            var catalogScopes = catalog.Scopes
+                .Select(static scope => MaterializationChannelSemantics.ToChannelScopeId(scope));
+            if (!selectedScopes.SetEquals(catalogScopes))
+            {
+                throw new ArgumentException(
+                    "Selected change-feed scopes must exactly equal the source-attributed finite catalog for every impact input.",
+                    nameof(changeFeeds));
+            }
+        }
+        var relationRootInputs = impactPlan.Routes
+            .Where(static route => route.Strategy is MaterializationDirectRootImpactStrategy)
+            .Select(static route => route.ChangeInput)
+            .ToHashSet();
+        var baselineScopes = shards
+            .Select(static shard => MaterializationChannelSemantics.ToChannelScopeId(shard.Scope))
+            .ToHashSet();
+        var relationRootFeedScopes = normalized
+            .Where(feed => relationRootInputs.Contains(feed.Scope.Input))
+            .Select(static feed => MaterializationChannelSemantics.ToChannelScopeId(feed.Scope))
+            .ToHashSet();
+        if (!baselineScopes.SetEquals(relationRootFeedScopes))
+        {
+            throw new ArgumentException(
+                "Baseline shard scopes must exactly equal the complete selected change-feed scopes for relation-root inputs.",
+                nameof(changeFeeds));
+        }
+
+        return [.. normalized.OrderBy(static feed => feed.Id.Value, StringComparer.Ordinal)];
+    }
+
     static void ValidateOperatingLimits(
         ImmutableArray<MaterializationRebuildSourcePlan> sources,
         MaterializationTargetDescriptor target,
         ImmutableArray<MaterializationRebuildShardPlan> shards,
+        ImmutableArray<MaterializationChangeFeedPlan> changeFeeds,
         MaterializationRebuildLimits limits)
     {
+        if (changeFeeds.Length > limits.MaximumChangeFeedsPerConvergenceActivation)
+        {
+            throw new ArgumentException(
+                "The complete selected change-feed catalog exceeds the per-convergence-activation feed bound.",
+                nameof(limits));
+        }
+
         foreach (var shard in shards)
         {
             var source = sources.Single(candidate => candidate.Input == shard.Scope.Input);
@@ -545,9 +889,23 @@ public sealed record MaterializationRebuildPlan
                 nameof(limits));
         }
 
+        foreach (var feed in changeFeeds)
+        {
+            var source = sources.Single(candidate => candidate.Input == feed.Scope.Input);
+            MaterializationCapabilityLimits.RequireSupportedBounds(
+                source.Profile,
+                MaterializationCapabilityKind.SourceChangeDelivery,
+                MaterializationLimitKind.ChangeItems,
+                limits.MaximumPageItems,
+                MaterializationLimitKind.ReadBytes,
+                limits.MaximumPageBytes,
+                nameof(limits));
+        }
+
         ReadOnlySpan<MaterializationCapabilityKind> targetCapabilities =
         [
             MaterializationCapabilityKind.TargetBulkUpsert,
+            MaterializationCapabilityKind.TargetBulkDelete,
             MaterializationCapabilityKind.TargetPerItemOutcomes
         ];
         foreach (var capability in targetCapabilities)
@@ -572,11 +930,11 @@ public sealed record MaterializationRebuildPlan
 /// <summary>Canonical fingerprinting for persisted materialization rebuild realization plans.</summary>
 public static class MaterializationRebuildPlanFingerprinter
 {
-    /// <summary>Digest algorithm used by the v1 profile.</summary>
+    /// <summary>Digest algorithm used by the current profile.</summary>
     public const string Algorithm = "sha256";
 
-    /// <summary>Canonicalization profile used by the v1 rebuild-plan fence.</summary>
-    public const string Canonicalization = "cohesive-materialization-rebuild-plan/v1-c14n/v1";
+    /// <summary>Canonicalization profile used by the current synchronization-plan fence.</summary>
+    public const string Canonicalization = "cohesive-materialization-rebuild-plan/v3-c14n/v1";
 
     /// <summary>Computes the fingerprint of one complete persisted rebuild plan.</summary>
     /// <param name="plan">Plan whose canonical content is fingerprinted.</param>
@@ -588,10 +946,13 @@ public static class MaterializationRebuildPlanFingerprinter
         return Compute(
             plan.SchemaVersion,
             plan.Materialization,
+            plan.ImpactPlan,
             plan.Sources,
             plan.Target,
             plan.TargetCapabilityMatch,
             plan.Shards,
+            plan.ChangeFeedCatalogs,
+            plan.ChangeFeeds,
             plan.Limits,
             plan.Provenance);
     }
@@ -599,20 +960,26 @@ public static class MaterializationRebuildPlanFingerprinter
     internal static MaterializationRebuildPlanFingerprint Compute(
         string schemaVersion,
         MaterializationDocument materialization,
+        MaterializationImpactPlan impactPlan,
         ImmutableArray<MaterializationRebuildSourcePlan> sources,
         MaterializationTargetDescriptor target,
         MaterializationCapabilityMatch targetCapabilityMatch,
         ImmutableArray<MaterializationRebuildShardPlan> shards,
+        ImmutableArray<MaterializationChangeFeedCatalogEvidence> changeFeedCatalogs,
+        ImmutableArray<MaterializationChangeFeedPlan> changeFeeds,
         MaterializationRebuildLimits limits,
         ExecutionProvenance provenance)
     {
         var content = new FingerprintContent(
             schemaVersion,
             materialization,
+            impactPlan,
             sources,
             target,
             targetCapabilityMatch,
             shards,
+            changeFeedCatalogs,
+            changeFeeds,
             limits,
             provenance);
         var canonical = StrictDocumentJson.GetCanonicalBytes(content, MaterializationJsonSerializer.CreateOptions());
@@ -622,10 +989,13 @@ public static class MaterializationRebuildPlanFingerprinter
     sealed record FingerprintContent(
         string SchemaVersion,
         MaterializationDocument Materialization,
+        MaterializationImpactPlan ImpactPlan,
         ImmutableArray<MaterializationRebuildSourcePlan> Sources,
         MaterializationTargetDescriptor Target,
         MaterializationCapabilityMatch TargetCapabilityMatch,
         ImmutableArray<MaterializationRebuildShardPlan> Shards,
+        ImmutableArray<MaterializationChangeFeedCatalogEvidence> ChangeFeedCatalogs,
+        ImmutableArray<MaterializationChangeFeedPlan> ChangeFeeds,
         MaterializationRebuildLimits Limits,
         ExecutionProvenance Provenance);
 }
