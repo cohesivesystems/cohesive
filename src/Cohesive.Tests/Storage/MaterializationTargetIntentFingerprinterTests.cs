@@ -158,6 +158,23 @@ public sealed class MaterializationTargetIntentFingerprinterTests
                 promotion.PromotionFence,
                 promotion.PromotedAtUtc)));
 
+        MaterializationAbandonGenerationRequest abandonment = new(
+            abandonmentId: new("abandonment/fingerprint"),
+            generationId: GenerationId,
+            abandonedAtUtc: Epoch.AddMinutes(4));
+        Assert.NotEqual(
+            MaterializationTargetIntentFingerprinter.Compute(abandonment),
+            MaterializationTargetIntentFingerprinter.Compute(new MaterializationAbandonGenerationRequest(
+                abandonmentId: abandonment.AbandonmentId,
+                generationId: new("generation/other"),
+                abandonedAtUtc: abandonment.AbandonedAtUtc)));
+        Assert.NotEqual(
+            MaterializationTargetIntentFingerprinter.Compute(abandonment),
+            MaterializationTargetIntentFingerprinter.Compute(new MaterializationAbandonGenerationRequest(
+                abandonmentId: abandonment.AbandonmentId,
+                generationId: abandonment.GenerationId,
+                abandonedAtUtc: abandonment.AbandonedAtUtc.AddTicks(1))));
+
         MaterializationRetireGenerationRequest retirement = new(
             new("retirement/fingerprint"),
             GenerationId,

@@ -113,7 +113,18 @@ public enum MaterializationCapabilityKind
     /// Resolves complete durable contributor-to-root associations and replaces them atomically with their target
     /// materialization mutations before application progress may advance.
     /// </summary>
-    TargetContributorLedger = 15
+    TargetContributorLedger = 15,
+
+    /// <summary>
+    /// Permanently abandons one non-active generation identity, including an identity whose physical generation has
+    /// not yet been created.
+    /// </summary>
+    /// <remarks>
+    /// This facility is stronger than <see cref="TargetRetirement"/>. A successful abandonment installs durable
+    /// exclusion evidence even for an absent generation so delayed begin, mutation, promotion, or read operations
+    /// cannot revive the identity.
+    /// </remarks>
+    TargetGenerationAbandonment = 16
 }
 
 /// <summary>Semantic guarantee that a materialization endpoint may prove.</summary>
@@ -199,7 +210,13 @@ public enum MaterializationGuaranteeKind
     /// <see cref="MaterializationLimitKind.TransactionItems"/> and
     /// <see cref="MaterializationLimitKind.TransactionBytes"/> hard safety limits.
     /// </remarks>
-    TransactionAlignedDelivery = 19
+    TransactionAlignedDelivery = 19,
+
+    /// <summary>
+    /// Generation abandonment establishes one atomic durable exclusion cut, retaining a tombstone for an absent
+    /// generation and rejecting every delayed operation that could make the identity writable, active, or readable.
+    /// </summary>
+    AtomicDurableGenerationExclusion = 20
 }
 
 /// <summary>Positive operating bound advertised or required for a materialization operation.</summary>
@@ -957,7 +974,8 @@ public static class MaterializationCapabilityCatalog
             or MaterializationCapabilityKind.TargetFencedPromotion
             or MaterializationCapabilityKind.TargetRetirement
             or MaterializationCapabilityKind.TargetCleanup
-            or MaterializationCapabilityKind.TargetContributorLedger => MaterializationEndpointRole.Target,
+            or MaterializationCapabilityKind.TargetContributorLedger
+            or MaterializationCapabilityKind.TargetGenerationAbandonment => MaterializationEndpointRole.Target,
         _ => throw new ArgumentOutOfRangeException(nameof(capability), capability, "Unsupported materialization capability.")
     };
 
@@ -1009,6 +1027,8 @@ public static class MaterializationCapabilityCatalog
             MaterializationGuaranteeKind.FencedMutation => IsFencedGenerationMutation(capability),
             MaterializationGuaranteeKind.AtomicWithMaterializationMutation =>
                 capability == MaterializationCapabilityKind.TargetContributorLedger,
+            MaterializationGuaranteeKind.AtomicDurableGenerationExclusion =>
+                capability == MaterializationCapabilityKind.TargetGenerationAbandonment,
             _ => false
         };
     }
@@ -1050,6 +1070,7 @@ public static class MaterializationCapabilityCatalog
                 IsBulkMutation(capability)
                 || capability is MaterializationCapabilityKind.TargetPerItemOutcomes
                     or MaterializationCapabilityKind.TargetGenerationIsolation
+                    or MaterializationCapabilityKind.TargetGenerationAbandonment
                     or MaterializationCapabilityKind.TargetContributorLedger,
             _ => false
         };

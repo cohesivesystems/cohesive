@@ -5,7 +5,8 @@ namespace Cohesive.Storage.Materialization;
 /// </summary>
 /// <remarks>
 /// The fake retains checkpoint and settlement audit evidence internally for write-once identity and settlement
-/// validation. Ordinary snapshots remain bounded and expose only the latest checkpoint and settlement.
+/// validation. Ordinary snapshots remain bounded and expose only the latest batch checkpoint, latest incremental
+/// Channel checkpoint, and latest settlement.
 /// </remarks>
 public sealed class InMemoryMaterializationProgressStore : IMaterializationProgressStore
 {
@@ -133,7 +134,20 @@ public sealed class InMemoryMaterializationProgressStore : IMaterializationProgr
                 aggregate.Mutations.Add(mutationId, intent);
                 return Task.FromResult(Replayed(aggregate));
             }
-            if (aggregate.LatestCheckpoint?.CommittedAtUtc > checkpoint.CommittedAtUtc)
+            var latestTrackCheckpoint = checkpoint.Kind == MaterializationCheckpointKind.ChangeProgress
+                ? aggregate.LatestChangeCheckpoint
+                : aggregate.LatestBatchCheckpoint;
+            if (latestTrackCheckpoint?.CommittedAtUtc > checkpoint.CommittedAtUtc)
+            {
+                return Task.FromResult(Rejected(
+                    MaterializationProgressMutationDisposition.IdentityConflict,
+                    aggregate,
+                    key));
+            }
+            var latestBatchPageOrdinal = aggregate.LatestBatchCheckpoint?.BatchPageOrdinal ?? 0;
+            if (checkpoint.Kind != MaterializationCheckpointKind.ChangeProgress
+                && (latestBatchPageOrdinal == long.MaxValue
+                    || checkpoint.BatchPageOrdinal != latestBatchPageOrdinal + 1))
             {
                 return Task.FromResult(Rejected(
                     MaterializationProgressMutationDisposition.IdentityConflict,
@@ -142,7 +156,14 @@ public sealed class InMemoryMaterializationProgressStore : IMaterializationProgr
             }
 
             aggregate.CheckpointAudit.Add(checkpoint.Id, checkpoint);
-            aggregate.LatestCheckpoint = checkpoint;
+            if (checkpoint.Kind == MaterializationCheckpointKind.ChangeProgress)
+            {
+                aggregate.LatestChangeCheckpoint = checkpoint;
+            }
+            else
+            {
+                aggregate.LatestBatchCheckpoint = checkpoint;
+            }
             aggregate.Revision = aggregate.Revision.Next();
             aggregate.Mutations.Add(mutationId, intent);
             return Task.FromResult(Applied(aggregate));
@@ -301,6 +322,7 @@ public sealed class InMemoryMaterializationProgressStore : IMaterializationProgr
         && left.Position == right.Position
         && left.AppliedDeliveries.SequenceEqual(right.AppliedDeliveries)
         && left.ChannelProgress == right.ChannelProgress
+        && left.BatchPageOrdinal == right.BatchPageOrdinal
         && left.CommittedAtUtc == right.CommittedAtUtc
         && string.Equals(left.EvidenceReference, right.EvidenceReference, StringComparison.Ordinal);
 
@@ -398,7 +420,9 @@ public sealed class InMemoryMaterializationProgressStore : IMaterializationProgr
 
         public string Owner { get; set; } = owner;
 
-        public MaterializationApplicationCheckpoint? LatestCheckpoint { get; set; }
+        public MaterializationApplicationCheckpoint? LatestBatchCheckpoint { get; set; }
+
+        public MaterializationApplicationCheckpoint? LatestChangeCheckpoint { get; set; }
 
         public MaterializationSourceSettlement? LatestSettlement { get; set; }
 
@@ -413,7 +437,8 @@ public sealed class InMemoryMaterializationProgressStore : IMaterializationProgr
             Revision,
             Fence,
             Owner,
-            LatestCheckpoint,
+            LatestBatchCheckpoint,
+            LatestChangeCheckpoint,
             LatestSettlement);
     }
 }

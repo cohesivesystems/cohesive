@@ -248,7 +248,7 @@ public sealed class MaterializationChannelSemanticsTests
             revision: MaterializationProgressRevision.Initial,
             fence: MaterializationProgressFence.Initial,
             fenceOwner: "worker/leased",
-            latestCheckpoint: checkpoint,
+            latestChangeCheckpoint: checkpoint,
             latestSettlement: settlement);
         MaterializationChangeSettlementObservation observation = new(
             progress: snapshot,
@@ -285,7 +285,7 @@ public sealed class MaterializationChannelSemanticsTests
             revision: MaterializationProgressRevision.Initial,
             fence: MaterializationProgressFence.Initial,
             fenceOwner: "worker/leased",
-            latestCheckpoint: checkpoint,
+            latestChangeCheckpoint: checkpoint,
             latestSettlement: uncovered));
     }
 
@@ -370,8 +370,8 @@ public sealed class MaterializationChannelSemanticsTests
             revision: MaterializationProgressRevision.Initial,
             fence: MaterializationProgressFence.Initial,
             fenceOwner: "worker/target-managed",
-            latestCheckpoint: checkpoint);
-        Assert.Same(checkpoint, snapshot.LatestCheckpoint);
+            latestChangeCheckpoint: checkpoint);
+        Assert.Same(checkpoint, snapshot.LatestChangeCheckpoint);
     }
 
     [Fact]
@@ -478,7 +478,8 @@ public sealed class MaterializationChannelSemanticsTests
             completion: null,
             position: null,
             appliedDeliveries: [],
-            committedAtUtc: ObservedAtUtc);
+            committedAtUtc: ObservedAtUtc,
+            batchPageOrdinal: 1);
         MaterializationApplicationCheckpoint completionCheckpoint = new(
             id: new("checkpoint/batch/completed"),
             kind: MaterializationCheckpointKind.BatchCompleted,
@@ -490,7 +491,8 @@ public sealed class MaterializationChannelSemanticsTests
                 evidenceReference: "tests/read-complete"),
             position: null,
             appliedDeliveries: [],
-            committedAtUtc: ObservedAtUtc);
+            committedAtUtc: ObservedAtUtc,
+            batchPageOrdinal: 1);
 
         Assert.Throws<ArgumentException>(() =>
             MaterializationChannelSemantics.ToChannelDurableProgress(continuationCheckpoint));
@@ -522,7 +524,7 @@ public sealed class MaterializationChannelSemanticsTests
             revision: MaterializationProgressRevision.Initial,
             fence: MaterializationProgressFence.Initial,
             fenceOwner: "worker/cumulative",
-            latestCheckpoint: checkpoint,
+            latestChangeCheckpoint: checkpoint,
             latestSettlement: settlement);
         MaterializationChangeSettlementObservation observation = new(
             progress: progress,
@@ -601,7 +603,7 @@ public sealed class MaterializationChannelSemanticsTests
             revision: MaterializationProgressRevision.Initial,
             fence: MaterializationProgressFence.Initial,
             fenceOwner: "worker/1",
-            latestCheckpoint: checkpoint);
+            latestChangeCheckpoint: checkpoint);
         MaterializationProgressMutationResult durable = new(
             disposition: MaterializationProgressMutationDisposition.Applied,
             snapshot: snapshot);

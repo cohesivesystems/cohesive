@@ -30,6 +30,9 @@ public sealed class MaterializationDefinitionTests
             definition.GetTargetCapabilities(MaterializationSynchronizationMode.Rebuild),
             static requirement => requirement.Capability == MaterializationCapabilityKind.TargetFencedPromotion);
         Assert.Contains(
+            definition.GetTargetCapabilities(MaterializationSynchronizationMode.Rebuild),
+            static requirement => requirement.Capability == MaterializationCapabilityKind.TargetGenerationAbandonment);
+        Assert.Contains(
             definition.GetTargetCapabilities(MaterializationSynchronizationMode.Incremental),
             static requirement => requirement.Capability == MaterializationCapabilityKind.TargetBulkDelete);
         Assert.DoesNotContain(
@@ -963,6 +966,99 @@ public sealed class MaterializationDefinitionTests
                 && diagnostic.Message.Contains(nameof(MaterializationGuaranteeKind.FencedPromotion), StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void Validator_RequiresAtomicDurableGenerationExclusionForRebuild()
+    {
+        var valid = CreateDefinition(reverseDeclarations: false);
+        var abandonment = Assert.Single(
+            valid.TargetCapabilities,
+            static requirement =>
+                requirement.Capability == MaterializationCapabilityKind.TargetGenerationAbandonment);
+        MaterializationCapabilityRequirement weakened = new(
+            id: abandonment.Id,
+            capability: abandonment.Capability,
+            guarantees: [],
+            operatingLimits: abandonment.OperatingLimits,
+            modes: abandonment.Modes);
+        MaterializationDefinition invalid = new(
+            id: valid.Id,
+            relation: valid.Relation,
+            sources: valid.Sources,
+            targetCapabilities:
+            [
+                .. valid.TargetCapabilities.Select(requirement =>
+                    requirement == abandonment ? weakened : requirement)
+            ],
+            updatePolicy: valid.UpdatePolicy,
+            failurePolicy: valid.FailurePolicy,
+            freshnessPolicy: valid.FreshnessPolicy,
+            controlLoops: valid.ControlLoops,
+            provenance: valid.Provenance);
+
+        var validation = MaterializationDefinitionValidator.Validate(invalid);
+
+        Assert.False(validation.IsValid);
+        Assert.Contains(
+            validation.Diagnostics,
+            static diagnostic =>
+                diagnostic.Code == MaterializationDefinitionDiagnosticCodes.ProtocolGuaranteeMissing
+                && diagnostic.Message.Contains(
+                    nameof(MaterializationGuaranteeKind.AtomicDurableGenerationExclusion),
+                    StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validator_RequiresGenerationAbandonmentCapabilityForRebuild()
+    {
+        var valid = CreateDefinition(reverseDeclarations: false);
+        MaterializationDefinition invalid = new(
+            id: valid.Id,
+            relation: valid.Relation,
+            sources: valid.Sources,
+            targetCapabilities:
+            [
+                .. valid.TargetCapabilities.Where(static requirement =>
+                    requirement.Capability != MaterializationCapabilityKind.TargetGenerationAbandonment)
+            ],
+            updatePolicy: valid.UpdatePolicy,
+            failurePolicy: valid.FailurePolicy,
+            freshnessPolicy: valid.FreshnessPolicy,
+            controlLoops: valid.ControlLoops,
+            provenance: valid.Provenance);
+
+        var validation = MaterializationDefinitionValidator.Validate(invalid);
+
+        Assert.False(validation.IsValid);
+        Assert.Contains(
+            validation.Diagnostics,
+            static diagnostic =>
+                diagnostic.Code == MaterializationDefinitionDiagnosticCodes.ProtocolCapabilityMissing
+                && diagnostic.Message.Contains(
+                    nameof(MaterializationCapabilityKind.TargetGenerationAbandonment),
+                    StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void CapabilityCatalog_DistinguishesGenerationAbandonmentFromRetirement()
+    {
+        Assert.Equal(
+            MaterializationEndpointRole.Target,
+            MaterializationCapabilityCatalog.RoleOf(
+                MaterializationCapabilityKind.TargetGenerationAbandonment));
+        Assert.True(MaterializationCapabilityCatalog.AllowsGuarantee(
+            MaterializationCapabilityKind.TargetGenerationAbandonment,
+            MaterializationGuaranteeKind.AtomicDurableGenerationExclusion));
+        Assert.True(MaterializationCapabilityCatalog.AllowsLimit(
+            MaterializationCapabilityKind.TargetGenerationAbandonment,
+            MaterializationLimitKind.IndexedIdentityCharacters));
+        Assert.False(MaterializationCapabilityCatalog.AllowsGuarantee(
+            MaterializationCapabilityKind.TargetRetirement,
+            MaterializationGuaranteeKind.AtomicDurableGenerationExclusion));
+        Assert.False(MaterializationCapabilityCatalog.AllowsGuarantee(
+            MaterializationCapabilityKind.TargetGenerationAbandonment,
+            MaterializationGuaranteeKind.FencedMutation));
+    }
+
     [Theory]
     [InlineData(MaterializationGuaranteeKind.RequestLocalCompleteness)]
     [InlineData(MaterializationGuaranteeKind.IdempotentWrite)]
@@ -1232,6 +1328,7 @@ public sealed class MaterializationDefinitionTests
             Requirement("target/seal", MaterializationCapabilityKind.TargetSeal, MaterializationSynchronizationMode.Rebuild),
             Requirement("target/validation", MaterializationCapabilityKind.TargetValidation, MaterializationSynchronizationMode.Rebuild),
             Requirement("target/promotion", MaterializationCapabilityKind.TargetFencedPromotion, MaterializationSynchronizationMode.Rebuild),
+            Requirement("target/abandonment", MaterializationCapabilityKind.TargetGenerationAbandonment, MaterializationSynchronizationMode.Rebuild),
             Requirement("target/retirement", MaterializationCapabilityKind.TargetRetirement, MaterializationSynchronizationMode.Rebuild),
             Requirement("target/cleanup", MaterializationCapabilityKind.TargetCleanup, MaterializationSynchronizationMode.Rebuild)
         ];
@@ -1478,6 +1575,8 @@ public sealed class MaterializationDefinitionTests
                     MaterializationGuaranteeKind.AtomicPromotion,
                 MaterializationGuaranteeKind.FencedPromotion
                 ],
+            MaterializationCapabilityKind.TargetGenerationAbandonment =>
+                [MaterializationGuaranteeKind.AtomicDurableGenerationExclusion],
             MaterializationCapabilityKind.TargetSeal
                 or MaterializationCapabilityKind.TargetValidation
                 or MaterializationCapabilityKind.TargetRetirement

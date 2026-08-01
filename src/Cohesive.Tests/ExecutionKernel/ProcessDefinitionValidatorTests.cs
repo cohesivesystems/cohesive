@@ -489,8 +489,12 @@ public sealed class ProcessDefinitionValidatorTests
         Assert.Equal("child", diagnostic.Evidence?.Subject);
     }
 
-    [Fact]
-    public void Validate_MappedChildFailureMustCarryTheExactChildProcessResultContract()
+    [Theory]
+    [InlineData("failed")]
+    [InlineData("cancelled")]
+    [InlineData("terminated")]
+    public void Validate_MappedChildTerminalFailureMustCarryTheExactChildProcessResultContract(
+        string mismatchedOutcome)
     {
         var child = DefinitionReference("process/review-child-failure");
         var requestDocument = InteractionDocument(
@@ -500,9 +504,9 @@ public sealed class ProcessDefinitionValidatorTests
                 new(
                     [
                         new RequestResultDefinition(new("approved"), StringSchema()),
-                        new RequestFailureDefinition(new("failed"), BooleanSchema()),
-                        new RequestFailureDefinition(new("cancelled"), StringSchema()),
-                        new RequestFailureDefinition(new("terminated"), StringSchema())
+                        new RequestFailureDefinition(new("failed"), FailureSchema("failed")),
+                        new RequestFailureDefinition(new("cancelled"), FailureSchema("cancelled")),
+                        new RequestFailureDefinition(new("terminated"), FailureSchema("terminated"))
                     ],
                     RequestOptionalTerminalSemantics.Unsupported,
                     RequestOptionalTerminalSemantics.Unsupported,
@@ -552,7 +556,12 @@ public sealed class ProcessDefinitionValidatorTests
         AssertDiagnostic(
             validation,
             ProcessDefinitionDiagnosticCodes.ChildRequestResultContractMismatch,
-            "/nodes/0/outcomeMapping/failed");
+            $"/nodes/0/outcomeMapping/{mismatchedOutcome}");
+
+        InteractionValueSchema FailureSchema(string outcome) =>
+            string.Equals(outcome, mismatchedOutcome, StringComparison.Ordinal)
+                ? BooleanSchema()
+                : StringSchema();
     }
 
     [Theory]

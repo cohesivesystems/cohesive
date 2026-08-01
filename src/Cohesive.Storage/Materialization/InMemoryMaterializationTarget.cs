@@ -201,6 +201,9 @@ public sealed class InMemoryMaterializationTarget : IMaterializationTarget
     readonly Dictionary<MaterializationSealId, SealOperationReceipt> sealReceipts = [];
     readonly Dictionary<MaterializationValidationId, ValidationOperationReceipt> validationReceipts = [];
     readonly Dictionary<MaterializationPromotionId, PromotionOperationReceipt> promotionReceipts = [];
+    readonly Dictionary<MaterializationAbandonmentId, MaterializationTargetIntentFingerprint> abandonmentReservations = [];
+    readonly Dictionary<MaterializationAbandonmentId, AbandonmentOperationReceipt> abandonmentReceipts = [];
+    readonly Dictionary<MaterializationGenerationId, MaterializationAbandonmentReceipt> generationAbandonments = [];
     readonly Dictionary<MaterializationRetirementId, RetirementOperationReceipt> retirementReceipts = [];
     readonly Dictionary<MaterializationCleanupId, CleanupOperationReceipt> cleanupReceipts = [];
 
@@ -328,6 +331,14 @@ public sealed class InMemoryMaterializationTarget : IMaterializationTarget
                     TrySnapshot(request.GenerationId)));
             }
 
+            if (generationAbandonments.ContainsKey(request.GenerationId)
+                && !generations.ContainsKey(request.GenerationId))
+            {
+                return ValueTask.FromResult(new MaterializationGenerationOperationResult(
+                    MaterializationTargetOperationDisposition.StateConflict,
+                    generation: null));
+            }
+
             if (generationIdentities.TryGetValue(request.GenerationId, out var identity))
             {
                 if (identity.BeginRequestFingerprint == requestFingerprint)
@@ -412,6 +423,17 @@ public sealed class InMemoryMaterializationTarget : IMaterializationTarget
 
             if (!generations.TryGetValue(request.GenerationId, out var generation))
             {
+                if (generationAbandonments.ContainsKey(request.GenerationId))
+                {
+                    return ValueTask.FromResult(RejectedBatch(
+                        request,
+                        MaterializationBatchDisposition.GenerationNotWritable,
+                        generationRevision: null,
+                        MaterializationItemOutcomeDisposition.PermanentFailure,
+                        GenerationNotWritableCode,
+                        "The addressed generation identity is durably abandoned."));
+                }
+
                 return ValueTask.FromResult(RejectedBatch(
                     request,
                     MaterializationBatchDisposition.GenerationNotFound,
@@ -992,6 +1014,105 @@ public sealed class InMemoryMaterializationTarget : IMaterializationTarget
     }
 
     /// <inheritdoc />
+    public ValueTask<MaterializationAbandonmentResult> AbandonGenerationAsync(
+        OperationContext context,
+        MaterializationAbandonGenerationRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(request);
+        context.CancellationToken.ThrowIfCancellationRequested();
+        var requestFingerprint = MaterializationTargetIntentFingerprinter.Compute(request);
+
+        lock (gate)
+        {
+            if (abandonmentReceipts.TryGetValue(request.AbandonmentId, out var prior))
+            {
+                return ValueTask.FromResult(new MaterializationAbandonmentResult(
+                    prior.RequestFingerprint == requestFingerprint
+                        ? MaterializationTargetOperationDisposition.Replayed
+                        : MaterializationTargetOperationDisposition.IdentityConflict,
+                    prior.RequestFingerprint == requestFingerprint
+                        ? TrySnapshot(request.GenerationId) ?? prior.Generation
+                        : TrySnapshot(request.GenerationId),
+                    prior.RequestFingerprint == requestFingerprint ? prior.Receipt : null));
+            }
+
+            if (abandonmentReservations.TryGetValue(request.AbandonmentId, out var reserved))
+            {
+                if (reserved != requestFingerprint)
+                {
+                    return ValueTask.FromResult(new MaterializationAbandonmentResult(
+                        MaterializationTargetOperationDisposition.IdentityConflict,
+                        TrySnapshot(request.GenerationId),
+                        receipt: null));
+                }
+            }
+            else
+            {
+                abandonmentReservations.Add(request.AbandonmentId, requestFingerprint);
+            }
+
+            generations.TryGetValue(request.GenerationId, out var generation);
+            if (activeGenerationId == request.GenerationId
+                || generation?.State == MaterializationGenerationState.Active)
+            {
+                return ValueTask.FromResult(new MaterializationAbandonmentResult(
+                    MaterializationTargetOperationDisposition.ActiveGenerationConflict,
+                    generation is null ? null : Snapshot(generation),
+                    receipt: null));
+            }
+
+            if (generationAbandonments.ContainsKey(request.GenerationId))
+            {
+                return ValueTask.FromResult(new MaterializationAbandonmentResult(
+                    MaterializationTargetOperationDisposition.StateConflict,
+                    TrySnapshot(request.GenerationId),
+                    receipt: null));
+            }
+
+            MaterializationGenerationSnapshot? generationSnapshot = null;
+            if (generation is not null)
+            {
+                var latestLifecycleEvidenceAtUtc = generation.RetiredAtUtc
+                    ?? generation.InactivatedAtUtc
+                    ?? generation.ValidationReceipt?.ValidatedAtUtc
+                    ?? generation.SealReceipt?.SealedAtUtc
+                    ?? generation.CreatedAtUtc;
+                if (request.AbandonedAtUtc < latestLifecycleEvidenceAtUtc)
+                {
+                    throw new ArgumentException(
+                        "An abandonment time cannot predate the generation's latest retained lifecycle evidence.",
+                        nameof(request));
+                }
+
+                var abandoned = generation.State == MaterializationGenerationState.Retired
+                    ? generation
+                    : generation with
+                    {
+                        State = MaterializationGenerationState.Retired,
+                        Revision = generation.Revision.Next(),
+                        RetiredAtUtc = request.AbandonedAtUtc
+                    };
+                generations[request.GenerationId] = abandoned;
+                generationSnapshot = Snapshot(abandoned);
+            }
+
+            MaterializationAbandonmentReceipt receipt = new(
+                abandonmentId: request.AbandonmentId,
+                generationId: request.GenerationId,
+                abandonedAtUtc: request.AbandonedAtUtc);
+            generationAbandonments.Add(request.GenerationId, receipt);
+            abandonmentReceipts.Add(
+                request.AbandonmentId,
+                new(requestFingerprint, receipt, generationSnapshot));
+            return ValueTask.FromResult(new MaterializationAbandonmentResult(
+                MaterializationTargetOperationDisposition.Applied,
+                generationSnapshot,
+                receipt));
+        }
+    }
+
+    /// <inheritdoc />
     public ValueTask<MaterializationGenerationOperationResult> RetireGenerationAsync(
         OperationContext context,
         MaterializationRetireGenerationRequest request)
@@ -1396,6 +1517,11 @@ public sealed class InMemoryMaterializationTarget : IMaterializationTarget
     sealed record PromotionOperationReceipt(
         MaterializationTargetIntentFingerprint RequestFingerprint,
         MaterializationPromotionReceipt Receipt);
+
+    sealed record AbandonmentOperationReceipt(
+        MaterializationTargetIntentFingerprint RequestFingerprint,
+        MaterializationAbandonmentReceipt Receipt,
+        MaterializationGenerationSnapshot? Generation);
 
     sealed record RetirementOperationReceipt(
         MaterializationTargetIntentFingerprint RequestFingerprint,

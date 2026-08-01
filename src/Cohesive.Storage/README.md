@@ -208,6 +208,25 @@ Capability matching establishes whether a binding can satisfy the declared consi
 that a particular run acquired a coordinated snapshot or baseline/change-feed cut. The later execution planner must
 persist the concrete run-scoped snapshot, feed-position, and retention evidence before it authorizes work.
 
+`MaterializationRebuildPlan` is that run-scoped authority for the reference baseline interpreter. Its strict
+fingerprinted document revalidates and pins the complete materialization IR, exact source and target capability
+matches, stable root shards, each canonical scan request, each hydration physical-plan fingerprint, and finite page,
+bulk, activation, parallelism, and cumulative per-shard bounds. Runtime bindings must reproduce all of that evidence;
+a restart cannot silently select another Relations lowering or reader placement under the same plan. The v1 page
+interpreter admits only `OnePerRoot` and `ZeroOrOnePerRoot` outputs. `Set` requires whole-set evaluation and
+`ManyPerRoot` requires an explicit expansion bound, so both fail plan validation instead of weakening boundedness.
+Canonical coordinator and worker Processes carry only exact plan and attempt-bound shard references. The Storage
+interpreter creates an isolated Loading candidate, captures one change position per shard, hydrates each bounded
+baseline page through the pinned canonical Relations realization, writes deterministic idempotent bulks, and
+terminates at `baseline-complete/catch-up-required`. It does not seal, promote, or make that candidate readable.
+
+`MaterializationRebuildProcessLifecycle` is the materialization-specific gate around the generic durable Process
+runtime. It binds the attempt's deterministic generation affinity before physical candidate creation. Pause and
+Continue preserve that affinity without target lifecycle I/O. Restart first commits or replays the replacement
+Process attempt, then atomically abandons the old generation identity, binds the replacement affinity, and begins
+exactly one replacement candidate. An absent old candidate receives a durable tombstone, closing the delayed-Begin
+race; replay resumes the same post-commit steps.
+
 The runtime ports keep three progress concepts separate:
 
 - `MaterializationSourcePosition` is a versioned opaque provider cursor bound to one exact Relations physical plan,
@@ -219,8 +238,10 @@ The runtime ports keep three progress concepts separate:
   the last delivery.
 - `MaterializationApplicationCheckpoint` records what a specific definition fingerprint and generation durably
   applied under compare-and-swap and a worker fence. A completed batch checkpoint retains the exact source scope,
-  read fingerprint, and authoritative complete/not-found Relations evidence instead of an unattributed completion
-  flag.
+  read fingerprint, authoritative complete/not-found Relations evidence, and one-based cumulative page ordinal
+  instead of an unattributed completion flag. That ordinal is part of mutation identity and cannot exceed the
+  persisted per-shard bound, including after crash recovery. Exhausted reads with `Partial`, `Failed`, or
+  `Inconclusive` evidence stop before hydration and target I/O and cannot become completion proof.
 - `MaterializationSourceSettlement` records a source acknowledgement. The engine must first persist its application
   checkpoint, then settle the source, and finally persist or emit the returned receipt. Pull sources may expose
   `IMaterializationSettlingSource` for an out-of-band acknowledgement. A managed source instead owns its
@@ -251,9 +272,17 @@ observation`. A crash after the application commit and before source settlement 
 change and delivery identities plus an exact replayed checkpoint make that safe. A crash after source settlement
 cannot expose uncommitted application work because settlement was not reachable before the durable proof.
 
-`IMaterializationProgressStore` returns a bounded snapshot containing only the latest checkpoint and settlement.
-Implementations may retain additional idempotency and audit evidence internally without making unbounded history part
-of the core port.
+`IMaterializationProgressStore` returns a bounded snapshot containing the latest baseline/batch checkpoint, the
+latest incremental Channel checkpoint, and the latest settlement. The two checkpoint tracks advance independently:
+baseline enumeration cannot overwrite the captured change cut, and change delivery cannot erase the baseline
+continuation or completion proof. Implementations may retain additional idempotency and audit evidence internally
+without making unbounded history part of the core port.
+
+A crash after a successful bulk but before its checkpoint re-reads the exact same page identity. If the source now
+produces different canonical target intent under that identity, the shard returns terminal `RestartRequired` with
+source-replay-drift evidence and leaves the candidate Loading and unreadable. The worker never abandons or replaces
+its own generation; external Control must issue `RestartAttempt`, after which the lifecycle protocol durably excludes
+the old generation and allocates exactly one fresh generation.
 
 `IMaterializationTarget` accepts fenced, idempotent, version-aware mutations for an isolated candidate during rebuild
 and for the active generation during incremental maintenance. Batches return one keyed outcome per input so retries
@@ -261,8 +290,13 @@ can contain only failed items. An unresolved retryable outcome is retained by ex
 content fingerprint, so unrelated work for the same item cannot make a candidate appear complete. A candidate is
 sealed, validated, and then promoted through an active-pointer compare-and-swap fence that is distinct from its
 generation worker fence. Promotion makes the previous active generation inactive and records the displacement boundary;
-retirement remains a separate policy operation, and physical cleanup permanently tombstones the caller-assigned
-generation identity so it cannot be reused. Ordinary target snapshots expose bounded lifecycle metadata rather than all
+retirement remains a separate policy operation. `AbandonGenerationAsync` atomically retires a non-active candidate
+or installs a tombstone when physical generation state does not yet exist, so a delayed begin or write cannot revive
+an abandoned Process attempt. Definitions that support rebuild therefore require the distinct
+`TargetGenerationAbandonment` capability with `AtomicDurableGenerationExclusion`; ordinary `TargetRetirement` does
+not satisfy that exclusion contract. Physical cleanup removes retained index data without removing that abandonment
+claim.
+Ordinary target snapshots expose bounded lifecycle metadata rather than all
 materialized items. Pause and Continue retain the same generation, while a Process restart creates a fresh generation. `InMemoryMaterializationSource`,
 `InMemoryMaterializationProgressStore`, and `InMemoryMaterializationTarget` are deterministic reference fakes for adapter
 and engine conformance tests, not production durability implementations.

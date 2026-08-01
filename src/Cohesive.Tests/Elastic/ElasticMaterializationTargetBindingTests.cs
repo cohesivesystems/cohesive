@@ -206,7 +206,11 @@ public sealed class ElasticMaterializationTargetBindingTests
 
         Assert.Equal(MaterializationEndpointRole.Target, profile.Role);
         Assert.Equal(binding.TargetId.Value, profile.Subject);
-        Assert.Equal(9, profile.Evidence.Length);
+        Assert.StartsWith(
+            "cohesive.adapters.elastic.materialization-target/v2/",
+            profile.Id.Value,
+            StringComparison.Ordinal);
+        Assert.Equal(10, profile.Evidence.Length);
 
         foreach (var evidence in profile.Evidence.Where(static item =>
                      item.Guarantees.Contains(MaterializationGuaranteeKind.FencedMutation)))
@@ -227,12 +231,21 @@ public sealed class ElasticMaterializationTargetBindingTests
         Assert.Contains(MaterializationGuaranteeKind.AtomicPromotion, promotion.Guarantees);
         Assert.Contains(MaterializationGuaranteeKind.FencedPromotion, promotion.Guarantees);
 
+        var abandonment = Assert.Single(profile.Evidence, static item =>
+            item.Capability == MaterializationCapabilityKind.TargetGenerationAbandonment);
+        Assert.Equal(CapabilityRealizationKind.Composed, abandonment.Realization);
+        Assert.Equal(
+            MaterializationGuaranteeKind.AtomicDurableGenerationExclusion,
+            Assert.Single(abandonment.Guarantees));
+        Assert.Contains("absent identities receive tombstones", abandonment.Description, StringComparison.Ordinal);
+
         var validation = Assert.Single(profile.Evidence, static item =>
             item.Capability == MaterializationCapabilityKind.TargetValidation);
         Assert.Contains("live template drift requires deployment validation", validation.Description, StringComparison.Ordinal);
 
         foreach (var evidence in profile.Evidence.Where(static item => item.Capability is
                      MaterializationCapabilityKind.TargetGenerationIsolation
+                     or MaterializationCapabilityKind.TargetGenerationAbandonment
                      or MaterializationCapabilityKind.TargetBulkUpsert
                      or MaterializationCapabilityKind.TargetBulkDelete
                      or MaterializationCapabilityKind.TargetPerItemOutcomes))

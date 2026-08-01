@@ -230,6 +230,9 @@ public sealed record MaterializationApplicationCheckpoint
     /// Complete replay, floor, and pending-delivery progress required for an incremental change checkpoint; must be
     /// <see langword="null"/> for a batch checkpoint.
     /// </param>
+    /// <param name="batchPageOrdinal">
+    /// One-based cumulative baseline-page ordinal for a batch checkpoint; <see langword="null"/> for change progress.
+    /// </param>
     /// <exception cref="ArgumentException">
     /// An identity, cursor, delivery set, or timestamp is invalid, or cursor fields conflict with
     /// <paramref name="kind"/>.
@@ -245,7 +248,8 @@ public sealed record MaterializationApplicationCheckpoint
         ImmutableArray<MaterializationDeliveryId> appliedDeliveries,
         DateTimeOffset committedAtUtc,
         string? evidenceReference = null,
-        ChannelDurableProgressEvidence? channelProgress = null)
+        ChannelDurableProgressEvidence? channelProgress = null,
+        long? batchPageOrdinal = null)
     {
         MaterializationContract.RequireDefinedIdentity(id.Value, nameof(id));
         if (!Enum.IsDefined(kind))
@@ -258,6 +262,14 @@ public sealed record MaterializationApplicationCheckpoint
             nameof(appliedDeliveries),
             "Applied delivery identities");
         ValidateCursor(kind, continuation, completion, position, normalizedDeliveries, channelProgress);
+        var batchCheckpoint = kind is MaterializationCheckpointKind.BatchContinuation
+            or MaterializationCheckpointKind.BatchCompleted;
+        if (batchCheckpoint != (batchPageOrdinal is > 0))
+        {
+            throw new ArgumentException(
+                "A batch checkpoint requires a positive cumulative page ordinal and change progress must omit it.",
+                nameof(batchPageOrdinal));
+        }
         ValidatePositionProjection(position, channelProgress);
         MaterializationContract.RequireUtc(committedAtUtc, nameof(committedAtUtc));
         if (evidenceReference is not null)
@@ -272,6 +284,7 @@ public sealed record MaterializationApplicationCheckpoint
         Position = position;
         AppliedDeliveries = normalizedDeliveries;
         ChannelProgress = channelProgress;
+        BatchPageOrdinal = batchPageOrdinal;
         CommittedAtUtc = committedAtUtc;
         EvidenceReference = evidenceReference;
     }
@@ -304,6 +317,13 @@ public sealed record MaterializationApplicationCheckpoint
     /// Complete incremental Channel progress, or <see langword="null"/> for a batch continuation or completion.
     /// </summary>
     public ChannelDurableProgressEvidence? ChannelProgress { get; }
+
+    /// <summary>
+    /// One-based cumulative number of baseline pages durably applied through this batch checkpoint, or
+    /// <see langword="null"/> for incremental change progress.
+    /// </summary>
+    [JsonConverter(typeof(StringEncodedInt64JsonConverter))]
+    public long? BatchPageOrdinal { get; }
 
     /// <summary>UTC durable application-commit time.</summary>
     public DateTimeOffset CommittedAtUtc { get; }
@@ -600,9 +620,9 @@ public sealed record MaterializationSourceSettlement
 
 /// <summary>Immutable bounded view of the latest state in one materialization progress aggregate.</summary>
 /// <remarks>
-/// The snapshot deliberately carries only the latest application checkpoint and latest source settlement. Durable
-/// implementations may retain additional audit or idempotency evidence internally, but history does not cross this
-/// core persistence port.
+/// Batch enumeration and incremental Channel delivery are independent progress tracks. The snapshot deliberately
+/// carries only the latest checkpoint for each track and the latest source settlement. Durable implementations may
+/// retain additional audit or idempotency evidence internally, but history does not cross this core persistence port.
 /// </remarks>
 public sealed record MaterializationProgressSnapshot
 {
@@ -611,15 +631,21 @@ public sealed record MaterializationProgressSnapshot
     /// <param name="revision">Current compare-and-swap revision.</param>
     /// <param name="fence">Current worker fence.</param>
     /// <param name="fenceOwner">Stable current worker identity.</param>
-    /// <param name="latestCheckpoint">Latest persisted application checkpoint, when application progress exists.</param>
+    /// <param name="latestBatchCheckpoint">
+    /// Latest persisted batch-continuation or batch-completed checkpoint, when baseline enumeration progress exists.
+    /// </param>
+    /// <param name="latestChangeCheckpoint">
+    /// Latest persisted incremental Channel checkpoint, when change-delivery progress exists.
+    /// </param>
     /// <param name="latestSettlement">Latest persisted source settlement, when acknowledgement progress exists.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="key"/> or <paramref name="fenceOwner"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
     /// <paramref name="revision"/> or <paramref name="fence"/> is default; an identity is otherwise invalid; a
-    /// checkpoint or settlement belongs to another source-feed scope; a settlement exists without any application
-    /// checkpoint; or a settlement that cites the latest checkpoint conflicts with it.
+    /// checkpoint is stored in the wrong progress track; a checkpoint or settlement belongs to another source-feed
+    /// scope; a settlement exists without incremental application progress; or a settlement that cites the latest
+    /// change checkpoint conflicts with it.
     /// </exception>
     [JsonConstructor]
     public MaterializationProgressSnapshot(
@@ -627,17 +653,19 @@ public sealed record MaterializationProgressSnapshot
         MaterializationProgressRevision revision,
         MaterializationProgressFence fence,
         string fenceOwner,
-        MaterializationApplicationCheckpoint? latestCheckpoint = null,
+        MaterializationApplicationCheckpoint? latestBatchCheckpoint = null,
+        MaterializationApplicationCheckpoint? latestChangeCheckpoint = null,
         MaterializationSourceSettlement? latestSettlement = null)
     {
         Key = Guard.RequireNotNull(key);
         MaterializationContract.RequireDefinedIdentity(revision.Value, nameof(revision));
         MaterializationContract.RequireDefinedIdentity(fence.Value, nameof(fence));
         FenceOwner = Guard.RequireNotNullOrWhiteSpace(fenceOwner);
-        ValidateLatestState(key, latestCheckpoint, latestSettlement);
+        ValidateLatestState(key, latestBatchCheckpoint, latestChangeCheckpoint, latestSettlement);
         Revision = revision;
         Fence = fence;
-        LatestCheckpoint = latestCheckpoint;
+        LatestBatchCheckpoint = latestBatchCheckpoint;
+        LatestChangeCheckpoint = latestChangeCheckpoint;
         LatestSettlement = latestSettlement;
     }
 
@@ -653,20 +681,48 @@ public sealed record MaterializationProgressSnapshot
     /// <summary>Stable current worker identity.</summary>
     public string FenceOwner { get; }
 
-    /// <summary>Latest persisted checkpoint, or <see langword="null"/> before application progress exists.</summary>
-    public MaterializationApplicationCheckpoint? LatestCheckpoint { get; }
+    /// <summary>
+    /// Latest persisted batch-continuation or batch-completed checkpoint, or <see langword="null"/> before baseline
+    /// enumeration progress exists.
+    /// </summary>
+    public MaterializationApplicationCheckpoint? LatestBatchCheckpoint { get; }
+
+    /// <summary>
+    /// Latest persisted incremental Channel checkpoint, or <see langword="null"/> before change progress exists.
+    /// </summary>
+    public MaterializationApplicationCheckpoint? LatestChangeCheckpoint { get; }
 
     /// <summary>Latest persisted source settlement, or <see langword="null"/> before acknowledgement.</summary>
     public MaterializationSourceSettlement? LatestSettlement { get; }
 
     static void ValidateLatestState(
         MaterializationProgressKey key,
-        MaterializationApplicationCheckpoint? latestCheckpoint,
+        MaterializationApplicationCheckpoint? latestBatchCheckpoint,
+        MaterializationApplicationCheckpoint? latestChangeCheckpoint,
         MaterializationSourceSettlement? latestSettlement)
     {
-        if (latestCheckpoint is not null)
+        if (latestBatchCheckpoint is not null)
         {
-            RequireCheckpointScope(key, latestCheckpoint);
+            if (latestBatchCheckpoint.Kind is not (
+                MaterializationCheckpointKind.BatchContinuation
+                or MaterializationCheckpointKind.BatchCompleted))
+            {
+                throw new ArgumentException(
+                    "The latest batch checkpoint must carry batch-continuation or batch-completed semantics.",
+                    nameof(latestBatchCheckpoint));
+            }
+            RequireCheckpointScope(key, latestBatchCheckpoint);
+        }
+
+        if (latestChangeCheckpoint is not null)
+        {
+            if (latestChangeCheckpoint.Kind != MaterializationCheckpointKind.ChangeProgress)
+            {
+                throw new ArgumentException(
+                    "The latest change checkpoint must carry incremental Channel progress semantics.",
+                    nameof(latestChangeCheckpoint));
+            }
+            RequireCheckpointScope(key, latestChangeCheckpoint);
         }
 
         if (latestSettlement is null)
@@ -674,10 +730,10 @@ public sealed record MaterializationProgressSnapshot
             return;
         }
 
-        if (latestCheckpoint is null)
+        if (latestChangeCheckpoint is null)
         {
             throw new ArgumentException(
-                "A source settlement requires prior durable application progress.",
+                "A source settlement requires prior durable incremental Channel progress.",
                 nameof(latestSettlement));
         }
         if (latestSettlement.Scope != key.Scope)
@@ -689,12 +745,12 @@ public sealed record MaterializationProgressSnapshot
 
         // The latest settlement may cite an older checkpoint after application has advanced. When it cites the
         // checkpoint retained by this compact snapshot, the complete cross-record invariant remains verifiable.
-        if (latestSettlement.Checkpoint == latestCheckpoint.Id
-            && (!latestSettlement.IsCoveredBy(latestCheckpoint, key.Scope)
-                || latestSettlement.SettledAtUtc < latestCheckpoint.CommittedAtUtc))
+        if (latestSettlement.Checkpoint == latestChangeCheckpoint.Id
+            && (!latestSettlement.IsCoveredBy(latestChangeCheckpoint, key.Scope)
+                || latestSettlement.SettledAtUtc < latestChangeCheckpoint.CommittedAtUtc))
         {
             throw new ArgumentException(
-                "A source settlement that cites the latest checkpoint must have exact durable coverage and chronology.",
+                "A source settlement that cites the latest change checkpoint must have exact durable coverage and chronology.",
                 nameof(latestSettlement));
         }
     }
@@ -920,6 +976,7 @@ static class MaterializationProgressIntent
         Append(builder, fence.Value);
         Append(builder, checkpoint.Id.Value);
         Append(builder, ((int)checkpoint.Kind).ToString(CultureInfo.InvariantCulture));
+        Append(builder, checkpoint.BatchPageOrdinal?.ToString(CultureInfo.InvariantCulture));
         Append(builder, checkpoint.Continuation?.FormatVersion.ToString(CultureInfo.InvariantCulture));
         Append(builder, checkpoint.Continuation?.ReadFingerprint.Algorithm);
         Append(builder, checkpoint.Continuation?.ReadFingerprint.Canonicalization);

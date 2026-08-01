@@ -35,6 +35,7 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
     const string SealReceiptDocumentKind = "seal-receipt";
     const string ValidationReceiptDocumentKind = "validation-receipt";
     const string PromotionReceiptDocumentKind = "promotion-receipt";
+    const string AbandonmentReceiptDocumentKind = "abandonment-receipt";
     const string RetirementReceiptDocumentKind = "retirement-receipt";
     const string CleanupReceiptDocumentKind = "cleanup-receipt";
     const string OperationReservationDocumentKind = "operation-reservation";
@@ -237,6 +238,21 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
 
     /// <inheritdoc />
     /// <exception cref="ElasticMaterializationTransportException">Elasticsearch I/O fails or returns an invalid bounded response.</exception>
+    public async ValueTask<MaterializationAbandonmentResult> AbandonGenerationAsync(
+        OperationContext context,
+        MaterializationAbandonGenerationRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(request);
+        return await ExecuteAsync(
+            context,
+            operation: "abandon-generation",
+            request.GenerationId,
+            cancellationToken => AbandonGenerationCoreAsync(request, cancellationToken)).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    /// <exception cref="ElasticMaterializationTransportException">Elasticsearch I/O fails or returns an invalid bounded response.</exception>
     public async ValueTask<MaterializationGenerationOperationResult> RetireGenerationAsync(
         OperationContext context,
         MaterializationRetireGenerationRequest request)
@@ -285,6 +301,12 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
         var existing = await ReadGenerationAsync(request.GenerationId, cancellationToken).ConfigureAwait(false);
         if (existing is not null)
         {
+            if (IsAbandonmentTombstone(existing.Value)
+                || existing.Value is { Retained: false, LastAbandonment: not null })
+            {
+                return new(MaterializationTargetOperationDisposition.StateConflict, generation: null);
+            }
+
             var accepted = await AcceptGenerationFenceAsync(
                 existing,
                 request.WorkerFence,
@@ -301,7 +323,7 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
                     await SnapshotAsync(accepted.Value, cancellationToken).ConfigureAwait(false));
             }
 
-            var stale = request.WorkerFence.Ordinal < existing.Value.LatestWorkerFence.Ordinal;
+            var stale = request.WorkerFence.Ordinal < RequiredWorkerFence(existing.Value).Ordinal;
             return new(
                 stale
                     ? MaterializationTargetOperationDisposition.StaleFence
@@ -335,6 +357,7 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
             PendingBatch: null,
             PendingSeal: null,
             PendingValidation: null,
+            LastAbandonment: null,
             LastRetirement: null,
             LastCleanup: null);
         var created = await CreateControlAsync(GenerationDocumentId(request.GenerationId), state, cancellationToken)
@@ -343,6 +366,12 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
         {
             existing = await ReadGenerationAsync(request.GenerationId, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("A concurrently created Elasticsearch generation state is unavailable.");
+            if (IsAbandonmentTombstone(existing.Value)
+                || existing.Value is { Retained: false, LastAbandonment: not null })
+            {
+                return new(MaterializationTargetOperationDisposition.StateConflict, generation: null);
+            }
+
             var accepted = await AcceptGenerationFenceAsync(existing, request.WorkerFence, cancellationToken)
                 .ConfigureAwait(false);
             if (accepted.Value.BeginFingerprint == fingerprint && accepted.Value.Retained)
@@ -374,7 +403,9 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
             return generation;
         }
 
-        var ownerAlias = GenerationOwnerAlias(generation.Value.GenerationId, generation.Value.BeginFingerprint);
+        var ownerAlias = GenerationOwnerAlias(
+            generation.Value.GenerationId,
+            RequiredBeginFingerprint(generation.Value));
         var createdIndex = await transport.CreateIndexAsync(
             generation.Value.IndexName,
             CreateGenerationIndexBody(generation.Value.GenerationId, ownerAlias),
@@ -484,16 +515,22 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
         {
             var missing = RejectedBatch(
                 request,
-                MaterializationBatchDisposition.GenerationNotFound,
+                generation is { Value.LastAbandonment: not null }
+                    ? MaterializationBatchDisposition.GenerationNotWritable
+                    : MaterializationBatchDisposition.GenerationNotFound,
                 generationRevision: null,
                 MaterializationItemOutcomeDisposition.PermanentFailure,
-                GenerationMissingCode,
-                "The addressed Elasticsearch generation does not exist.");
+                generation is { Value.LastAbandonment: not null }
+                    ? GenerationNotWritableCode
+                    : GenerationMissingCode,
+                generation is { Value.LastAbandonment: not null }
+                    ? "The addressed Elasticsearch generation identity is durably abandoned."
+                    : "The addressed Elasticsearch generation does not exist.");
             RecordBatchOutcomes(missing);
             return missing;
         }
 
-        if (request.WorkerFence.Ordinal < generation.Value.LatestWorkerFence.Ordinal)
+        if (request.WorkerFence.Ordinal < RequiredWorkerFence(generation.Value).Ordinal)
         {
             var stale = RejectedBatch(
                 request,
@@ -1457,8 +1494,15 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
 
     static MaterializationGenerationSnapshot WithLatestFence(
         MaterializationGenerationSnapshot snapshot,
-        Stored<GenerationState>? generation) =>
-        generation is null || snapshot.LatestWorkerFence == generation.Value.LatestWorkerFence
+        Stored<GenerationState>? generation)
+    {
+        if (generation is null || IsAbandonmentTombstone(generation.Value))
+        {
+            return snapshot;
+        }
+
+        var latestWorkerFence = RequiredWorkerFence(generation.Value);
+        return snapshot.LatestWorkerFence == latestWorkerFence
             ? snapshot
             : new(
                 snapshot.MaterializationId,
@@ -1466,7 +1510,7 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
                 snapshot.DefinitionFingerprint,
                 snapshot.State,
                 snapshot.Revision,
-                generation.Value.LatestWorkerFence,
+                latestWorkerFence,
                 snapshot.HasPermanentFailures,
                 snapshot.PendingRetryableMutationCount,
                 snapshot.VisibleItemCount,
@@ -1476,6 +1520,7 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
                 snapshot.CreatedAtUtc,
                 snapshot.InactivatedAtUtc,
                 snapshot.RetiredAtUtc);
+    }
 
     static DocumentValidationDiagnostic Diagnostic(
         string code,
@@ -1687,7 +1732,7 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
         {
             throw new ArgumentException("A seal time cannot predate generation creation.", nameof(request));
         }
-        if (request.WorkerFence.Ordinal < generation.Value.LatestWorkerFence.Ordinal)
+        if (request.WorkerFence.Ordinal < RequiredWorkerFence(generation.Value).Ordinal)
         {
             return new(
                 MaterializationTargetOperationDisposition.StaleFence,
@@ -1918,7 +1963,7 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
                 "A validation time cannot predate the generation's latest seal or validation boundary.",
                 nameof(request));
         }
-        if (request.WorkerFence.Ordinal < generation.Value.LatestWorkerFence.Ordinal)
+        if (request.WorkerFence.Ordinal < RequiredWorkerFence(generation.Value).Ordinal)
         {
             return new(
                 MaterializationTargetOperationDisposition.StaleFence,
@@ -2182,7 +2227,8 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
 
         var generation = await ReadGenerationAsync(request.GenerationId, cancellationToken).ConfigureAwait(false);
         var generationFenceWasStale = generation is not null
-            && request.GenerationWorkerFence.Ordinal < generation.Value.LatestWorkerFence.Ordinal;
+            && !IsAbandonmentTombstone(generation.Value)
+            && request.GenerationWorkerFence.Ordinal < RequiredWorkerFence(generation.Value).Ordinal;
         if (generation is not null)
         {
             generation = await AcceptGenerationFenceAsync(
@@ -2309,6 +2355,251 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
             receipt);
     }
 
+    async ValueTask<MaterializationAbandonmentResult> AbandonGenerationCoreAsync(
+        MaterializationAbandonGenerationRequest request,
+        CancellationToken cancellationToken)
+    {
+        RequireIndexedIdentity(request.GenerationId.Value, nameof(request));
+        var target = await LoadTargetAsync(cancellationToken).ConfigureAwait(false);
+        var fingerprint = MaterializationTargetIntentFingerprinter.Compute(request);
+        var receiptId = OperationDocumentId(AbandonmentReceiptDocumentKind, request.AbandonmentId.Value);
+        var prior = await ReadControlAsync<AbandonmentReceiptState>(receiptId, cancellationToken)
+            .ConfigureAwait(false);
+        var generation = await ReadGenerationAsync(request.GenerationId, cancellationToken).ConfigureAwait(false);
+        if (prior is not null)
+        {
+            if (prior.Value.RequestFingerprint != fingerprint)
+            {
+                return new(
+                    MaterializationTargetOperationDisposition.IdentityConflict,
+                    generation is { Value.Retained: true }
+                        ? await SnapshotAsync(generation.Value, cancellationToken).ConfigureAwait(false)
+                        : null,
+                    receipt: null);
+            }
+
+            return new(
+                MaterializationTargetOperationDisposition.Replayed,
+                generation is { Value.Retained: true }
+                    ? await SnapshotAsync(generation.Value, cancellationToken).ConfigureAwait(false)
+                    : prior.Value.Generation,
+                prior.Value.Receipt);
+        }
+
+        if (!await ReserveOperationAsync(receiptId, fingerprint, cancellationToken).ConfigureAwait(false))
+        {
+            return new(
+                MaterializationTargetOperationDisposition.IdentityConflict,
+                generation is { Value.Retained: true }
+                    ? await SnapshotAsync(generation.Value, cancellationToken).ConfigureAwait(false)
+                    : null,
+                receipt: null);
+        }
+
+        if (target.Value.ActiveGenerationId == request.GenerationId
+            || generation is { Value.State: MaterializationGenerationState.Active })
+        {
+            return new(
+                MaterializationTargetOperationDisposition.ActiveGenerationConflict,
+                generation is { Value.Retained: true }
+                    ? await SnapshotAsync(generation.Value, cancellationToken).ConfigureAwait(false)
+                    : null,
+                receipt: null);
+        }
+
+        if (generation?.Value.LastAbandonment is { } completed)
+        {
+            if (completed.RequestFingerprint != fingerprint
+                || completed.Receipt.AbandonmentId != request.AbandonmentId)
+            {
+                return new(
+                    MaterializationTargetOperationDisposition.StateConflict,
+                    generation.Value.Retained
+                        ? await SnapshotAsync(generation.Value, cancellationToken).ConfigureAwait(false)
+                        : null,
+                    receipt: null);
+            }
+
+            var replayGeneration = generation.Value.Retained
+                ? await SnapshotAsync(generation.Value, cancellationToken).ConfigureAwait(false)
+                : null;
+            await EnsureAbandonmentReceiptAsync(
+                receiptId,
+                fingerprint,
+                completed.Receipt,
+                replayGeneration,
+                cancellationToken).ConfigureAwait(false);
+            return new(
+                MaterializationTargetOperationDisposition.Replayed,
+                replayGeneration,
+                completed.Receipt);
+        }
+
+        MaterializationAbandonmentReceipt receipt = new(
+            abandonmentId: request.AbandonmentId,
+            generationId: request.GenerationId,
+            abandonedAtUtc: request.AbandonedAtUtc);
+        if (generation is null)
+        {
+            GenerationState tombstone = new(
+                FormatVersion: StateFormatVersion,
+                DocumentKind: GenerationDocumentKind,
+                BindingFingerprint: binding.Fingerprint.Value,
+                MaterializationId: Descriptor.MaterializationId,
+                GenerationId: request.GenerationId,
+                DefinitionFingerprint: null,
+                BeginFingerprint: null,
+                Retained: false,
+                IsProvisioned: false,
+                IndexName: binding.GetGenerationIndexName(request.GenerationId),
+                State: MaterializationGenerationState.Retired,
+                Revision: MaterializationGenerationRevision.Initial,
+                LatestWorkerFence: default,
+                HasPermanentFailures: false,
+                SealReceipt: null,
+                ValidationReceipt: null,
+                CreatedAtUtc: request.AbandonedAtUtc,
+                InactivatedAtUtc: null,
+                RetiredAtUtc: request.AbandonedAtUtc,
+                PendingBatch: null,
+                PendingSeal: null,
+                PendingValidation: null,
+                LastAbandonment: new(fingerprint, receipt),
+                LastRetirement: null,
+                LastCleanup: null);
+            var created = await CreateControlAsync(
+                GenerationDocumentId(request.GenerationId),
+                tombstone,
+                cancellationToken).ConfigureAwait(false);
+            if (created is not null)
+            {
+                await EnsureAbandonmentReceiptAsync(
+                    receiptId,
+                    fingerprint,
+                    receipt,
+                    generation: null,
+                    cancellationToken).ConfigureAwait(false);
+                return new(
+                    MaterializationTargetOperationDisposition.Applied,
+                    generation: null,
+                    receipt);
+            }
+
+            generation = await ReadGenerationAsync(request.GenerationId, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException(
+                    "A concurrently claimed Elasticsearch generation identity is unavailable.");
+            if (target.Value.ActiveGenerationId == request.GenerationId
+                || generation.Value.State == MaterializationGenerationState.Active)
+            {
+                return new(
+                    MaterializationTargetOperationDisposition.ActiveGenerationConflict,
+                    generation.Value.Retained
+                        ? await SnapshotAsync(generation.Value, cancellationToken).ConfigureAwait(false)
+                        : null,
+                    receipt: null);
+            }
+            if (generation.Value.LastAbandonment is { } concurrentAbandonment)
+            {
+                if (concurrentAbandonment.RequestFingerprint != fingerprint)
+                {
+                    return new(
+                        MaterializationTargetOperationDisposition.StateConflict,
+                        generation.Value.Retained
+                            ? await SnapshotAsync(generation.Value, cancellationToken).ConfigureAwait(false)
+                            : null,
+                        receipt: null);
+                }
+
+                await EnsureAbandonmentReceiptAsync(
+                    receiptId,
+                    fingerprint,
+                    concurrentAbandonment.Receipt,
+                    generation: null,
+                    cancellationToken).ConfigureAwait(false);
+                return new(
+                    MaterializationTargetOperationDisposition.Replayed,
+                    generation: null,
+                    concurrentAbandonment.Receipt);
+            }
+        }
+
+        var latestEvidenceAtUtc = generation.Value.RetiredAtUtc
+            ?? generation.Value.InactivatedAtUtc
+            ?? generation.Value.ValidationReceipt?.ValidatedAtUtc
+            ?? generation.Value.SealReceipt?.SealedAtUtc
+            ?? generation.Value.CreatedAtUtc;
+        if (request.AbandonedAtUtc < latestEvidenceAtUtc)
+        {
+            throw new ArgumentException(
+                "An abandonment time cannot predate the generation's latest retained lifecycle evidence.",
+                nameof(request));
+        }
+
+        var abandonedState = generation.Value with
+        {
+            State = MaterializationGenerationState.Retired,
+            Revision = generation.Value.State == MaterializationGenerationState.Retired
+                ? generation.Value.Revision
+                : Next(generation.Value.Revision),
+            RetiredAtUtc = generation.Value.RetiredAtUtc ?? request.AbandonedAtUtc,
+            PendingBatch = null,
+            PendingSeal = null,
+            PendingValidation = null,
+            LastAbandonment = new(fingerprint, receipt)
+        };
+        var generationSnapshot = generation.Value.Retained
+            ? await SnapshotAsync(abandonedState, cancellationToken).ConfigureAwait(false)
+            : null;
+        _ = await ReplaceControlAsync(generation, abandonedState, cancellationToken).ConfigureAwait(false);
+        await EnsureAbandonmentReceiptAsync(
+            receiptId,
+            fingerprint,
+            receipt,
+            generationSnapshot,
+            cancellationToken).ConfigureAwait(false);
+        return new(
+            MaterializationTargetOperationDisposition.Applied,
+            generationSnapshot,
+            receipt);
+    }
+
+    async ValueTask EnsureAbandonmentReceiptAsync(
+        string receiptId,
+        MaterializationTargetIntentFingerprint requestFingerprint,
+        MaterializationAbandonmentReceipt receipt,
+        MaterializationGenerationSnapshot? generation,
+        CancellationToken cancellationToken)
+    {
+        AbandonmentReceiptState state = new(
+            FormatVersion: StateFormatVersion,
+            DocumentKind: AbandonmentReceiptDocumentKind,
+            RequestFingerprint: requestFingerprint,
+            Receipt: receipt,
+            Generation: generation);
+        var created = await CreateControlAsync(receiptId, state, cancellationToken).ConfigureAwait(false);
+        if (created is not null)
+        {
+            return;
+        }
+
+        var retained = await ReadControlAsync<AbandonmentReceiptState>(receiptId, cancellationToken)
+            .ConfigureAwait(false)
+            ?? throw new InvalidOperationException(
+                "A concurrent Elasticsearch abandonment receipt is unavailable.");
+        if (retained.Value.RequestFingerprint != requestFingerprint
+            || retained.Value.Receipt != receipt
+            || (retained.Value.Generation is null) != (generation is null)
+            || (retained.Value.Generation is { } retainedGeneration
+                && generation is { } expectedGeneration
+                && (retainedGeneration.MaterializationId != expectedGeneration.MaterializationId
+                    || retainedGeneration.GenerationId != expectedGeneration.GenerationId
+                    || retainedGeneration.State != MaterializationGenerationState.Retired)))
+        {
+            throw new InvalidOperationException(
+                "The Elasticsearch abandonment identity conflicts with its durable lifecycle receipt.");
+        }
+    }
+
     async ValueTask<MaterializationGenerationOperationResult> RetireGenerationCoreAsync(
         MaterializationRetireGenerationRequest request,
         CancellationToken cancellationToken)
@@ -2356,7 +2647,7 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
         {
             return new(MaterializationTargetOperationDisposition.NotFound, generation: null);
         }
-        if (request.WorkerFence.Ordinal < generation.Value.LatestWorkerFence.Ordinal)
+        if (request.WorkerFence.Ordinal < RequiredWorkerFence(generation.Value).Ordinal)
         {
             return new(
                 MaterializationTargetOperationDisposition.StaleFence,
@@ -2516,7 +2807,14 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
                 await SnapshotAsync(target.Value, cancellationToken).ConfigureAwait(false),
                 wasRemoved: false);
         }
-        if (request.WorkerFence.Ordinal < generation.Value.LatestWorkerFence.Ordinal)
+        if (IsAbandonmentTombstone(generation.Value))
+        {
+            return new(
+                MaterializationTargetOperationDisposition.NotFound,
+                await SnapshotAsync(target.Value, cancellationToken).ConfigureAwait(false),
+                wasRemoved: false);
+        }
+        if (request.WorkerFence.Ordinal < RequiredWorkerFence(generation.Value).Ordinal)
         {
             return new(
                 MaterializationTargetOperationDisposition.StaleFence,
@@ -2581,18 +2879,32 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
                 wasRemoved: false);
         }
 
-        if (generation.Value.LastRetirement is not { } completedRetirement)
+        if (generation.Value.LastRetirement is null && generation.Value.LastAbandonment is null)
         {
             throw new InvalidOperationException(
-                "A retired Elasticsearch generation has no durable retirement completion evidence.");
+                "A retired Elasticsearch generation has no durable retirement or abandonment evidence.");
         }
         var retirementSnapshot = await SnapshotAsync(generation.Value, cancellationToken).ConfigureAwait(false);
-        await EnsureRetirementReceiptAsync(
-            OperationDocumentId(RetirementReceiptDocumentKind, completedRetirement.RetirementId.Value),
-            completedRetirement.RetirementId,
-            completedRetirement.RequestFingerprint,
-            retirementSnapshot,
-            cancellationToken).ConfigureAwait(false);
+        if (generation.Value.LastRetirement is { } completedRetirement)
+        {
+            await EnsureRetirementReceiptAsync(
+                OperationDocumentId(RetirementReceiptDocumentKind, completedRetirement.RetirementId.Value),
+                completedRetirement.RetirementId,
+                completedRetirement.RequestFingerprint,
+                retirementSnapshot,
+                cancellationToken).ConfigureAwait(false);
+        }
+        if (generation.Value.LastAbandonment is { } completedAbandonment)
+        {
+            await EnsureAbandonmentReceiptAsync(
+                OperationDocumentId(
+                    AbandonmentReceiptDocumentKind,
+                    completedAbandonment.Receipt.AbandonmentId.Value),
+                completedAbandonment.RequestFingerprint,
+                completedAbandonment.Receipt,
+                retirementSnapshot,
+                cancellationToken).ConfigureAwait(false);
+        }
 
         var ownsPhysicalIndex = await HasExactGenerationOwnershipAsync(
             generation.Value,
@@ -2612,7 +2924,7 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
         {
             var ownerAlias = GenerationOwnerAlias(
                 generation.Value.GenerationId,
-                generation.Value.BeginFingerprint);
+                RequiredBeginFingerprint(generation.Value));
             var deleted = await transport.DeleteOwnedIndexAsync(
                 generation.Value.IndexName,
                 ownerAlias,
@@ -2697,7 +3009,9 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
         GenerationState generation,
         CancellationToken cancellationToken)
     {
-        var ownerAlias = GenerationOwnerAlias(generation.GenerationId, generation.BeginFingerprint);
+        var ownerAlias = GenerationOwnerAlias(
+            generation.GenerationId,
+            RequiredBeginFingerprint(generation));
         var aliases = await transport.InspectAliasesAsync(
             [ownerAlias],
             policy.MaximumDiagnosticBytes,
@@ -3006,7 +3320,7 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
             || candidate.Value.PendingBatch is not null
             || candidate.Value.PendingSeal is not null
             || candidate.Value.PendingValidation is not null
-            || candidate.Value.LatestWorkerFence.Ordinal < pending.Receipt.GenerationWorkerFence.Ordinal
+            || RequiredWorkerFence(candidate.Value).Ordinal < pending.Receipt.GenerationWorkerFence.Ordinal
             || candidate.Value.State == MaterializationGenerationState.Validated
                 && candidate.Value.Revision != validation.GenerationRevision
             || candidate.Value.State == MaterializationGenerationState.Active
@@ -3047,7 +3361,9 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
             binding.ReadAlias,
             pending.ExpectedReadIndex,
             pending.NextReadIndex,
-            GenerationOwnerAlias(candidate.Value.GenerationId, candidate.Value.BeginFingerprint),
+            GenerationOwnerAlias(
+                candidate.Value.GenerationId,
+                RequiredBeginFingerprint(candidate.Value)),
             cancellationToken).ConfigureAwait(false);
         var unblocked = await transport.RemoveWriteBlockAsync(
             pending.NextReadIndex,
@@ -3240,7 +3556,12 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
         MaterializationWorkerFence requested,
         CancellationToken cancellationToken)
     {
-        if (requested.Ordinal <= generation.Value.LatestWorkerFence.Ordinal)
+        if (IsAbandonmentTombstone(generation.Value))
+        {
+            return generation;
+        }
+
+        if (requested.Ordinal <= RequiredWorkerFence(generation.Value).Ordinal)
         {
             return generation;
         }
@@ -3292,10 +3613,10 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
             return new(
                 generation.MaterializationId,
                 generation.GenerationId,
-                generation.DefinitionFingerprint,
+                RequiredDefinitionFingerprint(generation),
                 generation.State,
                 generation.Revision,
-                generation.LatestWorkerFence,
+                RequiredWorkerFence(generation),
                 generation.HasPermanentFailures,
                 pendingRetryableMutationCount: 0,
                 visibleItemCount: 0,
@@ -3328,10 +3649,10 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
         return new(
             generation.MaterializationId,
             generation.GenerationId,
-            generation.DefinitionFingerprint,
+            RequiredDefinitionFingerprint(generation),
             generation.State,
             generation.Revision,
-            generation.LatestWorkerFence,
+            RequiredWorkerFence(generation),
             generation.HasPermanentFailures,
             pending.Count,
             visible.Count,
@@ -3466,6 +3787,26 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
                     && receipt.Receipt.TargetId == Descriptor.Id
                     && IsDefined(receipt.RequestFingerprint.Value));
                 return;
+            case AbandonmentReceiptState receipt:
+                RequireControlEnvelope(
+                    receipt.FormatVersion,
+                    receipt.DocumentKind,
+                    AbandonmentReceiptDocumentKind);
+                RequireValidControl(
+                    receipt.Receipt is not null
+                    && id == OperationDocumentId(
+                        AbandonmentReceiptDocumentKind,
+                        receipt.Receipt.AbandonmentId.Value)
+                    && IsDefined(receipt.Receipt.GenerationId.Value)
+                    && IsUtc(receipt.Receipt.AbandonedAtUtc)
+                    && (receipt.Generation is not { } receiptGeneration
+                        || receiptGeneration.MaterializationId == Descriptor.MaterializationId
+                            && receiptGeneration.GenerationId == receipt.Receipt.GenerationId
+                            && receiptGeneration.State == MaterializationGenerationState.Retired
+                            && receiptGeneration.RetiredAtUtc is { } retiredAtUtc
+                            && retiredAtUtc <= receipt.Receipt.AbandonedAtUtc)
+                    && IsDefined(receipt.RequestFingerprint.Value));
+                return;
             case RetirementReceiptState receipt:
                 RequireControlEnvelope(receipt.FormatVersion, receipt.DocumentKind, RetirementReceiptDocumentKind);
                 RequireValidControl(
@@ -3554,22 +3895,54 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
     void ValidateGenerationState(string id, GenerationState generation)
     {
         RequireControlEnvelope(generation.FormatVersion, generation.DocumentKind, GenerationDocumentKind);
+        if (IsAbandonmentTombstone(generation))
+        {
+            var abandonment = generation.LastAbandonment!;
+            RequireValidControl(
+                id == GenerationDocumentId(generation.GenerationId)
+                && generation.BindingFingerprint == binding.Fingerprint.Value
+                && generation.MaterializationId == Descriptor.MaterializationId
+                && IsDefined(generation.GenerationId.Value)
+                && generation.IndexName == binding.GetGenerationIndexName(generation.GenerationId)
+                && generation.State == MaterializationGenerationState.Retired
+                && generation.Revision == MaterializationGenerationRevision.Initial
+                && generation.LatestWorkerFence is null
+                && !generation.HasPermanentFailures
+                && generation.CreatedAtUtc == abandonment.Receipt.AbandonedAtUtc
+                && generation.RetiredAtUtc == abandonment.Receipt.AbandonedAtUtc
+                && generation.InactivatedAtUtc is null
+                && generation.SealReceipt is null
+                && generation.ValidationReceipt is null
+                && generation.PendingBatch is null
+                && generation.PendingSeal is null
+                && generation.PendingValidation is null
+                && generation.LastRetirement is null
+                && generation.LastCleanup is null
+                && abandonment.Receipt.GenerationId == generation.GenerationId
+                && IsDefined(abandonment.Receipt.AbandonmentId.Value)
+                && IsDefined(abandonment.RequestFingerprint.Value)
+                && IsUtc(abandonment.Receipt.AbandonedAtUtc));
+            return;
+        }
+
         RequireValidControl(
             id == GenerationDocumentId(generation.GenerationId)
             && generation.BindingFingerprint == binding.Fingerprint.Value
             && generation.MaterializationId == Descriptor.MaterializationId
             && IsDefined(generation.GenerationId.Value)
-            && generation.DefinitionFingerprint is not null
-            && IsDefined(generation.DefinitionFingerprint.Algorithm)
-            && IsDefined(generation.DefinitionFingerprint.Canonicalization)
-            && IsDefined(generation.DefinitionFingerprint.Value)
-            && IsDefined(generation.BeginFingerprint.Value)
+            && generation.DefinitionFingerprint is { } definitionFingerprint
+            && IsDefined(definitionFingerprint.Algorithm)
+            && IsDefined(definitionFingerprint.Canonicalization)
+            && IsDefined(definitionFingerprint.Value)
+            && generation.BeginFingerprint is { } beginFingerprint
+            && IsDefined(beginFingerprint.Value)
             && (generation.IsProvisioned
                 || generation.State is MaterializationGenerationState.Loading or MaterializationGenerationState.Retired)
             && generation.IndexName == binding.GetGenerationIndexName(generation.GenerationId)
             && Enum.IsDefined(generation.State)
             && IsDefined(generation.Revision.Value)
-            && IsDefined(generation.LatestWorkerFence.Value)
+            && generation.LatestWorkerFence is { } latestWorkerFence
+            && IsDefined(latestWorkerFence.Value)
             && IsUtc(generation.CreatedAtUtc)
             && IsUtc(generation.InactivatedAtUtc)
             && IsUtc(generation.RetiredAtUtc)
@@ -3589,6 +3962,18 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
                 && generation.PendingBatch is null
                 && generation.PendingSeal is null
                 && generation.PendingValidation is null);
+        }
+
+        if (generation.LastAbandonment is { } retainedAbandonment)
+        {
+            RequireValidControl(
+                generation.State == MaterializationGenerationState.Retired
+                && retainedAbandonment.Receipt.GenerationId == generation.GenerationId
+                && IsDefined(retainedAbandonment.Receipt.AbandonmentId.Value)
+                && IsDefined(retainedAbandonment.RequestFingerprint.Value)
+                && IsUtc(retainedAbandonment.Receipt.AbandonedAtUtc)
+                && generation.RetiredAtUtc is { } retiredAtUtc
+                && retiredAtUtc <= retainedAbandonment.Receipt.AbandonedAtUtc);
         }
 
         ValidateGenerationLifecycle(generation);
@@ -3656,7 +4041,7 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
             case MaterializationGenerationState.Retired:
                 RequireValidControl(
                     generation.RetiredAtUtc is not null
-                    && generation.LastRetirement is not null);
+                    && (generation.LastRetirement is not null || generation.LastAbandonment is not null));
                 break;
             default:
                 throw InvalidControlState();
@@ -3679,7 +4064,7 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
                 && IsDefined(batch.RequestFingerprint.Value)
                 && IsDefined(batch.WorkerFence.Value)
                 && IsDefined(batch.StartedRevision.Value)
-                && batch.WorkerFence.Ordinal <= generation.LatestWorkerFence.Ordinal
+                && batch.WorkerFence.Ordinal <= RequiredWorkerFence(generation).Ordinal
                 && (!batch.IsInitialized
                     ? batch.PreexistingMutationIds.IsEmpty && batch.PreexistingPendingMutationIds.IsEmpty
                     : !batch.PreexistingMutationIds.IsDefault && !batch.PreexistingPendingMutationIds.IsDefault)
@@ -3736,6 +4121,22 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
                 && validation.StartedRevision == generation.Revision);
         }
     }
+
+    static bool IsAbandonmentTombstone(GenerationState generation) =>
+        !generation.Retained
+        && !generation.IsProvisioned
+        && generation.DefinitionFingerprint is null
+        && generation.BeginFingerprint is null
+        && generation.LastAbandonment is not null;
+
+    static MaterializationWorkerFence RequiredWorkerFence(GenerationState generation) =>
+        generation.LatestWorkerFence ?? throw InvalidControlState();
+
+    static ExecutionDefinitionFingerprint RequiredDefinitionFingerprint(GenerationState generation) =>
+        generation.DefinitionFingerprint ?? throw InvalidControlState();
+
+    static MaterializationTargetIntentFingerprint RequiredBeginFingerprint(GenerationState generation) =>
+        generation.BeginFingerprint ?? throw InvalidControlState();
 
     static bool HasUniqueDefinedValues(ImmutableArray<MaterializationItemMutationId> values)
     {
@@ -3975,6 +4376,7 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
         MaterializationSealResult seal => seal.Disposition.ToString(),
         MaterializationValidationResult validation => validation.Disposition.ToString(),
         MaterializationPromotionResult promotion => promotion.Disposition.ToString(),
+        MaterializationAbandonmentResult abandonment => abandonment.Disposition.ToString(),
         MaterializationCleanupResult cleanup => cleanup.Disposition.ToString(),
         _ => null
     };
@@ -4124,14 +4526,14 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
         string BindingFingerprint,
         MaterializationId MaterializationId,
         MaterializationGenerationId GenerationId,
-        ExecutionDefinitionFingerprint DefinitionFingerprint,
-        MaterializationTargetIntentFingerprint BeginFingerprint,
+        ExecutionDefinitionFingerprint? DefinitionFingerprint,
+        MaterializationTargetIntentFingerprint? BeginFingerprint,
         bool Retained,
         bool IsProvisioned,
         string IndexName,
         MaterializationGenerationState State,
         MaterializationGenerationRevision Revision,
-        MaterializationWorkerFence LatestWorkerFence,
+        MaterializationWorkerFence? LatestWorkerFence,
         bool HasPermanentFailures,
         MaterializationSealReceipt? SealReceipt,
         MaterializationValidationReceipt? ValidationReceipt,
@@ -4141,6 +4543,7 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
         PendingBatch? PendingBatch,
         PendingSeal? PendingSeal,
         PendingValidation? PendingValidation,
+        AbandonmentCompletion? LastAbandonment,
         RetirementCompletion? LastRetirement,
         CleanupCompletion? LastCleanup);
 
@@ -4153,6 +4556,10 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
         MaterializationValidationId ValidationId,
         MaterializationTargetIntentFingerprint RequestFingerprint,
         MaterializationGenerationRevision StartedRevision);
+
+    sealed record AbandonmentCompletion(
+        MaterializationTargetIntentFingerprint RequestFingerprint,
+        MaterializationAbandonmentReceipt Receipt);
 
     sealed record RetirementCompletion(
         MaterializationRetirementId RetirementId,
@@ -4221,6 +4628,13 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
         string DocumentKind,
         MaterializationTargetIntentFingerprint RequestFingerprint,
         MaterializationPromotionReceipt Receipt);
+
+    sealed record AbandonmentReceiptState(
+        int FormatVersion,
+        string DocumentKind,
+        MaterializationTargetIntentFingerprint RequestFingerprint,
+        MaterializationAbandonmentReceipt Receipt,
+        MaterializationGenerationSnapshot? Generation);
 
     sealed record RetirementReceiptState(
         int FormatVersion,

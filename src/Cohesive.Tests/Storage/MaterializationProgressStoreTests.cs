@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Physical;
@@ -124,7 +125,7 @@ public sealed class MaterializationProgressStoreTests
         Assert.Equal(
             MaterializationProgressMutationDisposition.IdentityConflict,
             checkpointIdentityConflict.Disposition);
-        Assert.Equal(checkpoint, (await store.LoadAsync(context, Key))!.LatestCheckpoint);
+        Assert.Equal(checkpoint, (await store.LoadAsync(context, Key))!.LatestChangeCheckpoint);
     }
 
     [Fact]
@@ -149,7 +150,8 @@ public sealed class MaterializationProgressStoreTests
             completion: null,
             position: null,
             [],
-            FirstCommit);
+            FirstCommit,
+            batchPageOrdinal: 1);
         MaterializationApplicationCheckpoint changedFingerprint = new(
             checkpoint.Id,
             checkpoint.Kind,
@@ -162,7 +164,18 @@ public sealed class MaterializationProgressStoreTests
             checkpoint.Position,
             checkpoint.AppliedDeliveries,
             checkpoint.CommittedAtUtc,
-            checkpoint.EvidenceReference);
+            checkpoint.EvidenceReference,
+            batchPageOrdinal: checkpoint.BatchPageOrdinal);
+        MaterializationApplicationCheckpoint changedPageOrdinal = new(
+            checkpoint.Id,
+            checkpoint.Kind,
+            checkpoint.Continuation,
+            checkpoint.Completion,
+            checkpoint.Position,
+            checkpoint.AppliedDeliveries,
+            checkpoint.CommittedAtUtc,
+            checkpoint.EvidenceReference,
+            batchPageOrdinal: 2);
 
         var committed = await store.SaveCheckpointAsync(
             context,
@@ -180,9 +193,20 @@ public sealed class MaterializationProgressStoreTests
             "worker-a",
             claim.Fence,
             changedFingerprint);
+        var pageOrdinalConflict = await store.SaveCheckpointAsync(
+            context,
+            Key,
+            new("checkpoint-mutation-1"),
+            claim.Revision,
+            "worker-a",
+            claim.Fence,
+            changedPageOrdinal);
 
         Assert.Equal(MaterializationProgressMutationDisposition.Applied, committed.Disposition);
         Assert.Equal(MaterializationProgressMutationDisposition.IdentityConflict, conflict.Disposition);
+        Assert.Equal(
+            MaterializationProgressMutationDisposition.IdentityConflict,
+            pageOrdinalConflict.Disposition);
     }
 
     [Fact]
@@ -208,7 +232,8 @@ public sealed class MaterializationProgressStoreTests
             completion,
             position: null,
             appliedDeliveries: [],
-            FirstCommit);
+            FirstCommit,
+            batchPageOrdinal: 1);
 
         var saved = await store.SaveCheckpointAsync(
             context,
@@ -219,7 +244,7 @@ public sealed class MaterializationProgressStoreTests
             claim.Fence,
             checkpoint);
 
-        var persisted = Assert.IsType<MaterializationProgressSnapshot>(saved.Snapshot).LatestCheckpoint;
+        var persisted = Assert.IsType<MaterializationProgressSnapshot>(saved.Snapshot).LatestBatchCheckpoint;
         Assert.Equal(completion, persisted?.Completion);
         Assert.Equal(Scope.Input, persisted?.Completion?.Scope.Input);
     }
@@ -255,7 +280,8 @@ public sealed class MaterializationProgressStoreTests
 
         Assert.Equal(MaterializationProgressMutationDisposition.StaleFence, stale.Disposition);
         Assert.Equal(MaterializationProgressDiagnosticCodes.StaleFence, Assert.Single(stale.Diagnostics).Code);
-        Assert.Null(second.LatestCheckpoint);
+        Assert.Null(second.LatestBatchCheckpoint);
+        Assert.Null(second.LatestChangeCheckpoint);
     }
 
     [Fact]
@@ -495,8 +521,91 @@ public sealed class MaterializationProgressStoreTests
             priorSettlement)).Snapshot);
 
         Assert.Equal(MaterializationProgressMutationDisposition.Replayed, priorIdentityReplay.Disposition);
-        Assert.Equal(secondCheckpoint, settled.LatestCheckpoint);
+        Assert.Equal(secondCheckpoint, settled.LatestChangeCheckpoint);
         Assert.Equal(priorSettlement, settled.LatestSettlement);
+    }
+
+    [Fact]
+    public async Task BatchAndChangeProgress_RemainIndependentAndSettlementCitesChangeAudit()
+    {
+        IMaterializationProgressStore store = new InMemoryMaterializationProgressStore();
+        var context = OperationContext.Create();
+        var claim = Assert.IsType<MaterializationProgressSnapshot>((await store.AcquireFenceAsync(
+            context,
+            Key,
+            new("claim-independent-tracks"),
+            expectedRevision: null,
+            owner: "worker-a")).Snapshot);
+        var changeCheckpoint = ChangeCheckpoint(
+            "checkpoint-change-cut",
+            "position-change-cut",
+            FirstCommit,
+            "delivery-change-cut");
+        var changeProgress = Assert.IsType<MaterializationProgressSnapshot>((await store.SaveCheckpointAsync(
+            context,
+            Key,
+            new("checkpoint-mutation-change-cut"),
+            claim.Revision,
+            "worker-a",
+            claim.Fence,
+            changeCheckpoint)).Snapshot);
+        MaterializationApplicationCheckpoint batchCheckpoint = new(
+            id: new("checkpoint-batch-continuation"),
+            kind: MaterializationCheckpointKind.BatchContinuation,
+            continuation: new MaterializationSourceContinuation(
+                formatVersion: 1,
+                readFingerprint: new("sha256", "tests/read/v1", "0123456789abcdef"),
+                scope: Scope,
+                value: "continuation-after-change-cut"),
+            completion: null,
+            position: null,
+            appliedDeliveries: [],
+            committedAtUtc: FirstCommit.AddSeconds(1),
+            batchPageOrdinal: 1);
+        var batchProgress = Assert.IsType<MaterializationProgressSnapshot>((await store.SaveCheckpointAsync(
+            context,
+            Key,
+            new("checkpoint-mutation-batch-continuation"),
+            changeProgress.Revision,
+            "worker-a",
+            changeProgress.Fence,
+            batchCheckpoint)).Snapshot);
+        MaterializationSourceSettlement settlement = new(
+            id: new("settlement-change-cut"),
+            checkpoint: changeCheckpoint.Id,
+            position: Assert.IsType<MaterializationSourcePosition>(changeCheckpoint.Position),
+            settledAtUtc: FirstCommit.AddSeconds(2));
+
+        var settled = Assert.IsType<MaterializationProgressSnapshot>((await store.SaveSettlementAsync(
+            context,
+            Key,
+            new("settlement-mutation-change-cut"),
+            batchProgress.Revision,
+            "worker-a",
+            batchProgress.Fence,
+            settlement)).Snapshot);
+
+        Assert.Equal(batchCheckpoint, settled.LatestBatchCheckpoint);
+        Assert.Equal(changeCheckpoint, settled.LatestChangeCheckpoint);
+        Assert.Equal(settlement, settled.LatestSettlement);
+
+        var json = JsonSerializer.Serialize(settled, StrictDocumentJson.CreateOptions());
+        var restored = Assert.IsType<MaterializationProgressSnapshot>(
+            JsonSerializer.Deserialize<MaterializationProgressSnapshot>(
+                json,
+                StrictDocumentJson.CreateOptions()));
+
+        Assert.Contains("\"latestBatchCheckpoint\":", json);
+        Assert.Contains("\"latestChangeCheckpoint\":", json);
+        Assert.DoesNotContain("\"latestCheckpoint\":", json);
+        Assert.Equal(batchCheckpoint.Id, restored.LatestBatchCheckpoint?.Id);
+        Assert.Equal(
+            batchCheckpoint.Continuation?.Value,
+            restored.LatestBatchCheckpoint?.Continuation?.Value);
+        Assert.Equal(changeCheckpoint.Id, restored.LatestChangeCheckpoint?.Id);
+        Assert.Equal(
+            changeCheckpoint.ChannelProgress?.ReplayCursor?.Value,
+            restored.LatestChangeCheckpoint?.ChannelProgress?.ReplayCursor?.Value);
     }
 
     [Fact]
@@ -542,29 +651,28 @@ public sealed class MaterializationProgressStoreTests
             MaterializationProgressRevision.Initial,
             MaterializationProgressFence.Initial,
             "worker-a",
-            latestCheckpoint: null,
-            settlement));
+            latestSettlement: settlement));
         Assert.Throws<ArgumentException>(() => new MaterializationProgressSnapshot(
             Key,
             MaterializationProgressRevision.Initial,
             MaterializationProgressFence.Initial,
             "worker-a",
-            foreignCheckpoint));
+            latestChangeCheckpoint: foreignCheckpoint));
         Assert.Throws<ArgumentException>(() => new MaterializationProgressSnapshot(
             Key,
             MaterializationProgressRevision.Initial,
             MaterializationProgressFence.Initial,
             "worker-a",
-            checkpoint,
-            mismatchedSettlement));
+            latestChangeCheckpoint: checkpoint,
+            latestSettlement: mismatchedSettlement));
 
         var valid = new MaterializationProgressSnapshot(
             Key,
             MaterializationProgressRevision.Initial,
             MaterializationProgressFence.Initial,
             "worker-a",
-            checkpoint,
-            settlement);
+            latestChangeCheckpoint: checkpoint,
+            latestSettlement: settlement);
         Assert.Equal(settlement, valid.LatestSettlement);
     }
 

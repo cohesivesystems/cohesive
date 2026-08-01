@@ -530,9 +530,9 @@ public sealed record MaterializationChangePage
     /// <paramref name="progress"/> or <paramref name="result"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="InvalidOperationException">
-    /// The mutation was not applied or replayed, the snapshot belongs to another progress key, the latest checkpoint
-    /// is not an incremental-change checkpoint through this page, or its applied delivery identities do not exactly equal
-    /// this page's delivery set.
+    /// The mutation was not applied or replayed, the snapshot belongs to another progress key, the latest change
+    /// checkpoint does not extend through this page, or its applied delivery identities do not exactly equal this
+    /// page's delivery set.
     /// </exception>
     public MaterializationApplicationCheckpoint RequireDurableCheckpointForSettlement(
         MaterializationProgressKey progress,
@@ -555,12 +555,12 @@ public sealed record MaterializationChangePage
                 "Provider settlement requires progress from the exact materialization definition, generation, and source-feed scope supplied to the handler.");
         }
 
-        var checkpoint = snapshot.LatestCheckpoint
-            ?? throw new InvalidOperationException("Provider settlement requires a durable application checkpoint.");
+        var checkpoint = snapshot.LatestChangeCheckpoint
+            ?? throw new InvalidOperationException("Provider settlement requires a durable change checkpoint.");
         if (checkpoint.Kind != MaterializationCheckpointKind.ChangeProgress)
         {
             throw new InvalidOperationException(
-                $"Provider settlement requires a '{MaterializationCheckpointKind.ChangeProgress}' checkpoint; the latest checkpoint is '{checkpoint.Kind}'.");
+                $"Provider settlement requires a '{MaterializationCheckpointKind.ChangeProgress}' checkpoint; the latest change checkpoint is '{checkpoint.Kind}'.");
         }
 
         if (!checkpoint.CoversReplayPosition(ThroughPosition))
