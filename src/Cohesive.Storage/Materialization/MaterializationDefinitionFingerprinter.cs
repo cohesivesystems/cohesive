@@ -8,11 +8,11 @@ namespace Cohesive.Storage.Materialization;
 /// <summary>Computes an exact portable-content fence for a canonical materialization definition.</summary>
 public static class MaterializationDefinitionFingerprinter
 {
-    /// <summary>Cryptographic hash algorithm used by the v1 profile.</summary>
+    /// <summary>Cryptographic hash algorithm used by the current profile.</summary>
     public const string Algorithm = "sha256";
 
-    /// <summary>Canonicalization profile used by the v1 materialization definition fence.</summary>
-    public const string Canonicalization = "cohesive-materialization-definition/v1-c14n/v1";
+    /// <summary>Canonicalization profile used by the v2 materialization definition fence.</summary>
+    public const string Canonicalization = "cohesive-materialization-definition/v2-c14n/v1";
 
     /// <summary>Computes the fingerprint of every canonical semantic, policy, provenance, and Control field.</summary>
     /// <param name="definition">Canonical materialization definition to fingerprint.</param>

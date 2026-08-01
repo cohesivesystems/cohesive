@@ -199,7 +199,7 @@ public sealed class ControlContractTests
             observedAtUtc,
             "cohesive.processes/reference-v1",
             "process:safe-point"));
-        Assert.Throws<ArgumentException>(() => new AimdControlState(
+        Assert.Throws<ArgumentException>(() => new ControlLoopState(
             ControlLoopDefinition.CurrentSchemaVersion,
             state.LoopId,
             state.Target,

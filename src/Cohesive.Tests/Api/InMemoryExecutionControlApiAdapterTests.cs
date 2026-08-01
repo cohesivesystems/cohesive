@@ -4,7 +4,9 @@ using Cohesive.Api.Execution;
 using Cohesive.Control;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
+using Cohesive.Storage.Materialization;
 using Cohesive.Tests.ExecutionKernel;
+using Cohesive.Tests.Storage;
 using Cohesive.Tests.Storage.Control;
 using ExecutionProcessStartResult = Cohesive.Execution.ProcessStartResult;
 
@@ -343,22 +345,24 @@ public sealed class InMemoryExecutionControlApiAdapterTests
             epoch,
             authority.AuthorityScope,
             BaselineUtc);
+        var acceptedRequest = LimitUpdate(
+            definition,
+            epoch,
+            initialRevision,
+            concurrency: 6,
+            commandId: "limits/accepted",
+            idempotencyKey: "limits/accepted",
+            authorization: ClientAuthorization("client-forged-control", "client-forged-control-policy"));
         var accepted = Dispatch<ControlLimitUpdateResult>(
             adapter,
             catalog.UpdateLimits,
-            LimitUpdate(
-                definition,
-                epoch,
-                initialRevision,
-                concurrency: 6,
-                commandId: "limits/accepted",
-                idempotencyKey: "limits/accepted",
-                authorization: ClientAuthorization("client-forged-control", "client-forged-control-policy")),
+            acceptedRequest,
             Invocation(
                 catalog,
                 BaselineUtc.AddSeconds(1),
                 BaselineUtc.AddSeconds(2),
-                authorization: authority));
+                authorization: authority),
+            ApiResultKind.Accepted);
 
         var pending = Dispatch<ControlLimitUpdateResult>(
             adapter,
@@ -404,6 +408,18 @@ public sealed class InMemoryExecutionControlApiAdapterTests
 
         Assert.Equal(ControlActuationDisposition.Applied, applied);
 
+        var appliedReplay = Dispatch<ControlLimitUpdateResult>(
+            adapter,
+            catalog.UpdateLimits,
+            acceptedRequest,
+            Invocation(
+                catalog,
+                BaselineUtc.AddMilliseconds(3100),
+                BaselineUtc.AddMilliseconds(3200),
+                authorization: authority));
+        Assert.Equal(ControlLimitUpdateDecisionDisposition.Replayed, appliedReplay.Disposition);
+        Assert.Equal(new ControlRevision("3"), appliedReplay.Revision);
+
         var stale = Dispatch<ControlLimitUpdateResult>(
             adapter,
             catalog.UpdateLimits,
@@ -434,7 +450,8 @@ public sealed class InMemoryExecutionControlApiAdapterTests
                 catalog,
                 BaselineUtc.AddSeconds(6),
                 BaselineUtc.AddSeconds(7),
-                authorization: authority));
+                authorization: authority),
+            ApiResultKind.Accepted);
 
         Assert.Equal(ControlLimitUpdateDecisionDisposition.Stale, stale.Disposition);
         Assert.Equal(new ControlRevision("3"), stale.Revision);
@@ -470,6 +487,512 @@ public sealed class InMemoryExecutionControlApiAdapterTests
         Assert.Contains(ControlDiagnosticCodes.WorkloadBudgetExceeded, outOfBounds.DiagnosticCodes);
     }
 
+    [Fact]
+    public async Task UpdateLimitsAsync_UsesAuthoritativeRuntimeStateAndAppliesOnlyAtExactSafePoint()
+    {
+        var processFixture = ProcessControlTestFixture.Create();
+        var catalog = ExecutionControlApiCatalog.Create();
+        var authority = TrustedAuthorization("cohesive/control", "tenant-a");
+        var (runtime, initial, clock, context) = await CreateMaterializationControlRuntimeAsync(
+            authority.AuthorityScope);
+        var adapter = new InMemoryExecutionControlApiAdapter(
+            processFixture.Catalog,
+            catalog,
+            limitUpdateDispatcher: (operation, command, decidedAtUtc) => runtime.SubmitLimitUpdateAsync(
+                operation,
+                MaterializationIndexSyncWorkloadKind.Rebuild,
+                command,
+                decidedAtUtc));
+        var localRegistration = Assert.Throws<InvalidOperationException>(() => adapter.RegisterControlLoop(
+            initial.Realization.EffectiveDefinition,
+            initial.State.Epoch,
+            authority.AuthorityScope,
+            clock.GetUtcNow()));
+        var localApplication = Assert.Throws<InvalidOperationException>(() => adapter.ApplyLimitsAtSafePoint(
+            authority.AuthorityScope,
+            new(
+                ControlLoopDefinition.CurrentSchemaVersion,
+                new("safe-point/local-registry-disabled"),
+                initial.State.LoopId,
+                initial.State.DefinitionFingerprint,
+                initial.State.Target,
+                initial.State.Epoch,
+                initial.State.Revision,
+                new("1"),
+                ControlApplicationPointKind.BatchBoundary,
+                clock.GetUtcNow(),
+                initial.Realization.EffectiveDefinition.ApplicationAuthority,
+                "tests/api/local-registry-disabled"),
+            clock.GetUtcNow()));
+        Assert.Contains("local Control registry is disabled", localRegistration.Message, StringComparison.Ordinal);
+        Assert.Contains("local Control registry is disabled", localApplication.Message, StringComparison.Ordinal);
+        var request = RuntimeLimitUpdate(
+            initial,
+            batchItems: 60,
+            commandId: "limits/runtime-api",
+            idempotencyKey: "limits/runtime-api",
+            authorization: ClientAuthorization("client/forged-control", "client-forged-control-policy"),
+            provenance: ClientProvenance("client-forged-control-provenance"));
+        var synchronousDispatch = Assert.Throws<InvalidOperationException>(() => adapter.Dispatch(
+            catalog.UpdateLimits,
+            request,
+            Invocation(
+                catalog,
+                clock.GetUtcNow(),
+                clock.GetUtcNow(),
+                authorization: authority)));
+        Assert.Contains("requires DispatchAsync", synchronousDispatch.Message, StringComparison.Ordinal);
+
+        clock.Advance(TimeSpan.FromSeconds(1));
+        var firstInvocation = Invocation(
+            catalog,
+            clock.GetUtcNow(),
+            clock.GetUtcNow().AddMilliseconds(250),
+            authorization: authority,
+            provenance: TrustedProvenance("trusted-runtime-api/first"));
+        var accepted = await DispatchAsync<ControlLimitUpdateResult>(
+            adapter,
+            context,
+            catalog.UpdateLimits,
+            request,
+            firstInvocation,
+            ApiResultKind.Accepted);
+        var pending = Assert.Single(await runtime.GetSnapshotsAsync(context));
+
+        Assert.Equal(ControlLimitUpdateDecisionDisposition.Accepted, accepted.Disposition);
+        Assert.Equal(new ControlRevision("2"), accepted.Revision);
+        Assert.Equal(80, BatchItems(pending));
+        var pendingReceipt = Assert.IsType<ControlLimitUpdateReceipt>(pending.State.PendingLimitUpdate);
+        Assert.Equal(authority, pendingReceipt.Command.Authorization);
+        Assert.Equal(firstInvocation.IssuedAtUtc, pendingReceipt.Command.IssuedAtUtc);
+        Assert.Equal(firstInvocation.ObservedAtUtc, pendingReceipt.AcceptedAtUtc);
+        Assert.Equal(firstInvocation.Provenance, pendingReceipt.Command.Provenance);
+        Assert.NotEqual(request.Authorization, pendingReceipt.Command.Authorization);
+        Assert.NotEqual(request.Provenance, pendingReceipt.Command.Provenance);
+
+        clock.Advance(TimeSpan.FromSeconds(1));
+        var replayed = await DispatchAsync<ControlLimitUpdateResult>(
+            adapter,
+            context,
+            catalog.UpdateLimits,
+            request,
+            Invocation(
+                catalog,
+                clock.GetUtcNow(),
+                clock.GetUtcNow(),
+                authorization: authority,
+                provenance: TrustedProvenance("trusted-runtime-api/replay")),
+            ApiResultKind.Accepted);
+        var afterReplay = Assert.Single(await runtime.GetSnapshotsAsync(context));
+
+        Assert.Equal(ControlLimitUpdateDecisionDisposition.Replayed, replayed.Disposition);
+        Assert.Equal(pending.State, afterReplay.State);
+        Assert.Equal(firstInvocation.Provenance, afterReplay.State.PendingLimitUpdate?.Command.Provenance);
+
+        clock.Advance(TimeSpan.FromSeconds(1));
+        var crossScopeReplay = await adapter.DispatchAsync(
+            context,
+            catalog.UpdateLimits,
+            request,
+            Invocation(
+                catalog,
+                clock.GetUtcNow(),
+                clock.GetUtcNow(),
+                authorization: TrustedAuthorization("cohesive/control", "tenant-b")));
+        var crossScopeProblem = Assert.IsType<ExecutionApiProblem>(crossScopeReplay.Body);
+        Assert.Equal(ApiResultKind.Forbidden, crossScopeReplay.Result.Kind);
+        Assert.Equal(ExecutionApiProblemCodes.Forbidden, crossScopeProblem.Code);
+        Assert.Equal(pending.State, Assert.Single(await runtime.GetSnapshotsAsync(context)).State);
+
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        var wrongCut = await runtime.AtSafePointAsync(
+            context,
+            MaterializationIndexSyncWorkloadKind.Rebuild,
+            ControlStageKind.Target,
+            ControlApplicationPointKind.WorkAdmissionBoundary,
+            "tests/api/runtime-limit-update/wrong-cut");
+        var deferred = Assert.Single(wrongCut.Snapshots);
+        Assert.Equal(80, wrongCut.MaximumBatchItems);
+        Assert.Equal(pending.State, deferred.State);
+
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        var exactCut = await runtime.AtSafePointAsync(
+            context,
+            MaterializationIndexSyncWorkloadKind.Rebuild,
+            ControlStageKind.Target,
+            ControlApplicationPointKind.BatchBoundary,
+            "tests/api/runtime-limit-update/exact-cut");
+        var applied = Assert.Single(exactCut.Snapshots);
+
+        Assert.Equal(60, exactCut.MaximumBatchItems);
+        Assert.Equal(new ControlRevision("3"), applied.State.Revision);
+        Assert.Null(applied.State.PendingLimitUpdate);
+        Assert.Equal(pendingReceipt, Assert.Single(applied.State.LimitUpdateActuations).Receipt);
+
+        clock.Advance(TimeSpan.FromSeconds(1));
+        var appliedReplay = await DispatchAsync<ControlLimitUpdateResult>(
+            adapter,
+            context,
+            catalog.UpdateLimits,
+            request,
+            Invocation(
+                catalog,
+                clock.GetUtcNow(),
+                clock.GetUtcNow(),
+                authorization: authority));
+        Assert.Equal(ControlLimitUpdateDecisionDisposition.Replayed, appliedReplay.Disposition);
+        Assert.Equal(applied.State.Revision, appliedReplay.Revision);
+    }
+
+    [Fact]
+    public async Task UpdateLimitsAsync_RejectsMissingApiGrantAndWrongRuntimeScopeWithoutMutation()
+    {
+        var processFixture = ProcessControlTestFixture.Create();
+        var catalog = ExecutionControlApiCatalog.Create();
+        var authority = TrustedAuthorization("cohesive/control", "tenant-a");
+        var (runtime, initial, clock, context) = await CreateMaterializationControlRuntimeAsync(
+            authority.AuthorityScope);
+        var dispatchCalls = 0;
+        var adapter = new InMemoryExecutionControlApiAdapter(
+            processFixture.Catalog,
+            catalog,
+            limitUpdateDispatcher: (operation, command, decidedAtUtc) =>
+            {
+                dispatchCalls++;
+                return runtime.SubmitLimitUpdateAsync(
+                    operation,
+                    MaterializationIndexSyncWorkloadKind.Rebuild,
+                    command,
+                    decidedAtUtc);
+            });
+        var request = RuntimeLimitUpdate(
+            initial,
+            batchItems: 60,
+            commandId: "limits/runtime-api-denied",
+            idempotencyKey: "limits/runtime-api-denied");
+
+        clock.Advance(TimeSpan.FromSeconds(1));
+        var wrongScope = await adapter.DispatchAsync(
+            context,
+            catalog.UpdateLimits,
+            request,
+            Invocation(
+                catalog,
+                clock.GetUtcNow(),
+                clock.GetUtcNow(),
+                authorization: TrustedAuthorization("cohesive/control", "tenant-b")));
+        var wrongScopeProblem = Assert.IsType<ExecutionApiProblem>(wrongScope.Body);
+
+        Assert.Equal(ApiResultKind.Forbidden, wrongScope.Result.Kind);
+        Assert.Equal(ExecutionApiProblemCodes.Forbidden, wrongScopeProblem.Code);
+        Assert.Equal(1, dispatchCalls);
+        Assert.Equal(initial.State, Assert.Single(await runtime.GetSnapshotsAsync(context)).State);
+
+        var missingGrant = await adapter.DispatchAsync(
+            context,
+            catalog.UpdateLimits,
+            request,
+            Invocation(
+                catalog,
+                clock.GetUtcNow(),
+                clock.GetUtcNow(),
+                authorization: authority,
+                grantedRequirements: []));
+        var missingGrantProblem = Assert.IsType<ExecutionApiProblem>(missingGrant.Body);
+
+        Assert.Equal(ApiResultKind.Forbidden, missingGrant.Result.Kind);
+        Assert.Equal(ExecutionApiProblemCodes.Forbidden, missingGrantProblem.Code);
+        Assert.Equal(1, dispatchCalls);
+        Assert.Equal(initial.State, Assert.Single(await runtime.GetSnapshotsAsync(context)).State);
+    }
+
+    [Theory]
+    [InlineData("loop")]
+    [InlineData("target")]
+    [InlineData("epoch")]
+    public async Task UpdateLimitsAsync_MapsMissingExactRuntimeAddressToOpaqueNotFound(
+        string mismatchedField)
+    {
+        var processFixture = ProcessControlTestFixture.Create();
+        var catalog = ExecutionControlApiCatalog.Create();
+        var authority = TrustedAuthorization("cohesive/control", "tenant-a");
+        var (runtime, initial, clock, context) = await CreateMaterializationControlRuntimeAsync(
+            authority.AuthorityScope);
+        var adapter = new InMemoryExecutionControlApiAdapter(
+            processFixture.Catalog,
+            catalog,
+            limitUpdateDispatcher: (operation, command, decidedAtUtc) => runtime.SubmitLimitUpdateAsync(
+                operation,
+                MaterializationIndexSyncWorkloadKind.Rebuild,
+                command,
+                decidedAtUtc));
+        var request = RuntimeLimitUpdate(
+            initial,
+            batchItems: 60,
+            commandId: $"limits/runtime-api-missing-{mismatchedField}",
+            idempotencyKey: $"limits/runtime-api-missing-{mismatchedField}",
+            loopId: string.Equals(mismatchedField, "loop", StringComparison.Ordinal)
+                ? new("index-sync/missing")
+                : null,
+            target: string.Equals(mismatchedField, "target", StringComparison.Ordinal)
+                ? "materialization/missing"
+                : null,
+            epoch: string.Equals(mismatchedField, "epoch", StringComparison.Ordinal)
+                ? new("generation/missing")
+                : null);
+
+        clock.Advance(TimeSpan.FromSeconds(1));
+        var dispatched = await adapter.DispatchAsync(
+            context,
+            catalog.UpdateLimits,
+            request,
+            Invocation(
+                catalog,
+                clock.GetUtcNow(),
+                clock.GetUtcNow(),
+                authorization: authority));
+        var problem = Assert.IsType<ExecutionApiProblem>(dispatched.Body);
+
+        Assert.Equal(ApiResultKind.NotFound, dispatched.Result.Kind);
+        Assert.Equal(ExecutionApiProblemCodes.NotFound, problem.Code);
+        Assert.Equal(initial.State, Assert.Single(await runtime.GetSnapshotsAsync(context)).State);
+    }
+
+    [Fact]
+    public async Task UpdateLimitsAsync_ConformingPortRestoresRetainedEvidenceForExactReplay()
+    {
+        var processFixture = ProcessControlTestFixture.Create();
+        var catalog = ExecutionControlApiCatalog.Create();
+        var definition = ControlDefinition();
+        var epoch = new ControlEpochId("attempt/authoritative-port");
+        var authority = TrustedAuthorization("cohesive/control", "tenant-a");
+        var durableState = ControlLoopState.Create(
+            definition,
+            epoch,
+            authority.AuthorityScope,
+            BaselineUtc);
+        var adapter = new InMemoryExecutionControlApiAdapter(
+            processFixture.Catalog,
+            catalog,
+            limitUpdateDispatcher: (_, command, decidedAtUtc) =>
+            {
+                if (command.Authorization.AuthorityScope != durableState.AuthorityScope)
+                {
+                    return ValueTask.FromResult(new ControlLimitUpdateDecision(
+                        ControlLoopDefinition.CurrentSchemaVersion,
+                        ControlLimitUpdateDecisionDisposition.Unauthorized,
+                        durableState));
+                }
+
+                var retained = durableState.FindLimitUpdateReceipt(command.CommandId)?.Command;
+                if (retained is not null)
+                {
+                    command = new(
+                        command.SchemaVersion,
+                        command.CommandId,
+                        command.IdempotencyKey,
+                        command.LoopId,
+                        command.DefinitionFingerprint,
+                        command.Target,
+                        command.Epoch,
+                        command.ExpectedRevision,
+                        command.RequestedOperatingPoint,
+                        retained.Authorization,
+                        retained.IssuedAtUtc,
+                        retained.Provenance);
+                }
+
+                var decision = ControlLimitUpdateReferenceReducer.Submit(
+                    definition,
+                    durableState,
+                    command,
+                    decidedAtUtc);
+                durableState = decision.State;
+                return ValueTask.FromResult(decision);
+            });
+        var request = LimitUpdate(
+            definition,
+            epoch,
+            durableState.Revision,
+            concurrency: 6,
+            commandId: "limits/port-replay",
+            idempotencyKey: "limits/port-replay");
+        var context = OperationContext.Create();
+        var firstInvocation = Invocation(
+            catalog,
+            BaselineUtc.AddSeconds(1),
+            BaselineUtc.AddSeconds(2),
+            authorization: authority,
+            provenance: TrustedProvenance("trusted-port/first"));
+
+        var accepted = await DispatchAsync<ControlLimitUpdateResult>(
+            adapter,
+            context,
+            catalog.UpdateLimits,
+            request,
+            firstInvocation,
+            ApiResultKind.Accepted);
+        var replayed = await DispatchAsync<ControlLimitUpdateResult>(
+            adapter,
+            context,
+            catalog.UpdateLimits,
+            request,
+            Invocation(
+                catalog,
+                BaselineUtc.AddSeconds(3),
+                BaselineUtc.AddSeconds(4),
+                authorization: authority,
+                provenance: TrustedProvenance("trusted-port/replay")),
+            ApiResultKind.Accepted);
+        var semanticReplay = await DispatchAsync<ControlLimitUpdateResult>(
+            adapter,
+            context,
+            catalog.UpdateLimits,
+            LimitUpdate(
+                definition,
+                epoch,
+                ControlRevision.Initial,
+                concurrency: 6,
+                commandId: "limits/port-semantic-replay",
+                idempotencyKey: "limits/port-replay"),
+            Invocation(
+                catalog,
+                BaselineUtc.AddSeconds(5),
+                BaselineUtc.AddSeconds(6),
+                authorization: authority,
+                provenance: firstInvocation.Provenance),
+            ApiResultKind.Accepted);
+        var priorState = durableState;
+        var denied = await adapter.DispatchAsync(
+            context,
+            catalog.UpdateLimits,
+            request,
+            Invocation(
+                catalog,
+                BaselineUtc.AddSeconds(7),
+                BaselineUtc.AddSeconds(8),
+                authorization: TrustedAuthorization("cohesive/control", "tenant-b")));
+
+        Assert.Equal(ControlLimitUpdateDecisionDisposition.Accepted, accepted.Disposition);
+        Assert.Equal(ControlLimitUpdateDecisionDisposition.Replayed, replayed.Disposition);
+        Assert.Equal(ControlLimitUpdateDecisionDisposition.Replayed, semanticReplay.Disposition);
+        Assert.Equal(firstInvocation.Provenance, durableState.PendingLimitUpdate?.Command.Provenance);
+        Assert.Equal(ApiResultKind.Forbidden, denied.Result.Kind);
+        Assert.IsType<ExecutionApiProblem>(denied.Body);
+        Assert.Equal(priorState, durableState);
+    }
+
+    [Theory]
+    [InlineData("scope")]
+    [InlineData("loop")]
+    [InlineData("target")]
+    [InlineData("epoch")]
+    public async Task UpdateLimitsAsync_RejectsDispatcherStateOutsideTrustedAddressBeforeProjection(
+        string mismatchedField)
+    {
+        var processFixture = ProcessControlTestFixture.Create();
+        var catalog = ExecutionControlApiCatalog.Create();
+        var authority = TrustedAuthorization("cohesive/control", "tenant-a");
+        var (_, initial, clock, context) = await CreateMaterializationControlRuntimeAsync(
+            authority.AuthorityScope);
+        var forgedDefinition = string.Equals(mismatchedField, "loop", StringComparison.Ordinal)
+            ? MaterializationControlDefinition(loopId: new("index-sync/forged"))
+            : string.Equals(mismatchedField, "target", StringComparison.Ordinal)
+                ? MaterializationControlDefinition(target: "materialization/forged")
+                : initial.Realization.EffectiveDefinition;
+        var forgedState = ControlLoopState.Create(
+            forgedDefinition,
+            string.Equals(mismatchedField, "epoch", StringComparison.Ordinal)
+                ? new("generation/forged")
+                : initial.State.Epoch,
+            string.Equals(mismatchedField, "scope", StringComparison.Ordinal)
+                ? TrustedAuthorization("cohesive/control", "tenant-b").AuthorityScope
+                : authority.AuthorityScope,
+            BaselineUtc);
+        var forgedDecision = new ControlLimitUpdateDecision(
+            ControlLoopDefinition.CurrentSchemaVersion,
+            ControlLimitUpdateDecisionDisposition.Stale,
+            forgedState);
+        var adapter = new InMemoryExecutionControlApiAdapter(
+            processFixture.Catalog,
+            catalog,
+            limitUpdateDispatcher: (_, _, _) => ValueTask.FromResult(forgedDecision));
+        var request = RuntimeLimitUpdate(
+            initial,
+            batchItems: 60,
+            commandId: $"limits/runtime-api-forged-{mismatchedField}",
+            idempotencyKey: $"limits/runtime-api-forged-{mismatchedField}");
+        clock.Advance(TimeSpan.FromSeconds(1));
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await adapter.DispatchAsync(
+                context,
+                catalog.UpdateLimits,
+                request,
+                Invocation(
+                    catalog,
+                    clock.GetUtcNow(),
+                    clock.GetUtcNow(),
+                    authorization: authority)));
+
+        Assert.Contains("authoritative limit-update dispatcher", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(ControlLimitUpdateDecisionDisposition.Accepted)]
+    [InlineData(ControlLimitUpdateDecisionDisposition.Replayed)]
+    public async Task UpdateLimitsAsync_RejectsDispatcherReceiptForDifferentCommandBeforeProjection(
+        ControlLimitUpdateDecisionDisposition disposition)
+    {
+        var processFixture = ProcessControlTestFixture.Create();
+        var catalog = ExecutionControlApiCatalog.Create();
+        var authority = TrustedAuthorization("cohesive/control", "tenant-a");
+        var (_, initial, clock, context) = await CreateMaterializationControlRuntimeAsync(
+            authority.AuthorityScope);
+        var forgedCommand = RuntimeLimitUpdate(
+            initial,
+            batchItems: 50,
+            commandId: "limits/runtime-api-forged-receipt",
+            idempotencyKey: "limits/runtime-api-forged-receipt",
+            authorization: authority,
+            provenance: TrustedProvenance("trusted-forged-receipt"));
+        var forgedAcceptance = ControlLimitUpdateReferenceReducer.Submit(
+            initial.Realization.EffectiveDefinition,
+            initial.State,
+            forgedCommand,
+            BaselineUtc.AddMilliseconds(1));
+        var forgedDecision = disposition == ControlLimitUpdateDecisionDisposition.Accepted
+            ? forgedAcceptance
+            : new(
+                ControlLoopDefinition.CurrentSchemaVersion,
+                ControlLimitUpdateDecisionDisposition.Replayed,
+                forgedAcceptance.State,
+                forgedAcceptance.Receipt);
+        var adapter = new InMemoryExecutionControlApiAdapter(
+            processFixture.Catalog,
+            catalog,
+            limitUpdateDispatcher: (_, _, _) => ValueTask.FromResult(forgedDecision));
+        var request = RuntimeLimitUpdate(
+            initial,
+            batchItems: 60,
+            commandId: "limits/runtime-api-expected-receipt",
+            idempotencyKey: "limits/runtime-api-expected-receipt");
+        clock.Advance(TimeSpan.FromSeconds(1));
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await adapter.DispatchAsync(
+                context,
+                catalog.UpdateLimits,
+                request,
+                Invocation(
+                    catalog,
+                    clock.GetUtcNow(),
+                    clock.GetUtcNow(),
+                    authorization: authority)));
+
+        Assert.Contains("receipt", exception.Message, StringComparison.Ordinal);
+    }
+
     static T Dispatch<T>(
         InMemoryExecutionControlApiAdapter adapter,
         ApiEndpoint endpoint,
@@ -480,6 +1003,42 @@ public sealed class InMemoryExecutionControlApiAdapterTests
         var dispatched = adapter.Dispatch(endpoint, request, invocation);
         Assert.Equal(expectedKind, dispatched.Result.Kind);
         return Assert.IsType<T>(dispatched.Body);
+    }
+
+    static async ValueTask<T> DispatchAsync<T>(
+        InMemoryExecutionControlApiAdapter adapter,
+        OperationContext context,
+        ApiEndpoint endpoint,
+        object request,
+        ExecutionApiInvocationContext invocation,
+        ApiResultKind expectedKind = ApiResultKind.Success)
+    {
+        var dispatched = await adapter.DispatchAsync(context, endpoint, request, invocation);
+        Assert.Equal(expectedKind, dispatched.Result.Kind);
+        return Assert.IsType<T>(dispatched.Body);
+    }
+
+    static async ValueTask<(
+        MaterializationIndexSyncControlRuntime Runtime,
+        MaterializationIndexSyncControlSnapshot Initial,
+        MutableTimeProvider Clock,
+        OperationContext Context)> CreateMaterializationControlRuntimeAsync(
+            InteractionAuthorityScope authorityScope)
+    {
+        var definition = MaterializationControlDefinition();
+        var plan = MaterializationRebuildPlanJsonSerializerTests.CreateControlledPlan(
+            [definition],
+            [new(definition.Id, MaterializationIndexSyncWorkloadKind.Rebuild)]);
+        var provider = new MaterializationIndexSyncControlRuntimeProvider(
+            plan,
+            new InMemoryMaterializationIndexSyncControlStateStore(),
+            new MaterializationIndexSyncAdmissionGate(),
+            authorityScope);
+        var runtime = provider.ForGeneration(new("generation/runtime-api"));
+        MutableTimeProvider clock = new(BaselineUtc);
+        var context = OperationContext.Create(timeProvider: clock);
+        var initial = Assert.Single(await runtime.GetSnapshotsAsync(context));
+        return (runtime, initial, clock, context);
     }
 
     static ProcessStartRequest StartRequest(
@@ -620,4 +1179,62 @@ public sealed class InMemoryExecutionControlApiAdapterTests
             authorization ?? ClientAuthorization(),
             BaselineUtc,
             ClientProvenance());
+
+    static ControlLimitUpdateCommand RuntimeLimitUpdate(
+        MaterializationIndexSyncControlSnapshot snapshot,
+        long batchItems,
+        string commandId,
+        string idempotencyKey,
+        ControlLoopId? loopId = null,
+        string? target = null,
+        ControlEpochId? epoch = null,
+        ProcessControlAuthorizationContext? authorization = null,
+        ExecutionProvenance? provenance = null) =>
+        new(
+            ControlLoopDefinition.CurrentSchemaVersion,
+            new(commandId),
+            new(idempotencyKey),
+            loopId ?? snapshot.State.LoopId,
+            snapshot.State.DefinitionFingerprint,
+            target ?? snapshot.State.Target,
+            epoch ?? snapshot.State.Epoch,
+            snapshot.State.Revision,
+            ControlTestFixture.Point((ControlActuatorKind.BatchItems, batchItems)),
+            authorization ?? ClientAuthorization(),
+            BaselineUtc,
+            provenance ?? ClientProvenance());
+
+    static ControlLoopDefinition MaterializationControlDefinition(
+        ControlLoopId? loopId = null,
+        string? target = null) =>
+        new(
+            ControlLoopDefinition.CurrentSchemaVersion,
+            loopId ?? new("index-sync/api-target-batch"),
+            target: target ?? "loads/search-json",
+            applicationAuthority: MaterializationIndexSyncControlCompiler.ApplicationAuthority,
+            stage: ControlStageKind.Target,
+            hardLimits: ControlTestFixture.Limits(
+                ControlTestFixture.Limit(
+                    ControlActuatorKind.BatchItems,
+                    minimum: 1,
+                    maximum: 100,
+                    ControlHardLimitOrigin.Semantic,
+                    "tests/api/materialization-definition/v1")),
+            initialOperatingPoint: ControlTestFixture.Point((ControlActuatorKind.BatchItems, 80)),
+            objectives: [ControlTestFixture.Objective()],
+            policy: AimdControlPolicyResolver.Resolve(ControlActuatorKind.BatchItems),
+            budgets: [],
+            provenance: ControlTestFixture.Provenance());
+
+    static long BatchItems(MaterializationIndexSyncControlSnapshot snapshot) =>
+        snapshot.State.OperatingPoint.Get(ControlActuatorKind.BatchItems).Quantity.Value;
+
+    sealed class MutableTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        DateTimeOffset current = utcNow;
+
+        public override DateTimeOffset GetUtcNow() => current;
+
+        internal void Advance(TimeSpan duration) => current = current.Add(duration);
+    }
 }

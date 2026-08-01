@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using System.Text;
 
 namespace Cohesive.Storage.Materialization;
@@ -29,6 +30,18 @@ internal readonly record struct MaterializationTargetWriteResult(
     MaterializationTargetWriteDisposition Disposition,
     string? Message);
 
+/// <summary>Currently applied target batch bounds read at one exact batch boundary.</summary>
+internal readonly record struct MaterializationTargetBatchOperatingLimits(int MaximumItems, long MaximumBytes)
+{
+    internal void Validate()
+    {
+        if (MaximumItems <= 0)
+            throw new ArgumentOutOfRangeException(nameof(MaximumItems), MaximumItems, "A target item bound must be positive.");
+        if (MaximumBytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(MaximumBytes), MaximumBytes, "A target byte bound must be positive.");
+    }
+}
+
 /// <summary>
 /// Applies target mutations under exact item-and-canonical-byte bounds while preserving retry and idempotency
 /// semantics shared by baseline and incremental materialization execution.
@@ -41,13 +54,16 @@ internal static class MaterializationTargetBatchWriter
     /// <param name="generation">Loading or active generation receiving the mutations.</param>
     /// <param name="workerFence">Current target ownership fence.</param>
     /// <param name="mutations">Ordered mutations to apply.</param>
-    /// <param name="maximumBulkItems">Maximum mutations in one target request.</param>
-    /// <param name="maximumBulkBytes">Maximum canonical target-intent bytes in one request.</param>
+    /// <param name="resolveLimits">Reads the currently applied bounds at every exact batch boundary.</param>
     /// <param name="maximumAttempts">Maximum target attempts for each selected chunk.</param>
-    /// <param name="createBatchId">Deterministic identity projection from chunk index and zero-based retry index.</param>
+    /// <param name="createBatchId">
+    /// Deterministic identity projection from a canonical digest of the exact selected mutation content and each
+    /// mutation's zero-based attempt ordinal.
+    /// </param>
     /// <param name="afterBulkObservation">
     /// Optional observation invoked after exact result validation and before the outcome is interpreted.
     /// </param>
+    /// <param name="acquireAdmission">Optional target-stage admission acquired immediately before each physical request.</param>
     /// <returns>Terminal semantic write evidence.</returns>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="context"/>, <paramref name="target"/>, or <paramref name="createBatchId"/> is
@@ -62,34 +78,21 @@ internal static class MaterializationTargetBatchWriter
         MaterializationGenerationId generation,
         MaterializationWorkerFence workerFence,
         ImmutableArray<MaterializationItemMutation> mutations,
-        int maximumBulkItems,
-        long maximumBulkBytes,
+        Func<OperationContext, ValueTask<MaterializationTargetBatchOperatingLimits>> resolveLimits,
         int maximumAttempts,
-        Func<int, int, MaterializationBatchId> createBatchId,
+        Func<string, MaterializationBatchId> createBatchId,
         Func<OperationContext, MaterializationApplyBatchRequest, MaterializationBatchResult, ValueTask>?
-            afterBulkObservation = null)
+            afterBulkObservation = null,
+        Func<OperationContext, ValueTask<IAsyncDisposable?>>? acquireAdmission = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(resolveLimits);
         ArgumentNullException.ThrowIfNull(createBatchId);
         MaterializationContract.RequireDefinedIdentity(generation.Value, nameof(generation));
         MaterializationContract.RequireDefinedIdentity(workerFence.Value, nameof(workerFence));
         if (mutations.IsDefault)
             throw new ArgumentException("Target mutations cannot be default.", nameof(mutations));
-        if (maximumBulkItems <= 0)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(maximumBulkItems),
-                maximumBulkItems,
-                "A target bulk-item bound must be positive.");
-        }
-        if (maximumBulkBytes <= 0)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(maximumBulkBytes),
-                maximumBulkBytes,
-                "A target bulk-byte bound must be positive.");
-        }
         if (maximumAttempts <= 0)
         {
             throw new ArgumentOutOfRangeException(
@@ -101,25 +104,37 @@ internal static class MaterializationTargetBatchWriter
         if (mutations.IsEmpty)
             return new(MaterializationTargetWriteDisposition.Applied, null);
 
-        var offset = 0;
-        var chunkIndex = 0;
-        while (offset < mutations.Length)
+        List<PendingMutation> pending = new(mutations.Length);
+        foreach (var mutation in mutations)
+            pending.Add(new(mutation, Attempt: 0));
+
+        while (pending.Count > 0)
         {
+            var limits = await resolveLimits(context).ConfigureAwait(false);
+            limits.Validate();
             var lowerCount = 1;
-            var upperCount = Math.Min(maximumBulkItems, mutations.Length - offset);
-            ImmutableArray<MaterializationItemMutation>? selected = null;
+            var upperCount = Math.Min(limits.MaximumItems, pending.Count);
+            ImmutableArray<PendingMutation>? selected = null;
             while (lowerCount <= upperCount)
             {
                 var count = lowerCount + ((upperCount - lowerCount) / 2);
-                var candidate = mutations.Slice(offset, count);
-                var request = new MaterializationApplyBatchRequest(
-                    batchId: createBatchId(chunkIndex, 0),
+                var candidateBuilder = ImmutableArray.CreateBuilder<PendingMutation>(count);
+                var mutationBuilder = ImmutableArray.CreateBuilder<MaterializationItemMutation>(count);
+                for (var index = 0; index < count; index++)
+                {
+                    candidateBuilder.Add(pending[index]);
+                    mutationBuilder.Add(pending[index].Mutation);
+                }
+                var candidate = candidateBuilder.MoveToImmutable();
+                var candidateMutations = mutationBuilder.MoveToImmutable();
+                var candidateRequest = new MaterializationApplyBatchRequest(
+                    batchId: createBatchId(ContentIdentity(candidate)),
                     generationId: generation,
                     workerFence: workerFence,
-                    mutations: candidate);
+                    mutations: candidateMutations);
                 if (MaterializationTargetIntentFingerprinter.TryAnalyzeBatch(
-                        request,
-                        maximumBulkBytes,
+                        candidateRequest,
+                        limits.MaximumBytes,
                         out _,
                         out _))
                 {
@@ -136,96 +151,127 @@ internal static class MaterializationTargetBatchWriter
             {
                 return new(
                     MaterializationTargetWriteDisposition.BoundaryExceeded,
-                    $"One output mutation cannot fit the {maximumBulkBytes}-byte target bound.");
+                    $"One output mutation cannot fit the {limits.MaximumBytes}-byte target bound.");
             }
 
-            var chunk = selected.Value;
-            var pending = chunk;
-            for (var retry = 0; retry < maximumAttempts; retry++)
+            var batch = selected.Value;
+            var batchMutations = ImmutableArray.CreateBuilder<MaterializationItemMutation>(batch.Length);
+            foreach (var item in batch)
+                batchMutations.Add(item.Mutation);
+            var exactMutations = batchMutations.MoveToImmutable();
+            var request = new MaterializationApplyBatchRequest(
+                batchId: createBatchId(ContentIdentity(batch)),
+                generationId: generation,
+                workerFence: workerFence,
+                mutations: exactMutations);
+            var admissionLease = acquireAdmission is null
+                ? null
+                : await acquireAdmission(context).ConfigureAwait(false);
+            MaterializationBatchResult result;
+            try
             {
-                var request = new MaterializationApplyBatchRequest(
-                    batchId: createBatchId(chunkIndex, retry),
-                    generationId: generation,
-                    workerFence: workerFence,
-                    mutations: pending);
-                var result = await target.ApplyBatchAsync(context, request).ConfigureAwait(false);
-                try
+                result = await target.ApplyBatchAsync(context, request).ConfigureAwait(false);
+            }
+            finally
+            {
+                if (admissionLease is not null)
+                    await admissionLease.DisposeAsync().ConfigureAwait(false);
+            }
+            try
+            {
+                result.ValidateAgainst(request);
+            }
+            catch (ArgumentException exception)
+            {
+                return new(
+                    MaterializationTargetWriteDisposition.Failed,
+                    $"The target returned inexact per-item evidence: {exception.Message}");
+            }
+
+            if (afterBulkObservation is not null)
+                await afterBulkObservation(context, request, result).ConfigureAwait(false);
+
+            if (result.Disposition == MaterializationBatchDisposition.IdentityConflict)
+            {
+                return new(
+                    MaterializationTargetWriteDisposition.IdentityConflict,
+                    $"The target found different canonical content for replayed batch '{request.BatchId.Value}'.");
+            }
+            if (result.Disposition == MaterializationBatchDisposition.StaleFence)
+            {
+                return new(
+                    MaterializationTargetWriteDisposition.StaleFence,
+                    "The target rejected a stale generation worker fence.");
+            }
+
+            Dictionary<MaterializationItemMutationId, MaterializationItemOutcomeDisposition> outcomes =
+                new(result.Outcomes.Length);
+            StringBuilder? permanentFailures = null;
+            var hasItemIdentityConflict = false;
+            foreach (var outcome in result.Outcomes)
+            {
+                outcomes.Add(outcome.MutationId, outcome.Disposition);
+                if (outcome.Disposition == MaterializationItemOutcomeDisposition.IdempotencyConflict)
+                    hasItemIdentityConflict = true;
+                if (outcome.Disposition is MaterializationItemOutcomeDisposition.Applied
+                    or MaterializationItemOutcomeDisposition.Replayed
+                    or MaterializationItemOutcomeDisposition.RetryableRejected)
                 {
-                    result.ValidateAgainst(request);
-                }
-                catch (ArgumentException exception)
-                {
-                    return new(
-                        MaterializationTargetWriteDisposition.Failed,
-                        $"The target returned inexact per-item evidence: {exception.Message}");
+                    continue;
                 }
 
-                if (afterBulkObservation is not null)
-                {
-                    await afterBulkObservation(context, request, result).ConfigureAwait(false);
-                }
+                permanentFailures ??= new();
+                if (permanentFailures.Length > 0)
+                    permanentFailures.Append(' ');
+                permanentFailures.Append(outcome.Code).Append(": ").Append(outcome.Message);
+            }
+            if (hasItemIdentityConflict)
+            {
+                return new(
+                    MaterializationTargetWriteDisposition.IdentityConflict,
+                    "The target found different canonical content for a replayed mutation identity.");
+            }
+            if (permanentFailures is not null)
+                return new(MaterializationTargetWriteDisposition.Failed, permanentFailures.ToString());
 
-                if (result.Disposition == MaterializationBatchDisposition.IdentityConflict)
-                {
-                    return new(
-                        MaterializationTargetWriteDisposition.IdentityConflict,
-                        $"The target found different canonical content for replayed batch '{request.BatchId.Value}'.");
-                }
-                if (result.Disposition == MaterializationBatchDisposition.StaleFence)
-                {
-                    return new(
-                        MaterializationTargetWriteDisposition.StaleFence,
-                        "The target rejected a stale generation worker fence.");
-                }
-
-                HashSet<MaterializationItemMutationId>? retryable = null;
-                StringBuilder? permanentFailures = null;
-                foreach (var outcome in result.Outcomes)
-                {
-                    if (outcome.Disposition is MaterializationItemOutcomeDisposition.Applied
-                        or MaterializationItemOutcomeDisposition.Replayed)
-                    {
-                        continue;
-                    }
-                    if (outcome.Disposition == MaterializationItemOutcomeDisposition.RetryableRejected)
-                    {
-                        retryable ??= new(result.Outcomes.Length);
-                        retryable.Add(outcome.MutationId);
-                        continue;
-                    }
-
-                    permanentFailures ??= new();
-                    if (permanentFailures.Length > 0)
-                        permanentFailures.Append(' ');
-                    permanentFailures.Append(outcome.Code).Append(": ").Append(outcome.Message);
-                }
-
-                if (retryable is null && permanentFailures is null)
-                    break;
-                if (permanentFailures is not null)
-                {
-                    return new(MaterializationTargetWriteDisposition.Failed, permanentFailures.ToString());
-                }
-                if (retry + 1 >= maximumAttempts)
+            pending.RemoveRange(index: 0, count: batch.Length);
+            List<PendingMutation>? failed = null;
+            foreach (var item in batch)
+            {
+                if (outcomes[item.Mutation.MutationId] != MaterializationItemOutcomeDisposition.RetryableRejected)
+                    continue;
+                if (item.Attempt + 1 >= maximumAttempts)
                 {
                     return new(
                         MaterializationTargetWriteDisposition.Failed,
                         "The target retry budget was exhausted for one or more output mutations.");
                 }
 
-                var retryBuilder = ImmutableArray.CreateBuilder<MaterializationItemMutation>(retryable!.Count);
-                foreach (var mutation in pending)
-                {
-                    if (retryable.Contains(mutation.MutationId))
-                        retryBuilder.Add(mutation);
-                }
-                pending = retryBuilder.MoveToImmutable();
+                failed ??= new(batch.Length);
+                failed.Add(item with { Attempt = item.Attempt + 1 });
             }
-
-            offset += chunk.Length;
-            chunkIndex++;
+            if (failed is not null)
+                pending.InsertRange(index: 0, failed);
         }
 
         return new(MaterializationTargetWriteDisposition.Applied, null);
+
+        static string ContentIdentity(ImmutableArray<PendingMutation> batch)
+        {
+            using MaterializationStableIdentity.DigestBuilder builder = new();
+            builder.Append("materialization-target-batch-content/v1");
+            foreach (var item in batch)
+            {
+                var fingerprint = MaterializationTargetIntentFingerprinter.Compute(item.Mutation);
+                builder.Append(item.Mutation.MutationId.Value);
+                builder.Append(fingerprint.Algorithm);
+                builder.Append(fingerprint.Canonicalization);
+                builder.Append(fingerprint.Value);
+                builder.Append(item.Attempt.ToString(CultureInfo.InvariantCulture));
+            }
+            return builder.Complete();
+        }
     }
+
+    readonly record struct PendingMutation(MaterializationItemMutation Mutation, int Attempt);
 }

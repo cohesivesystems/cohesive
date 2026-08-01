@@ -381,7 +381,7 @@ public sealed class ControlSafePointActuationTests
             pending.Revision,
             nextRevision,
             observedAtUtc);
-        var forgedState = new AimdControlState(
+        var forgedState = new ControlLoopState(
             pending.SchemaVersion,
             pending.LoopId,
             pending.Target,
@@ -437,7 +437,7 @@ public sealed class ControlSafePointActuationTests
             initial.OperatingPoint,
             ControlRegulatorFixture.Point(proposedConcurrency),
             observedAt);
-        var state = new AimdControlState(
+        var state = new ControlLoopState(
             ControlLoopDefinition.CurrentSchemaVersion,
             initial.LoopId,
             initial.Target,
@@ -497,7 +497,7 @@ public sealed class ControlSafePointActuationTests
             initial.OperatingPoint,
             ControlRegulatorFixture.Point(concurrency: 7),
             observedAtUtc);
-        var state = new AimdControlState(
+        var state = new ControlLoopState(
             ControlLoopDefinition.CurrentSchemaVersion,
             initial.LoopId,
             initial.Target,
@@ -581,7 +581,7 @@ public sealed class ControlSafePointActuationTests
             recoveryCooldownMilliseconds: 10_000);
         var pending = Recommend(definition, value: 9_000);
         var applied = Apply(definition, pending, "cooldown-cut", fence: 1);
-        var forged = new AimdControlState(
+        var forged = new ControlLoopState(
             applied.SchemaVersion,
             applied.LoopId,
             applied.Target,
@@ -711,7 +711,7 @@ public sealed class ControlSafePointActuationTests
             diagnostic.Code == ControlDiagnosticCodes.RecommendationAbsent);
     }
 
-    static AimdControlState Recommend(ControlLoopDefinition definition, long value)
+    static ControlLoopState Recommend(ControlLoopDefinition definition, long value)
     {
         var state = ControlRegulatorFixture.InitialState(definition);
         var observation = ControlRegulatorFixture.Observation(state, "recommendation", value);
@@ -724,9 +724,9 @@ public sealed class ControlSafePointActuationTests
         return decision.State;
     }
 
-    static AimdControlState Apply(
+    static ControlLoopState Apply(
         ControlLoopDefinition definition,
-        AimdControlState pending,
+        ControlLoopState pending,
         string id,
         long fence)
     {

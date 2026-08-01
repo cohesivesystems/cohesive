@@ -132,18 +132,20 @@ public sealed class ControlJsonSerializerTests
             ControlJsonSerializer.DeserializeDefinition(root.ToJsonString()));
     }
 
-    [Fact]
-    public void Reader_RejectsUnsupportedSchemaVersion()
+    [Theory]
+    [InlineData("cohesive-control/v1")]
+    [InlineData("cohesive-control/v999")]
+    public void Reader_RejectsUnsupportedSchemaVersion(string unsupportedSchemaVersion)
     {
         var scenario = CreateAppliedScenario();
         var root = ParseObject(ControlJsonSerializer.Serialize(scenario.Decision));
-        root["schemaVersion"] = "cohesive-control/v2";
+        root["schemaVersion"] = unsupportedSchemaVersion;
 
         var exception = Assert.Throws<JsonException>(() =>
             ControlJsonSerializer.DeserializeDecision(root.ToJsonString(), scenario.Definition));
 
         Assert.Contains("Unsupported Control schema", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("cohesive-control/v2", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(unsupportedSchemaVersion, exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -206,7 +208,7 @@ public sealed class ControlJsonSerializerTests
     static AppliedScenario CreateAppliedScenario()
     {
         var definition = Definition();
-        var initialState = AimdControlState.Create(
+        var initialState = ControlLoopState.Create(
             definition,
             new("generation/17"),
             CreatedAtUtc);
@@ -309,7 +311,7 @@ public sealed class ControlJsonSerializerTests
 
     static ControlObservation Observation(
         ControlLoopDefinition definition,
-        AimdControlState state,
+        ControlLoopState state,
         string id,
         DateTimeOffset observedAtUtc,
         long processorBasisPoints) =>

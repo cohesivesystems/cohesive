@@ -430,9 +430,16 @@ public sealed record ControlActuation
     public DateTimeOffset AppliedAtUtc { get; }
 }
 
-/// <summary>Complete durable state of one reference AIMD controller loop.</summary>
-public sealed record AimdControlState
+/// <summary>Complete durable state of one bounded Control loop.</summary>
+/// <remarks>
+/// Adaptive recommendations and explicit operator overrides share this one revision, effective operating point,
+/// safe-point fence, and durable evidence ledger. An accepted operator override supersedes adaptive advice but is
+/// not a permanent operating mode; after safe-point application, fresh observations may drive AIMD again.
+/// </remarks>
+public sealed record ControlLoopState
 {
+    readonly ImmutableArray<ControlLimitUpdateReceipt> limitUpdateReceipts;
+
     /// <summary>Creates complete explicit controller state.</summary>
     /// <param name="schemaVersion">Exact portable Control schema version.</param>
     /// <param name="loopId">Stable loop identity.</param>
@@ -450,7 +457,10 @@ public sealed record AimdControlState
     /// <param name="lastObservation">Last accepted observation retained for exact replay.</param>
     /// <param name="pendingRecommendation">Non-authoritative recommendation awaiting a safe point.</param>
     /// <param name="lastActuation">Last applied actuation retained for exact replay.</param>
-    /// <param name="lastApplicationFence">Last applied runtime safe-point fence.</param>
+    /// <param name="lastApplicationFence">Last applied runtime safe-point fence across adaptive and operator actuations.</param>
+    /// <param name="authorityScope">Optional authority boundary allowed to submit operator overrides.</param>
+    /// <param name="limitUpdateActuations">Applied operator overrides in durable revision order.</param>
+    /// <param name="pendingLimitUpdate">Accepted operator override awaiting a safe point.</param>
     /// <exception cref="ArgumentException">Identity, time, state, replay, recommendation, or actuation invariants conflict.</exception>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="target"/>, <paramref name="definitionFingerprint"/>, or <paramref name="operatingPoint"/> is
@@ -461,7 +471,7 @@ public sealed record AimdControlState
     /// <paramref name="lastClassification"/> is unsupported.
     /// </exception>
     [JsonConstructor]
-    public AimdControlState(
+    public ControlLoopState(
         ExecutionIrSchemaVersion schemaVersion,
         ControlLoopId loopId,
         string target,
@@ -478,7 +488,10 @@ public sealed record AimdControlState
         ControlObservation? lastObservation = null,
         ControlRecommendation? pendingRecommendation = null,
         ControlActuation? lastActuation = null,
-        ControlApplicationFence? lastApplicationFence = null)
+        ControlApplicationFence? lastApplicationFence = null,
+        InteractionAuthorityScope? authorityScope = null,
+        ImmutableArray<ControlLimitUpdateActuation> limitUpdateActuations = default,
+        ControlLimitUpdateReceipt? pendingLimitUpdate = null)
     {
         if (string.IsNullOrWhiteSpace(schemaVersion.Value)
             || string.IsNullOrWhiteSpace(loopId.Value)
@@ -528,21 +541,18 @@ public sealed record AimdControlState
                 || !string.Equals(pendingRecommendation.Target, Target, StringComparison.Ordinal)
                 || pendingRecommendation.ExpectedRevision != revision
                 || pendingRecommendation.PriorOperatingPoint != OperatingPoint
-                || lastObservation?.Id != pendingRecommendation.ObservationId))
+                || lastObservation?.Id != pendingRecommendation.ObservationId
+                || pendingLimitUpdate is not null))
         {
             throw new ArgumentException("Pending recommendation does not match current controller state.", nameof(pendingRecommendation));
         }
-        if ((lastActuation is null) != (lastApplicationFence is null))
-            throw new ArgumentException("Last actuation and application fence must be retained together.", nameof(lastActuation));
         if (lastActuation is not null
             && (lastActuation.Recommendation.LoopId != loopId
                 || lastActuation.Recommendation.Epoch != epoch
                 || lastActuation.Recommendation.DefinitionFingerprint != DefinitionFingerprint
                 || lastActuation.Observation.DefinitionFingerprint != DefinitionFingerprint
                 || !string.Equals(lastActuation.Recommendation.Target, Target, StringComparison.Ordinal)
-                || lastActuation.Revision.Ordinal > revision.Ordinal
-                || lastActuation.Recommendation.ProposedOperatingPoint != OperatingPoint
-                || lastActuation.ApplicationPoint.Fence != lastApplicationFence))
+                || lastActuation.Revision.Ordinal > revision.Ordinal))
         {
             throw new ArgumentException("Last actuation does not match current controller state.", nameof(lastActuation));
         }
@@ -552,6 +562,80 @@ public sealed record AimdControlState
                 || cooldownUntilUtc < lastActuation.AppliedAtUtc))
         {
             throw new ArgumentException("Recovery cooldown must follow a retained decrease actuation.", nameof(cooldownUntilUtc));
+        }
+
+        if (limitUpdateActuations.IsDefault)
+            limitUpdateActuations = [];
+        if (limitUpdateActuations.Any(static actuation => actuation is null))
+            throw new ArgumentException("Limit-update actuations cannot contain null entries.", nameof(limitUpdateActuations));
+        limitUpdateActuations = [.. limitUpdateActuations.OrderBy(static actuation => actuation.Revision.Ordinal)];
+        if ((pendingLimitUpdate is not null || !limitUpdateActuations.IsDefaultOrEmpty) && authorityScope is null)
+        {
+            throw new ArgumentException(
+                "Operator update evidence requires an explicit authority scope.",
+                nameof(authorityScope));
+        }
+        ValidateLimitUpdateLedger(
+            schemaVersion,
+            loopId,
+            Target,
+            epoch,
+            revision,
+            DefinitionFingerprint,
+            authorityScope,
+            limitUpdateActuations,
+            pendingLimitUpdate,
+            createdAtUtc,
+            hasAdaptiveEvidence: lastObservation is not null || lastActuation is not null);
+
+        var receiptBuilder = ImmutableArray.CreateBuilder<ControlLimitUpdateReceipt>(
+            limitUpdateActuations.Length + (pendingLimitUpdate is null ? 0 : 1));
+        foreach (var actuation in limitUpdateActuations)
+            receiptBuilder.Add(actuation.Receipt);
+        if (pendingLimitUpdate is not null)
+            receiptBuilder.Add(pendingLimitUpdate);
+        limitUpdateReceipts = receiptBuilder.MoveToImmutable();
+
+        var lastLimitUpdateActuation = limitUpdateActuations.IsDefaultOrEmpty ? null : limitUpdateActuations[^1];
+        if (lastActuation is not null
+            && lastLimitUpdateActuation is not null
+            && lastActuation.Revision == lastLimitUpdateActuation.Revision)
+        {
+            throw new ArgumentException(
+                "Adaptive and operator actuations cannot claim the same durable revision.",
+                nameof(limitUpdateActuations));
+        }
+        if (lastActuation is not null
+            && lastLimitUpdateActuation is not null
+            && (lastActuation.ApplicationPoint.Fence == lastLimitUpdateActuation.ApplicationPoint.Fence
+                || (lastActuation.Revision.Ordinal > lastLimitUpdateActuation.Revision.Ordinal)
+                    != (lastActuation.ApplicationPoint.Fence.Ordinal
+                        > lastLimitUpdateActuation.ApplicationPoint.Fence.Ordinal)))
+        {
+            throw new ArgumentException(
+                "Adaptive and operator application fences must increase in durable revision order.",
+                nameof(lastApplicationFence));
+        }
+
+        var adaptiveIsLatest = lastActuation is not null
+            && (lastLimitUpdateActuation is null || lastActuation.Revision.Ordinal > lastLimitUpdateActuation.Revision.Ordinal);
+        var expectedPoint = adaptiveIsLatest
+            ? lastActuation!.Recommendation.ProposedOperatingPoint
+            : lastLimitUpdateActuation?.OperatingPoint;
+        var expectedFence = adaptiveIsLatest
+            ? lastActuation!.ApplicationPoint.Fence
+            : lastLimitUpdateActuation?.ApplicationPoint.Fence;
+        if (expectedPoint is not null && OperatingPoint != expectedPoint)
+        {
+            throw new ArgumentException(
+                "The effective point must match the latest adaptive or operator actuation.",
+                nameof(operatingPoint));
+        }
+        if (lastApplicationFence != expectedFence)
+        {
+            throw new ArgumentException(
+                "The retained application fence must belong to the latest adaptive or operator actuation.",
+                nameof(lastApplicationFence));
         }
 
         SchemaVersion = schemaVersion;
@@ -568,6 +652,9 @@ public sealed record AimdControlState
         PendingRecommendation = pendingRecommendation;
         LastActuation = lastActuation;
         LastApplicationFence = lastApplicationFence;
+        AuthorityScope = authorityScope;
+        LimitUpdateActuations = limitUpdateActuations;
+        PendingLimitUpdate = pendingLimitUpdate;
     }
 
     /// <summary>Exact portable Control schema version.</summary>
@@ -619,8 +706,72 @@ public sealed record AimdControlState
     /// <summary>Last applied actuation retained for exact replay.</summary>
     public ControlActuation? LastActuation { get; }
 
-    /// <summary>Last applied runtime safe-point fence.</summary>
+    /// <summary>Last applied runtime safe-point fence across adaptive and operator actuations.</summary>
     public ControlApplicationFence? LastApplicationFence { get; }
+
+    /// <summary>Optional authority boundary allowed to submit operator overrides.</summary>
+    public InteractionAuthorityScope? AuthorityScope { get; }
+
+    /// <summary>Accepted operator-update receipts in durable revision order.</summary>
+    [JsonIgnore]
+    public ImmutableArray<ControlLimitUpdateReceipt> LimitUpdateReceipts => limitUpdateReceipts;
+
+    /// <summary>Finds a retained operator-update receipt by stable command identity.</summary>
+    /// <param name="commandId">Stable command identity to inspect.</param>
+    /// <returns>The retained receipt, or <see langword="null"/> when the command is unknown.</returns>
+    /// <exception cref="ArgumentException"><paramref name="commandId"/> is default.</exception>
+    public ControlLimitUpdateReceipt? FindLimitUpdateReceipt(EmissionId commandId)
+    {
+        if (string.IsNullOrWhiteSpace(commandId.Value))
+            throw new ArgumentException("A limit-update receipt lookup requires a stable command identity.", nameof(commandId));
+
+        foreach (var receipt in limitUpdateReceipts)
+        {
+            if (receipt.Command.CommandId == commandId)
+                return receipt;
+        }
+        return null;
+    }
+
+    /// <summary>Applied operator overrides in durable revision order.</summary>
+    public ImmutableArray<ControlLimitUpdateActuation> LimitUpdateActuations { get; }
+
+    /// <summary>Accepted operator override awaiting an exact safe point.</summary>
+    public ControlLimitUpdateReceipt? PendingLimitUpdate { get; }
+
+    /// <summary>Latest applied operator override, when any.</summary>
+    [JsonIgnore]
+    public ControlLimitUpdateActuation? LastLimitUpdateActuation =>
+        LimitUpdateActuations.IsDefaultOrEmpty ? null : LimitUpdateActuations[^1];
+
+    /// <summary>Identity of the latest point-changing adaptive or operator actuation.</summary>
+    [JsonIgnore]
+    public ControlActuationId? LastAppliedActuationId => IsAdaptiveActuationLatest
+        ? LastActuation?.Id
+        : LastLimitUpdateActuation?.Id;
+
+    /// <summary>Revision of the latest point-changing adaptive or operator actuation.</summary>
+    [JsonIgnore]
+    public ControlRevision? LastAppliedActuationRevision => IsAdaptiveActuationLatest
+        ? LastActuation?.Revision
+        : LastLimitUpdateActuation?.Revision;
+
+    /// <summary>Time of the latest point-changing adaptive or operator actuation.</summary>
+    [JsonIgnore]
+    public DateTimeOffset? LastAppliedAtUtc => IsAdaptiveActuationLatest
+        ? LastActuation?.AppliedAtUtc
+        : LastLimitUpdateActuation?.AppliedAtUtc;
+
+    /// <summary>Operating point produced by the latest adaptive or operator actuation.</summary>
+    [JsonIgnore]
+    public ControlOperatingPoint? LastAppliedOperatingPoint => IsAdaptiveActuationLatest
+        ? LastActuation?.Recommendation.ProposedOperatingPoint
+        : LastLimitUpdateActuation?.OperatingPoint;
+
+    [JsonIgnore]
+    bool IsAdaptiveActuationLatest => LastActuation is not null
+        && (LastLimitUpdateActuation is null
+            || LastActuation.Revision.Ordinal > LastLimitUpdateActuation.Revision.Ordinal);
 
     /// <summary>Creates initial state for a definition and new controlled epoch.</summary>
     /// <param name="definition">Canonical loop definition.</param>
@@ -629,7 +780,7 @@ public sealed record AimdControlState
     /// <returns>Initial state at revision one and the definition's initial operating point.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="definition"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException"><paramref name="epoch"/> is default or <paramref name="createdAtUtc"/> is not UTC.</exception>
-    public static AimdControlState Create(
+    public static ControlLoopState Create(
         ControlLoopDefinition definition,
         ControlEpochId epoch,
         DateTimeOffset createdAtUtc)
@@ -646,6 +797,181 @@ public sealed record AimdControlState
             healthyObservationCount: 0,
             createdAtUtc,
             updatedAtUtc: createdAtUtc);
+    }
+
+    /// <summary>Creates initial state with an authority allowed to submit operator overrides.</summary>
+    /// <param name="definition">Canonical loop definition.</param>
+    /// <param name="epoch">New Process attempt, materialization generation, or other epoch.</param>
+    /// <param name="authorityScope">Authority and optional tenant boundary allowed to issue overrides.</param>
+    /// <param name="createdAtUtc">Explicit UTC state creation time.</param>
+    /// <returns>Initial state at revision one and the definition's initial operating point.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="definition"/> or <paramref name="authorityScope"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="epoch"/> is default or <paramref name="createdAtUtc"/> is not UTC.</exception>
+    public static ControlLoopState Create(
+        ControlLoopDefinition definition,
+        ControlEpochId epoch,
+        InteractionAuthorityScope authorityScope,
+        DateTimeOffset createdAtUtc)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(authorityScope);
+        return new(
+            ControlLoopDefinition.CurrentSchemaVersion,
+            definition.Id,
+            definition.Target,
+            epoch,
+            ControlRevision.Initial,
+            definition.Fingerprint,
+            definition.InitialOperatingPoint,
+            healthyObservationCount: 0,
+            createdAtUtc,
+            updatedAtUtc: createdAtUtc,
+            authorityScope: authorityScope);
+    }
+
+    /// <summary>Compares complete durable loop states structurally.</summary>
+    /// <param name="other">State to compare.</param>
+    /// <returns><see langword="true"/> when all adaptive and operator evidence is equal.</returns>
+    public bool Equals(ControlLoopState? other) =>
+        ReferenceEquals(this, other)
+        || other is not null
+        && SchemaVersion == other.SchemaVersion
+        && LoopId == other.LoopId
+        && string.Equals(Target, other.Target, StringComparison.Ordinal)
+        && Epoch == other.Epoch
+        && Revision == other.Revision
+        && DefinitionFingerprint == other.DefinitionFingerprint
+        && OperatingPoint == other.OperatingPoint
+        && HealthyObservationCount == other.HealthyObservationCount
+        && CreatedAtUtc == other.CreatedAtUtc
+        && UpdatedAtUtc == other.UpdatedAtUtc
+        && LastEvaluatedAtUtc == other.LastEvaluatedAtUtc
+        && LastClassification == other.LastClassification
+        && CooldownUntilUtc == other.CooldownUntilUtc
+        && LastObservation == other.LastObservation
+        && PendingRecommendation == other.PendingRecommendation
+        && LastActuation == other.LastActuation
+        && LastApplicationFence == other.LastApplicationFence
+        && AuthorityScope == other.AuthorityScope
+        && LimitUpdateActuations.SequenceEqual(other.LimitUpdateActuations)
+        && PendingLimitUpdate == other.PendingLimitUpdate;
+
+    /// <summary>Returns a structural hash over complete durable state.</summary>
+    /// <returns>A hash derived from all adaptive and operator evidence.</returns>
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(SchemaVersion);
+        hash.Add(LoopId);
+        hash.Add(Target, StringComparer.Ordinal);
+        hash.Add(Epoch);
+        hash.Add(Revision);
+        hash.Add(DefinitionFingerprint);
+        hash.Add(OperatingPoint);
+        hash.Add(HealthyObservationCount);
+        hash.Add(CreatedAtUtc);
+        hash.Add(UpdatedAtUtc);
+        hash.Add(LastEvaluatedAtUtc);
+        hash.Add(LastClassification);
+        hash.Add(CooldownUntilUtc);
+        hash.Add(LastObservation);
+        hash.Add(PendingRecommendation);
+        hash.Add(LastActuation);
+        hash.Add(LastApplicationFence);
+        hash.Add(AuthorityScope);
+        foreach (var actuation in LimitUpdateActuations)
+            hash.Add(actuation);
+        hash.Add(PendingLimitUpdate);
+        return hash.ToHashCode();
+    }
+
+    static void ValidateLimitUpdateLedger(
+        ExecutionIrSchemaVersion schemaVersion,
+        ControlLoopId loopId,
+        string target,
+        ControlEpochId epoch,
+        ControlRevision revision,
+        ExecutionDefinitionFingerprint definitionFingerprint,
+        InteractionAuthorityScope? authorityScope,
+        ImmutableArray<ControlLimitUpdateActuation> actuations,
+        ControlLimitUpdateReceipt? pending,
+        DateTimeOffset createdAtUtc,
+        bool hasAdaptiveEvidence)
+    {
+        if (actuations.GroupBy(static actuation => actuation.Id).Any(static group => group.Count() > 1)
+            || actuations.GroupBy(static actuation => actuation.ApplicationPoint.Id).Any(static group => group.Count() > 1))
+        {
+            throw new ArgumentException(
+                "Limit-update actuation and application-point identities must be unique.",
+                nameof(actuations));
+        }
+
+        var receiptCount = actuations.Length + (pending is null ? 0 : 1);
+        var receipts = ImmutableArray.CreateBuilder<ControlLimitUpdateReceipt>(receiptCount);
+        ControlRevision? priorActuationRevision = null;
+        ControlApplicationFence? priorApplicationFence = null;
+        var priorTransitionAtUtc = createdAtUtc;
+        if (!hasAdaptiveEvidence
+            && !actuations.IsDefaultOrEmpty
+            && actuations[0].Receipt.Command.ExpectedRevision != ControlRevision.Initial)
+        {
+            throw new ArgumentException(
+                "An operator-only ledger must begin at the initial revision.",
+                nameof(actuations));
+        }
+        foreach (var actuation in actuations)
+        {
+            var receipt = actuation.Receipt;
+            var command = receipt.Command;
+            if (actuation.Id != ControlDerivedIdentity.LimitUpdateActuation(receipt, actuation.ApplicationPoint)
+                || command.SchemaVersion != schemaVersion
+                || command.LoopId != loopId
+                || command.DefinitionFingerprint != definitionFingerprint
+                || !string.Equals(command.Target, target, StringComparison.Ordinal)
+                || command.Epoch != epoch
+                || command.Authorization.AuthorityScope != authorityScope
+                || actuation.Revision.Ordinal > revision.Ordinal
+                || priorActuationRevision is { } priorRevision
+                    && actuation.Revision.Ordinal <= priorRevision.Ordinal
+                || priorApplicationFence is { } priorFence
+                    && actuation.ApplicationPoint.Fence.Ordinal <= priorFence.Ordinal
+                || receipt.AcceptedAtUtc < priorTransitionAtUtc)
+            {
+                throw new ArgumentException(
+                    "Every retained operator actuation must be canonical, chronological, and belong to this state fence.",
+                    nameof(actuations));
+            }
+            receipts.Add(receipt);
+            priorActuationRevision = actuation.Revision;
+            priorApplicationFence = actuation.ApplicationPoint.Fence;
+            priorTransitionAtUtc = actuation.AppliedAtUtc;
+        }
+
+        if (pending is not null)
+        {
+            var command = pending.Command;
+            if (command.SchemaVersion != schemaVersion
+                || command.LoopId != loopId
+                || command.DefinitionFingerprint != definitionFingerprint
+                || !string.Equals(command.Target, target, StringComparison.Ordinal)
+                || command.Epoch != epoch
+                || command.Authorization.AuthorityScope != authorityScope
+                || pending.AcceptedRevision != revision
+                || pending.AcceptedAtUtc < priorTransitionAtUtc)
+            {
+                throw new ArgumentException(
+                    "The pending operator override must be the latest transition and belong to this state fence.",
+                    nameof(pending));
+            }
+            receipts.Add(pending);
+        }
+
+        if (receipts.GroupBy(static receipt => receipt.Command.CommandId).Any(static group => group.Count() > 1))
+            throw new ArgumentException("Limit-update command identities must be unique.", nameof(actuations));
+        if (receipts.GroupBy(static receipt => receipt.Command.IdempotencyKey).Any(static group => group.Count() > 1))
+            throw new ArgumentException("Limit-update idempotency keys must be unique.", nameof(actuations));
     }
 }
 
@@ -667,7 +993,7 @@ public sealed record ControlDecision
         ExecutionIrSchemaVersion schemaVersion,
         ControlDecisionDisposition disposition,
         DateTimeOffset evaluatedAtUtc,
-        AimdControlState state,
+        ControlLoopState state,
         ControlRecommendation? recommendation = null,
         ImmutableArray<DocumentValidationDiagnostic> diagnostics = default)
     {
@@ -713,7 +1039,7 @@ public sealed record ControlDecision
     public DateTimeOffset EvaluatedAtUtc { get; }
 
     /// <summary>Complete state after the decision.</summary>
-    public AimdControlState State { get; }
+    public ControlLoopState State { get; }
 
     /// <summary>Pending recommendation for a recommended or replayed outcome.</summary>
     public ControlRecommendation? Recommendation { get; }
@@ -766,7 +1092,7 @@ public sealed record ControlActuationResult
     public ControlActuationResult(
         ExecutionIrSchemaVersion schemaVersion,
         ControlActuationDisposition disposition,
-        AimdControlState state,
+        ControlLoopState state,
         ControlActuation? actuation = null,
         ImmutableArray<DocumentValidationDiagnostic> diagnostics = default)
     {
@@ -811,7 +1137,7 @@ public sealed record ControlActuationResult
     public ControlActuationDisposition Disposition { get; }
 
     /// <summary>Complete state after the attempt.</summary>
-    public AimdControlState State { get; }
+    public ControlLoopState State { get; }
 
     /// <summary>Applied or replayed receipt.</summary>
     public ControlActuation? Actuation { get; }

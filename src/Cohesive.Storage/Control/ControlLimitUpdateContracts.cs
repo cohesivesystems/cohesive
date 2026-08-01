@@ -318,7 +318,7 @@ public sealed record ControlLimitUpdateDecision
     public ControlLimitUpdateDecision(
         ExecutionIrSchemaVersion schemaVersion,
         ControlLimitUpdateDecisionDisposition disposition,
-        ControlLimitUpdateState state,
+        ControlLoopState state,
         ControlLimitUpdateReceipt? receipt = null,
         ImmutableArray<DocumentValidationDiagnostic> diagnostics = default)
     {
@@ -328,12 +328,12 @@ public sealed record ControlLimitUpdateDecision
             throw new ArgumentOutOfRangeException(nameof(disposition), disposition, "Unsupported limit-update disposition.");
         State = Guard.RequireNotNull(state);
         if (disposition == ControlLimitUpdateDecisionDisposition.Accepted
-            && (receipt is null || state.PendingUpdate != receipt))
+            && (receipt is null || state.PendingLimitUpdate != receipt))
         {
             throw new ArgumentException("An accepted decision must expose the state's exact pending receipt.", nameof(receipt));
         }
         if (disposition == ControlLimitUpdateDecisionDisposition.Replayed
-            && (receipt is null || !state.Receipts.Contains(receipt)))
+            && (receipt is null || !state.LimitUpdateReceipts.Contains(receipt)))
         {
             throw new ArgumentException("A replayed decision requires its retained receipt.", nameof(receipt));
         }
@@ -365,7 +365,7 @@ public sealed record ControlLimitUpdateDecision
     public ControlLimitUpdateDecisionDisposition Disposition { get; }
 
     /// <summary>Complete durable state after the decision.</summary>
-    public ControlLimitUpdateState State { get; }
+    public ControlLoopState State { get; }
 
     /// <summary>Accepted or replayed command receipt, when applicable.</summary>
     public ControlLimitUpdateReceipt? Receipt { get; }
@@ -416,7 +416,7 @@ public sealed record ControlLimitUpdateActuationResult
     public ControlLimitUpdateActuationResult(
         ExecutionIrSchemaVersion schemaVersion,
         ControlActuationDisposition disposition,
-        ControlLimitUpdateState state,
+        ControlLoopState state,
         ControlLimitUpdateActuation? actuation = null,
         ImmutableArray<DocumentValidationDiagnostic> diagnostics = default)
     {
@@ -433,14 +433,14 @@ public sealed record ControlLimitUpdateActuationResult
                 nameof(actuation));
         }
         if (disposition == ControlActuationDisposition.Applied
-            && state.LastActuation != actuation)
+            && state.LastLimitUpdateActuation != actuation)
         {
             throw new ArgumentException(
                 "An applied result must expose the state's latest actuation.",
                 nameof(actuation));
         }
         if (disposition == ControlActuationDisposition.Replayed
-            && !state.Actuations.Contains(actuation!))
+            && !state.LimitUpdateActuations.Contains(actuation!))
         {
             throw new ArgumentException(
                 "A replayed result must expose an actuation retained by the durable ledger.",
@@ -474,7 +474,7 @@ public sealed record ControlLimitUpdateActuationResult
     public ControlActuationDisposition Disposition { get; }
 
     /// <summary>Complete durable state after the attempt.</summary>
-    public ControlLimitUpdateState State { get; }
+    public ControlLoopState State { get; }
 
     /// <summary>Applied or replayed actuation receipt, when applicable.</summary>
     public ControlLimitUpdateActuation? Actuation { get; }

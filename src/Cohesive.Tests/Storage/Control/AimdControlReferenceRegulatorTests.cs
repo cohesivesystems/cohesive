@@ -412,7 +412,7 @@ public sealed class AimdControlReferenceRegulatorTests
     {
         var definition = ControlRegulatorFixture.Definition();
         var initial = ControlRegulatorFixture.InitialState(definition);
-        var unreachable = new AimdControlState(
+        var unreachable = new ControlLoopState(
             ControlLoopDefinition.CurrentSchemaVersion,
             initial.LoopId,
             initial.Target,
@@ -429,7 +429,7 @@ public sealed class AimdControlReferenceRegulatorTests
             "contradictory-classification",
             value: 9_000,
             observedAtUtc);
-        var contradictory = new AimdControlState(
+        var contradictory = new ControlLoopState(
             ControlLoopDefinition.CurrentSchemaVersion,
             initial.LoopId,
             initial.Target,
@@ -458,7 +458,7 @@ public sealed class AimdControlReferenceRegulatorTests
     {
         var definition = ControlRegulatorFixture.Definition(initial: 6);
         var initial = ControlRegulatorFixture.InitialState(definition);
-        var forged = new AimdControlState(
+        var forged = new ControlLoopState(
             initial.SchemaVersion,
             initial.LoopId,
             initial.Target,
@@ -494,7 +494,7 @@ public sealed class AimdControlReferenceRegulatorTests
             value: 5_000,
             observedAtUtc: evaluatedAtUtc,
             windowEndedAtUtc: evaluatedAtUtc.AddMilliseconds(-1_001));
-        var forged = new AimdControlState(
+        var forged = new ControlLoopState(
             initial.SchemaVersion,
             initial.LoopId,
             initial.Target,
@@ -766,7 +766,7 @@ public sealed class AimdControlReferenceRegulatorTests
         state = Evaluate(definition, state, "healthy-proof-1", value: 5_000).State;
         state = Evaluate(definition, state, "healthy-proof-2", value: 5_000).State;
         var recommended = Evaluate(definition, state, "healthy-proof-3", value: 5_000).State;
-        var forged = new AimdControlState(
+        var forged = new ControlLoopState(
             recommended.SchemaVersion,
             recommended.LoopId,
             recommended.Target,
@@ -883,7 +883,7 @@ public sealed class AimdControlReferenceRegulatorTests
             value: 7_000,
             observedAtUtc,
             expectedRevision: priorRevision);
-        var exhausted = new AimdControlState(
+        var exhausted = new ControlLoopState(
             ControlLoopDefinition.CurrentSchemaVersion,
             initial.LoopId,
             initial.Target,
@@ -921,7 +921,7 @@ public sealed class AimdControlReferenceRegulatorTests
 
     static ControlDecision Evaluate(
         ControlLoopDefinition definition,
-        AimdControlState state,
+        ControlLoopState state,
         string id,
         long value,
         DateTimeOffset? observedAtUtc = null)
@@ -938,9 +938,9 @@ public sealed class AimdControlReferenceRegulatorTests
             observation.ObservedAtUtc);
     }
 
-    static AimdControlState RecommendAndApplyDecrease(
+    static ControlLoopState RecommendAndApplyDecrease(
         ControlLoopDefinition definition,
-        AimdControlState state,
+        ControlLoopState state,
         long fence = 1)
     {
         var recommendation = Evaluate(definition, state, $"decrease-{fence}", value: 9_000);
@@ -959,8 +959,8 @@ public sealed class AimdControlReferenceRegulatorTests
         return applied.State;
     }
 
-    static AimdControlState StateAfterForgedHealthyEvaluation(
-        AimdControlState state,
+    static ControlLoopState StateAfterForgedHealthyEvaluation(
+        ControlLoopState state,
         ControlObservation observation,
         long healthyObservationCount) =>
         new(
@@ -983,7 +983,7 @@ public sealed class AimdControlReferenceRegulatorTests
             lastActuation: state.LastActuation,
             lastApplicationFence: state.LastApplicationFence);
 
-    static long Concurrency(AimdControlState state) => Concurrency(state.OperatingPoint);
+    static long Concurrency(ControlLoopState state) => Concurrency(state.OperatingPoint);
 
     static long Concurrency(ControlOperatingPoint point) =>
         point.Get(ControlActuatorKind.Concurrency).Quantity.Value;

@@ -25,6 +25,7 @@ public sealed class ExecutionControlApiCatalogTests
         ];
 
         Assert.Equal(9, catalog.Definition.Operations.Count);
+        Assert.Equal("cohesive-execution-control-api/v2", ExecutionControlApiCatalog.CurrentSchemaVersion.Value);
         Assert.Equal(endpoints, catalog.Definition.Endpoints);
         Assert.Equal(
             [
@@ -59,6 +60,28 @@ public sealed class ExecutionControlApiCatalogTests
         Assert.All(
             catalog.Definition.Operations.SelectMany(static operation => operation.Results),
             static result => Assert.Null(result.Http));
+        var updateLimits = catalog.Definition.GetOperation(catalog.UpdateLimits);
+        Assert.Equal(
+            [
+                ApiResultKind.Success,
+                ApiResultKind.Accepted,
+                ApiResultKind.PreconditionFailed,
+                ApiResultKind.Conflict,
+                ApiResultKind.ValidationFailed,
+                ApiResultKind.Forbidden,
+                ApiResultKind.NotFound
+            ],
+            updateLimits.Results.Select(static result => result.Kind));
+
+        var httpProjection = updateLimits.WithHttp(new HttpBinding(
+            method: "POST",
+            route: "/execution-control/limits",
+            parameters: null,
+            body: null));
+        var accepted = Assert.Single(
+            httpProjection.Results,
+            static result => result.Kind == ApiResultKind.Accepted);
+        Assert.Equal(202, accepted.Http?.StatusCode);
     }
 
     [Fact]

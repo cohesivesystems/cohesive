@@ -8,8 +8,8 @@ public static class MaterializationIndexSyncStatusWireNames
     /// <summary>Stable authority and extension identity for index-synchronization status.</summary>
     public const string SemanticAuthority = "cohesive.storage.index-sync.status";
 
-    /// <summary>Exact v1 portable payload schema version.</summary>
-    public const string CurrentSchemaVersion = "index-sync-status/v1";
+    /// <summary>Exact v2 portable payload schema version, including attributable adaptive Control state.</summary>
+    public const string CurrentSchemaVersion = "index-sync-status/v2";
 
     /// <summary>Gets the typed execution-extension identity derived from <see cref="SemanticAuthority"/>.</summary>
     public static ExecutionExtensionId ExtensionId { get; } = new(SemanticAuthority);

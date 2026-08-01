@@ -840,13 +840,48 @@ public sealed class CosmosMaterializationSourceTests
         await cancellation.CancelAsync();
         await Assert.ThrowsAsync<OperationCanceledException>(() => queuedRead);
         Assert.Single(secondChanges.Calls);
-        Assert.Contains(secondObserver.Observations, static observation =>
+        var canceledObservation = Assert.Single(secondObserver.Observations, static observation =>
             observation.Operation == CosmosMaterializationSourceOperationKind.ChangeRead
             && observation.Disposition == CosmosMaterializationSourceDisposition.Canceled);
+        Assert.All(canceledObservation.Measurements, static measurement =>
+            Assert.Equal(ControlMeasurementAvailability.Unavailable, measurement.Availability));
+        Assert.All(canceledObservation.Measurements, static measurement =>
+            Assert.Equal("cosmos.materialization.control-evidence.canceled", measurement.FailureCode));
 
         releaseFirst.TrySetResult(true);
         var completed = await firstRead;
         Assert.Equal(MaterializationChangePageState.CaughtUp, completed.State);
+    }
+
+    [Theory]
+    [InlineData((int)CosmosMaterializationSourceDisposition.Canceled)]
+    [InlineData((int)CosmosMaterializationSourceDisposition.TerminalFailure)]
+    public void ObservationContract_RejectsControlEligibleMeasurementsForIneligibleOperation(int dispositionValue)
+    {
+        var disposition = (CosmosMaterializationSourceDisposition)dispositionValue;
+        var fixture = CreateFixture(StandardBaseline());
+        ControlMeasurement availableLatency = new(
+            metric: ControlMetricKind.Latency,
+            statistic: ControlStatisticKind.Last,
+            availability: ControlMeasurementAvailability.Available,
+            value: new(1, ControlUnit.Milliseconds),
+            sampleCount: 1);
+
+        var exception = Assert.Throws<ArgumentException>(() => new CosmosMaterializationSourceObservation(
+            operation: CosmosMaterializationSourceOperationKind.ChangeRead,
+            disposition: disposition,
+            scope: fixture.Source.Scope,
+            startedAtUtc: ObservedAt,
+            completedAtUtc: ObservedAt,
+            itemCount: 0,
+            canonicalByteCount: 0,
+            requestCharge: 0,
+            measurements: [availableLatency],
+            evidenceReference: "tests/cosmos/canceled-provider-evidence",
+            controlEvidenceReference: "tests/cosmos/canceled-control-occurrence"));
+
+        Assert.Equal("measurements", exception.ParamName);
+        Assert.Contains("cannot carry Control-eligible", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -876,9 +911,60 @@ public sealed class CosmosMaterializationSourceTests
         Assert.Equal(3200, exception.Observation.SubStatusCode);
         Assert.Equal(9.75, exception.Observation.RequestCharge);
         Assert.Equal(TimeSpan.FromMilliseconds(250), exception.Observation.RetryAfter);
+        Assert.Contains(exception.Observation.Measurements, static measurement =>
+            measurement.Metric == ControlMetricKind.RequestUnitConsumption
+            && measurement.Statistic == ControlStatisticKind.Sum
+            && measurement.Value is { Value: 9_750, Unit: ControlUnit.MilliRequestUnits });
+        Assert.Contains(exception.Observation.Measurements, static measurement =>
+            measurement.Metric == ControlMetricKind.RejectionRatio
+            && measurement.Value is { Value: 10_000, Unit: ControlUnit.BasisPoints });
         Assert.DoesNotContain("provider response", exception.Message, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("provider-activity", exception.Observation.EvidenceReference, StringComparison.Ordinal);
         Assert.Same(exception.Observation, observer.Observations[^1]);
+    }
+
+    [Theory]
+    [InlineData((int)HttpStatusCode.TooManyRequests, (int)CosmosMaterializationSourceDisposition.Throttled)]
+    [InlineData((int)HttpStatusCode.InternalServerError, (int)CosmosMaterializationSourceDisposition.RetryableFailure)]
+    public async Task RetryableProviderProtocolFailureWithoutRequestCharge_MarksOnlyRuEvidenceUnavailable(
+        int statusCodeValue,
+        int dispositionValue)
+    {
+        FakeChangeFeedReader changes = new();
+        changes.Current = ChangePage([], "cut/missing-request-charge", HttpStatusCode.NotModified);
+        RecordingObserver observer = new();
+        var fixture = CreateFixture(StandardBaseline(), changes, observer);
+        var captured = await fixture.Source.CaptureCurrentPositionAsync(Context(), fixture.Source.Scope);
+        changes.Handler = (_, _, _, _) =>
+            ValueTask.FromException<CosmosMaterializationProviderChangePage>(new CosmosProviderProtocolException(
+                reason: "request-charge-unavailable",
+                message: "A completed retryable response omitted trustworthy request-charge evidence.",
+                statusCode: (HttpStatusCode)statusCodeValue,
+                requestCharge: null));
+
+        var exception = await Assert.ThrowsAsync<CosmosMaterializationSourceException>(() =>
+            fixture.Source.ReadChangesAsync(Context(), ChangeRequest(fixture, captured)).AsTask());
+
+        var observation = exception.Observation;
+        Assert.Equal((CosmosMaterializationSourceDisposition)dispositionValue, observation.Disposition);
+        Assert.Null(observation.RequestCharge);
+        var requestUnits = Assert.Single(
+            observation.Measurements,
+            static measurement => measurement.Metric == ControlMetricKind.RequestUnitConsumption);
+        Assert.Equal(ControlMeasurementAvailability.Unavailable, requestUnits.Availability);
+        Assert.Null(requestUnits.Value);
+        Assert.Equal(0, requestUnits.SampleCount);
+        Assert.Equal(
+            "cosmos.materialization.control-evidence.request-charge-unavailable",
+            requestUnits.FailureCode);
+        Assert.Contains(observation.Measurements, static measurement =>
+            measurement.Metric == ControlMetricKind.Latency
+            && measurement.Availability == ControlMeasurementAvailability.Available);
+        Assert.Contains(observation.Measurements, static measurement =>
+            measurement.Metric == ControlMetricKind.RejectionRatio
+            && measurement.Availability == ControlMeasurementAvailability.Available
+            && measurement.Value is { Value: 10_000, Unit: ControlUnit.BasisPoints });
+        Assert.Same(observation, observer.Observations[^1]);
     }
 
     [Fact]
@@ -940,6 +1026,8 @@ public sealed class CosmosMaterializationSourceTests
         Assert.Equal(HttpStatusCode.OK, observed.StatusCode);
         Assert.Equal(3.5, observed.RequestCharge);
         Assert.Contains("tests/cosmos-provider-evidence", observed.EvidenceReference, StringComparison.Ordinal);
+        Assert.All(observed.Measurements, static measurement =>
+            Assert.Equal(ControlMeasurementAvailability.Unavailable, measurement.Availability));
     }
 
     [Fact]
@@ -1118,6 +1206,10 @@ public sealed class CosmosMaterializationSourceTests
         Assert.Equal(CosmosMaterializationSourceDisposition.TerminalFailure, exception.Observation.Disposition);
         Assert.Equal(3.5, exception.Observation.RequestCharge);
         Assert.Equal(HttpStatusCode.OK, exception.Observation.StatusCode);
+        Assert.All(exception.Observation.Measurements, static measurement =>
+            Assert.Equal(ControlMeasurementAvailability.Unavailable, measurement.Availability));
+        Assert.All(exception.Observation.Measurements, static measurement =>
+            Assert.Equal("cosmos.materialization.control-evidence.terminal-failure", measurement.FailureCode));
         Assert.Contains(observer.Observations, static observation =>
             observation.Operation == CosmosMaterializationSourceOperationKind.ChangeRead
             && observation.Disposition == CosmosMaterializationSourceDisposition.TerminalFailure);
@@ -1276,7 +1368,7 @@ public sealed class CosmosMaterializationSourceTests
     [Fact]
     public async Task CapabilityProfileOmitsUnsupportedGuarantees_AndPartialReadEmitsTypedControlEvidence()
     {
-        var baseline = StandardBaseline(requestCharge: 7.25);
+        var baseline = StandardBaseline(requestCharge: 7.2506);
         RecordingObserver observer = new();
         var fixture = CreateFixture(baseline, observer: observer);
         var profile = fixture.Source.Descriptor.CapabilityProfile;
@@ -1296,7 +1388,7 @@ public sealed class CosmosMaterializationSourceTests
         var observation = Assert.Single(observer.Observations);
         Assert.Equal(CosmosMaterializationSourceOperationKind.BaselineRead, observation.Operation);
         Assert.Equal(CosmosMaterializationSourceDisposition.Partial, observation.Disposition);
-        Assert.Equal(7.25, observation.RequestCharge);
+        Assert.Equal(7.2506, observation.RequestCharge);
         Assert.Equal(HttpStatusCode.OK, observation.StatusCode);
         Assert.Contains(observation.Measurements, static measurement =>
             measurement.Metric == ControlMetricKind.Latency
@@ -1305,6 +1397,22 @@ public sealed class CosmosMaterializationSourceTests
         Assert.Contains(observation.Measurements, static measurement =>
             measurement.Metric == ControlMetricKind.RejectionRatio
             && measurement.Value is { Value: 0, Unit: ControlUnit.BasisPoints });
+        Assert.Contains(observation.Measurements, static measurement =>
+            measurement.Metric == ControlMetricKind.RequestUnitConsumption
+            && measurement.Statistic == ControlStatisticKind.Sum
+            && measurement.Value is { Value: 7_251, Unit: ControlUnit.MilliRequestUnits });
+        Assert.Contains(observation.Measurements, measurement =>
+            measurement.Metric == ControlMetricKind.BatchItems
+            && measurement.Statistic == ControlStatisticKind.Last
+            && measurement.Value is { Unit: ControlUnit.Count } value
+            && value.Value == observation.ItemCount);
+        Assert.Contains(observation.Measurements, measurement =>
+            measurement.Metric == ControlMetricKind.BatchBytes
+            && measurement.Statistic == ControlStatisticKind.Last
+            && measurement.Value is { Unit: ControlUnit.Bytes } value
+            && value.Value == observation.CanonicalByteCount);
+        Assert.DoesNotContain(observation.Measurements, static measurement =>
+            measurement.Metric == ControlMetricKind.QueueDepth);
     }
 
     [Fact]

@@ -4,11 +4,38 @@ using Cohesive.Execution;
 
 namespace Cohesive.Api.Execution;
 
+/// <summary>Asynchronously reduces one trusted canonical limit update through its authoritative runtime store.</summary>
+/// <remarks>
+/// <paramref name="command"/> carries the current trusted invocation evidence. An implementation MUST authorize
+/// that current authority scope against the addressed durable state before restoring retained occurrence evidence.
+/// After admission, an exact command-identity retry must restore only its retained authorization, issuance, and
+/// provenance before canonical reduction. The implementation must use <paramref name="decidedAtUtc"/> unchanged
+/// and return state for the command's exact loop, target, and epoch.
+/// </remarks>
+/// <param name="context">Explicit cancellation, time, and tracing context.</param>
+/// <param name="command">Command rebound to trusted API authority, issuance, and provenance evidence.</param>
+/// <param name="decidedAtUtc">Exact trusted API observation time used to linearize the command decision.</param>
+/// <returns>The canonical decision returned after any required authoritative durable mutation.</returns>
+/// <exception cref="ArgumentNullException">
+/// <paramref name="context"/> or <paramref name="command"/> is <see langword="null"/>.
+/// </exception>
+/// <exception cref="ArgumentException">
+/// <paramref name="decidedAtUtc"/> is not UTC, or another command value is structurally invalid.
+/// </exception>
+/// <exception cref="KeyNotFoundException">No exact runtime target exists for the command address.</exception>
+/// <exception cref="InvalidOperationException">The authoritative store reports an incoherent mutation result.</exception>
+/// <exception cref="OperationCanceledException">The operation is cancelled.</exception>
+public delegate ValueTask<ControlLimitUpdateDecision> ExecutionControlLimitUpdateDispatcher(
+    OperationContext context,
+    ControlLimitUpdateCommand command,
+    DateTimeOffset decidedAtUtc);
+
 /// <summary>Trusted server-side evidence used to admit one execution-control API invocation.</summary>
 /// <remarks>
 /// This value is materialized by an API, identity, or test adapter after authentication and authorization. It is
 /// never a client request contract. <see cref="InMemoryExecutionControlApiAdapter"/> replaces all caller-supplied
-/// authorization, issuance, and provenance fields with this evidence before invoking a canonical reducer.
+/// authorization, issuance, and provenance fields with this evidence before dispatch. After admitting the current
+/// authority scope, an authoritative dispatcher may restore the retained occurrence evidence for exact replay.
 /// </remarks>
 public sealed class ExecutionApiInvocationContext
 {
@@ -123,7 +150,9 @@ public sealed class ExecutionApiInvocationContext
 /// This adapter is a reference integration and test realization, not a durable production store. Each admitted
 /// operation is linearized under the addressed resource lock. Start registry insertion is atomic across instance,
 /// command, and idempotency indexes. Canonical reducers remain the sole owners of replay, optimistic-fence, and
-/// lifecycle semantics.
+/// lifecycle semantics. When an authoritative limit-update dispatcher is configured, <c>updateLimits</c> bypasses
+/// the local Control registry entirely; the adapter only authorizes, rebinds trusted context, and projects the
+/// authoritative decision.
 /// </remarks>
 public sealed class InMemoryExecutionControlApiAdapter
 {
@@ -134,6 +163,7 @@ public sealed class InMemoryExecutionControlApiAdapter
     readonly ProcessControlReferenceExecutor processExecutor;
     readonly Func<ProcessControlState, ExecutionRuntimeStatusDetails?>? runtimeStatus;
     readonly Func<ProcessControlState, ExecutionTerminalOutcome?>? terminalOutcome;
+    readonly ExecutionControlLimitUpdateDispatcher? limitUpdateDispatcher;
     readonly Dictionary<ProcessKey, ProcessEntry> processes = [];
     readonly Dictionary<StartCommandKey, ProcessStartReceipt> startsByCommand = [];
     readonly Dictionary<StartIdempotencyKey, ProcessStartReceipt> startsByIdempotency = [];
@@ -144,18 +174,24 @@ public sealed class InMemoryExecutionControlApiAdapter
     /// <param name="catalog">Optional canonical API catalog; a fresh canonical catalog is used when omitted.</param>
     /// <param name="runtimeStatus">Optional safe runtime-status projection for token, wait, demand, and extension facets.</param>
     /// <param name="terminalOutcome">Optional safe terminal-outcome projection.</param>
+    /// <param name="limitUpdateDispatcher">
+    /// Optional authoritative asynchronous dispatcher. When supplied, callers MUST use <see cref="DispatchAsync"/>
+    /// for <c>updateLimits</c>; the local Control registry is not consulted.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="contracts"/> is <see langword="null"/>.</exception>
     public InMemoryExecutionControlApiAdapter(
         InteractionContractCatalog contracts,
         ExecutionControlApiCatalog? catalog = null,
         Func<ProcessControlState, ExecutionRuntimeStatusDetails?>? runtimeStatus = null,
-        Func<ProcessControlState, ExecutionTerminalOutcome?>? terminalOutcome = null)
+        Func<ProcessControlState, ExecutionTerminalOutcome?>? terminalOutcome = null,
+        ExecutionControlLimitUpdateDispatcher? limitUpdateDispatcher = null)
     {
         ArgumentNullException.ThrowIfNull(contracts);
         this.catalog = catalog ?? ExecutionControlApiCatalog.Create();
         processExecutor = new(contracts);
         this.runtimeStatus = runtimeStatus;
         this.terminalOutcome = terminalOutcome;
+        this.limitUpdateDispatcher = limitUpdateDispatcher;
     }
 
     /// <summary>Canonical semantic endpoint catalog bound by this adapter.</summary>
@@ -172,7 +208,8 @@ public sealed class InMemoryExecutionControlApiAdapter
     /// </exception>
     /// <exception cref="InvalidOperationException">
     /// <paramref name="endpoint"/> is not owned by this adapter, or a first-time Signal invocation lacks a trusted
-    /// <see cref="ExecutionApiInvocationContext.SignalContext"/>.
+    /// <see cref="ExecutionApiInvocationContext.SignalContext"/>, or synchronous <c>updateLimits</c> dispatch is
+    /// attempted while an authoritative asynchronous dispatcher is configured.
     /// </exception>
     /// <exception cref="ArgumentException">
     /// Trusted observation time precedes durable state or first-time command issuance.
@@ -200,6 +237,11 @@ public sealed class InMemoryExecutionControlApiAdapter
 
         if (ReferenceEquals(endpoint, catalog.UpdateLimits))
         {
+            if (limitUpdateDispatcher is not null)
+            {
+                throw new InvalidOperationException(
+                    "An authoritative asynchronous limit-update dispatcher requires DispatchAsync.");
+            }
             return request is ControlLimitUpdateCommand update
                 ? DispatchLimitUpdate(update, invocation)
                 : TypeMismatch(endpoint);
@@ -219,6 +261,65 @@ public sealed class InMemoryExecutionControlApiAdapter
         return DispatchProcessControl(endpoint, (ProcessControlCommand)request, invocation);
     }
 
+    /// <summary>
+    /// Dispatches through the authoritative asynchronous limit-update store when configured, and otherwise reuses
+    /// the synchronous reference path.
+    /// </summary>
+    /// <param name="context">Explicit cancellation, time, and tracing context.</param>
+    /// <param name="endpoint">Exact typed endpoint handle owned by <see cref="Catalog"/>.</param>
+    /// <param name="request">Request value whose runtime type must match the endpoint declaration.</param>
+    /// <param name="invocation">Trusted server-side authorization, timing, and provenance evidence.</param>
+    /// <returns>The exact declared result variant and its structurally safe response body.</returns>
+    /// <exception cref="ArgumentNullException">A required argument is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// Trusted evidence is chronologically invalid or a command value is structurally invalid.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// <paramref name="endpoint"/> is not owned by this adapter; a first-time Signal invocation lacks a trusted
+    /// <see cref="ExecutionApiInvocationContext.SignalContext"/>; or the authoritative dispatcher or store returns
+    /// incoherent evidence.
+    /// </exception>
+    /// <exception cref="OverflowException">A canonical reducer exhausts its semantic revision space.</exception>
+    /// <exception cref="OperationCanceledException">The authoritative dispatch is cancelled.</exception>
+    public async ValueTask<ExecutionApiDispatchResult> DispatchAsync(
+        OperationContext context,
+        ApiEndpoint endpoint,
+        object request,
+        ExecutionApiInvocationContext invocation)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(endpoint);
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(invocation);
+        context.ThrowIfCancellationRequested();
+        if (limitUpdateDispatcher is null || !ReferenceEquals(endpoint, catalog.UpdateLimits))
+            return Dispatch(endpoint, request, invocation);
+
+        EnsureOwnedEndpoint(endpoint);
+        if (!IsAuthorized(endpoint, invocation))
+            return Problem(endpoint, ApiResultKind.Forbidden, ExecutionApiProblemCodes.Forbidden);
+        if (request is not ControlLimitUpdateCommand update)
+            return TypeMismatch(endpoint);
+
+        var canonical = Rebind(update, invocation, prior: null);
+        ControlLimitUpdateDecision decision;
+        try
+        {
+            decision = await limitUpdateDispatcher(
+                        context,
+                        canonical,
+                        invocation.ObservedAtUtc)
+                    .ConfigureAwait(false)
+                ?? throw new InvalidOperationException(
+                    "The authoritative limit-update dispatcher returned no canonical decision.");
+        }
+        catch (KeyNotFoundException)
+        {
+            return Problem(endpoint, ApiResultKind.NotFound, ExecutionApiProblemCodes.NotFound);
+        }
+        return LimitUpdateResult(decision, canonical, invocation);
+    }
+
     /// <summary>Registers one bounded Control loop and epoch for subsequent <c>updateLimits</c> dispatch.</summary>
     /// <param name="definition">Canonical immutable bounded loop definition.</param>
     /// <param name="epoch">Current Process attempt, index generation, or other controlled epoch.</param>
@@ -229,7 +330,10 @@ public sealed class InMemoryExecutionControlApiAdapter
     /// <paramref name="definition"/> or <paramref name="authorityScope"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException"><paramref name="epoch"/> is default or time is not UTC.</exception>
-    /// <exception cref="InvalidOperationException">The exact scoped loop, target, and epoch are already registered.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// An authoritative limit-update dispatcher is configured, or the exact scoped loop, target, and epoch are
+    /// already registered.
+    /// </exception>
     public ControlRevision RegisterControlLoop(
         ControlLoopDefinition definition,
         ControlEpochId epoch,
@@ -238,7 +342,8 @@ public sealed class InMemoryExecutionControlApiAdapter
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(authorityScope);
-        var state = ControlLimitUpdateState.Create(definition, epoch, authorityScope, createdAtUtc);
+        EnsureLocalControlRegistryEnabled();
+        var state = ControlLoopState.Create(definition, epoch, authorityScope, createdAtUtc);
         var key = new ControlKey(authorityScope, definition.Id, definition.Target, epoch);
         lock (controlRegistryGate)
         {
@@ -258,6 +363,7 @@ public sealed class InMemoryExecutionControlApiAdapter
     /// <exception cref="ArgumentNullException">
     /// <paramref name="authorityScope"/> or <paramref name="applicationPoint"/> is <see langword="null"/>.
     /// </exception>
+    /// <exception cref="InvalidOperationException">An authoritative limit-update dispatcher is configured.</exception>
     /// <exception cref="KeyNotFoundException">No exact scoped loop, target, and epoch are registered.</exception>
     /// <exception cref="ArgumentException"><paramref name="appliedAtUtc"/> is not UTC.</exception>
     public ControlActuationDisposition ApplyLimitsAtSafePoint(
@@ -267,6 +373,7 @@ public sealed class InMemoryExecutionControlApiAdapter
     {
         ArgumentNullException.ThrowIfNull(authorityScope);
         ArgumentNullException.ThrowIfNull(applicationPoint);
+        EnsureLocalControlRegistryEnabled();
         var key = new ControlKey(
             authorityScope,
             applicationPoint.LoopId,
@@ -400,60 +507,115 @@ public sealed class InMemoryExecutionControlApiAdapter
 
         lock (entry.Gate)
         {
-            ProcessControlAuthorizationContext? priorAuthorization = null;
-            ExecutionProvenance? priorProvenance = null;
-            DateTimeOffset? priorIssuedAtUtc = null;
-            for (var i = 0; i < entry.State.Receipts.Length; i++)
-            {
-                var prior = entry.State.Receipts[i].Command;
-                if (prior.CommandId != request.CommandId)
-                    continue;
-                priorAuthorization = prior.Authorization;
-                priorProvenance = prior.Provenance;
-                priorIssuedAtUtc = prior.IssuedAtUtc;
-                break;
-            }
-
-            var canonical = new ControlLimitUpdateCommand(
-                request.SchemaVersion,
-                request.CommandId,
-                request.IdempotencyKey,
-                request.LoopId,
-                request.DefinitionFingerprint,
-                request.Target,
-                request.Epoch,
-                request.ExpectedRevision,
-                request.RequestedOperatingPoint,
-                priorAuthorization ?? invocation.Authorization,
-                priorIssuedAtUtc ?? invocation.IssuedAtUtc,
-                priorProvenance ?? invocation.Provenance);
+            var prior = entry.State.FindLimitUpdateReceipt(request.CommandId)?.Command;
+            var canonical = Rebind(request, invocation, prior);
             var decision = ControlLimitUpdateReferenceReducer.Submit(
                 entry.Definition,
                 entry.State,
                 canonical,
                 invocation.ObservedAtUtc);
             entry.State = decision.State;
-            if (decision.Disposition == ControlLimitUpdateDecisionDisposition.Unauthorized)
-            {
-                return Problem(
-                    catalog.UpdateLimits,
-                    ApiResultKind.Forbidden,
-                    ExecutionApiProblemCodes.Forbidden);
-            }
-
-            var kind = decision.Disposition switch
-            {
-                ControlLimitUpdateDecisionDisposition.Stale => ApiResultKind.PreconditionFailed,
-                ControlLimitUpdateDecisionDisposition.IdentityConflict
-                    or ControlLimitUpdateDecisionDisposition.IdempotencyConflict
-                    or ControlLimitUpdateDecisionDisposition.PendingConflict => ApiResultKind.Conflict,
-                ControlLimitUpdateDecisionDisposition.OutOfBounds
-                    or ControlLimitUpdateDecisionDisposition.Invalid => ApiResultKind.ValidationFailed,
-                _ => ApiResultKind.Success
-            };
-            return Result(catalog.UpdateLimits, kind, ControlLimitUpdateResult.FromDecision(decision));
+            return LimitUpdateResult(decision, canonical, invocation);
         }
     }
+
+    ExecutionApiDispatchResult LimitUpdateResult(
+        ControlLimitUpdateDecision decision,
+        ControlLimitUpdateCommand command,
+        ExecutionApiInvocationContext invocation)
+    {
+        EnsureCoherentLimitUpdateDecision(decision, command, invocation);
+        if (decision.Disposition == ControlLimitUpdateDecisionDisposition.Unauthorized)
+        {
+            return Problem(
+                catalog.UpdateLimits,
+                ApiResultKind.Forbidden,
+                ExecutionApiProblemCodes.Forbidden);
+        }
+
+        var kind = decision.Disposition switch
+        {
+            ControlLimitUpdateDecisionDisposition.Accepted => ApiResultKind.Accepted,
+            ControlLimitUpdateDecisionDisposition.Replayed
+                when decision.Receipt is not null
+                     && decision.State.PendingLimitUpdate == decision.Receipt => ApiResultKind.Accepted,
+            ControlLimitUpdateDecisionDisposition.Stale => ApiResultKind.PreconditionFailed,
+            ControlLimitUpdateDecisionDisposition.IdentityConflict
+                or ControlLimitUpdateDecisionDisposition.IdempotencyConflict
+                or ControlLimitUpdateDecisionDisposition.PendingConflict => ApiResultKind.Conflict,
+            ControlLimitUpdateDecisionDisposition.OutOfBounds
+                or ControlLimitUpdateDecisionDisposition.Invalid => ApiResultKind.ValidationFailed,
+            _ => ApiResultKind.Success
+        };
+        return Result(catalog.UpdateLimits, kind, ControlLimitUpdateResult.FromDecision(decision));
+    }
+
+    static void EnsureCoherentLimitUpdateDecision(
+        ControlLimitUpdateDecision decision,
+        ControlLimitUpdateCommand command,
+        ExecutionApiInvocationContext invocation)
+    {
+        var state = decision.State;
+        if (state.LoopId != command.LoopId
+            || !string.Equals(state.Target, command.Target, StringComparison.Ordinal)
+            || state.Epoch != command.Epoch)
+        {
+            throw new InvalidOperationException(
+                "The authoritative limit-update dispatcher returned state for a different command address.");
+        }
+
+        if (decision.Disposition == ControlLimitUpdateDecisionDisposition.Unauthorized)
+            return;
+        if (state.AuthorityScope != invocation.Authorization.AuthorityScope)
+        {
+            throw new InvalidOperationException(
+                "The authoritative limit-update dispatcher returned state outside the trusted authority scope.");
+        }
+
+        if (decision.Disposition == ControlLimitUpdateDecisionDisposition.Accepted)
+        {
+            if (decision.Receipt?.Command != command
+                || decision.Receipt.AcceptedAtUtc != invocation.ObservedAtUtc)
+            {
+                throw new InvalidOperationException(
+                    "The authoritative limit-update dispatcher returned an incoherent acceptance receipt.");
+            }
+            return;
+        }
+
+        if (decision.Disposition != ControlLimitUpdateDecisionDisposition.Replayed)
+            return;
+
+        var retained = decision.Receipt!.Command;
+        var exactReplay = retained.CommandId == command.CommandId
+            && retained == Rebind(command, invocation, retained);
+        var semanticReplay = retained.CommandId != command.CommandId
+            && ControlLimitUpdateReferenceReducer.HasSameIdempotentIntent(retained, command);
+        if (retained.Authorization.AuthorityScope != invocation.Authorization.AuthorityScope
+            || (!exactReplay && !semanticReplay))
+        {
+            throw new InvalidOperationException(
+                "The authoritative limit-update dispatcher returned an incoherent replay receipt.");
+        }
+    }
+
+    static ControlLimitUpdateCommand Rebind(
+        ControlLimitUpdateCommand command,
+        ExecutionApiInvocationContext invocation,
+        ControlLimitUpdateCommand? prior) =>
+        new(
+            command.SchemaVersion,
+            command.CommandId,
+            command.IdempotencyKey,
+            command.LoopId,
+            command.DefinitionFingerprint,
+            command.Target,
+            command.Epoch,
+            command.ExpectedRevision,
+            command.RequestedOperatingPoint,
+            prior?.Authorization ?? invocation.Authorization,
+            prior?.IssuedAtUtc ?? invocation.IssuedAtUtc,
+            prior?.Provenance ?? invocation.Provenance);
 
     ProcessControlCommand Rebind(
         ProcessControlCommand command,
@@ -553,6 +715,15 @@ public sealed class InMemoryExecutionControlApiAdapter
         }
     }
 
+    void EnsureLocalControlRegistryEnabled()
+    {
+        if (limitUpdateDispatcher is not null)
+        {
+            throw new InvalidOperationException(
+                "The local Control registry is disabled while an authoritative limit-update dispatcher is configured.");
+        }
+    }
+
     ExecutionApiDispatchResult TypeMismatch(ApiEndpoint endpoint) =>
         Problem(endpoint, ApiResultKind.ValidationFailed, ExecutionApiProblemCodes.RequestTypeMismatch);
 
@@ -585,12 +756,12 @@ public sealed class InMemoryExecutionControlApiAdapter
         internal ProcessControlState State { get; set; } = state;
     }
 
-    sealed class ControlEntry(ControlLoopDefinition definition, ControlLimitUpdateState state)
+    sealed class ControlEntry(ControlLoopDefinition definition, ControlLoopState state)
     {
         internal object Gate { get; } = new();
 
         internal ControlLoopDefinition Definition { get; } = definition;
 
-        internal ControlLimitUpdateState State { get; set; } = state;
+        internal ControlLoopState State { get; set; } = state;
     }
 }

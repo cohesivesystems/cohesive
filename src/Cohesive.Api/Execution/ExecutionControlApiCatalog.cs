@@ -46,7 +46,7 @@ public sealed class ExecutionControlApiCatalog
 {
     /// <summary>Current semantic schema version of the execution-control API declaration.</summary>
     public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } =
-        new("cohesive-execution-control-api/v1");
+        new("cohesive-execution-control-api/v2");
 
     ExecutionControlApiCatalog(
         ApiDefinition definition,
@@ -188,6 +188,7 @@ public sealed class ExecutionControlApiCatalog
                 ControlLimitUpdateWireNames.CommandPath)
             .Accepts<ControlLimitUpdateCommand>()
             .Returns<ControlLimitUpdateResult>()
+            .Result<ControlLimitUpdateResult>(ApiResultKind.Accepted)
             .Result<ControlLimitUpdateResult>(ApiResultKind.PreconditionFailed)
             .Result<ControlLimitUpdateResult>(ApiResultKind.Conflict)
             .Result<ControlLimitUpdateResult>(ApiResultKind.ValidationFailed)

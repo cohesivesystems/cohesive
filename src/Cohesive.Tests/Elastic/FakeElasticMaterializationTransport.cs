@@ -45,6 +45,7 @@ internal sealed class FakeElasticMaterializationTransport : IElasticMaterializat
     readonly List<ElasticAliasCasRequest> aliasRequests = [];
     int ambiguousAliasApplications;
     int scanResponseLimitFailures;
+    BulkTransportFault? nextBulkTransportFault;
     TaskCompletionSource? nextBulkEntered;
     TaskCompletionSource? nextBulkRelease;
 
@@ -134,6 +135,20 @@ internal sealed class FakeElasticMaterializationTransport : IElasticMaterializat
                 statusCode,
                 ElasticMaterializationPhysicalNames.RequireValue(errorType, nameof(errorType)),
                 "Injected deterministic bulk rejection."));
+
+    internal void FailNextBulkTransport(
+        int? statusCode,
+        string errorType,
+        bool retryable)
+    {
+        errorType = ElasticMaterializationPhysicalNames.RequireValue(errorType, nameof(errorType));
+        lock (gate)
+        {
+            if (nextBulkTransportFault is not null)
+                throw new InvalidOperationException("A fake bulk transport failure is already pending.");
+            nextBulkTransportFault = new(statusCode, errorType, retryable);
+        }
+    }
 
     internal void ApplyNextAliasExchangeThenFailAmbiguously(int occurrences = 1)
     {
@@ -631,6 +646,15 @@ internal sealed class FakeElasticMaterializationTransport : IElasticMaterializat
             var captured = CloneBulkOperations(operations);
             bulkRequests.Add(captured);
             Record(BulkOperation, index: null, id: null, operations.Length, maximumWireBytes, maximumResponseBytes);
+            if (nextBulkTransportFault is { } transportFault)
+            {
+                nextBulkTransportFault = null;
+                throw new ElasticMaterializationTransportException(
+                    statusCode: transportFault.StatusCode,
+                    errorType: transportFault.ErrorType,
+                    retryable: transportFault.Retryable,
+                    message: "Injected deterministic bulk transport failure.");
+            }
             var builder = ImmutableArray.CreateBuilder<ElasticBulkItemResult>(operations.Length);
             var errors = false;
             for (var ordinal = 0; ordinal < operations.Length; ordinal++)
@@ -1647,6 +1671,8 @@ internal sealed class FakeElasticMaterializationTransport : IElasticMaterializat
     readonly record struct BulkOrdinalFaultKey(int RequestOrdinal, int ItemOrdinal);
 
     readonly record struct BulkFault(int StatusCode, string ErrorType, string Reason);
+
+    readonly record struct BulkTransportFault(int? StatusCode, string ErrorType, bool Retryable);
 
     readonly record struct SearchCandidate(string Id, byte[] Source, JsonElement? AliasFilter);
 

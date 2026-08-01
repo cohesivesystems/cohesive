@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Cohesive.Adapters.Elastic;
+using Cohesive.Control;
 using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Relations.Physical;
@@ -298,6 +299,407 @@ public sealed class ElasticMaterializationTargetTests
         Assert.NotEqual(generationBulks[0][1].Id, retriedWrite.Id);
     }
 
+    [Fact]
+    public async Task ApplyBatch_EmitsExactLoopAgnosticControlEvidence()
+    {
+        RecordingTargetObserver observer = new();
+        var rig = CreateRig(observer: observer);
+        var generationId = new MaterializationGenerationId("generation/observed");
+        await BeginAsync(rig, generationId, Epoch);
+        MaterializationApplyBatchRequest request = new(
+            batchId: new("batch/observed"),
+            generationId: generationId,
+            workerFence: WorkerFence,
+            mutations:
+            [
+                new MaterializationUpsert(
+                    itemId: new("item/observed/one"),
+                    mutationId: new("mutation/observed/one"),
+                    version: new("1"),
+                    value: ObservationValue.FromString("one")),
+                new MaterializationUpsert(
+                    itemId: new("item/observed/two"),
+                    mutationId: new("mutation/observed/two"),
+                    version: new("1"),
+                    value: ObservationValue.FromString("two"))
+            ]);
+        var intent = MaterializationTargetIntentFingerprinter.AnalyzeBatch(request);
+        var timeProvider = new IncrementingTimeProvider(Epoch, TimeSpan.FromSeconds(1));
+
+        var result = await rig.Target.ApplyBatchAsync(OperationContext.Create(timeProvider: timeProvider), request);
+
+        Assert.All(result.Outcomes, static outcome =>
+            Assert.Equal(MaterializationItemOutcomeDisposition.Applied, outcome.Disposition));
+        var observation = Assert.Single(observer.Observations);
+        Assert.Equal(ElasticMaterializationTargetDisposition.Complete, observation.Disposition);
+        Assert.Equal(rig.Target.Descriptor.Id, observation.TargetId);
+        Assert.Equal(DefinitionId, observation.MaterializationId);
+        Assert.Equal(generationId, observation.GenerationId);
+        Assert.Equal(request.BatchId, observation.BatchId);
+        Assert.Equal(2, observation.ItemCount);
+        Assert.Equal(intent.CanonicalByteCount, observation.CanonicalByteCount);
+        Assert.Equal(2, observation.SuccessfulItemCount);
+        Assert.Contains(observation.Measurements, static measurement =>
+            measurement.Metric == ControlMetricKind.Latency
+            && measurement.Statistic == ControlStatisticKind.Last
+            && measurement.Value is { Value: 1_000, Unit: ControlUnit.Milliseconds });
+        Assert.Contains(observation.Measurements, static measurement =>
+            measurement.Metric == ControlMetricKind.RejectionRatio
+            && measurement.Value is { Value: 0, Unit: ControlUnit.BasisPoints });
+        Assert.Contains(observation.Measurements, static measurement =>
+            measurement.Metric == ControlMetricKind.BatchItems
+            && measurement.Value is { Value: 2, Unit: ControlUnit.Count });
+        Assert.Contains(observation.Measurements, measurement =>
+            measurement.Metric == ControlMetricKind.BatchBytes
+            && measurement.Value is { Unit: ControlUnit.Bytes } value
+            && value.Value == intent.CanonicalByteCount);
+        Assert.Contains(observation.Measurements, static measurement =>
+            measurement.Metric == ControlMetricKind.ItemThroughput
+            && measurement.Statistic == ControlStatisticKind.Mean
+            && measurement.Value is { Value: 2, Unit: ControlUnit.ItemsPerSecond });
+        Assert.DoesNotContain(observation.Measurements, static measurement =>
+            measurement.Metric is ControlMetricKind.QueueDepth or ControlMetricKind.ByteThroughput);
+        Assert.Equal(
+            ElasticMaterializationTargetControlEvidenceKind.PressureSample,
+            observation.ControlEvidenceKind);
+    }
+
+    [Fact]
+    public async Task ApplyBatch_ExactReplayRetainsProviderIdentityButUsesOccurrenceSafeIneligibleControlEvidence()
+    {
+        RecordingTargetObserver observer = new();
+        var rig = CreateRig(observer: observer);
+        var generationId = new MaterializationGenerationId("generation/observed-batch-replay");
+        await BeginAsync(rig, generationId, Epoch);
+        var request = ObservedRequest("batch-replay", generationId);
+
+        _ = await rig.Target.ApplyBatchAsync(OperationContext.Create(), request);
+        var replayed = await rig.Target.ApplyBatchAsync(OperationContext.Create(), request);
+
+        Assert.Equal(MaterializationBatchDisposition.Replayed, replayed.Disposition);
+        Assert.Equal(2, observer.Observations.Length);
+        var first = observer.Observations[0];
+        var second = observer.Observations[1];
+        Assert.Equal(first.EvidenceReference, second.EvidenceReference);
+        Assert.NotEqual(first.ControlEvidenceReference, second.ControlEvidenceReference);
+        Assert.Equal(ElasticMaterializationTargetDisposition.Replayed, second.Disposition);
+        Assert.Equal(
+            ElasticMaterializationTargetControlEvidenceKind.BatchReplay,
+            second.ControlEvidenceKind);
+        Assert.All(second.Measurements, static measurement =>
+            Assert.Equal(ControlMeasurementAvailability.Unavailable, measurement.Availability));
+        Assert.All(second.Measurements, static measurement =>
+            Assert.Equal("elastic.materialization.control-evidence.batch-replayed", measurement.FailureCode));
+    }
+
+    [Fact]
+    public async Task ApplyBatch_MixedItemReplayIsConservativelyControlIneligible()
+    {
+        RecordingTargetObserver observer = new();
+        var rig = CreateRig(observer: observer);
+        var generationId = new MaterializationGenerationId("generation/observed-item-replay");
+        await BeginAsync(rig, generationId, Epoch);
+        MaterializationItemMutation retained = new MaterializationUpsert(
+            itemId: new("item/observed-item-replay/retained"),
+            mutationId: new("mutation/observed-item-replay/retained"),
+            version: new("1"),
+            value: ObservationValue.FromString("retained"));
+        _ = await rig.Target.ApplyBatchAsync(
+            OperationContext.Create(),
+            new(
+                batchId: new("batch/observed-item-replay/seed"),
+                generationId: generationId,
+                workerFence: WorkerFence,
+                mutations: [retained]));
+
+        var mixed = await rig.Target.ApplyBatchAsync(
+            OperationContext.Create(),
+            new(
+                batchId: new("batch/observed-item-replay/mixed"),
+                generationId: generationId,
+                workerFence: WorkerFence,
+                mutations:
+                [
+                    retained,
+                    new MaterializationUpsert(
+                        itemId: new("item/observed-item-replay/new"),
+                        mutationId: new("mutation/observed-item-replay/new"),
+                        version: new("1"),
+                        value: ObservationValue.FromString("new"))
+                ]));
+
+        Assert.Contains(mixed.Outcomes, static outcome =>
+            outcome.Disposition == MaterializationItemOutcomeDisposition.Replayed);
+        Assert.Contains(mixed.Outcomes, static outcome =>
+            outcome.Disposition == MaterializationItemOutcomeDisposition.Applied);
+        var observation = observer.Observations[^1];
+        Assert.Equal(
+            ElasticMaterializationTargetControlEvidenceKind.MixedItemReplay,
+            observation.ControlEvidenceKind);
+        Assert.All(observation.Measurements, static measurement =>
+            Assert.Equal(ControlMeasurementAvailability.Unavailable, measurement.Availability));
+        Assert.All(observation.Measurements, static measurement =>
+            Assert.Equal("elastic.materialization.control-evidence.item-replayed", measurement.FailureCode));
+    }
+
+    [Fact]
+    public async Task ApplyBatch_ProjectsPartialItemRejectionWithoutChangingTheBatchResult()
+    {
+        RecordingTargetObserver observer = new();
+        var rig = CreateRig(observer: observer);
+        var generationId = new MaterializationGenerationId("generation/observed-rejection");
+        await BeginAsync(rig, generationId, Epoch);
+        rig.Transport.EnqueueRetryableBulkItemFailure(itemOrdinal: 0);
+        MaterializationApplyBatchRequest request = new(
+            batchId: new("batch/observed-rejection"),
+            generationId: generationId,
+            workerFence: WorkerFence,
+            mutations:
+            [
+                new MaterializationUpsert(
+                    itemId: new("item/observed/rejected"),
+                    mutationId: new("mutation/observed/rejected"),
+                    version: new("1"),
+                    value: ObservationValue.FromString("rejected")),
+                new MaterializationUpsert(
+                    itemId: new("item/observed/applied"),
+                    mutationId: new("mutation/observed/applied"),
+                    version: new("1"),
+                    value: ObservationValue.FromString("applied"))
+            ]);
+
+        var result = await rig.Target.ApplyBatchAsync(
+            OperationContext.Create(
+                timeProvider: new IncrementingTimeProvider(Epoch, TimeSpan.FromSeconds(1))),
+            request);
+
+        Assert.Equal(MaterializationBatchDisposition.Applied, result.Disposition);
+        Assert.Equal(MaterializationItemOutcomeDisposition.RetryableRejected, result.Outcomes[0].Disposition);
+        Assert.Equal(MaterializationItemOutcomeDisposition.Applied, result.Outcomes[1].Disposition);
+        var observation = Assert.Single(observer.Observations);
+        Assert.Equal(ElasticMaterializationTargetDisposition.PartiallyRejected, observation.Disposition);
+        Assert.Equal(1, observation.SuccessfulItemCount);
+        Assert.Equal(result.Outcomes[0].Code, observation.FailureCode);
+        Assert.Contains(observation.Measurements, static measurement =>
+            measurement.Metric == ControlMetricKind.RejectionRatio
+            && measurement.Value is { Value: 5_000, Unit: ControlUnit.BasisPoints });
+        Assert.Contains(observation.Measurements, static measurement =>
+            measurement.Metric == ControlMetricKind.ItemThroughput
+            && measurement.Value is { Value: 1, Unit: ControlUnit.ItemsPerSecond });
+    }
+
+    [Fact]
+    public async Task ApplyBatch_ObserverFailureCannotChangeDurableTargetSemantics()
+    {
+        var rig = CreateRig(observer: new ThrowingTargetObserver());
+        var generationId = new MaterializationGenerationId("generation/throwing-observer");
+        await BeginAsync(rig, generationId, Epoch);
+
+        var result = await rig.Target.ApplyBatchAsync(
+            OperationContext.Create(
+                timeProvider: new IncrementingTimeProvider(Epoch, TimeSpan.FromSeconds(1))),
+            new(
+                batchId: new("batch/throwing-observer"),
+                generationId: generationId,
+                workerFence: WorkerFence,
+                mutations:
+                [
+                    new MaterializationUpsert(
+                        itemId: new("item/throwing-observer"),
+                        mutationId: new("mutation/throwing-observer"),
+                        version: new("1"),
+                        value: ObservationValue.FromString("retained"))
+                ]));
+
+        Assert.Equal(MaterializationBatchDisposition.Applied, result.Disposition);
+        Assert.Equal(MaterializationItemOutcomeDisposition.Applied, Assert.Single(result.Outcomes).Disposition);
+        Assert.Equal(
+            1,
+            (await rig.Target.InspectGenerationAsync(OperationContext.Create(), generationId))!.VisibleItemCount);
+    }
+
+    [Fact]
+    public async Task ApplyBatch_CancellationWhileAwaitingAdmissionMarksUnderivableEvidenceUnavailable()
+    {
+        RecordingTargetObserver observer = new();
+        var rig = CreateRig(observer: observer);
+        var generationId = new MaterializationGenerationId("generation/canceled-observation");
+        await BeginAsync(rig, generationId, Epoch);
+        var (firstBulkEntered, releaseFirstBulk) = rig.Transport.PauseNextBulk();
+        var first = rig.Target.ApplyBatchAsync(
+            OperationContext.Create(),
+            ObservedRequest("first", generationId)).AsTask();
+        await firstBulkEntered;
+        using CancellationTokenSource cancellation = new();
+        var canceled = rig.Target.ApplyBatchAsync(
+            OperationContext.Create(
+                timeProvider: new IncrementingTimeProvider(Epoch, TimeSpan.FromSeconds(1)),
+                cancellationToken: cancellation.Token),
+            ObservedRequest("canceled", generationId)).AsTask();
+        await Task.Yield();
+
+        try
+        {
+            await cancellation.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => canceled);
+        }
+        finally
+        {
+            releaseFirstBulk();
+        }
+        _ = await first;
+
+        var observation = Assert.Single(observer.Observations, static candidate =>
+            candidate.Disposition == ElasticMaterializationTargetDisposition.Canceled);
+        Assert.Null(observation.SuccessfulItemCount);
+        Assert.Equal(
+            ElasticMaterializationTargetControlEvidenceKind.IneligibleOperation,
+            observation.ControlEvidenceKind);
+        Assert.All(observation.Measurements, static measurement =>
+            Assert.Equal(ControlMeasurementAvailability.Unavailable, measurement.Availability));
+        Assert.All(observation.Measurements, static measurement =>
+            Assert.Equal("elastic.materialization.control-evidence.canceled", measurement.FailureCode));
+    }
+
+    [Fact]
+    public async Task ApplyBatch_TerminalTransportFailureIsControlIneligible()
+    {
+        RecordingTargetObserver observer = new();
+        var rig = CreateRig(observer: observer);
+        var generationId = new MaterializationGenerationId("generation/terminal-observation");
+        await BeginAsync(rig, generationId, Epoch);
+        rig.Transport.FailNextBulkTransport(
+            statusCode: 401,
+            errorType: "security_exception",
+            retryable: false);
+
+        var exception = await Assert.ThrowsAsync<ElasticMaterializationTransportException>(() =>
+            rig.Target.ApplyBatchAsync(
+                OperationContext.Create(
+                    timeProvider: new IncrementingTimeProvider(Epoch, TimeSpan.FromSeconds(1))),
+                ObservedRequest("terminal", generationId)).AsTask());
+
+        Assert.Equal(401, exception.StatusCode);
+        var observation = Assert.Single(observer.Observations);
+        Assert.Equal(ElasticMaterializationTargetDisposition.TerminalFailure, observation.Disposition);
+        Assert.Equal(
+            ElasticMaterializationTargetControlEvidenceKind.IneligibleOperation,
+            observation.ControlEvidenceKind);
+        Assert.Equal("security_exception", observation.FailureCode);
+        Assert.Equal(401, observation.StatusCode);
+        Assert.All(observation.Measurements, static measurement =>
+            Assert.Equal(ControlMeasurementAvailability.Unavailable, measurement.Availability));
+        Assert.All(observation.Measurements, static measurement =>
+            Assert.Equal("elastic.materialization.control-evidence.ineligible-operation", measurement.FailureCode));
+    }
+
+    [Theory]
+    [InlineData(
+        ElasticMaterializationTargetDisposition.Replayed,
+        ElasticMaterializationTargetControlEvidenceKind.BatchReplay)]
+    [InlineData(
+        ElasticMaterializationTargetDisposition.Complete,
+        ElasticMaterializationTargetControlEvidenceKind.MixedItemReplay)]
+    [InlineData(
+        ElasticMaterializationTargetDisposition.Canceled,
+        ElasticMaterializationTargetControlEvidenceKind.IneligibleOperation)]
+    [InlineData(
+        ElasticMaterializationTargetDisposition.TerminalFailure,
+        ElasticMaterializationTargetControlEvidenceKind.IneligibleOperation)]
+    public void ObservationContract_RejectsControlEligibleMeasurementsForIneligibleExecution(
+        ElasticMaterializationTargetDisposition disposition,
+        ElasticMaterializationTargetControlEvidenceKind controlEvidenceKind)
+    {
+        ControlMeasurement availableLatency = new(
+            metric: ControlMetricKind.Latency,
+            statistic: ControlStatisticKind.Last,
+            availability: ControlMeasurementAvailability.Available,
+            value: new(1, ControlUnit.Milliseconds),
+            sampleCount: 1);
+
+        var exception = Assert.Throws<ArgumentException>(() => new ElasticMaterializationTargetObservation(
+            disposition: disposition,
+            targetId: new("target/observation-contract"),
+            materializationId: new("materialization/observation-contract"),
+            generationId: new("generation/observation-contract"),
+            batchId: new("batch/observation-contract"),
+            startedAtUtc: Epoch,
+            completedAtUtc: Epoch,
+            itemCount: 1,
+            canonicalByteCount: 1,
+            successfulItemCount: disposition is (
+                ElasticMaterializationTargetDisposition.Canceled
+                    or ElasticMaterializationTargetDisposition.TerminalFailure)
+                ? null
+                : 1,
+            measurements: [availableLatency],
+            controlEvidenceKind: controlEvidenceKind,
+            evidenceReference: "tests/elastic/provider-evidence",
+            controlEvidenceReference: "tests/elastic/control-occurrence"));
+
+        Assert.Equal("measurements", exception.ParamName);
+        Assert.Contains("cannot carry Control-eligible", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ObservationContract_RejectsIneligibleClassificationForCompletedPressureSample()
+    {
+        ControlMeasurement unavailableLatency = new(
+            metric: ControlMetricKind.Latency,
+            statistic: ControlStatisticKind.Last,
+            availability: ControlMeasurementAvailability.Unavailable,
+            failureCode: "tests/elastic/unavailable");
+
+        var exception = Assert.Throws<ArgumentException>(() => new ElasticMaterializationTargetObservation(
+            disposition: ElasticMaterializationTargetDisposition.Complete,
+            targetId: new("target/observation-contract"),
+            materializationId: new("materialization/observation-contract"),
+            generationId: new("generation/observation-contract"),
+            batchId: new("batch/observation-contract"),
+            startedAtUtc: Epoch,
+            completedAtUtc: Epoch,
+            itemCount: 1,
+            canonicalByteCount: 1,
+            successfulItemCount: 1,
+            measurements: [unavailableLatency],
+            controlEvidenceKind: ElasticMaterializationTargetControlEvidenceKind.IneligibleOperation,
+            evidenceReference: "tests/elastic/provider-evidence",
+            controlEvidenceReference: "tests/elastic/control-occurrence"));
+
+        Assert.Equal("controlEvidenceKind", exception.ParamName);
+        Assert.Contains("requires a partial rejection", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ObservationContract_RejectsPressureSampleForTerminalFailure()
+    {
+        ControlMeasurement unavailableLatency = new(
+            metric: ControlMetricKind.Latency,
+            statistic: ControlStatisticKind.Last,
+            availability: ControlMeasurementAvailability.Unavailable,
+            failureCode: "tests/elastic/terminal");
+
+        var exception = Assert.Throws<ArgumentException>(() => new ElasticMaterializationTargetObservation(
+            disposition: ElasticMaterializationTargetDisposition.TerminalFailure,
+            targetId: new("target/observation-contract"),
+            materializationId: new("materialization/observation-contract"),
+            generationId: new("generation/observation-contract"),
+            batchId: new("batch/observation-contract"),
+            startedAtUtc: Epoch,
+            completedAtUtc: Epoch,
+            itemCount: 1,
+            canonicalByteCount: 1,
+            successfulItemCount: null,
+            measurements: [unavailableLatency],
+            controlEvidenceKind: ElasticMaterializationTargetControlEvidenceKind.PressureSample,
+            evidenceReference: "tests/elastic/provider-evidence",
+            controlEvidenceReference: "tests/elastic/control-occurrence",
+            failureCode: "tests/elastic/terminal"));
+
+        Assert.Equal("controlEvidenceKind", exception.ParamName);
+        Assert.Contains("terminal batch requires ineligible", exception.Message, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData(425)]
     [InlineData(500)]
@@ -468,11 +870,14 @@ public sealed class ElasticMaterializationTargetTests
     [Fact]
     public async Task ApplyBatch_OversizedReuseOfAnAdmittedBatchIdentityIsAConflict()
     {
-        var rig = CreateRig(new(
-            maximumBatchItems: 1,
-            maximumBatchBytes: 1_000_000,
-            maximumParallelism: 1,
-            maximumDiagnosticBytes: 4_096));
+        RecordingTargetObserver observer = new();
+        var rig = CreateRig(
+            new(
+                maximumBatchItems: 1,
+                maximumBatchBytes: 1_000_000,
+                maximumParallelism: 1,
+                maximumDiagnosticBytes: 4_096),
+            observer: observer);
         var generationId = new MaterializationGenerationId("generation/oversized-identity-reuse");
         await BeginAsync(rig, generationId, Epoch);
         var admitted = await rig.Target.ApplyBatchAsync(
@@ -503,6 +908,15 @@ public sealed class ElasticMaterializationTargetTests
                 MaterializationItemOutcomeDisposition.IdempotencyConflict,
                 outcome.Disposition));
         Assert.Equal(bulkCount, rig.Transport.BulkRequests.Length);
+        var observation = observer.Observations[^1];
+        Assert.Equal(ElasticMaterializationTargetDisposition.IdentityConflict, observation.Disposition);
+        Assert.Equal(
+            ElasticMaterializationTargetControlEvidenceKind.IneligibleOperation,
+            observation.ControlEvidenceKind);
+        Assert.All(observation.Measurements, static measurement =>
+            Assert.Equal(ControlMeasurementAvailability.Unavailable, measurement.Availability));
+        Assert.All(observation.Measurements, static measurement =>
+            Assert.Equal("elastic.materialization.control-evidence.ineligible-operation", measurement.FailureCode));
     }
 
     [Fact]
@@ -583,7 +997,8 @@ public sealed class ElasticMaterializationTargetTests
                     Epoch)));
         Assert.Empty(generationRig.Transport.Calls);
 
-        var rig = CreateRig();
+        RecordingTargetObserver observer = new();
+        var rig = CreateRig(observer: observer);
         var generationId = new MaterializationGenerationId("generation/indexed-identity-limit");
         await BeginAsync(rig, generationId, Epoch);
         var result = await rig.Target.ApplyBatchAsync(
@@ -613,6 +1028,13 @@ public sealed class ElasticMaterializationTargetTests
             rig.Transport.BulkRequests.SelectMany(static operations => operations),
             operation => operation.Index == generationIndex);
         Assert.Equal(ElasticBulkOperationKind.Index, write.Kind);
+        var observation = Assert.Single(observer.Observations);
+        Assert.Equal(ElasticMaterializationTargetDisposition.PartiallyRejected, observation.Disposition);
+        Assert.Equal(
+            ElasticMaterializationTargetControlEvidenceKind.IneligibleOperation,
+            observation.ControlEvidenceKind);
+        Assert.All(observation.Measurements, static measurement =>
+            Assert.Equal(ControlMeasurementAvailability.Unavailable, measurement.Availability));
     }
 
     [Fact]
@@ -1566,6 +1988,22 @@ public sealed class ElasticMaterializationTargetTests
         return Assert.IsType<MaterializationGenerationSnapshot>(result.Generation);
     }
 
+    static MaterializationApplyBatchRequest ObservedRequest(
+        string suffix,
+        MaterializationGenerationId generationId) =>
+        new(
+            batchId: new($"batch/observed/{suffix}"),
+            generationId: generationId,
+            workerFence: WorkerFence,
+            mutations:
+            [
+                new MaterializationUpsert(
+                    itemId: new($"item/observed/{suffix}"),
+                    mutationId: new($"mutation/observed/{suffix}"),
+                    version: new("1"),
+                    value: ObservationValue.FromString(suffix))
+            ]);
+
     static async Task<PreparedGeneration> PrepareValidatedAsync(
         TargetRig rig,
         string suffix,
@@ -1748,7 +2186,9 @@ public sealed class ElasticMaterializationTargetTests
     static ElasticJsonObject JsonObject(ReadOnlyMemory<byte> value) =>
         ElasticJsonObject.Parse(value, nameof(value));
 
-    static TargetRig CreateRig(ElasticMaterializationTargetPolicy? policy = null)
+    static TargetRig CreateRig(
+        ElasticMaterializationTargetPolicy? policy = null,
+        IElasticMaterializationTargetObserver? observer = null)
     {
         var binding = CreateBinding();
         var runtime = new ElasticElasticsearchRuntimeBinding(
@@ -1761,7 +2201,12 @@ public sealed class ElasticMaterializationTargetTests
             binding,
             effectivePolicy,
             transport,
-            new ElasticMaterializationTarget(binding, effectivePolicy, runtime, transport));
+            new ElasticMaterializationTarget(
+                binding: binding,
+                policy: effectivePolicy,
+                runtimeBinding: runtime,
+                transport: transport,
+                observer: observer));
     }
 
     static ElasticMaterializationTarget ReloadTarget(TargetRig rig)
@@ -1814,4 +2259,46 @@ public sealed class ElasticMaterializationTargetTests
         string Id,
         byte[] Source,
         ElasticDocumentConcurrencyToken Token);
+
+    sealed class RecordingTargetObserver : IElasticMaterializationTargetObserver
+    {
+        readonly object gate = new();
+        readonly List<ElasticMaterializationTargetObservation> observations = [];
+
+        internal ImmutableArray<ElasticMaterializationTargetObservation> Observations
+        {
+            get
+            {
+                lock (gate)
+                {
+                    return [.. observations];
+                }
+            }
+        }
+
+        public void Observe(ElasticMaterializationTargetObservation observation)
+        {
+            lock (gate)
+            {
+                observations.Add(observation);
+            }
+        }
+    }
+
+    sealed class IncrementingTimeProvider(DateTimeOffset initialUtcNow, TimeSpan increment) : TimeProvider
+    {
+        long callCount;
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            var ordinal = Interlocked.Increment(ref callCount) - 1;
+            return initialUtcNow + TimeSpan.FromTicks(increment.Ticks * ordinal);
+        }
+    }
+
+    sealed class ThrowingTargetObserver : IElasticMaterializationTargetObserver
+    {
+        public void Observe(ElasticMaterializationTargetObservation observation) =>
+            throw new InvalidOperationException("Injected observer failure.");
+    }
 }

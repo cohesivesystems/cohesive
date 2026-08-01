@@ -74,7 +74,12 @@ public enum CosmosMaterializationFailureKind
 /// <remarks>
 /// The adapter intentionally does not create <see cref="ControlObservation"/> because it does not own the loop,
 /// definition fingerprint, epoch, or expected controller revision. Request charge remains Cosmos-specific evidence;
-/// portable pressure signals are projected into <see cref="Measurements"/>.
+/// portable pressure signals are projected into <see cref="Measurements"/>. Request-unit consumption is represented
+/// in fixed-point milli request units, rounded to the nearest milli request unit with midpoint values rounded away
+/// from zero and saturated at <see cref="ControlQuantity.MaximumPortableValue"/>, so canonical Control evidence never
+/// depends on floating-point serialization.
+/// Queue depth is intentionally absent because the Cosmos SDK and the adapter admission gates do not expose an exact
+/// queued-work count at this operation boundary.
 /// </remarks>
 public sealed record CosmosMaterializationSourceObservation
 {
@@ -86,13 +91,20 @@ public sealed record CosmosMaterializationSourceObservation
     /// <param name="completedAtUtc">UTC operation completion.</param>
     /// <param name="itemCount">Non-negative semantic item or delivery count.</param>
     /// <param name="canonicalByteCount">Non-negative canonical semantic byte count.</param>
-    /// <param name="requestCharge">Non-negative Cosmos request-unit charge observed from completed SDK responses.</param>
+    /// <param name="requestCharge">
+    /// Non-negative Cosmos request-unit charge observed from completed SDK responses, or <see langword="null"/> when
+    /// the provider did not expose trustworthy charge evidence.
+    /// </param>
     /// <param name="measurements">Typed portable Control measurements.</param>
     /// <param name="evidenceReference">Non-sensitive adapter evidence reference.</param>
+    /// <param name="controlEvidenceReference">Occurrence-safe identity for a runtime-owned Control observation.</param>
     /// <param name="statusCode">Provider HTTP status when available.</param>
     /// <param name="subStatusCode">Provider substatus when available.</param>
     /// <param name="retryAfter">Provider retry delay when available.</param>
-    /// <exception cref="ArgumentNullException"><paramref name="scope"/> or <paramref name="evidenceReference"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="scope"/>, <paramref name="evidenceReference"/>, or
+    /// <paramref name="controlEvidenceReference"/> is <see langword="null"/>.
+    /// </exception>
     /// <exception cref="ArgumentException">A timestamp, evidence reference, or measurement collection is invalid.</exception>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <paramref name="operation"/> or <paramref name="disposition"/> is unsupported; an item count, byte count, or
@@ -106,9 +118,10 @@ public sealed record CosmosMaterializationSourceObservation
         DateTimeOffset completedAtUtc,
         long itemCount,
         long canonicalByteCount,
-        double requestCharge,
+        double? requestCharge,
         ImmutableArray<ControlMeasurement> measurements,
         string evidenceReference,
+        string controlEvidenceReference,
         HttpStatusCode? statusCode = null,
         int? subStatusCode = null,
         TimeSpan? retryAfter = null)
@@ -123,10 +136,20 @@ public sealed record CosmosMaterializationSourceObservation
             throw new ArgumentOutOfRangeException(nameof(itemCount), itemCount, "An observed item count cannot be negative.");
         if (canonicalByteCount < 0)
             throw new ArgumentOutOfRangeException(nameof(canonicalByteCount), canonicalByteCount, "An observed byte count cannot be negative.");
-        if (!double.IsFinite(requestCharge) || requestCharge < 0)
+        if (requestCharge is { } charge && (!double.IsFinite(charge) || charge < 0))
             throw new ArgumentOutOfRangeException(nameof(requestCharge), requestCharge, "A Cosmos request charge must be finite and non-negative.");
         if (measurements.IsDefault || measurements.Any(static measurement => measurement is null))
             throw new ArgumentException("Control measurements must be a non-default collection without null entries.", nameof(measurements));
+        if (disposition is (
+                CosmosMaterializationSourceDisposition.Canceled
+                    or CosmosMaterializationSourceDisposition.TerminalFailure)
+            && measurements.Any(static measurement =>
+                measurement.Availability != ControlMeasurementAvailability.Unavailable))
+        {
+            throw new ArgumentException(
+                "A canceled or terminal Cosmos operation cannot carry Control-eligible measurements.",
+                nameof(measurements));
+        }
         if (retryAfter < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(retryAfter), retryAfter, "A provider retry delay cannot be negative.");
 
@@ -140,6 +163,7 @@ public sealed record CosmosMaterializationSourceObservation
         RequestCharge = requestCharge;
         Measurements = measurements;
         EvidenceReference = Guard.RequireNotNullOrWhiteSpace(evidenceReference);
+        ControlEvidenceReference = Guard.RequireNotNullOrWhiteSpace(controlEvidenceReference);
         StatusCode = statusCode;
         SubStatusCode = subStatusCode;
         RetryAfter = retryAfter;
@@ -166,14 +190,21 @@ public sealed record CosmosMaterializationSourceObservation
     /// <summary>Canonical semantic byte count.</summary>
     public long CanonicalByteCount { get; }
 
-    /// <summary>Cosmos request-unit charge aggregated across completed SDK responses.</summary>
-    public double RequestCharge { get; }
+    /// <summary>Cosmos request-unit charge aggregated across completed SDK responses, when available.</summary>
+    /// <remarks>
+    /// This provider-native value is retained for diagnostics. Portable Control consumers should use the
+    /// <see cref="ControlMetricKind.RequestUnitConsumption"/> measurement in <see cref="Measurements"/>.
+    /// </remarks>
+    public double? RequestCharge { get; }
 
     /// <summary>Portable typed pressure measurements ready for a runtime-owned Control observation envelope.</summary>
     public ImmutableArray<ControlMeasurement> Measurements { get; }
 
     /// <summary>Non-sensitive adapter evidence reference.</summary>
     public string EvidenceReference { get; }
+
+    /// <summary>Occurrence-safe identity to use when wrapping measurements in a Control observation.</summary>
+    public string ControlEvidenceReference { get; }
 
     /// <summary>Provider HTTP status when available.</summary>
     public HttpStatusCode? StatusCode { get; }
@@ -190,7 +221,11 @@ public interface ICosmosMaterializationSourceObserver
 {
     /// <summary>Observes one completed, failed, or canceled bounded source operation.</summary>
     /// <param name="observation">Typed operation evidence.</param>
-    /// <remarks>An observer SHOULD return promptly and MUST NOT throw.</remarks>
+    /// <remarks>
+    /// Calls for independently admitted scopes may be concurrent. An observer MUST be thread-safe, SHOULD return
+    /// promptly, and MUST NOT throw. The source suppresses non-fatal observer failures so advisory evidence cannot
+    /// alter cursor or materialization semantics.
+    /// </remarks>
     void Observe(CosmosMaterializationSourceObservation observation);
 }
 

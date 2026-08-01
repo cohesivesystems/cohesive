@@ -77,13 +77,13 @@ internal static class ControlRegulatorFixture
     internal static ControlOperatingPoint Point(long concurrency) =>
         ControlTestFixture.Point((ControlActuatorKind.Concurrency, concurrency));
 
-    internal static AimdControlState InitialState(
+    internal static ControlLoopState InitialState(
         ControlLoopDefinition definition,
         string epoch = "generation-1") =>
-        AimdControlState.Create(definition, new ControlEpochId(epoch), StartedAtUtc);
+        ControlLoopState.Create(definition, new ControlEpochId(epoch), StartedAtUtc);
 
     internal static ControlObservation Observation(
-        AimdControlState state,
+        ControlLoopState state,
         string id,
         long value = 5_000,
         DateTimeOffset? observedAtUtc = null,
@@ -125,7 +125,7 @@ internal static class ControlRegulatorFixture
     }
 
     internal static ControlApplicationPoint ApplicationPoint(
-        AimdControlState state,
+        ControlLoopState state,
         string id,
         long fence,
         DateTimeOffset observedAtUtc,

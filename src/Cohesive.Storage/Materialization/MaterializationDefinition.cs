@@ -317,6 +317,7 @@ public sealed record MaterializationDefinition
     /// <param name="freshnessPolicy">End-to-end freshness requirements.</param>
     /// <param name="controlLoops">Optional bounded Control definitions for source, transform, or target stages.</param>
     /// <param name="provenance">Required producer and source attribution.</param>
+    /// <param name="controlWorkloads">Explicit rebuild or realtime workload binding for every Control loop.</param>
     /// <exception cref="ArgumentNullException">A required reference is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">An identity or collection invariant is invalid.</exception>
     [JsonConstructor]
@@ -329,7 +330,8 @@ public sealed record MaterializationDefinition
         MaterializationFailurePolicy failurePolicy,
         MaterializationFreshnessPolicy freshnessPolicy,
         ImmutableArray<ControlLoopDefinition> controlLoops,
-        ExecutionProvenance provenance)
+        ExecutionProvenance provenance,
+        ImmutableArray<MaterializationIndexSyncControlWorkloadBinding> controlWorkloads = default)
     {
         if (string.IsNullOrWhiteSpace(id.Value))
         {
@@ -385,6 +387,13 @@ public sealed record MaterializationDefinition
             throw new ArgumentException("Materialization Control definitions cannot contain null entries.", nameof(controlLoops));
         }
 
+        if (loops.Any(static loop => loop.SchemaVersion != ControlLoopDefinition.CurrentSchemaVersion))
+        {
+            throw new ArgumentException(
+                "Every embedded Control loop must use the current portable Control schema version.",
+                nameof(controlLoops));
+        }
+
         if (loops.GroupBy(static loop => loop.Id).Any(static group => group.Count() > 1))
         {
             throw new ArgumentException("A materialization definition cannot repeat a Control loop identity.", nameof(controlLoops));
@@ -396,6 +405,45 @@ public sealed record MaterializationDefinition
         }
 
         ControlLoops = [.. loops.OrderBy(static loop => loop.Id.Value, StringComparer.Ordinal)];
+
+        var workloads = controlWorkloads.IsDefault ? [] : controlWorkloads;
+        if (workloads.Any(static binding => binding is null))
+        {
+            throw new ArgumentException(
+                "Materialization Control workload bindings cannot contain null entries.",
+                nameof(controlWorkloads));
+        }
+        if (workloads.GroupBy(static binding => binding.LoopId).Any(static group => group.Count() > 1))
+        {
+            throw new ArgumentException(
+                "A materialization definition cannot repeat a Control workload binding.",
+                nameof(controlWorkloads));
+        }
+        if (!ControlLoops.Select(static loop => loop.Id)
+                .SequenceEqual(workloads.Select(static binding => binding.LoopId)
+                    .OrderBy(static id => id.Value, StringComparer.Ordinal)))
+        {
+            throw new ArgumentException(
+                "Every materialization Control loop requires exactly one explicit rebuild or realtime workload binding.",
+                nameof(controlWorkloads));
+        }
+        var loopsById = ControlLoops.ToDictionary(static loop => loop.Id);
+        HashSet<(MaterializationIndexSyncWorkloadKind Workload, ControlStageKind Stage, ControlActuatorKind Actuator)>
+            ownedAxes = [];
+        foreach (var binding in workloads)
+        {
+            var loop = loopsById[binding.LoopId];
+            foreach (var value in loop.InitialOperatingPoint.Values)
+            {
+                if (!ownedAxes.Add((binding.Workload, loop.Stage, value.Actuator)))
+                {
+                    throw new ArgumentException(
+                        "One workload cannot bind multiple Control loops to the same stage and actuator.",
+                        nameof(controlWorkloads));
+                }
+            }
+        }
+        ControlWorkloads = [.. workloads.OrderBy(static binding => binding.LoopId.Value, StringComparer.Ordinal)];
     }
 
     /// <summary>Stable logical materialization identity.</summary>
@@ -421,6 +469,9 @@ public sealed record MaterializationDefinition
 
     /// <summary>Bounded Control definitions in canonical loop-identity order.</summary>
     public ImmutableArray<ControlLoopDefinition> ControlLoops { get; }
+
+    /// <summary>Explicit workload bindings in canonical loop-identity order.</summary>
+    public ImmutableArray<MaterializationIndexSyncControlWorkloadBinding> ControlWorkloads { get; }
 
     /// <summary>Required producer and source attribution.</summary>
     public ExecutionProvenance Provenance { get; }
@@ -468,7 +519,7 @@ public sealed record MaterializationDefinition
 public sealed record MaterializationDocument
 {
     /// <summary>Current portable materialization document schema version.</summary>
-    public const string CurrentSchemaVersion = "cohesive-materialization/v1";
+    public const string CurrentSchemaVersion = "cohesive-materialization/v2";
 
     /// <summary>Creates a materialization document.</summary>
     /// <param name="schemaVersion">Exact portable materialization schema version.</param>
@@ -483,6 +534,12 @@ public sealed record MaterializationDocument
         ExecutionDefinitionFingerprint definitionFingerprint)
     {
         SchemaVersion = Guard.RequireNotNullOrWhiteSpace(schemaVersion);
+        if (!string.Equals(schemaVersion, CurrentSchemaVersion, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"Materialization schema '{schemaVersion}' is unsupported; expected '{CurrentSchemaVersion}'.",
+                nameof(schemaVersion));
+        }
         Definition = Guard.RequireNotNull(definition);
         DefinitionFingerprint = Guard.RequireNotNull(definitionFingerprint);
     }

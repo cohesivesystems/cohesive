@@ -32,7 +32,7 @@ public static class AimdControlReferenceRegulator
     /// <exception cref="ArgumentException"><paramref name="evaluatedAtUtc"/> is not UTC.</exception>
     public static ControlDecision Evaluate(
         ControlLoopDefinition definition,
-        AimdControlState state,
+        ControlLoopState state,
         ControlObservation observation,
         DateTimeOffset evaluatedAtUtc)
     {
@@ -68,6 +68,16 @@ public static class AimdControlReferenceRegulator
                 state,
                 state.PendingRecommendation);
         }
+        if (state.PendingLimitUpdate is not null)
+        {
+            return Rejected(
+                state,
+                evaluatedAtUtc,
+                Diagnostic(
+                    ControlDiagnosticCodes.LimitUpdatePending,
+                    "Automatic observations cannot advance while an accepted operator override awaits its safe point.",
+                    "/state/pendingLimitUpdate"));
+        }
         if (state.Revision.Ordinal == long.MaxValue)
             return Rejected(state, evaluatedAtUtc, RevisionExhaustedDiagnostic(state));
 
@@ -97,8 +107,8 @@ public static class AimdControlReferenceRegulator
         ControlRecommendation? recommendation = null;
         var currentValue = state.OperatingPoint.Get(definition.Policy.Actuator);
         var range = definition.GetEffectiveRange(definition.Policy.Actuator);
-        var dwellSatisfied = state.LastActuation is null
-            || ElapsedMilliseconds(state.LastActuation.AppliedAtUtc, observation.WindowEndedAtUtc)
+        var dwellSatisfied = state.LastAppliedAtUtc is not { } lastAppliedAtUtc
+            || ElapsedMilliseconds(lastAppliedAtUtc, observation.WindowEndedAtUtc)
                 >= definition.Policy.MinimumDwellMilliseconds;
 
         switch (classification)
@@ -159,7 +169,7 @@ public static class AimdControlReferenceRegulator
         }
 
         var nextRevision = state.Revision.Next();
-        var nextState = new AimdControlState(
+        var nextState = new ControlLoopState(
             ControlLoopDefinition.CurrentSchemaVersion,
             state.LoopId,
             state.Target,
@@ -176,7 +186,10 @@ public static class AimdControlReferenceRegulator
             lastObservation: observation,
             pendingRecommendation: recommendation,
             lastActuation: state.LastActuation,
-            lastApplicationFence: state.LastApplicationFence);
+            lastApplicationFence: state.LastApplicationFence,
+            authorityScope: state.AuthorityScope,
+            limitUpdateActuations: state.LimitUpdateActuations,
+            pendingLimitUpdate: state.PendingLimitUpdate);
 
         return new(
             ControlLoopDefinition.CurrentSchemaVersion,
@@ -200,7 +213,7 @@ public static class AimdControlReferenceRegulator
     /// <exception cref="ArgumentException"><paramref name="appliedAtUtc"/> is not UTC.</exception>
     public static ControlActuationResult Apply(
         ControlLoopDefinition definition,
-        AimdControlState state,
+        ControlLoopState state,
         ControlApplicationPoint applicationPoint,
         DateTimeOffset appliedAtUtc)
     {
@@ -233,6 +246,15 @@ public static class AimdControlReferenceRegulator
                 ControlActuationDisposition.Replayed,
                 state,
                 lastActuation);
+        }
+        if (state.PendingLimitUpdate is not null)
+        {
+            return RejectedActuation(
+                state,
+                Diagnostic(
+                    ControlDiagnosticCodes.LimitUpdatePending,
+                    "Adaptive advice cannot be actuated while an accepted operator override awaits its safe point.",
+                    "/state/pendingLimitUpdate"));
         }
         if (state.Revision.Ordinal == long.MaxValue)
             return RejectedActuation(state, RevisionExhaustedDiagnostic(state));
@@ -321,7 +343,7 @@ public static class AimdControlReferenceRegulator
         DateTimeOffset? cooldown = recommendation.Direction == ControlRecommendationDirection.Decrease
             ? AddMillisecondsSaturating(appliedAtUtc, definition.Policy.RecoveryCooldownMilliseconds)
             : null;
-        var nextState = new AimdControlState(
+        var nextState = new ControlLoopState(
             ControlLoopDefinition.CurrentSchemaVersion,
             state.LoopId,
             state.Target,
@@ -338,7 +360,10 @@ public static class AimdControlReferenceRegulator
             lastObservation: state.LastObservation,
             pendingRecommendation: null,
             lastActuation: actuation,
-            lastApplicationFence: applicationPoint.Fence);
+            lastApplicationFence: applicationPoint.Fence,
+            authorityScope: state.AuthorityScope,
+            limitUpdateActuations: state.LimitUpdateActuations,
+            pendingLimitUpdate: state.PendingLimitUpdate);
 
         return new(
             ControlLoopDefinition.CurrentSchemaVersion,
@@ -354,7 +379,7 @@ public static class AimdControlReferenceRegulator
     /// <exception cref="ArgumentNullException"><paramref name="definition"/> or <paramref name="state"/> is <see langword="null"/>.</exception>
     public static DocumentValidationResult ValidateState(
         ControlLoopDefinition definition,
-        AimdControlState state)
+        ControlLoopState state)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(state);
@@ -377,37 +402,36 @@ public static class AimdControlReferenceRegulator
 
         var statePointValidation = definition.ValidateOperatingPoint(state.OperatingPoint);
         diagnostics.AddRange(statePointValidation.Diagnostics);
+        AppendLimitUpdateDiagnostics(definition, state, diagnostics);
 
-        var expectedOperatingPoint = state.LastActuation?.Recommendation.ProposedOperatingPoint
-            ?? definition.InitialOperatingPoint;
+        var expectedOperatingPoint = state.LastAppliedOperatingPoint ?? definition.InitialOperatingPoint;
         if (state.OperatingPoint != expectedOperatingPoint)
         {
             diagnostics.Add(CreateDiagnostic(
                 ControlDiagnosticCodes.StateInvalid,
-                "The effective operating point must be the definition's initial point or the retained actuation's exact proposed point.",
+                "The effective operating point must be the definition's initial point or the latest adaptive/operator actuation's exact point.",
                 "/state/operatingPoint"));
         }
 
         var observation = state.LastObservation;
         if (observation is null)
         {
-            if (state.Revision != ControlRevision.Initial
-                || state.HealthyObservationCount != 0
-                || state.UpdatedAtUtc != state.CreatedAtUtc
+            if (state.HealthyObservationCount != 0
                 || state.LastEvaluatedAtUtc is not null
                 || state.LastClassification is not null
                 || state.CooldownUntilUtc is not null
                 || state.PendingRecommendation is not null
-                || state.LastActuation is not null
-                || state.LastApplicationFence is not null)
+                || state.LastActuation is not null)
             {
                 diagnostics.Add(CreateDiagnostic(
                     ControlDiagnosticCodes.StateInvalid,
-                    "A state without accepted observation evidence must be the exact initial revision-one state.",
+                    "A state without adaptive observation evidence cannot retain adaptive transition evidence.",
                     "/state",
-                    expected: "initial revision with no transition evidence",
+                    expected: "no adaptive transition evidence",
                     observed: $"revision {state.Revision.Value}"));
             }
+
+            ValidateLatestTransition(state, diagnostics);
 
             return DocumentValidationResult.FromDiagnostics(diagnostics);
         }
@@ -462,48 +486,70 @@ public static class AimdControlReferenceRegulator
         var retainedActuation = state.LastActuation;
         var latestActuation = retainedActuation is not null
             && retainedActuation.Revision == state.Revision;
-        var revisionDistance = latestActuation ? 2L : 1L;
-        if (state.Revision.Ordinal <= revisionDistance
-            || observation.ExpectedRevision.Ordinal != state.Revision.Ordinal - revisionDistance)
+        var observationEvaluationRevision = observation.ExpectedRevision.Ordinal == long.MaxValue
+            ? long.MaxValue
+            : observation.ExpectedRevision.Ordinal + 1;
+        var latestOperatorTransitionRevision = state.PendingLimitUpdate?.AcceptedRevision
+            ?? state.LastLimitUpdateActuation?.Revision;
+        var operatorTransitionAfterObservation = latestOperatorTransitionRevision is { } operatorRevision
+            && operatorRevision.Ordinal > observationEvaluationRevision;
+        if (operatorTransitionAfterObservation)
         {
-            diagnostics.Add(CreateDiagnostic(
-                ControlDiagnosticCodes.StateInvalid,
-                "Retained transition evidence does not account for the durable state revision.",
-                "/state/revision",
-                expected: latestActuation
-                    ? $"observation revision {state.Revision.Ordinal - 2} before evaluation and actuation"
-                    : $"observation revision {state.Revision.Ordinal - 1} before evaluation",
-                observed: observation.ExpectedRevision.Value));
-        }
-
-        if (latestActuation)
-        {
-            if (state.PendingRecommendation is not null
-                || retainedActuation!.Observation != observation
-                || state.UpdatedAtUtc != retainedActuation.AppliedAtUtc
-                || state.LastEvaluatedAtUtc != retainedActuation.Recommendation.IssuedAtUtc)
+            if (state.PendingRecommendation is not null || state.HealthyObservationCount != 0)
             {
                 diagnostics.Add(CreateDiagnostic(
                     ControlDiagnosticCodes.StateInvalid,
-                    "A latest actuation must retain its generating observation and exact evaluation/application chronology.",
-                    "/state/lastActuation"));
+                    "A later operator transition must supersede adaptive advice and reset its recovery streak.",
+                    "/state/pendingRecommendation"));
             }
+            ValidateLatestTransition(state, diagnostics);
         }
-        else if (state.UpdatedAtUtc != state.LastEvaluatedAtUtc
-            || state.LastActuation is { } earlierActuation
-                && (earlierActuation.Revision.Ordinal >= state.Revision.Ordinal
-                    || earlierActuation.AppliedAtUtc > state.LastEvaluatedAtUtc))
+        else
         {
-            diagnostics.Add(CreateDiagnostic(
-                ControlDiagnosticCodes.StateInvalid,
-                "A state whose latest transition was evaluation must be updated at that evaluation after any retained actuation.",
-                "/state/updatedAtUtc"));
+            var revisionDistance = latestActuation ? 2L : 1L;
+            if (state.Revision.Ordinal <= revisionDistance
+                || observation.ExpectedRevision.Ordinal != state.Revision.Ordinal - revisionDistance)
+            {
+                diagnostics.Add(CreateDiagnostic(
+                    ControlDiagnosticCodes.StateInvalid,
+                    "Retained transition evidence does not account for the durable state revision.",
+                    "/state/revision",
+                    expected: latestActuation
+                        ? $"observation revision {state.Revision.Ordinal - 2} before evaluation and actuation"
+                        : $"observation revision {state.Revision.Ordinal - 1} before evaluation",
+                    observed: observation.ExpectedRevision.Value));
+            }
+
+            if (latestActuation)
+            {
+                if (state.PendingRecommendation is not null
+                    || retainedActuation!.Observation != observation
+                    || state.UpdatedAtUtc != retainedActuation.AppliedAtUtc
+                    || state.LastEvaluatedAtUtc != retainedActuation.Recommendation.IssuedAtUtc)
+                {
+                    diagnostics.Add(CreateDiagnostic(
+                        ControlDiagnosticCodes.StateInvalid,
+                        "A latest actuation must retain its generating observation and exact evaluation/application chronology.",
+                        "/state/lastActuation"));
+                }
+            }
+            else if (state.UpdatedAtUtc != state.LastEvaluatedAtUtc
+                || state.LastActuation is { } earlierActuation
+                    && (earlierActuation.Revision.Ordinal >= state.Revision.Ordinal
+                        || earlierActuation.AppliedAtUtc > state.LastEvaluatedAtUtc))
+            {
+                diagnostics.Add(CreateDiagnostic(
+                    ControlDiagnosticCodes.StateInvalid,
+                    "A state whose latest transition was evaluation must be updated at that evaluation after any retained actuation.",
+                    "/state/updatedAtUtc"));
+            }
         }
 
         if (state.LastActuation is { } actuation)
         {
             AppendActuationDiagnostics(definition, actuation, diagnostics, "/state/lastActuation");
-            DateTimeOffset? expectedCooldown = actuation.Recommendation.Direction == ControlRecommendationDirection.Decrease
+            DateTimeOffset? expectedCooldown = state.LastAppliedActuationRevision == actuation.Revision
+                && actuation.Recommendation.Direction == ControlRecommendationDirection.Decrease
                 ? AddMillisecondsSaturating(actuation.AppliedAtUtc, definition.Policy.RecoveryCooldownMilliseconds)
                 : null;
             if (state.CooldownUntilUtc != expectedCooldown)
@@ -524,14 +570,13 @@ public static class AimdControlReferenceRegulator
                 "/state/cooldownUntilUtc"));
         }
 
-        var maximumReachableHealthyObservationCount = retainedActuation is null
-            ? state.Revision.Ordinal - ControlRevision.Initial.Ordinal
-            : state.Revision.Ordinal - retainedActuation.Revision.Ordinal;
+        var healthyCountBaseline = state.LastAppliedActuationRevision ?? ControlRevision.Initial;
+        var maximumReachableHealthyObservationCount = state.Revision.Ordinal - healthyCountBaseline.Ordinal;
         var healthyInsideCooldown = classification == ControlPressureClassification.Healthy
             && state.CooldownUntilUtc is { } cooldown
             && observation.WindowEndedAtUtc < cooldown;
         if (state.HealthyObservationCount > maximumReachableHealthyObservationCount
-            || latestActuation && state.HealthyObservationCount != 0
+            || (latestActuation || operatorTransitionAfterObservation) && state.HealthyObservationCount != 0
             || healthyInsideCooldown && state.HealthyObservationCount != 0
             || classification is not null and not ControlPressureClassification.Healthy
                 && state.HealthyObservationCount != 0)
@@ -552,8 +597,9 @@ public static class AimdControlReferenceRegulator
                 && pending.PriorOperatingPoint == state.OperatingPoint
                 && pending.ExpectedRevision == state.Revision
                 && pending.ObservationId == observation.Id
-                && pending.PriorActuationId == state.LastActuation?.Id
-                && pending.PriorActuationRevision == state.LastActuation?.Revision;
+                && pending.PriorActuationId == state.LastAppliedActuationId
+                && pending.PriorActuationRevision == state.LastAppliedActuationRevision
+                && state.PendingLimitUpdate is null;
             if (!pendingFenceValid)
             {
                 diagnostics.Add(CreateDiagnostic(
@@ -570,6 +616,7 @@ public static class AimdControlReferenceRegulator
                 ValidatePendingRecommendation(definition, state, pending, diagnostics);
         }
         else if (!latestActuation
+            && !operatorTransitionAfterObservation
             && classification == ControlPressureClassification.Healthy
             && (state.CooldownUntilUtc is null || observation.WindowEndedAtUtc >= state.CooldownUntilUtc))
         {
@@ -584,8 +631,8 @@ public static class AimdControlReferenceRegulator
             {
                 var range = definition.GetEffectiveRange(definition.Policy.Actuator);
                 var current = state.OperatingPoint.Get(definition.Policy.Actuator).Quantity.Value;
-                var dwellSatisfied = state.LastActuation is null
-                    || ElapsedMilliseconds(state.LastActuation.AppliedAtUtc, observation.WindowEndedAtUtc)
+                var dwellSatisfied = state.LastAppliedAtUtc is not { } lastAppliedAtUtc
+                    || ElapsedMilliseconds(lastAppliedAtUtc, observation.WindowEndedAtUtc)
                         >= definition.Policy.MinimumDwellMilliseconds;
                 if (state.HealthyObservationCount >= definition.Policy.HealthyObservationCount
                     && dwellSatisfied
@@ -649,9 +696,114 @@ public static class AimdControlReferenceRegulator
         return DocumentValidationResult.FromDiagnostics(diagnostics);
     }
 
+    static void AppendLimitUpdateDiagnostics(
+        ControlLoopDefinition definition,
+        ControlLoopState state,
+        ICollection<DocumentValidationDiagnostic> diagnostics)
+    {
+        for (var index = 0; index < state.LimitUpdateActuations.Length; index++)
+        {
+            var actuation = state.LimitUpdateActuations[index];
+            var command = actuation.Receipt.Command;
+            var priorValidation = definition.ValidateOperatingPoint(actuation.PriorOperatingPoint);
+            var requestedValidation = definition.ValidateOperatingPoint(command.RequestedOperatingPoint);
+            foreach (var diagnostic in priorValidation.Diagnostics)
+                diagnostics.Add(diagnostic);
+            foreach (var diagnostic in requestedValidation.Diagnostics)
+                diagnostics.Add(diagnostic);
+
+            var transitionValid = ControlLimitUpdateReferenceReducer.TryGetApplicationKind(
+                actuation.PriorOperatingPoint,
+                command.RequestedOperatingPoint,
+                out var expectedKind,
+                out _);
+            if (!transitionValid
+                || actuation.Id != ControlDerivedIdentity.LimitUpdateActuation(
+                    actuation.Receipt,
+                    actuation.ApplicationPoint)
+                || !string.Equals(
+                    actuation.ApplicationPoint.Authority,
+                    definition.ApplicationAuthority,
+                    StringComparison.Ordinal)
+                || transitionValid && actuation.ApplicationPoint.Kind != expectedKind)
+            {
+                diagnostics.Add(CreateDiagnostic(
+                    ControlDiagnosticCodes.ActuationInvalid,
+                    "Retained operator actuation is not the exact bounded transition authorized at its safe point.",
+                    $"/state/limitUpdateActuations/{index}"));
+            }
+        }
+
+        if (state.PendingLimitUpdate is { } pending)
+        {
+            var requestedValidation = definition.ValidateOperatingPoint(pending.Command.RequestedOperatingPoint);
+            foreach (var diagnostic in requestedValidation.Diagnostics)
+                diagnostics.Add(diagnostic);
+            if (!ControlLimitUpdateReferenceReducer.TryGetApplicationKind(
+                state.OperatingPoint,
+                pending.Command.RequestedOperatingPoint,
+                out _,
+                out _))
+            {
+                diagnostics.Add(CreateDiagnostic(
+                    ControlDiagnosticCodes.LimitUpdateInvalid,
+                    "Pending operator override must be a non-empty bounded transition from the current point.",
+                    "/state/pendingLimitUpdate/command/requestedOperatingPoint"));
+            }
+        }
+    }
+
+    static void ValidateLatestTransition(
+        ControlLoopState state,
+        ICollection<DocumentValidationDiagnostic> diagnostics)
+    {
+        var expectedRevision = ControlRevision.Initial;
+        var expectedUpdatedAtUtc = state.CreatedAtUtc;
+
+        void Consider(ControlRevision revision, DateTimeOffset atUtc)
+        {
+            if (revision.Ordinal > expectedRevision.Ordinal)
+            {
+                expectedRevision = revision;
+                expectedUpdatedAtUtc = atUtc;
+            }
+        }
+
+        if (state.LastObservation is { } observation
+            && observation.ExpectedRevision.Ordinal < long.MaxValue
+            && state.LastEvaluatedAtUtc is { } evaluatedAtUtc)
+        {
+            Consider(observation.ExpectedRevision.Next(), evaluatedAtUtc);
+        }
+        if (state.LastActuation is { } adaptive)
+            Consider(adaptive.Revision, adaptive.AppliedAtUtc);
+        if (state.LastLimitUpdateActuation is { } manual)
+            Consider(manual.Revision, manual.AppliedAtUtc);
+        if (state.PendingLimitUpdate is { } pending)
+            Consider(pending.AcceptedRevision, pending.AcceptedAtUtc);
+
+        if (state.Revision != expectedRevision || state.UpdatedAtUtc != expectedUpdatedAtUtc)
+        {
+            diagnostics.Add(CreateDiagnostic(
+                ControlDiagnosticCodes.StateInvalid,
+                "The shared revision and update time must identify the latest retained adaptive or operator transition.",
+                "/state/revision",
+                expected: $"{expectedRevision.Value}/{expectedUpdatedAtUtc:O}",
+                observed: $"{state.Revision.Value}/{state.UpdatedAtUtc:O}"));
+        }
+
+        if (state.PendingLimitUpdate is not null && state.PendingRecommendation is not null)
+        {
+            diagnostics.Add(CreateDiagnostic(
+                ControlDiagnosticCodes.StateInvalid,
+                "Adaptive advice and an accepted operator override cannot be pending together.",
+                "/state/pendingRecommendation"));
+        }
+    }
+
     static ImmutableArray<DocumentValidationDiagnostic> ValidateObservation(
         ControlLoopDefinition definition,
-        AimdControlState state,
+        ControlLoopState state,
         ControlObservation observation,
         DateTimeOffset evaluatedAtUtc)
     {
@@ -699,7 +851,7 @@ public static class AimdControlReferenceRegulator
 
     static void ValidatePendingRecommendation(
         ControlLoopDefinition definition,
-        AimdControlState state,
+        ControlLoopState state,
         ControlRecommendation recommendation,
         ICollection<DocumentValidationDiagnostic> diagnostics)
     {
@@ -714,8 +866,8 @@ public static class AimdControlReferenceRegulator
         if (diagnostics.Count != diagnosticCount)
             return;
 
-        var dwellSatisfied = state.LastActuation is null
-            || ElapsedMilliseconds(state.LastActuation.AppliedAtUtc, observation.WindowEndedAtUtc)
+        var dwellSatisfied = state.LastAppliedAtUtc is not { } lastAppliedAtUtc
+            || ElapsedMilliseconds(lastAppliedAtUtc, observation.WindowEndedAtUtc)
                 >= definition.Policy.MinimumDwellMilliseconds;
         var cooldownSatisfied = recommendation.Direction != ControlRecommendationDirection.Increase
             || state.CooldownUntilUtc is null
@@ -1002,7 +1154,7 @@ public static class AimdControlReferenceRegulator
 
     static ControlRecommendation CreateRecommendation(
         ControlLoopDefinition definition,
-        AimdControlState state,
+        ControlLoopState state,
         ControlObservation observation,
         ControlRevision expectedRevision,
         ControlRecommendationDirection direction,
@@ -1013,8 +1165,8 @@ public static class AimdControlReferenceRegulator
         var unit = ControlUnitCatalog.ForActuator(definition.Policy.Actuator);
         var proposed = state.OperatingPoint.With(
             new(definition.Policy.Actuator, new(proposedValue, unit)));
-        var priorActuationId = state.LastActuation?.Id;
-        var priorActuationRevision = state.LastActuation?.Revision;
+        var priorActuationId = state.LastAppliedActuationId;
+        var priorActuationRevision = state.LastAppliedActuationRevision;
         return new(
             ControlDerivedIdentity.Recommendation(
                 state.LoopId,
@@ -1098,7 +1250,7 @@ public static class AimdControlReferenceRegulator
         && first.ExpectedRevision == second.ExpectedRevision;
 
     static ControlDecision Rejected(
-        AimdControlState state,
+        ControlLoopState state,
         DateTimeOffset evaluatedAtUtc,
         ImmutableArray<DocumentValidationDiagnostic> diagnostics) =>
         new(
@@ -1109,7 +1261,7 @@ public static class AimdControlReferenceRegulator
             diagnostics: diagnostics);
 
     static ControlActuationResult RejectedActuation(
-        AimdControlState state,
+        ControlLoopState state,
         ImmutableArray<DocumentValidationDiagnostic> diagnostics) =>
         new(
             ControlLoopDefinition.CurrentSchemaVersion,
@@ -1132,7 +1284,7 @@ public static class AimdControlReferenceRegulator
         DiagnosticSeverity severity) =>
         [CreateDiagnostic(code, message, location, severity: severity)];
 
-    static ImmutableArray<DocumentValidationDiagnostic> RevisionExhaustedDiagnostic(AimdControlState state) =>
+    static ImmutableArray<DocumentValidationDiagnostic> RevisionExhaustedDiagnostic(ControlLoopState state) =>
         Diagnostic(
             ControlDiagnosticCodes.RevisionExhausted,
             "The control revision space is exhausted; begin a new control epoch before accepting more evidence.",

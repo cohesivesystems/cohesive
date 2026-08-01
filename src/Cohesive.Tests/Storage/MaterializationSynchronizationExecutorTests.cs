@@ -942,7 +942,7 @@ public sealed partial class MaterializationRebuildExecutorTests
                         interpreter: interpreter)
                     : retained;
             }));
-        return new(resolved, workStore);
+        return new(resolved, workStore, MaterializationIndexSyncWorkloadKind.Rebuild);
     }
 
     static InMemoryMaterializationSource Source(

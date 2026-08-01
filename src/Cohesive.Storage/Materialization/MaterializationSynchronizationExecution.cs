@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Cohesive.Control;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
 
@@ -330,13 +331,11 @@ static class MaterializationSynchronizationIdentities
 
     internal static MaterializationBatchId Batch(
         MaterializationPreparedSynchronizationWork work,
-        int chunk,
-        int retry) =>
+        string contentIdentity) =>
         new($"{Prefix}/batch/{MaterializationStableIdentity.Digest(
             work.PreparationId.Value,
             work.Version?.Value ?? "effect-free",
-            chunk.ToString(CultureInfo.InvariantCulture),
-            retry.ToString(CultureInfo.InvariantCulture))}");
+            contentIdentity)}");
 }
 
 /// <summary>
@@ -355,17 +354,23 @@ public sealed class MaterializationSynchronizationExecutor
 
     readonly ResolvedMaterializationRebuildPlan resolved;
     readonly IMaterializationSynchronizationWorkStore workStore;
+    readonly MaterializationIndexSyncWorkloadKind workload;
 
     /// <summary>Creates a synchronization executor over exact runtime bindings and one durable work authority.</summary>
     /// <param name="resolved">Exact persisted plan resolved to source, Relations, progress, and target ports.</param>
     /// <param name="workStore">Generation-wide durable target-work and item-version authority.</param>
+    /// <param name="workload">Explicit rebuild catch-up or realtime maintenance workload.</param>
     /// <exception cref="ArgumentNullException">An argument is <see langword="null"/>.</exception>
     public MaterializationSynchronizationExecutor(
         ResolvedMaterializationRebuildPlan resolved,
-        IMaterializationSynchronizationWorkStore workStore)
+        IMaterializationSynchronizationWorkStore workStore,
+        MaterializationIndexSyncWorkloadKind workload)
     {
         this.resolved = resolved ?? throw new ArgumentNullException(nameof(resolved));
         this.workStore = workStore ?? throw new ArgumentNullException(nameof(workStore));
+        if (!Enum.IsDefined(workload))
+            throw new ArgumentOutOfRangeException(nameof(workload), workload, "Unsupported index-sync workload.");
+        this.workload = workload;
     }
 
     /// <summary>Exact persisted synchronization plan interpreted by this executor.</summary>
@@ -498,6 +503,7 @@ public sealed class MaterializationSynchronizationExecutor
         var feed = plan.ChangeFeeds.Single(candidate => candidate.Id == feedId);
         var binding = resolved.GetChangeFeed(feedId);
         var generation = MaterializationRebuildIdentities.Generation(plan, attempt);
+        var control = resolved.GetControlRuntime(generation);
         var generationSnapshot = await resolved.Target.InspectGenerationAsync(context, generation).ConfigureAwait(false);
         if (generationSnapshot is null
             || generationSnapshot.MaterializationId != plan.Materialization.Definition.Id
@@ -593,19 +599,58 @@ public sealed class MaterializationSynchronizationExecutor
         while (pagesRead < plan.Limits.MaximumPagesPerShard)
         {
             context.ThrowIfCancellationRequested();
+            var readReference = $"{feed.Id.Value}/read/{afterPosition.FormatVersion.ToString(CultureInfo.InvariantCulture)}/{afterPosition.Value}";
+            var maximumPageItems = plan.Limits.MaximumPageItems;
+            var maximumPageBytes = plan.Limits.MaximumPageBytes;
+            if (control is not null)
+            {
+                var sourcePoint = await control.AtSafePointAsync(
+                        context,
+                        workload,
+                        ControlStageKind.Source,
+                        ControlApplicationPointKind.BatchBoundary,
+                        $"{readReference}/source-batch")
+                    .ConfigureAwait(false);
+                var transformPoint = await control.AtSafePointAsync(
+                        context,
+                        workload,
+                        ControlStageKind.Transform,
+                        ControlApplicationPointKind.BatchBoundary,
+                        $"{readReference}/transform-batch")
+                    .ConfigureAwait(false);
+                maximumPageItems = Math.Min(
+                    maximumPageItems,
+                    Math.Min(sourcePoint.MaximumBatchItems, transformPoint.MaximumBatchItems));
+                maximumPageBytes = Math.Min(
+                    maximumPageBytes,
+                    Math.Min(sourcePoint.MaximumBatchBytes, transformPoint.MaximumBatchBytes));
+            }
             var readStartedAtUtc = context.UtcNow;
             MaterializationChangePage page;
             try
             {
+                await using var sourceAdmission = control is null
+                    ? null
+                    : await control.AcquireStageAsync(
+                        context,
+                        workload,
+                        ControlStageKind.Source,
+                        binding.Source.Descriptor.Source.Value,
+                        $"{readReference}/source-admission").ConfigureAwait(false);
                 page = await binding.Source.ReadChangesAsync(
                         context,
                         new MaterializationChangeReadRequest(
                             scope: feed.Scope,
                             afterPosition,
-                            maximumDeliveries: plan.Limits.MaximumPageItems,
-                            maximumBytes: plan.Limits.MaximumPageBytes))
+                            maximumDeliveries: maximumPageItems,
+                            maximumBytes: maximumPageBytes))
                     .ConfigureAwait(false);
-                ValidateOrdinaryPageBounds(feed, binding.Source, page, plan.Limits);
+                ValidateOrdinaryPageBounds(
+                    feed,
+                    binding.Source,
+                    page,
+                    maximumPageItems,
+                    maximumPageBytes);
                 if (page.ThroughPosition.Scope != feed.Scope)
                 {
                     throw new InvalidOperationException(
@@ -665,6 +710,14 @@ public sealed class MaterializationSynchronizationExecutor
             ImmutableArray<MaterializationSynchronizationItemIntent> itemIntents;
             try
             {
+                await using var transformAdmission = control is null
+                    ? null
+                    : await control.AcquireStageAsync(
+                        context,
+                        workload,
+                        ControlStageKind.Transform,
+                        $"{plan.Materialization.Definition.Id.Value}/transform",
+                        $"{preparationId.Value}/transform-admission").ConfigureAwait(false);
                 var projections = await binding.Interpreter.InterpretAsync(context, feed, generation, page)
                     .ConfigureAwait(false);
                 itemIntents = ProjectItemIntents(projections);
@@ -1032,16 +1085,31 @@ public sealed class MaterializationSynchronizationExecutor
         MaterializationGenerationId generation,
         MaterializationProgressFence workFence)
     {
+        var control = resolved.GetControlRuntime(generation);
         var result = await MaterializationTargetBatchWriter.ApplyAsync(
                 context,
                 resolved.Target,
                 generation,
                 new MaterializationWorkerFence(workFence.Value),
                 work.Mutations,
-                resolved.Plan.Limits.MaximumBulkItems,
-                resolved.Plan.Limits.MaximumBulkBytes,
+                control is null
+                    ? _ => ValueTask.FromResult(new MaterializationTargetBatchOperatingLimits(
+                        resolved.Plan.Limits.MaximumBulkItems,
+                        resolved.Plan.Limits.MaximumBulkBytes))
+                    : operation => control.ResolveTargetBatchLimitsAsync(
+                        operation,
+                        workload,
+                        $"{work.PreparationId.Value}/target-batch"),
                 resolved.Plan.Materialization.Definition.FailurePolicy.MaximumAttempts,
-                (chunk, retry) => MaterializationSynchronizationIdentities.Batch(work, chunk, retry))
+                contentIdentity => MaterializationSynchronizationIdentities.Batch(work, contentIdentity),
+                acquireAdmission: control is null
+                    ? null
+                    : async operation => await control.AcquireStageAsync(
+                        operation,
+                        workload,
+                        ControlStageKind.Target,
+                        resolved.Target.Descriptor.Id.Value,
+                        $"{work.PreparationId.Value}/target-admission").ConfigureAwait(false))
             .ConfigureAwait(false);
         return result.Disposition == MaterializationTargetWriteDisposition.Applied ? null : result;
     }
@@ -1249,7 +1317,8 @@ public sealed class MaterializationSynchronizationExecutor
         MaterializationChangeFeedPlan feed,
         IMaterializationPullChangeSource source,
         MaterializationChangePage page,
-        MaterializationRebuildLimits limits)
+        int appliedMaximumItems,
+        long appliedMaximumBytes)
     {
         var requirements = resolved.Plan.Materialization.Definition.Sources
             .Single(candidate => candidate.Input == feed.Scope.Input)
@@ -1263,8 +1332,8 @@ public sealed class MaterializationSynchronizationExecutor
             .Evidence!;
         var transactionAligned = changeEvidence.Guarantees.Contains(
             MaterializationGuaranteeKind.TransactionAlignedDelivery);
-        var maximumItems = (long)limits.MaximumPageItems;
-        var maximumBytes = limits.MaximumPageBytes;
+        var maximumItems = (long)appliedMaximumItems;
+        var maximumBytes = appliedMaximumBytes;
         if (transactionAligned)
         {
             maximumItems = checked(maximumItems + changeEvidence.OperatingLimits

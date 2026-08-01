@@ -23,7 +23,10 @@ public enum ControlUnit
     ItemsPerSecond = 4,
 
     /// <summary>Byte count per second.</summary>
-    BytesPerSecond = 5
+    BytesPerSecond = 5,
+
+    /// <summary>One thousandth of a provider request unit.</summary>
+    MilliRequestUnits = 6
 }
 
 /// <summary>Closed family of independently bounded operational actuators.</summary>
@@ -127,7 +130,19 @@ public enum ControlMetricKind
     LagDuration = 7,
 
     /// <summary>Buffer utilization as basis points in the inclusive range 0 through 10,000.</summary>
-    BackpressureUtilization = 8
+    BackpressureUtilization = 8,
+
+    /// <summary>Provider request-unit consumption expressed in exact fixed-point milli request units.</summary>
+    RequestUnitConsumption = 9,
+
+    /// <summary>Exact number of work items awaiting admission or processing at the observed boundary.</summary>
+    QueueDepth = 10,
+
+    /// <summary>Exact number of items represented by one completed or rejected batch operation.</summary>
+    BatchItems = 11,
+
+    /// <summary>Exact canonical bytes represented by one completed or rejected batch operation.</summary>
+    BatchBytes = 12
 }
 
 /// <summary>Statistic represented by one measurement value.</summary>
@@ -199,7 +214,11 @@ public static class ControlUnitCatalog
         ControlMetricKind.Latency or ControlMetricKind.LagDuration => ControlUnit.Milliseconds,
         ControlMetricKind.ItemThroughput => ControlUnit.ItemsPerSecond,
         ControlMetricKind.ByteThroughput => ControlUnit.BytesPerSecond,
-        ControlMetricKind.LagItems => ControlUnit.Count,
+        ControlMetricKind.LagItems
+            or ControlMetricKind.QueueDepth
+            or ControlMetricKind.BatchItems => ControlUnit.Count,
+        ControlMetricKind.BatchBytes => ControlUnit.Bytes,
+        ControlMetricKind.RequestUnitConsumption => ControlUnit.MilliRequestUnits,
         _ => throw new ArgumentOutOfRangeException(nameof(metric), metric, "Unsupported control metric.")
     };
 }

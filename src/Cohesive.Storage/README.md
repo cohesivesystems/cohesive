@@ -146,7 +146,7 @@ one source per graph-qualified shape and rejects duplicate shape or source ident
 
 `Cohesive.Storage.Materialization` defines one backend-neutral contract for rebuild and incremental synchronization.
 A `MaterializationDocument` persists the exact `RelationQueryCompilationRequest`, its compiled-plan fingerprint, and
-the selected output under the `cohesive-materialization/v1` schema. Loading recompiles that request and fails closed
+the selected output under the `cohesive-materialization/v2` schema. Loading recompiles that request and fails closed
 if the plan, output, or acquisition-source contract has drifted. The compiled Relations requirement graph,
 dependency manifest, and lineage remain the sole dependency authorities; Storage does not copy their edges.
 Definition validation covers both source-set and relationship-traversal acquisitions, deriving bounded enumeration,
@@ -196,6 +196,16 @@ item/byte/concurrency limits and semantic guarantees such as stable complete enu
 explicit settlement, fenced idempotent versioned writes, generation isolation, exact per-item outcomes, and atomic fenced
 promotion. `MaterializationCapabilityMatcher` resolves those requirements against attributable adapter evidence and
 returns structured diagnostics instead of weakening a guarantee.
+
+The persisted `cohesive-materialization-rebuild-plan/v4` realization also contains the deterministic result of
+compiling explicitly workload-bound Control loops against those plan and adapter limits. A generation-scoped
+`MaterializationIndexSyncControlRuntime` owns one durable CAS state per exact materialization, effective Control
+definition, plan, physical target, generation, workload, and loop. Source, transform, and target operating points
+become effective only at their declared batch or work-admission safe points. Pause and continue retain the same
+generation and Control epoch; Process restart uses a new generation and therefore a fresh epoch. Shared admission is
+non-preemptive and realtime-first, and rebuild work cannot consume explicitly reserved realtime capacity even while
+that capacity is idle. Target batching rereads applied bounds at every batch boundary, deterministically rechunks
+pending mutations, and retries only the retryable rejected subset; already applied items are never resubmitted.
 
 Change-delivery evidence may omit item or byte maxima when a provider exposes only advisory callback hints. Such
 evidence can satisfy an unbounded managed-execution requirement but cannot satisfy a definition that requires hard
@@ -314,7 +324,8 @@ retains the continuation boundary but cannot retain an MVCC snapshot.
 The `Cohesive.Control` namespace is incubated in this package. It defines portable regulation semantics without
 embedding channels, semaphores, timers, CPU samplers, retry libraries, or target SDKs. A control loop combines:
 
-- typed fixed-point observations for CPU, memory, latency, throughput, rejection, lag, and backpressure;
+- typed fixed-point observations for CPU, memory, latency, throughput, rejection, lag, backpressure, request-unit
+  consumption, queue depth, and batch shape;
 - explicit objective polarity, so high-pressure and low-pressure metrics cannot be silently inverted;
 - attributable semantic, compiler, adapter, and deployment hard limits whose intersection cannot be overridden;
 - item/byte batching, concurrency, item/byte rates, finite buffers, and reserved workload capacity;
@@ -327,7 +338,7 @@ embedding channels, semaphores, timers, CPU samplers, retry libraries, or target
 The regulator receives an explicit UTC evaluation time and returns complete durable state:
 
 ```csharp
-var state = AimdControlState.Create(definition, new ControlEpochId("index-generation-42"), now);
+var state = ControlLoopState.Create(definition, new ControlEpochId("index-generation-42"), now);
 var decision = AimdControlReferenceRegulator.Evaluate(definition, state, observation, now);
 
 // The recommendation is still non-authoritative here. A Process or materialization runtime maps
