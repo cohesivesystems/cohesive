@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Physical;
 using Cohesive.Storage.Materialization;
@@ -339,6 +340,105 @@ public sealed class MaterializationProgressStoreTests
     }
 
     [Fact]
+    public async Task IndividualSettlement_RequiresPositionlessDeliveryCoverageInDurableCheckpoint()
+    {
+        IMaterializationProgressStore store = new InMemoryMaterializationProgressStore();
+        var context = OperationContext.Create();
+        var claim = Assert.IsType<MaterializationProgressSnapshot>((await store.AcquireFenceAsync(
+            context,
+            Key,
+            new("claim-individual"),
+            expectedRevision: null,
+            owner: "worker-a")).Snapshot);
+        var channelScope = MaterializationChannelSemantics.ToChannelScopeId(Scope);
+        MaterializationDeliveryId appliedDelivery = new("delivery-applied");
+        ChannelProviderDeliveryId providerFloor = new("delivery-provider-floor");
+        ChannelProviderDeliveryId providerPending = new("delivery-provider-pending");
+        MaterializationApplicationCheckpoint checkpoint = new(
+            id: new("checkpoint-individual"),
+            kind: MaterializationCheckpointKind.ChangeProgress,
+            continuation: null,
+            completion: null,
+            position: null,
+            appliedDeliveries: [appliedDelivery],
+            committedAtUtc: FirstCommit,
+            channelProgress: new(
+                replayCursor: null,
+                floor: new ChannelProviderDeliveryProgressFloor(
+                    scope: channelScope,
+                    orderingDomain: MaterializationChannelSemantics.ToChannelOrderingDomainId(Scope),
+                    delivery: providerFloor),
+                pending: new ChannelStableDeliverySetProgress(
+                    scope: channelScope,
+                    deliveries: [providerPending])));
+        var checkpointResult = await store.SaveCheckpointAsync(
+            context,
+            Key,
+            new("checkpoint-mutation-individual"),
+            claim.Revision,
+            "worker-a",
+            claim.Fence,
+            checkpoint);
+        var checkpointSnapshot = Assert.IsType<MaterializationProgressSnapshot>(checkpointResult.Snapshot);
+        MaterializationSourceSettlement uncovered = new(
+            id: new("settlement-individual-uncovered"),
+            checkpoint: checkpoint.Id,
+            scope: Scope,
+            kind: ChannelSettlementKind.Individual,
+            position: null,
+            deliveries: [new(providerPending.Value)],
+            settledAtUtc: FirstCommit.AddSeconds(1));
+
+        var mismatch = await store.SaveSettlementAsync(
+            context,
+            Key,
+            new("settlement-mutation-individual-uncovered"),
+            checkpointSnapshot.Revision,
+            "worker-a",
+            checkpointSnapshot.Fence,
+            uncovered);
+
+        Assert.Equal(MaterializationProgressMutationDisposition.CheckpointMismatch, mismatch.Disposition);
+        Assert.Null(Assert.IsType<MaterializationProgressSnapshot>(mismatch.Snapshot).LatestSettlement);
+
+        MaterializationSourceSettlement covered = new(
+            id: new("settlement-individual-covered"),
+            checkpoint: checkpoint.Id,
+            scope: Scope,
+            kind: ChannelSettlementKind.Individual,
+            position: null,
+            deliveries: [appliedDelivery],
+            settledAtUtc: FirstCommit.AddSeconds(1),
+            evidenceReference: "tests/individual-ack");
+        var applied = await store.SaveSettlementAsync(
+            context,
+            Key,
+            new("settlement-mutation-individual-covered"),
+            checkpointSnapshot.Revision,
+            "worker-a",
+            checkpointSnapshot.Fence,
+            covered);
+        var replayed = await store.SaveSettlementAsync(
+            context,
+            Key,
+            new("settlement-mutation-individual-covered"),
+            checkpointSnapshot.Revision,
+            "worker-a",
+            checkpointSnapshot.Fence,
+            covered);
+
+        Assert.Equal(MaterializationProgressMutationDisposition.Applied, applied.Disposition);
+        Assert.Equal(MaterializationProgressMutationDisposition.Replayed, replayed.Disposition);
+        var persisted = Assert.IsType<MaterializationSourceSettlement>(
+            Assert.IsType<MaterializationProgressSnapshot>(applied.Snapshot).LatestSettlement);
+        Assert.Equal(ChannelSettlementKind.Individual, persisted.Kind);
+        Assert.Null(persisted.Position);
+        Assert.Equal(
+            appliedDelivery,
+            Assert.Single(persisted.Deliveries));
+    }
+
+    [Fact]
     public async Task Snapshot_ExposesLatestProgressWhileFakeRetainsInternalAuditEvidence()
     {
         IMaterializationProgressStore store = new InMemoryMaterializationProgressStore();
@@ -418,14 +518,19 @@ public sealed class MaterializationProgressStoreTests
             Placement,
             new("tenant-b"),
             new("tenant-b/feed-0"));
+        MaterializationSourcePosition foreignPosition = new(
+            formatVersion: 1,
+            scope: otherScope,
+            value: "position-1");
         MaterializationApplicationCheckpoint foreignCheckpoint = new(
-            new("checkpoint-foreign"),
-            MaterializationCheckpointKind.ChangePosition,
+            id: new("checkpoint-foreign"),
+            kind: MaterializationCheckpointKind.ChangeProgress,
             continuation: null,
             completion: null,
-            new MaterializationSourcePosition(formatVersion: 1, otherScope, "position-1"),
-            [],
-            FirstCommit);
+            position: foreignPosition,
+            appliedDeliveries: [],
+            committedAtUtc: FirstCommit,
+            channelProgress: MaterializationChannelSemantics.CreatePositionedDurableProgress(foreignPosition));
 
         Assert.Throws<ArgumentException>(() => new MaterializationProgressSnapshot(
             Key,
@@ -548,15 +653,20 @@ public sealed class MaterializationProgressStoreTests
         string checkpoint,
         string position,
         DateTimeOffset committedAtUtc,
-        params string[] deliveries) => new(
-        new(checkpoint),
-        MaterializationCheckpointKind.ChangePosition,
-        continuation: null,
-        completion: null,
-        Position(position),
-        [.. deliveries.Select(static delivery => new MaterializationDeliveryId(delivery))],
-        committedAtUtc,
-        "tests/application");
+        params string[] deliveries)
+    {
+        var checkpointPosition = Position(position);
+        return new(
+            id: new(checkpoint),
+            kind: MaterializationCheckpointKind.ChangeProgress,
+            continuation: null,
+            completion: null,
+            position: checkpointPosition,
+            appliedDeliveries: [.. deliveries.Select(static delivery => new MaterializationDeliveryId(delivery))],
+            committedAtUtc: committedAtUtc,
+            evidenceReference: "tests/application",
+            channelProgress: MaterializationChannelSemantics.CreatePositionedDurableProgress(checkpointPosition));
+    }
 
     static MaterializationSourcePosition Position(string value) =>
         new(formatVersion: 1, Key.Scope, value);

@@ -153,7 +153,7 @@ public sealed class PostgresMaterializationSource : IMaterializationSource
     }
 
     /// <inheritdoc />
-    public MaterializationSourceDescriptor Descriptor { get; }
+    public MaterializationQuerySourceDescriptor Descriptor { get; }
 
     /// <summary>Exact source-read placement, partition, and ordering scope accepted by this materialization source.</summary>
     public MaterializationSourceScope Scope { get; }
@@ -350,7 +350,7 @@ public sealed class PostgresMaterializationSource : IMaterializationSource
             evidence.Add(new(
                 new($"cohesive.adapters.postgres/materialization/{(int)capability}/v1"),
                 capability,
-                MaterializationCapabilityRealizationKind.Constrained,
+                CapabilityRealizationKind.Constrained,
                 guarantees,
                 limits,
                 normalizedSourceReferences,
@@ -359,7 +359,7 @@ public sealed class PostgresMaterializationSource : IMaterializationSource
         evidence.Add(new(
             new("cohesive.adapters.postgres/materialization/continuation/v2"),
             MaterializationCapabilityKind.SourceContinuation,
-            MaterializationCapabilityRealizationKind.Constrained,
+            CapabilityRealizationKind.Constrained,
             [MaterializationGuaranteeKind.StableOrdering, MaterializationGuaranteeKind.Reconciliation],
             [new MaterializationOperatingLimit(MaterializationLimitKind.Parallelism, 1)],
             normalizedSourceReferences,

@@ -292,15 +292,17 @@ public sealed class MaterializationManagedChangeSourceTests
             ];
         }
 
+        var checkpointPosition = position ?? page.ThroughPosition;
         return new(
-            new("checkpoint-1"),
-            MaterializationCheckpointKind.ChangePosition,
+            id: new("checkpoint-1"),
+            kind: MaterializationCheckpointKind.ChangeProgress,
             continuation: null,
             completion: null,
-            position ?? page.ThroughPosition,
-            appliedDeliveries,
-            committedAtUtc ?? DeliveredAtUtc.AddTicks(1),
-            "tests/application-commit");
+            position: checkpointPosition,
+            appliedDeliveries: appliedDeliveries,
+            committedAtUtc: committedAtUtc ?? DeliveredAtUtc.AddTicks(1),
+            evidenceReference: "tests/application-commit",
+            channelProgress: MaterializationChannelSemantics.CreatePositionedDurableProgress(checkpointPosition));
     }
 
     static MaterializationProgressMutationResult SuccessfulResult(

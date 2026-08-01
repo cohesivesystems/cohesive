@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
@@ -25,7 +26,7 @@ public static class MaterializationProgressDiagnosticCodes
     /// <summary>A settlement cites a checkpoint that has not been durably persisted.</summary>
     public const string CheckpointNotFound = "materialization.progress.checkpointNotFound";
 
-    /// <summary>A settlement position differs from the position proven by its cited checkpoint.</summary>
+    /// <summary>Settlement coverage differs from the progress proven by its cited checkpoint.</summary>
     public const string CheckpointMismatch = "materialization.progress.checkpointMismatch";
 }
 
@@ -189,8 +190,8 @@ public sealed record MaterializationProgressKey
     public MaterializationSourceScope Scope { get; }
 }
 
-/// <summary>Semantic cursor represented by an application checkpoint.</summary>
-[JsonConverter(typeof(JsonStringEnumConverter))]
+/// <summary>Semantic progress family represented by an application checkpoint.</summary>
+[JsonConverter(typeof(StrictStringEnumJsonConverterFactory))]
 public enum MaterializationCheckpointKind
 {
     /// <summary>A batch partition has more data and persists its next-page continuation.</summary>
@@ -199,8 +200,11 @@ public enum MaterializationCheckpointKind
     /// <summary>A batch partition was authoritatively exhausted.</summary>
     BatchCompleted = 1,
 
-    /// <summary>Incremental effects through one raw source position were durably applied.</summary>
-    ChangePosition = 2
+    /// <summary>
+    /// Incremental effects and their complete Channel progress evidence were durably applied. Positioned pull feeds
+    /// retain their source position as a narrow projection; leased delivery may omit it.
+    /// </summary>
+    ChangeProgress = 2
 }
 
 /// <summary>
@@ -210,13 +214,22 @@ public sealed record MaterializationApplicationCheckpoint
 {
     /// <summary>Creates an application checkpoint.</summary>
     /// <param name="id">Stable write-once checkpoint identity.</param>
-    /// <param name="kind">Batch-continuation, batch-completed, or change-position semantics.</param>
+    /// <param name="kind">Batch-continuation, batch-completed, or incremental-change progress semantics.</param>
     /// <param name="continuation">Next batch page for <see cref="MaterializationCheckpointKind.BatchContinuation"/>.</param>
     /// <param name="completion">Exact authoritative read completion for <see cref="MaterializationCheckpointKind.BatchCompleted"/>.</param>
-    /// <param name="position">Applied raw source position for <see cref="MaterializationCheckpointKind.ChangePosition"/>.</param>
-    /// <param name="appliedDeliveries">Delivery identities whose effects are covered by a change checkpoint.</param>
+    /// <param name="position">
+    /// Optional materialization source position corresponding to <paramref name="channelProgress"/>'s replay cursor.
+    /// </param>
+    /// <param name="appliedDeliveries">
+    /// Exact stable delivery identities whose application effects are covered by this checkpoint. This application
+    /// coverage is independent of provider pending-delivery progress in <paramref name="channelProgress"/>.
+    /// </param>
     /// <param name="committedAtUtc">UTC durable application-commit time.</param>
     /// <param name="evidenceReference">Optional opaque application evidence reference.</param>
+    /// <param name="channelProgress">
+    /// Complete replay, floor, and pending-delivery progress required for an incremental change checkpoint; must be
+    /// <see langword="null"/> for a batch checkpoint.
+    /// </param>
     /// <exception cref="ArgumentException">
     /// An identity, cursor, delivery set, or timestamp is invalid, or cursor fields conflict with
     /// <paramref name="kind"/>.
@@ -231,7 +244,8 @@ public sealed record MaterializationApplicationCheckpoint
         MaterializationSourcePosition? position,
         ImmutableArray<MaterializationDeliveryId> appliedDeliveries,
         DateTimeOffset committedAtUtc,
-        string? evidenceReference = null)
+        string? evidenceReference = null,
+        ChannelDurableProgressEvidence? channelProgress = null)
     {
         MaterializationContract.RequireDefinedIdentity(id.Value, nameof(id));
         if (!Enum.IsDefined(kind))
@@ -239,7 +253,12 @@ public sealed record MaterializationApplicationCheckpoint
             throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported application-checkpoint kind.");
         }
 
-        ValidateCursor(kind, continuation, completion, position, appliedDeliveries);
+        var normalizedDeliveries = NormalizeDeliveries(
+            appliedDeliveries,
+            nameof(appliedDeliveries),
+            "Applied delivery identities");
+        ValidateCursor(kind, continuation, completion, position, normalizedDeliveries, channelProgress);
+        ValidatePositionProjection(position, channelProgress);
         MaterializationContract.RequireUtc(committedAtUtc, nameof(committedAtUtc));
         if (evidenceReference is not null)
         {
@@ -251,7 +270,8 @@ public sealed record MaterializationApplicationCheckpoint
         Continuation = continuation;
         Completion = completion;
         Position = position;
-        AppliedDeliveries = NormalizeDeliveries(appliedDeliveries);
+        AppliedDeliveries = normalizedDeliveries;
+        ChannelProgress = channelProgress;
         CommittedAtUtc = committedAtUtc;
         EvidenceReference = evidenceReference;
     }
@@ -259,7 +279,7 @@ public sealed record MaterializationApplicationCheckpoint
     /// <summary>Stable write-once checkpoint identity.</summary>
     public MaterializationCheckpointId Id { get; }
 
-    /// <summary>Batch-continuation, batch-completed, or change-position semantics.</summary>
+    /// <summary>Batch-continuation, batch-completed, or incremental-change progress semantics.</summary>
     public MaterializationCheckpointKind Kind { get; }
 
     /// <summary>Next batch page, or <see langword="null"/> for another checkpoint kind.</summary>
@@ -268,11 +288,22 @@ public sealed record MaterializationApplicationCheckpoint
     /// <summary>Exact authoritative read completion, or <see langword="null"/> for another checkpoint kind.</summary>
     public MaterializationSourceReadCompletion? Completion { get; }
 
-    /// <summary>Applied raw source position, or <see langword="null"/> for a batch checkpoint.</summary>
+    /// <summary>
+    /// Optional source-specific replay position retained for positioned source operations. Incremental progress
+    /// authority belongs to <see cref="ChannelProgress"/>; when present, this projection must identify its exact
+    /// replay cursor.
+    /// </summary>
     public MaterializationSourcePosition? Position { get; }
 
-    /// <summary>Applied delivery identities in deterministic ordinal order.</summary>
+    /// <summary>
+    /// Stable delivery identities whose application effects are covered, in deterministic ordinal order.
+    /// </summary>
     public ImmutableArray<MaterializationDeliveryId> AppliedDeliveries { get; }
+
+    /// <summary>
+    /// Complete incremental Channel progress, or <see langword="null"/> for a batch continuation or completion.
+    /// </summary>
+    public ChannelDurableProgressEvidence? ChannelProgress { get; }
 
     /// <summary>UTC durable application-commit time.</summary>
     public DateTimeOffset CommittedAtUtc { get; }
@@ -280,12 +311,41 @@ public sealed record MaterializationApplicationCheckpoint
     /// <summary>Optional opaque application evidence reference.</summary>
     public string? EvidenceReference { get; }
 
+    /// <summary>Determines whether this durable checkpoint covers one exact positioned replay boundary.</summary>
+    /// <param name="position">Materialization source position whose application must be durable.</param>
+    /// <returns><see langword="true"/> when the checkpoint's replay cursor is the exact projected position.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="position"/> is <see langword="null"/>.</exception>
+    public bool CoversReplayPosition(MaterializationSourcePosition position)
+    {
+        ArgumentNullException.ThrowIfNull(position);
+        var cursor = ChannelProgress?.ReplayCursor;
+        return Kind == MaterializationCheckpointKind.ChangeProgress
+            && cursor is not null
+            && MaterializationChannelSemantics.IsSameReplayPosition(cursor, position);
+    }
+
+    internal bool CoversIndividualDeliveries(ImmutableArray<MaterializationDeliveryId> deliveries)
+    {
+        if (Kind != MaterializationCheckpointKind.ChangeProgress)
+        {
+            return false;
+        }
+
+        foreach (var delivery in deliveries)
+        {
+            if (!ContainsCanonical(AppliedDeliveries, delivery.Value))
+                return false;
+        }
+        return !deliveries.IsDefaultOrEmpty;
+    }
+
     static void ValidateCursor(
         MaterializationCheckpointKind kind,
         MaterializationSourceContinuation? continuation,
         MaterializationSourceReadCompletion? completion,
         MaterializationSourcePosition? position,
-        ImmutableArray<MaterializationDeliveryId> appliedDeliveries)
+        ImmutableArray<MaterializationDeliveryId> appliedDeliveries,
+        ChannelDurableProgressEvidence? channelProgress)
     {
         var deliveries = appliedDeliveries.IsDefault ? [] : appliedDeliveries;
         var valid = kind switch
@@ -293,26 +353,44 @@ public sealed record MaterializationApplicationCheckpoint
             MaterializationCheckpointKind.BatchContinuation => continuation is not null
                 && completion is null
                 && position is null
-                && deliveries.IsDefaultOrEmpty,
+                && deliveries.IsDefaultOrEmpty
+                && channelProgress is null,
             MaterializationCheckpointKind.BatchCompleted => continuation is null
                 && completion is not null
                 && position is null
-                && deliveries.IsDefaultOrEmpty,
-            MaterializationCheckpointKind.ChangePosition => continuation is null
+                && deliveries.IsDefaultOrEmpty
+                && channelProgress is null,
+            MaterializationCheckpointKind.ChangeProgress => continuation is null
                 && completion is null
-                && position is not null,
+                && channelProgress is not null,
             _ => false
         };
         if (!valid)
         {
             throw new ArgumentException(
-                "Batch continuations require only a continuation, completed batches require exact authoritative read evidence, and change checkpoints require a position with optional applied delivery identities.",
+                "Batch checkpoints carry only their batch cursor evidence, while change checkpoints require complete Channel progress and may additionally retain a matching source position.",
                 nameof(kind));
         }
     }
 
-    static ImmutableArray<MaterializationDeliveryId> NormalizeDeliveries(
-        ImmutableArray<MaterializationDeliveryId> values)
+    static void ValidatePositionProjection(
+        MaterializationSourcePosition? position,
+        ChannelDurableProgressEvidence? channelProgress)
+    {
+        if (position is not null
+            && (channelProgress?.ReplayCursor is null
+                || !MaterializationChannelSemantics.IsSameReplayPosition(channelProgress.ReplayCursor, position)))
+        {
+            throw new ArgumentException(
+                "A retained materialization source position must equal the Channel replay cursor.",
+                nameof(channelProgress));
+        }
+    }
+
+    internal static ImmutableArray<MaterializationDeliveryId> NormalizeDeliveries(
+        ImmutableArray<MaterializationDeliveryId> values,
+        string parameterName,
+        string description)
     {
         if (values.IsDefaultOrEmpty)
         {
@@ -322,7 +400,7 @@ public sealed record MaterializationApplicationCheckpoint
         var isCanonical = true;
         for (var index = 0; index < values.Length; index++)
         {
-            MaterializationContract.RequireDefinedIdentity(values[index].Value, nameof(values));
+            MaterializationContract.RequireDefinedIdentity(values[index].Value, parameterName);
             if (index == 0)
             {
                 continue;
@@ -331,7 +409,7 @@ public sealed record MaterializationApplicationCheckpoint
             var comparison = StringComparer.Ordinal.Compare(values[index - 1].Value, values[index].Value);
             if (comparison == 0)
             {
-                throw new ArgumentException("Applied delivery identities cannot repeat.", nameof(values));
+                throw new ArgumentException($"{description} cannot repeat.", parameterName);
             }
 
             if (comparison > 0)
@@ -351,17 +429,37 @@ public sealed record MaterializationApplicationCheckpoint
         {
             if (sorted[index - 1] == sorted[index])
             {
-                throw new ArgumentException("Applied delivery identities cannot repeat.", nameof(values));
+                throw new ArgumentException($"{description} cannot repeat.", parameterName);
             }
         }
         return sorted.MoveToImmutable();
     }
+
+    static bool ContainsCanonical(
+        ImmutableArray<MaterializationDeliveryId> deliveries,
+        string sought)
+    {
+        var lower = 0;
+        var upper = deliveries.Length - 1;
+        while (lower <= upper)
+        {
+            var middle = lower + ((upper - lower) / 2);
+            var comparison = StringComparer.Ordinal.Compare(deliveries[middle].Value, sought);
+            if (comparison == 0)
+                return true;
+            if (comparison < 0)
+                lower = middle + 1;
+            else
+                upper = middle - 1;
+        }
+        return false;
+    }
 }
 
-/// <summary>Explicit acknowledgement of one already-persisted change application checkpoint.</summary>
+/// <summary>Explicit individual or cumulative acknowledgement of one already-persisted change checkpoint.</summary>
 public sealed record MaterializationSourceSettlement
 {
-    /// <summary>Creates a source settlement.</summary>
+    /// <summary>Creates a positioned cumulative source settlement.</summary>
     /// <param name="id">Stable write-once settlement identity.</param>
     /// <param name="checkpoint">Already-persisted application checkpoint cited by the settlement.</param>
     /// <param name="position">Raw source position proven by the cited checkpoint.</param>
@@ -369,17 +467,85 @@ public sealed record MaterializationSourceSettlement
     /// <param name="evidenceReference">Optional opaque source acknowledgement evidence.</param>
     /// <exception cref="ArgumentNullException"><paramref name="position"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">An identity, timestamp, or evidence reference is invalid.</exception>
-    [JsonConstructor]
     public MaterializationSourceSettlement(
         MaterializationSettlementId id,
         MaterializationCheckpointId checkpoint,
         MaterializationSourcePosition position,
         DateTimeOffset settledAtUtc,
         string? evidenceReference = null)
+        : this(
+            id: id,
+            checkpoint: checkpoint,
+            scope: Guard.RequireNotNull(position).Scope,
+            kind: ChannelSettlementKind.CumulativePrefix,
+            position: position,
+            deliveries: [],
+            settledAtUtc: settledAtUtc,
+            evidenceReference: evidenceReference)
+    {
+    }
+
+    /// <summary>Creates an individual or cumulative source settlement.</summary>
+    /// <param name="id">Stable write-once settlement identity.</param>
+    /// <param name="checkpoint">Already-persisted application checkpoint cited by the settlement.</param>
+    /// <param name="scope">Exact materialization source scope whose provider state changed.</param>
+    /// <param name="kind">Individual delivery or cumulative-prefix settlement.</param>
+    /// <param name="position">Exact cumulative position, or <see langword="null"/> for individual settlement.</param>
+    /// <param name="deliveries">One exact delivery for individual settlement; empty for cumulative settlement.</param>
+    /// <param name="settledAtUtc">UTC time at which settlement completed.</param>
+    /// <param name="evidenceReference">Optional opaque source acknowledgement evidence.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="scope"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// An identity, scope, coverage, timestamp, or evidence reference is invalid.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="kind"/> is not individual or cumulative.</exception>
+    [JsonConstructor]
+    public MaterializationSourceSettlement(
+        MaterializationSettlementId id,
+        MaterializationCheckpointId checkpoint,
+        MaterializationSourceScope scope,
+        ChannelSettlementKind kind,
+        MaterializationSourcePosition? position,
+        ImmutableArray<MaterializationDeliveryId> deliveries,
+        DateTimeOffset settledAtUtc,
+        string? evidenceReference = null)
     {
         MaterializationContract.RequireDefinedIdentity(id.Value, nameof(id));
         MaterializationContract.RequireDefinedIdentity(checkpoint.Value, nameof(checkpoint));
-        Position = Guard.RequireNotNull(position);
+        Scope = Guard.RequireNotNull(scope);
+        if (kind is not (ChannelSettlementKind.CumulativePrefix or ChannelSettlementKind.Individual))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(kind),
+                kind,
+                "Materialization source settlement supports cumulative-prefix or individual acknowledgement.");
+        }
+
+        var normalizedDeliveries = MaterializationApplicationCheckpoint.NormalizeDeliveries(
+            deliveries,
+            nameof(deliveries),
+            "Settled delivery identities");
+        var validCoverage = kind switch
+        {
+            ChannelSettlementKind.CumulativePrefix => position is not null
+                && normalizedDeliveries.IsDefaultOrEmpty,
+            ChannelSettlementKind.Individual => position is null
+                && normalizedDeliveries.Length == 1,
+            _ => false
+        };
+        if (!validCoverage)
+        {
+            throw new ArgumentException(
+                "Cumulative settlement requires one position and no deliveries; individual settlement requires exactly one delivery and no position.",
+                nameof(kind));
+        }
+        if (position is not null && position.Scope != scope)
+        {
+            throw new ArgumentException(
+                "A cumulative settlement position must belong to the exact settlement source scope.",
+                nameof(position));
+        }
+
         MaterializationContract.RequireUtc(settledAtUtc, nameof(settledAtUtc));
         if (evidenceReference is not null)
         {
@@ -388,6 +554,9 @@ public sealed record MaterializationSourceSettlement
 
         Id = id;
         Checkpoint = checkpoint;
+        Kind = kind;
+        Position = position;
+        Deliveries = normalizedDeliveries;
         SettledAtUtc = settledAtUtc;
         EvidenceReference = evidenceReference;
     }
@@ -398,14 +567,35 @@ public sealed record MaterializationSourceSettlement
     /// <summary>Already-persisted application checkpoint cited by the settlement.</summary>
     public MaterializationCheckpointId Checkpoint { get; }
 
-    /// <summary>Raw source position proven by the cited checkpoint.</summary>
-    public MaterializationSourcePosition Position { get; }
+    /// <summary>Exact source scope whose provider delivery state changed.</summary>
+    public MaterializationSourceScope Scope { get; }
+
+    /// <summary>Individual or cumulative-prefix settlement operation.</summary>
+    public ChannelSettlementKind Kind { get; }
+
+    /// <summary>Raw cumulative source position, or <see langword="null"/> for individual settlement.</summary>
+    public MaterializationSourcePosition? Position { get; }
+
+    /// <summary>Exact delivery covered by individual settlement; empty for cumulative settlement.</summary>
+    public ImmutableArray<MaterializationDeliveryId> Deliveries { get; }
 
     /// <summary>UTC time at which settlement completed.</summary>
     public DateTimeOffset SettledAtUtc { get; }
 
     /// <summary>Optional opaque source acknowledgement evidence.</summary>
     public string? EvidenceReference { get; }
+
+    internal bool IsCoveredBy(
+        MaterializationApplicationCheckpoint checkpoint,
+        MaterializationSourceScope expectedScope) =>
+        Checkpoint == checkpoint.Id
+        && Scope == expectedScope
+        && (Kind switch
+        {
+            ChannelSettlementKind.CumulativePrefix => checkpoint.CoversReplayPosition(Position!),
+            ChannelSettlementKind.Individual => checkpoint.CoversIndividualDeliveries(Deliveries),
+            _ => false
+        });
 }
 
 /// <summary>Immutable bounded view of the latest state in one materialization progress aggregate.</summary>
@@ -490,7 +680,7 @@ public sealed record MaterializationProgressSnapshot
                 "A source settlement requires prior durable application progress.",
                 nameof(latestSettlement));
         }
-        if (latestSettlement.Position.Scope != key.Scope)
+        if (latestSettlement.Scope != key.Scope)
         {
             throw new ArgumentException(
                 "A source settlement must belong to its exact progress source-feed scope.",
@@ -500,12 +690,11 @@ public sealed record MaterializationProgressSnapshot
         // The latest settlement may cite an older checkpoint after application has advanced. When it cites the
         // checkpoint retained by this compact snapshot, the complete cross-record invariant remains verifiable.
         if (latestSettlement.Checkpoint == latestCheckpoint.Id
-            && (latestCheckpoint.Kind != MaterializationCheckpointKind.ChangePosition
-                || latestCheckpoint.Position != latestSettlement.Position
+            && (!latestSettlement.IsCoveredBy(latestCheckpoint, key.Scope)
                 || latestSettlement.SettledAtUtc < latestCheckpoint.CommittedAtUtc))
         {
             throw new ArgumentException(
-                "A source settlement that cites the latest checkpoint must match its change position and chronology.",
+                "A source settlement that cites the latest checkpoint must have exact durable coverage and chronology.",
                 nameof(latestSettlement));
         }
     }
@@ -514,14 +703,16 @@ public sealed record MaterializationProgressSnapshot
         MaterializationProgressKey key,
         MaterializationApplicationCheckpoint checkpoint)
     {
-        var scope = checkpoint.Kind switch
+        var scopeMatches = checkpoint.Kind switch
         {
-            MaterializationCheckpointKind.BatchContinuation => checkpoint.Continuation?.Scope,
-            MaterializationCheckpointKind.BatchCompleted => checkpoint.Completion?.Scope,
-            MaterializationCheckpointKind.ChangePosition => checkpoint.Position?.Scope,
-            _ => null
+            MaterializationCheckpointKind.BatchContinuation => checkpoint.Continuation?.Scope == key.Scope,
+            MaterializationCheckpointKind.BatchCompleted => checkpoint.Completion?.Scope == key.Scope,
+            MaterializationCheckpointKind.ChangeProgress => checkpoint.ChannelProgress is not null
+                && MaterializationChannelSemantics.GetChannelScope(checkpoint.ChannelProgress)
+                    == MaterializationChannelSemantics.ToChannelScopeId(key.Scope),
+            _ => false
         };
-        if (scope != key.Scope)
+        if (!scopeMatches)
         {
             throw new ArgumentException("A checkpoint cursor must belong to its exact progress source-feed scope.", nameof(checkpoint));
         }
@@ -553,7 +744,7 @@ public enum MaterializationProgressMutationDisposition
     /// <summary>A settlement cites a checkpoint that has not been persisted.</summary>
     CheckpointNotFound = 6,
 
-    /// <summary>A settlement position conflicts with its cited checkpoint.</summary>
+    /// <summary>Settlement coverage conflicts with its cited checkpoint.</summary>
     CheckpointMismatch = 7
 }
 
@@ -705,6 +896,8 @@ public interface IMaterializationProgressStore
 
 static class MaterializationProgressIntent
 {
+    static readonly JsonSerializerOptions CanonicalJsonOptions = StrictDocumentJson.CreateOptions();
+
     public static string Fence(MaterializationProgressRevision? expectedRevision, string owner)
     {
         StringBuilder builder = new();
@@ -749,6 +942,11 @@ static class MaterializationProgressIntent
         {
             Append(builder, delivery.Value);
         }
+        Append(builder, checkpoint.ChannelProgress is null
+            ? null
+            : Convert.ToBase64String(StrictDocumentJson.GetCanonicalBytes(
+                checkpoint.ChannelProgress,
+                CanonicalJsonOptions)));
 
         Append(builder, checkpoint.CommittedAtUtc.UtcTicks.ToString(CultureInfo.InvariantCulture));
         Append(builder, checkpoint.EvidenceReference);
@@ -768,9 +966,13 @@ static class MaterializationProgressIntent
         Append(builder, fence.Value);
         Append(builder, settlement.Id.Value);
         Append(builder, settlement.Checkpoint.Value);
-        AppendScope(builder, settlement.Position.Scope);
-        Append(builder, settlement.Position.FormatVersion.ToString(CultureInfo.InvariantCulture));
-        Append(builder, settlement.Position.Value);
+        AppendScope(builder, settlement.Scope);
+        Append(builder, ((int)settlement.Kind).ToString(CultureInfo.InvariantCulture));
+        Append(builder, settlement.Position?.FormatVersion.ToString(CultureInfo.InvariantCulture));
+        Append(builder, settlement.Position?.Value);
+        Append(builder, settlement.Deliveries.Length.ToString(CultureInfo.InvariantCulture));
+        foreach (var delivery in settlement.Deliveries)
+            Append(builder, delivery.Value);
         Append(builder, settlement.SettledAtUtc.UtcTicks.ToString(CultureInfo.InvariantCulture));
         Append(builder, settlement.EvidenceReference);
         return builder.ToString();

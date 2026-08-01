@@ -360,7 +360,7 @@ public sealed class CosmosMaterializationSource : IMaterializationPullChangeSour
     }
 
     /// <inheritdoc />
-    public MaterializationSourceDescriptor Descriptor { get; }
+    public MaterializationQuerySourceDescriptor Descriptor { get; }
 
     /// <summary>Exact source placement, logical partition, and ordering scope accepted by this source.</summary>
     public MaterializationSourceScope Scope { get; }
@@ -2397,8 +2397,8 @@ public sealed class CosmosMaterializationSource : IMaterializationPullChangeSour
                 id: new($"cohesive.adapters.cosmos/materialization/{(int)capability}/v1"),
                 capability: capability,
                 realization: capability == MaterializationCapabilityKind.SourceBatchedPointRead
-                    ? MaterializationCapabilityRealizationKind.Composed
-                    : MaterializationCapabilityRealizationKind.Constrained,
+                    ? CapabilityRealizationKind.Composed
+                    : CapabilityRealizationKind.Constrained,
                 guarantees:
                 [
                     MaterializationGuaranteeKind.StableOrdering,
@@ -2420,7 +2420,7 @@ public sealed class CosmosMaterializationSource : IMaterializationPullChangeSour
         evidence.Add(new(
             id: new("cohesive.adapters.cosmos/materialization/continuation/v2"),
             capability: MaterializationCapabilityKind.SourceContinuation,
-            realization: MaterializationCapabilityRealizationKind.Constrained,
+            realization: CapabilityRealizationKind.Constrained,
             guarantees:
             [
                 MaterializationGuaranteeKind.StableOrdering,
@@ -2437,7 +2437,7 @@ public sealed class CosmosMaterializationSource : IMaterializationPullChangeSour
         evidence.Add(new(
             id: new("cohesive.adapters.cosmos/materialization/change-delivery/v2"),
             capability: MaterializationCapabilityKind.SourceChangeDelivery,
-            realization: MaterializationCapabilityRealizationKind.Constrained,
+            realization: CapabilityRealizationKind.Constrained,
             guarantees: changeGuarantees,
             operatingLimits:
             [

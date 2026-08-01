@@ -4,26 +4,6 @@ using Cohesive.Model.Serialization;
 
 namespace Cohesive.Relations.Realization;
 
-/// <summary>Final classification selected for one demanded realization requirement.</summary>
-[JsonConverter(typeof(JsonStringEnumConverter))]
-public enum RelationQueryRealizationDecisionKind
-{
-    /// <summary>The target preserves the requirement directly.</summary>
-    Native = 0,
-
-    /// <summary>A declared rule composes exact support from target facilities.</summary>
-    Composed = 1,
-
-    /// <summary>Exact support is available only inside validated operating boundaries.</summary>
-    Constrained = 2,
-
-    /// <summary>An explicit local override supplies exact support.</summary>
-    Override = 3,
-
-    /// <summary>No permitted strategy preserves the requirement.</summary>
-    Unavailable = 4
-}
-
 /// <summary>Reason that a demanded realization requirement has no permitted exact strategy.</summary>
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum RelationQueryUnavailableReason
@@ -162,7 +142,7 @@ public abstract record RelationQueryRealizationDecision
 
     /// <summary>Final realization classification.</summary>
     [JsonIgnore]
-    public abstract RelationQueryRealizationDecisionKind Kind { get; }
+    public abstract CapabilityRealizationKind Kind { get; }
 
     /// <summary>Gets the target capability evidence retained by this final decision.</summary>
     /// <returns>
@@ -261,7 +241,7 @@ public sealed record NativeRelationQueryRealizationDecision : RelationQueryReali
     }
 
     /// <inheritdoc />
-    public override RelationQueryRealizationDecisionKind Kind => RelationQueryRealizationDecisionKind.Native;
+    public override CapabilityRealizationKind Kind => CapabilityRealizationKind.Native;
 
     /// <summary>Target evidence proving direct support.</summary>
     public ImmutableArray<RelationQueryTargetCapabilityEvidenceId> CapabilityEvidence { get; }
@@ -313,7 +293,7 @@ public sealed record ComposedRelationQueryRealizationDecision : RelationQueryRea
     }
 
     /// <inheritdoc />
-    public override RelationQueryRealizationDecisionKind Kind => RelationQueryRealizationDecisionKind.Composed;
+    public override CapabilityRealizationKind Kind => CapabilityRealizationKind.Composed;
 
     /// <summary>Ordered versioned rule closure proving exact support.</summary>
     public ImmutableArray<RelationQueryCompositionRuleId> CompositionRules { get; }
@@ -382,7 +362,7 @@ public sealed record ConstrainedRelationQueryRealizationDecision : RelationQuery
     }
 
     /// <inheritdoc />
-    public override RelationQueryRealizationDecisionKind Kind => RelationQueryRealizationDecisionKind.Constrained;
+    public override CapabilityRealizationKind Kind => CapabilityRealizationKind.Constrained;
 
     /// <summary>Target evidence supporting the constrained strategy.</summary>
     public ImmutableArray<RelationQueryTargetCapabilityEvidenceId> CapabilityEvidence { get; }
@@ -449,7 +429,7 @@ public sealed record OverrideRelationQueryRealizationDecision : RelationQueryRea
     }
 
     /// <inheritdoc />
-    public override RelationQueryRealizationDecisionKind Kind => RelationQueryRealizationDecisionKind.Override;
+    public override CapabilityRealizationKind Kind => CapabilityRealizationKind.Override;
 
     /// <summary>Explicit override supplying the realization.</summary>
     public RelationQueryRealizationOverrideId Override { get; }
@@ -491,7 +471,7 @@ public sealed record UnavailableRelationQueryRealizationDecision : RelationQuery
     }
 
     /// <inheritdoc />
-    public override RelationQueryRealizationDecisionKind Kind => RelationQueryRealizationDecisionKind.Unavailable;
+    public override CapabilityRealizationKind Kind => CapabilityRealizationKind.Unavailable;
 
     /// <summary>Typed reason no permitted exact strategy exists.</summary>
     public RelationQueryUnavailableReason Reason { get; }

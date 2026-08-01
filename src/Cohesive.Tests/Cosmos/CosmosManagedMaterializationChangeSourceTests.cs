@@ -727,7 +727,7 @@ public sealed class CosmosManagedMaterializationChangeSourceTests
 
         var delivery = Assert.Single(fixture.Source.Descriptor.CapabilityProfile.Evidence, static evidence =>
             evidence.Capability == MaterializationCapabilityKind.SourceChangeDelivery);
-        Assert.Equal(MaterializationCapabilityRealizationKind.Constrained, delivery.Realization);
+        Assert.Equal(CapabilityRealizationKind.Constrained, delivery.Realization);
         Assert.Equal(3, delivery.Guarantees.Length);
         Assert.Contains(MaterializationGuaranteeKind.StableOrdering, delivery.Guarantees);
         Assert.Contains(MaterializationGuaranteeKind.AtLeastOnceDelivery, delivery.Guarantees);
@@ -1335,15 +1335,17 @@ public sealed class CosmosManagedMaterializationChangeSourceTests
         MaterializationProgressMutationDisposition disposition = MaterializationProgressMutationDisposition.Applied,
         MaterializationSourcePosition? position = null)
     {
+        var checkpointPosition = position ?? page.ThroughPosition;
         MaterializationApplicationCheckpoint checkpoint = new(
             id: new(checkpointId),
-            kind: MaterializationCheckpointKind.ChangePosition,
+            kind: MaterializationCheckpointKind.ChangeProgress,
             continuation: null,
             completion: null,
-            position: position ?? page.ThroughPosition,
+            position: checkpointPosition,
             appliedDeliveries: [.. page.Deliveries.Select(static delivery => delivery.Id)],
             committedAtUtc: ObservedAtUtc,
-            evidenceReference: "tests/application-checkpoint");
+            evidenceReference: "tests/application-checkpoint",
+            channelProgress: MaterializationChannelSemantics.CreatePositionedDurableProgress(checkpointPosition));
         MaterializationProgressSnapshot snapshot = new(
             key: progress,
             revision: MaterializationProgressRevision.Initial,
@@ -1571,13 +1573,14 @@ public sealed class CosmosManagedMaterializationChangeSourceTests
 
             MaterializationApplicationCheckpoint checkpoint = new(
                 id: attempt.CheckpointId,
-                kind: MaterializationCheckpointKind.ChangePosition,
+                kind: MaterializationCheckpointKind.ChangeProgress,
                 continuation: null,
                 completion: null,
                 position: page.ThroughPosition,
                 appliedDeliveries: [.. page.Deliveries.Select(static delivery => delivery.Id)],
                 committedAtUtc: ObservedAtUtc,
-                evidenceReference: "tests/durable-application-checkpoint");
+                evidenceReference: "tests/durable-application-checkpoint",
+                channelProgress: MaterializationChannelSemantics.CreatePositionedDurableProgress(page.ThroughPosition));
             var result = await store.SaveCheckpointAsync(
                 context: context,
                 key: progress,

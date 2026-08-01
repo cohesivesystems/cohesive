@@ -739,7 +739,7 @@ public sealed class MaterializationTargetGenerationTests
         MaterializationCapabilityEvidence constrainedAlternative = new(
             new("upsert/constrained-alternative"),
             MaterializationCapabilityKind.TargetBulkUpsert,
-            MaterializationCapabilityRealizationKind.Constrained,
+            CapabilityRealizationKind.Constrained,
             [
                 MaterializationGuaranteeKind.FencedMutation,
                 MaterializationGuaranteeKind.IdempotentWrite,
@@ -1601,7 +1601,7 @@ public sealed class MaterializationTargetGenerationTests
             new(
                 new(id),
                 capability,
-                MaterializationCapabilityRealizationKind.Native,
+                CapabilityRealizationKind.Native,
                 guarantees.IsDefault ? [] : guarantees,
                 limits.IsDefault ? [] : limits,
                 ["cohesive.storage.in-memory/v1"]);

@@ -36,14 +36,14 @@ public sealed class InMemoryMaterializationSource : IMaterializationPullChangeSo
     /// from another source.
     /// </exception>
     public InMemoryMaterializationSource(
-        MaterializationSourceDescriptor descriptor,
+        MaterializationQuerySourceDescriptor descriptor,
         ImmutableArray<MaterializationChangeDelivery> changes = default)
         : this(descriptor, changes, retainedStartExposed: false)
     {
     }
 
     InMemoryMaterializationSource(
-        MaterializationSourceDescriptor descriptor,
+        MaterializationQuerySourceDescriptor descriptor,
         ImmutableArray<MaterializationChangeDelivery> changes,
         bool retainedStartExposed)
     {
@@ -83,12 +83,12 @@ public sealed class InMemoryMaterializationSource : IMaterializationPullChangeSo
     }
 
     internal static InMemoryMaterializationSource CreateRetained(
-        MaterializationSourceDescriptor descriptor,
+        MaterializationQuerySourceDescriptor descriptor,
         ImmutableArray<MaterializationChangeDelivery> changes) =>
         new(descriptor, changes, retainedStartExposed: true);
 
     /// <inheritdoc />
-    public MaterializationSourceDescriptor Descriptor { get; }
+    public MaterializationQuerySourceDescriptor Descriptor { get; }
 
     /// <inheritdoc />
     public async ValueTask<MaterializationSourcePage> ReadPageAsync(
@@ -348,11 +348,11 @@ public sealed class InMemoryMaterializationSource : IMaterializationPullChangeSo
             }
 
             MaterializationSourceSettlement receipt = new(
-                request.Id,
-                request.Checkpoint,
-                request.Position,
-                settledAtUtc,
-                "cohesive.storage.in-memory/settlement/v1");
+                id: request.Id,
+                checkpoint: request.Checkpoint,
+                position: request.Position,
+                settledAtUtc: settledAtUtc,
+                evidenceReference: "cohesive.storage.in-memory/settlement/v1");
             settlements.Add(request.Id, new(request, receipt));
             return ValueTask.FromResult(new MaterializationSourceSettlementResult(
                 MaterializationSourceSettlementDisposition.Acknowledged,
@@ -469,7 +469,7 @@ public sealed class InMemoryRetainedMaterializationSource : IMaterializationSett
     /// duplicate delivery identity, or a delivery from another source.
     /// </exception>
     public InMemoryRetainedMaterializationSource(
-        MaterializationSourceDescriptor descriptor,
+        MaterializationQuerySourceDescriptor descriptor,
         ImmutableArray<MaterializationChangeDelivery> changes = default)
     {
         ArgumentNullException.ThrowIfNull(descriptor);
@@ -486,7 +486,7 @@ public sealed class InMemoryRetainedMaterializationSource : IMaterializationSett
     }
 
     /// <inheritdoc />
-    public MaterializationSourceDescriptor Descriptor => source.Descriptor;
+    public MaterializationQuerySourceDescriptor Descriptor => source.Descriptor;
 
     /// <inheritdoc />
     public ValueTask<MaterializationSourcePage> ReadPageAsync(

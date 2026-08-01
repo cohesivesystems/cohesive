@@ -1846,7 +1846,7 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
                 [
                     new(
                         new($"requirement/{branchName}"),
-                        RelationQueryRealizationDecisionKind.Native,
+                        CapabilityRealizationKind.Native,
                         [new($"evidence/{branchName}")])
                 ]);
             CosmosRelationQueryResultIdentityBinding? identity = includeIdentity
