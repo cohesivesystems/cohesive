@@ -359,14 +359,29 @@ public enum MaterializationChangePageState
     Progressed = 2
 }
 
-/// <summary>Bounded request for all dependency changes in one acquisition feed after an explicit durable boundary.</summary>
+/// <summary>Page-budget request for dependency changes in one acquisition feed after an explicit durable boundary.</summary>
+/// <remarks>
+/// <see cref="MaximumDeliveries"/> and <see cref="MaximumBytes"/> are hard output bounds for ordinary change sources.
+/// When the selected <see cref="MaterializationCapabilityKind.SourceChangeDelivery"/> evidence advertises
+/// <see cref="MaterializationGuaranteeKind.TransactionAlignedDelivery"/>, they are preferred page budgets instead.
+/// Such a source may cross either budget only by retaining one complete source transaction as the final admitted
+/// transaction in the page; it must not admit another transaction after crossing a budget. The indivisible
+/// transaction itself remains bounded by the evidence's <see cref="MaterializationLimitKind.TransactionItems"/> and
+/// <see cref="MaterializationLimitKind.TransactionBytes"/> hard safety limits.
+/// </remarks>
 public sealed record MaterializationChangeReadRequest
 {
-    /// <summary>Creates a bounded change request.</summary>
+    /// <summary>Creates a change request with positive item and encoded-byte page budgets.</summary>
     /// <param name="scope">Exact acquisition input, source, partition, and ordering scope to observe.</param>
     /// <param name="afterPosition">Exclusive durable page boundary previously captured or returned by the source.</param>
-    /// <param name="maximumDeliveries">Positive maximum number of deliveries to return.</param>
-    /// <param name="maximumBytes">Positive maximum sum of canonical encoded delivery bytes to return.</param>
+    /// <param name="maximumDeliveries">
+    /// Positive delivery page budget. This is a hard output bound unless the selected source evidence advertises
+    /// transaction-aligned delivery.
+    /// </param>
+    /// <param name="maximumBytes">
+    /// Positive canonical encoded-byte page budget. This is a hard output bound unless the selected source evidence
+    /// advertises transaction-aligned delivery.
+    /// </param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="scope"/> or <paramref name="afterPosition"/> is <see langword="null"/>.
     /// </exception>
@@ -409,10 +424,16 @@ public sealed record MaterializationChangeReadRequest
     /// <summary>Exclusive durable page boundary previously captured or returned by the source.</summary>
     public MaterializationSourcePosition AfterPosition { get; }
 
-    /// <summary>Positive maximum number of deliveries to return.</summary>
+    /// <summary>
+    /// Positive delivery page budget; a hard bound except for one final indivisible transaction from a source that
+    /// advertises transaction-aligned delivery.
+    /// </summary>
     public int MaximumDeliveries { get; }
 
-    /// <summary>Positive maximum sum of canonical encoded delivery bytes to return.</summary>
+    /// <summary>
+    /// Positive canonical encoded-byte page budget; a hard bound except for one final indivisible transaction from a
+    /// source that advertises transaction-aligned delivery.
+    /// </summary>
     [JsonConverter(typeof(StringEncodedInt64JsonConverter))]
     public long MaximumBytes { get; }
 }

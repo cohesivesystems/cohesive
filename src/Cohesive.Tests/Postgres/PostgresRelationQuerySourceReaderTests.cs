@@ -18,7 +18,7 @@ using Npgsql;
 
 namespace Cohesive.Tests.Postgres;
 
-public sealed class PostgresRelationQuerySourceReaderTests
+public sealed partial class PostgresRelationQuerySourceReaderTests
 {
     [Fact]
     public async Task IdentityBatch_UsesOneTypedAnyCommandAndProjectsSqlNullAsMissing()
@@ -326,6 +326,65 @@ public sealed class PostgresRelationQuerySourceReaderTests
         Assert.Empty(executor.Commands[0].Parameters);
         Assert.Single(executor.Commands[1].Parameters, static parameter => !parameter.IsArray);
         Assert.Single(executor.Commands[2].Parameters, static parameter => !parameter.IsArray);
+    }
+
+    [Fact]
+    public async Task ExecutorBoundReaderRetainsAffinityAcrossMaterializationPages()
+    {
+        var originalExecutor = new TableExecutor([]);
+        var boundExecutor = new TableExecutor(
+        [
+            new("item-a", "Alpha", null, "parent-1"),
+            new("item-b", "Beta", null, "parent-1")
+        ]);
+        var fixture = CreateFixture(originalExecutor.ExecuteAsync);
+        var boundReader = fixture.Reader.WithCommandExecutor(boundExecutor.ExecuteAsync);
+        var originalSource = new PostgresMaterializationSource(
+            fixture.Reader,
+            fixture.SourcePlacement,
+            ContinuationAuthenticationKey);
+        var boundSource = new PostgresMaterializationSource(
+            boundReader,
+            fixture.SourcePlacement,
+            ContinuationAuthenticationKey);
+        var read = fixture.Read(
+            fixture.SourcePlacement,
+            [Field(fixture.NameInput, "name")],
+            new RelationQueryBoundedEnumeration(maximumRows: 10));
+
+        var first = await boundSource.ReadPageAsync(
+            OperationContext.Create(),
+            new(
+                read,
+                boundSource.Scope,
+                continuation: null,
+                maximumItems: 1,
+                maximumBytes: 1_000_000));
+        var second = await boundSource.ReadPageAsync(
+            OperationContext.Create(),
+            new(
+                read,
+                boundSource.Scope,
+                Assert.IsType<MaterializationSourceContinuation>(first.Continuation),
+                maximumItems: 1,
+                maximumBytes: 1_000_000));
+
+        Assert.Equal(["item-a"], first.Read.Observations.Select(static row => row.Identity));
+        Assert.Equal(["item-b"], second.Read.Observations.Select(static row => row.Identity));
+        Assert.Equal(MaterializationSourcePageState.Exhausted, second.State);
+        Assert.Empty(originalExecutor.Commands);
+        Assert.Equal(2, boundExecutor.Commands.Count);
+        Assert.Same(fixture.Reader.Policy, boundReader.Policy);
+        Assert.Same(fixture.Reader.StorageBinding, boundReader.StorageBinding);
+        Assert.Equal(fixture.Reader.PhysicalPlan, boundReader.PhysicalPlan);
+        Assert.Equal(fixture.Reader.Descriptor, boundReader.Descriptor);
+        Assert.Equal(originalSource.Scope, boundSource.Scope);
+        Assert.Equal(
+            originalSource.Descriptor.CapabilityProfile.Id,
+            boundSource.Descriptor.CapabilityProfile.Id);
+        Assert.Equal(
+            originalSource.Descriptor.CapabilityProfile.Evidence.Select(static evidence => evidence.Id),
+            boundSource.Descriptor.CapabilityProfile.Evidence.Select(static evidence => evidence.Id));
     }
 
     [Fact]
@@ -1318,6 +1377,115 @@ public sealed class PostgresRelationQuerySourceReaderTests
             Assert.Equal(
                 ["item-a", "item-b"],
                 compiledPage.Read.Observations.Select(static row => row.Identity));
+        }
+        finally
+        {
+            await using var cleanup = dataSource.CreateCommand($"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE;");
+            await cleanup.ExecuteNonQueryAsync();
+        }
+    }
+
+    [PostgresFact]
+    public async Task LocalPostgres_TransactionBoundMaterializationPagesShareOneSnapshot_WhenConfigured()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("COHESIVE_POSTGRES_TEST_CONNECTION_STRING")
+            ?? throw new InvalidOperationException("The PostgreSQL integration-test connection string disappeared after test discovery.");
+
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        var schema = $"ari188_{Guid.NewGuid():N}";
+        const string TableName = "snapshot_items";
+        try
+        {
+            await using (var setup = dataSource.CreateCommand($$"""
+                CREATE SCHEMA "{{schema}}";
+                CREATE TABLE "{{schema}}"."{{TableName}}" (
+                    "load_id" text COLLATE "C" PRIMARY KEY,
+                    "load_name" text NOT NULL,
+                    CONSTRAINT "ck_{{TableName}}_id_ascii" CHECK (octet_length("load_id") = length("load_id"))
+                );
+                INSERT INTO "{{schema}}"."{{TableName}}" ("load_id", "load_name") VALUES
+                    ('item-a', 'Alpha'),
+                    ('item-b', 'Beta');
+                """))
+            {
+                await setup.ExecuteNonQueryAsync();
+            }
+
+            var compiled = CreateCanonicalExecutionFixture(
+                (command, cancellationToken) => PostgresNpgsqlExecution.ExecuteAsync(
+                    dataSource,
+                    command,
+                    cancellationToken),
+                schema,
+                TableName,
+                queryId: "postgres-transaction-bound-materialization");
+            var reader = new PostgresRelationQuerySourceReader(
+                compiled.Plan,
+                compiled.PhysicalPlan,
+                compiled.Source,
+                compiled.Storage,
+                dataSource,
+                new PostgresNpgsqlRuntimeBinding(
+                    compiled.Storage.Database,
+                    dataSource,
+                    "cohesive.tests/postgres/transaction-bound-runtime/v1"),
+                Policy);
+            await using var connection = await dataSource.OpenConnectionAsync();
+            await using var transaction = await connection.BeginTransactionAsync(
+                System.Data.IsolationLevel.RepeatableRead);
+            var transactionExecutor = PostgresNpgsqlExecution.CreateTransactionExecutor(
+                connection,
+                transaction);
+            var commandCount = 0;
+            var transactionReader = reader.WithCommandExecutor(async (command, cancellationToken) =>
+            {
+                commandCount++;
+                return await transactionExecutor(command, cancellationToken);
+            });
+            var placement = Assert.Single(compiled.PhysicalPlan.Placement.Bindings);
+            var source = new PostgresMaterializationSource(
+                transactionReader,
+                placement,
+                ContinuationAuthenticationKey);
+            var read = CanonicalSourceRead(compiled);
+
+            var first = await source.ReadPageAsync(
+                OperationContext.Create(),
+                new(
+                    read,
+                    source.Scope,
+                    continuation: null,
+                    maximumItems: 1,
+                    maximumBytes: 1_000_000));
+
+            await using (var concurrentWrite = dataSource.CreateCommand($$"""
+                INSERT INTO "{{schema}}"."{{TableName}}" ("load_id", "load_name")
+                VALUES ('item-c', 'Gamma');
+                """))
+            {
+                await concurrentWrite.ExecuteNonQueryAsync();
+            }
+
+            var second = await source.ReadPageAsync(
+                OperationContext.Create(),
+                new(
+                    read,
+                    source.Scope,
+                    Assert.IsType<MaterializationSourceContinuation>(first.Continuation),
+                    maximumItems: 1,
+                    maximumBytes: 1_000_000));
+
+            Assert.Equal(["item-a"], first.Read.Observations.Select(static row => row.Identity));
+            Assert.Equal(["item-b"], second.Read.Observations.Select(static row => row.Identity));
+            Assert.Equal(MaterializationSourcePageState.MoreAvailable, first.State);
+            Assert.Equal(MaterializationSourcePageState.Exhausted, second.State);
+            Assert.Null(second.Continuation);
+            Assert.Equal(2, commandCount);
+            Assert.Same(connection, transaction.Connection);
+            Assert.Same(reader.Policy, transactionReader.Policy);
+            Assert.Same(reader.StorageBinding, transactionReader.StorageBinding);
+            Assert.Equal(reader.PhysicalPlan, transactionReader.PhysicalPlan);
+            Assert.Equal(reader.Descriptor, transactionReader.Descriptor);
         }
         finally
         {

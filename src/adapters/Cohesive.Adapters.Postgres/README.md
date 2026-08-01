@@ -2,8 +2,9 @@
 
 `Cohesive.Adapters.Postgres` is the single PostgreSQL adapter package. It provides an injection-safe standalone
 `SELECT` builder, canonical Relations compilation, exact persistable storage bindings, and Npgsql-backed bounded
-Relations and materialization sources. The builder can be used without Cohesive.Relations query compilation; the
-storage binding remains the shared physical authority for compilation and runtime source execution.
+Relations, rebuild, reconciliation, and transaction-aligned logical-replication sources. The builder can be used
+without Cohesive.Relations query compilation; the storage binding remains the shared physical authority for
+compilation and runtime source execution.
 
 For convention-first C# authoring, begin with the
 [`Cohesive.Relations` quick start](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Relations/docs/GETTING_STARTED.md).
@@ -188,7 +189,9 @@ requires a `PostgresNpgsqlRuntimeBinding`: an explicit authority maps the persis
 data-source instance and a sanitized configuration fingerprint. Passing a different instance or database attestation
 fails before I/O. Multi-host data sources and ambient transactions are rejected so replica choice or hidden
 transaction state cannot become unattributed consistency evidence. Reader diagnostics and materialization capability
-evidence retain the runtime authority and sanitized data-source fingerprint after registration.
+evidence retain the runtime authority and sanitized data-source fingerprint after registration. A runtime that also
+serves logical replication supplies an explicit factory for fresh `LogicalReplicationConnection` instances; see
+[Logical replication](#logical-replication) below.
 
 ```csharp
 var runtime = new PostgresNpgsqlRuntimeBinding(
@@ -223,9 +226,9 @@ request-local completeness, and reconciliation, but it does **not** claim one co
 A continuation retains the exclusive identity boundary, exact binding/read affinity, and cumulative
 per-correlation-key emitted counts used to enforce fan-out bounds across resumed statements, not a database snapshot.
 A caller may persist that opaque continuation across pause/resume and must supply the same authentication key after a
-restart while it remains valid. Deliberate key rotation invalidates previously issued continuations. The source does
-not implement change delivery, settlement, or a PostgreSQL materialization write target; incremental CDC and target
-writes remain separate adapter work.
+restart while it remains valid. Deliberate key rotation invalidates previously issued continuations. This paged source
+does not itself deliver or settle changes, and the package does not yet provide a PostgreSQL materialization write
+target. Incremental delivery is instead supplied by the logical-replication source described below.
 
 ```csharp
 // Resolve this from an application secret store and retain it while issued continuations remain resumable.
@@ -235,6 +238,201 @@ var rebuildSource = new PostgresMaterializationSource(
     sourcePlacement,
     continuationKey);
 ```
+
+## Logical replication
+
+`PostgresLogicalReplicationMaterializationChangeSource` implements the backend-neutral pull-change and explicit
+settlement contracts over PostgreSQL's built-in `pgoutput` protocol. It composes the same exact Relations reader,
+physical placement, and storage binding used for rebuild reads, so physical column selectors, canonical scalar
+decoding, identity evidence, and materialization scope have one authority. Npgsql remains an adapter implementation
+detail; durable positions and change pages expose only `Cohesive.Storage.Materialization` contracts.
+
+### PostgreSQL provisioning
+
+The PostgreSQL server must enable logical decoding with `wal_level = logical` and have sufficient
+`max_replication_slots` and `max_wal_senders` capacity. These settings require server-level configuration and may
+require a restart. The runtime role must be allowed to connect to the bound database, read the published table and
+catalog evidence used during validation, and start logical replication; grant the PostgreSQL `REPLICATION` role
+attribute where required by the deployment. Keep host-based authentication scoped to that role, database, and
+network rather than copying a broad development rule into production.
+
+Provision one publication and one permanent `pgoutput` slot dedicated exclusively to the exact materialization
+source placement. At preflight, the v1 adapter requires the publication to include the bound table with all columns,
+`INSERT`, `UPDATE`, and `DELETE` enabled, `TRUNCATE` disabled, no row filter, and
+`publish_via_partition_root` disabled. A publication may contain other tables; the adapter advances through their WAL
+without projecting them as changes for this placement. The slot must exist, be inactive, be non-temporary, use
+`pgoutput`, and not enable two-phase decoding. A representative full-before-image setup is:
+
+```sql
+ALTER TABLE "transport"."loads" REPLICA IDENTITY FULL;
+
+CREATE PUBLICATION "cohesive_loads_publication"
+    FOR TABLE "transport"."loads"
+    WITH (publish = 'insert, update, delete');
+
+SELECT *
+FROM pg_create_logical_replication_slot(
+    'cohesive_loads_slot',
+    'pgoutput');
+```
+
+Use `REPLICA IDENTITY DEFAULT` when the bound primary key supplies the required mutation identity, or
+`REPLICA IDENTITY USING INDEX ...` with an explicitly bound qualifying unique index. Select
+`PostgresLogicalReplicationBeforeImageRequirement.Required` only with `REPLICA IDENTITY FULL`; PostgreSQL's key-only
+replica identities cannot prove a complete prior row. Publication column lists must retain every replica-identity and
+projected column required by the exact storage binding; the v1 full-column preflight rejects a partial column list.
+The v1 adapter also requires `FULL` when a projected text, numeric, or `bytea` value may be represented by pgoutput as
+an unchanged TOAST marker: key-only identity cannot reconstruct that complete canonical after image. Fixed-width
+projections may use `DEFAULT` or `USING INDEX` without claiming a complete before image.
+Row filters, partition-root publication, and two-phase decoding require a future explicit capability rather than an
+unattributed relaxation of this binding.
+
+Replication slots retain WAL independently of application health. Configure a finite operational retention policy,
+monitor `pg_replication_slots`, and alert on retained bytes, inactivity, invalidation, and remaining safe WAL. Dropping
+or recreating the slot invalidates its prior durable positions even when its name is reused. PostgreSQL does not expose
+a durable slot-incarnation identity, so `PostgresLogicalReplicationBinding.SlotGeneration` is an operator-owned,
+non-secret identity that must rotate whenever the physical slot is recreated.
+
+Useful upstream references are PostgreSQL's
+[logical-replication publication and replica-identity documentation](https://www.postgresql.org/docs/current/logical-replication-publication.html),
+[replication settings](https://www.postgresql.org/docs/current/runtime-config-replication.html), and Npgsql's
+[logical-replication guide](https://www.npgsql.org/doc/replication.html).
+
+### Runtime binding
+
+`NpgsqlDataSource` cannot create replication-protocol connections. Register the ordinary data source and an explicit
+factory that returns a fresh, unopened `LogicalReplicationConnection` for every operation:
+
+```csharp
+using Npgsql;
+using Npgsql.Replication;
+
+await using var dataSource = NpgsqlDataSource.Create(connectionString);
+var runtime = new PostgresNpgsqlRuntimeBinding(
+    database: storage.Database,
+    dataSource: dataSource,
+    authority: "operations/deployment/postgres-primary",
+    logicalReplicationConnectionFactory: () =>
+        new LogicalReplicationConnection(connectionString));
+```
+
+The runtime binding verifies that both paths name the same single host, port, database, user, TLS, and other
+non-secret connection settings. It normalizes only the pooling, enlistment, multiplexing, and keepalive values that
+Npgsql necessarily changes for replication connections, and rejects a factory that returns the same connection
+object twice. Password, certificate, and authentication callbacks configured on `NpgsqlDataSource` are not inherited
+by `LogicalReplicationConnection`; configure equivalent behavior explicitly in the factory without placing secrets in
+the runtime authority or adapter evidence.
+
+Bind that runtime to the canonical reader, publication, dedicated slot, operator-owned slot generation, expected
+replica identity, and the same caller-managed position-authentication key after every restart:
+
+```csharp
+var logicalBinding = new PostgresLogicalReplicationBinding(
+    publicationName: "cohesive_loads_publication",
+    slotName: "cohesive_loads_slot",
+    slotGeneration: "operations/loads-slot@generation-3",
+    expectedReplicaIdentity: new(
+        kind: PostgresLogicalReplicationReplicaIdentityKind.Full),
+    beforeImageRequirement: PostgresLogicalReplicationBeforeImageRequirement.Required);
+
+var changeSource = await PostgresLogicalReplicationMaterializationChangeSource.CreateAsync(
+    reader: reader,
+    placement: sourcePlacement,
+    runtimeBinding: runtime,
+    binding: logicalBinding,
+    positionAuthenticationKey: positionAuthenticationKey,
+    policy: PostgresLogicalReplicationSourcePolicy.Default);
+```
+
+Creation inspects the live publication, table, replica identity, slot, output plugin, and server identity before it
+advertises capabilities. Configuration drift fails closed instead of silently changing the meaning or coverage of a
+materialization feed. The position key must contain at least 32 bytes, remain available for every still-resumable
+position, and come from an application secret store. Rotating it deliberately invalidates positions authenticated by
+the prior key. `CreateAsync` does not create, replace, or drop the publication or slot.
+
+### Exported-snapshot baseline handoff
+
+For an initial rebuild that must close the gap between a bounded baseline and logical replication,
+`PostgresLogicalReplicationBaselineHandoff.CreateAsync` creates the configured permanent slot at a PostgreSQL
+consistent point, imports its exported snapshot as the first command of one `REPEATABLE READ` transaction, and
+returns three aligned values:
+
+- the handoff itself, which is an `IMaterializationSource` whose baseline pages all use that imported snapshot;
+- `ChangeStartPosition`, the exact exclusive WAL cut paired with the snapshot; and
+- `ChangeSource`, the retained change source that reads commits after that cut.
+
+The slot must not already exist. Read every baseline page through the handoff instance (or its descriptor's wrapped
+Relations reader) while the handoff remains alive, durably checkpoint the completed baseline and
+`ChangeStartPosition`, then dispose the handoff to end the snapshot transaction. Disposal never drops or settles the
+permanent slot and does not dispose `ChangeSource`.
+
+```csharp
+await using var handoff = await PostgresLogicalReplicationBaselineHandoff.CreateAsync(
+    context: operationContext,
+    reader: reader,
+    placement: sourcePlacement,
+    runtimeBinding: runtime,
+    binding: logicalBinding,
+    positionAuthenticationKey: positionAuthenticationKey,
+    policy: PostgresLogicalReplicationSourcePolicy.Default);
+
+// Enumerate handoff.ReadPageAsync(...) to completion and durably checkpoint the baseline.
+var catchUpAfter = handoff.ChangeStartPosition;
+var incrementalSource = handoff.ChangeSource;
+```
+
+Creating a permanent slot is an external durable mutation. The handoff deliberately does not retry an indeterminate
+slot-creation result and does not remove a slot during failure cleanup. If creation fails after PostgreSQL may have
+created the slot, inspect the named slot and either adopt or remove it before retrying. Rotate `SlotGeneration` whenever
+the physical slot is recreated, even when its name is unchanged. This bootstrap path is for a new slot; the ordinary
+`PostgresMaterializationSource` remains available for reconciliation rebuilds that do not require one MVCC snapshot.
+
+### Delivery, durability, and settlement semantics
+
+The source captures opaque, authenticated WAL positions and returns complete committed PostgreSQL transactions in
+source order. It never splits one transaction between pages. `MaterializationChangeReadRequest` item and byte values
+are therefore preferred page budgets: the final admitted transaction may cross either budget, but no later
+transaction is admitted. `MaximumTransactionChanges` and `MaximumTransactionBytes` are separate hard safety limits;
+exceeding either fails the read without advancing application progress or provider settlement. Reads also bound the
+number of transactions, reconnect attempts, inactivity, and encoded position size.
+
+Use `CaptureCurrentPositionAsync` to establish an exclusive "start after the currently visible WAL" boundary. Use
+`CaptureRetainedStartPositionAsync` only when a recovery or bootstrap plan intentionally wants the existing slot's
+earliest safely replayable confirmed boundary. This is not the raw `restart_lsn`, which may precede the logical slot's
+replay contract. Neither call reads changes, extends retention, changes the slot, or creates application progress.
+Both positions fail closed when the bound server, database, publication, slot, operator-owned slot generation,
+physical plan, placement, or authentication key no longer matches.
+
+An empty page may still advance `ThroughPosition` when the source scanned irrelevant WAL. Persist that exact boundary
+just as carefully as a page containing deliveries. A caught-up result is bounded to the WAL end captured for that
+operation; it is not a promise that no later transaction can arrive. Stable change and delivery identities make
+at-least-once retries attributable, while the canonical before/after observations retain the exact Relations shape,
+identity, and field selectors.
+
+Reading does not acknowledge WAL. The owning Process must apply target effects, durably save an application checkpoint
+covering the page's exact position and delivery identities, and only then call `IMaterializationSettlingSource.SettleAsync`
+with that checkpoint evidence. Settlement advances and confirms the dedicated slot position; replaying the same
+settlement identity is idempotent, while reusing it for different evidence is rejected. Use
+`PostgresLogicalReplicationMaterializationChangeSource.CreateSettlementId` for the conventional deterministic
+identity derived from the already-durable checkpoint and exact authenticated position. The required order remains:
+
+```text
+apply effects -> commit application checkpoint -> settle PostgreSQL slot -> record settlement receipt
+```
+
+A crash before settlement may redeliver an already-applied transaction. A crash after settlement cannot expose
+uncommitted target work because the API requires the durable checkpoint evidence first. Pause/continue retains the
+same source position, slot generation, and index generation. If the slot is lost, invalidated, recreated, or no longer
+retains the requested WAL, the source returns a typed terminal recovery classification rather than guessing a new
+starting point. A rebuild or operator-directed recovery must establish a new baseline and rotate the appropriate
+generation identities.
+
+`InspectHealthAsync` polls the exact slot and returns provider-neutral health for the source scope.
+`IPostgresLogicalReplicationObserver` additionally receives typed operation and slot-health observations without
+putting provider objects into core contracts. Observer implementations must be fast, thread-safe, and non-throwing.
+Use the health state, retained/pending/safe WAL estimates, inactivity, operation disposition, and stable failure
+classifications to drive alerts and Cohesive.Control policy; do not parse human-readable exception text as
+operational state.
 
 ## End-to-end relation compilation
 
@@ -445,9 +643,11 @@ Conformance tests compile representative rows, aggregation, relationship travers
 text-search, paging, and distinct plans against the exact advertised profile, including structured fail-closed cases.
 Source-reader and materialization conformance tests additionally cover set-oriented point and predicate batches,
 bounded enumeration, authenticated keyset resume and forgery rejection, field projection, provider and page byte
-boundaries, runtime/database affinity failures, cancellation, and the absence of a cross-page snapshot claim. Npgsql
-remains confined to the adapter package; Cohesive.Relations and Cohesive.Storage public contracts do not expose
-provider types.
+boundaries, runtime/database affinity failures, cancellation, and the absence of a cross-page snapshot claim.
+Logical-replication contract tests cover deployment affinity, authenticated positions, transaction-aligned budgeting,
+key-changing update expansion, before/after images, explicit settlement, typed health and failure observations, and
+slot-generation fencing. Npgsql remains confined to the adapter package; Cohesive.Relations and Cohesive.Storage
+public contracts do not expose provider types.
 
 Set `COHESIVE_POSTGRES_TEST_CONNECTION_STRING` to run the opt-in local PostgreSQL execution scenario against a database
 where the configured user may create and drop a temporary schema:
@@ -455,4 +655,17 @@ where the configured user may create and drop a temporary schema:
 ```bash
 COHESIVE_POSTGRES_TEST_CONNECTION_STRING='Host=localhost;Database=postgres;Username=postgres;Password=postgres' \
   ./eng/test-postgres-integration.sh
+```
+
+Logical replication is a separate opt-in suite because it requires server-level configuration and creates
+database-wide publications and permanent slots during the tests. Point it only at a disposable database with
+`wal_level=logical`; the configured role must be able to create and drop schemas, publications, and logical
+replication slots. The suite exercises full, default, and explicit-index replica identity (including an index with an
+included non-key column), typed insert/update/delete delivery including a primary-key change, explicit settlement
+without read-side feedback, and the exported-snapshot baseline handoff. Each scenario waits for its test-owned slot to
+become inactive and then removes the slot, publication, and schema.
+
+```bash
+COHESIVE_POSTGRES_LOGICAL_REPLICATION_TEST_CONNECTION_STRING='Host=localhost;Database=postgres;Username=postgres;Password=postgres' \
+  ./eng/test-postgres-logical-replication-integration.sh
 ```

@@ -6,5 +6,5 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 dotnet test "$repo_root/src/Cohesive.Tests/Cohesive.Tests.csproj" \
   --configuration Release \
-  --filter "FullyQualifiedName~PostgresRelationQuerySourceReaderTests.LocalPostgres_ExecutesRelationsReadAndMaterialization_WhenConfigured" \
+  --filter "FullyQualifiedName~PostgresRelationQuerySourceReaderTests.LocalPostgres_" \
   --logger "console;verbosity=minimal"
