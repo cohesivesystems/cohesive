@@ -783,9 +783,13 @@ public sealed class MaterializationRebuildProcessLifecycleTests
             Shards,
             attempt,
             generation,
+            new("materialization/lifecycle-tests"),
+            new("target/lifecycle-tests"),
             begin ?? (_ => Task.FromResult(Initialization(generation))),
             (_, _) => Task.FromException<MaterializationRebuildShardResult>(
                 new InvalidOperationException("Lifecycle tests do not execute rebuild shards.")),
+            (_, _, _) => Task.FromException<MaterializationGenerationActivationResult>(
+                new InvalidOperationException("Lifecycle tests do not activate generations.")),
             abandon);
 
     static MaterializationRebuildInitializationResult Initialization(

@@ -14,7 +14,7 @@ using Cohesive.Storage.Materialization;
 
 namespace Cohesive.Tests.Storage;
 
-public sealed class MaterializationRebuildExecutorTests
+public sealed partial class MaterializationRebuildExecutorTests
 {
     const long ReadBytes = 1_000_000;
     const long WriteBytes = 1_000_000;
@@ -37,6 +37,25 @@ public sealed class MaterializationRebuildExecutorTests
             forward.Plan.Sources.Select(static source => source.Input.Value).Order(StringComparer.Ordinal),
             reverse.Plan.Sources.Select(static source => source.Input.Value));
         Assert.Equal(
+            forward.Plan.ChangeFeedCatalogs.Select(static catalog => catalog.Input.Value).Order(StringComparer.Ordinal),
+            reverse.Plan.ChangeFeedCatalogs.Select(static catalog => catalog.Input.Value));
+        Assert.All(
+            forward.Plan.ChangeFeedCatalogs,
+            catalog => Assert.Equal(
+                catalog.Scopes.Select(scope => MaterializationChannelSemantics.ToChannelScopeId(scope).Value)
+                    .Order(StringComparer.Ordinal),
+                catalog.Scopes.Select(scope => MaterializationChannelSemantics.ToChannelScopeId(scope).Value)));
+        Assert.Equal(5, forward.Plan.ChangeFeeds.Length);
+        Assert.Equal(
+            forward.Plan.ChangeFeeds.Select(static feed => feed.Id.Value).Order(StringComparer.Ordinal),
+            reverse.Plan.ChangeFeeds.Select(static feed => feed.Id.Value));
+        Assert.All(
+            forward.Plan.ImpactPlan.Routes,
+            route => Assert.Contains(forward.Plan.ChangeFeeds, feed => feed.Scope.Input == route.ChangeInput));
+        Assert.All(
+            forward.Plan.Shards,
+            shard => Assert.Contains(forward.Plan.ChangeFeeds, feed => feed.Scope == shard.Scope));
+        Assert.Equal(
             forward.Plan.Fingerprint,
             MaterializationRebuildPlanFingerprinter.Compute(forward.Plan));
 
@@ -54,16 +73,19 @@ public sealed class MaterializationRebuildExecutorTests
         Assert.True(staleMatch.IsSatisfied);
         Assert.Throws<ArgumentException>(() => new MaterializationRebuildPlan(
             materialization: forward.Plan.Materialization,
+            impactPlan: forward.Plan.ImpactPlan,
             sources: forward.Plan.Sources,
             target: forward.Plan.Target,
             targetCapabilityMatch: staleMatch,
             shards: forward.Plan.Shards,
+            changeFeedCatalogs: forward.Plan.ChangeFeedCatalogs,
+            changeFeeds: forward.Plan.ChangeFeeds,
             limits: forward.Plan.Limits,
             provenance: forward.Plan.Provenance));
     }
 
     [Fact]
-    public async Task BeginAttempt_AllocatesOneDeterministicLoadingCandidateAndPersistsThreeChannelCuts()
+    public async Task BeginAttempt_AllocatesOneDeterministicLoadingCandidateAndPersistsEveryDependencyFeedCut()
     {
         var fixture = CreateFixture();
         var attempt = Attempt("attempt-1");
@@ -76,7 +98,7 @@ public sealed class MaterializationRebuildExecutorTests
         Assert.Equal(expectedGeneration, begun.Generation);
         Assert.Equal(expectedGeneration, replayed.Generation);
         Assert.Equal(MaterializationGenerationState.Loading, begun.GenerationSnapshot!.State);
-        Assert.Equal(3, begun.Progress.Length);
+        Assert.Equal(fixture.Plan.ChangeFeeds.Length, begun.Progress.Length);
         Assert.All(begun.Progress, static progress =>
         {
             Assert.Null(progress.LatestBatchCheckpoint);
@@ -93,6 +115,52 @@ public sealed class MaterializationRebuildExecutorTests
         var target = await fixture.Target.InspectAsync(OperationContext.Create());
         Assert.Null(target.ActiveGenerationId);
         Assert.Equal(1, target.RetainedGenerationCount);
+    }
+
+    [Fact]
+    public async Task RunShard_PartialInitializationCannotReadOrMutateBeforeEveryFeedCutExists()
+    {
+        var fixture = CreateFixture();
+        var failingFeed = fixture.Plan.ChangeFeeds[^1];
+        var failingIndex = fixture.Plan.ChangeFeeds.Length - 1;
+        var runnableShard = fixture.Plan.Shards.First(shard => fixture.Plan.ChangeFeeds
+            .Take(failingIndex)
+            .Any(feed => feed.Scope == shard.Scope));
+        var resolved = new ResolvedMaterializationRebuildPlan(
+            plan: fixture.Plan,
+            target: fixture.Target,
+            progressStore: fixture.Resolved.ProgressStore,
+            shardBindings: fixture.Plan.Shards.Select(shard => fixture.Resolved.GetShard(shard.Id)),
+            changeFeedBindings: System.Linq.Enumerable.Select(fixture.Plan.ChangeFeeds, feed =>
+            {
+                var binding = fixture.Resolved.GetChangeFeed(feed.Id);
+                return feed.Id == failingFeed.Id
+                    ? new MaterializationChangeFeedBinding(
+                        feed,
+                        feed.Channel,
+                        new CaptureFailingChangeSource(binding.Source),
+                        binding.Interpreter)
+                    : binding;
+            }));
+        var executor = new MaterializationRebuildExecutor(resolved);
+        var attempt = Attempt("attempt-partial-initialization");
+
+        await Assert.ThrowsAsync<InjectedChangeCutException>(() =>
+            executor.BeginAttemptAsync(OperationContext.Create(), attempt));
+        var result = await executor.RunShardAsync(
+            OperationContext.Create(),
+            attempt,
+            runnableShard.Id);
+
+        Assert.Equal(MaterializationRebuildShardDisposition.NotReady, result.Disposition);
+        Assert.Contains(
+            result.Diagnostics,
+            static diagnostic =>
+                diagnostic.Code == MaterializationRebuildDiagnosticCodes.InitializationIncomplete);
+        Assert.All(fixture.ScanReaders.Values, static reader => Assert.Equal(0, reader.ReadCalls));
+        Assert.Empty(await Items(
+            fixture.Target,
+            MaterializationRebuildIdentities.Generation(fixture.Plan, attempt)));
     }
 
     [Fact]
@@ -184,8 +252,7 @@ public sealed class MaterializationRebuildExecutorTests
             progress.Key,
             mutationId: new("mutation/forged-read-completion"),
             expectedRevision: progress.Revision,
-            owner: $"{attempt.Continuation.ProcessInstanceId.Value}/"
-                + $"{attempt.Continuation.ProcessAttemptId.Value}/{shardId.Value}",
+            owner: Assert.IsType<string>(progress.FenceOwner),
             fence: progress.Fence,
             checkpoint: forgedCompletion);
 
@@ -372,7 +439,8 @@ public sealed class MaterializationRebuildExecutorTests
             fixture.Plan,
             fixture.Target,
             fixture.Resolved.ProgressStore,
-            bindings));
+            bindings,
+            fixture.Plan.ChangeFeeds.Select(feed => fixture.Resolved.GetChangeFeed(feed.Id))));
 
         var result = await executor.RunShardAsync(
             OperationContext.Create(),
@@ -530,7 +598,8 @@ public sealed class MaterializationRebuildExecutorTests
         bool reversePlanDeclarations = false,
         IMaterializationRebuildCrashInjector? crashInjector = null,
         int maximumPageItems = 2,
-        int maximumPagesPerShard = 10)
+        int maximumPagesPerShard = 10,
+        bool transactionAlignedChangeDelivery = false)
     {
         RelationQueryCompilationRequest compilationRequest = new(
             FederatedLoadRelationFixture.RelationDocument,
@@ -553,7 +622,8 @@ public sealed class MaterializationRebuildExecutorTests
                 id: $"tests/rebuild-source/{Uri.EscapeDataString(requirement.Input.Value)}/v1",
                 role: MaterializationEndpointRole.Source,
                 subject: source.Value,
-                requirements: requirement.Capabilities);
+                requirements: requirement.Capabilities,
+                transactionAlignedChangeDelivery: transactionAlignedChangeDelivery);
             return new MaterializationRebuildSourcePlan(
                 input: requirement.Input,
                 source: source,
@@ -616,16 +686,30 @@ public sealed class MaterializationRebuildExecutorTests
                 id: new(shardId),
                 scope: scope,
                 read: read,
-                hydrationPhysicalPlan: semantic.PhysicalPlan.Fingerprint,
-                changeChannel: new(
-                    algorithm: "sha256",
-                    canonicalization: "tests/channel-plan/v1",
-                    value: $"channel-{suffix}"));
+                hydrationPhysicalPlan: semantic.PhysicalPlan.Fingerprint);
         }).ToImmutableArray();
+        var impactPlan = MaterializationRebuildTestPlan.CompileImpactPlan(
+            materialization,
+            policyId: "tests/materialization-rebuild-impact/v1",
+            maximumAffectedRoots: ReadItems,
+            maximumReadBytes: ReadBytes);
+        var changeFeedCatalog = MaterializationRebuildTestPlan.CreateChangeFeedCatalog(
+            semantic.Plan,
+            semantic.PhysicalPlan.Fingerprint,
+            impactPlan,
+            sourcePlans,
+            shards,
+            contributorPlacement: route => semantic.Placement.Bindings.Single(candidate =>
+                candidate.Input == route.ChangeInput),
+            channelCanonicalization: "tests/materialization-rebuild-channel/v1");
+        var changeFeedCatalogs = changeFeedCatalog.Evidence;
+        var changeFeeds = changeFeedCatalog.Feeds;
         if (reversePlanDeclarations)
         {
             sourcePlans = sourcePlans.Reverse().ToImmutableArray();
             shards = shards.Reverse().ToImmutableArray();
+            changeFeedCatalogs = changeFeedCatalogs.Reverse().ToImmutableArray();
+            changeFeeds = changeFeeds.Reverse().ToImmutableArray();
         }
         var limits = new MaterializationRebuildLimits(
             maximumPageItems: maximumPageItems,
@@ -634,13 +718,17 @@ public sealed class MaterializationRebuildExecutorTests
             maximumBulkBytes: WriteBytes,
             maximumPagesPerShard: maximumPagesPerShard,
             maximumStartsPerActivation: 2,
-            maximumParallelism: 2);
+            maximumParallelism: 2,
+            maximumChangeFeedsPerConvergenceActivation: 16);
         var plan = new MaterializationRebuildPlan(
             materialization: materialization,
+            impactPlan: impactPlan,
             sources: sourcePlans,
             target: targetDescriptor,
             targetCapabilityMatch: targetMatch,
             shards: shards,
+            changeFeedCatalogs: changeFeedCatalogs,
+            changeFeeds: changeFeeds,
             limits: limits,
             provenance: new(
                 producer: new("tests/materialization-rebuild-plan"),
@@ -681,6 +769,24 @@ public sealed class MaterializationRebuildExecutorTests
         }
         var target = new InMemoryMaterializationTarget(targetDescriptor);
         var progressStore = new InMemoryMaterializationProgressStore();
+        var impactInterpreter = new MaterializationImpactPlanInterpreter(
+            plan.ImpactPlan,
+            definition,
+            new MaterializationTestImpactRuntime(plan.ImpactPlan.Fingerprint));
+        var sourceByFeed = plan.ChangeFeeds.ToDictionary(
+            static feed => feed.Id,
+            feed =>
+            {
+                var matchingShard = plan.Shards.SingleOrDefault(shard => shard.Scope == feed.Scope);
+                if (matchingShard is not null)
+                    return sourceByShard[matchingShard.Id];
+
+                var sourcePlan = plan.Sources.Single(source => source.Input == feed.Scope.Input);
+                var reader = physicalScenario.Readers.Single(candidate =>
+                    candidate.Descriptor.Source == sourcePlan.Source);
+                return new InMemoryMaterializationSource(
+                    new MaterializationQuerySourceDescriptor(reader, sourcePlan.Profile));
+            });
         var resolved = new ResolvedMaterializationRebuildPlan(
             plan: plan,
             target: target,
@@ -688,7 +794,12 @@ public sealed class MaterializationRebuildExecutorTests
             shardBindings: plan.Shards.Select(shard => new MaterializationRebuildShardBinding(
                 shard: shard,
                 source: sourceByShard[shard.Id],
-                hydrator: hydrator)));
+                hydrator: hydrator)),
+            changeFeedBindings: plan.ChangeFeeds.Select(feed => new MaterializationChangeFeedBinding(
+                feed: feed,
+                channel: feed.Channel,
+                source: sourceByFeed[feed.Id],
+                interpreter: impactInterpreter)));
         return new(
             plan,
             resolved,
@@ -708,25 +819,27 @@ public sealed class MaterializationRebuildExecutorTests
         [
             .. plan.InputContract.Sources.Select(source => SourceRequirement(
                 source.Input.Id,
-                MaterializationCapabilityKind.SourceBoundedEnumeration)),
+                MaterializationCapabilityKind.SourceBoundedEnumeration,
+                isRoot: source.Role == RelationQuerySourceInputRole.RelationRoot)),
             .. plan.InputContract.Traversals.Select(traversal => SourceRequirement(
                 traversal.Input.Id,
                 traversal.Input.Direction == RelationshipTraversalDirection.Forward
                     ? MaterializationCapabilityKind.SourceBatchedPointRead
-                    : MaterializationCapabilityKind.SourceParameterizedPredicateQuery))
+                    : MaterializationCapabilityKind.SourceParameterizedPredicateQuery,
+                isRoot: false))
         ];
         ImmutableArray<MaterializationCapabilityRequirement> target =
         [
-            Requirement("target/isolation", MaterializationCapabilityKind.TargetGenerationIsolation),
-            Requirement("target/upsert", MaterializationCapabilityKind.TargetBulkUpsert),
-            Requirement("target/delete", MaterializationCapabilityKind.TargetBulkDelete),
-            Requirement("target/outcomes", MaterializationCapabilityKind.TargetPerItemOutcomes),
-            Requirement("target/seal", MaterializationCapabilityKind.TargetSeal),
-            Requirement("target/validation", MaterializationCapabilityKind.TargetValidation),
-            Requirement("target/promotion", MaterializationCapabilityKind.TargetFencedPromotion),
-            Requirement("target/retirement", MaterializationCapabilityKind.TargetRetirement),
-            Requirement("target/abandonment", MaterializationCapabilityKind.TargetGenerationAbandonment),
-            Requirement("target/cleanup", MaterializationCapabilityKind.TargetCleanup)
+            Requirement("target/isolation", MaterializationCapabilityKind.TargetGenerationIsolation, MaterializationSynchronizationMode.Rebuild),
+            Requirement("target/upsert", MaterializationCapabilityKind.TargetBulkUpsert, MaterializationSynchronizationMode.All),
+            Requirement("target/delete", MaterializationCapabilityKind.TargetBulkDelete, MaterializationSynchronizationMode.All),
+            Requirement("target/outcomes", MaterializationCapabilityKind.TargetPerItemOutcomes, MaterializationSynchronizationMode.All),
+            Requirement("target/seal", MaterializationCapabilityKind.TargetSeal, MaterializationSynchronizationMode.Rebuild),
+            Requirement("target/validation", MaterializationCapabilityKind.TargetValidation, MaterializationSynchronizationMode.Rebuild),
+            Requirement("target/promotion", MaterializationCapabilityKind.TargetFencedPromotion, MaterializationSynchronizationMode.Rebuild),
+            Requirement("target/retirement", MaterializationCapabilityKind.TargetRetirement, MaterializationSynchronizationMode.Rebuild),
+            Requirement("target/abandonment", MaterializationCapabilityKind.TargetGenerationAbandonment, MaterializationSynchronizationMode.Rebuild),
+            Requirement("target/cleanup", MaterializationCapabilityKind.TargetCleanup, MaterializationSynchronizationMode.Rebuild)
         ];
         return new(
             id: new("tests/load-search"),
@@ -734,7 +847,7 @@ public sealed class MaterializationRebuildExecutorTests
             sources: sources,
             targetCapabilities: target,
             updatePolicy: new(
-                supportedModes: MaterializationSynchronizationMode.Rebuild,
+                supportedModes: MaterializationSynchronizationMode.All,
                 consistency: MaterializationConsistencyKind.BaselinePlusCatchUp,
                 idempotency: MaterializationIdempotencyKind.StableOutputIdentityAndVersion),
             failurePolicy: new(
@@ -752,33 +865,45 @@ public sealed class MaterializationRebuildExecutorTests
 
     static MaterializationSourceRequirement SourceRequirement(
         RelationQueryInputId input,
-        MaterializationCapabilityKind readCapability) =>
-        new(
-            input: input,
-            capabilities:
-            [
-                Requirement($"{input.Value}/read", readCapability),
-                Requirement($"{input.Value}/continuation", MaterializationCapabilityKind.SourceContinuation),
-                Requirement($"{input.Value}/changes", MaterializationCapabilityKind.SourceChangeDelivery),
-                Requirement($"{input.Value}/settlement", MaterializationCapabilityKind.SourceSettlement)
-            ]);
+        MaterializationCapabilityKind readCapability,
+        bool isRoot)
+    {
+        ImmutableArray<MaterializationCapabilityRequirement> capabilities =
+        [
+            Requirement($"{input.Value}/read", readCapability, MaterializationSynchronizationMode.Rebuild),
+            Requirement($"{input.Value}/continuation", MaterializationCapabilityKind.SourceContinuation, MaterializationSynchronizationMode.Rebuild),
+            Requirement($"{input.Value}/changes", MaterializationCapabilityKind.SourceChangeDelivery, MaterializationSynchronizationMode.All),
+            Requirement($"{input.Value}/settlement", MaterializationCapabilityKind.SourceSettlement, MaterializationSynchronizationMode.All)
+        ];
+        if (isRoot)
+        {
+            capabilities = capabilities.Add(Requirement(
+                $"{input.Value}/inverse",
+                MaterializationCapabilityKind.SourceParameterizedPredicateQuery,
+                MaterializationSynchronizationMode.Incremental));
+        }
+
+        return new(input, capabilities);
+    }
 
     static MaterializationCapabilityRequirement Requirement(
         string id,
-        MaterializationCapabilityKind capability) =>
+        MaterializationCapabilityKind capability,
+        MaterializationSynchronizationMode modes) =>
         new(
             id: new(id),
             capability: capability,
             guarantees: Guarantees(capability),
             operatingLimits: Limits(capability),
-            modes: MaterializationSynchronizationMode.Rebuild);
+            modes: modes);
 
     static MaterializationCapabilityProfile CapabilityProfile(
         string id,
         MaterializationEndpointRole role,
         string subject,
         ImmutableArray<MaterializationCapabilityRequirement> requirements,
-        CapabilityRealizationKind realization = CapabilityRealizationKind.Native) =>
+        CapabilityRealizationKind realization = CapabilityRealizationKind.Native,
+        bool transactionAlignedChangeDelivery = false) =>
         new(
             id: new(id),
             role: role,
@@ -789,8 +914,16 @@ public sealed class MaterializationRebuildExecutorTests
                     id: new($"evidence/{Uri.EscapeDataString(requirement.Id.Value)}"),
                     capability: requirement.Capability,
                     realization: realization,
-                    guarantees: requirement.Guarantees,
-                    operatingLimits: requirement.OperatingLimits,
+                    guarantees: transactionAlignedChangeDelivery
+                        && requirement.Capability == MaterializationCapabilityKind.SourceChangeDelivery
+                            ? requirement.Guarantees.Add(MaterializationGuaranteeKind.TransactionAlignedDelivery)
+                            : requirement.Guarantees,
+                    operatingLimits: transactionAlignedChangeDelivery
+                        && requirement.Capability == MaterializationCapabilityKind.SourceChangeDelivery
+                            ? requirement.OperatingLimits
+                                .Add(new(MaterializationLimitKind.TransactionItems, 2))
+                                .Add(new(MaterializationLimitKind.TransactionBytes, 100_000))
+                            : requirement.OperatingLimits,
                     sourceReferences: ["tests/ari-176-reference-adapter/v1"]))
             ]);
 
@@ -920,6 +1053,10 @@ public sealed class MaterializationRebuildExecutorTests
 
         public RelationQuerySourceReaderDescriptor Descriptor { get; } = descriptor;
 
+        public string FirstObservationIdentity => current.Observations[0].Identity;
+
+        public int ReadCalls { get; private set; }
+
         public void ReplaceFirstObservationIdentity(string identity)
         {
             if (current.Observations.IsDefaultOrEmpty)
@@ -941,9 +1078,34 @@ public sealed class MaterializationRebuildExecutorTests
         {
             ArgumentNullException.ThrowIfNull(request);
             cancellationToken.ThrowIfCancellationRequested();
+            ReadCalls++;
             return ValueTask.FromResult(current);
         }
     }
+
+    sealed class CaptureFailingChangeSource(IMaterializationPullChangeSource inner)
+        : IMaterializationPullChangeSource
+    {
+        public MaterializationQuerySourceDescriptor Descriptor => inner.Descriptor;
+
+        public ValueTask<MaterializationSourcePage> ReadPageAsync(
+            OperationContext context,
+            MaterializationSourcePageRequest request) =>
+            inner.ReadPageAsync(context, request);
+
+        public ValueTask<MaterializationSourcePosition> CaptureCurrentPositionAsync(
+            OperationContext context,
+            MaterializationSourceScope scope) =>
+            ValueTask.FromException<MaterializationSourcePosition>(new InjectedChangeCutException());
+
+        public ValueTask<MaterializationChangePage> ReadChangesAsync(
+            OperationContext context,
+            MaterializationChangeReadRequest request) =>
+            inner.ReadChangesAsync(context, request);
+    }
+
+    sealed class InjectedChangeCutException()
+        : Exception("Injected change-feed cut capture failure.");
 
     sealed class TestHydrator(
         RelationQueryCompiledPlanReference plan,

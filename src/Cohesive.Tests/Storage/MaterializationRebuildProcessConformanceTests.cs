@@ -29,7 +29,7 @@ public sealed class MaterializationRebuildProcessConformanceTests
         new("authority/materialization-rebuild-conformance", "tenant/cohesive");
 
     [Fact]
-    public async Task CanonicalCoordinator_DrivesThreeRealShardChildrenToBaselineCompleteCatchUpRequired()
+    public async Task CanonicalCoordinator_DrivesRealBaselineCatchUpAndPromotionToAnActiveGeneration()
     {
         var artifacts = MaterializationRebuildProcessFactory.Create();
         ProcessContinuationIdentity coordinatorContinuation = new(
@@ -39,13 +39,19 @@ public sealed class MaterializationRebuildProcessConformanceTests
             continuation: coordinatorContinuation,
             startedAtUtc: StartedAtUtc);
         var materialization = CreateMaterializationFixture();
-        var execution = new MaterializationRebuildExecution(materialization.Resolved, attempt);
+        var execution = new MaterializationRebuildExecution(
+            materialization.Resolved,
+            attempt,
+            new InMemoryMaterializationSynchronizationWorkStore());
         var executionResolver = new ExactExecutionResolver(execution);
         var initializationAdapter = new MaterializationRebuildInitializationDurableOperationAdapter(
             request: artifacts.InitializationRequest,
             resolver: executionResolver);
         var shardAdapter = new MaterializationRebuildShardDurableOperationAdapter(
             request: artifacts.ShardRebuildRequest,
+            resolver: executionResolver);
+        var activationAdapter = new MaterializationSynchronizationActivationDurableOperationAdapter(
+            request: artifacts.SynchronizationActivationRequest,
             resolver: executionResolver);
         var workerRuntime = new ProcessDurableRuntime(
             store: new InMemoryProcessDurableStore(),
@@ -66,9 +72,13 @@ public sealed class MaterializationRebuildProcessConformanceTests
                 workerId: "worker/materialization-rebuild-coordinator",
                 workerLease: TimeSpan.FromMinutes(5)),
             bindingResolver: new ExactBindingResolver(
-                [artifacts.InitializationBinding, artifacts.WorkerInvocationBinding]),
+                [
+                    artifacts.InitializationBinding,
+                    artifacts.WorkerInvocationBinding,
+                    artifacts.SynchronizationActivationBinding
+                ]),
             operationAdapterResolver: new ExactAdapterResolver(
-                [initializationAdapter, childAdapter]));
+                [initializationAdapter, childAdapter, activationAdapter]));
         var context = OperationContext.Create(timeProvider: new FixedTimeProvider(StartedAtUtc));
         var start = Start(artifacts, coordinatorContinuation, materialization.Plan.Fingerprint);
 
@@ -160,25 +170,6 @@ public sealed class MaterializationRebuildProcessConformanceTests
             workerRuntime,
             Assert.IsType<DurableOperationState>(finalAdvanced.Operation)));
 
-        var completed = await coordinatorRuntime.ActivateAsync(
-            context,
-            artifacts.CoordinatorPlan,
-            coordinatorContinuation,
-            NextActivation(
-                artifacts,
-                Assert.IsType<ProcessDurableStoreSnapshot>(finalAdvanced.Snapshot).Checkpoint,
-                id: "activation/coordinator/complete"));
-        var completedCheckpoint = Assert.IsType<ProcessDurableStoreSnapshot>(completed.Snapshot).Checkpoint;
-
-        Assert.Equal(ExecutionTerminalOutcomeKind.Completed, completedCheckpoint.Continuation.Terminal.Kind);
-        Assert.Equal(
-            MaterializationRebuildProcessFactory.BaselineCompleteCatchUpRequired,
-            Assert.IsType<ObservationValue>(
-                Assert.IsType<PortableValue>(completedCheckpoint.Continuation.Terminal.Detail?.Value).Value)
-                .GetRequiredString());
-        Assert.Equal(3, truthfulOrigins.Count);
-        Assert.Equal(3, truthfulOrigins.Select(static origin => origin.Continuation).Distinct().Count());
-
         var readiness = await materialization.Executor.InspectReadinessAsync(context, attempt);
         Assert.NotNull(readiness);
         Assert.Equal(execution.Generation, readiness.Generation);
@@ -189,6 +180,52 @@ public sealed class MaterializationRebuildProcessConformanceTests
             Assert.Equal(MaterializationCheckpointKind.ChangeProgress, progress.LatestChangeCheckpoint?.Kind);
         });
 
+        var activationRequested = await coordinatorRuntime.ActivateAsync(
+            context,
+            artifacts.CoordinatorPlan,
+            coordinatorContinuation,
+            NextActivation(
+                artifacts,
+                Assert.IsType<ProcessDurableStoreSnapshot>(finalAdvanced.Snapshot).Checkpoint,
+                id: "activation/coordinator/request-synchronization"));
+        var activationRequestedCheckpoint = Assert.IsType<ProcessDurableStoreSnapshot>(
+            activationRequested.Snapshot).Checkpoint;
+        var activationOperation = Assert.Single(
+            activationRequestedCheckpoint.DurableOperations,
+            operation => operation.Request.Contract == artifacts.SynchronizationActivationRequest
+                && operation.Status != DurableOperationStatus.Dispositioned);
+
+        var activationAdvanced = await coordinatorRuntime.AdvanceOperationAsync(
+            context,
+            artifacts.CoordinatorPlan,
+            coordinatorContinuation.ProcessInstanceId,
+            activationOperation.OperationId);
+        Assert.Equal(DurableOperationStatus.Dispositioned, activationAdvanced.Operation?.Status);
+        Assert.Equal(
+            MaterializationRebuildProcessFactory.ActiveOutcome,
+            activationAdvanced.Operation?.Acknowledgement?.Outcome.Id);
+
+        var completed = await coordinatorRuntime.ActivateAsync(
+            context,
+            artifacts.CoordinatorPlan,
+            coordinatorContinuation,
+            NextActivation(
+                artifacts,
+                Assert.IsType<ProcessDurableStoreSnapshot>(activationAdvanced.Snapshot).Checkpoint,
+                id: "activation/coordinator/complete"));
+        var completedCheckpoint = Assert.IsType<ProcessDurableStoreSnapshot>(completed.Snapshot).Checkpoint;
+
+        Assert.Equal(ExecutionTerminalOutcomeKind.Completed, completedCheckpoint.Continuation.Terminal.Kind);
+        var activeGenerationReference = MaterializationActiveGenerationReferenceJsonSerializer.Deserialize(
+            Assert.IsType<ObservationValue>(
+                    Assert.IsType<PortableValue>(completedCheckpoint.Continuation.Terminal.Detail?.Value).Value)
+                .GetRequiredString());
+        Assert.Equal(materialization.Plan.Fingerprint, activeGenerationReference.Plan);
+        Assert.Equal(execution.Generation, activeGenerationReference.Generation);
+        Assert.Equal(materialization.Plan.Target.Id, activeGenerationReference.Target);
+        Assert.Equal(3, truthfulOrigins.Count);
+        Assert.Equal(3, truthfulOrigins.Select(static origin => origin.Continuation).Distinct().Count());
+
         var generation = await materialization.Target.InspectGenerationAsync(context, execution.Generation);
         var target = await materialization.Target.InspectAsync(context);
         var items = await materialization.Target.InspectItemsAsync(
@@ -196,8 +233,8 @@ public sealed class MaterializationRebuildProcessConformanceTests
             execution.Generation,
             afterItemId: null,
             maximumItems: 100);
-        Assert.Equal(MaterializationGenerationState.Loading, generation?.State);
-        Assert.Null(target.ActiveGenerationId);
+        Assert.Equal(MaterializationGenerationState.Active, generation?.State);
+        Assert.Equal(execution.Generation, target.ActiveGenerationId);
         Assert.Equal(9, items?.Items.Length);
     }
 
@@ -375,21 +412,34 @@ public sealed class MaterializationRebuildProcessConformanceTests
                 id: new(shardId),
                 scope,
                 read,
-                hydrationPhysicalPlan: semantic.PhysicalPlan.Fingerprint,
-                changeChannel: new(
-                    algorithm: "sha256",
-                    canonicalization: "tests/rebuild-process-channel/v1",
-                    value: $"channel-{suffix}"));
+                hydrationPhysicalPlan: semantic.PhysicalPlan.Fingerprint);
         }).ToImmutableArray();
+        var impactPlan = MaterializationRebuildTestPlan.CompileImpactPlan(
+            materialization,
+            policyId: "tests/materialization-rebuild-process-impact/v1",
+            maximumAffectedRoots: ReadItems,
+            maximumReadBytes: ReadBytes);
+        var changeFeedCatalog = MaterializationRebuildTestPlan.CreateChangeFeedCatalog(
+            semantic.Plan,
+            semantic.PhysicalPlan.Fingerprint,
+            impactPlan,
+            sourcePlans,
+            shards,
+            contributorPlacement: route => semantic.Placement.Bindings.Single(candidate =>
+                candidate.Input == route.ChangeInput),
+            channelCanonicalization: "tests/materialization-rebuild-process-channel/v1");
         var plan = new MaterializationRebuildPlan(
             materialization,
+            impactPlan,
             sources: sourcePlans,
             target: targetDescriptor,
             targetCapabilityMatch: MaterializationCapabilityMatcher.MatchForMode(
                 definition.TargetCapabilities,
                 targetProfile,
                 MaterializationSynchronizationMode.Rebuild),
-            shards,
+            shards: shards,
+            changeFeedCatalogs: changeFeedCatalog.Evidence,
+            changeFeeds: changeFeedCatalog.Feeds,
             limits: new(
                 maximumPageItems: 2,
                 maximumPageBytes: ReadBytes,
@@ -397,7 +447,8 @@ public sealed class MaterializationRebuildProcessConformanceTests
                 maximumBulkBytes: WriteBytes,
                 maximumPagesPerShard: 10,
                 maximumStartsPerActivation: 2,
-                maximumParallelism: 2),
+                maximumParallelism: 2,
+                maximumChangeFeedsPerConvergenceActivation: 16),
             provenance: Provenance("rebuild-plan"));
         var physicalScenario = FederatedLoadConformanceData.CreatePhysicalScenario(
             semantic,
@@ -432,6 +483,24 @@ public sealed class MaterializationRebuildProcessConformanceTests
 
         var target = new InMemoryMaterializationTarget(targetDescriptor);
         var progress = new InMemoryMaterializationProgressStore();
+        var impactInterpreter = new MaterializationImpactPlanInterpreter(
+            plan.ImpactPlan,
+            definition,
+            new MaterializationTestImpactRuntime(plan.ImpactPlan.Fingerprint));
+        var sourceByFeed = plan.ChangeFeeds.ToDictionary(
+            static feed => feed.Id,
+            feed =>
+            {
+                var matchingShard = plan.Shards.SingleOrDefault(shard => shard.Scope == feed.Scope);
+                if (matchingShard is not null)
+                    return sourceByShard[matchingShard.Id];
+
+                var sourcePlan = plan.Sources.Single(source => source.Input == feed.Scope.Input);
+                var reader = physicalScenario.Readers.Single(candidate =>
+                    candidate.Descriptor.Source == sourcePlan.Source);
+                return new InMemoryMaterializationSource(
+                    new MaterializationQuerySourceDescriptor(reader, sourcePlan.Profile));
+            });
         var resolved = new ResolvedMaterializationRebuildPlan(
             plan,
             target,
@@ -439,7 +508,12 @@ public sealed class MaterializationRebuildProcessConformanceTests
             shardBindings: plan.Shards.Select(shard => new MaterializationRebuildShardBinding(
                 shard,
                 source: sourceByShard[shard.Id],
-                hydrator)));
+                hydrator)),
+            changeFeedBindings: plan.ChangeFeeds.Select(feed => new MaterializationChangeFeedBinding(
+                feed: feed,
+                channel: feed.Channel,
+                source: sourceByFeed[feed.Id],
+                interpreter: impactInterpreter)));
         return new(plan, resolved, new MaterializationRebuildExecutor(resolved), target);
     }
 
@@ -451,25 +525,27 @@ public sealed class MaterializationRebuildProcessConformanceTests
         [
             .. plan.InputContract.Sources.Select(source => SourceRequirement(
                 source.Input.Id,
-                MaterializationCapabilityKind.SourceBoundedEnumeration)),
+                MaterializationCapabilityKind.SourceBoundedEnumeration,
+                isRoot: source.Role == RelationQuerySourceInputRole.RelationRoot)),
             .. plan.InputContract.Traversals.Select(traversal => SourceRequirement(
                 traversal.Input.Id,
                 traversal.Input.Direction == RelationshipTraversalDirection.Forward
                     ? MaterializationCapabilityKind.SourceBatchedPointRead
-                    : MaterializationCapabilityKind.SourceParameterizedPredicateQuery))
+                    : MaterializationCapabilityKind.SourceParameterizedPredicateQuery,
+                isRoot: false))
         ];
         ImmutableArray<MaterializationCapabilityRequirement> target =
         [
-            Requirement("target/isolation", MaterializationCapabilityKind.TargetGenerationIsolation),
-            Requirement("target/upsert", MaterializationCapabilityKind.TargetBulkUpsert),
-            Requirement("target/delete", MaterializationCapabilityKind.TargetBulkDelete),
-            Requirement("target/outcomes", MaterializationCapabilityKind.TargetPerItemOutcomes),
-            Requirement("target/seal", MaterializationCapabilityKind.TargetSeal),
-            Requirement("target/validation", MaterializationCapabilityKind.TargetValidation),
-            Requirement("target/promotion", MaterializationCapabilityKind.TargetFencedPromotion),
-            Requirement("target/abandonment", MaterializationCapabilityKind.TargetGenerationAbandonment),
-            Requirement("target/retirement", MaterializationCapabilityKind.TargetRetirement),
-            Requirement("target/cleanup", MaterializationCapabilityKind.TargetCleanup)
+            Requirement("target/isolation", MaterializationCapabilityKind.TargetGenerationIsolation, MaterializationSynchronizationMode.Rebuild),
+            Requirement("target/upsert", MaterializationCapabilityKind.TargetBulkUpsert, MaterializationSynchronizationMode.All),
+            Requirement("target/delete", MaterializationCapabilityKind.TargetBulkDelete, MaterializationSynchronizationMode.All),
+            Requirement("target/outcomes", MaterializationCapabilityKind.TargetPerItemOutcomes, MaterializationSynchronizationMode.All),
+            Requirement("target/seal", MaterializationCapabilityKind.TargetSeal, MaterializationSynchronizationMode.Rebuild),
+            Requirement("target/validation", MaterializationCapabilityKind.TargetValidation, MaterializationSynchronizationMode.Rebuild),
+            Requirement("target/promotion", MaterializationCapabilityKind.TargetFencedPromotion, MaterializationSynchronizationMode.Rebuild),
+            Requirement("target/abandonment", MaterializationCapabilityKind.TargetGenerationAbandonment, MaterializationSynchronizationMode.Rebuild),
+            Requirement("target/retirement", MaterializationCapabilityKind.TargetRetirement, MaterializationSynchronizationMode.Rebuild),
+            Requirement("target/cleanup", MaterializationCapabilityKind.TargetCleanup, MaterializationSynchronizationMode.Rebuild)
         ];
         return new(
             id: new("tests/load-search-process-conformance"),
@@ -477,7 +553,7 @@ public sealed class MaterializationRebuildProcessConformanceTests
             sources,
             targetCapabilities: target,
             updatePolicy: new(
-                supportedModes: MaterializationSynchronizationMode.Rebuild,
+                supportedModes: MaterializationSynchronizationMode.All,
                 consistency: MaterializationConsistencyKind.BaselinePlusCatchUp,
                 idempotency: MaterializationIdempotencyKind.StableOutputIdentityAndVersion),
             failurePolicy: new(
@@ -492,24 +568,36 @@ public sealed class MaterializationRebuildProcessConformanceTests
 
     static MaterializationSourceRequirement SourceRequirement(
         RelationQueryInputId input,
-        MaterializationCapabilityKind readCapability) => new(
-        input,
-        capabilities:
+        MaterializationCapabilityKind readCapability,
+        bool isRoot)
+    {
+        ImmutableArray<MaterializationCapabilityRequirement> capabilities =
         [
-            Requirement($"{input.Value}/read", readCapability),
-            Requirement($"{input.Value}/continuation", MaterializationCapabilityKind.SourceContinuation),
-            Requirement($"{input.Value}/changes", MaterializationCapabilityKind.SourceChangeDelivery),
-            Requirement($"{input.Value}/settlement", MaterializationCapabilityKind.SourceSettlement)
-        ]);
+            Requirement($"{input.Value}/read", readCapability, MaterializationSynchronizationMode.Rebuild),
+            Requirement($"{input.Value}/continuation", MaterializationCapabilityKind.SourceContinuation, MaterializationSynchronizationMode.Rebuild),
+            Requirement($"{input.Value}/changes", MaterializationCapabilityKind.SourceChangeDelivery, MaterializationSynchronizationMode.All),
+            Requirement($"{input.Value}/settlement", MaterializationCapabilityKind.SourceSettlement, MaterializationSynchronizationMode.All)
+        ];
+        if (isRoot)
+        {
+            capabilities = capabilities.Add(Requirement(
+                $"{input.Value}/inverse",
+                MaterializationCapabilityKind.SourceParameterizedPredicateQuery,
+                MaterializationSynchronizationMode.Incremental));
+        }
+
+        return new(input, capabilities);
+    }
 
     static MaterializationCapabilityRequirement Requirement(
         string id,
-        MaterializationCapabilityKind capability) => new(
+        MaterializationCapabilityKind capability,
+        MaterializationSynchronizationMode modes) => new(
         id: new(id),
         capability,
         guarantees: Guarantees(capability),
         operatingLimits: Limits(capability),
-        modes: MaterializationSynchronizationMode.Rebuild);
+        modes: modes);
 
     static MaterializationCapabilityProfile CapabilityProfile(
         string id,
