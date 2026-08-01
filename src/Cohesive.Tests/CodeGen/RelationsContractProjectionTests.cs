@@ -170,23 +170,23 @@ public sealed class RelationsContractProjectionTests
         AssertInterfaceDoesNotContainMember(
             text,
             nameof(NativeRelationQueryRealizationDecision),
-            "kind: RelationQueryRealizationDecisionKind;");
+            "kind: CapabilityRealizationKind;");
         AssertInterfaceDoesNotContainMember(
             text,
             nameof(ComposedRelationQueryRealizationDecision),
-            "kind: RelationQueryRealizationDecisionKind;");
+            "kind: CapabilityRealizationKind;");
         AssertInterfaceDoesNotContainMember(
             text,
             nameof(ConstrainedRelationQueryRealizationDecision),
-            "kind: RelationQueryRealizationDecisionKind;");
+            "kind: CapabilityRealizationKind;");
         AssertInterfaceDoesNotContainMember(
             text,
             nameof(OverrideRelationQueryRealizationDecision),
-            "kind: RelationQueryRealizationDecisionKind;");
+            "kind: CapabilityRealizationKind;");
         AssertInterfaceDoesNotContainMember(
             text,
             nameof(UnavailableRelationQueryRealizationDecision),
-            "kind: RelationQueryRealizationDecisionKind;");
+            "kind: CapabilityRealizationKind;");
         Assert.DoesNotContain("isRealizable: boolean;", text, StringComparison.Ordinal);
     }
 

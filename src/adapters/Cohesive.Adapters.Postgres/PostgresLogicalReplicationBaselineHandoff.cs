@@ -276,7 +276,7 @@ public sealed class PostgresLogicalReplicationBaselineHandoff :
     }
 
     /// <inheritdoc />
-    public MaterializationSourceDescriptor Descriptor { get; }
+    public MaterializationQuerySourceDescriptor Descriptor { get; }
 
     /// <summary>Exact table, partition, and ordering scope shared by the snapshot and change source.</summary>
     public MaterializationSourceScope Scope => baseline.Scope;

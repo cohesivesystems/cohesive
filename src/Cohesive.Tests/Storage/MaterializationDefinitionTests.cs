@@ -160,7 +160,7 @@ public sealed class MaterializationDefinitionTests
             new(
                 new("evidence/enumeration"),
                 MaterializationCapabilityKind.SourceBoundedEnumeration,
-                MaterializationCapabilityRealizationKind.Constrained,
+                CapabilityRealizationKind.Constrained,
                 [MaterializationGuaranteeKind.StableOrdering],
                 [
                     new(MaterializationLimitKind.ReadItems, 128),
@@ -171,7 +171,7 @@ public sealed class MaterializationDefinitionTests
             new(
                 new("evidence/enumeration"),
                 MaterializationCapabilityKind.SourceBoundedEnumeration,
-                MaterializationCapabilityRealizationKind.Constrained,
+                CapabilityRealizationKind.Constrained,
                 [MaterializationGuaranteeKind.StableOrdering],
                 [
                     new(MaterializationLimitKind.ReadItems, 64),
@@ -189,7 +189,7 @@ public sealed class MaterializationDefinitionTests
             MaterializationSynchronizationMode.Rebuild);
 
         Assert.True(accepted.IsSatisfied);
-        Assert.Equal(MaterializationCapabilityRealizationKind.Constrained, accepted.Decisions[0].Realization);
+        Assert.Equal(CapabilityRealizationKind.Constrained, accepted.Decisions[0].Realization);
         Assert.False(rejected.IsSatisfied);
         Assert.Contains(
             rejected.Validation.Diagnostics,
@@ -220,7 +220,7 @@ public sealed class MaterializationDefinitionTests
             new MaterializationCapabilityEvidence(
                 new("evidence/settlement"),
                 MaterializationCapabilityKind.SourceSettlement,
-                MaterializationCapabilityRealizationKind.Native,
+                CapabilityRealizationKind.Native,
                 [MaterializationGuaranteeKind.AtomicPromotion],
                 [],
                 ["adapter/source/v1"]));
@@ -228,7 +228,7 @@ public sealed class MaterializationDefinitionTests
             new MaterializationCapabilityEvidence(
                 new("evidence/enumeration"),
                 MaterializationCapabilityKind.SourceBoundedEnumeration,
-                MaterializationCapabilityRealizationKind.Native,
+                CapabilityRealizationKind.Native,
                 [],
                 [new(MaterializationLimitKind.WriteItems, 100)],
                 ["adapter/source/v1"]));
@@ -258,14 +258,14 @@ public sealed class MaterializationDefinitionTests
         MaterializationCapabilityEvidence completeMutations = new(
             new("evidence/complete-mutations"),
             MaterializationCapabilityKind.SourceChangeDelivery,
-            MaterializationCapabilityRealizationKind.Native,
+            CapabilityRealizationKind.Native,
             [MaterializationGuaranteeKind.CompleteMutationDelivery],
             operatingLimits: [],
             sourceReferences: ["adapter/complete-mutations/v1"]);
         MaterializationCapabilityEvidence latestUpserts = new(
             new("evidence/latest-upserts"),
             MaterializationCapabilityKind.SourceChangeDelivery,
-            MaterializationCapabilityRealizationKind.Native,
+            CapabilityRealizationKind.Native,
             [MaterializationGuaranteeKind.LatestVersionUpsertDelivery],
             operatingLimits: [],
             sourceReferences: ["adapter/latest-upserts/v1"]);
@@ -312,7 +312,7 @@ public sealed class MaterializationDefinitionTests
             new MaterializationCapabilityEvidence(
                 new("evidence/missing-coverage"),
                 MaterializationCapabilityKind.SourceChangeDelivery,
-                MaterializationCapabilityRealizationKind.Native,
+                CapabilityRealizationKind.Native,
                 [MaterializationGuaranteeKind.AtLeastOnceDelivery],
                 operatingLimits: [],
                 sourceReferences: ["adapter/missing-coverage/v1"]));
@@ -320,7 +320,7 @@ public sealed class MaterializationDefinitionTests
             new MaterializationCapabilityEvidence(
                 new("evidence/ambiguous-coverage"),
                 MaterializationCapabilityKind.SourceChangeDelivery,
-                MaterializationCapabilityRealizationKind.Native,
+                CapabilityRealizationKind.Native,
                 [
                     MaterializationGuaranteeKind.CompleteMutationDelivery,
                     MaterializationGuaranteeKind.LatestVersionUpsertDelivery
@@ -385,7 +385,7 @@ public sealed class MaterializationDefinitionTests
             new MaterializationCapabilityEvidence(
                 id: new("evidence/transaction-aligned/missing-limits"),
                 capability: MaterializationCapabilityKind.SourceChangeDelivery,
-                realization: MaterializationCapabilityRealizationKind.Constrained,
+                realization: CapabilityRealizationKind.Constrained,
                 guarantees:
                 [
                     MaterializationGuaranteeKind.CompleteMutationDelivery,
@@ -397,7 +397,7 @@ public sealed class MaterializationDefinitionTests
             new MaterializationCapabilityEvidence(
                 id: new("evidence/transaction-aligned/incomplete-limits"),
                 capability: MaterializationCapabilityKind.SourceChangeDelivery,
-                realization: MaterializationCapabilityRealizationKind.Constrained,
+                realization: CapabilityRealizationKind.Constrained,
                 guarantees:
                 [
                     MaterializationGuaranteeKind.CompleteMutationDelivery,
@@ -414,7 +414,7 @@ public sealed class MaterializationDefinitionTests
             new MaterializationCapabilityEvidence(
                 id: new("evidence/ordinary/transaction-limits"),
                 capability: MaterializationCapabilityKind.SourceChangeDelivery,
-                realization: MaterializationCapabilityRealizationKind.Constrained,
+                realization: CapabilityRealizationKind.Constrained,
                 guarantees: [MaterializationGuaranteeKind.CompleteMutationDelivery],
                 operatingLimits:
                 [
@@ -495,7 +495,7 @@ public sealed class MaterializationDefinitionTests
         MaterializationCapabilityEvidence ordinary = new(
             id: new("evidence/ordinary/bounded"),
             capability: MaterializationCapabilityKind.SourceChangeDelivery,
-            realization: MaterializationCapabilityRealizationKind.Constrained,
+            realization: CapabilityRealizationKind.Constrained,
             guarantees: [MaterializationGuaranteeKind.CompleteMutationDelivery],
             operatingLimits:
             [
@@ -591,7 +591,7 @@ public sealed class MaterializationDefinitionTests
         var exception = Assert.Throws<ArgumentException>(() => new MaterializationCapabilityEvidence(
             new("evidence/incomplete"),
             capability,
-            MaterializationCapabilityRealizationKind.Constrained,
+            CapabilityRealizationKind.Constrained,
             [],
             incompleteLimits,
             ["adapter/incomplete/v1"]));
@@ -601,12 +601,35 @@ public sealed class MaterializationDefinitionTests
     }
 
     [Fact]
+    public void CapabilityRealization_RejectsUnknownEvidenceAndDecision()
+    {
+        var evidenceException = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new MaterializationCapabilityEvidence(
+                id: new("evidence/unknown"),
+                capability: MaterializationCapabilityKind.TargetGenerationIsolation,
+                realization: CapabilityRealizationKind.Unknown,
+                guarantees: [],
+                operatingLimits: [],
+                sourceReferences: ["adapter/unknown/v1"]));
+        Assert.Equal("realization", evidenceException.ParamName);
+
+        MaterializationCapabilityRequirement requirement = new(
+            id: new("target/generation-isolation"),
+            capability: MaterializationCapabilityKind.TargetGenerationIsolation);
+        var decisionException = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new MaterializationCapabilityDecision(
+                requirement,
+                realization: CapabilityRealizationKind.Unknown));
+        Assert.Equal("realization", decisionException.ParamName);
+    }
+
+    [Fact]
     public void ChangeDeliveryEvidence_MayOmitAdvisoryBatchLimits_ButCannotSatisfyBoundedRequirements()
     {
         MaterializationCapabilityEvidence managed = new(
             new("evidence/managed-changes"),
             MaterializationCapabilityKind.SourceChangeDelivery,
-            MaterializationCapabilityRealizationKind.Native,
+            CapabilityRealizationKind.Native,
             [
                 MaterializationGuaranteeKind.AtLeastOnceDelivery,
                 MaterializationGuaranteeKind.LatestVersionUpsertDelivery
@@ -680,7 +703,7 @@ public sealed class MaterializationDefinitionTests
         MaterializationCapabilityEvidence evidence = new(
             id: new("evidence/contributor-ledger"),
             capability: MaterializationCapabilityKind.TargetContributorLedger,
-            realization: MaterializationCapabilityRealizationKind.Native,
+            realization: CapabilityRealizationKind.Native,
             guarantees:
             [
                 MaterializationGuaranteeKind.RequestLocalCompleteness,
@@ -752,7 +775,7 @@ public sealed class MaterializationDefinitionTests
                 new(
                     new("evidence/a-distant"),
                     MaterializationCapabilityKind.SourceBoundedEnumeration,
-                    MaterializationCapabilityRealizationKind.Constrained,
+                    CapabilityRealizationKind.Constrained,
                     guarantees: [],
                     operatingLimits:
                     [
@@ -763,7 +786,7 @@ public sealed class MaterializationDefinitionTests
                 new(
                     new("evidence/z-closest"),
                     MaterializationCapabilityKind.SourceBoundedEnumeration,
-                    MaterializationCapabilityRealizationKind.Constrained,
+                    CapabilityRealizationKind.Constrained,
                     [
                         MaterializationGuaranteeKind.StableOrdering,
                         MaterializationGuaranteeKind.RequestLocalCompleteness
@@ -1147,7 +1170,7 @@ public sealed class MaterializationDefinitionTests
         new(
             id: new(id),
             capability: MaterializationCapabilityKind.SourceChangeDelivery,
-            realization: MaterializationCapabilityRealizationKind.Constrained,
+            realization: CapabilityRealizationKind.Constrained,
             guarantees:
             [
                 MaterializationGuaranteeKind.CompleteMutationDelivery,

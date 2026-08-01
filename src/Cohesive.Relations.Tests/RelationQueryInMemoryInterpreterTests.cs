@@ -410,7 +410,7 @@ public sealed class RelationQueryInMemoryInterpreterTests
         Assert.Contains(
             realization.Decisions,
             decision => decision.Requirement == averageRequirement.Id
-                && decision.Kind == RelationQueryRealizationDecisionKind.Native);
+                && decision.Kind == CapabilityRealizationKind.Native);
         Assert.Equal(RelationQueryExecutionStatus.Succeeded, result.Status);
         Assert.Empty(result.Diagnostics);
         var branch = Assert.Single(result.QueryResults);

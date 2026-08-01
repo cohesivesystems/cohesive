@@ -201,7 +201,8 @@ public sealed class CosmosManagedMaterializationChangeSource : IMaterializationM
             authenticationKey: authenticationKey,
             maximumValueCharacters: policy.MaximumPositionCharacters);
         Descriptor = new(
-            relationReader: reader,
+            source: reader.Descriptor.Source,
+            executionDomain: reader.Descriptor.ExecutionDomain,
             capabilityProfile: CreateCapabilityProfile(
                 reader: reader,
                 physicalPlan: physicalPlan,
@@ -979,7 +980,7 @@ public sealed class CosmosManagedMaterializationChangeSource : IMaterializationM
             new MaterializationCapabilityEvidence(
                 id: new("cohesive.adapters.cosmos/managed-change/latest-version-upsert/v1"),
                 capability: MaterializationCapabilityKind.SourceChangeDelivery,
-                realization: MaterializationCapabilityRealizationKind.Constrained,
+                realization: CapabilityRealizationKind.Constrained,
                 guarantees:
                 [
                     MaterializationGuaranteeKind.StableOrdering,
@@ -992,7 +993,7 @@ public sealed class CosmosManagedMaterializationChangeSource : IMaterializationM
             new MaterializationCapabilityEvidence(
                 id: new("cohesive.adapters.cosmos/managed-change/manual-settlement/v1"),
                 capability: MaterializationCapabilityKind.SourceSettlement,
-                realization: MaterializationCapabilityRealizationKind.Constrained,
+                realization: CapabilityRealizationKind.Constrained,
                 guarantees: [MaterializationGuaranteeKind.ExplicitSettlement],
                 operatingLimits: [],
                 sourceReferences: sourceReferences,

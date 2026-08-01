@@ -582,7 +582,7 @@ public sealed record RelationQueryNativeCompilationDecisionReference
     /// </param>
     /// <param name="override">
     /// Explicit override identity. This is required only when <paramref name="kind"/> is
-    /// <see cref="RelationQueryRealizationDecisionKind.Override"/> and otherwise must be <see langword="null"/>.
+    /// <see cref="CapabilityRealizationKind.Override"/> and otherwise must be <see langword="null"/>.
     /// </param>
     /// <param name="operatingBoundaries">
     /// Validated operating boundaries used by the decision. Only constrained and override decisions may retain
@@ -599,7 +599,7 @@ public sealed record RelationQueryNativeCompilationDecisionReference
     /// </exception>
     public RelationQueryNativeCompilationDecisionReference(
         RelationQueryRealizationRequirementId requirement,
-        RelationQueryRealizationDecisionKind kind,
+        CapabilityRealizationKind kind,
         ImmutableArray<RelationQueryTargetCapabilityEvidenceId> capabilityEvidence = default,
         ImmutableArray<RelationQueryCompositionRuleId> compositionRules = default,
         RelationQueryRealizationOverrideId? @override = null,
@@ -608,11 +608,11 @@ public sealed record RelationQueryNativeCompilationDecisionReference
     {
         if (string.IsNullOrWhiteSpace(requirement.Value))
             throw new ArgumentException("Native compilation decision provenance requires a requirement identity.", nameof(requirement));
-        if (!Enum.IsDefined(kind))
+        if (!Enum.IsDefined(kind) || kind == CapabilityRealizationKind.Unknown)
             throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported realization decision kind.");
-        if (kind == RelationQueryRealizationDecisionKind.Unavailable)
+        if (kind == CapabilityRealizationKind.Unavailable)
             throw new ArgumentException("A native artifact cannot retain an unavailable final decision as proof.", nameof(kind));
-        if ((kind == RelationQueryRealizationDecisionKind.Override) != (@override is not null))
+        if ((kind == CapabilityRealizationKind.Override) != (@override is not null))
             throw new ArgumentException("Only an override decision can retain an override identity, and it must retain one.", nameof(@override));
         if (@override is { } overrideId && string.IsNullOrWhiteSpace(overrideId.Value))
             throw new ArgumentException("A retained override identity cannot be default.", nameof(@override));
@@ -634,14 +634,14 @@ public sealed record RelationQueryNativeCompilationDecisionReference
             nameof(operatingBoundaries));
         PreservedGuarantees = NormalizeGuarantees(preservedGuarantees);
 
-        if (kind is not RelationQueryRealizationDecisionKind.Override && CapabilityEvidence.IsDefaultOrEmpty)
+        if (kind is not CapabilityRealizationKind.Override && CapabilityEvidence.IsDefaultOrEmpty)
             throw new ArgumentException("A retained native, composed, or constrained decision requires capability evidence.", nameof(capabilityEvidence));
-        if ((kind == RelationQueryRealizationDecisionKind.Composed) != !CompositionRules.IsDefaultOrEmpty
-            && kind != RelationQueryRealizationDecisionKind.Constrained)
+        if ((kind == CapabilityRealizationKind.Composed) != !CompositionRules.IsDefaultOrEmpty
+            && kind != CapabilityRealizationKind.Constrained)
         {
             throw new ArgumentException("Composition rules are required by composed decisions and unavailable to unrelated decision kinds.", nameof(compositionRules));
         }
-        if (kind is not (RelationQueryRealizationDecisionKind.Constrained or RelationQueryRealizationDecisionKind.Override)
+        if (kind is not (CapabilityRealizationKind.Constrained or CapabilityRealizationKind.Override)
             && !OperatingBoundaries.IsDefaultOrEmpty)
         {
             throw new ArgumentException("Only constrained or override decisions can retain validated operating boundaries.", nameof(operatingBoundaries));
@@ -652,7 +652,7 @@ public sealed record RelationQueryNativeCompilationDecisionReference
     public RelationQueryRealizationRequirementId Requirement { get; }
 
     /// <summary>Final realization classification.</summary>
-    public RelationQueryRealizationDecisionKind Kind { get; }
+    public CapabilityRealizationKind Kind { get; }
 
     /// <summary>Target capability evidence used by the decision.</summary>
     public ImmutableArray<RelationQueryTargetCapabilityEvidenceId> CapabilityEvidence { get; }

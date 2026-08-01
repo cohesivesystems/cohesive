@@ -224,7 +224,7 @@ public sealed class RelationQueryNativeCompilationContractTests
     {
         var decision = new RelationQueryNativeCompilationDecisionReference(
             new("requirement/z"),
-            RelationQueryRealizationDecisionKind.Constrained,
+            CapabilityRealizationKind.Constrained,
             [new("evidence/z"), new("evidence/a")],
             [new("rule/z"), new("rule/a")],
             operatingBoundaries: [new("boundary/z"), new("boundary/a")],
@@ -244,30 +244,34 @@ public sealed class RelationQueryNativeCompilationContractTests
 
         Assert.Throws<ArgumentException>(() => new RelationQueryNativeCompilationDecisionReference(
             default,
-            RelationQueryRealizationDecisionKind.Native,
+            CapabilityRealizationKind.Native,
             [new("evidence/a")]));
         Assert.Throws<ArgumentException>(() => new RelationQueryNativeCompilationDecisionReference(
             new("requirement/a"),
-            RelationQueryRealizationDecisionKind.Native));
+            CapabilityRealizationKind.Native));
         Assert.Throws<ArgumentException>(() => new RelationQueryNativeCompilationDecisionReference(
             new("requirement/a"),
-            RelationQueryRealizationDecisionKind.Unavailable,
+            CapabilityRealizationKind.Unavailable,
+            [new("evidence/a")]));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RelationQueryNativeCompilationDecisionReference(
+            new("requirement/a"),
+            CapabilityRealizationKind.Unknown,
             [new("evidence/a")]));
         Assert.Throws<ArgumentException>(() => new RelationQueryNativeCompilationDecisionReference(
             new("requirement/a"),
-            RelationQueryRealizationDecisionKind.Composed,
+            CapabilityRealizationKind.Composed,
             [new("evidence/a")]));
         Assert.Throws<ArgumentException>(() => new RelationQueryNativeCompilationDecisionReference(
             new("requirement/a"),
-            RelationQueryRealizationDecisionKind.Native,
+            CapabilityRealizationKind.Native,
             [new("evidence/a")],
             [new("rule/a")]));
         Assert.Throws<ArgumentException>(() => new RelationQueryNativeCompilationDecisionReference(
             new("requirement/a"),
-            RelationQueryRealizationDecisionKind.Override));
+            CapabilityRealizationKind.Override));
         Assert.Throws<ArgumentException>(() => new RelationQueryNativeCompilationDecisionReference(
             new("requirement/a"),
-            RelationQueryRealizationDecisionKind.Native,
+            CapabilityRealizationKind.Native,
             [new("evidence/a"), new("evidence/a")]));
     }
 
@@ -286,11 +290,11 @@ public sealed class RelationQueryNativeCompilationContractTests
                 .Branches);
         var firstDecision = new RelationQueryNativeCompilationDecisionReference(
             new("requirement/a"),
-            RelationQueryRealizationDecisionKind.Native,
+            CapabilityRealizationKind.Native,
             [new("evidence/a")]);
         var secondDecision = new RelationQueryNativeCompilationDecisionReference(
             new("requirement/z"),
-            RelationQueryRealizationDecisionKind.Constrained,
+            CapabilityRealizationKind.Constrained,
             [new("evidence/z"), new("evidence/a")],
             operatingBoundaries: [new("boundary/z")]);
 

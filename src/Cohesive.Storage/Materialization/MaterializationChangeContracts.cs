@@ -114,7 +114,10 @@ public sealed record MaterializationChangeEnvelope
     /// <param name="subjectIdentity">Stable identity of the observation affected by the change.</param>
     /// <param name="scope">Exact acquisition input, source, partition, and ordering scope containing the change.</param>
     /// <param name="shape">Stable shape of the affected observation, retained even when no image is available.</param>
-    /// <param name="position">Opaque position immediately associated with the change.</param>
+    /// <param name="position">
+    /// Optional opaque position immediately associated with the change. Positionless leased deliveries retain
+    /// provider delivery and attempt identity without inventing a replay cursor.
+    /// </param>
     /// <param name="kind">Create, update, delete, or source-ambiguous upsert semantics.</param>
     /// <param name="before">Observation before the change, when required by <paramref name="kind"/>.</param>
     /// <param name="after">Observation after the change, when required by <paramref name="kind"/>.</param>
@@ -122,8 +125,8 @@ public sealed record MaterializationChangeEnvelope
     /// <param name="observedAtUtc">UTC time at which the adapter observed the change.</param>
     /// <param name="evidenceReference">Optional opaque source evidence reference.</param>
     /// <exception cref="ArgumentNullException">
-    /// <paramref name="id"/> contains a <see langword="null"/> value, or <paramref name="subjectIdentity"/>,
-    /// <paramref name="scope"/>, or <paramref name="position"/> is <see langword="null"/>.
+    /// <paramref name="id"/> contains a <see langword="null"/> value, or <paramref name="subjectIdentity"/> or
+    /// <paramref name="scope"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
     /// An identity, position, observation, time, or create/update/delete invariant is invalid.
@@ -135,7 +138,7 @@ public sealed record MaterializationChangeEnvelope
         string subjectIdentity,
         MaterializationSourceScope scope,
         QualifiedShapeId shape,
-        MaterializationSourcePosition position,
+        MaterializationSourcePosition? position,
         MaterializationChangeKind kind,
         RelationQuerySourceReadObservation? before,
         RelationQuerySourceReadObservation? after,
@@ -156,8 +159,7 @@ public sealed record MaterializationChangeEnvelope
             throw new ArgumentException("A source change shape must match its exact Relations placement scope.", nameof(shape));
         }
 
-        ArgumentNullException.ThrowIfNull(position);
-        if (position.Scope != scope)
+        if (position is not null && position.Scope != scope)
         {
             throw new ArgumentException(
                 "A change position must belong to the exact source-feed scope.",
@@ -207,8 +209,11 @@ public sealed record MaterializationChangeEnvelope
     /// <summary>Stable shape of the affected observation, including deletes without an image.</summary>
     public QualifiedShapeId Shape { get; }
 
-    /// <summary>Opaque position immediately associated with the change.</summary>
-    public MaterializationSourcePosition Position { get; }
+    /// <summary>
+    /// Opaque position immediately associated with the change, or <see langword="null"/> for positionless leased
+    /// delivery.
+    /// </summary>
+    public MaterializationSourcePosition? Position { get; }
 
     /// <summary>Create, update, delete, or source-ambiguous upsert semantics.</summary>
     public MaterializationChangeKind Kind { get; }
@@ -449,7 +454,8 @@ public sealed record MaterializationChangePage
     /// <param name="state">Whether the source is caught up or another bounded read is required to prove catch-up.</param>
     /// <exception cref="ArgumentException">
     /// <paramref name="deliveries"/> contains a null entry or duplicate delivery identity, a delivery belongs to a
-    /// different scope, an empty page claims that deliveries are available, or a progressed page contains a delivery.
+    /// different scope or has no position, an empty page claims that deliveries are available, or a progressed page
+    /// contains a delivery.
     /// </exception>
     /// <exception cref="ArgumentNullException"><paramref name="throughPosition"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="state"/> is unsupported.</exception>
@@ -492,6 +498,13 @@ public sealed record MaterializationChangePage
             {
                 throw new ArgumentException("Every change delivery must belong to the page boundary scope.", nameof(deliveries));
             }
+
+            if (delivery.Change.Position is null)
+            {
+                throw new ArgumentException(
+                    "A positioned pull page cannot contain a positionless leased delivery.",
+                    nameof(deliveries));
+            }
         }
 
         Deliveries = normalized;
@@ -518,7 +531,7 @@ public sealed record MaterializationChangePage
     /// </exception>
     /// <exception cref="InvalidOperationException">
     /// The mutation was not applied or replayed, the snapshot belongs to another progress key, the latest checkpoint
-    /// is not a change-position checkpoint through this page, or its applied delivery identities do not exactly equal
+    /// is not an incremental-change checkpoint through this page, or its applied delivery identities do not exactly equal
     /// this page's delivery set.
     /// </exception>
     public MaterializationApplicationCheckpoint RequireDurableCheckpointForSettlement(
@@ -544,13 +557,13 @@ public sealed record MaterializationChangePage
 
         var checkpoint = snapshot.LatestCheckpoint
             ?? throw new InvalidOperationException("Provider settlement requires a durable application checkpoint.");
-        if (checkpoint.Kind != MaterializationCheckpointKind.ChangePosition)
+        if (checkpoint.Kind != MaterializationCheckpointKind.ChangeProgress)
         {
             throw new InvalidOperationException(
-                $"Provider settlement requires a '{MaterializationCheckpointKind.ChangePosition}' checkpoint; the latest checkpoint is '{checkpoint.Kind}'.");
+                $"Provider settlement requires a '{MaterializationCheckpointKind.ChangeProgress}' checkpoint; the latest checkpoint is '{checkpoint.Kind}'.");
         }
 
-        if (checkpoint.Position != ThroughPosition)
+        if (!checkpoint.CoversReplayPosition(ThroughPosition))
         {
             throw new InvalidOperationException(
                 "Provider settlement requires a durable application checkpoint through the exact delivered page position.");

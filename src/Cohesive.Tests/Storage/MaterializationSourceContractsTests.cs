@@ -51,6 +51,22 @@ public sealed class MaterializationSourceContractsTests
     }
 
     [Fact]
+    public void ChangeOnlySourceDescriptor_DoesNotInventRelationsReaderCapability()
+    {
+        var profile = CreateSource().Source.Descriptor.CapabilityProfile;
+        MaterializationSourceDescriptor descriptor = new(
+            source: Source,
+            executionDomain: new("tests/domain"),
+            capabilityProfile: profile);
+        IMaterializationChangeSource source = new ChangeOnlySource(descriptor);
+
+        Assert.Same(descriptor, source.Descriptor);
+        Assert.IsNotType<MaterializationQuerySourceDescriptor>(source.Descriptor);
+        Assert.Equal(Source, source.Descriptor.Source);
+        Assert.Equal(new RelationQueryExecutionDomainId("tests/domain"), source.Descriptor.ExecutionDomain);
+    }
+
+    [Fact]
     public async Task PagedRead_ScopesOpaqueContinuationToSourceAndPartition()
     {
         var fixture = CreateSource();
@@ -224,7 +240,7 @@ public sealed class MaterializationSourceContractsTests
                 new MaterializationCapabilityEvidence(
                     new("bounded-enumeration"),
                     MaterializationCapabilityKind.SourceBoundedEnumeration,
-                    MaterializationCapabilityRealizationKind.Native,
+                    CapabilityRealizationKind.Native,
                     [],
                     [
                         new MaterializationOperatingLimit(MaterializationLimitKind.ReadItems, MaximumProfileItems),
@@ -656,13 +672,14 @@ public sealed class MaterializationSourceContractsTests
                 maximumDeliveries: 10,
                 maximumBytes: MaximumPageBytes));
         MaterializationApplicationCheckpoint checkpoint = new(
-            new("empty-cut"),
-            MaterializationCheckpointKind.ChangePosition,
+            id: new("empty-cut"),
+            kind: MaterializationCheckpointKind.ChangeProgress,
             continuation: null,
             completion: null,
-            page.ThroughPosition,
+            position: page.ThroughPosition,
             appliedDeliveries: [],
-            new DateTimeOffset(2026, 7, 30, 12, 0, 0, TimeSpan.Zero));
+            committedAtUtc: new DateTimeOffset(2026, 7, 30, 12, 0, 0, TimeSpan.Zero),
+            channelProgress: MaterializationChannelSemantics.CreatePositionedDurableProgress(page.ThroughPosition));
 
         Assert.Equal(MaterializationChangePageState.CaughtUp, page.State);
         Assert.Empty(page.Deliveries);
@@ -722,13 +739,14 @@ public sealed class MaterializationSourceContractsTests
         var position = changePage.ThroughPosition;
         var checkpointTime = context.UtcNow.AddSeconds(-1);
         MaterializationApplicationCheckpoint checkpoint = new(
-            new("checkpoint-1"),
-            MaterializationCheckpointKind.ChangePosition,
+            id: new("checkpoint-1"),
+            kind: MaterializationCheckpointKind.ChangeProgress,
             continuation: null,
             completion: null,
-            position,
-            [new MaterializationDeliveryId("delivery-1")],
-            checkpointTime);
+            position: position,
+            appliedDeliveries: [new MaterializationDeliveryId("delivery-1")],
+            committedAtUtc: checkpointTime,
+            channelProgress: MaterializationChannelSemantics.CreatePositionedDurableProgress(position));
         var checkpointResult = await progress.SaveCheckpointAsync(
             context,
             key,
@@ -809,7 +827,7 @@ public sealed class MaterializationSourceContractsTests
                 new MaterializationCapabilityEvidence(
                     new("bounded-enumeration"),
                     MaterializationCapabilityKind.SourceBoundedEnumeration,
-                    MaterializationCapabilityRealizationKind.Native,
+                    CapabilityRealizationKind.Native,
                     [
                         MaterializationGuaranteeKind.StableOrdering,
                         MaterializationGuaranteeKind.RequestLocalCompleteness
@@ -822,14 +840,14 @@ public sealed class MaterializationSourceContractsTests
                 new MaterializationCapabilityEvidence(
                     new("continuation"),
                     MaterializationCapabilityKind.SourceContinuation,
-                    MaterializationCapabilityRealizationKind.Native,
+                    CapabilityRealizationKind.Native,
                     [],
                     [],
                     ["tests/in-memory-reader"]),
                 new MaterializationCapabilityEvidence(
                     new("change-delivery"),
                     MaterializationCapabilityKind.SourceChangeDelivery,
-                    MaterializationCapabilityRealizationKind.Native,
+                    CapabilityRealizationKind.Native,
                     [
                         MaterializationGuaranteeKind.StableOrdering,
                         MaterializationGuaranteeKind.AtLeastOnceDelivery,
@@ -845,14 +863,14 @@ public sealed class MaterializationSourceContractsTests
                 new MaterializationCapabilityEvidence(
                     new("settlement"),
                     MaterializationCapabilityKind.SourceSettlement,
-                    MaterializationCapabilityRealizationKind.Native,
+                    CapabilityRealizationKind.Native,
                     [MaterializationGuaranteeKind.ExplicitSettlement],
                     [],
                     ["tests/in-memory-reader"])
             ]);
         return new(
             new InMemoryRetainedMaterializationSource(
-                new MaterializationSourceDescriptor(reader, materializationProfile),
+                new MaterializationQuerySourceDescriptor(reader, materializationProfile),
                 changes),
             reader);
     }
@@ -907,6 +925,11 @@ public sealed class MaterializationSourceContractsTests
     }
 
     sealed record SourceFixture(InMemoryRetainedMaterializationSource Source, RecordingReader Reader);
+
+    sealed class ChangeOnlySource(MaterializationSourceDescriptor descriptor) : IMaterializationChangeSource
+    {
+        public MaterializationSourceDescriptor Descriptor { get; } = descriptor;
+    }
 
     sealed class RecordingReader(
         RelationQuerySourceReaderDescriptor descriptor,

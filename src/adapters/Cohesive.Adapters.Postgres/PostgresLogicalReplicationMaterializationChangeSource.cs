@@ -305,7 +305,7 @@ public sealed class PostgresLogicalReplicationMaterializationChangeSource :
     }
 
     /// <inheritdoc />
-    public MaterializationSourceDescriptor Descriptor { get; }
+    public MaterializationQuerySourceDescriptor Descriptor { get; }
 
     /// <summary>Exact source-feed scope shared by baseline reads and logical-replication positions.</summary>
     public MaterializationSourceScope Scope => baseline.Scope;
@@ -577,11 +577,11 @@ public sealed class PostgresLogicalReplicationMaterializationChangeSource :
             if (settledAtUtc < admissibleAtUtc)
                 settledAtUtc = admissibleAtUtc;
             var receipt = new MaterializationSourceSettlement(
-                request.Id,
-                request.Checkpoint,
-                request.Position,
-                settledAtUtc,
-                Evidence(string.Concat(
+                id: request.Id,
+                checkpoint: request.Checkpoint,
+                position: request.Position,
+                settledAtUtc: settledAtUtc,
+                evidenceReference: Evidence(string.Concat(
                     "settlement-confirmed/",
                     position.WalPosition.ToString())));
             var disposition = feedback.Disposition == PostgresLogicalReplicationFeedbackDisposition.Confirmed
@@ -1536,7 +1536,7 @@ public sealed class PostgresLogicalReplicationMaterializationChangeSource :
         var changeEvidence = new MaterializationCapabilityEvidence(
             new("cohesive.adapters.postgres/logical-replication/change-delivery/v1"),
             MaterializationCapabilityKind.SourceChangeDelivery,
-            MaterializationCapabilityRealizationKind.Constrained,
+            CapabilityRealizationKind.Constrained,
             changeGuarantees.Count == changeGuarantees.Capacity
                 ? changeGuarantees.MoveToImmutable()
                 : changeGuarantees.ToImmutable(),
@@ -1552,7 +1552,7 @@ public sealed class PostgresLogicalReplicationMaterializationChangeSource :
         var settlementEvidence = new MaterializationCapabilityEvidence(
             new("cohesive.adapters.postgres/logical-replication/settlement/v1"),
             MaterializationCapabilityKind.SourceSettlement,
-            MaterializationCapabilityRealizationKind.Native,
+            CapabilityRealizationKind.Native,
             [MaterializationGuaranteeKind.ExplicitSettlement],
             [new MaterializationOperatingLimit(MaterializationLimitKind.Parallelism, 1)],
             references,

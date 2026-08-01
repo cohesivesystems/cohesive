@@ -576,7 +576,7 @@ public sealed class MaterializationTargetIntentFingerprinterTests
             long writeBytes) => new(
                 new(id),
                 capability,
-                MaterializationCapabilityRealizationKind.Native,
+                CapabilityRealizationKind.Native,
                 capability == MaterializationCapabilityKind.TargetPerItemOutcomes
                     ? [MaterializationGuaranteeKind.ExactPerItemOutcome]
                     : [

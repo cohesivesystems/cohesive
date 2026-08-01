@@ -152,25 +152,29 @@ public sealed record MaterializationSourceContinuation
     public string Value { get; }
 }
 
-/// <summary>
-/// Runtime binding of the canonical Relations reader to attributable materialization-source capabilities.
-/// </summary>
-public sealed class MaterializationSourceDescriptor
+/// <summary>Runtime identity and attributable capabilities shared by every materialization source.</summary>
+/// <remarks>
+/// A change-only source does not imply a Relations reader. Batch/current-state acquisition is advertised and bound
+/// independently through <see cref="MaterializationQuerySourceDescriptor"/> when it is actually available.
+/// </remarks>
+public class MaterializationSourceDescriptor
 {
-    /// <summary>Creates a source descriptor.</summary>
-    /// <param name="relationReader">Exact canonical Relations source reader used for semantic reads.</param>
+    /// <summary>Creates a change-source descriptor without inventing a current-state reader.</summary>
+    /// <param name="source">Exact physical source instance.</param>
+    /// <param name="executionDomain">Execution or consistency domain containing the source.</param>
     /// <param name="capabilityProfile">Attributable materialization capabilities for the same source.</param>
-    /// <exception cref="ArgumentNullException">
-    /// <paramref name="relationReader"/> or <paramref name="capabilityProfile"/> is <see langword="null"/>.
-    /// </exception>
+    /// <exception cref="ArgumentNullException"><paramref name="capabilityProfile"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
-    /// The profile is not a source profile or describes a different physical source instance.
+    /// An identity is default, or the profile is not a source profile or describes a different physical source
+    /// instance.
     /// </exception>
     public MaterializationSourceDescriptor(
-        IRelationQuerySourceReader relationReader,
+        RelationQuerySourceInstanceId source,
+        RelationQueryExecutionDomainId executionDomain,
         MaterializationCapabilityProfile capabilityProfile)
     {
-        RelationReader = Guard.RequireNotNull(relationReader);
+        MaterializationContract.RequireDefinedIdentity(source.Value, nameof(source));
+        MaterializationContract.RequireDefinedIdentity(executionDomain.Value, nameof(executionDomain));
         CapabilityProfile = Guard.RequireNotNull(capabilityProfile);
         if (capabilityProfile.Role != MaterializationEndpointRole.Source)
         {
@@ -179,26 +183,55 @@ public sealed class MaterializationSourceDescriptor
 
         if (!string.Equals(
                 capabilityProfile.Subject,
-                relationReader.Descriptor.Source.Value,
+                source.Value,
                 StringComparison.Ordinal))
         {
             throw new ArgumentException(
-                "The materialization capability profile must describe the exact Relations source reader.",
+                "The materialization capability profile must describe the exact physical source instance.",
                 nameof(capabilityProfile));
         }
+
+        Source = source;
+        ExecutionDomain = executionDomain;
+    }
+
+    /// <summary>Exact physical source identity.</summary>
+    public RelationQuerySourceInstanceId Source { get; }
+
+    /// <summary>Execution or consistency domain containing the source.</summary>
+    public RelationQueryExecutionDomainId ExecutionDomain { get; }
+
+    /// <summary>Attributable materialization capabilities for the same source.</summary>
+    public MaterializationCapabilityProfile CapabilityProfile { get; }
+}
+
+/// <summary>
+/// Runtime binding of a canonical Relations reader to attributable materialization-source capabilities.
+/// </summary>
+public sealed class MaterializationQuerySourceDescriptor : MaterializationSourceDescriptor
+{
+    /// <summary>Creates a query-capable source descriptor.</summary>
+    /// <param name="relationReader">Exact canonical Relations source reader used for semantic reads.</param>
+    /// <param name="capabilityProfile">Attributable materialization capabilities for the same source.</param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="relationReader"/> or <paramref name="capabilityProfile"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// The profile is not a source profile or describes a different physical source instance.
+    /// </exception>
+    public MaterializationQuerySourceDescriptor(
+        IRelationQuerySourceReader relationReader,
+        MaterializationCapabilityProfile capabilityProfile)
+        : base(
+            source: Guard.RequireNotNull(relationReader).Descriptor.Source,
+            executionDomain: relationReader.Descriptor.ExecutionDomain,
+            capabilityProfile: capabilityProfile)
+    {
+        RelationReader = relationReader;
     }
 
     /// <summary>Exact canonical Relations source reader used for semantic reads.</summary>
     public IRelationQuerySourceReader RelationReader { get; }
-
-    /// <summary>Physical source identity projected from <see cref="RelationReader"/>.</summary>
-    public RelationQuerySourceInstanceId Source => RelationReader.Descriptor.Source;
-
-    /// <summary>Execution or consistency domain projected from <see cref="RelationReader"/>.</summary>
-    public RelationQueryExecutionDomainId ExecutionDomain => RelationReader.Descriptor.ExecutionDomain;
-
-    /// <summary>Attributable materialization capabilities for the same source.</summary>
-    public MaterializationCapabilityProfile CapabilityProfile { get; }
 }
 
 /// <summary>One bounded materialization page request around an exact canonical Relations source request.</summary>
@@ -425,7 +458,7 @@ public sealed record MaterializationSourceReadCompletion
 public interface IMaterializationSource
 {
     /// <summary>Exact canonical Relations reader and attributable materialization capability profile.</summary>
-    MaterializationSourceDescriptor Descriptor { get; }
+    MaterializationQuerySourceDescriptor Descriptor { get; }
 
     /// <summary>Executes one bounded, continuation-aware source page read.</summary>
     /// <param name="context">Operation context carrying time, identity, tracing, and cancellation.</param>
@@ -454,7 +487,7 @@ public interface IMaterializationSource
 /// </remarks>
 public interface IMaterializationChangeSource
 {
-    /// <summary>Exact canonical Relations reader and attributable materialization capability profile.</summary>
+    /// <summary>Exact physical source identity and attributable materialization capability profile.</summary>
     MaterializationSourceDescriptor Descriptor { get; }
 }
 
@@ -475,7 +508,10 @@ public interface IMaterializationPullChangeSource : IMaterializationSource, IMat
     /// Exact canonical Relations reader and attributable materialization capability profile shared by the paged and
     /// change-delivery source views.
     /// </summary>
-    new MaterializationSourceDescriptor Descriptor { get; }
+    new MaterializationQuerySourceDescriptor Descriptor { get; }
+
+    /// <inheritdoc />
+    MaterializationSourceDescriptor IMaterializationChangeSource.Descriptor => Descriptor;
 
     /// <summary>Captures the current opaque end position of one exact source-feed scope.</summary>
     /// <remarks>
@@ -703,13 +739,13 @@ public sealed record MaterializationChangeSettlementObservation
 {
     /// <summary>Creates one checkpoint-attributed managed source settlement observation.</summary>
     /// <param name="progress">Durable application progress that authorized provider settlement.</param>
-    /// <param name="settlement">Provider acknowledgement of the checkpoint's exact source position.</param>
+    /// <param name="settlement">Provider acknowledgement of exact coverage retained by the checkpoint.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="progress"/> or <paramref name="settlement"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// The progress lacks the cited change checkpoint, the checkpoint or position differs, the source scope differs,
-    /// or settlement predates the durable application commit.
+    /// The progress lacks the cited change checkpoint, settlement coverage differs, the source scope differs, or
+    /// settlement predates the durable application commit.
     /// </exception>
     [JsonConstructor]
     public MaterializationChangeSettlementObservation(
@@ -720,14 +756,12 @@ public sealed record MaterializationChangeSettlementObservation
         Settlement = Guard.RequireNotNull(settlement);
         var checkpoint = progress.LatestCheckpoint;
         if (checkpoint is null
-            || checkpoint.Kind != MaterializationCheckpointKind.ChangePosition
-            || checkpoint.Id != settlement.Checkpoint
-            || checkpoint.Position != settlement.Position
-            || progress.Key.Scope != settlement.Position.Scope
+            || checkpoint.Kind != MaterializationCheckpointKind.ChangeProgress
+            || !settlement.IsCoveredBy(checkpoint, progress.Key.Scope)
             || settlement.SettledAtUtc < checkpoint.CommittedAtUtc)
         {
             throw new ArgumentException(
-                "A managed settlement observation must cite the exact durable change checkpoint, position, source scope, and causal commit boundary.",
+                "A managed settlement observation must cite exact durable change coverage, source scope, and causal commit boundary.",
                 nameof(settlement));
         }
     }
@@ -735,7 +769,7 @@ public sealed record MaterializationChangeSettlementObservation
     /// <summary>Durable application progress that authorized provider settlement.</summary>
     public MaterializationProgressSnapshot Progress { get; }
 
-    /// <summary>Provider acknowledgement of the checkpoint's exact source position.</summary>
+    /// <summary>Provider acknowledgement of exact checkpoint-covered progress.</summary>
     public MaterializationSourceSettlement Settlement { get; }
 }
 

@@ -296,7 +296,7 @@ public static class RelationQueryContextualAssessmentProjector
                 foreach (var requirement in selection.Requirements)
                 {
                     if (!decisions.TryGetValue(requirement.Id, out var decision)
-                        || decision.Kind == RelationQueryRealizationDecisionKind.Unavailable)
+                        || decision.Kind == CapabilityRealizationKind.Unavailable)
                     {
                         throw new InvalidOperationException(
                             $"Successful branch '{branch.Id.Value}' has no available profile decision for requirement "

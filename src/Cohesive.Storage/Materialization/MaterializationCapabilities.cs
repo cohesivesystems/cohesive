@@ -246,32 +246,6 @@ public enum MaterializationLimitKind
     TransactionBytes = 8
 }
 
-/// <summary>How attributable endpoint evidence realizes one requested capability.</summary>
-/// <remarks>
-/// This is part of the persisted <c>cohesive-materialization/v1</c> evidence contract. It is intentionally distinct
-/// from a Relations compiler's realization-decision type: endpoint profiles classify durable adapter evidence before
-/// any materialization requirement is selected, while a compiler decision records the outcome of planning one
-/// demand. The matching implementation does not maintain a conversion table between the two closed models.
-/// </remarks>
-[JsonConverter(typeof(JsonStringEnumConverter))]
-public enum MaterializationCapabilityRealizationKind
-{
-    /// <summary>The endpoint implements the capability directly.</summary>
-    Native = 0,
-
-    /// <summary>Declared endpoint facilities compose exact support.</summary>
-    Composed = 1,
-
-    /// <summary>Exact support holds only inside the evidence's declared limits.</summary>
-    Constrained = 2,
-
-    /// <summary>An explicit local override supplies exact attributable support.</summary>
-    Override = 3,
-
-    /// <summary>No supplied evidence preserves the requested capability.</summary>
-    Unavailable = 4
-}
-
 /// <summary>Stable identity of a materialization capability requirement.</summary>
 [JsonConverter(typeof(SingleValueWrapperJsonConverter))]
 public readonly record struct MaterializationCapabilityRequirementId
@@ -469,7 +443,7 @@ public sealed record MaterializationCapabilityEvidence
     public MaterializationCapabilityEvidence(
         MaterializationCapabilityEvidenceId id,
         MaterializationCapabilityKind capability,
-        MaterializationCapabilityRealizationKind realization,
+        CapabilityRealizationKind realization,
         ImmutableArray<MaterializationGuaranteeKind> guarantees,
         ImmutableArray<MaterializationOperatingLimit> operatingLimits,
         ImmutableArray<string> sourceReferences,
@@ -485,7 +459,8 @@ public sealed record MaterializationCapabilityEvidence
             throw new ArgumentOutOfRangeException(nameof(capability), capability, "Unsupported materialization capability.");
         }
 
-        if (!Enum.IsDefined(realization) || realization == MaterializationCapabilityRealizationKind.Unavailable)
+        if (!Enum.IsDefined(realization)
+            || realization is CapabilityRealizationKind.Unavailable or CapabilityRealizationKind.Unknown)
         {
             throw new ArgumentOutOfRangeException(nameof(realization), realization, "Evidence must describe an available realization.");
         }
@@ -525,7 +500,7 @@ public sealed record MaterializationCapabilityEvidence
     public MaterializationCapabilityKind Capability { get; }
 
     /// <summary>How the endpoint realizes the facility.</summary>
-    public MaterializationCapabilityRealizationKind Realization { get; }
+    public CapabilityRealizationKind Realization { get; }
 
     /// <summary>Preserved semantic guarantees in canonical order.</summary>
     public ImmutableArray<MaterializationGuaranteeKind> Guarantees { get; }
@@ -621,7 +596,7 @@ public sealed record MaterializationCapabilityDecision
 {
     /// <summary>Creates a capability decision.</summary>
     /// <param name="requirement">Requirement receiving the decision.</param>
-    /// <param name="realization">Available realization kind or <see cref="MaterializationCapabilityRealizationKind.Unavailable"/>.</param>
+    /// <param name="realization">Available realization kind or <see cref="CapabilityRealizationKind.Unavailable"/>.</param>
     /// <param name="evidence">Selected evidence, or <see langword="null"/> when unavailable.</param>
     /// <exception cref="ArgumentNullException"><paramref name="requirement"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
@@ -631,16 +606,16 @@ public sealed record MaterializationCapabilityDecision
     [JsonConstructor]
     public MaterializationCapabilityDecision(
         MaterializationCapabilityRequirement requirement,
-        MaterializationCapabilityRealizationKind realization,
+        CapabilityRealizationKind realization,
         MaterializationCapabilityEvidence? evidence = null)
     {
         Requirement = Guard.RequireNotNull(requirement);
-        if (!Enum.IsDefined(realization))
+        if (!Enum.IsDefined(realization) || realization == CapabilityRealizationKind.Unknown)
         {
             throw new ArgumentOutOfRangeException(nameof(realization), realization, "Unsupported realization kind.");
         }
 
-        if ((realization == MaterializationCapabilityRealizationKind.Unavailable) != (evidence is null))
+        if ((realization == CapabilityRealizationKind.Unavailable) != (evidence is null))
         {
             throw new ArgumentException("Unavailable decisions omit evidence; available decisions require it.", nameof(evidence));
         }
@@ -668,7 +643,7 @@ public sealed record MaterializationCapabilityDecision
     public MaterializationCapabilityRequirement Requirement { get; }
 
     /// <summary>Final realization classification.</summary>
-    public MaterializationCapabilityRealizationKind Realization { get; }
+    public CapabilityRealizationKind Realization { get; }
 
     /// <summary>Selected endpoint evidence, or <see langword="null"/> when unavailable.</summary>
     public MaterializationCapabilityEvidence? Evidence { get; }
@@ -720,7 +695,7 @@ public sealed record MaterializationCapabilityMatch
     /// <summary>Whether every requirement has an evidence-backed realization and no error diagnostic.</summary>
     [JsonIgnore]
     public bool IsSatisfied => Validation.IsValid
-        && Decisions.All(static decision => decision.Realization != MaterializationCapabilityRealizationKind.Unavailable);
+        && Decisions.All(static decision => decision.Realization != CapabilityRealizationKind.Unavailable);
 }
 
 /// <summary>Matches backend-independent requirements to one exact endpoint capability snapshot.</summary>
@@ -789,7 +764,7 @@ public static class MaterializationCapabilityMatcher
                     profile,
                     expected: requiredRole.ToString(),
                     observed: profile.Role.ToString()));
-                decisions.Add(new(requirement, MaterializationCapabilityRealizationKind.Unavailable));
+                decisions.Add(new(requirement, CapabilityRealizationKind.Unavailable));
                 continue;
             }
 
@@ -802,7 +777,7 @@ public static class MaterializationCapabilityMatcher
                     profile,
                     expected: requirement.Capability.ToString(),
                     observed: "not advertised"));
-                decisions.Add(new(requirement, MaterializationCapabilityRealizationKind.Unavailable));
+                decisions.Add(new(requirement, CapabilityRealizationKind.Unavailable));
                 continue;
             }
 
@@ -862,7 +837,7 @@ public static class MaterializationCapabilityMatcher
                 }
             }
 
-            decisions.Add(new(requirement, MaterializationCapabilityRealizationKind.Unavailable));
+            decisions.Add(new(requirement, CapabilityRealizationKind.Unavailable));
         }
 
         diagnostics.Sort(DocumentValidationDiagnosticComparer.Ordinal);

@@ -163,7 +163,7 @@ public sealed class InMemoryMaterializationProgressStore : IMaterializationProgr
         ArgumentNullException.ThrowIfNull(settlement);
         MaterializationContract.RequireDefinedIdentity(expectedRevision.Value, nameof(expectedRevision));
         MaterializationContract.RequireDefinedIdentity(fence.Value, nameof(fence));
-        if (settlement.Position.Scope != key.Scope)
+        if (settlement.Scope != key.Scope)
         {
             throw new ArgumentException("A settlement must belong to its exact progress source-feed scope.", nameof(settlement));
         }
@@ -214,8 +214,7 @@ public sealed class InMemoryMaterializationProgressStore : IMaterializationProgr
                     aggregate,
                     key));
             }
-            if (checkpoint.Kind != MaterializationCheckpointKind.ChangePosition
-                || checkpoint.Position != settlement.Position)
+            if (!settlement.IsCoveredBy(checkpoint, key.Scope))
             {
                 return Task.FromResult(Rejected(
                     MaterializationProgressMutationDisposition.CheckpointMismatch,
@@ -301,6 +300,7 @@ public sealed class InMemoryMaterializationProgressStore : IMaterializationProgr
         && left.Completion == right.Completion
         && left.Position == right.Position
         && left.AppliedDeliveries.SequenceEqual(right.AppliedDeliveries)
+        && left.ChannelProgress == right.ChannelProgress
         && left.CommittedAtUtc == right.CommittedAtUtc
         && string.Equals(left.EvidenceReference, right.EvidenceReference, StringComparison.Ordinal);
 
@@ -309,7 +309,10 @@ public sealed class InMemoryMaterializationProgressStore : IMaterializationProgr
         MaterializationSourceSettlement right) =>
         left.Id == right.Id
         && left.Checkpoint == right.Checkpoint
+        && left.Scope == right.Scope
+        && left.Kind == right.Kind
         && left.Position == right.Position
+        && left.Deliveries.SequenceEqual(right.Deliveries)
         && left.SettledAtUtc == right.SettledAtUtc
         && string.Equals(left.EvidenceReference, right.EvidenceReference, StringComparison.Ordinal);
 
@@ -337,7 +340,7 @@ public sealed class InMemoryMaterializationProgressStore : IMaterializationProgr
             MaterializationProgressMutationDisposition.CheckpointNotFound =>
                 (MaterializationProgressDiagnosticCodes.CheckpointNotFound, "Settlement requires an already-persisted checkpoint."),
             MaterializationProgressMutationDisposition.CheckpointMismatch =>
-                (MaterializationProgressDiagnosticCodes.CheckpointMismatch, "Settlement does not match its cited checkpoint."),
+                (MaterializationProgressDiagnosticCodes.CheckpointMismatch, "Settlement coverage does not match its cited checkpoint."),
             _ => throw new ArgumentOutOfRangeException(nameof(disposition), disposition, "Unsupported rejected disposition.")
         };
         var subject = string.Join('/',
@@ -361,7 +364,7 @@ public sealed class InMemoryMaterializationProgressStore : IMaterializationProgr
             MaterializationProgressMutationDisposition.CheckpointNotFound =>
                 ("settlement cites a durable checkpoint", "cited checkpoint was absent"),
             MaterializationProgressMutationDisposition.CheckpointMismatch =>
-                ("settlement matches the cited checkpoint position and chronology", "settlement position or chronology differed"),
+                ("settlement has exact coverage in the cited checkpoint and valid chronology", "settlement coverage or chronology differed"),
             _ => throw new ArgumentOutOfRangeException(nameof(disposition), disposition, "Unsupported rejected disposition.")
         };
         return new(

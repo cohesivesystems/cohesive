@@ -316,7 +316,7 @@ public static class RelationQueryRealizationCompiler
             var status = invalid
                 ? RelationQueryRealizationStatus.Invalid
                 : normalizedDecisions.Any(static decision =>
-                    decision.Kind == RelationQueryRealizationDecisionKind.Unavailable)
+                    decision.Kind == CapabilityRealizationKind.Unavailable)
                     ? RelationQueryRealizationStatus.NotRealizable
                     : RelationQueryRealizationStatus.Realizable;
             return CreateReport(normalizedDecisions, status);

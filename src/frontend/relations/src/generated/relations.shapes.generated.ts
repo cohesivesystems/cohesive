@@ -2465,7 +2465,7 @@ export const relationQueryExplainRequirementInputKindLabels: Record<RelationQuer
 
 export interface RelationQueryNativeCompilationDecisionReference {
   requirement: RelationQueryRealizationRequirementId;
-  kind: RelationQueryRealizationDecisionKind;
+  kind: CapabilityRealizationKind;
   capabilityEvidence: RelationQueryTargetCapabilityEvidenceId[];
   compositionRules: RelationQueryCompositionRuleId[];
   override?: RelationQueryRealizationOverrideId | null;
@@ -2620,22 +2620,24 @@ export interface RelationQueryLogicalBypass {
   result: ValueBindingId;
 }
 
-export type RelationQueryRealizationDecisionKind = 'Native' | 'Composed' | 'Constrained' | 'Override' | 'Unavailable';
+export type CapabilityRealizationKind = 'Native' | 'Composed' | 'Constrained' | 'Override' | 'Unavailable' | 'Unknown';
 
-export const relationQueryRealizationDecisionKinds = {
+export const capabilityRealizationKinds = {
   native: 'Native',
   composed: 'Composed',
   constrained: 'Constrained',
   override: 'Override',
   unavailable: 'Unavailable',
-} as const satisfies Record<string, RelationQueryRealizationDecisionKind>;
+  unknown: 'Unknown',
+} as const satisfies Record<string, CapabilityRealizationKind>;
 
-export const relationQueryRealizationDecisionKindLabels: Record<RelationQueryRealizationDecisionKind, string> = {
+export const capabilityRealizationKindLabels: Record<CapabilityRealizationKind, string> = {
   Native: 'Native',
   Composed: 'Composed',
   Constrained: 'Constrained',
   Override: 'Override',
   Unavailable: 'Unavailable',
+  Unknown: 'Unknown',
 };
 
 export type TemporalIntervalBound = {

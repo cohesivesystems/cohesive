@@ -177,7 +177,7 @@ public sealed class CosmosMaterializationSourceTests
         var pointRead = Assert.Single(
             fixture.Source.Descriptor.CapabilityProfile.Evidence,
             static evidence => evidence.Capability == MaterializationCapabilityKind.SourceBatchedPointRead);
-        Assert.Equal(MaterializationCapabilityRealizationKind.Composed, pointRead.Realization);
+        Assert.Equal(CapabilityRealizationKind.Composed, pointRead.Realization);
         Assert.All(baseline.Calls, static call =>
             Assert.Equal(ConsistencyLevel.Strong, call.ConsistencyLevel));
     }

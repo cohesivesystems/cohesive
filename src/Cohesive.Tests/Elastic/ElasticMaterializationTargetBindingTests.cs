@@ -211,7 +211,7 @@ public sealed class ElasticMaterializationTargetBindingTests
         foreach (var evidence in profile.Evidence.Where(static item =>
                      item.Guarantees.Contains(MaterializationGuaranteeKind.FencedMutation)))
         {
-            Assert.Equal(MaterializationCapabilityRealizationKind.Constrained, evidence.Realization);
+            Assert.Equal(CapabilityRealizationKind.Constrained, evidence.Realization);
             Assert.Contains(
                 $"elastic-single-writer-authority:{binding.SingleWriter.Authority}",
                 evidence.SourceReferences);
@@ -222,7 +222,7 @@ public sealed class ElasticMaterializationTargetBindingTests
 
         var promotion = Assert.Single(profile.Evidence, static item =>
             item.Capability == MaterializationCapabilityKind.TargetFencedPromotion);
-        Assert.Equal(MaterializationCapabilityRealizationKind.Composed, promotion.Realization);
+        Assert.Equal(CapabilityRealizationKind.Composed, promotion.Realization);
         Assert.Contains("alias-marker compare-and-swap", promotion.Description, StringComparison.Ordinal);
         Assert.Contains(MaterializationGuaranteeKind.AtomicPromotion, promotion.Guarantees);
         Assert.Contains(MaterializationGuaranteeKind.FencedPromotion, promotion.Guarantees);

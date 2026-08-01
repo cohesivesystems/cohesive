@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
+using Cohesive.Model;
 using Cohesive.Storage.Materialization;
 
 namespace Cohesive.Adapters.Elastic;
@@ -78,7 +79,7 @@ public static class ElasticMaterializationTargetProfile
                     ],
                     generationLimits,
                     sources,
-                    MaterializationCapabilityRealizationKind.Constrained,
+                    CapabilityRealizationKind.Constrained,
                     "A caller-identified physical index remains outside the stable read alias until promotion."),
                 Evidence(
                     MaterializationCapabilityKind.TargetBulkUpsert,
@@ -89,7 +90,7 @@ public static class ElasticMaterializationTargetProfile
                     ],
                     writeLimits,
                     sources,
-                    MaterializationCapabilityRealizationKind.Constrained,
+                    CapabilityRealizationKind.Constrained,
                     "Bounded Elasticsearch bulk writes retain canonical mutation and version evidence under the persisted external single-writer authority."),
                 Evidence(
                     MaterializationCapabilityKind.TargetBulkDelete,
@@ -100,28 +101,28 @@ public static class ElasticMaterializationTargetProfile
                     ],
                     writeLimits,
                     sources,
-                    MaterializationCapabilityRealizationKind.Constrained,
+                    CapabilityRealizationKind.Constrained,
                     "Deletes are retained as versioned tombstones under the persisted external single-writer authority until generation cleanup."),
                 Evidence(
                     MaterializationCapabilityKind.TargetPerItemOutcomes,
                     [MaterializationGuaranteeKind.ExactPerItemOutcome],
                     writeLimits,
                     sources,
-                    MaterializationCapabilityRealizationKind.Composed,
+                    CapabilityRealizationKind.Composed,
                     "Adapter preflight and bulk item responses produce one request-order terminal outcome per input."),
                 Evidence(
                     MaterializationCapabilityKind.TargetSeal,
                     [MaterializationGuaranteeKind.FencedMutation],
                     parallelism,
                     sources,
-                    MaterializationCapabilityRealizationKind.Constrained,
+                    CapabilityRealizationKind.Constrained,
                     "Sealing is serialized with generation writes and records attributable immutable evidence."),
                 Evidence(
                     MaterializationCapabilityKind.TargetValidation,
                     [MaterializationGuaranteeKind.FencedMutation],
                     parallelism,
                     sources,
-                    MaterializationCapabilityRealizationKind.Constrained,
+                    CapabilityRealizationKind.Constrained,
                     "Validation checks the exact sealed generation and carries the binding-declared index-template fingerprint as provenance; live template drift requires deployment validation."),
                 Evidence(
                     MaterializationCapabilityKind.TargetFencedPromotion,
@@ -131,21 +132,21 @@ public static class ElasticMaterializationTargetProfile
                     ],
                     parallelism,
                     sources,
-                    MaterializationCapabilityRealizationKind.Composed,
+                    CapabilityRealizationKind.Composed,
                     "An atomic Elasticsearch alias-marker compare-and-swap fences and applies the stable read-alias promotion."),
                 Evidence(
                     MaterializationCapabilityKind.TargetRetirement,
                     [MaterializationGuaranteeKind.FencedMutation],
                     parallelism,
                     sources,
-                    MaterializationCapabilityRealizationKind.Constrained,
+                    CapabilityRealizationKind.Constrained,
                     "Retirement is a fenced logical lifecycle transition separate from physical cleanup."),
                 Evidence(
                     MaterializationCapabilityKind.TargetCleanup,
                     [MaterializationGuaranteeKind.FencedMutation],
                     parallelism,
                     sources,
-                    MaterializationCapabilityRealizationKind.Constrained,
+                    CapabilityRealizationKind.Constrained,
                     "Cleanup removes only a fenced retired generation while retaining its identity tombstone.")
             ],
             "Generation-per-index Elasticsearch target with bounded bulk mutation and fenced stable-alias promotion.");
@@ -221,7 +222,7 @@ public static class ElasticMaterializationTargetProfile
         ImmutableArray<MaterializationGuaranteeKind> guarantees,
         ImmutableArray<MaterializationOperatingLimit> limits,
         ImmutableArray<string> sources,
-        MaterializationCapabilityRealizationKind realization,
+        CapabilityRealizationKind realization,
         string description) => new(
         new($"elastic/materialization-target/{(int)capability}"),
         capability,

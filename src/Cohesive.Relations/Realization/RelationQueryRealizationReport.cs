@@ -439,7 +439,7 @@ public sealed class RelationQueryRealizationReport
                                plan.CompilerProfile,
                                StringComparer.Ordinal);
         if (!supportsPlan && decisions.Any(static decision =>
-                decision.Kind != RelationQueryRealizationDecisionKind.Unavailable))
+                decision.Kind != CapabilityRealizationKind.Unavailable))
         {
             throw InvalidDecision(
                 "A target profile that does not support the compiled plan cannot carry an available realization decision.");
@@ -949,7 +949,7 @@ public sealed class RelationQueryRealizationReport
         ImmutableArray<RelationQueryRealizationDiagnostic> diagnostics)
     {
         var hasUnavailable = decisions.Any(static decision =>
-            decision.Kind == RelationQueryRealizationDecisionKind.Unavailable);
+            decision.Kind == CapabilityRealizationKind.Unavailable);
         var hasError = diagnostics.Any(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
         if (status == RelationQueryRealizationStatus.Realizable && (hasUnavailable || hasError))
             throw new ArgumentException("A realizable report cannot contain unavailable decisions or error diagnostics.", nameof(status));

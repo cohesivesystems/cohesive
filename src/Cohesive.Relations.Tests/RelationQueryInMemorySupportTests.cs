@@ -140,7 +140,7 @@ public sealed class RelationQueryInMemorySupportTests
         Assert.Contains(
             report.Decisions,
             decision => decision.Requirement == aggregateRequirement.Id
-                && decision.Kind == RelationQueryRealizationDecisionKind.Native);
+                && decision.Kind == CapabilityRealizationKind.Native);
         var gap = Assert.Single(gapAnalysis.Gaps);
         Assert.Equal(RelationRequirementGapCause.CapabilityUnavailable, gap.Cause);
         Assert.Equal(capability.Input.Id, gap.Input.Id);
