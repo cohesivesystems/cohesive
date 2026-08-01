@@ -51,6 +51,14 @@ public sealed class MaterializationTargetGenerationTests
             new("generation/default-boundary"),
             default,
             [mutation]));
+        Assert.Throws<ArgumentException>(() => new MaterializationAbandonGenerationRequest(
+            abandonmentId: default,
+            generationId: new("generation/default-boundary"),
+            abandonedAtUtc: Epoch));
+        Assert.Throws<ArgumentException>(() => new MaterializationAbandonGenerationRequest(
+            abandonmentId: new("abandonment/non-utc"),
+            generationId: new("generation/non-utc"),
+            abandonedAtUtc: Epoch.ToOffset(TimeSpan.FromHours(1))));
     }
 
     [Fact]
@@ -93,6 +101,170 @@ public sealed class MaterializationTargetGenerationTests
         Assert.Equal(MaterializationTargetOperationDisposition.MaterializationConflict, differentMaterialization.Disposition);
         Assert.Equal(DefinitionId, differentMaterialization.Generation!.MaterializationId);
         Assert.Equal(DefinitionFingerprint, differentMaterialization.Generation.DefinitionFingerprint);
+    }
+
+    [Fact]
+    public async Task AbandonGeneration_AbsentIdentityInstallsDurableTombstone()
+    {
+        var target = Target();
+        var generationId = new MaterializationGenerationId("generation/abandoned-before-begin");
+        MaterializationAbandonGenerationRequest request = new(
+            abandonmentId: new("abandonment/before-begin"),
+            generationId: generationId,
+            abandonedAtUtc: Epoch);
+
+        var applied = await target.AbandonGenerationAsync(OperationContext.Create(), request);
+        var replayed = await target.AbandonGenerationAsync(OperationContext.Create(), request);
+        var identityConflict = await target.AbandonGenerationAsync(
+            OperationContext.Create(),
+            new(
+                abandonmentId: request.AbandonmentId,
+                generationId: new("generation/different"),
+                abandonedAtUtc: Epoch));
+        var stateConflict = await target.AbandonGenerationAsync(
+            OperationContext.Create(),
+            new(
+                abandonmentId: new("abandonment/different"),
+                generationId: generationId,
+                abandonedAtUtc: Epoch.AddSeconds(1)));
+        var lateBegin = await target.BeginGenerationAsync(
+            OperationContext.Create(),
+            new(
+                materializationId: DefinitionId,
+                generationId: generationId,
+                definitionFingerprint: DefinitionFingerprint,
+                workerFence: FenceOne,
+                createdAtUtc: Epoch.AddMinutes(-1)));
+        var lateBatch = await target.ApplyBatchAsync(
+            OperationContext.Create(),
+            new(
+                batchId: new("batch/abandoned-before-begin"),
+                generationId: generationId,
+                workerFence: FenceOne,
+                mutations:
+                [
+                    new MaterializationDelete(
+                        itemId: new("item/abandoned-before-begin"),
+                        mutationId: new("mutation/abandoned-before-begin"),
+                        version: new("1"))
+                ]));
+
+        Assert.Equal(MaterializationTargetOperationDisposition.Applied, applied.Disposition);
+        Assert.Null(applied.Generation);
+        Assert.Equal(request.AbandonmentId, applied.Receipt!.AbandonmentId);
+        Assert.Equal(MaterializationTargetOperationDisposition.Replayed, replayed.Disposition);
+        Assert.Equal(applied.Receipt, replayed.Receipt);
+        Assert.Null(replayed.Generation);
+        Assert.Equal(MaterializationTargetOperationDisposition.IdentityConflict, identityConflict.Disposition);
+        Assert.Equal(MaterializationTargetOperationDisposition.StateConflict, stateConflict.Disposition);
+        Assert.Equal(MaterializationTargetOperationDisposition.StateConflict, lateBegin.Disposition);
+        Assert.Null(lateBegin.Generation);
+        Assert.Equal(MaterializationBatchDisposition.GenerationNotWritable, lateBatch.Disposition);
+        Assert.Null(lateBatch.GenerationRevision);
+        Assert.Equal(
+            MaterializationItemOutcomeDisposition.PermanentFailure,
+            Assert.Single(lateBatch.Outcomes).Disposition);
+        Assert.Null(await target.InspectGenerationAsync(OperationContext.Create(), generationId));
+        Assert.Equal(0, (await target.InspectAsync(OperationContext.Create())).RetainedGenerationCount);
+    }
+
+    [Fact]
+    public async Task AbandonGeneration_RetiresCandidateAndCleanupCannotReviveIdentity()
+    {
+        var target = Target();
+        var generationId = new MaterializationGenerationId("generation/abandoned-candidate");
+        var begun = await Begin(target, generationId, Epoch, FenceOne);
+        MaterializationAbandonGenerationRequest abandonment = new(
+            abandonmentId: new("abandonment/candidate"),
+            generationId: generationId,
+            abandonedAtUtc: Epoch.AddMinutes(1));
+
+        var abandoned = await target.AbandonGenerationAsync(OperationContext.Create(), abandonment);
+        var lateBegin = await target.BeginGenerationAsync(
+            OperationContext.Create(),
+            new(
+                materializationId: DefinitionId,
+                generationId: generationId,
+                definitionFingerprint: DefinitionFingerprint,
+                workerFence: FenceOne,
+                createdAtUtc: Epoch));
+        var lateBatch = await target.ApplyBatchAsync(
+            OperationContext.Create(),
+            new(
+                batchId: new("batch/abandoned-candidate"),
+                generationId: generationId,
+                workerFence: FenceOne,
+                mutations:
+                [
+                    new MaterializationDelete(
+                        itemId: new("item/abandoned-candidate"),
+                        mutationId: new("mutation/abandoned-candidate"),
+                        version: new("1"))
+                ]));
+        var cleanup = await target.CleanupGenerationAsync(
+            OperationContext.Create(),
+            new(
+                cleanupId: new("cleanup/abandoned-candidate"),
+                generationId: generationId,
+                expectedRevision: abandoned.Generation!.Revision,
+                workerFence: FenceOne,
+                cleanedAtUtc: Epoch.AddMinutes(2)));
+        var replayedAfterCleanup = await target.AbandonGenerationAsync(OperationContext.Create(), abandonment);
+        var beginAfterCleanup = await target.BeginGenerationAsync(
+            OperationContext.Create(),
+            new(
+                materializationId: DefinitionId,
+                generationId: generationId,
+                definitionFingerprint: DefinitionFingerprint,
+                workerFence: FenceOne,
+                createdAtUtc: Epoch));
+
+        Assert.Equal(MaterializationGenerationRevision.Initial, begun.Revision);
+        Assert.Equal(MaterializationTargetOperationDisposition.Applied, abandoned.Disposition);
+        Assert.Equal(MaterializationGenerationState.Retired, abandoned.Generation.State);
+        Assert.Equal(Epoch.AddMinutes(1), abandoned.Generation.RetiredAtUtc);
+        Assert.Equal(MaterializationTargetOperationDisposition.Replayed, lateBegin.Disposition);
+        Assert.Equal(MaterializationGenerationState.Retired, lateBegin.Generation!.State);
+        Assert.Equal(MaterializationBatchDisposition.GenerationNotWritable, lateBatch.Disposition);
+        Assert.Equal(MaterializationTargetOperationDisposition.Applied, cleanup.Disposition);
+        Assert.True(cleanup.WasRemoved);
+        Assert.Equal(MaterializationTargetOperationDisposition.Replayed, replayedAfterCleanup.Disposition);
+        Assert.Equal(MaterializationGenerationState.Retired, replayedAfterCleanup.Generation!.State);
+        Assert.Equal(MaterializationTargetOperationDisposition.StateConflict, beginAfterCleanup.Disposition);
+        Assert.Null(await target.InspectGenerationAsync(OperationContext.Create(), generationId));
+    }
+
+    [Fact]
+    public async Task AbandonGeneration_RejectsActiveGenerationWithoutInstallingEvidence()
+    {
+        var target = Target();
+        var prepared = await PrepareValidated(target, "abandon-active", Epoch, FenceOne);
+        _ = await target.PromoteGenerationAsync(
+            OperationContext.Create(),
+            Promotion(
+                "promotion/abandon-active",
+                prepared,
+                expectedActiveGenerationId: null,
+                MaterializationTargetRevision.Initial,
+                FenceOne,
+                PromotionFenceOne,
+                Epoch.AddMinutes(3)));
+        MaterializationAbandonGenerationRequest request = new(
+            abandonmentId: new("abandonment/active"),
+            generationId: prepared.GenerationId,
+            abandonedAtUtc: Epoch.AddMinutes(4));
+
+        var rejected = await target.AbandonGenerationAsync(OperationContext.Create(), request);
+        var repeated = await target.AbandonGenerationAsync(OperationContext.Create(), request);
+
+        Assert.Equal(MaterializationTargetOperationDisposition.ActiveGenerationConflict, rejected.Disposition);
+        Assert.Equal(MaterializationGenerationState.Active, rejected.Generation!.State);
+        Assert.Null(rejected.Receipt);
+        Assert.Equal(MaterializationTargetOperationDisposition.ActiveGenerationConflict, repeated.Disposition);
+        Assert.Null(repeated.Receipt);
+        Assert.Equal(
+            prepared.GenerationId,
+            (await target.InspectAsync(OperationContext.Create())).ActiveGenerationId);
     }
 
     [Fact]
@@ -1293,6 +1465,37 @@ public sealed class MaterializationTargetGenerationTests
     }
 
     [Fact]
+    public void AbandonmentContracts_RoundTripDurableTombstoneEvidence()
+    {
+        MaterializationAbandonGenerationRequest request = new(
+            abandonmentId: new("abandonment/round-trip"),
+            generationId: new("generation/round-trip"),
+            abandonedAtUtc: Epoch);
+        MaterializationAbandonmentReceipt receipt = new(
+            request.AbandonmentId,
+            request.GenerationId,
+            request.AbandonedAtUtc);
+        MaterializationAbandonmentResult result = new(
+            MaterializationTargetOperationDisposition.Applied,
+            generation: null,
+            receipt);
+        var options = StrictDocumentJson.CreateOptions();
+
+        var restoredRequest = JsonSerializer.Deserialize<MaterializationAbandonGenerationRequest>(
+            JsonSerializer.Serialize(request, options),
+            options);
+        var restoredResult = JsonSerializer.Deserialize<MaterializationAbandonmentResult>(
+            JsonSerializer.Serialize(result, options),
+            options);
+
+        Assert.Equal(request, restoredRequest);
+        Assert.Equal(result, restoredResult);
+        Assert.Equal(
+            MaterializationTargetIntentFingerprinter.Compute(request),
+            MaterializationTargetIntentFingerprinter.Compute(restoredRequest!));
+    }
+
+    [Fact]
     public void MutationWire_UsesSubtypeAsAuthorityAndStringEncodesOperationalEnums()
     {
         MaterializationApplyBatchRequest request = new(
@@ -1629,6 +1832,10 @@ public sealed class MaterializationTargetGenerationTests
                     "isolation",
                     MaterializationCapabilityKind.TargetGenerationIsolation,
                     [MaterializationGuaranteeKind.FencedMutation, MaterializationGuaranteeKind.GenerationIsolation]),
+                Evidence(
+                    "generation-abandonment",
+                    MaterializationCapabilityKind.TargetGenerationAbandonment,
+                    [MaterializationGuaranteeKind.AtomicDurableGenerationExclusion]),
                 Evidence(
                     "outcomes",
                     MaterializationCapabilityKind.TargetPerItemOutcomes,

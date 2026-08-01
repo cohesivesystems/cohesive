@@ -311,6 +311,19 @@ public static class MaterializationTargetIntentFingerprinter
         return ComputeCanonical(PromotionOperationFingerprintInput.From(request));
     }
 
+    /// <summary>Computes the exact generation-abandonment intent.</summary>
+    /// <param name="request">Generation-abandonment request to fingerprint.</param>
+    /// <returns>The deterministic target-intent fingerprint.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <see langword="null"/>.</exception>
+    /// <exception cref="JsonException">The intent cannot be serialized.</exception>
+    /// <exception cref="NotSupportedException">An intent value has no configured JSON representation.</exception>
+    /// <exception cref="InvalidOperationException">The intent has no canonical JSON representation.</exception>
+    public static MaterializationTargetIntentFingerprint Compute(MaterializationAbandonGenerationRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return ComputeCanonical(AbandonmentOperationFingerprintInput.From(request));
+    }
+
     /// <summary>Computes the exact retirement intent, excluding its replaceable worker fence.</summary>
     /// <param name="request">Retirement request to fingerprint.</param>
     /// <returns>The deterministic target-intent fingerprint.</returns>
@@ -417,6 +430,15 @@ public static class MaterializationTargetIntentFingerprinter
     {
         internal static RetirementOperationFingerprintInput From(MaterializationRetireGenerationRequest request) =>
             new(request.RetirementId.Value, request.GenerationId.Value, request.ExpectedRevision.Value, request.RetiredAtUtc);
+    }
+
+    sealed record AbandonmentOperationFingerprintInput(
+        string AbandonmentId,
+        string GenerationId,
+        DateTimeOffset AbandonedAtUtc)
+    {
+        internal static AbandonmentOperationFingerprintInput From(MaterializationAbandonGenerationRequest request) =>
+            new(request.AbandonmentId.Value, request.GenerationId.Value, request.AbandonedAtUtc);
     }
 
     sealed record CleanupOperationFingerprintInput(

@@ -314,11 +314,11 @@ public sealed class MaterializationManagedChangeSourceTests
     static MaterializationProgressSnapshot Snapshot(
         MaterializationProgressKey progress,
         MaterializationApplicationCheckpoint checkpoint) => new(
-        progress,
-        MaterializationProgressRevision.Initial,
-        MaterializationProgressFence.Initial,
-        "worker-a",
-        checkpoint);
+        key: progress,
+        revision: MaterializationProgressRevision.Initial,
+        fence: MaterializationProgressFence.Initial,
+        fenceOwner: "worker-a",
+        latestChangeCheckpoint: checkpoint);
 
     static DocumentValidationDiagnostic Diagnostic(string code) => new(
         code,

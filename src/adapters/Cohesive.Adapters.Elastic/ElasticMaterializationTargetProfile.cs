@@ -9,7 +9,7 @@ namespace Cohesive.Adapters.Elastic;
 /// <summary>Projects exact Elasticsearch target bindings and operating policy into Storage capability evidence.</summary>
 public static class ElasticMaterializationTargetProfile
 {
-    const string ProfilePrefix = "cohesive.adapters.elastic.materialization-target/v1/";
+    const string ProfilePrefix = "cohesive.adapters.elastic.materialization-target/v2/";
 
     /// <summary>Creates the exact capability profile for one bound Elasticsearch target runtime.</summary>
     /// <param name="binding">Persisted physical target binding and query/template evidence.</param>
@@ -134,6 +134,13 @@ public static class ElasticMaterializationTargetProfile
                     sources,
                     CapabilityRealizationKind.Composed,
                     "An atomic Elasticsearch alias-marker compare-and-swap fences and applies the stable read-alias promotion."),
+                Evidence(
+                    MaterializationCapabilityKind.TargetGenerationAbandonment,
+                    [MaterializationGuaranteeKind.AtomicDurableGenerationExclusion],
+                    generationLimits,
+                    sources,
+                    CapabilityRealizationKind.Composed,
+                    "A generation control-document create establishes the durable exclusion cut; absent identities receive tombstones, and interrupted receipt publication is recovered without reopening the identity."),
                 Evidence(
                     MaterializationCapabilityKind.TargetRetirement,
                     [MaterializationGuaranteeKind.FencedMutation],

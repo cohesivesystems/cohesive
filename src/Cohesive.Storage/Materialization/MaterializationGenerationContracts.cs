@@ -355,6 +355,26 @@ public readonly record struct MaterializationPromotionId
     public override string ToString() => Value;
 }
 
+/// <summary>Stable idempotency identity of one generation-abandonment claim.</summary>
+[JsonConverter(typeof(SingleValueWrapperJsonConverter))]
+public readonly record struct MaterializationAbandonmentId
+{
+    /// <summary>Creates an abandonment identity.</summary>
+    /// <param name="value">Identity reused only for an exact retry of the same abandonment intent.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="value"/> is empty, white-space, or contains ill-formed Unicode.</exception>
+    [JsonConstructor]
+    public MaterializationAbandonmentId(string value) =>
+        Value = MaterializationContract.RequireUnicodeIdentity(value, nameof(value));
+
+    /// <summary>Gets the abandonment identity.</summary>
+    public string Value { get; }
+
+    /// <summary>Returns the abandonment identity.</summary>
+    /// <returns>The value supplied at construction.</returns>
+    public override string ToString() => Value;
+}
+
 /// <summary>Stable idempotency identity of one logical generation retirement.</summary>
 [JsonConverter(typeof(SingleValueWrapperJsonConverter))]
 public readonly record struct MaterializationRetirementId
@@ -1400,6 +1420,74 @@ public sealed record MaterializationPromotionReceipt
     public DateTimeOffset PromotedAtUtc { get; }
 }
 
+/// <summary>Durable evidence that one generation identity can never become writable or readable.</summary>
+public sealed record MaterializationAbandonmentReceipt
+{
+    /// <summary>Creates immutable generation-abandonment evidence.</summary>
+    /// <param name="abandonmentId">Stable abandonment idempotency identity.</param>
+    /// <param name="generationId">Permanently abandoned generation identity.</param>
+    /// <param name="abandonedAtUtc">UTC abandonment-boundary time.</param>
+    /// <exception cref="ArgumentException">
+    /// An identity is default or <paramref name="abandonedAtUtc"/> is not UTC.
+    /// </exception>
+    [JsonConstructor]
+    public MaterializationAbandonmentReceipt(
+        MaterializationAbandonmentId abandonmentId,
+        MaterializationGenerationId generationId,
+        DateTimeOffset abandonedAtUtc)
+    {
+        MaterializationContract.RequireDefinedIdentity(abandonmentId.Value, nameof(abandonmentId));
+        MaterializationContract.RequireDefinedIdentity(generationId.Value, nameof(generationId));
+        MaterializationContract.RequireUtc(abandonedAtUtc, nameof(abandonedAtUtc));
+        AbandonmentId = abandonmentId;
+        GenerationId = generationId;
+        AbandonedAtUtc = abandonedAtUtc;
+    }
+
+    /// <summary>Gets the stable abandonment idempotency identity.</summary>
+    public MaterializationAbandonmentId AbandonmentId { get; }
+
+    /// <summary>Gets the permanently abandoned generation identity.</summary>
+    public MaterializationGenerationId GenerationId { get; }
+
+    /// <summary>Gets the UTC abandonment-boundary time.</summary>
+    public DateTimeOffset AbandonedAtUtc { get; }
+}
+
+/// <summary>Request to atomically forbid a generation identity from ever becoming active.</summary>
+public sealed record MaterializationAbandonGenerationRequest
+{
+    /// <summary>Creates a generation-abandonment request.</summary>
+    /// <param name="abandonmentId">Stable abandonment idempotency identity.</param>
+    /// <param name="generationId">Generation identity to permanently abandon.</param>
+    /// <param name="abandonedAtUtc">UTC abandonment-boundary time.</param>
+    /// <exception cref="ArgumentException">
+    /// An identity is default or <paramref name="abandonedAtUtc"/> is not UTC.
+    /// </exception>
+    [JsonConstructor]
+    public MaterializationAbandonGenerationRequest(
+        MaterializationAbandonmentId abandonmentId,
+        MaterializationGenerationId generationId,
+        DateTimeOffset abandonedAtUtc)
+    {
+        MaterializationContract.RequireDefinedIdentity(abandonmentId.Value, nameof(abandonmentId));
+        MaterializationContract.RequireDefinedIdentity(generationId.Value, nameof(generationId));
+        MaterializationContract.RequireUtc(abandonedAtUtc, nameof(abandonedAtUtc));
+        AbandonmentId = abandonmentId;
+        GenerationId = generationId;
+        AbandonedAtUtc = abandonedAtUtc;
+    }
+
+    /// <summary>Gets the stable abandonment idempotency identity.</summary>
+    public MaterializationAbandonmentId AbandonmentId { get; }
+
+    /// <summary>Gets the generation identity to permanently abandon.</summary>
+    public MaterializationGenerationId GenerationId { get; }
+
+    /// <summary>Gets the UTC abandonment-boundary time.</summary>
+    public DateTimeOffset AbandonedAtUtc { get; }
+}
+
 /// <summary>Request to make an inactive or abandoned generation eligible for cleanup.</summary>
 public sealed record MaterializationRetireGenerationRequest
 {
@@ -1882,6 +1970,65 @@ public sealed record MaterializationGenerationOperationResult
     }
 }
 
+/// <summary>Result of one atomic generation-abandonment claim.</summary>
+public sealed record MaterializationAbandonmentResult
+{
+    /// <summary>Creates a generation-abandonment result.</summary>
+    /// <param name="disposition">Observable abandonment disposition.</param>
+    /// <param name="generation">
+    /// Current or historical retired generation metadata when physical generation state existed; otherwise null for
+    /// a tombstone-only abandonment claim.
+    /// </param>
+    /// <param name="receipt">Durable abandonment evidence for applied or replayed outcomes.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="disposition"/> is unsupported.</exception>
+    /// <exception cref="ArgumentException">
+    /// Receipt presence, generation identity, or retired-generation state contradicts the disposition.
+    /// </exception>
+    [JsonConstructor]
+    public MaterializationAbandonmentResult(
+        MaterializationTargetOperationDisposition disposition,
+        MaterializationGenerationSnapshot? generation,
+        MaterializationAbandonmentReceipt? receipt)
+    {
+        MaterializationGenerationOperationResult.RequireDisposition(disposition);
+        var succeeded = disposition is MaterializationTargetOperationDisposition.Applied
+            or MaterializationTargetOperationDisposition.Replayed;
+        if (succeeded != (receipt is not null))
+        {
+            throw new ArgumentException(
+                "Exactly an applied or replayed abandonment result requires durable abandonment evidence.",
+                nameof(receipt));
+        }
+
+        if (receipt is not null
+            && generation is not null
+            && (generation.GenerationId != receipt.GenerationId
+                || generation.State != MaterializationGenerationState.Retired
+                || generation.RetiredAtUtc is not { } retiredAtUtc
+                || retiredAtUtc > receipt.AbandonedAtUtc))
+        {
+            throw new ArgumentException(
+                "Abandonment generation metadata must identify a generation retired no later than the abandonment boundary.",
+                nameof(generation));
+        }
+
+        Disposition = disposition;
+        Generation = generation;
+        Receipt = receipt;
+    }
+
+    /// <summary>Gets the observable abandonment disposition.</summary>
+    public MaterializationTargetOperationDisposition Disposition { get; }
+
+    /// <summary>
+    /// Gets current or historical retired generation metadata, or null when only an identity tombstone was required.
+    /// </summary>
+    public MaterializationGenerationSnapshot? Generation { get; }
+
+    /// <summary>Gets durable abandonment evidence for an applied or replayed outcome.</summary>
+    public MaterializationAbandonmentReceipt? Receipt { get; }
+}
+
 /// <summary>Result of one generation seal operation.</summary>
 public sealed record MaterializationSealResult
 {
@@ -2194,6 +2341,20 @@ public interface IMaterializationTarget
     ValueTask<MaterializationPromotionResult> PromoteGenerationAsync(
         OperationContext context,
         MaterializationPromoteGenerationRequest request);
+
+    /// <summary>
+    /// Atomically retires a non-active generation or installs a durable tombstone when the generation is not yet
+    /// present, preventing every later begin or write from reviving the abandoned identity.
+    /// </summary>
+    /// <param name="context">Operation context carrying cancellation and trace metadata.</param>
+    /// <param name="request">Complete generation-abandonment intent.</param>
+    /// <returns>The abandonment result and durable evidence when successful.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="context"/> or <paramref name="request"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">The abandonment time predates retained lifecycle evidence.</exception>
+    /// <exception cref="OperationCanceledException">The operation cancellation token was canceled.</exception>
+    ValueTask<MaterializationAbandonmentResult> AbandonGenerationAsync(
+        OperationContext context,
+        MaterializationAbandonGenerationRequest request);
 
     /// <summary>Logically retires an inactive generation without physically deleting it.</summary>
     /// <param name="context">Operation context carrying cancellation and trace metadata.</param>

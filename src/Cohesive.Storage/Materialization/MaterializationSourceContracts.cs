@@ -754,7 +754,7 @@ public sealed record MaterializationChangeSettlementObservation
     {
         Progress = Guard.RequireNotNull(progress);
         Settlement = Guard.RequireNotNull(settlement);
-        var checkpoint = progress.LatestCheckpoint;
+        var checkpoint = progress.LatestChangeCheckpoint;
         if (checkpoint is null
             || checkpoint.Kind != MaterializationCheckpointKind.ChangeProgress
             || !settlement.IsCoveredBy(checkpoint, progress.Key.Scope)

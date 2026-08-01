@@ -70,6 +70,7 @@ public static class MaterializationDefinitionValidator
         MaterializationCapabilityKind.TargetSeal,
         MaterializationCapabilityKind.TargetValidation,
         MaterializationCapabilityKind.TargetFencedPromotion,
+        MaterializationCapabilityKind.TargetGenerationAbandonment,
         MaterializationCapabilityKind.TargetRetirement,
         MaterializationCapabilityKind.TargetCleanup
     ];
@@ -577,6 +578,10 @@ public static class MaterializationDefinitionValidator
         {
             yield return MaterializationGuaranteeKind.AtomicPromotion;
             yield return MaterializationGuaranteeKind.FencedPromotion;
+        }
+        else if (capability == MaterializationCapabilityKind.TargetGenerationAbandonment)
+        {
+            yield return MaterializationGuaranteeKind.AtomicDurableGenerationExclusion;
         }
         else if (capability is MaterializationCapabilityKind.TargetSeal
                  or MaterializationCapabilityKind.TargetValidation

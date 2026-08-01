@@ -397,6 +397,7 @@ public sealed class MaterializationInverseImpactTests
             TargetRequirement("target/seal", MaterializationCapabilityKind.TargetSeal, MaterializationSynchronizationMode.Rebuild),
             TargetRequirement("target/validation", MaterializationCapabilityKind.TargetValidation, MaterializationSynchronizationMode.Rebuild),
             TargetRequirement("target/promotion", MaterializationCapabilityKind.TargetFencedPromotion, MaterializationSynchronizationMode.Rebuild),
+            TargetRequirement("target/abandonment", MaterializationCapabilityKind.TargetGenerationAbandonment, MaterializationSynchronizationMode.Rebuild),
             TargetRequirement("target/retirement", MaterializationCapabilityKind.TargetRetirement, MaterializationSynchronizationMode.Rebuild),
             TargetRequirement("target/cleanup", MaterializationCapabilityKind.TargetCleanup, MaterializationSynchronizationMode.Rebuild)
         ];
@@ -557,6 +558,8 @@ public sealed class MaterializationInverseImpactTests
                     [MaterializationGuaranteeKind.ExactPerItemOutcome],
                 MaterializationCapabilityKind.TargetFencedPromotion =>
                     [MaterializationGuaranteeKind.AtomicPromotion, MaterializationGuaranteeKind.FencedPromotion],
+                MaterializationCapabilityKind.TargetGenerationAbandonment =>
+                    [MaterializationGuaranteeKind.AtomicDurableGenerationExclusion],
                 MaterializationCapabilityKind.TargetSeal
                     or MaterializationCapabilityKind.TargetValidation
                     or MaterializationCapabilityKind.TargetRetirement

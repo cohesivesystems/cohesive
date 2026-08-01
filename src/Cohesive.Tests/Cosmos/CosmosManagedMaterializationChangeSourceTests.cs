@@ -1351,7 +1351,7 @@ public sealed class CosmosManagedMaterializationChangeSourceTests
             revision: MaterializationProgressRevision.Initial,
             fence: MaterializationProgressFence.Initial,
             fenceOwner: "worker/application",
-            latestCheckpoint: checkpoint);
+            latestChangeCheckpoint: checkpoint);
         return new(disposition, snapshot);
     }
 

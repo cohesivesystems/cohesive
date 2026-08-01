@@ -150,7 +150,7 @@ public static class MaterializationChannelSemantics
         MaterializationChangeSettlementObservation observation)
     {
         ArgumentNullException.ThrowIfNull(observation);
-        var checkpoint = observation.Progress.LatestCheckpoint!;
+        var checkpoint = observation.Progress.LatestChangeCheckpoint!;
         var scope = observation.Progress.Key.Scope;
         var settlement = observation.Settlement;
         var channelScope = ToChannelScopeId(scope);
