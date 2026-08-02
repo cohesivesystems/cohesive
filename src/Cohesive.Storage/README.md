@@ -180,6 +180,20 @@ relationship-key lookup for the step's reference-bearing source role using its c
 proves the referenced source capability; the original relation-query physical plan is not assumed to already contain
 that reverse placement.
 
+`RelationQueryMaterializationRebuildHydrator` and `RelationQueryMaterializationImpactRuntime` share one exact
+Relations physical-execution mechanism. The semantic plan, successful realization, physical plan, selected complete
+output, and non-root readers are fingerprint-affine; capability evidence is projected from that exact realization.
+Materialization v1 requires invocation parameters to be bound into the persisted definition rather than supplied as
+ambient runtime state. Incremental hydration supplies the complete bounded current root set, correlates every output
+through canonical root-occurrence provenance, and preserves the same zero-or-one-per-root projection invariant as
+baseline hydration. Direct-root selection remains part of the impact-plan interpreter. Every inverse route requires
+an explicit `MaterializationImpactRootResolver` binding; Storage never infers a provider query from the portable
+impact IR. Hydration evaluation identities are fenced by impact-plan, generation, channel scope, feed, and opaque
+through-position evidence so replay is stable without allowing evidence from another generation to alias it.
+
+Deployment and incident procedures for this lifecycle are collected in the
+[index synchronization operations runbook](../../docs/INDEX_SYNC_RUNBOOK.md).
+
 Contributor-ledger keys use materialization, generation, definition, impact-plan, canonical input, semantic shape,
 and stable contributor identity—not evaluation-local occurrence identity. Entries retain complete root associations
 and prior emitted item identities so moves and deletes can remove stale outputs. Exact ledger capability additionally

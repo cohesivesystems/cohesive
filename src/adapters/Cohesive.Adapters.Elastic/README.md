@@ -277,9 +277,6 @@ var rows = compilation.Artifacts.Single(
     artifact => artifact.Branch.Kind == RelationQueryNativeResultKind.QueryRows);
 var countResult = compilation.Artifacts.Single(
     artifact => artifact.Branch.Kind == RelationQueryNativeResultKind.QueryAggregation);
-
-SearchRequest rowsRequest = rows.Bind(parameters);
-SearchRequest countRequest = countResult.Bind(parameters);
 ```
 
 `ElasticRelationQueryBindingAuthoringOptions` supplies a named scoped profile between adapter conventions and local
@@ -335,8 +332,56 @@ var typedBinding = ElasticRelationQueryBinding.For(typedPlacedLoad)
     .Build();
 ```
 
-Both values are fresh Elastic SDK `SearchRequest` objects. The count request uses `size: 0` and exact total-hit
-tracking. Each branch is independently reusable and must be bound independently.
+Execute compiled artifacts through the adapter executor when the caller needs canonical Relations rows rather than
+raw SDK responses. The runtime binding attests the exact borrowed client and cluster, and every invocation repeats
+the plan, realization, placement, storage-binding, and runtime fingerprints that authorize physical execution:
+
+```csharp
+var client = new ElasticsearchClient(
+    new ElasticsearchClientSettings(new Uri("https://elasticsearch.example")));
+ElasticElasticsearchRuntimeBinding runtime = new(
+    cluster: new("production-search"),
+    client: client,
+    authority: "example/elastic-runtime/v1");
+var executor = new ElasticRelationQueryArtifactExecutor(runtime);
+CancellationToken cancellationToken = default;
+
+var rowResult = await executor.ExecuteAsync(
+    new ElasticRelationQueryArtifactExecutionRequest(
+        plan: RelationQueryCompiledPlanReference.From(plan),
+        realization: realization.Fingerprint,
+        placement: placement.Fingerprint,
+        storageBindingFingerprint: storageBinding.Fingerprint,
+        runtimeFingerprint: runtime.Fingerprint,
+        artifact: rows,
+        maximumRows: 25,
+        parameters: parameters),
+    cancellationToken);
+var countExecution = await executor.ExecuteAsync(
+    new ElasticRelationQueryArtifactExecutionRequest(
+        plan: RelationQueryCompiledPlanReference.From(plan),
+        realization: realization.Fingerprint,
+        placement: placement.Fingerprint,
+        storageBindingFingerprint: storageBinding.Fingerprint,
+        runtimeFingerprint: runtime.Fingerprint,
+        artifact: countResult,
+        maximumRows: 1,
+        parameters: parameters),
+    cancellationToken);
+
+if (!rowResult.IsSuccessful || !countExecution.IsSuccessful)
+    throw new InvalidOperationException("Elasticsearch did not produce complete canonical query results.");
+
+var canonicalRows = rowResult.Rows;
+var canonicalCount = countExecution.Rows.Single();
+```
+
+The executor validates artifact freshness and provider response completeness, enforces explicit buffering bounds,
+and decodes hits, exact total counts, and composite buckets into `RelationQueryOutputRow`. It returns structured,
+sanitized diagnostics on a failed physical result and never exposes partial rows as successful. Search-after and
+composite continuations retain the exact artifact fingerprint and ordered physical fields. When an artifact uses
+direct, untransformed canonical cursor parameters, `TryCreateParameterOverrides` projects those values for the next
+canonical invocation; otherwise the planning layer must author the next page explicitly.
 
 The suffix lowering can be overridden through attributable compiler policy. This explicit-local preference selects
 the exact wildcard strategy even though the binding also supplies a reversed suffix field:
@@ -362,14 +407,15 @@ The policy decision participates in artifact fingerprints and provenance. The bi
 indexed term without lossy normalization. Missing evidence produces a structured diagnostic rather than a weaker
 query. Advanced users can also register an `IElasticQueryLoweringStrategy` within the supported physical IR.
 
-After binding, callers can inspect or explicitly adjust the ordinary SDK request:
+Advanced callers can still bind, inspect, or explicitly adjust the ordinary SDK request:
 
 ```csharp
+SearchRequest rowsRequest = rows.Bind(parameters);
 rowsRequest.Timeout = "5s";
 ```
 
-That mutation is outside the compiler's exactness and provenance guarantees; those describe the request initially
-materialized by `Bind`.
+Direct SDK execution and any mutation are outside the executor's result-decoding and response-completeness contract.
+The compiler's exactness and provenance guarantees describe only the request initially materialized by `Bind`.
 
 The scalar membership capability above remains the simplest choice when each location is independently searchable.
 When predicates must correlate fields from the same structured element, use canonical `Any`. The following is an
@@ -443,8 +489,7 @@ fingerprint, and exactness guarantee describe the initially materialized request
 
 ```csharp
 SearchRequest request = compiledArtifact.Bind(invocationParameters);
-request.Timeout = "5s"; // Optional explicit caller override.
-SearchResponse<JsonElement> response = await client.SearchAsync<JsonElement>(request, cancellationToken);
+request.Timeout = "5s"; // Explicit low-level escape hatch.
 ```
 
 The immutable physical query IR supports exact term, range, existence, wildcard, prefix, Boolean, and nested clauses

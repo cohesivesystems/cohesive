@@ -309,7 +309,6 @@ public sealed class RelationQueryEvaluationOutcome
 /// </summary>
 public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
 {
-    const string CapabilityEvidenceReferencePrefix = "relation-query-realization-target";
     const string SuppliedOnlyConventionSetVersion = "cohesive.relations/supplied-only-conventions/v1";
     const string SuppliedOnlySourceKey = "cohesive.relations/supplied-only";
 
@@ -566,7 +565,7 @@ public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
 
         var suppliedSources = CreateSuppliedSources(evaluation, plan, placement);
         var parameters = ProjectParameters(evaluation, plan);
-        var capabilities = CreateCapabilityEvidence(plan, realization);
+        var capabilities = RelationQueryRealizationRuntimeEvidence.ProjectCapabilities(plan, realization);
         RelationQueryPhysicalExecutionRequest request = new(
             plan,
             physicalPlanning.Plan!,
@@ -615,25 +614,6 @@ public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
             .. plan.InputContract.Parameters
                 .Select(parameter => byInput[parameter.Input.Id])
                 .OrderBy(static parameter => parameter.Input.Value, StringComparer.Ordinal)
-        ];
-    }
-
-    static ImmutableArray<RelationQueryCapabilityEvidence> CreateCapabilityEvidence(
-        CompiledRelationQueryPlan plan,
-        RelationQueryRealizationReport realization)
-    {
-        var evidenceReference = string.Concat(
-            CapabilityEvidenceReferencePrefix,
-            "/",
-            Uri.EscapeDataString(realization.TargetProfile.Target.Value),
-            "/profile/",
-            Uri.EscapeDataString(realization.TargetProfile.Id.Value));
-        return
-        [
-            .. plan.InputContract.Capabilities.Select(capability => new RelationQueryCapabilityEvidence(
-                capability.Input.Id,
-                RelationQueryCapabilityEvidenceState.Available,
-                evidenceReference))
         ];
     }
 

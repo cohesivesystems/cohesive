@@ -182,6 +182,61 @@ public enum ElasticRelationQueryResultValueEncoding
     ExactCountInt64 = 5
 }
 
+/// <summary>Single adapter authority for semantic result contracts and their exact Elasticsearch encodings.</summary>
+internal static class ElasticRelationQueryResultValueEncodingSemantics
+{
+    internal static bool TryResolve(
+        ValueContract contract,
+        out ElasticRelationQueryResultValueEncoding encoding)
+    {
+        ArgumentNullException.ThrowIfNull(contract);
+        if (contract.Cardinality != FieldCardinality.Single)
+        {
+            encoding = default;
+            return false;
+        }
+
+        switch (contract.GetEffectiveType())
+        {
+            case ScalarTypeRef { Kind: ScalarTypeKind.Bool }:
+                encoding = ElasticRelationQueryResultValueEncoding.JsonBoolean;
+                return true;
+            case ScalarTypeRef { Kind: ScalarTypeKind.Int32 or ScalarTypeKind.Int64 }:
+                encoding = ElasticRelationQueryResultValueEncoding.JsonInt64;
+                return true;
+            case ScalarTypeRef { Kind: ScalarTypeKind.String or ScalarTypeKind.Guid }:
+                encoding = ElasticRelationQueryResultValueEncoding.JsonString;
+                return true;
+            case ScalarTypeRef { Kind: ScalarTypeKind.Date or ScalarTypeKind.DateTime or ScalarTypeKind.Instant }:
+                encoding = ElasticRelationQueryResultValueEncoding.CanonicalTemporalString;
+                return true;
+            default:
+                encoding = default;
+                return false;
+        }
+    }
+
+    internal static bool IsCompatible(
+        ValueContract contract,
+        ElasticRelationQueryResultValueEncoding encoding)
+    {
+        ArgumentNullException.ThrowIfNull(contract);
+        if (!Enum.IsDefined(encoding) || contract.Cardinality != FieldCardinality.Single)
+            return false;
+        if (encoding == ElasticRelationQueryResultValueEncoding.ExactCountInt64)
+        {
+            return contract is
+            {
+                Presence: FieldPresence.Required,
+                Nullability: FieldNullability.NonNullable
+            }
+            && contract.GetEffectiveType() is ScalarTypeRef { Kind: ScalarTypeKind.Int64 };
+        }
+
+        return TryResolve(contract, out var expected) && encoding == expected;
+    }
+}
+
 /// <summary>Binding sufficient to reconstruct one canonical output field from an Elasticsearch response.</summary>
 public sealed record ElasticRelationQueryResultFieldBinding
 {
@@ -260,9 +315,9 @@ public sealed record ElasticRelationQueryResultFieldBinding
         if (countSource)
         {
             if (encoding != ElasticRelationQueryResultValueEncoding.ExactCountInt64
-                || normalizedValueContract.GetEffectiveType() is not ScalarTypeRef { Kind: ScalarTypeKind.Int64 }
-                || normalizedValueContract.Presence != FieldPresence.Required
-                || normalizedValueContract.Nullability != FieldNullability.NonNullable)
+                || !ElasticRelationQueryResultValueEncodingSemantics.IsCompatible(
+                    normalizedValueContract,
+                    encoding))
             {
                 throw new ArgumentException(
                     "Elasticsearch hit and bucket counts require an exact required, non-null Int64 count encoding.",
@@ -271,7 +326,14 @@ public sealed record ElasticRelationQueryResultFieldBinding
         }
         else
         {
-            var expectedEncoding = ExpectedValueEncoding(normalizedValueContract);
+            if (!ElasticRelationQueryResultValueEncodingSemantics.TryResolve(
+                    normalizedValueContract,
+                    out var expectedEncoding))
+            {
+                throw new ArgumentException(
+                    "The semantic value contract has no supported exact Elasticsearch result encoding.",
+                    nameof(valueContract));
+            }
             if (encoding != expectedEncoding)
             {
                 throw new ArgumentException(
@@ -309,22 +371,6 @@ public sealed record ElasticRelationQueryResultFieldBinding
 
     /// <summary>Producing canonical assignment, or <see langword="null"/>.</summary>
     public QueryAssignmentId? Assignment { get; }
-
-    static ElasticRelationQueryResultValueEncoding ExpectedValueEncoding(ValueContract contract) =>
-        contract.GetEffectiveType() switch
-        {
-            ScalarTypeRef { Kind: ScalarTypeKind.Bool } =>
-                ElasticRelationQueryResultValueEncoding.JsonBoolean,
-            ScalarTypeRef { Kind: ScalarTypeKind.Int32 or ScalarTypeKind.Int64 } =>
-                ElasticRelationQueryResultValueEncoding.JsonInt64,
-            ScalarTypeRef { Kind: ScalarTypeKind.String or ScalarTypeKind.Guid } =>
-                ElasticRelationQueryResultValueEncoding.JsonString,
-            ScalarTypeRef { Kind: ScalarTypeKind.Date or ScalarTypeKind.DateTime or ScalarTypeKind.Instant } =>
-                ElasticRelationQueryResultValueEncoding.CanonicalTemporalString,
-            _ => throw new ArgumentException(
-                "The semantic value contract has no supported exact Elasticsearch result encoding.",
-                nameof(contract))
-        };
 }
 
 /// <summary>Binding from one request-template value to one canonical invocation parameter.</summary>
@@ -380,6 +426,7 @@ public sealed record ElasticRelationQueryPagingContract
     /// <param name="offset">Number of ordered rows skipped by offset paging.</param>
     /// <param name="limit">Maximum hits or buckets returned.</param>
     /// <param name="sortFields">Ordered physical sort or composite fields.</param>
+    /// <param name="sortValueContracts">Exact semantic value contracts aligned with <paramref name="sortFields"/>.</param>
     /// <param name="stableUniqueFinalField">Final stable unique hit sort field, or <see langword="null"/> for composite paging.</param>
     /// <exception cref="ArgumentOutOfRangeException">An enum or numeric value is unsupported.</exception>
     /// <exception cref="ArgumentException">Fields or paging metadata are inconsistent.</exception>
@@ -388,6 +435,7 @@ public sealed record ElasticRelationQueryPagingContract
         int offset,
         int limit,
         ImmutableArray<string> sortFields,
+        ImmutableArray<ValueContract> sortValueContracts,
         string? stableUniqueFinalField)
     {
         if (!Enum.IsDefined(kind))
@@ -409,6 +457,25 @@ public sealed record ElasticRelationQueryPagingContract
         if (normalized.IsDefaultOrEmpty || normalized.Any(string.IsNullOrWhiteSpace))
         {
             throw new ArgumentException("Elasticsearch paging requires non-empty physical sort fields.", nameof(sortFields));
+        }
+        if (normalized.Distinct(StringComparer.Ordinal).Count() != normalized.Length)
+        {
+            throw new ArgumentException("Elasticsearch paging cannot repeat a physical sort field.", nameof(sortFields));
+        }
+
+        var normalizedContracts = sortValueContracts.IsDefault ? [] : sortValueContracts;
+        if (normalizedContracts.Length != normalized.Length
+            || normalizedContracts.Any(static contract => contract is null)
+            || normalizedContracts.Any(static contract => contract is not
+                {
+                    Cardinality: FieldCardinality.Single,
+                    Presence: FieldPresence.Required,
+                    Nullability: FieldNullability.NonNullable
+                }))
+        {
+            throw new ArgumentException(
+                "Elasticsearch paging requires one required, non-null, single-valued semantic contract per physical sort field.",
+                nameof(sortValueContracts));
         }
 
         if (kind != ElasticRelationQueryPagingKind.Offset && offset != 0)
@@ -438,6 +505,7 @@ public sealed record ElasticRelationQueryPagingContract
         Offset = offset;
         Limit = limit;
         SortFields = normalized;
+        SortValueContracts = normalizedContracts;
         StableUniqueFinalField = stableUniqueFinalField;
     }
 
@@ -452,6 +520,9 @@ public sealed record ElasticRelationQueryPagingContract
 
     /// <summary>Ordered physical sort or composite fields.</summary>
     public ImmutableArray<string> SortFields { get; }
+
+    /// <summary>Exact semantic value contracts aligned with <see cref="SortFields"/>.</summary>
+    public ImmutableArray<ValueContract> SortValueContracts { get; }
 
     /// <summary>Final stable unique hit sort field, or <see langword="null"/> for composite paging.</summary>
     public string? StableUniqueFinalField { get; }
@@ -494,6 +565,7 @@ public sealed class ElasticRelationQueryCompiledArtifact
         ImmutableArray<ElasticRelationQueryResultFieldBinding> resultFields,
         ImmutableArray<ElasticRelationQueryParameterBinding> parameters,
         ElasticRelationQueryPagingContract? paging,
+        ElasticQueryLoweringFingerprint loweringPolicyFingerprint,
         ImmutableArray<ElasticRelationQueryLoweringDecision> loweringDecisions,
         RelationQueryNativeCompilationProvenance provenance,
         ElasticRelationQueryArtifactFingerprint fingerprint)
@@ -508,10 +580,25 @@ public sealed class ElasticRelationQueryCompiledArtifact
             nameof(resultFields));
         Parameters = NormalizeAndOrder(parameters, static parameter => parameter.Parameter.Value, nameof(parameters));
         Paging = paging;
+        if (string.IsNullOrWhiteSpace(loweringPolicyFingerprint.Algorithm)
+            || string.IsNullOrWhiteSpace(loweringPolicyFingerprint.Canonicalization)
+            || string.IsNullOrWhiteSpace(loweringPolicyFingerprint.Value))
+        {
+            throw new ArgumentException(
+                "An Elasticsearch artifact requires the exact lowering-policy fingerprint used during compilation.",
+                nameof(loweringPolicyFingerprint));
+        }
+        LoweringPolicyFingerprint = loweringPolicyFingerprint;
         LoweringDecisions = NormalizePreservingOrder(
             loweringDecisions,
             static decision => decision.SiteId,
             nameof(loweringDecisions));
+        if (LoweringDecisions.Any(decision => decision.Decision.PolicyFingerprint != LoweringPolicyFingerprint))
+        {
+            throw new ArgumentException(
+                "Every Elasticsearch lowering decision must identify the artifact's exact lowering policy.",
+                nameof(loweringDecisions));
+        }
         Provenance = Guard.RequireNotNull(provenance);
         Fingerprint = Guard.RequireNotNull(fingerprint);
         if (Branch.Id != Provenance.Branch)
@@ -540,6 +627,9 @@ public sealed class ElasticRelationQueryCompiledArtifact
 
     /// <summary>Exact paging guarantees, or <see langword="null"/> for an unpaged aggregate.</summary>
     public ElasticRelationQueryPagingContract? Paging { get; }
+
+    /// <summary>Exact normalized lowering-policy fingerprint used to compile this artifact.</summary>
+    public ElasticQueryLoweringFingerprint LoweringPolicyFingerprint { get; }
 
     /// <summary>Attributable configurable-lowering decisions in stable expression-site order.</summary>
     public ImmutableArray<ElasticRelationQueryLoweringDecision> LoweringDecisions { get; }

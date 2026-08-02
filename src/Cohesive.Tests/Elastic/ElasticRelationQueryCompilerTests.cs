@@ -1255,9 +1255,34 @@ public sealed class ElasticRelationQueryCompilerTests
             offset: 0,
             limit: 25,
             ["createdAt", "id.keyword"],
+            [
+                new ValueContract(new ScalarTypeRef(ScalarTypeKind.Instant)),
+                new ValueContract(new ScalarTypeRef(ScalarTypeKind.String))
+            ],
             stableUniqueFinalField: "createdAt"));
 
         Assert.Contains("final physical sort field", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PagingContract_RequiresUniqueFieldsAndAlignedSemanticContracts()
+    {
+        var contract = new ValueContract(new ScalarTypeRef(ScalarTypeKind.String));
+
+        Assert.Throws<ArgumentException>(() => new ElasticRelationQueryPagingContract(
+            ElasticRelationQueryPagingKind.SearchAfter,
+            offset: 0,
+            limit: 25,
+            ["id.keyword", "id.keyword"],
+            [contract, contract],
+            stableUniqueFinalField: "id.keyword"));
+        Assert.Throws<ArgumentException>(() => new ElasticRelationQueryPagingContract(
+            ElasticRelationQueryPagingKind.SearchAfter,
+            offset: 0,
+            limit: 25,
+            ["id.keyword"],
+            sortValueContracts: [],
+            stableUniqueFinalField: "id.keyword"));
     }
 
     [Fact]
@@ -1541,7 +1566,7 @@ public sealed class ElasticRelationQueryCompilerTests
             throw new IOException("Intentional extension failure.");
     }
 
-    sealed class Fixture
+    internal sealed class Fixture
     {
         static readonly GraphId Graph = new("elastic-compiler-tests/v1");
         static readonly QualifiedShapeId LoadShape = new(Graph, new ShapeId("Load"));

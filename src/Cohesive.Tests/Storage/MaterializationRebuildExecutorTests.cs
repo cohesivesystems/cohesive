@@ -576,6 +576,60 @@ public sealed partial class MaterializationRebuildExecutorTests
     }
 
     [Fact]
+    public void ProductionHydrator_MissingSelectedRootPlacement_ThrowsDocumentedArgumentException()
+    {
+        var fixture = CreateFixture();
+        var retained = fixture.Semantic.PhysicalPlan;
+        var rootPlacement = retained.Placement.Bindings.Single(binding =>
+            binding.Input == fixture.Root.Input.Id);
+        RelationQuerySourcePlacementBinding nonRootPlacement = new(
+            id: rootPlacement.Id,
+            input: fixture.Root.Fields[0].Input.Id,
+            node: rootPlacement.Node,
+            binding: rootPlacement.Binding,
+            shape: rootPlacement.Shape,
+            source: rootPlacement.Source,
+            kind: rootPlacement.Kind,
+            acquisition: rootPlacement.Acquisition,
+            origin: rootPlacement.Origin,
+            identity: rootPlacement.Identity,
+            fields: rootPlacement.Fields,
+            relationshipKeys: rootPlacement.RelationshipKeys,
+            partition: rootPlacement.Partition);
+        RelationQuerySourcePlacement placement = new(
+            schemaVersion: retained.Placement.SchemaVersion,
+            plan: retained.Placement.Plan,
+            conventionSetVersion: retained.Placement.ConventionSetVersion,
+            sourceInstances: retained.Placement.SourceInstances,
+            bindings:
+            [
+                .. retained.Placement.Bindings.Select(binding =>
+                    binding.Id == rootPlacement.Id ? nonRootPlacement : binding)
+            ]);
+        CompiledRelationQueryPhysicalPlan missingRootPlacement = new(
+            schemaVersion: retained.SchemaVersion,
+            plan: retained.Plan,
+            realization: retained.Realization,
+            placement: placement,
+            policy: retained.Policy,
+            stages: retained.Stages,
+            terminal: retained.Terminal,
+            diagnostics: retained.Diagnostics);
+
+        var exception = Assert.Throws<ArgumentException>(() =>
+            new RelationQueryMaterializationRebuildHydrator(
+                plan: fixture.Semantic.Plan,
+                physicalPlan: missingRootPlacement,
+                realization: fixture.Semantic.Realization,
+                suppliedRoot: fixture.Root.Input.Id,
+                output: fixture.Plan.Materialization.Definition.Relation.Output,
+                sourceReaders: fixture.Readers));
+
+        Assert.Equal("suppliedRoot", exception.ParamName);
+        Assert.Contains("physical plan", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RuntimeBinding_RejectsHydratorForAnotherPersistedPhysicalLowering()
     {
         var fixture = CreateFixture();

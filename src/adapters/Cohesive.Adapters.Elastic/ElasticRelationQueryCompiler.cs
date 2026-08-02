@@ -930,7 +930,7 @@ public sealed class ElasticRelationQueryCompiler
                 analysis.ParameterBindings,
                 analysis.Body.Paging,
                 [.. loweringDecisions],
-                loweringPolicy,
+                loweringPolicy.Fingerprint,
                 provenance);
             return new(
                 branch,
@@ -940,6 +940,7 @@ public sealed class ElasticRelationQueryCompiler
                 analysis.Body.ResultFields,
                 analysis.ParameterBindings,
                 analysis.Body.Paging,
+                loweringPolicy.Fingerprint,
                 [.. loweringDecisions],
                 provenance,
                 fingerprint);
@@ -1851,6 +1852,8 @@ public sealed class ElasticRelationQueryCompiler
             ImmutableArray<ElasticSearchSort>.Builder sorts =
                 ImmutableArray.CreateBuilder<ElasticSearchSort>(order.Orderings.Length);
             ImmutableArray<string>.Builder sortFields = ImmutableArray.CreateBuilder<string>(order.Orderings.Length);
+            ImmutableArray<ValueContract>.Builder sortValueContracts =
+                ImmutableArray.CreateBuilder<ValueContract>(order.Orderings.Length);
             string? stableFinalField = null;
             for (var index = 0; index < order.Orderings.Length; index++)
             {
@@ -1882,6 +1885,7 @@ public sealed class ElasticRelationQueryCompiler
                 var physicalName = RequireQueryField(field, orderExecution.Id);
                 sorts.Add(new(physicalName, ordering.Direction, ordering.NullPlacement));
                 sortFields.Add(physicalName);
+                sortValueContracts.Add(site.Analysis.KnownResult!);
                 if (index == order.Orderings.Length - 1)
                 {
                     RequireCapability(
@@ -1920,6 +1924,7 @@ public sealed class ElasticRelationQueryCompiler
                         offset.Offset,
                         offset.Limit,
                         sortFields.ToImmutable(),
+                        sortValueContracts.ToImmutable(),
                         stableFinalField);
                     break;
                 case KeysetPageDefinition keyset:
@@ -1954,6 +1959,7 @@ public sealed class ElasticRelationQueryCompiler
                         offset: 0,
                         keyset.Limit,
                         sortFields.ToImmutable(),
+                        sortValueContracts.ToImmutable(),
                         stableFinalField);
                     break;
                 default:
@@ -2216,6 +2222,8 @@ public sealed class ElasticRelationQueryCompiler
             ImmutableArray<ElasticCompositeAggregationSource>.Builder sources =
                 ImmutableArray.CreateBuilder<ElasticCompositeAggregationSource>(order.Orderings.Length);
             ImmutableArray<string>.Builder physicalFields = ImmutableArray.CreateBuilder<string>(order.Orderings.Length);
+            ImmutableArray<ValueContract>.Builder physicalValueContracts =
+                ImmutableArray.CreateBuilder<ValueContract>(order.Orderings.Length);
             Dictionary<FieldPath, (string Name, RelationQueryAggregateGroupingExecution Grouping)> groupResultSources = [];
             List<RelationQueryAggregateGroupingExecution> orderedGroupings = [];
             HashSet<QueryAssignmentId> seenGroupings = [];
@@ -2269,6 +2277,7 @@ public sealed class ElasticRelationQueryCompiler
                 var name = $"g{index.ToString(CultureInfo.InvariantCulture)}";
                 sources.Add(new(name, physicalField, ordering.Direction));
                 physicalFields.Add(physicalField);
+                physicalValueContracts.Add(grouping.KeySite.Analysis.KnownResult!);
                 orderedGroupings.Add(grouping);
                 groupResultSources.Add(grouping.Definition.Target, (name, grouping));
             }
@@ -2359,6 +2368,7 @@ public sealed class ElasticRelationQueryCompiler
                     offset: 0,
                     page.Limit,
                     physicalFields.ToImmutable(),
+                    physicalValueContracts.ToImmutable(),
                     stableUniqueFinalField: null));
         }
 
@@ -2715,28 +2725,14 @@ public sealed class ElasticRelationQueryCompiler
             ValueContract contract,
             QueryNodeId node)
         {
-            if (contract.Cardinality != FieldCardinality.Single)
+            if (!ElasticRelationQueryResultValueEncodingSemantics.TryResolve(contract, out var encoding))
             {
                 throw Fail(
                     ElasticRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                    "Elasticsearch v2 result fields require a single-valued semantic contract.",
+                    "Elasticsearch v2 cannot prove a canonical physical result encoding for this value contract.",
                     node);
             }
-            return contract.GetEffectiveType() switch
-            {
-                ScalarTypeRef { Kind: ScalarTypeKind.Bool } =>
-                    ElasticRelationQueryResultValueEncoding.JsonBoolean,
-                ScalarTypeRef { Kind: ScalarTypeKind.Int32 or ScalarTypeKind.Int64 } =>
-                    ElasticRelationQueryResultValueEncoding.JsonInt64,
-                ScalarTypeRef { Kind: ScalarTypeKind.String or ScalarTypeKind.Guid } =>
-                    ElasticRelationQueryResultValueEncoding.JsonString,
-                ScalarTypeRef { Kind: ScalarTypeKind.Date or ScalarTypeKind.DateTime or ScalarTypeKind.Instant } =>
-                    ElasticRelationQueryResultValueEncoding.CanonicalTemporalString,
-                _ => throw Fail(
-                    ElasticRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                    "Elasticsearch v2 cannot prove a canonical physical result encoding for this value contract.",
-                    node)
-            };
+            return encoding;
         }
 
         static bool IsRequiredNonNull(ValueContract? contract) => contract is
@@ -2852,7 +2848,7 @@ public sealed class ElasticRelationQueryCompiler
 static class ElasticRelationQueryArtifactFingerprinter
 {
     const string Algorithm = "sha256";
-    const string Canonicalization = "cohesive.relations.elastic-artifact/v3-c14n/v1";
+    const string Canonicalization = "cohesive.relations.elastic-artifact/v4-c14n/v1";
 
     public static ElasticRelationQueryArtifactFingerprint Compute(
         RelationQueryNativeResultBranch branch,
@@ -2863,7 +2859,7 @@ static class ElasticRelationQueryArtifactFingerprinter
         ImmutableArray<ElasticRelationQueryParameterBinding> parameters,
         ElasticRelationQueryPagingContract? paging,
         ImmutableArray<ElasticRelationQueryLoweringDecision> loweringDecisions,
-        ElasticQueryLoweringPolicy loweringPolicy,
+        ElasticQueryLoweringFingerprint loweringPolicyFingerprint,
         RelationQueryNativeCompilationProvenance provenance)
     {
         StringBuilder canonical = new();
@@ -2874,9 +2870,9 @@ static class ElasticRelationQueryArtifactFingerprinter
         Append(canonical, storageBinding.Fingerprint.Algorithm);
         Append(canonical, storageBinding.Fingerprint.Canonicalization);
         Append(canonical, storageBinding.Fingerprint.Value);
-        Append(canonical, loweringPolicy.Fingerprint.Algorithm);
-        Append(canonical, loweringPolicy.Fingerprint.Canonicalization);
-        Append(canonical, loweringPolicy.Fingerprint.Value);
+        Append(canonical, loweringPolicyFingerprint.Algorithm);
+        Append(canonical, loweringPolicyFingerprint.Canonicalization);
+        Append(canonical, loweringPolicyFingerprint.Value);
         Append(canonical, selectedFields.Length);
         foreach (var field in selectedFields)
         {
@@ -2924,6 +2920,10 @@ static class ElasticRelationQueryArtifactFingerprinter
             foreach (var field in paging.SortFields)
             {
                 Append(canonical, field);
+            }
+            foreach (var contract in paging.SortValueContracts)
+            {
+                Append(canonical, JsonSerializer.Serialize(contract, jsonOptions));
             }
         }
         Append(canonical, loweringDecisions.Length);

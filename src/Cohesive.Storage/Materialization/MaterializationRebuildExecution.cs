@@ -288,12 +288,8 @@ public interface IMaterializationRebuildHydrator
 /// <summary>Canonical Relations physical-execution interpretation for rebuild page hydration.</summary>
 public sealed class RelationQueryMaterializationRebuildHydrator : IMaterializationRebuildHydrator
 {
-    readonly CompiledRelationQueryPlan plan;
-    readonly CompiledRelationQueryPhysicalPlan physicalPlan;
-    readonly RelationQueryRealizationReport realization;
     readonly RelationQueryInputId suppliedRoot;
-    readonly RelationQueryOutputReference output;
-    readonly RelationQueryPhysicalExecutor executor;
+    readonly RelationQueryMaterializationHydration hydration;
 
     /// <summary>Creates one exact Relations hydration interpretation.</summary>
     /// <param name="plan">Exact successful semantic plan.</param>
@@ -304,6 +300,15 @@ public sealed class RelationQueryMaterializationRebuildHydrator : IMaterializati
     /// <param name="sourceReaders">Readers for non-root hydration inputs.</param>
     /// <exception cref="ArgumentNullException">A required reference or collection is null.</exception>
     /// <exception cref="ArgumentException">The selected input, output, or physical placement is incompatible.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// A shape snapshot cannot be represented by the compiled-plan canonicalization profile.
+    /// </exception>
+    /// <exception cref="System.Text.Json.JsonException">
+    /// A shape snapshot cannot be serialized as canonical JSON.
+    /// </exception>
+    /// <exception cref="NotSupportedException">
+    /// A shape snapshot contains a runtime type unsupported by its JSON serializer.
+    /// </exception>
     public RelationQueryMaterializationRebuildHydrator(
         CompiledRelationQueryPlan plan,
         CompiledRelationQueryPhysicalPlan physicalPlan,
@@ -312,38 +317,11 @@ public sealed class RelationQueryMaterializationRebuildHydrator : IMaterializati
         RelationQueryOutputReference output,
         IEnumerable<IRelationQuerySourceReader> sourceReaders)
     {
-        this.plan = Guard.RequireNotNull(plan);
-        this.physicalPlan = Guard.RequireNotNull(physicalPlan);
-        this.realization = Guard.RequireNotNull(realization);
-        this.output = Guard.RequireNotNull(output);
-        ArgumentNullException.ThrowIfNull(sourceReaders);
-        var exactPlan = RelationQueryCompiledPlanReference.From(plan);
-        var exactPlanFingerprint = RelationQueryCompiledPlanReferenceFingerprinter.Compute(exactPlan);
-        if (RelationQueryCompiledPlanReferenceFingerprinter.Compute(physicalPlan.Plan) != exactPlanFingerprint
-            || RelationQueryCompiledPlanReferenceFingerprinter.Compute(realization.Plan) != exactPlanFingerprint
-            || physicalPlan.Realization != realization.Fingerprint
-            || !realization.IsRealizable)
-        {
-            throw new ArgumentException(
-                "Rebuild hydration requires one exact realizable semantic, realization, and physical-plan chain.",
-                nameof(physicalPlan));
-        }
-        MaterializationContract.RequireDefinedIdentity(suppliedRoot.Value, nameof(suppliedRoot));
-        if (!plan.RequirementGraph.Outputs.Any(candidate => output.Covers(candidate) || candidate.Covers(output)))
-            throw new ArgumentException("The selected output is absent from the exact compiled plan.", nameof(output));
-        if (output.Field is not null)
-            throw new ArgumentException("Rebuild hydration requires a complete shaped output.", nameof(output));
-        var input = plan.InputContract.Sources.SingleOrDefault(source => source.Input.Id == suppliedRoot);
-        if (input?.Role != RelationQuerySourceInputRole.RelationRoot)
-            throw new ArgumentException("The supplied hydration input must be one canonical relation root.", nameof(suppliedRoot));
-        var placement = physicalPlan.Placement.Bindings.SingleOrDefault(binding => binding.Input == suppliedRoot);
-        if (placement?.Acquisition != RelationQuerySourceAcquisitionKind.Supplied)
-            throw new ArgumentException("The hydration physical plan must mark the page root as supplied.", nameof(physicalPlan));
-
+        hydration = new(plan, physicalPlan, realization, output, sourceReaders);
+        hydration.RequireSuppliedRoot(suppliedRoot, nameof(suppliedRoot));
         this.suppliedRoot = suppliedRoot;
-        executor = new(sourceReaders);
-        Plan = exactPlan;
-        PhysicalPlan = physicalPlan.Fingerprint;
+        Plan = hydration.Plan;
+        PhysicalPlan = hydration.PhysicalPlan;
     }
 
     /// <inheritdoc />
@@ -365,36 +343,7 @@ public sealed class RelationQueryMaterializationRebuildHydrator : IMaterializati
             completeness: RelationQueryEvidenceCompleteness.Complete,
             observations: request.Page.Read.Observations,
             evidenceReference: request.Page.Read.EvidenceReference);
-        var execution = await executor.ExecuteAsync(
-                new RelationQueryPhysicalExecutionRequest(
-                    plan: plan,
-                    physicalPlan: physicalPlan,
-                    realization: realization,
-                    evaluation: request.Evaluation,
-                    suppliedSources: [supplied]),
-                context.CancellationToken)
-            .ConfigureAwait(false);
-        if (!execution.IsSuccessful || execution.Interpretation is null)
-        {
-            throw new InvalidOperationException(
-                $"Canonical Relations hydration '{request.Evaluation.Value}' was not conclusive: "
-                + string.Join(" ", execution.Diagnostics.Select(static diagnostic => diagnostic.Message)));
-        }
-
-        var rows = output.Kind switch
-        {
-            RelationQueryOutputReferenceKind.Relation
-                when execution.Interpretation.Relation is { } relation
-                     && relation.Relation == output.Relation
-                     && relation.State == RelationQueryExecutionOutputState.Complete => relation.Rows,
-            RelationQueryOutputReferenceKind.QueryResult
-                when execution.Interpretation.QueryResults.SingleOrDefault(result => result.Result == output.QueryResult) is { } result
-                     && result.State == RelationQueryExecutionOutputState.Complete => result.Rows,
-            _ => throw new InvalidOperationException(
-                $"Selected Relations output '{output.Id.Value}' was absent or incomplete after hydration.")
-        };
-        if (rows.Any(static row => !row.IsComplete))
-            throw new InvalidOperationException("A rebuild cannot materialize rows with unresolved Relations gaps.");
+        var rows = await hydration.HydrateAsync(context, request.Evaluation, [supplied]).ConfigureAwait(false);
         return new(rows, evidenceReference: request.Evaluation.Value);
     }
 }

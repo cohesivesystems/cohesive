@@ -7,6 +7,7 @@ using Cohesive.Model.Serialization;
 using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Physical;
 using Cohesive.Storage.Materialization;
+using Cohesive.Tests.Storage;
 using Microsoft.Azure.Cosmos;
 
 namespace Cohesive.Tests.Cosmos;
@@ -29,6 +30,254 @@ public sealed class CosmosMaterializationSourceTests
         { nameof(CosmosObservationContainerDocument.ObservationId), null },
         { nameof(CosmosObservationContainerDocument.ObservationId), "   " }
     };
+
+    internal static PullChangeSourceConformanceCase CreatePullChangeSourceConformanceCase() => new(
+        Adapter: "Cosmos DB full-fidelity pull",
+        SettlementCapability: null,
+        ObserveBaselineReplayAsync: ObservePullBaselineReplayAsync,
+        ObservePositionedRedeliveryAsync: ObservePullPositionedRedeliveryAsync,
+        ObserveExplicitSettlementAsync: ObservePullExplicitSettlementAsync,
+        ObserveCancellationAsync: ObservePullCancellationAsync,
+        ObserveAffinityRejectionsAsync: ObservePullAffinityRejectionsAsync);
+
+    static async Task<PullBaselineReplayObservation> ObservePullBaselineReplayAsync()
+    {
+        const int MaximumItems = 1;
+        var baseline = StandardBaseline();
+        var fixture = CreateFixture(baseline: baseline);
+        var first = await fixture.Source.ReadPageAsync(
+            context: Context(),
+            request: BaselineRequest(
+                fixture: fixture,
+                continuation: null,
+                maximumItems: MaximumItems,
+                maximumBytes: GenerousPageBytes));
+        var continuation = PullChangeSourceConformanceInputs.RequireContinuation(first);
+        var resumed = await fixture.Source.ReadPageAsync(
+            context: Context(),
+            request: BaselineRequest(
+                fixture: fixture,
+                continuation: continuation,
+                maximumItems: MaximumItems,
+                maximumBytes: GenerousPageBytes));
+        var replayed = await fixture.Source.ReadPageAsync(
+            context: Context(),
+            request: BaselineRequest(
+                fixture: fixture,
+                continuation: continuation,
+                maximumItems: MaximumItems,
+                maximumBytes: GenerousPageBytes));
+
+        return new(
+            MaximumItems: MaximumItems,
+            MaximumBytes: GenerousPageBytes,
+            First: first,
+            Resumed: resumed,
+            Replayed: replayed,
+            ProviderReadAttempts: baseline.Calls.Count);
+    }
+
+    static async Task<PullPositionedRedeliveryObservation> ObservePullPositionedRedeliveryAsync()
+    {
+        const int MaximumDeliveries = 1;
+        FakeChangeFeedReader changes = new()
+        {
+            Current = ChangePage(
+                changes: [],
+                continuation: "conformance/cut",
+                statusCode: HttpStatusCode.NotModified)
+        };
+        changes.Pages["conformance/cut"] = ChangePage(
+            changes:
+            [
+                ProviderChange(
+                    operation: CosmosMaterializationProviderChangeKind.Create,
+                    current: Document(identity: "load-a"),
+                    lsn: 90)
+            ],
+            continuation: "conformance/through",
+            statusCode: HttpStatusCode.OK);
+        var fixture = CreateFixture(
+            baseline: StandardBaseline(),
+            changes: changes);
+        var captured = await fixture.Source.CaptureCurrentPositionAsync(
+            context: Context(),
+            scope: fixture.Source.Scope);
+        const int SettlementAttemptsBefore = 0;
+        var initial = await fixture.Source.ReadChangesAsync(
+            context: Context(),
+            request: ChangeRequest(
+                fixture: fixture,
+                position: captured,
+                maximumDeliveries: MaximumDeliveries,
+                maximumBytes: GenerousPageBytes));
+        var redelivered = await fixture.Source.ReadChangesAsync(
+            context: Context(),
+            request: ChangeRequest(
+                fixture: fixture,
+                position: captured,
+                maximumDeliveries: MaximumDeliveries,
+                maximumBytes: GenerousPageBytes));
+
+        return new(
+            Scope: fixture.Source.Scope,
+            CapturedPosition: captured,
+            MaximumDeliveries: MaximumDeliveries,
+            MaximumBytes: GenerousPageBytes,
+            Initial: initial,
+            Redelivered: redelivered,
+            ProviderSettlementAttemptsBeforeReads: SettlementAttemptsBefore,
+            ProviderSettlementAttemptsAfterReads: 0);
+    }
+
+    static Task<PullExplicitSettlementObservation> ObservePullExplicitSettlementAsync()
+    {
+        var fixture = CreateFixture(baseline: StandardBaseline());
+        var settlementPortAvailable = (object)fixture.Source is IMaterializationSettlingSource;
+        var settlementCapabilityAdvertised = fixture.Source.Descriptor.CapabilityProfile.Evidence.Any(
+            static evidence => evidence.Capability == MaterializationCapabilityKind.SourceSettlement);
+        return Task.FromResult(new PullExplicitSettlementObservation(
+            SettlementPortAvailable: settlementPortAvailable,
+            SettlementCapabilityAdvertised: settlementCapabilityAdvertised,
+            Acknowledged: null,
+            Replayed: null,
+            ProviderSettlementAttempts: 0,
+            ProviderSettlementStateBefore: "unsupported",
+            ProviderSettlementStateAfter: "unsupported"));
+    }
+
+    static async Task<PullCancellationObservation> ObservePullCancellationAsync()
+    {
+        FakeChangeFeedReader changes = new()
+        {
+            Current = ChangePage(
+                changes: [],
+                continuation: "conformance/cancel",
+                statusCode: HttpStatusCode.NotModified)
+        };
+        changes.Pages["conformance/cancel"] = ChangePage(
+            changes:
+            [
+                ProviderChange(
+                    operation: CosmosMaterializationProviderChangeKind.Create,
+                    current: Document(identity: "load-a"),
+                    lsn: 91)
+            ],
+            continuation: "conformance/cancel-through",
+            statusCode: HttpStatusCode.OK);
+        var fixture = CreateFixture(
+            baseline: StandardBaseline(),
+            changes: changes);
+        var captured = await fixture.Source.CaptureCurrentPositionAsync(
+            context: Context(),
+            scope: fixture.Source.Scope);
+        var readsBefore = changes.Calls.Count;
+        using CancellationTokenSource cancellation = new();
+        cancellation.Cancel();
+        var changeReadCancellationObserved = false;
+        try
+        {
+            _ = await fixture.Source.ReadChangesAsync(
+                context: Context(cancellationToken: cancellation.Token),
+                request: ChangeRequest(
+                    fixture: fixture,
+                    position: captured,
+                    maximumDeliveries: 1,
+                    maximumBytes: GenerousPageBytes));
+        }
+        catch (OperationCanceledException)
+        {
+            changeReadCancellationObserved = true;
+        }
+
+        return new(
+            ChangeReadCancellationObserved: changeReadCancellationObserved,
+            SettlementCancellationObserved: false,
+            ProviderReadAttemptsBefore: readsBefore,
+            ProviderReadAttemptsAfter: changes.Calls.Count,
+            ProviderSettlementAttemptsBefore: 0,
+            ProviderSettlementAttemptsAfter: 0,
+            ProviderSettlementStateBefore: "unsupported",
+            ProviderSettlementStateAfter: "unsupported");
+    }
+
+    static async Task<PullAffinityRejectionObservation> ObservePullAffinityRejectionsAsync()
+    {
+        var baseline = StandardBaseline();
+        FakeChangeFeedReader changes = new()
+        {
+            Current = ChangePage(
+                changes: [],
+                continuation: "conformance/affinity",
+                statusCode: HttpStatusCode.NotModified)
+        };
+        var fixture = CreateFixture(
+            baseline: baseline,
+            changes: changes);
+        var first = await fixture.Source.ReadPageAsync(
+            context: Context(),
+            request: BaselineRequest(
+                fixture: fixture,
+                continuation: null,
+                maximumItems: 1,
+                maximumBytes: GenerousPageBytes));
+        var continuation = PullChangeSourceConformanceInputs.RequireContinuation(first);
+        var captured = await fixture.Source.CaptureCurrentPositionAsync(
+            context: Context(),
+            scope: fixture.Source.Scope);
+        var foreignScope = PullChangeSourceConformanceInputs.ForeignScope(fixture.Source.Scope);
+        var providerReadsBefore = baseline.Calls.Count + changes.Calls.Count;
+
+        var scopeMismatchRejected = false;
+        try
+        {
+            _ = await fixture.Source.CaptureCurrentPositionAsync(
+                context: Context(),
+                scope: foreignScope);
+        }
+        catch (ArgumentException)
+        {
+            scopeMismatchRejected = true;
+        }
+
+        var readMismatchRejected = false;
+        try
+        {
+            _ = new MaterializationSourcePageRequest(
+                read: PullChangeSourceConformanceInputs.AlternateRead(fixture.Read),
+                scope: fixture.Source.Scope,
+                continuation: continuation,
+                maximumItems: 1,
+                maximumBytes: GenerousPageBytes);
+        }
+        catch (ArgumentException)
+        {
+            readMismatchRejected = true;
+        }
+
+        var positionMismatchRejected = false;
+        try
+        {
+            _ = new MaterializationChangeReadRequest(
+                scope: foreignScope,
+                afterPosition: captured,
+                maximumDeliveries: 1,
+                maximumBytes: GenerousPageBytes);
+        }
+        catch (ArgumentException)
+        {
+            positionMismatchRejected = true;
+        }
+
+        return new(
+            ScopeMismatchRejected: scopeMismatchRejected,
+            ReadMismatchRejected: readMismatchRejected,
+            PositionMismatchRejected: positionMismatchRejected,
+            ProviderReadAttemptsBefore: providerReadsBefore,
+            ProviderReadAttemptsAfter: baseline.Calls.Count + changes.Calls.Count,
+            ProviderSettlementAttemptsBefore: 0,
+            ProviderSettlementAttemptsAfter: 0);
+    }
 
     [Fact]
     public async Task BaselineResume_RetainsProviderPageTailAcrossItemAndByteBounds()
