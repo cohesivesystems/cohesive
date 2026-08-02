@@ -41,6 +41,8 @@ public sealed class IndexSyncVerticalSliceTests
     const string ReadAlias = "index-sync-read";
     const string MaterializationIdValue = "tests/index-sync/materialization";
     const string TargetIdValue = "tests/index-sync/elastic-target";
+    const string PriorTargetIdValue = "tests/index-sync/prior-target";
+    static readonly MaterializationPlacementSubjectId PlacementSubject = new("subject/index-sync/all");
     static readonly DateTimeOffset StartedAtUtc =
         new(2026, 8, 1, 12, 0, 0, TimeSpan.Zero);
     static readonly InteractionAuthorityScope ProcessAuthority =
@@ -129,7 +131,7 @@ public sealed class IndexSyncVerticalSliceTests
         Assert.Equal(2, activated?.VisibleItemCount);
         Assert.Equal(0, activated?.PendingRetryableMutationCount);
         await AssertPromotedReadbackAsync(semantic.Readback, target, generationIndex);
-        await AssertExplicitBackendPoolSwapAsync(fixture.Plan, target, result, context);
+        await AssertExplicitBackendPoolSwapAsync(fixture, target, result, context);
         await AssertRestartAttemptAbandonsCandidateAndPreservesActiveGenerationAsync(
             fixture,
             target,
@@ -149,12 +151,12 @@ public sealed class IndexSyncVerticalSliceTests
             new InMemoryMaterializationSynchronizationWorkStore());
         Assert.Equal(generation, execution.Generation);
         var lifecycle = RebuildProcessLifecycle(
-            fixture.Plan.Fingerprint,
+            fixture.Resolved.Authority,
             artifacts,
             new ExactRebuildExecutionResolver(execution));
         var initialized = await lifecycle.InitializeAsync(
             OperationContext.Create(timeProvider: new FixedTimeProvider(attempt.StartedAtUtc)),
-            RebuildProcessStart(artifacts, fixture.Plan.Fingerprint, attempt));
+            RebuildProcessStart(artifacts, fixture.Resolved.Authority, attempt));
         var initialSnapshot = Assert.IsType<ProcessDurableStoreSnapshot>(initialized.Snapshot);
         var initialAffinity = Assert.Single(initialSnapshot.Checkpoint.Control.CurrentAttempt.AffinityBindings);
         var candidateBeforeControl = await target.Target.InspectGenerationAsync(
@@ -225,10 +227,11 @@ public sealed class IndexSyncVerticalSliceTests
         Assert.NotEqual(candidateExecution.Generation, replacementExecution.Generation);
         var artifacts = MaterializationRebuildProcessFactory.Create();
         var resolver = new ExactRebuildExecutionResolver(candidateExecution);
-        var lifecycle = RebuildProcessLifecycle(fixture.Plan.Fingerprint, artifacts, resolver);
+        var authority = fixture.Resolved.Authority;
+        var lifecycle = RebuildProcessLifecycle(authority, artifacts, resolver);
         var candidateInitialized = await lifecycle.InitializeAsync(
             OperationContext.Create(timeProvider: new FixedTimeProvider(candidateAttempt.StartedAtUtc)),
-            RebuildProcessStart(artifacts, fixture.Plan.Fingerprint, candidateAttempt));
+            RebuildProcessStart(artifacts, authority, candidateAttempt));
         var candidateProcess = Assert.IsType<ProcessDurableStoreSnapshot>(candidateInitialized.Snapshot);
         var candidate = await target.Target.InspectGenerationAsync(
             OperationContext.Create(timeProvider: new FixedTimeProvider(candidateAttempt.StartedAtUtc)),
@@ -330,7 +333,7 @@ public sealed class IndexSyncVerticalSliceTests
     }
 
     static MaterializationRebuildProcessLifecycle RebuildProcessLifecycle(
-        MaterializationRebuildPlanFingerprint plan,
+        MaterializationRebuildLeafExecutionAuthority authority,
         MaterializationRebuildProcessArtifacts artifacts,
         IMaterializationRebuildExecutionResolver resolver) =>
         new(
@@ -342,15 +345,15 @@ public sealed class IndexSyncVerticalSliceTests
                     workerLease: TimeSpan.FromMinutes(5),
                     maxAmbiguousStoreMutationAttempts: 3)),
             artifacts,
-            plan,
+            authority,
             resolver);
 
     static ProcessStartReceipt RebuildProcessStart(
         MaterializationRebuildProcessArtifacts artifacts,
-        MaterializationRebuildPlanFingerprint plan,
+        MaterializationRebuildLeafExecutionAuthority authority,
         MaterializationRebuildAttempt attempt)
     {
-        var planReference = MaterializationRebuildWorkReferenceJsonSerializer.SerializePlan(new(plan));
+        var authorityReference = MaterializationRebuildWorkReferenceJsonSerializer.SerializeAuthority(authority);
         var request = new ProcessStartRequest(
             schemaVersion: ProcessStartRequest.CurrentSchemaVersion,
             definition: artifacts.CoordinatorPlan.DefinitionReference,
@@ -367,7 +370,7 @@ public sealed class IndexSyncVerticalSliceTests
             initialContinuation: attempt.Continuation,
             input: PortableValue.Concrete(
                 artifacts.CoordinatorPlan.Definition.Input,
-                ObservationValue.FromString(planReference)));
+                ObservationValue.FromString(authorityReference)));
         return new(request, acceptedAtUtc: attempt.StartedAtUtc);
     }
 
@@ -377,6 +380,38 @@ public sealed class IndexSyncVerticalSliceTests
         TargetFixture target)
     {
         var materialization = MaterializationDocument.FromDefinition(semantic.Definition);
+        var backendPool = CreateBackendPoolDocument(materialization, target.Target.Descriptor);
+        var rebuildRequest = new MaterializationRebuildRequestDocument(
+            schemaVersion: MaterializationRebuildRequestDocument.CurrentSchemaVersion,
+            materialization,
+            selection: new MaterializationExplicitPlacementSubjectSelection([PlacementSubject]),
+            placement: new(MaterializationBackendPoolReference.FromDocument(backendPool)),
+            scheduling: new(maximumStartsPerActivation: 1, maximumParallelism: 1),
+            promotion: new(MaterializationRebuildPromotionMode.Independent),
+            provenance: Provenance("rebuild-request"));
+        var membership = RequirePlanningArtifact(MaterializationRebuildPlanSetCompiler.FreezeMembership(
+            rebuildRequest,
+            observedMembers: [PlacementSubject],
+            authority: new(
+                authority: "tests/index-sync/membership-authority/v1",
+                revision: "revision/1",
+                cut: "cut/index-sync/1",
+                completeness: MaterializationRebuildMembershipCompleteness.Complete,
+                evidenceReferences: ["tests/index-sync/membership-evidence/1"]),
+            provenance: Provenance("membership")));
+        var capacityDomain = new MaterializationPhysicalCapacityDomain(
+            id: new("capacity/index-sync/elastic"),
+            maximumParallelism: 1,
+            evidenceReferences: ["tests/index-sync/capacity/elastic"]);
+        var placement = RequirePlanningArtifact(MaterializationRebuildPlanSetCompiler.CompilePlacement(
+            rebuildRequest,
+            membership,
+            backendPool,
+            assignments: [new(PlacementSubject, target.Target.Descriptor.Id)],
+            capacityDomains: [capacityDomain],
+            capacityAssignments: [new(target.Target.Descriptor.Id, capacityDomain.Id)],
+            provenance: Provenance("placement")));
+        var placementSlice = Assert.Single(placement.Slices);
         var sourceRequirement = Assert.Single(semantic.Definition.Sources);
         var sourceProfile = source.Source.Descriptor.CapabilityProfile;
         MaterializationRebuildSourcePlan sourcePlan = new(
@@ -412,6 +447,7 @@ public sealed class IndexSyncVerticalSliceTests
             channelCanonicalization: "tests/index-sync/channel/v1");
         MaterializationRebuildPlan plan = new(
             materialization,
+            placementSlice,
             impactPlan,
             sources: [sourcePlan],
             target: target.Target.Descriptor,
@@ -429,6 +465,12 @@ public sealed class IndexSyncVerticalSliceTests
                 maximumParallelism: 2,
                 maximumChangeFeedsPerConvergenceActivation: 4),
             provenance: Provenance("rebuild-plan"));
+        var planSet = RequirePlanningArtifact(MaterializationRebuildPlanSetLinker.Link(
+            rebuildRequest,
+            membership,
+            placement,
+            leafPlans: [plan],
+            provenance: Provenance("plan-set")));
         var controlProvider = new MaterializationIndexSyncControlRuntimeProvider(
             plan,
             new InMemoryMaterializationIndexSyncControlStateStore(),
@@ -452,14 +494,17 @@ public sealed class IndexSyncVerticalSliceTests
             impactRuntime);
         var feed = Assert.Single(feedCatalog.Feeds);
         var resolved = new ResolvedMaterializationRebuildPlan(
-            plan,
-            target.Target,
-            new InMemoryMaterializationProgressStore(),
+            planSet: planSet,
+            plan: plan,
+            target: target.Target,
+            progressStore: new InMemoryMaterializationProgressStore(),
             shardBindings: [new(shard, source.Source, hydrator)],
             changeFeedBindings: [new(feed, feed.Channel, source.Source, interpreter)],
             controlRuntimeProvider: controlProvider);
         return new(
+            rebuildRequest,
             plan,
+            planSet,
             shard,
             resolved,
             controlProvider,
@@ -1012,21 +1057,17 @@ public sealed class IndexSyncVerticalSliceTests
     }
 
     static async Task AssertExplicitBackendPoolSwapAsync(
-        MaterializationRebuildPlan plan,
+        ExecutionFixture fixture,
         TargetFixture promotedTarget,
         MaterializationGenerationActivationResult activation,
         OperationContext context)
     {
-        MaterializationTargetId priorTargetId = new("tests/index-sync/prior-target");
+        var plan = fixture.Plan;
+        MaterializationTargetId priorTargetId = new(PriorTargetIdValue);
         var promotedDescriptor = promotedTarget.Target.Descriptor;
-        MaterializationTargetDescriptor priorDescriptor = new(
-            priorTargetId,
-            promotedDescriptor.MaterializationId,
-            new(
-                new("tests/index-sync/prior-target-profile/v1"),
-                MaterializationEndpointRole.Target,
-                priorTargetId.Value,
-                promotedDescriptor.Capabilities.Evidence));
+        var poolDocument = fixture.PlanSet.Placement.BackendPool;
+        var poolDefinition = poolDocument.Definition;
+        var priorDescriptor = poolDefinition.Members.Single(member => member.Id == priorTargetId);
         var priorTarget = new InMemoryMaterializationTarget(priorDescriptor);
         var priorGenerationId = new MaterializationGenerationId("generation/index-sync/prior");
         var priorCreatedAtUtc = StartedAtUtc.AddMinutes(-10);
@@ -1074,28 +1115,55 @@ public sealed class IndexSyncVerticalSliceTests
             priorTargetId,
             priorGenerationId,
             plan.Materialization.DefinitionFingerprint);
+        var priorCapacity = new MaterializationPhysicalCapacityDomain(
+            id: new("capacity/index-sync/prior"),
+            maximumParallelism: 1,
+            evidenceReferences: ["tests/index-sync/capacity/prior"]);
+        var priorPlacementPlan = RequirePlanningArtifact(MaterializationRebuildPlanSetCompiler.CompilePlacement(
+            fixture.Request,
+            fixture.PlanSet.Membership,
+            poolDocument,
+            assignments: [new(PlacementSubject, priorTargetId)],
+            capacityDomains: [priorCapacity],
+            capacityAssignments: [new(priorTargetId, priorCapacity.Id)],
+            provenance: Provenance("prior-placement")));
+        var priorPlacement = Assert.Single(priorPlacementPlan.Slices);
+        var priorTargetMatch = MaterializationCapabilityMatcher.MatchForMode(
+            plan.Materialization.Definition.TargetCapabilities,
+            priorDescriptor.Capabilities,
+            MaterializationSynchronizationMode.Rebuild);
+        MaterializationRebuildPlan priorPlan = new(
+            materialization: plan.Materialization,
+            placementSlice: priorPlacement,
+            impactPlan: plan.ImpactPlan,
+            sources: plan.Sources,
+            target: priorDescriptor,
+            targetCapabilityMatch: priorTargetMatch,
+            shards: plan.Shards,
+            changeFeedCatalogs: plan.ChangeFeedCatalogs,
+            changeFeeds: plan.ChangeFeeds,
+            limits: plan.Limits,
+            provenance: Provenance("prior-rebuild-plan"));
+        var priorPlanSet = RequirePlanningArtifact(MaterializationRebuildPlanSetLinker.Link(
+            fixture.Request,
+            fixture.PlanSet.Membership,
+            priorPlacementPlan,
+            leafPlans: [priorPlan],
+            provenance: Provenance("prior-plan-set")));
+        var priorAuthority = MaterializationRebuildLeafExecutionAuthority.FromPlanSet(priorPlanSet, priorPlan);
+        var priorActivation = new MaterializationActiveGenerationReference(
+            schemaVersion: MaterializationActiveGenerationReference.CurrentSchemaVersion,
+            authority: priorAuthority,
+            generation: priorGenerationId,
+            targetRevision: priorReceipt.TargetRevision,
+            promotion: priorReceipt.PromotionId,
+            promotionFence: priorReceipt.PromotionFence,
+            validation: priorReceipt.ValidationFingerprint,
+            activatedAtUtc: priorReceipt.PromotedAtUtc);
         MaterializationReadableBackendReference priorRead = new(
+            plan.PlacementSlice,
             priorGeneration,
-            new(
-                MaterializationActiveGenerationReference.CurrentSchemaVersion,
-                plan.Fingerprint,
-                promotedDescriptor.MaterializationId,
-                priorTargetId,
-                priorGenerationId,
-                priorReceipt.TargetRevision,
-                priorReceipt.PromotionId,
-                priorReceipt.PromotionFence,
-                priorReceipt.ValidationFingerprint,
-                priorReceipt.PromotedAtUtc));
-
-        MaterializationBackendPoolDefinition poolDefinition = new(
-            new("pool/index-sync/read-write"),
-            promotedDescriptor.MaterializationId,
-            plan.Materialization.DefinitionFingerprint,
-            [priorDescriptor, promotedDescriptor],
-            defaultTarget: priorTargetId,
-            provenance: Provenance("backend-pool"));
-        var poolDocument = MaterializationBackendPoolDocument.FromDefinition(poolDefinition);
+            priorActivation);
         var pool = new InMemoryMaterializationTargetPool(
             poolDefinition,
             [priorTarget, promotedTarget.Target]);
@@ -1105,14 +1173,13 @@ public sealed class IndexSyncVerticalSliceTests
             poolDefinition,
             priorTargetId,
             priorTargetId,
-            authority: "tests/index-sync/feature-flags/initial/v1");
+            authority: "tests/index-sync/bootstrap-routing/v1");
         var initialized = await router.SwapAsync(
             context,
             new(
                 new(
                     new("route/index-sync/initialize"),
-                    poolDefinition.Id,
-                    poolDocument.DefinitionFingerprint,
+                    plan.PlacementSlice,
                     MaterializationBackendRoutingRevision.Initial,
                     fence,
                     context.UtcNow),
@@ -1127,59 +1194,67 @@ public sealed class IndexSyncVerticalSliceTests
             activation.Generation,
             plan.Materialization.DefinitionFingerprint);
         MaterializationReadableBackendReference promotedRead = new(
+            plan.PlacementSlice,
             promotedGeneration,
-            new(
-                MaterializationActiveGenerationReference.CurrentSchemaVersion,
-                plan.Fingerprint,
-                promotedDescriptor.MaterializationId,
-                promotedDescriptor.Id,
-                activation.Generation,
-                promotion.TargetRevision,
-                promotion.PromotionId,
-                promotion.PromotionFence,
-                promotion.ValidationFingerprint,
-                promotion.PromotedAtUtc));
+            new MaterializationActiveGenerationReference(
+                schemaVersion: MaterializationActiveGenerationReference.CurrentSchemaVersion,
+                authority: fixture.Resolved.Authority,
+                generation: activation.Generation,
+                targetRevision: promotion.TargetRevision,
+                promotion: promotion.PromotionId,
+                promotionFence: promotion.PromotionFence,
+                validation: promotion.ValidationFingerprint,
+                activatedAtUtc: promotion.PromotedAtUtc));
 
-        var routedBeforeAdmission = await router.ResolveReadAsync(context);
+        var routedBeforeAdmission = await router.ResolveReadAsync(context, plan.PlacementSlice);
         Assert.Same(priorTarget, routedBeforeAdmission.Target);
         Assert.Equal(activation.Generation, (await promotedTarget.Target.InspectAsync(context)).ActiveGenerationId);
-        var admitted = await router.AdmitCandidateAsync(
+        var promotionExecutor = new MaterializationIndependentPromotionExecutor(fixture.PlanSet, plan);
+        var promotionRequest = promotionExecutor.CreateRequest(
+            promotedRead.Activation,
+            initialized.Snapshot,
+            fence,
+            context.UtcNow.AddMilliseconds(1));
+        MaterializationSwapBackendRoutingRequest reservedSwap = new(
+            header: new(
+                commandId: promotionRequest.SwapCommandId,
+                placementSlice: promotionRequest.Authority.PlacementSlice,
+                expectedRevision: new((promotionRequest.ExpectedRoutingRevision.Ordinal + 1).ToString(
+                    System.Globalization.CultureInfo.InvariantCulture)),
+                fence: promotionRequest.Fence,
+                issuedAtUtc: promotionRequest.SwapIssuedAtUtc),
+            read: promotedRead,
+            write: promotedGeneration,
+            configuration: promotionRequest.Configuration);
+        var admittedBeforeCrash = await router.AdmitCandidateAsync(
             context,
-            new(
-                new(
-                    new("route/index-sync/admit-elastic"),
-                    poolDefinition.Id,
-                    poolDocument.DefinitionFingerprint,
-                    initialized.Snapshot.Revision,
-                    fence,
-                    context.UtcNow.AddMilliseconds(1)),
-                promotedGeneration));
-        Assert.Equal(MaterializationBackendRoutingDisposition.Applied, admitted.Disposition);
-        var featureFlagConfiguration = RouteConfiguration(
-            poolDefinition,
-            promotedDescriptor.Id,
-            promotedDescriptor.Id,
-            authority: "tests/index-sync/feature-flags/elastic/v1");
-        var swapped = await router.SwapAsync(
-            context,
-            new(
-                new(
-                    new("route/index-sync/swap-elastic"),
-                    poolDefinition.Id,
-                    poolDocument.DefinitionFingerprint,
-                    admitted.Snapshot.Revision,
-                    fence,
-                    context.UtcNow.AddMilliseconds(2)),
-                promotedRead,
-                promotedGeneration,
-                featureFlagConfiguration));
-        var routed = await router.ResolveReadAsync(context);
+            new MaterializationAdmitBackendCandidateRequest(
+                header: new(
+                    commandId: promotionRequest.AdmitCommandId,
+                    placementSlice: promotionRequest.Authority.PlacementSlice,
+                    expectedRevision: promotionRequest.ExpectedRoutingRevision,
+                        fence: promotionRequest.Fence,
+                        issuedAtUtc: promotionRequest.AdmitIssuedAtUtc),
+                candidate: promotedGeneration,
+                expectedFollowUp: reservedSwap));
+        var promoted = await promotionExecutor.ExecuteAsync(context, promotionRequest, router);
+        var replayed = await promotionExecutor.ExecuteAsync(context, promotionRequest, router);
+        var routed = await router.ResolveReadAsync(context, plan.PlacementSlice);
 
-        Assert.Equal(MaterializationBackendRoutingDisposition.Applied, swapped.Disposition);
+        Assert.Equal(MaterializationBackendRoutingDisposition.Applied, admittedBeforeCrash.Disposition);
+        Assert.Equal(MaterializationBackendRoutingDisposition.Replayed, promoted.Admission.Disposition);
+        Assert.Equal(MaterializationBackendRoutingDisposition.Applied, promoted.Routing!.Disposition);
+        Assert.True(promoted.IsCurrentlySelected);
+        Assert.Equal(MaterializationBackendRoutingDisposition.Replayed, replayed.Admission.Disposition);
+        Assert.Equal(MaterializationBackendRoutingDisposition.Replayed, replayed.Routing!.Disposition);
+        Assert.True(replayed.IsCurrentlySelected);
         Assert.Same(promotedTarget.Target, routed.Target);
         Assert.Equal(promotedGeneration, routed.Generation);
-        Assert.Equal(promotedDescriptor.Id, swapped.Snapshot.Configuration!.ReadTarget);
-        Assert.Equal(promotedDescriptor.Id, swapped.Snapshot.Configuration.WriteTarget);
+        Assert.Equal(promotedDescriptor.Id, promoted.Routing.Snapshot.Configuration!.ReadTarget);
+        Assert.Equal(promotedDescriptor.Id, promoted.Routing.Snapshot.Configuration.WriteTarget);
+        Assert.All(
+            promoted.Routing.Snapshot.Configuration.Configuration,
+            decision => Assert.Equal($"plan-set:{fixture.PlanSet.Fingerprint.Value}", decision.Authority));
     }
 
     static MaterializationBackendRoutingConfiguration RouteConfiguration(
@@ -1192,6 +1267,35 @@ public sealed class IndexSyncVerticalSliceTests
             EffectiveConfigurationOrigin.Explicit,
             authority,
             new(read, write)));
+
+    static MaterializationBackendPoolDocument CreateBackendPoolDocument(
+        MaterializationDocument materialization,
+        MaterializationTargetDescriptor promotedTarget)
+    {
+        MaterializationTargetId priorTargetId = new(PriorTargetIdValue);
+        MaterializationTargetDescriptor priorTarget = new(
+            id: priorTargetId,
+            materializationId: promotedTarget.MaterializationId,
+            capabilities: new(
+                id: new("tests/index-sync/prior-target-profile/v1"),
+                role: MaterializationEndpointRole.Target,
+                subject: priorTargetId.Value,
+                evidence: promotedTarget.Capabilities.Evidence));
+        return MaterializationBackendPoolDocument.FromDefinition(new(
+            id: new("pool/index-sync/read-write"),
+            materializationId: materialization.Definition.Id,
+            definitionFingerprint: materialization.DefinitionFingerprint,
+            members: [priorTarget, promotedTarget],
+            defaultTarget: priorTargetId,
+            provenance: Provenance("backend-pool")));
+    }
+
+    static TArtifact RequirePlanningArtifact<TArtifact>(
+        MaterializationRebuildPlanningResult<TArtifact> result)
+        where TArtifact : class =>
+        result.Artifact ?? throw new InvalidOperationException(string.Join(
+            Environment.NewLine,
+            result.Diagnostics.Select(static diagnostic => $"{diagnostic.Code}: {diagnostic.Message}")));
 
     static ElasticElasticsearchRuntimeBinding ReadbackRuntime(
         ElasticClusterId cluster,
@@ -1678,7 +1782,9 @@ public sealed class IndexSyncVerticalSliceTests
         ElasticMaterializationTarget Target);
 
     sealed record ExecutionFixture(
+        MaterializationRebuildRequestDocument Request,
         MaterializationRebuildPlan Plan,
+        MaterializationRebuildPlanSet PlanSet,
         MaterializationRebuildShardPlan Shard,
         ResolvedMaterializationRebuildPlan Resolved,
         MaterializationIndexSyncControlRuntimeProvider ControlProvider,
@@ -2122,12 +2228,12 @@ public sealed class IndexSyncVerticalSliceTests
             executions.Add(execution.Attempt.Continuation, execution);
 
         public bool TryResolve(
-            MaterializationRebuildPlanFingerprint plan,
+            MaterializationRebuildLeafExecutionAuthority authority,
             ProcessContinuationIdentity continuation,
             out MaterializationRebuildExecution? resolved)
         {
             if (executions.TryGetValue(continuation, out var execution)
-                && plan == execution.PlanFingerprint)
+                && authority == execution.Authority)
             {
                 resolved = execution;
                 return true;

@@ -1,9 +1,12 @@
 # Index Synchronization Operations Runbook
 
 This runbook covers the current Cohesive materialization rebuild, incremental synchronization, generation
-activation, and backend-pool routing model. It applies to one exact `MaterializationRebuildPlan` and one candidate
-target generation. A higher-level request that selects tenants or places work across several targets must compile
-to explicit plans and placement evidence before this procedure begins.
+activation, and backend-pool routing model. The outer authority is one exact linked
+`MaterializationRebuildPlanSet`: a canonical request, complete frozen membership, explicit subject-to-target
+placement, bounded scheduling realization, declared promotion policy, and one exact placement-bound leaf plan per
+slice. The executable unit is one `MaterializationRebuildPlan`, its full `MaterializationPlacementSliceReference`,
+and one candidate target generation. The current high-level promotion executor realizes `Independent` leaf
+promotion; the other declared cross-target policies still require a parent coordinator.
 
 The core lifecycle and adapter components are independently tested. The focused ARI-180 acceptance suite covers
 shared source conformance, Elasticsearch target and canonical-query execution, and the composed Cosmos DB or
@@ -13,35 +16,45 @@ guarantee. Run
 
 The following rules are invariant:
 
-1. Execute only the persisted, fingerprint-verified materialization, impact, rebuild, source, target, and pool
-   artifacts admitted for the run. Do not silently recompile drifted artifacts during recovery.
+1. Execute only the persisted, fingerprint-verified request, membership, placement, plan-set, leaf, materialization,
+   impact, source, target, and pool artifacts admitted for the run. Do not silently recompile drifted artifacts
+   during recovery.
 2. Keep a candidate generation isolated from readers until catch-up converges and target-local seal, validation,
    and promotion complete.
 3. For a settling source, preserve the order `apply target effects -> commit application checkpoint -> settle
    provider progress -> record settlement receipt`.
 4. Pause and Continue retain the current Process attempt and index generation. RestartAttempt abandons that
    generation and begins a fresh generation.
-5. Target-local promotion and backend-pool route selection are separate durable decisions.
-6. Never retire or clean up a generation while it is routed, admitted as a candidate, or still has in-flight work.
+5. Target-local promotion and placement-scoped backend routing are separate durable decisions.
+6. Carry both the placement-slice identity and its complete fingerprint. Slice identity alone is not sufficient
+   authority for execution, routing, status, or recovery.
+7. Never retire or clean up a generation while it is routed, admitted as a candidate, or still has in-flight work
+   under any placement slice that shares the physical generation.
 
 ## Prerequisites
 
 ### Common deployment prerequisites
 
-- Persist the canonical `MaterializationDocument`, compiled `MaterializationImpactPlan`,
-  `MaterializationRebuildPlan`, Process artifacts, and `MaterializationBackendPoolDocument`. Deserialize them
-  through their strict serializers on startup so schema versions and canonical fingerprints are revalidated.
-- Resolve every planned source, Relations hydration plan, target, and backend-pool dependency by its exact persisted
-  identity. Runtime endpoints must satisfy the capability profile and physical affinity pinned by the plan.
+- Persist the canonical `MaterializationRebuildRequestDocument`, complete
+  `MaterializationRebuildMembershipEvidence`, `MaterializationTargetPlacementPlan`, linked
+  `MaterializationRebuildPlanSet`, every referenced `MaterializationRebuildPlan`, `MaterializationDocument`, compiled
+  `MaterializationImpactPlan`, Process artifacts, and `MaterializationBackendPoolDocument`. Persist their exact
+  references as well. Deserialize through the strict serializers on startup so schema versions, canonical
+  fingerprints, slice bindings, and no-gap/no-overlap leaf coverage are revalidated.
+- Resolve every planned source, Relations hydration plan, target, backend-pool dependency, and leaf binding by its
+  exact persisted identity and fingerprint. Runtime endpoints must satisfy the capability profile and physical
+  affinity pinned by the leaf plan and its full placement slice.
 - Provide durable implementations for Process checkpoints, materialization progress, synchronization work, Control
-  state, and backend routing before using this workflow in production. The repository's `InMemory*`
-  implementations are semantic reference authorities and test fixtures, not process-restart durability claims.
+  state, and backend routing before using this workflow in production. Routing state, command receipts, revisions,
+  and ownership fences must be isolated by exact placement-slice fingerprint, not only by pool, target, or slice ID.
+  The repository's `InMemory*` implementations are semantic reference authorities and test fixtures, not
+  process-restart durability claims.
 - Store continuation and position authentication keys in a secret store. Retain the appropriate key while any
   issued continuation or position is resumable. Never log the key or decode an opaque provider position in
   operational tooling.
-- Ensure the target selected for a rebuild is not currently serving pool reads if feature-flag-level route
-  isolation is required. Elasticsearch promotion moves that target's stable alias immediately; a pool swap cannot
-  hide an alias change from callers already routed to the same target.
+- Ensure the target selected for a rebuild is not currently serving reads under any placement slice if
+  feature-flag-level route isolation is required. Elasticsearch promotion moves that target's stable alias
+  immediately; a later slice route swap cannot hide an alias change from callers already routed to the same target.
 - Register tracing, metrics, and typed adapter observers before starting work. Observers must be fast,
   thread-safe, non-throwing, and must not place provider response bodies or secrets in telemetry.
 
@@ -99,7 +112,9 @@ Record the following evidence together before starting or resuming a run:
 | Authority | Evidence to retain |
 | --- | --- |
 | Semantic definition | Materialization schema version, definition identity, and `DefinitionFingerprint` |
-| Rebuild realization | Rebuild-plan schema version, `Fingerprint`, provenance, limits, stable shard catalog, and complete change-feed catalog |
+| Rebuild request and plan set | Request/reference fingerprint, complete membership authority and cut, placement-plan fingerprint, plan-set fingerprint, scheduling realization, promotion mode, and partial-failure policy when applicable |
+| Rebuild leaf realization | Rebuild-plan schema version, `Fingerprint`, exact plan reference, provenance, limits, stable shard catalog, and complete change-feed catalog |
+| Placement slice | Slice ID, full algorithm/canonicalization/value fingerprint, materialization definition reference, membership fingerprint, pool reference, target, and canonical subjects |
 | Incremental semantics | Impact-plan fingerprint and exact route/link evidence |
 | Relations | Canonical plan and hydration physical-plan fingerprints, placement fingerprint, and adapter storage-binding fingerprints |
 | Source | Source/profile identity, capability evidence, physical scope, runtime affinity, and authenticated initial cut |
@@ -107,7 +122,7 @@ Record the following evidence together before starting or resuming a run:
 | Cosmos DB | Account/database/container affinity, binding digest, feed mode, retention evidence, and lease-store/processor namespace when managed |
 | Elasticsearch | Target-binding fingerprint, search-binding fingerprint, template fingerprint, cluster/target identities, read alias, and single-writer evidence |
 | Process and generation | Process definition revision/fingerprint, instance, attempt, generation affinity, activation identity, and worker fences |
-| Backend pool | Pool definition fingerprint, resolved configuration with origin/precedence, routing revision, routing fence, and exact read/write generation references |
+| Backend routing | Pool definition fingerprint plus exact placement-slice ID and fingerprint, resolved configuration with origin/precedence, slice-scoped routing revision and fence, and exact read/write generation references |
 | Control | Effective loop fingerprints, generation epoch, durable revision, operating point, pending recommendation/override, and application fence |
 
 Treat a fingerprint mismatch, unknown schema version, runtime-affinity mismatch, stale worker fence, or reused
@@ -121,30 +136,41 @@ checkpoints.
 
 ## Start and recover a synchronization run
 
-1. Load and validate the exact persisted artifacts. Resolve source and target bindings without substituting a
-   similarly named endpoint.
-2. Inspect the backend-pool routing snapshot and every referenced target generation. Establish the currently active
-   read/write routes before admitting a candidate.
-3. Run provider preflight. PostgreSQL preflight inspects publication, table, replica identity, slot, plugin, slot
+1. Load and validate the exact request, membership, placement, plan set, and referenced leaf plans. Re-link them and
+   reject changed selection, membership, pool, target, subjects, scheduling, promotion, or leaf content.
+2. Select one exact `MaterializationRebuildLeafPlanBinding`. Retain both its slice ID and fingerprint, and verify the
+   leaf's `MaterializationRebuildPlanReference` carries that same slice fingerprint.
+3. Call `IMaterializationBackendRouter.InspectAsync(context, placementSlice)` for that exact slice and inspect every
+   generation it references. Call `ResolveReadAsync` or `ResolveWriteAsync` with the same slice only after its routes
+   are initialized; never infer a route from pool state or target identity.
+4. Resolve source and target bindings without substituting a similarly named endpoint, then run provider preflight.
+   PostgreSQL preflight inspects publication, table, replica identity, slot, plugin, slot
    generation, and server affinity. Cosmos and Elasticsearch runtime bindings must prove their exact resource
    identities.
-4. Initialize or restore the materialization rebuild Process. Persist the Process attempt-to-generation affinity
+5. Initialize or restore the materialization rebuild Process. Persist the Process attempt-to-generation affinity
    before physical candidate creation. Exact initialization replay must resolve the same generation.
-5. Begin the isolated target generation. When a backend pool is used, admit the retained generation with
-   `AdmitCandidateAsync`. Candidate admission does not make it readable or writable through the active pool routes.
-6. Capture every planned change-feed cut before baseline enumeration. Persist those cuts independently from
+6. Begin the isolated target generation. Its deterministic identity includes the placement-bound leaf-plan
+   fingerprint. Beginning the target candidate does not admit or expose it through placement-scoped routing.
+7. Capture every planned change-feed cut before baseline enumeration. Persist those cuts independently from
    baseline continuations.
-7. Execute bounded baseline pages. Each page uses deterministic hydration, mutation, batch, checkpoint, and
+8. Execute bounded baseline pages. Each page uses deterministic hydration, mutation, batch, checkpoint, and
    Process-request identities. A replay must produce the same canonical target intent.
-8. After all baseline shards report `baseline-complete/catch-up-required`, run bounded synchronization from the
+9. After all baseline shards report `baseline-complete/catch-up-required`, run bounded synchronization from the
    retained cuts. Persist effect-free position advances as well as pages containing changes.
-9. For settling sources, settle only after the target effect and exact application checkpoint are durable. Drain an
+10. For settling sources, settle only after the target effect and exact application checkpoint are durable. Drain an
    unfinished settlement before reading another page from that source scope.
-10. Require a catalog-complete, fresh convergence receipt. Then let
+11. Require a catalog-complete, fresh convergence receipt. Then let
     `MaterializationGenerationActivationExecutor` persist and reconcile seal, validation, and target-local
-    promotion in that order.
-11. Resolve the desired backend-pool configuration and perform the separate revision- and fence-checked route swap.
-    Only this step changes which target dependency receives newly admitted pool reads or writes.
+    promotion in that order, yielding a placement-bound `MaterializationActiveGenerationReference`.
+12. For `Independent` promotion, create and persist one strict
+    `MaterializationIndependentPromotionRequest` from the exact linked plan set, leaf, placement slice, active
+    generation, pre-admission slice snapshot, routing fence, stable command IDs, and timestamps. Then invoke
+    `MaterializationIndependentPromotionExecutor`. It first admits the exact candidate and then atomically switches
+    that slice's paired read/write routes. Recovery must deserialize and replay the retained request, not reconstruct
+    it from a later snapshot.
+13. Do not execute `AllReadyProgressive` or `AtomicVisibility` leaf visibility changes independently. Their declared
+    readiness barrier, partial-failure behavior, compensation, or all-or-none guarantee requires a durable parent
+    coordinator that is not yet supplied by the reference runtime.
 
 An ordinary retry of an exact durable operation reuses its operation, mutation, batch, and generation identities.
 If the retained target intent no longer matches an exact replay, stop with RestartRequired; continuing the same
@@ -152,17 +178,20 @@ attempt would weaken idempotency.
 
 ## Inspect status
 
-Use `MaterializationIndexSyncStatusProjector.CreateExtension` to combine the current routing snapshot, exact
+Use `MaterializationIndexSyncStatusProjector.CreateExtension` to combine one placement-scoped routing snapshot, exact
 generation snapshots, per-scope progress, durable Control snapshots, provider lag/failure observations, and runtime
-provenance. The `cohesive.storage.index-sync.status` extension is a projection of those authorities; it must not
-become a second writable status store.
+provenance. Schema `index-sync-status/v3` carries `placementSlice` and `placementSliceFingerprint`. Publish or index
+each projection under `MaterializationIndexSyncStatusWireNames.PlacementStatusPath(placementSlice)`, whose path
+includes the materialization, pool, slice ID, and full fingerprint components. Do not publish one pool-global status
+document or key by slice ID alone. The `cohesive.storage.index-sync.status` extension is a projection of its
+authorities; it must not become a second writable status store.
 
 At minimum, display and alert on:
 
 - Process instance, attempt, control mode/revision, current generation affinity, latest activation, and any
   RestartRequired diagnostic.
-- Backend-pool definition fingerprint, revision/fence, active read and write coordinates, candidate, draining,
-  retired, cleaned, and effective configuration provenance.
+- Placement-slice ID and full fingerprint, backend-pool definition fingerprint, slice-scoped revision/fence, active
+  read and write coordinates, candidate, draining, retired, cleaned, and effective configuration provenance.
 - Generation state, visible item and tombstone counts, pending retryable mutations, permanent-failure flag, seal,
   validation, and promotion evidence.
 - Baseline continuation/completion, incremental position, applied delivery identities, latest checkpoint, and
@@ -271,45 +300,76 @@ Target-local activation and backend routing protect different boundaries:
 
 - `MaterializationGenerationActivationExecutor` converges, seals, validates, and promotes one generation on one
   `IMaterializationTarget`. For Elasticsearch, promotion atomically moves that target binding's stable read alias.
-- `IMaterializationBackendRouter` selects concrete target dependencies for newly admitted reads and writes. It
-  requires exact target-owned activation evidence for a read route and exact resolved configuration provenance.
+- `IMaterializationBackendRouter` selects concrete target dependencies for newly admitted reads and writes under one
+  exact placement slice. `InspectAsync`, `ResolveReadAsync`, and `ResolveWriteAsync` require that slice explicitly;
+  every mutation header, proof, receipt, and snapshot retains it. Revision, fence, idempotency, lifecycle roles, and
+  route state are isolated by the slice fingerprint rather than shared across the backend pool.
+- `MaterializationIndependentPromotionExecutor` is the current high-level realization for a plan set whose promotion
+  mode is `Independent`. Its strict durable request binds the plan-set reference, leaf-plan reference, full slice,
+  active-generation evidence, pre-admission revision, fence, two command identities, and issuance times.
 
-Use this lifecycle:
+Use this lifecycle for each independently promoted leaf:
 
-1. **Admit candidate.** Admit the exact retained generation into the pool without changing active routes.
-2. **Activate target.** Complete catch-up, seal, validation, and target-local promotion. Keep its receipts.
-3. **Swap routes.** Submit one revision- and fence-checked `MaterializationSwapBackendRoutingRequest`. Read and
-   write routes may move together or according to the declared configuration, but neither route is implicit in an
-   item ID or adapter.
-4. **Drain displaced generations.** The swap closes new admissions and records the exact routing revision for each
-   displaced generation. Wait for in-flight work to reach zero and submit a `MaterializationBackendDrainProof`
-   bound to that admission revision.
-5. **Rollback if needed.** Roll back only while the prior generation remains physically retained and target-locally
+1. **Activate the target generation.** Complete catch-up, seal, validation, and target-local promotion. Persist the
+   placement-bound active-generation evidence.
+2. **Inspect the exact placement slice.** Retain its pre-admission revision and select an ownership fence. A snapshot,
+   revision, or fence from another slice is not interchangeable, even when pool and target IDs match.
+3. **Persist independent promotion intent.** Serialize the exact `MaterializationIndependentPromotionRequest` before
+   routing I/O. On recovery, submit those same bytes and command identities.
+4. **Admit and swap.** The independent executor admits the activated generation as that slice's candidate and then
+   atomically switches its paired read/write routes. Candidate admission alone is not visibility. Low-level callers
+   may issue the equivalent `AdmitCandidateAsync` and `SwapAsync` commands, but must carry the same exact slice and
+   must not weaken the plan set's declared promotion mode. A low-level migration may retain readable activation
+   evidence from an earlier target or membership cut only when the materialization, exact pool definition, and
+   canonical placement-subject set are unchanged. A changed subject set needs explicit placement-transition or
+   coverage evidence; it is never inferred from matching target IDs.
+5. **Drain displaced generations.** The swap closes new admissions for this slice and records its exact routing
+   revision for each displaced generation. Wait for slice-scoped in-flight work to reach zero and submit a
+   `MaterializationBackendDrainProof` bound to that slice and admission revision.
+6. **Rollback if needed.** Roll back only while the prior generation remains physically retained and target-locally
    readable, and only with a current-revision `MaterializationBackendRollbackProof` establishing equivalence to the
-   current routes. The current Elasticsearch target promotes only a Validated candidate; it does not generically
-   reactivate its Inactive predecessor. Same-target alias rollback therefore needs a separately supported target
-   operation, while the reference pool rollback is directly usable when the prior backend still retains its own
-   active readable generation.
-6. **Retire from the pool.** After exact quiescence, retire the generation's routing role. Pool retirement does not
-   call the target lifecycle.
-7. **Retire and clean the target.** Issue exact fenced target retirement and cleanup operations only after the
-   target itself reports the generation non-active. Pool retirement does not deactivate a target-local generation.
-   If a removed backend still considers that generation Active, retain it until another target-local lifecycle
-   operation safely displaces it; the current generic target contract has no standalone deactivation command.
-8. **Record pool cleanup.** Submit `MaterializationBackendCleanupProof` derived from the adapter-owned cleanup
-   receipt and exact pool-retirement revision. Retain the pool cleanup tombstone so the generation cannot be
-   readmitted under the old identity.
+   current routes under the same slice. The current Elasticsearch target promotes only a Validated candidate; it
+   does not generically reactivate its Inactive predecessor. Same-target alias rollback therefore needs a separately
+   supported target operation, while the reference pool rollback is directly usable when the prior backend still
+   retains its own active readable generation.
+7. **Retire from slice routing.** After exact quiescence, retire the generation's role under this placement slice.
+   Routing retirement does not call the target lifecycle.
+8. **Reserve routing exclusion.** Submit `MaterializationReserveBackendCleanupRequest` from one retired placement
+   slice before deleting physical data. That router atomically proves that none of its placement slices still retains
+   an active, candidate, or draining role; captures every exact slice-retirement revision it owns; and installs a
+   terminal reservation that prevents the generation from being admitted or routed there again. Persist the returned
+   reservation and token. If another pool, pool-definition version, or router can reference the same physical
+   generation, the cleanup coordinator must collect an equivalent reservation from each authority; one router's
+   reservation is not global deletion authority.
+9. **Retire and clean the target.** Issue exact fenced target retirement and cleanup operations only after the target
+   itself reports the generation non-active and every required routing-authority reservation has committed. Slice retirement does
+   not deactivate a target-local generation. If a removed backend still considers that generation Active, retain it
+   until another target-local lifecycle operation safely displaces it; the current generic target contract has no
+   standalone deactivation command.
+10. **Record every slice acknowledgement.** Submit `MaterializationBackendCleanupProof` derived from the same
+    reservation token and adapter-owned physical-cleanup receipt for each captured slice-retirement claim. Retain
+    every slice's cleanup tombstone so the generation cannot be readmitted under the old identity. A crash between
+    physical deletion and the final acknowledgement replays the retained reservation and proof; it does not reserve
+    or delete a different generation.
 
 An Elasticsearch alias swap is atomic for that target, but it does not provide a stable multi-request search view.
 Do not infer PIT-like consistency for paged Relations queries. Backend-pool routing likewise controls admission; it
-does not cancel requests admitted under a prior revision.
+does not cancel requests admitted under a prior revision. A revision from one placement slice says nothing about the
+revision or ownership fence of another slice.
 
 ## Current provider and runtime limitations
 
 - The repository currently ships in-memory reference stores and routing authorities; production durability and
   distributed ownership require concrete adapters that pass the same crash, CAS, fencing, and replay matrices.
-- A single `MaterializationRebuildPlan` selects one target. Multi-tenant plan sets, tenant-to-target placement,
-  coordinated multi-target activation, and declared partial-failure policy belong to a higher-level planning layer.
+- The in-memory router uses one process-local linearization gate across placement scopes, including target
+  inspection. This preserves the atomic cross-slice cleanup proof but is not a capacity scheduler or a production
+  concurrency model. A durable router should combine slice-local mutation serialization with an authoritative
+  generation-reference index so cleanup reservation remains atomic without coupling unrelated target I/O.
+- Canonical requests, complete frozen membership, subject-to-target placement, bounded scheduling realizations,
+  placement-bound leaf plans, linked plan sets, and declared promotion/partial-failure policies are implemented.
+  `Independent` leaf visibility has a durable reference executor. A durable parent scheduler and the coordination
+  interpreters for `AllReadyProgressive` and `AtomicVisibility` remain to be implemented; declarations of those modes
+  are not execution evidence.
 - End-to-end Cosmos DB/PostgreSQL-to-Elasticsearch support is established only by the focused ARI-180 conformance
   suite. Independent compiler, source, synchronization, target, and router tests are not a substitute.
 - Cosmos pull positions and managed-processor leases are distinct. The full-fidelity pull source does not settle a

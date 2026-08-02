@@ -73,6 +73,7 @@ public sealed partial class MaterializationRebuildExecutorTests
         Assert.True(staleMatch.IsSatisfied);
         Assert.Throws<ArgumentException>(() => new MaterializationRebuildPlan(
             materialization: forward.Plan.Materialization,
+            placementSlice: forward.Plan.PlacementSlice,
             impactPlan: forward.Plan.ImpactPlan,
             sources: forward.Plan.Sources,
             target: forward.Plan.Target,
@@ -127,6 +128,7 @@ public sealed partial class MaterializationRebuildExecutorTests
             .Take(failingIndex)
             .Any(feed => feed.Scope == shard.Scope));
         var resolved = new ResolvedMaterializationRebuildPlan(
+            planSet: MaterializationRebuildPlanJsonSerializerTests.CreateSinglePlanSet(fixture.Plan),
             plan: fixture.Plan,
             target: fixture.Target,
             progressStore: fixture.Resolved.ProgressStore,
@@ -436,6 +438,7 @@ public sealed partial class MaterializationRebuildExecutorTests
                 : retained;
         });
         var executor = new MaterializationRebuildExecutor(new(
+            MaterializationRebuildPlanJsonSerializerTests.CreateSinglePlanSet(fixture.Plan),
             fixture.Plan,
             fixture.Target,
             fixture.Resolved.ProgressStore,
@@ -822,6 +825,9 @@ public sealed partial class MaterializationRebuildExecutorTests
             maximumChangeFeedsPerConvergenceActivation: 16);
         var plan = new MaterializationRebuildPlan(
             materialization: materialization,
+            placementSlice: MaterializationRebuildPlanJsonSerializerTests.CreateSinglePlacementSlice(
+                materialization,
+                targetDescriptor),
             impactPlan: impactPlan,
             sources: sourcePlans,
             target: targetDescriptor,
@@ -888,6 +894,7 @@ public sealed partial class MaterializationRebuildExecutorTests
                     new MaterializationQuerySourceDescriptor(reader, sourcePlan.Profile));
             });
         var resolved = new ResolvedMaterializationRebuildPlan(
+            planSet: MaterializationRebuildPlanJsonSerializerTests.CreateSinglePlanSet(plan),
             plan: plan,
             target: target,
             progressStore: progressStore,

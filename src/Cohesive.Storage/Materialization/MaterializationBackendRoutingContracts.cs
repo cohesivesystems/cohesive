@@ -6,7 +6,7 @@ using Cohesive.Model.Serialization;
 
 namespace Cohesive.Storage.Materialization;
 
-/// <summary>Monotonic compare-and-swap revision of one backend pool's routing state.</summary>
+/// <summary>Monotonic compare-and-swap revision of one exact placement slice's routing state.</summary>
 [JsonConverter(typeof(SingleValueWrapperJsonConverter))]
 public readonly record struct MaterializationBackendRoutingRevision
 {
@@ -39,7 +39,7 @@ public readonly record struct MaterializationBackendRoutingRevision
         new(checked(Ordinal + 1).ToString(CultureInfo.InvariantCulture));
 }
 
-/// <summary>Monotonic ownership fence for one backend pool's routing authority.</summary>
+/// <summary>Monotonic ownership fence for one exact placement slice's routing authority.</summary>
 [JsonConverter(typeof(SingleValueWrapperJsonConverter))]
 public readonly record struct MaterializationBackendRoutingFence
 {
@@ -69,7 +69,7 @@ public readonly record struct MaterializationBackendRoutingFence
     public override string ToString() => Value;
 }
 
-/// <summary>Stable idempotency identity of one backend-pool routing command.</summary>
+/// <summary>Stable idempotency identity of one placement-scoped backend routing command.</summary>
 [JsonConverter(typeof(SingleValueWrapperJsonConverter))]
 public readonly record struct MaterializationBackendRoutingCommandId
 {
@@ -129,15 +129,21 @@ public sealed record MaterializationBackendGenerationReference
 public sealed record MaterializationReadableBackendReference
 {
     /// <summary>Creates one exact readable route.</summary>
+    /// <param name="placementSlice">Exact placement authority under which the route is readable.</param>
     /// <param name="generation">Backend generation implementing the route.</param>
     /// <param name="activation">Exact target promotion and validation evidence.</param>
     /// <exception cref="ArgumentNullException">A required reference is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException">Activation evidence addresses another target or generation.</exception>
+    /// <exception cref="ArgumentException">
+    /// Activation evidence addresses another target or generation, belongs to another materialization or pool, or
+    /// covers another canonical placement-subject set.
+    /// </exception>
     [JsonConstructor]
     public MaterializationReadableBackendReference(
+        MaterializationPlacementSliceReference placementSlice,
         MaterializationBackendGenerationReference generation,
         MaterializationActiveGenerationReference activation)
     {
+        PlacementSlice = placementSlice ?? throw new ArgumentNullException(nameof(placementSlice));
         Generation = generation ?? throw new ArgumentNullException(nameof(generation));
         Activation = activation ?? throw new ArgumentNullException(nameof(activation));
         if (generation.TargetId != activation.Target || generation.GenerationId != activation.Generation)
@@ -146,7 +152,24 @@ public sealed record MaterializationReadableBackendReference
                 "Readable routing evidence must address the exact backend generation.",
                 nameof(activation));
         }
+        if (activation.PlacementSlice.Materialization != placementSlice.Materialization
+            || activation.PlacementSlice.Pool != placementSlice.Pool
+            || !activation.PlacementSlice.Subjects.SequenceEqual(placementSlice.Subjects))
+        {
+            throw new ArgumentException(
+                "Readable routing evidence must retain the route's exact materialization, backend pool, and canonical placement subjects.",
+                nameof(activation));
+        }
+        if (generation.DefinitionFingerprint != placementSlice.Materialization.DefinitionFingerprint)
+        {
+            throw new ArgumentException(
+                "A readable generation must implement the placement slice's exact materialization definition.",
+                nameof(generation));
+        }
     }
+
+    /// <summary>Exact placement authority under which the route is readable.</summary>
+    public MaterializationPlacementSliceReference PlacementSlice { get; }
 
     /// <summary>Exact backend-generation coordinate.</summary>
     public MaterializationBackendGenerationReference Generation { get; }
@@ -155,7 +178,7 @@ public sealed record MaterializationReadableBackendReference
     public MaterializationActiveGenerationReference Activation { get; }
 }
 
-/// <summary>Pool role derived from independent routing slots and lifecycle membership.</summary>
+/// <summary>Placement-scoped role derived from independent routing slots and lifecycle membership.</summary>
 [JsonConverter(typeof(StrictStringEnumJsonConverterFactory))]
 public enum MaterializationBackendRole
 {
@@ -182,13 +205,15 @@ public enum MaterializationBackendRole
 public sealed record MaterializationBackendDrainProof
 {
     /// <summary>Creates routing-revision-bound quiescence evidence.</summary>
+    /// <param name="placementSlice">Exact placement authority whose admissions became quiescent.</param>
     /// <param name="generation">Backend generation proven quiescent.</param>
     /// <param name="admissionsClosedAtRevision">Revision at which the generation stopped receiving new admissions.</param>
     /// <param name="inFlightOperationCount">Authoritative in-flight count; must be zero.</param>
     /// <param name="quiescenceToken">Stable evidence token from the lease/admission authority.</param>
     /// <param name="observedAtUtc">UTC observation boundary.</param>
     /// <exception cref="ArgumentNullException">
-    /// <paramref name="generation"/> or <paramref name="quiescenceToken"/> is <see langword="null"/>.
+    /// <paramref name="placementSlice"/>, <paramref name="generation"/>, or <paramref name="quiescenceToken"/> is
+    /// <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
     /// <paramref name="admissionsClosedAtRevision"/> is not committed, <paramref name="quiescenceToken"/> is empty
@@ -197,13 +222,17 @@ public sealed record MaterializationBackendDrainProof
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="inFlightOperationCount"/> is not zero.</exception>
     [JsonConstructor]
     public MaterializationBackendDrainProof(
+        MaterializationPlacementSliceReference placementSlice,
         MaterializationBackendGenerationReference generation,
         MaterializationBackendRoutingRevision admissionsClosedAtRevision,
         long inFlightOperationCount,
         string quiescenceToken,
         DateTimeOffset observedAtUtc)
     {
+        PlacementSlice = placementSlice ?? throw new ArgumentNullException(nameof(placementSlice));
         Generation = generation ?? throw new ArgumentNullException(nameof(generation));
+        if (generation.DefinitionFingerprint != placementSlice.Materialization.DefinitionFingerprint)
+            throw new ArgumentException("Drain evidence must implement the placement slice's exact definition.", nameof(generation));
         MaterializationContract.RequireDefinedIdentity(admissionsClosedAtRevision.Value, nameof(admissionsClosedAtRevision));
         if (admissionsClosedAtRevision.Ordinal == 0)
             throw new ArgumentException("Drain evidence must follow a committed routing transition.", nameof(admissionsClosedAtRevision));
@@ -215,6 +244,9 @@ public sealed record MaterializationBackendDrainProof
         InFlightOperationCount = inFlightOperationCount;
         ObservedAtUtc = observedAtUtc;
     }
+
+    /// <summary>Exact placement authority whose admissions became quiescent.</summary>
+    public MaterializationPlacementSliceReference PlacementSlice { get; }
 
     /// <summary>Backend generation proven quiescent.</summary>
     public MaterializationBackendGenerationReference Generation { get; }
@@ -237,10 +269,11 @@ public sealed record MaterializationBackendDrainProof
 public sealed record MaterializationBackendRollbackProof
 {
     /// <summary>Creates current-revision-bound rollback equivalence evidence.</summary>
+    /// <param name="placementSlice">Exact placement authority for which equivalence was observed.</param>
     /// <param name="generation">Draining generation to restore.</param>
     /// <param name="currentRead">Current exact read route against which equivalence was established.</param>
     /// <param name="currentWrite">Current exact write route against which equivalence was established.</param>
-    /// <param name="expectedRoutingRevision">Current pool revision fenced by the proof.</param>
+    /// <param name="expectedRoutingRevision">Current placement-scoped revision fenced by the proof.</param>
     /// <param name="equivalenceFingerprint">Opaque durable fingerprint of the exact source cut and synchronization evidence.</param>
     /// <param name="observedAtUtc">UTC equivalence observation boundary.</param>
     /// <exception cref="ArgumentNullException">
@@ -252,6 +285,7 @@ public sealed record MaterializationBackendRollbackProof
     /// </exception>
     [JsonConstructor]
     public MaterializationBackendRollbackProof(
+        MaterializationPlacementSliceReference placementSlice,
         MaterializationBackendGenerationReference generation,
         MaterializationReadableBackendReference currentRead,
         MaterializationBackendGenerationReference currentWrite,
@@ -259,15 +293,33 @@ public sealed record MaterializationBackendRollbackProof
         string equivalenceFingerprint,
         DateTimeOffset observedAtUtc)
     {
+        PlacementSlice = placementSlice ?? throw new ArgumentNullException(nameof(placementSlice));
         Generation = generation ?? throw new ArgumentNullException(nameof(generation));
         CurrentRead = currentRead ?? throw new ArgumentNullException(nameof(currentRead));
         CurrentWrite = currentWrite ?? throw new ArgumentNullException(nameof(currentWrite));
+        if (generation.DefinitionFingerprint != placementSlice.Materialization.DefinitionFingerprint
+            || currentRead.Generation.DefinitionFingerprint != placementSlice.Materialization.DefinitionFingerprint
+            || currentWrite.DefinitionFingerprint != placementSlice.Materialization.DefinitionFingerprint)
+        {
+            throw new ArgumentException(
+                "Rollback evidence must implement one exact placement-slice definition.",
+                nameof(generation));
+        }
         MaterializationContract.RequireDefinedIdentity(expectedRoutingRevision.Value, nameof(expectedRoutingRevision));
         EquivalenceFingerprint = MaterializationContract.RequireUnicodeIdentity(equivalenceFingerprint, nameof(equivalenceFingerprint));
         MaterializationContract.RequireUtc(observedAtUtc, nameof(observedAtUtc));
         ExpectedRoutingRevision = expectedRoutingRevision;
         ObservedAtUtc = observedAtUtc;
+        if (currentRead.PlacementSlice != placementSlice)
+        {
+            throw new ArgumentException(
+                "Rollback read evidence must belong to the exact placement authority.",
+                nameof(currentRead));
+        }
     }
+
+    /// <summary>Exact placement authority for which equivalence was observed.</summary>
+    public MaterializationPlacementSliceReference PlacementSlice { get; }
 
     /// <summary>Draining generation to restore.</summary>
     public MaterializationBackendGenerationReference Generation { get; }
@@ -278,7 +330,7 @@ public sealed record MaterializationBackendRollbackProof
     /// <summary>Current write route used by the equivalence proof.</summary>
     public MaterializationBackendGenerationReference CurrentWrite { get; }
 
-    /// <summary>Pool revision at which equivalence was observed.</summary>
+    /// <summary>Placement-scoped revision at which equivalence was observed.</summary>
     public MaterializationBackendRoutingRevision ExpectedRoutingRevision { get; }
 
     /// <summary>Opaque fingerprint covering source cut, synchronization, and validation evidence.</summary>
@@ -293,7 +345,7 @@ public sealed record MaterializationBackendDrainState
 {
     /// <summary>Creates one drain state.</summary>
     /// <param name="generation">Backend generation being drained.</param>
-    /// <param name="admissionsClosedAtRevision">Pool revision that stopped new admissions.</param>
+    /// <param name="admissionsClosedAtRevision">Placement-scoped revision that stopped new admissions.</param>
     /// <param name="proof">Exact quiescence evidence when drain completed.</param>
     /// <exception cref="ArgumentNullException"><paramref name="generation"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
@@ -322,19 +374,19 @@ public sealed record MaterializationBackendDrainState
     /// <summary>Backend generation being drained.</summary>
     public MaterializationBackendGenerationReference Generation { get; }
 
-    /// <summary>Pool revision at which new admissions stopped.</summary>
+    /// <summary>Placement-scoped revision at which new admissions stopped.</summary>
     public MaterializationBackendRoutingRevision AdmissionsClosedAtRevision { get; }
 
     /// <summary>Exact quiescence evidence, or <see langword="null"/> while draining remains incomplete.</summary>
     public MaterializationBackendDrainProof? Proof { get; }
 }
 
-/// <summary>Pool-retirement evidence retained until exact physical cleanup is acknowledged.</summary>
+/// <summary>Placement-scoped retirement evidence retained until exact physical cleanup is acknowledged.</summary>
 public sealed record MaterializationBackendRetirementState
 {
-    /// <summary>Creates one pool-retirement state.</summary>
-    /// <param name="generation">Quiescent backend generation removed from pool routing.</param>
-    /// <param name="retiredAtRevision">Exact pool revision that committed retirement.</param>
+    /// <summary>Creates one placement-scoped retirement state.</summary>
+    /// <param name="generation">Quiescent backend generation removed from placement routing.</param>
+    /// <param name="retiredAtRevision">Exact placement-scoped revision that committed retirement.</param>
     /// <exception cref="ArgumentNullException"><paramref name="generation"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException"><paramref name="retiredAtRevision"/> is not a committed revision.</exception>
     [JsonConstructor]
@@ -344,63 +396,219 @@ public sealed record MaterializationBackendRetirementState
     {
         Generation = generation ?? throw new ArgumentNullException(nameof(generation));
         if (retiredAtRevision.Ordinal == 0)
-            throw new ArgumentException("Pool retirement requires a committed routing revision.", nameof(retiredAtRevision));
+            throw new ArgumentException("Placement retirement requires a committed routing revision.", nameof(retiredAtRevision));
         RetiredAtRevision = retiredAtRevision;
     }
 
-    /// <summary>Quiescent backend generation removed from pool routing.</summary>
+    /// <summary>Quiescent backend generation removed from placement routing.</summary>
     public MaterializationBackendGenerationReference Generation { get; }
 
-    /// <summary>Exact pool revision that committed retirement.</summary>
+    /// <summary>Exact placement-scoped revision that committed retirement.</summary>
     public MaterializationBackendRoutingRevision RetiredAtRevision { get; }
 }
 
-/// <summary>Exact external evidence that a pool-retired backend generation has been physically cleaned.</summary>
+/// <summary>One exact placement-scoped retirement captured by a physical cleanup reservation.</summary>
+public sealed record MaterializationBackendCleanupRetirementClaim
+{
+    /// <summary>Creates one exact retirement claim.</summary>
+    /// <param name="placementSlice">Placement authority retaining the retirement.</param>
+    /// <param name="retiredAtRevision">Exact placement-scoped revision that committed retirement.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="placementSlice"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="retiredAtRevision"/> is not a committed revision.</exception>
+    [JsonConstructor]
+    public MaterializationBackendCleanupRetirementClaim(
+        MaterializationPlacementSliceReference placementSlice,
+        MaterializationBackendRoutingRevision retiredAtRevision)
+    {
+        PlacementSlice = placementSlice ?? throw new ArgumentNullException(nameof(placementSlice));
+        if (retiredAtRevision.Ordinal == 0)
+            throw new ArgumentException("A cleanup retirement claim requires a committed routing revision.", nameof(retiredAtRevision));
+        RetiredAtRevision = retiredAtRevision;
+    }
+
+    /// <summary>Placement authority retaining the retirement.</summary>
+    public MaterializationPlacementSliceReference PlacementSlice { get; }
+
+    /// <summary>Exact placement-scoped revision that committed retirement.</summary>
+    public MaterializationBackendRoutingRevision RetiredAtRevision { get; }
+}
+
+/// <summary>Durable exclusion claim for every placement reference owned by one routing authority.</summary>
 /// <remarks>
-/// Pool retirement is deliberately orthogonal to target-local generation state. A target adapter or deployment
-/// interpreter produces this evidence after it removes or disables the retired physical backend; the pool routing
-/// authority consumes the evidence without inventing target-specific cleanup semantics.
+/// This reservation is necessary before physical deletion, but it is sufficient only when its router is the exclusive
+/// authority capable of routing the generation. A cleanup coordinator must collect equivalent exclusion evidence from
+/// every pool or router authority that can reference shared physical storage before instructing an adapter to delete.
+/// </remarks>
+public sealed class MaterializationBackendCleanupReservation : IEquatable<MaterializationBackendCleanupReservation>
+{
+    /// <summary>Creates one exact physical cleanup reservation.</summary>
+    /// <param name="generation">Physical backend generation reserved for cleanup.</param>
+    /// <param name="retirements">Complete canonical set of this router's placement retirements covered by the reservation.</param>
+    /// <param name="receipt">Committed routing receipt that installed the reservation.</param>
+    /// <param name="token">Opaque durable token that physical cleanup evidence must cite.</param>
+    /// <exception cref="ArgumentNullException">A required reference is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// The retirement set is empty, duplicated, noncanonical, belongs to another definition or pool; the receipt does
+    /// not causally commit <see cref="MaterializationBackendRoutingOperation.ReserveCleanup"/> after one covered
+    /// placement retirement; or <paramref name="token"/> is empty or ill-formed Unicode.
+    /// </exception>
+    [JsonConstructor]
+    public MaterializationBackendCleanupReservation(
+        MaterializationBackendGenerationReference generation,
+        ImmutableArray<MaterializationBackendCleanupRetirementClaim> retirements,
+        MaterializationBackendRoutingReceipt receipt,
+        string token)
+    {
+        Generation = generation ?? throw new ArgumentNullException(nameof(generation));
+        Receipt = receipt ?? throw new ArgumentNullException(nameof(receipt));
+        Token = MaterializationContract.RequireUnicodeIdentity(token, nameof(token));
+        var normalized = retirements.IsDefault ? [] : retirements;
+        if (normalized.IsEmpty || normalized.Any(static claim => claim is null))
+            throw new ArgumentException("A cleanup reservation requires at least one retirement claim.", nameof(retirements));
+        if (normalized.Any(claim =>
+                claim.PlacementSlice.Materialization.DefinitionFingerprint != generation.DefinitionFingerprint))
+        {
+            throw new ArgumentException(
+                "Every cleanup retirement claim must address the generation's exact materialization definition.",
+                nameof(retirements));
+        }
+        if (normalized.Any(claim => claim.PlacementSlice.Pool != receipt.PlacementSlice.Pool))
+        {
+            throw new ArgumentException(
+                "Every cleanup retirement claim must belong to the reservation receipt's exact backend-pool definition.",
+                nameof(retirements));
+        }
+        if (normalized.Select(static claim => claim.PlacementSlice.Fingerprint).Distinct().Count() != normalized.Length)
+            throw new ArgumentException("Cleanup retirement claims must be placement-unique.", nameof(retirements));
+
+        var canonical = normalized
+            .OrderBy(static claim => claim.PlacementSlice.Fingerprint.Value, StringComparer.Ordinal)
+            .ToImmutableArray();
+        if (!normalized.SequenceEqual(canonical))
+            throw new ArgumentException("Cleanup retirement claims must use canonical placement-fingerprint order.", nameof(retirements));
+        var receiptClaim = canonical.FirstOrDefault(claim => claim.PlacementSlice == receipt.PlacementSlice);
+        if (receipt.Operation != MaterializationBackendRoutingOperation.ReserveCleanup || receiptClaim is null)
+        {
+            throw new ArgumentException(
+                "The cleanup reservation receipt must commit reservation under one covered placement authority.",
+                nameof(receipt));
+        }
+        if (receiptClaim.RetiredAtRevision.Ordinal >= receipt.Revision.Ordinal)
+        {
+            throw new ArgumentException(
+                "The cleanup reservation receipt must causally follow its placement's retained retirement revision.",
+                nameof(receipt));
+        }
+
+        Retirements = canonical;
+    }
+
+    /// <summary>Physical backend generation reserved for cleanup.</summary>
+    public MaterializationBackendGenerationReference Generation { get; }
+
+    /// <summary>Complete canonical set of this router's placement retirements covered by the reservation.</summary>
+    public ImmutableArray<MaterializationBackendCleanupRetirementClaim> Retirements { get; }
+
+    /// <summary>Committed routing receipt that installed the reservation.</summary>
+    public MaterializationBackendRoutingReceipt Receipt { get; }
+
+    /// <summary>Opaque durable token that physical cleanup evidence must cite.</summary>
+    public string Token { get; }
+
+    /// <summary>Compares reservations by their complete durable semantic content.</summary>
+    /// <param name="other">Reservation to compare.</param>
+    /// <returns><see langword="true"/> when every authority, claim, receipt, and token is equal.</returns>
+    public bool Equals(MaterializationBackendCleanupReservation? other) =>
+        ReferenceEquals(this, other)
+        || other is not null
+            && Generation == other.Generation
+            && Receipt == other.Receipt
+            && string.Equals(Token, other.Token, StringComparison.Ordinal)
+            && Retirements.SequenceEqual(other.Retirements);
+
+    /// <summary>Compares this reservation with an arbitrary value.</summary>
+    /// <param name="obj">Value to compare.</param>
+    /// <returns><see langword="true"/> when <paramref name="obj"/> is semantically equal.</returns>
+    public override bool Equals(object? obj) => Equals(obj as MaterializationBackendCleanupReservation);
+
+    /// <summary>Returns a hash code over the complete durable semantic content.</summary>
+    /// <returns>A semantic hash code.</returns>
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Generation);
+        hash.Add(Receipt);
+        hash.Add(Token, StringComparer.Ordinal);
+        foreach (var retirement in Retirements)
+            hash.Add(retirement);
+        return hash.ToHashCode();
+    }
+}
+
+/// <summary>Exact external evidence that a reserved backend generation has been physically cleaned.</summary>
+/// <remarks>
+/// Placement retirement is deliberately orthogonal to target-local generation state. A target adapter or deployment
+/// interpreter produces this evidence only after honoring an exact cleanup reservation. Placement routing consumes
+/// the evidence without inventing target-specific cleanup semantics.
 /// </remarks>
 public sealed record MaterializationBackendCleanupProof
 {
     /// <summary>Creates exact physical cleanup evidence.</summary>
-    /// <param name="generation">Pool-retired backend generation that was cleaned.</param>
-    /// <param name="retiredAtRevision">Exact pool-retirement revision observed by the cleanup interpreter.</param>
+    /// <param name="placementSlice">Exact placement authority that retired the generation.</param>
+    /// <param name="generation">Reserved backend generation that was cleaned.</param>
+    /// <param name="retiredAtRevision">Exact placement-retirement revision observed by the cleanup interpreter.</param>
+    /// <param name="reservationToken">Exact durable reservation token honored before physical deletion.</param>
     /// <param name="cleanupFingerprint">Opaque durable fingerprint of the adapter-owned cleanup receipt.</param>
-    /// <param name="observedAtUtc">UTC completion observation boundary.</param>
+    /// <param name="observedAtUtc">
+    /// UTC completion observation boundary. A routing authority rejects this proof when the boundary predates the
+    /// cited reservation's commit time.
+    /// </param>
     /// <exception cref="ArgumentNullException">
-    /// <paramref name="generation"/> or <paramref name="cleanupFingerprint"/> is <see langword="null"/>.
+    /// <paramref name="placementSlice"/>, <paramref name="generation"/>, <paramref name="reservationToken"/>, or
+    /// <paramref name="cleanupFingerprint"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// <paramref name="retiredAtRevision"/> is not committed, <paramref name="cleanupFingerprint"/> is empty or
-    /// ill-formed Unicode, or <paramref name="observedAtUtc"/> is not UTC.
+    /// <paramref name="retiredAtRevision"/> is not committed; a string identity is empty or ill-formed Unicode; or
+    /// <paramref name="observedAtUtc"/> is not UTC.
     /// </exception>
     [JsonConstructor]
     public MaterializationBackendCleanupProof(
+        MaterializationPlacementSliceReference placementSlice,
         MaterializationBackendGenerationReference generation,
         MaterializationBackendRoutingRevision retiredAtRevision,
+        string reservationToken,
         string cleanupFingerprint,
         DateTimeOffset observedAtUtc)
     {
+        PlacementSlice = placementSlice ?? throw new ArgumentNullException(nameof(placementSlice));
         Generation = generation ?? throw new ArgumentNullException(nameof(generation));
+        if (generation.DefinitionFingerprint != placementSlice.Materialization.DefinitionFingerprint)
+            throw new ArgumentException("Cleanup evidence must implement the placement slice's exact definition.", nameof(generation));
         if (retiredAtRevision.Ordinal == 0)
-            throw new ArgumentException("Physical cleanup must cite a committed pool-retirement revision.", nameof(retiredAtRevision));
+            throw new ArgumentException("Physical cleanup must cite a committed placement-retirement revision.", nameof(retiredAtRevision));
+        ReservationToken = MaterializationContract.RequireUnicodeIdentity(reservationToken, nameof(reservationToken));
         CleanupFingerprint = MaterializationContract.RequireUnicodeIdentity(cleanupFingerprint, nameof(cleanupFingerprint));
         MaterializationContract.RequireUtc(observedAtUtc, nameof(observedAtUtc));
         RetiredAtRevision = retiredAtRevision;
         ObservedAtUtc = observedAtUtc;
     }
 
-    /// <summary>Pool-retired backend generation that was cleaned.</summary>
+    /// <summary>Exact placement authority that retired the generation.</summary>
+    public MaterializationPlacementSliceReference PlacementSlice { get; }
+
+    /// <summary>Reserved backend generation that was cleaned.</summary>
     public MaterializationBackendGenerationReference Generation { get; }
 
-    /// <summary>Exact pool-retirement revision observed before physical cleanup.</summary>
+    /// <summary>Exact placement-retirement revision observed before physical cleanup.</summary>
     public MaterializationBackendRoutingRevision RetiredAtRevision { get; }
+
+    /// <summary>Exact durable reservation token honored before physical deletion.</summary>
+    public string ReservationToken { get; }
 
     /// <summary>Opaque durable fingerprint of the adapter-owned cleanup receipt.</summary>
     public string CleanupFingerprint { get; }
 
-    /// <summary>UTC physical cleanup observation boundary.</summary>
+    /// <summary>UTC physical cleanup observation boundary, which must not predate the cited reservation commit.</summary>
     public DateTimeOffset ObservedAtUtc { get; }
 }
 
@@ -409,30 +617,26 @@ public sealed record MaterializationBackendRoutingCommandHeader
 {
     /// <summary>Creates one exact command fence.</summary>
     /// <param name="commandId">Stable command identity.</param>
-    /// <param name="poolId">Backend pool being mutated.</param>
-    /// <param name="poolDefinitionFingerprint">Exact canonical pool definition.</param>
+    /// <param name="placementSlice">Exact placement authority whose routing state is mutated.</param>
     /// <param name="expectedRevision">Optimistic routing revision.</param>
     /// <param name="fence">Current routing authority fence.</param>
     /// <param name="issuedAtUtc">UTC command issuance time.</param>
-    /// <exception cref="ArgumentNullException"><paramref name="poolDefinitionFingerprint"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="placementSlice"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">An identity is default or <paramref name="issuedAtUtc"/> is not UTC.</exception>
     [JsonConstructor]
     public MaterializationBackendRoutingCommandHeader(
         MaterializationBackendRoutingCommandId commandId,
-        MaterializationBackendPoolId poolId,
-        ExecutionDefinitionFingerprint poolDefinitionFingerprint,
+        MaterializationPlacementSliceReference placementSlice,
         MaterializationBackendRoutingRevision expectedRevision,
         MaterializationBackendRoutingFence fence,
         DateTimeOffset issuedAtUtc)
     {
         MaterializationContract.RequireDefinedIdentity(commandId.Value, nameof(commandId));
-        MaterializationContract.RequireDefinedIdentity(poolId.Value, nameof(poolId));
-        PoolDefinitionFingerprint = poolDefinitionFingerprint ?? throw new ArgumentNullException(nameof(poolDefinitionFingerprint));
+        PlacementSlice = placementSlice ?? throw new ArgumentNullException(nameof(placementSlice));
         MaterializationContract.RequireDefinedIdentity(expectedRevision.Value, nameof(expectedRevision));
         MaterializationContract.RequireDefinedIdentity(fence.Value, nameof(fence));
         MaterializationContract.RequireUtc(issuedAtUtc, nameof(issuedAtUtc));
         CommandId = commandId;
-        PoolId = poolId;
         ExpectedRevision = expectedRevision;
         Fence = fence;
         IssuedAtUtc = issuedAtUtc;
@@ -441,11 +645,16 @@ public sealed record MaterializationBackendRoutingCommandHeader
     /// <summary>Stable command identity.</summary>
     public MaterializationBackendRoutingCommandId CommandId { get; }
 
-    /// <summary>Backend pool being mutated.</summary>
-    public MaterializationBackendPoolId PoolId { get; }
+    /// <summary>Exact placement authority whose routing state is mutated.</summary>
+    public MaterializationPlacementSliceReference PlacementSlice { get; }
+
+    /// <summary>Pinned backend pool containing the placement's concrete targets.</summary>
+    [JsonIgnore]
+    public MaterializationBackendPoolId PoolId => PlacementSlice.Pool.Pool;
 
     /// <summary>Exact canonical pool-definition fence.</summary>
-    public ExecutionDefinitionFingerprint PoolDefinitionFingerprint { get; }
+    [JsonIgnore]
+    public ExecutionDefinitionFingerprint PoolDefinitionFingerprint => PlacementSlice.Pool.DefinitionFingerprint;
 
     /// <summary>Optimistic routing revision.</summary>
     public MaterializationBackendRoutingRevision ExpectedRevision { get; }
@@ -457,20 +666,84 @@ public sealed record MaterializationBackendRoutingCommandHeader
     public DateTimeOffset IssuedAtUtc { get; }
 }
 
-/// <summary>Admits one physical generation as the pool's sole rebuild candidate.</summary>
+/// <summary>Durable placement-scoped reservation for the exact swap expected to follow candidate admission.</summary>
+public sealed record MaterializationBackendFollowUpReservation
+{
+    /// <summary>Creates one exact follow-up swap reservation.</summary>
+    /// <param name="request">Complete immutable swap intent reserved by candidate admission.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// The request does not route one paired candidate under one exact placement slice, its configuration selects
+    /// another target, or it is a rollback.
+    /// </exception>
+    [JsonConstructor]
+    public MaterializationBackendFollowUpReservation(MaterializationSwapBackendRoutingRequest request)
+    {
+        Request = request ?? throw new ArgumentNullException(nameof(request));
+        if (request.Read.PlacementSlice != request.Header.PlacementSlice
+            || request.Read.Generation != request.Write
+            || request.Configuration.ReadTarget != request.Write.TargetId
+            || request.Configuration.WriteTarget != request.Write.TargetId
+            || request.Rollback is not null)
+        {
+            throw new ArgumentException(
+                "A reserved follow-up must be a forward paired read/write swap to one exact candidate.",
+                nameof(request));
+        }
+    }
+
+    /// <summary>Complete immutable swap intent reserved by candidate admission.</summary>
+    public MaterializationSwapBackendRoutingRequest Request { get; }
+
+    /// <summary>Stable identity reserved for the follow-up command.</summary>
+    [JsonIgnore]
+    public MaterializationBackendRoutingCommandId CommandId => Request.Header.CommandId;
+
+    /// <summary>Candidate whose admission established the reservation.</summary>
+    [JsonIgnore]
+    public MaterializationBackendGenerationReference Candidate => Request.Write;
+}
+
+/// <summary>Admits one physical generation as the placement's sole rebuild candidate.</summary>
 public sealed record MaterializationAdmitBackendCandidateRequest
 {
     /// <summary>Creates one candidate-admission command.</summary>
     /// <param name="header">Common exact command fence.</param>
     /// <param name="candidate">Generation to admit as the sole candidate.</param>
+    /// <param name="expectedFollowUp">
+    /// Optional complete durable swap intent reserved to consume this admission.
+    /// </param>
     /// <exception cref="ArgumentNullException">A required reference is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// The follow-up reuses the admission identity, does not bind the exact next revision, slice, fence, candidate,
+    /// paired configuration, or causal timestamp, or attempts a rollback.
+    /// </exception>
     [JsonConstructor]
     public MaterializationAdmitBackendCandidateRequest(
         MaterializationBackendRoutingCommandHeader header,
-        MaterializationBackendGenerationReference candidate)
+        MaterializationBackendGenerationReference candidate,
+        MaterializationSwapBackendRoutingRequest? expectedFollowUp = null)
     {
         Header = header ?? throw new ArgumentNullException(nameof(header));
         Candidate = candidate ?? throw new ArgumentNullException(nameof(candidate));
+        if (expectedFollowUp is not null)
+        {
+            var reservation = new MaterializationBackendFollowUpReservation(expectedFollowUp);
+            if (reservation.CommandId == header.CommandId
+                || header.ExpectedRevision.Ordinal == long.MaxValue
+                || expectedFollowUp.Header.ExpectedRevision.Ordinal != header.ExpectedRevision.Ordinal + 1
+                || expectedFollowUp.Header.PlacementSlice != header.PlacementSlice
+                || expectedFollowUp.Header.Fence != header.Fence
+                || expectedFollowUp.Header.IssuedAtUtc < header.IssuedAtUtc
+                || expectedFollowUp.Read.PlacementSlice != header.PlacementSlice
+                || reservation.Candidate != candidate)
+            {
+                throw new ArgumentException(
+                    "Candidate admission must reserve its exact causal next-revision paired swap intent.",
+                    nameof(expectedFollowUp));
+            }
+        }
+        ExpectedFollowUp = expectedFollowUp;
     }
 
     /// <summary>Common exact command fence.</summary>
@@ -478,6 +751,9 @@ public sealed record MaterializationAdmitBackendCandidateRequest
 
     /// <summary>Generation to admit as the sole candidate.</summary>
     public MaterializationBackendGenerationReference Candidate { get; }
+
+    /// <summary>Optional complete durable swap intent reserved to consume this admission.</summary>
+    public MaterializationSwapBackendRoutingRequest? ExpectedFollowUp { get; }
 }
 
 /// <summary>Clears a failed pool candidate only after target-owned permanent-abandonment evidence exists.</summary>
@@ -485,7 +761,7 @@ public sealed record MaterializationAbandonBackendCandidateRequest
 {
     /// <summary>Creates one candidate-abandonment command.</summary>
     /// <param name="header">Common exact command fence.</param>
-    /// <param name="candidate">Exact candidate generation whose pool role should be cleared.</param>
+    /// <param name="candidate">Exact candidate generation whose placement-scoped role should be cleared.</param>
     /// <param name="abandonment">Target-owned permanent-abandonment receipt.</param>
     /// <exception cref="ArgumentNullException">A required reference is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException"><paramref name="abandonment"/> addresses another generation.</exception>
@@ -509,7 +785,7 @@ public sealed record MaterializationAbandonBackendCandidateRequest
     /// <summary>Common exact command fence.</summary>
     public MaterializationBackendRoutingCommandHeader Header { get; }
 
-    /// <summary>Exact candidate generation whose pool role should be cleared.</summary>
+    /// <summary>Exact candidate generation whose placement-scoped role should be cleared.</summary>
     public MaterializationBackendGenerationReference Candidate { get; }
 
     /// <summary>Target-owned permanent-abandonment receipt.</summary>
@@ -580,12 +856,12 @@ public sealed record MaterializationCompleteBackendDrainRequest
     public MaterializationBackendDrainProof Proof { get; }
 }
 
-/// <summary>Retires one quiescent generation from pool routing while preserving target-local lifecycle state.</summary>
+/// <summary>Retires one quiescent generation from placement routing while preserving target-local lifecycle state.</summary>
 public sealed record MaterializationRetireBackendGenerationRequest
 {
-    /// <summary>Creates one pool-retirement command.</summary>
+    /// <summary>Creates one placement-retirement command.</summary>
     /// <param name="header">Common exact command fence.</param>
-    /// <param name="generation">Quiescent generation to retire from pool routing.</param>
+    /// <param name="generation">Quiescent generation to retire from placement routing.</param>
     /// <exception cref="ArgumentNullException">A required reference is <see langword="null"/>.</exception>
     [JsonConstructor]
     public MaterializationRetireBackendGenerationRequest(
@@ -599,14 +875,37 @@ public sealed record MaterializationRetireBackendGenerationRequest
     /// <summary>Common exact command fence.</summary>
     public MaterializationBackendRoutingCommandHeader Header { get; }
 
-    /// <summary>Quiescent generation to retire from pool routing.</summary>
+    /// <summary>Quiescent generation to retire from placement routing.</summary>
     public MaterializationBackendGenerationReference Generation { get; }
 }
 
-/// <summary>Consumes adapter-owned cleanup evidence while retaining a pool routing tombstone.</summary>
+/// <summary>Reserves one generation after excluding every reference owned by one routing authority.</summary>
+public sealed record MaterializationReserveBackendCleanupRequest
+{
+    /// <summary>Creates one physical cleanup reservation command.</summary>
+    /// <param name="header">Common exact command fence.</param>
+    /// <param name="generation">Retired physical generation to reserve for cleanup.</param>
+    /// <exception cref="ArgumentNullException">A required reference is <see langword="null"/>.</exception>
+    [JsonConstructor]
+    public MaterializationReserveBackendCleanupRequest(
+        MaterializationBackendRoutingCommandHeader header,
+        MaterializationBackendGenerationReference generation)
+    {
+        Header = header ?? throw new ArgumentNullException(nameof(header));
+        Generation = generation ?? throw new ArgumentNullException(nameof(generation));
+    }
+
+    /// <summary>Common exact command fence.</summary>
+    public MaterializationBackendRoutingCommandHeader Header { get; }
+
+    /// <summary>Retired physical generation to reserve for cleanup.</summary>
+    public MaterializationBackendGenerationReference Generation { get; }
+}
+
+/// <summary>Consumes reservation-bound cleanup evidence while retaining a placement routing tombstone.</summary>
 public sealed record MaterializationCleanupBackendGenerationRequest
 {
-    /// <summary>Creates one pool cleanup command.</summary>
+    /// <summary>Creates one placement-scoped cleanup acknowledgement command.</summary>
     /// <param name="header">Common exact command fence.</param>
     /// <param name="proof">Exact adapter-owned physical cleanup evidence.</param>
     /// <exception cref="ArgumentNullException">A required reference is <see langword="null"/>.</exception>
@@ -626,7 +925,7 @@ public sealed record MaterializationCleanupBackendGenerationRequest
     public MaterializationBackendCleanupProof Proof { get; }
 }
 
-/// <summary>Observable outcome of one backend-pool routing command.</summary>
+/// <summary>Observable outcome of one placement-scoped backend routing command.</summary>
 [JsonConverter(typeof(StrictStringEnumJsonConverterFactory))]
 public enum MaterializationBackendRoutingDisposition
 {
@@ -655,11 +954,11 @@ public enum MaterializationBackendRoutingDisposition
     NotFound = 7
 }
 
-/// <summary>Closed semantic discriminator for a committed backend-pool routing transition.</summary>
+/// <summary>Closed semantic discriminator for a committed placement-scoped backend routing transition.</summary>
 [JsonConverter(typeof(StrictStringEnumJsonConverterFactory))]
 public enum MaterializationBackendRoutingOperation
 {
-    /// <summary>One generation was admitted as the pool's rebuild candidate.</summary>
+    /// <summary>One generation was admitted as the placement's rebuild candidate.</summary>
     AdmitCandidate = 0,
 
     /// <summary>A permanently abandoned generation's candidate role was cleared.</summary>
@@ -671,33 +970,40 @@ public enum MaterializationBackendRoutingOperation
     /// <summary>Exact quiescence evidence completed one generation's drain.</summary>
     CompleteDrain = 3,
 
-    /// <summary>One quiescent generation was retired from pool routing.</summary>
+    /// <summary>One quiescent generation was retired from placement routing.</summary>
     Retire = 4,
 
-    /// <summary>External physical-cleanup evidence was consumed and replaced by a pool tombstone.</summary>
-    Cleanup = 5
+    /// <summary>External physical-cleanup evidence was consumed and replaced by a placement tombstone.</summary>
+    Cleanup = 5,
+
+    /// <summary>One router authority's generation references were frozen before external physical cleanup.</summary>
+    ReserveCleanup = 6
 }
 
-/// <summary>Immutable receipt for one committed backend-pool routing transition.</summary>
+/// <summary>Immutable receipt for one committed placement-scoped backend routing transition.</summary>
 public sealed record MaterializationBackendRoutingReceipt
 {
     /// <summary>Creates one committed routing receipt.</summary>
     /// <param name="commandId">Stable command identity.</param>
+    /// <param name="placementSlice">Exact placement authority under which the command committed.</param>
     /// <param name="operation">Closed semantic operation that committed.</param>
-    /// <param name="revision">Committed pool revision.</param>
+    /// <param name="revision">Committed placement-scoped revision.</param>
     /// <param name="fence">Accepted routing authority fence.</param>
     /// <param name="committedAtUtc">UTC linearization boundary.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="placementSlice"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">An identity is default, revision is zero, or time is not UTC.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="operation"/> is unsupported.</exception>
     [JsonConstructor]
     public MaterializationBackendRoutingReceipt(
         MaterializationBackendRoutingCommandId commandId,
+        MaterializationPlacementSliceReference placementSlice,
         MaterializationBackendRoutingOperation operation,
         MaterializationBackendRoutingRevision revision,
         MaterializationBackendRoutingFence fence,
         DateTimeOffset committedAtUtc)
     {
         MaterializationContract.RequireDefinedIdentity(commandId.Value, nameof(commandId));
+        PlacementSlice = placementSlice ?? throw new ArgumentNullException(nameof(placementSlice));
         if (!Enum.IsDefined(operation))
         {
             throw new ArgumentOutOfRangeException(
@@ -719,10 +1025,13 @@ public sealed record MaterializationBackendRoutingReceipt
     /// <summary>Stable command identity.</summary>
     public MaterializationBackendRoutingCommandId CommandId { get; }
 
+    /// <summary>Exact placement authority under which the command committed.</summary>
+    public MaterializationPlacementSliceReference PlacementSlice { get; }
+
     /// <summary>Closed semantic operation that committed.</summary>
     public MaterializationBackendRoutingOperation Operation { get; }
 
-    /// <summary>Committed pool revision.</summary>
+    /// <summary>Committed placement-scoped revision.</summary>
     public MaterializationBackendRoutingRevision Revision { get; }
 
     /// <summary>Accepted routing authority fence.</summary>
@@ -732,30 +1041,29 @@ public sealed record MaterializationBackendRoutingReceipt
     public DateTimeOffset CommittedAtUtc { get; }
 }
 
-/// <summary>Immutable view of backend-pool routes and retained lifecycle history.</summary>
+/// <summary>Immutable view of one placement slice's backend routes and retained lifecycle history.</summary>
 public sealed record MaterializationBackendRoutingSnapshot
 {
     /// <summary>Creates one canonical routing snapshot.</summary>
-    /// <param name="poolId">Stable backend-pool identity.</param>
-    /// <param name="poolDefinitionFingerprint">Exact canonical pool definition.</param>
+    /// <param name="placementSlice">Exact placement authority owning every route and lifecycle observation.</param>
     /// <param name="revision">Current routing revision.</param>
     /// <param name="latestFence">Greatest accepted routing authority fence.</param>
     /// <param name="activeRead">Exact readable route, when initialized.</param>
     /// <param name="activeWrite">Exact write route, when initialized.</param>
     /// <param name="candidate">Current rebuild candidate.</param>
     /// <param name="draining">Canonical draining generations.</param>
-    /// <param name="retired">Canonical retained pool-retirement states.</param>
+    /// <param name="retired">Canonical retained placement-retirement states.</param>
     /// <param name="cleaned">Canonical cleanup tombstones.</param>
     /// <param name="configuration">Effective target selection and precedence explanation for initialized routing.</param>
-    /// <exception cref="ArgumentNullException"><paramref name="poolDefinitionFingerprint"/> is <see langword="null"/>.</exception>
+    /// <param name="pendingFollowUp">Durable exact follow-up reservation established by candidate admission.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="placementSlice"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
     /// An identity is default; a route, configuration, or lifecycle topology is contradictory; or retained lifecycle
     /// evidence follows <paramref name="revision"/>.
     /// </exception>
     [JsonConstructor]
     public MaterializationBackendRoutingSnapshot(
-        MaterializationBackendPoolId poolId,
-        ExecutionDefinitionFingerprint poolDefinitionFingerprint,
+        MaterializationPlacementSliceReference placementSlice,
         MaterializationBackendRoutingRevision revision,
         MaterializationBackendRoutingFence? latestFence,
         MaterializationReadableBackendReference? activeRead,
@@ -764,10 +1072,10 @@ public sealed record MaterializationBackendRoutingSnapshot
         ImmutableArray<MaterializationBackendDrainState> draining,
         ImmutableArray<MaterializationBackendRetirementState> retired,
         ImmutableArray<MaterializationBackendGenerationReference> cleaned,
-        MaterializationBackendRoutingConfiguration? configuration = null)
+        MaterializationBackendRoutingConfiguration? configuration = null,
+        MaterializationBackendFollowUpReservation? pendingFollowUp = null)
     {
-        MaterializationContract.RequireDefinedIdentity(poolId.Value, nameof(poolId));
-        PoolDefinitionFingerprint = poolDefinitionFingerprint ?? throw new ArgumentNullException(nameof(poolDefinitionFingerprint));
+        PlacementSlice = placementSlice ?? throw new ArgumentNullException(nameof(placementSlice));
         MaterializationContract.RequireDefinedIdentity(revision.Value, nameof(revision));
         if (latestFence is { } acceptedFence)
             MaterializationContract.RequireDefinedIdentity(acceptedFence.Value, nameof(latestFence));
@@ -782,6 +1090,27 @@ public sealed record MaterializationBackendRoutingSnapshot
                 || configuration.WriteTarget != activeWrite!.TargetId))
         {
             throw new ArgumentException("Effective configuration must select the exact active read and write targets.", nameof(configuration));
+        }
+        if (activeRead is not null && activeRead.PlacementSlice != placementSlice)
+            throw new ArgumentException("The readable route belongs to another placement authority.", nameof(activeRead));
+        if (candidate is not null && candidate.TargetId != placementSlice.Target)
+            throw new ArgumentException("The candidate belongs to another placement target.", nameof(candidate));
+        if (pendingFollowUp is not null && pendingFollowUp.Candidate != candidate)
+        {
+            throw new ArgumentException(
+                "A follow-up reservation must bind the exact currently admitted candidate.",
+                nameof(pendingFollowUp));
+        }
+        if (pendingFollowUp is not null
+            && (pendingFollowUp.Request.Header.PlacementSlice != placementSlice
+                || pendingFollowUp.Request.Read.PlacementSlice != placementSlice
+                || pendingFollowUp.Request.Header.ExpectedRevision != revision
+                || latestFence is null
+                || pendingFollowUp.Request.Header.Fence != latestFence.Value))
+        {
+            throw new ArgumentException(
+                "A follow-up reservation must retain this snapshot's exact placement, revision, and accepted fence.",
+                nameof(pendingFollowUp));
         }
 
         var normalizedDraining = NormalizeDraining(draining);
@@ -802,16 +1131,15 @@ public sealed record MaterializationBackendRoutingSnapshot
             throw new ArgumentException("A drain boundary cannot follow the containing routing revision.", nameof(draining));
         if (normalizedRetired.Any(retirement => retirement.RetiredAtRevision.Ordinal > revision.Ordinal))
             throw new ArgumentException("A retirement boundary cannot follow the containing routing revision.", nameof(retired));
-        ExecutionDefinitionFingerprint? routedDefinition = null;
-        RequireSameDefinition(activeRead?.Generation);
-        RequireSameDefinition(activeWrite);
-        RequireSameDefinition(candidate);
+        RequirePlacementDefinition(activeRead?.Generation);
+        RequirePlacementDefinition(activeWrite);
+        RequirePlacementDefinition(candidate);
         foreach (var drain in normalizedDraining)
-            RequireSameDefinition(drain.Generation);
+            RequirePlacementDefinition(drain.Generation);
         foreach (var retirement in normalizedRetired)
-            RequireSameDefinition(retirement.Generation);
+            RequirePlacementDefinition(retirement.Generation);
         foreach (var generation in normalizedCleaned)
-            RequireSameDefinition(generation);
+            RequirePlacementDefinition(generation);
 
         var terminal = new HashSet<MaterializationBackendGenerationReference>(
             normalizedRetired.Select(static retirement => retirement.Generation));
@@ -830,40 +1158,46 @@ public sealed record MaterializationBackendRoutingSnapshot
         if (candidate is not null && activeRead?.Generation == candidate)
             throw new ArgumentException("A candidate must be cleared before it becomes readable.", nameof(candidate));
 
-        PoolId = poolId;
         Revision = revision;
         LatestFence = latestFence;
         ActiveRead = activeRead;
         ActiveWrite = activeWrite;
         Candidate = candidate;
+        PendingFollowUp = pendingFollowUp;
         Draining = normalizedDraining;
         Retired = normalizedRetired;
         Cleaned = normalizedCleaned;
         Configuration = configuration;
 
-        void RequireSameDefinition(MaterializationBackendGenerationReference? generation)
+        foreach (var drain in normalizedDraining)
+        {
+            if (drain.Proof is { } proof && proof.PlacementSlice != placementSlice)
+                throw new ArgumentException("Drain evidence belongs to another placement authority.", nameof(draining));
+        }
+
+        void RequirePlacementDefinition(MaterializationBackendGenerationReference? generation)
         {
             if (generation is null)
                 return;
-            if (routedDefinition is null)
-            {
-                routedDefinition = generation.DefinitionFingerprint;
-                return;
-            }
-            if (generation.DefinitionFingerprint != routedDefinition)
+            if (generation.DefinitionFingerprint != placementSlice.Materialization.DefinitionFingerprint)
             {
                 throw new ArgumentException(
-                    "Every backend-pool route and lifecycle reference must implement one exact materialization definition.",
+                    "Every placement route and lifecycle reference must implement the placement slice's exact materialization definition.",
                     nameof(activeWrite));
             }
         }
     }
 
+    /// <summary>Exact placement authority owning every route and lifecycle observation.</summary>
+    public MaterializationPlacementSliceReference PlacementSlice { get; }
+
     /// <summary>Stable backend-pool identity.</summary>
-    public MaterializationBackendPoolId PoolId { get; }
+    [JsonIgnore]
+    public MaterializationBackendPoolId PoolId => PlacementSlice.Pool.Pool;
 
     /// <summary>Exact canonical pool-definition fence.</summary>
-    public ExecutionDefinitionFingerprint PoolDefinitionFingerprint { get; }
+    [JsonIgnore]
+    public ExecutionDefinitionFingerprint PoolDefinitionFingerprint => PlacementSlice.Pool.DefinitionFingerprint;
 
     /// <summary>Current routing revision.</summary>
     public MaterializationBackendRoutingRevision Revision { get; }
@@ -880,10 +1214,13 @@ public sealed record MaterializationBackendRoutingSnapshot
     /// <summary>Current rebuild candidate.</summary>
     public MaterializationBackendGenerationReference? Candidate { get; }
 
+    /// <summary>Durable exact follow-up command reservation established by candidate admission.</summary>
+    public MaterializationBackendFollowUpReservation? PendingFollowUp { get; }
+
     /// <summary>Draining generations in canonical coordinate order.</summary>
     public ImmutableArray<MaterializationBackendDrainState> Draining { get; }
 
-    /// <summary>Retained pool-retirement states in canonical coordinate order.</summary>
+    /// <summary>Retained placement-retirement states in canonical coordinate order.</summary>
     public ImmutableArray<MaterializationBackendRetirementState> Retired { get; }
 
     /// <summary>Cleanup tombstones in canonical coordinate order.</summary>
@@ -966,7 +1303,7 @@ public sealed record MaterializationBackendRoutingSnapshot
     }
 }
 
-/// <summary>Result of one backend-pool routing command.</summary>
+/// <summary>Result of one placement-scoped backend routing command.</summary>
 public sealed record MaterializationBackendRoutingResult
 {
     /// <summary>Creates one routing command result.</summary>
@@ -992,6 +1329,19 @@ public sealed record MaterializationBackendRoutingResult
         {
             throw new ArgumentException("Only applied or replayed routing results carry a receipt.", nameof(receipt));
         }
+        if (receipt is not null && receipt.PlacementSlice != snapshot.PlacementSlice)
+            throw new ArgumentException("A routing receipt must belong to the resulting snapshot's placement authority.", nameof(receipt));
+        if (receipt is not null
+            && (receipt.Revision.Ordinal > snapshot.Revision.Ordinal
+                || disposition == MaterializationBackendRoutingDisposition.Applied
+                    && receipt.Revision != snapshot.Revision
+                || snapshot.LatestFence is not { } latestFence
+                || receipt.Fence.Ordinal > latestFence.Ordinal))
+        {
+            throw new ArgumentException(
+                "A routing receipt must be causally retained by the resulting revision and accepted fence.",
+                nameof(receipt));
+        }
 
         Disposition = disposition;
         Receipt = receipt;
@@ -1011,33 +1361,86 @@ public sealed record MaterializationBackendRoutingResult
     public string? Detail { get; }
 }
 
+/// <summary>Result of atomically reserving one physical backend generation for cleanup.</summary>
+public sealed record MaterializationBackendCleanupReservationResult
+{
+    /// <summary>Creates one cleanup reservation result.</summary>
+    /// <param name="routing">Placement-scoped routing outcome.</param>
+    /// <param name="reservation">Durable reservation returned only for an applied or replayed command.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="routing"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// Reservation presence contradicts the routing disposition or its receipt is not the routing receipt.
+    /// </exception>
+    [JsonConstructor]
+    public MaterializationBackendCleanupReservationResult(
+        MaterializationBackendRoutingResult routing,
+        MaterializationBackendCleanupReservation? reservation = null)
+    {
+        Routing = routing ?? throw new ArgumentNullException(nameof(routing));
+        var succeeded = routing.Disposition is MaterializationBackendRoutingDisposition.Applied
+            or MaterializationBackendRoutingDisposition.Replayed;
+        if (succeeded != (reservation is not null))
+        {
+            throw new ArgumentException(
+                "Only an applied or replayed cleanup reservation command returns a reservation.",
+                nameof(reservation));
+        }
+        if (reservation is not null && reservation.Receipt != routing.Receipt)
+        {
+            throw new ArgumentException(
+                "The cleanup reservation must retain the exact routing receipt returned by the command.",
+                nameof(reservation));
+        }
+        Reservation = reservation;
+    }
+
+    /// <summary>Placement-scoped routing outcome.</summary>
+    public MaterializationBackendRoutingResult Routing { get; }
+
+    /// <summary>Durable cleanup reservation for an applied or replayed command.</summary>
+    public MaterializationBackendCleanupReservation? Reservation { get; }
+}
+
 /// <summary>Revision-pinned concrete target binding returned by read or write resolution.</summary>
 public sealed record MaterializationBackendRouteBinding
 {
     /// <summary>Creates one revision-pinned target binding.</summary>
-    /// <param name="revision">Pool revision observed at admission.</param>
+    /// <param name="placementSlice">Exact placement authority under which the route was admitted.</param>
+    /// <param name="revision">Placement-scoped revision observed at admission.</param>
     /// <param name="generation">Exact admitted backend generation.</param>
     /// <param name="target">Concrete target dependency resolved by exact ID.</param>
     /// <exception cref="ArgumentNullException">A required reference is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
-    /// <paramref name="revision"/> is not committed or the concrete target has another identity.
+    /// <paramref name="revision"/> is not committed, or the generation or concrete target belongs to another
+    /// placement authority.
     /// </exception>
     public MaterializationBackendRouteBinding(
+        MaterializationPlacementSliceReference placementSlice,
         MaterializationBackendRoutingRevision revision,
         MaterializationBackendGenerationReference generation,
         IMaterializationTarget target)
     {
+        PlacementSlice = placementSlice ?? throw new ArgumentNullException(nameof(placementSlice));
         MaterializationContract.RequireDefinedIdentity(revision.Value, nameof(revision));
         if (revision.Ordinal == 0)
             throw new ArgumentException("An admitted route binding requires a committed routing revision.", nameof(revision));
         Generation = generation ?? throw new ArgumentNullException(nameof(generation));
         Target = target ?? throw new ArgumentNullException(nameof(target));
-        if (target.Descriptor.Id != generation.TargetId)
-            throw new ArgumentException("A route binding must retain the exact selected target dependency.", nameof(target));
+        if (generation.DefinitionFingerprint != placementSlice.Materialization.DefinitionFingerprint
+            || target.Descriptor.Id != generation.TargetId
+            || target.Descriptor.MaterializationId != placementSlice.Materialization.Materialization)
+        {
+            throw new ArgumentException(
+                "A route binding must retain the exact selected target dependency and placement definition.",
+                nameof(target));
+        }
         Revision = revision;
     }
 
-    /// <summary>Pool revision observed at admission.</summary>
+    /// <summary>Exact placement authority under which the route was admitted.</summary>
+    public MaterializationPlacementSliceReference PlacementSlice { get; }
+
+    /// <summary>Placement-scoped revision observed at admission.</summary>
     public MaterializationBackendRoutingRevision Revision { get; }
 
     /// <summary>Exact admitted backend generation.</summary>
@@ -1048,7 +1451,7 @@ public sealed record MaterializationBackendRouteBinding
     public IMaterializationTarget Target { get; }
 }
 
-/// <summary>Linearizable backend-pool routing and lifecycle authority.</summary>
+/// <summary>Linearizable placement-scoped backend routing and lifecycle authority.</summary>
 /// <remarks>
 /// Routing revision, fence, evidence, and lifecycle conflicts are returned as
 /// <see cref="MaterializationBackendRoutingDisposition"/> values. They are not exceptional control flow.
@@ -1057,29 +1460,47 @@ public interface IMaterializationBackendRouter
 {
     /// <summary>Reads the complete routing snapshot, including retained lifecycle history.</summary>
     /// <param name="context">Operation context carrying cancellation and trace metadata.</param>
+    /// <param name="placementSlice">Exact placement authority to inspect.</param>
     /// <returns>The current immutable snapshot.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="context"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="context"/> or <paramref name="placementSlice"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="placementSlice"/> belongs to another backend pool.</exception>
     /// <exception cref="OperationCanceledException">The operation cancellation token was canceled.</exception>
     /// <exception cref="ObjectDisposedException">The router implementation has been disposed.</exception>
-    ValueTask<MaterializationBackendRoutingSnapshot> InspectAsync(OperationContext context);
+    ValueTask<MaterializationBackendRoutingSnapshot> InspectAsync(
+        OperationContext context,
+        MaterializationPlacementSliceReference placementSlice);
 
     /// <summary>Resolves and pins the exact current readable backend generation.</summary>
     /// <param name="context">Operation context carrying cancellation and trace metadata.</param>
+    /// <param name="placementSlice">Exact placement authority whose read route is resolved.</param>
     /// <returns>The revision-pinned read binding.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="context"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="context"/> or <paramref name="placementSlice"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="placementSlice"/> belongs to another backend pool.</exception>
     /// <exception cref="InvalidOperationException">Routing has not been initialized.</exception>
     /// <exception cref="OperationCanceledException">The operation cancellation token was canceled.</exception>
     /// <exception cref="ObjectDisposedException">The router implementation has been disposed.</exception>
-    ValueTask<MaterializationBackendRouteBinding> ResolveReadAsync(OperationContext context);
+    ValueTask<MaterializationBackendRouteBinding> ResolveReadAsync(
+        OperationContext context,
+        MaterializationPlacementSliceReference placementSlice);
 
     /// <summary>Resolves and pins the exact current writable backend generation.</summary>
     /// <param name="context">Operation context carrying cancellation and trace metadata.</param>
+    /// <param name="placementSlice">Exact placement authority whose write route is resolved.</param>
     /// <returns>The revision-pinned write binding.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="context"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="context"/> or <paramref name="placementSlice"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="placementSlice"/> belongs to another backend pool.</exception>
     /// <exception cref="InvalidOperationException">Routing has not been initialized.</exception>
     /// <exception cref="OperationCanceledException">The operation cancellation token was canceled.</exception>
     /// <exception cref="ObjectDisposedException">The router implementation has been disposed.</exception>
-    ValueTask<MaterializationBackendRouteBinding> ResolveWriteAsync(OperationContext context);
+    ValueTask<MaterializationBackendRouteBinding> ResolveWriteAsync(
+        OperationContext context,
+        MaterializationPlacementSliceReference placementSlice);
 
     /// <summary>Admits one candidate generation.</summary>
     /// <param name="context">Operation context carrying cancellation and trace metadata.</param>
@@ -1088,6 +1509,7 @@ public interface IMaterializationBackendRouter
     /// <exception cref="ArgumentNullException">
     /// <paramref name="context"/> or <paramref name="request"/> is <see langword="null"/>.
     /// </exception>
+    /// <exception cref="ArgumentException">The request's placement slice belongs to another routing authority.</exception>
     /// <exception cref="OperationCanceledException">The operation cancellation token was canceled.</exception>
     /// <exception cref="ObjectDisposedException">The router implementation has been disposed.</exception>
     ValueTask<MaterializationBackendRoutingResult> AdmitCandidateAsync(
@@ -1101,6 +1523,7 @@ public interface IMaterializationBackendRouter
     /// <exception cref="ArgumentNullException">
     /// <paramref name="context"/> or <paramref name="request"/> is <see langword="null"/>.
     /// </exception>
+    /// <exception cref="ArgumentException">The request's placement slice belongs to another routing authority.</exception>
     /// <exception cref="OperationCanceledException">The operation cancellation token was canceled.</exception>
     /// <exception cref="ObjectDisposedException">The router implementation has been disposed.</exception>
     ValueTask<MaterializationBackendRoutingResult> AbandonCandidateAsync(
@@ -1114,6 +1537,7 @@ public interface IMaterializationBackendRouter
     /// <exception cref="ArgumentNullException">
     /// <paramref name="context"/> or <paramref name="request"/> is <see langword="null"/>.
     /// </exception>
+    /// <exception cref="ArgumentException">The request's placement slice belongs to another routing authority.</exception>
     /// <exception cref="OperationCanceledException">The operation cancellation token was canceled.</exception>
     /// <exception cref="ObjectDisposedException">The router implementation has been disposed.</exception>
     ValueTask<MaterializationBackendRoutingResult> SwapAsync(
@@ -1127,32 +1551,49 @@ public interface IMaterializationBackendRouter
     /// <exception cref="ArgumentNullException">
     /// <paramref name="context"/> or <paramref name="request"/> is <see langword="null"/>.
     /// </exception>
+    /// <exception cref="ArgumentException">The request's placement slice belongs to another routing authority.</exception>
     /// <exception cref="OperationCanceledException">The operation cancellation token was canceled.</exception>
     /// <exception cref="ObjectDisposedException">The router implementation has been disposed.</exception>
     ValueTask<MaterializationBackendRoutingResult> CompleteDrainAsync(
         OperationContext context,
         MaterializationCompleteBackendDrainRequest request);
 
-    /// <summary>Retires one quiescent generation from pool routing.</summary>
+    /// <summary>Retires one quiescent generation from placement routing.</summary>
     /// <param name="context">Operation context carrying cancellation and trace metadata.</param>
-    /// <param name="request">Exact fenced pool-retirement command; target-local lifecycle state is unchanged.</param>
+    /// <param name="request">Exact fenced placement-retirement command; target-local lifecycle state is unchanged.</param>
     /// <returns>The observable routing result.</returns>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="context"/> or <paramref name="request"/> is <see langword="null"/>.
     /// </exception>
+    /// <exception cref="ArgumentException">The request's placement slice belongs to another routing authority.</exception>
     /// <exception cref="OperationCanceledException">The operation cancellation token was canceled.</exception>
     /// <exception cref="ObjectDisposedException">The router implementation has been disposed.</exception>
     ValueTask<MaterializationBackendRoutingResult> RetireAsync(
         OperationContext context,
         MaterializationRetireBackendGenerationRequest request);
 
-    /// <summary>Consumes physical cleanup evidence and retains a pool tombstone.</summary>
+    /// <summary>Atomically reserves one generation after excluding every reference owned by this router.</summary>
     /// <param name="context">Operation context carrying cancellation and trace metadata.</param>
-    /// <param name="request">Exact fenced pool command carrying adapter-owned physical cleanup evidence.</param>
+    /// <param name="request">Exact fenced reservation command for one placement-retired generation.</param>
+    /// <returns>The routing outcome and durable reservation when the command applied or replayed.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="context"/> or <paramref name="request"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">The request's placement slice belongs to another routing authority.</exception>
+    /// <exception cref="OperationCanceledException">The operation cancellation token was canceled.</exception>
+    /// <exception cref="ObjectDisposedException">The router implementation has been disposed.</exception>
+    ValueTask<MaterializationBackendCleanupReservationResult> ReserveCleanupAsync(
+        OperationContext context,
+        MaterializationReserveBackendCleanupRequest request);
+
+    /// <summary>Consumes reservation-bound physical cleanup evidence and retains a placement tombstone.</summary>
+    /// <param name="context">Operation context carrying cancellation and trace metadata.</param>
+    /// <param name="request">Exact fenced placement command carrying reservation-bound physical cleanup evidence.</param>
     /// <returns>The observable routing result.</returns>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="context"/> or <paramref name="request"/> is <see langword="null"/>.
     /// </exception>
+    /// <exception cref="ArgumentException">The request's placement slice belongs to another routing authority.</exception>
     /// <exception cref="OperationCanceledException">The operation cancellation token was canceled.</exception>
     /// <exception cref="ObjectDisposedException">The router implementation has been disposed.</exception>
     ValueTask<MaterializationBackendRoutingResult> CleanupAsync(

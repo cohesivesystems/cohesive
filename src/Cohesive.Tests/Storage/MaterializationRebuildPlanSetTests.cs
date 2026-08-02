@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
@@ -60,11 +61,12 @@ public sealed class MaterializationRebuildPlanSetTests
                 Shuffle(domains, random),
                 Shuffle(capacityAssignments, random),
                 Provenance("tests/ari-192/placement/permutation")));
+            var boundLeaves = BindLeavesToPlacement(leaves, placement);
             var planSet = AssertSuccessful(MaterializationRebuildPlanSetLinker.Link(
                 request,
                 membership,
                 placement,
-                Shuffle(leaves, random),
+                Shuffle(boundLeaves, random),
                 Provenance("tests/ari-192/link/permutation")));
 
             expectedRequest ??= MaterializationRebuildPlanningJsonSerializer.GetCanonicalRequestBytes(request);
@@ -119,6 +121,10 @@ public sealed class MaterializationRebuildPlanSetTests
         Assert.Equal(forward.Placement.Slices.Select(static slice => slice.Fingerprint),
             placement.Slices.Select(static slice => slice.Fingerprint));
         Assert.Equal(forward.PlanSet.Fingerprint, planSet.Fingerprint);
+        Assert.Equal("cohesive-materialization-rebuild-plan-set/v2", planSet.SchemaVersion);
+        Assert.Equal(
+            "cohesive-materialization-rebuild-plan-set/v2-c14n/v1",
+            planSet.Fingerprint.Canonicalization);
         Assert.Equal(forward.PlanSet.Request, planSet.Request);
         Assert.Equal(forward.PlanSet.LeafPlans.Select(static binding => binding.LeafPlan),
             planSet.LeafPlans.Select(static binding => binding.LeafPlan));
@@ -298,11 +304,18 @@ public sealed class MaterializationRebuildPlanSetTests
             scenario.Placement,
             [scenario.Leaves[0]],
             Provenance("tests/ari-192/link/missing"));
+        var conflictingSameTarget = CloneLeaf(
+            scenario.Leaves[0],
+            scenario.Leaves[0].Target.Id.Value,
+            profileId: scenario.Leaves[0].Target.Capabilities.Id.Value,
+            provenance: Provenance("tests/ari-193/link/distinct-same-target-leaf"));
+        Assert.NotEqual(scenario.Leaves[0].Fingerprint, conflictingSameTarget.Fingerprint);
+        Assert.Equal(scenario.Leaves[0].Target.Id, conflictingSameTarget.Target.Id);
         var conflicting = MaterializationRebuildPlanSetLinker.Link(
             scenario.Request,
             scenario.Membership,
             scenario.Placement,
-            [scenario.Leaves[0], scenario.Leaves[0], scenario.Leaves[1]],
+            [scenario.Leaves[0], conflictingSameTarget, scenario.Leaves[1]],
             Provenance("tests/ari-192/link/conflict"));
         var extraLeaf = CloneLeaf(scenario.Leaves[0], "target/outside-placement");
         var extra = MaterializationRebuildPlanSetLinker.Link(
@@ -326,6 +339,81 @@ public sealed class MaterializationRebuildPlanSetTests
         Assert.Contains(conflicting.Diagnostics, diagnostic => diagnostic.Code == MaterializationRebuildPlanningDiagnosticCodes.LeafPlanConflict);
         Assert.Contains(extra.Diagnostics, diagnostic => diagnostic.Code == MaterializationRebuildPlanningDiagnosticCodes.LeafPlanExtra);
         Assert.Contains(drifted.Diagnostics, diagnostic => diagnostic.Code == MaterializationRebuildPlanningDiagnosticCodes.LeafPlanTargetMismatch);
+    }
+
+    [Fact]
+    public void Linker_RejectsDetachedOrSubstitutedSameTargetPlacementSlices()
+    {
+        var scenario = CreateScenario(reverseInputs: false);
+        var retained = scenario.Leaves[0];
+        MaterializationRebuildMembershipFingerprint substitutedMembership = new(
+            algorithm: "sha256",
+            canonicalization: "tests/ari-193/substituted-membership/v1",
+            value: new string('e', 64));
+        var substitutedSlice = MaterializationPlacementSliceReference.Create(
+            retained.PlacementSlice.Materialization,
+            substitutedMembership,
+            retained.PlacementSlice.Pool,
+            retained.Target.Id,
+            retained.PlacementSlice.Subjects);
+        var substituted = CloneLeaf(
+            retained,
+            retained.Target.Id.Value,
+            profileId: retained.Target.Capabilities.Id.Value,
+            placementSlice: substitutedSlice);
+
+        var result = MaterializationRebuildPlanSetLinker.Link(
+            scenario.Request,
+            scenario.Membership,
+            scenario.Placement,
+            [substituted, scenario.Leaves[1]],
+            Provenance("tests/ari-193/link/substituted-slice"));
+
+        Assert.False(result.IsSuccessful);
+        Assert.Contains(result.Diagnostics,
+            diagnostic => diagnostic.Code == MaterializationRebuildPlanningDiagnosticCodes.LeafPlanPlacementMismatch);
+        Assert.Throws<ArgumentException>(() => new MaterializationRebuildLeafPlanBinding(
+            scenario.Placement.Slices[0],
+            MaterializationRebuildPlanReference.FromPlan(scenario.Leaves[1])));
+    }
+
+    [Fact]
+    public void LeafExecutionAuthority_RequiresExactLinkedPlanSetLeafAndFullSlice()
+    {
+        var scenario = CreateScenario(reverseInputs: false);
+        var leaf = scenario.Leaves[0];
+
+        var authority = MaterializationRebuildLeafExecutionAuthority.FromPlanSet(scenario.PlanSet, leaf);
+
+        Assert.Equal(MaterializationRebuildPlanSetReference.FromPlanSet(scenario.PlanSet), authority.PlanSet);
+        Assert.Equal(MaterializationRebuildPlanReference.FromPlan(leaf), authority.LeafPlan);
+        Assert.Equal(leaf.PlacementSlice, authority.PlacementSlice);
+        Assert.Throws<ArgumentException>(() => MaterializationRebuildLeafExecutionAuthority.FromPlanSet(
+            scenario.PlanSet,
+            CreateLeaves()[0]));
+        var substitutedTarget = CloneLeaf(
+            leaf,
+            leaf.Target.Id.Value,
+            profileId: "profile/substituted-execution-target");
+        var substitutedBindings = scenario.PlanSet.LeafPlans
+            .Select(binding => binding.LeafPlan.Plan == leaf.Fingerprint
+                ? new MaterializationRebuildLeafPlanBinding(
+                    binding.Slice,
+                    MaterializationRebuildPlanReference.FromPlan(substitutedTarget))
+                : binding)
+            .ToImmutableArray();
+        MaterializationRebuildPlanSet substitutedPlanSet = new(
+            schemaVersion: scenario.PlanSet.SchemaVersion,
+            request: scenario.PlanSet.Request,
+            membership: scenario.PlanSet.Membership,
+            placement: scenario.PlanSet.Placement,
+            scheduling: scenario.PlanSet.Scheduling,
+            promotion: scenario.PlanSet.Promotion,
+            leafPlans: substitutedBindings,
+            provenance: scenario.PlanSet.Provenance);
+        Assert.Throws<ArgumentException>(() => MaterializationRebuildLeafExecutionAuthority.FromPlanSet(
+            substitutedPlanSet,
+            substitutedTarget));
     }
 
     [Fact]
@@ -359,17 +447,20 @@ public sealed class MaterializationRebuildPlanSetTests
             [new("subject/a"), new("subject/c")]);
         var stalePlacement = CompilePlacement(request, staleSubstitution, pool, leaves,
             [new("subject/a"), new("subject/b")]);
+        var firstLeaves = BindLeavesToPlacement(leaves, firstPlacement);
+        var secondLeaves = BindLeavesToPlacement(leaves, secondPlacement);
+        var staleLeaves = BindLeavesToPlacement(leaves, stalePlacement);
         var expected = AssertSuccessful(MaterializationRebuildPlanSetLinker.Link(
             request,
             firstMembership,
             firstPlacement,
-            leaves,
+            firstLeaves,
             Provenance("tests/ari-192/link/relations")));
         var reevaluated = AssertSuccessful(MaterializationRebuildPlanSetLinker.Link(
             request,
             secondMembership,
             secondPlacement,
-            leaves,
+            secondLeaves,
             Provenance("tests/ari-192/link/relations")));
 
         Assert.Equal(request.Fingerprint, expected.Request.Request);
@@ -380,7 +471,7 @@ public sealed class MaterializationRebuildPlanSetTests
             request,
             secondMembership,
             secondPlacement,
-            leaves);
+            secondLeaves);
         Assert.False(replay.IsSuccessful);
         Assert.Contains(replay.Diagnostics, diagnostic => diagnostic.Code == MaterializationRebuildPlanningDiagnosticCodes.ReplayConflict);
         var staleReplay = MaterializationRebuildPlanSetLinker.ValidateReplay(
@@ -388,7 +479,7 @@ public sealed class MaterializationRebuildPlanSetTests
             request,
             staleSubstitution,
             stalePlacement,
-            leaves);
+            staleLeaves);
         Assert.Contains(staleReplay.Diagnostics, diagnostic => diagnostic.Code == MaterializationRebuildPlanningDiagnosticCodes.ReplayConflict);
     }
 
@@ -600,7 +691,234 @@ public sealed class MaterializationRebuildPlanSetTests
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Code == "materialization.rebuildPlanning.json.invalid");
     }
 
-    static Scenario CreateScenario(bool reverseInputs)
+    [Fact]
+    public async Task IndependentPromotion_RejectsForeignAuthorityBeforeRouterIo()
+    {
+        var progressive = CreateScenario(reverseInputs: false);
+        Assert.Throws<ArgumentException>(() => new MaterializationIndependentPromotionExecutor(
+            progressive.PlanSet,
+            progressive.Leaves[0]));
+
+        var scenario = CreateScenario(
+            reverseInputs: false,
+            promotion: new(MaterializationRebuildPromotionMode.Independent));
+        var leaf = scenario.Leaves[0];
+        var binding = scenario.PlanSet.LeafPlans.Single(candidate => candidate.LeafPlan.Plan == leaf.Fingerprint);
+        var leafAuthority = MaterializationRebuildLeafExecutionAuthority.FromPlanSet(scenario.PlanSet, leaf);
+        MaterializationActiveGenerationReference active = new(
+            schemaVersion: MaterializationActiveGenerationReference.CurrentSchemaVersion,
+            authority: leafAuthority,
+            generation: new("generation/independent-promotion"),
+            targetRevision: new("1"),
+            promotion: new("promotion/independent"),
+            promotionFence: new("1"),
+            validation: new("validation/independent"),
+            activatedAtUtc: new(2026, 8, 2, 12, 0, 0, TimeSpan.Zero));
+        MaterializationBackendRoutingSnapshot snapshot = new(
+            placementSlice: binding.Slice,
+            revision: MaterializationBackendRoutingRevision.Initial,
+            latestFence: null,
+            activeRead: null,
+            activeWrite: null,
+            candidate: null,
+            draining: [],
+            retired: [],
+            cleaned: []);
+        var executor = new MaterializationIndependentPromotionExecutor(scenario.PlanSet, leaf);
+        var valid = executor.CreateRequest(active, snapshot, new("1"), active.ActivatedAtUtc.AddSeconds(1));
+        MaterializationBackendRoutingSnapshot refreshedSnapshot = new(
+            placementSlice: binding.Slice,
+            revision: new("1"),
+            latestFence: new("2"),
+            activeRead: null,
+            activeWrite: null,
+            candidate: null,
+            draining: [],
+            retired: [],
+            cleaned: []);
+        var refreshed = executor.CreateRequest(
+            active,
+            refreshedSnapshot,
+            new("2"),
+            valid.AdmitIssuedAtUtc.AddSeconds(1));
+        Assert.NotEqual(valid.AdmitCommandId, refreshed.AdmitCommandId);
+        Assert.NotEqual(valid.SwapCommandId, refreshed.SwapCommandId);
+        MaterializationActiveGenerationReference distinctEvidence = new(
+            schemaVersion: active.SchemaVersion,
+            authority: active.Authority,
+            generation: active.Generation,
+            targetRevision: active.TargetRevision,
+            promotion: new("promotion/independent-distinct-evidence"),
+            promotionFence: active.PromotionFence,
+            validation: active.Validation,
+            activatedAtUtc: active.ActivatedAtUtc);
+        var evidenceChanged = executor.CreateRequest(
+            distinctEvidence,
+            snapshot,
+            new("1"),
+            valid.AdmitIssuedAtUtc);
+        Assert.NotEqual(valid.AdmitCommandId, evidenceChanged.AdmitCommandId);
+        Assert.NotEqual(valid.SwapCommandId, evidenceChanged.SwapCommandId);
+        Assert.Throws<ArgumentOutOfRangeException>(() => executor.CreateRequest(
+            active,
+            snapshot,
+            new("1"),
+            DateTimeOffset.MaxValue));
+        var json = MaterializationIndependentPromotionRequestJsonSerializer.Serialize(valid);
+        var restored = MaterializationIndependentPromotionRequestJsonSerializer.Deserialize(json);
+        Assert.Equal(valid, restored);
+        Assert.Equal("cohesive-materialization-independent-promotion-request/v1", restored.SchemaVersion);
+        Assert.Equal(
+            json,
+            MaterializationIndependentPromotionRequestJsonSerializer.Serialize(restored));
+        Assert.Throws<ArgumentException>(() => new MaterializationIndependentPromotionRequest(
+            schemaVersion: valid.SchemaVersion,
+            activeGeneration: valid.ActiveGeneration,
+            configuration: valid.Configuration,
+            expectedRoutingRevision: valid.ExpectedRoutingRevision,
+            fence: valid.Fence,
+            admitCommandId: valid.AdmitCommandId,
+            swapCommandId: valid.SwapCommandId,
+            admitIssuedAtUtc: valid.ActiveGeneration.ActivatedAtUtc.AddTicks(-1),
+            swapIssuedAtUtc: valid.ActiveGeneration.ActivatedAtUtc));
+
+        var unknownMember = JsonNode.Parse(json)!.AsObject();
+        unknownMember["unexpected"] = true;
+        Assert.Throws<JsonException>(() => MaterializationIndependentPromotionRequestJsonSerializer.Deserialize(
+            unknownMember.ToJsonString()));
+        var missingFence = JsonNode.Parse(json)!.AsObject();
+        missingFence.Remove("fence");
+        Assert.Throws<JsonException>(() => MaterializationIndependentPromotionRequestJsonSerializer.Deserialize(
+            missingFence.ToJsonString()));
+        var foreignSchema = JsonNode.Parse(json)!.AsObject();
+        foreignSchema["schemaVersion"] = "cohesive-materialization-independent-promotion-request/v0";
+        Assert.Throws<JsonException>(() => MaterializationIndependentPromotionRequestJsonSerializer.Deserialize(
+            foreignSchema.ToJsonString()));
+        var substitutedSlice = JsonNode.Parse(json)!.AsObject();
+        substitutedSlice["activeGeneration"]!["authority"]!["binding"]!["slice"]!["subjects"]![0] =
+            "subject/substituted";
+        Assert.Throws<JsonException>(() => MaterializationIndependentPromotionRequestJsonSerializer.Deserialize(
+            substitutedSlice.ToJsonString()));
+        var substitutedConfiguration = JsonNode.Parse(json)!.AsObject();
+        substitutedConfiguration["configuration"]!["readTarget"] = "target/substituted";
+        Assert.Throws<JsonException>(() => MaterializationIndependentPromotionRequestJsonSerializer.Deserialize(
+            substitutedConfiguration.ToJsonString()));
+
+        MaterializationRebuildPlanSetReference foreignPlanSet = new(
+            schemaVersion: MaterializationRebuildPlanSetReference.CurrentSchemaVersion,
+            request: valid.Authority.PlanSet.Request,
+            planSet: new(
+                valid.Authority.PlanSet.PlanSet.Algorithm,
+                valid.Authority.PlanSet.PlanSet.Canonicalization,
+                new string('0', 64)));
+        MaterializationRebuildLeafExecutionAuthority foreignAuthority = new(
+            schemaVersion: MaterializationRebuildLeafExecutionAuthority.CurrentSchemaVersion,
+            planSet: foreignPlanSet,
+            binding: valid.Authority.Binding);
+        MaterializationActiveGenerationReference foreignActive = new(
+            schemaVersion: valid.ActiveGeneration.SchemaVersion,
+            authority: foreignAuthority,
+            generation: valid.ActiveGeneration.Generation,
+            targetRevision: valid.ActiveGeneration.TargetRevision,
+            promotion: valid.ActiveGeneration.Promotion,
+            promotionFence: valid.ActiveGeneration.PromotionFence,
+            validation: valid.ActiveGeneration.Validation,
+            activatedAtUtc: valid.ActiveGeneration.ActivatedAtUtc);
+        var foreignConfiguration = MaterializationBackendRoutingConfigurationResolver.Resolve(
+            scenario.Pool.Definition,
+            new MaterializationBackendRoutingConfigurationLayer(
+                origin: EffectiveConfigurationOrigin.Explicit,
+                authority: $"plan-set:{foreignPlanSet.PlanSet.Value}",
+                settings: new(readTarget: binding.Slice.Target, writeTarget: binding.Slice.Target)));
+        MaterializationIndependentPromotionRequest foreign = new(
+            schemaVersion: valid.SchemaVersion,
+            activeGeneration: foreignActive,
+            configuration: foreignConfiguration,
+            expectedRoutingRevision: valid.ExpectedRoutingRevision,
+            fence: valid.Fence,
+            admitCommandId: valid.AdmitCommandId,
+            swapCommandId: valid.SwapCommandId,
+            admitIssuedAtUtc: valid.AdmitIssuedAtUtc,
+            swapIssuedAtUtc: valid.SwapIssuedAtUtc);
+        var router = new RecordingBackendRouter();
+
+        await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await executor.ExecuteAsync(OperationContext.Create(), foreign, router));
+        Assert.Equal(0, router.CallCount);
+
+        MaterializationIndependentPromotionRequest noncanonicalCommand = new(
+            schemaVersion: valid.SchemaVersion,
+            activeGeneration: valid.ActiveGeneration,
+            configuration: valid.Configuration,
+            expectedRoutingRevision: valid.ExpectedRoutingRevision,
+            fence: valid.Fence,
+            admitCommandId: new("promotion/noncanonical-admit-command"),
+            swapCommandId: valid.SwapCommandId,
+            admitIssuedAtUtc: valid.AdmitIssuedAtUtc,
+            swapIssuedAtUtc: valid.SwapIssuedAtUtc);
+        await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await executor.ExecuteAsync(OperationContext.Create(), noncanonicalCommand, router));
+        Assert.Equal(0, router.CallCount);
+    }
+
+    [Fact]
+    public async Task IndependentPromotion_ReportsPerSlicePartialSuccessWithoutCoordinatedProjection()
+    {
+        var scenario = CreateScenario(
+            reverseInputs: false,
+            promotion: new(MaterializationRebuildPromotionMode.Independent));
+        var failedSlice = scenario.PlanSet.LeafPlans[1].Slice;
+        IndependentOutcomeRouter router = new(failedSlice.Fingerprint);
+        var outcomes = ImmutableArray.CreateBuilder<MaterializationIndependentPromotionResult>(2);
+        for (var index = 0; index < scenario.Leaves.Length; index++)
+        {
+            var leaf = scenario.Leaves[index];
+            var binding = scenario.PlanSet.LeafPlans.Single(candidate => candidate.LeafPlan.Plan == leaf.Fingerprint);
+            MaterializationActiveGenerationReference active = new(
+                schemaVersion: MaterializationActiveGenerationReference.CurrentSchemaVersion,
+                authority: MaterializationRebuildLeafExecutionAuthority.FromPlanSet(scenario.PlanSet, leaf),
+                generation: new($"generation/independent-partial/{index}"),
+                targetRevision: new("1"),
+                promotion: new($"promotion/independent-partial/{index}"),
+                promotionFence: new("1"),
+                validation: new($"validation/independent-partial/{index}"),
+                activatedAtUtc: new(2026, 8, 2, 14, index, 0, TimeSpan.Zero));
+            MaterializationBackendRoutingSnapshot initial = new(
+                placementSlice: binding.Slice,
+                revision: MaterializationBackendRoutingRevision.Initial,
+                latestFence: null,
+                activeRead: null,
+                activeWrite: null,
+                candidate: null,
+                draining: [],
+                retired: [],
+                cleaned: []);
+            var executor = new MaterializationIndependentPromotionExecutor(scenario.PlanSet, leaf);
+            var request = executor.CreateRequest(
+                active,
+                initial,
+                new("1"),
+                active.ActivatedAtUtc.AddSeconds(1));
+            outcomes.Add(await executor.ExecuteAsync(OperationContext.Create(), request, router));
+        }
+
+        var selected = outcomes[0];
+        var failed = outcomes[1];
+        Assert.True(selected.IsCurrentlySelected);
+        Assert.Equal(MaterializationBackendRoutingDisposition.Applied, selected.Admission.Disposition);
+        Assert.Equal(MaterializationBackendRoutingDisposition.Applied, selected.Routing!.Disposition);
+        Assert.False(failed.IsCurrentlySelected);
+        Assert.Equal(MaterializationBackendRoutingDisposition.Applied, failed.Admission.Disposition);
+        Assert.Equal(MaterializationBackendRoutingDisposition.EvidenceConflict, failed.Routing!.Disposition);
+        Assert.Null(failed.Routing.Receipt);
+        Assert.NotEqual(selected.PlacementSlice.Fingerprint, failed.PlacementSlice.Fingerprint);
+        Assert.Equal(selected.Generation, selected.Routing.Snapshot.ActiveRead!.Generation);
+        Assert.Null(failed.Routing.Snapshot.ActiveRead);
+    }
+
+    static Scenario CreateScenario(
+        bool reverseInputs,
+        MaterializationRebuildPromotionPolicy? promotion = null)
     {
         var leaves = CreateLeaves();
         if (reverseInputs)
@@ -615,7 +933,8 @@ public sealed class MaterializationRebuildPlanSetTests
             leaves[0].Materialization,
             pool,
             new MaterializationExplicitPlacementSubjectSelection(members),
-            source: "tests/ari-192/request");
+            source: "tests/ari-192/request",
+            promotion: promotion);
         var membership = AssertSuccessful(MaterializationRebuildPlanSetCompiler.FreezeMembership(
             request,
             members,
@@ -646,6 +965,7 @@ public sealed class MaterializationRebuildPlanSetTests
             domains,
             capacityAssignments,
             Provenance("tests/ari-192/placement")));
+        leaves = BindLeavesToPlacement(leaves, placement);
         var planSet = AssertSuccessful(MaterializationRebuildPlanSetLinker.Link(
             request,
             membership,
@@ -728,7 +1048,9 @@ public sealed class MaterializationRebuildPlanSetTests
     static MaterializationRebuildPlan CloneLeaf(
         MaterializationRebuildPlan source,
         string targetId,
-        string? profileId = null)
+        string? profileId = null,
+        MaterializationPlacementSliceReference? placementSlice = null,
+        ExecutionProvenance? provenance = null)
     {
         MaterializationTargetId id = new(targetId);
         var profile = new MaterializationCapabilityProfile(
@@ -743,6 +1065,11 @@ public sealed class MaterializationRebuildPlanSetTests
             MaterializationSynchronizationMode.Rebuild);
         return new(
             source.Materialization,
+            placementSlice ?? (id == source.Target.Id
+                ? source.PlacementSlice
+                : MaterializationRebuildPlanJsonSerializerTests.CreateSinglePlacementSlice(
+                    source.Materialization,
+                    target)),
             source.ImpactPlan,
             source.Sources,
             target,
@@ -751,8 +1078,23 @@ public sealed class MaterializationRebuildPlanSetTests
             source.ChangeFeedCatalogs,
             source.ChangeFeeds,
             source.Limits,
-            source.Provenance);
+            provenance ?? source.Provenance);
     }
+
+    static ImmutableArray<MaterializationRebuildPlan> BindLeavesToPlacement(
+        ImmutableArray<MaterializationRebuildPlan> leaves,
+        MaterializationTargetPlacementPlan placement) =>
+        [
+            .. placement.Slices.Select(slice =>
+            {
+                var leaf = leaves.Single(candidate => candidate.Target.Id == slice.Target);
+                return CloneLeaf(
+                    leaf,
+                    leaf.Target.Id.Value,
+                    profileId: leaf.Target.Capabilities.Id.Value,
+                    placementSlice: slice);
+            })
+        ];
 
     static MaterializationRelationsPlacementSubjectSelection CreateRelationsSelection(MaterializationRebuildPlan leaf)
     {
@@ -802,6 +1144,178 @@ public sealed class MaterializationRebuildPlanSetTests
 
     static ImmutableArray<T> Shuffle<T>(IEnumerable<T> values, Random random) =>
         [.. values.OrderBy(_ => random.Next())];
+
+    sealed class RecordingBackendRouter : IMaterializationBackendRouter
+    {
+        internal int CallCount { get; private set; }
+
+        public ValueTask<MaterializationBackendRoutingSnapshot> InspectAsync(
+            OperationContext context,
+            MaterializationPlacementSliceReference placementSlice) => Fail<MaterializationBackendRoutingSnapshot>();
+
+        public ValueTask<MaterializationBackendRouteBinding> ResolveReadAsync(
+            OperationContext context,
+            MaterializationPlacementSliceReference placementSlice) => Fail<MaterializationBackendRouteBinding>();
+
+        public ValueTask<MaterializationBackendRouteBinding> ResolveWriteAsync(
+            OperationContext context,
+            MaterializationPlacementSliceReference placementSlice) => Fail<MaterializationBackendRouteBinding>();
+
+        public ValueTask<MaterializationBackendRoutingResult> AdmitCandidateAsync(
+            OperationContext context,
+            MaterializationAdmitBackendCandidateRequest request) => Fail<MaterializationBackendRoutingResult>();
+
+        public ValueTask<MaterializationBackendRoutingResult> AbandonCandidateAsync(
+            OperationContext context,
+            MaterializationAbandonBackendCandidateRequest request) => Fail<MaterializationBackendRoutingResult>();
+
+        public ValueTask<MaterializationBackendRoutingResult> SwapAsync(
+            OperationContext context,
+            MaterializationSwapBackendRoutingRequest request) => Fail<MaterializationBackendRoutingResult>();
+
+        public ValueTask<MaterializationBackendRoutingResult> CompleteDrainAsync(
+            OperationContext context,
+            MaterializationCompleteBackendDrainRequest request) => Fail<MaterializationBackendRoutingResult>();
+
+        public ValueTask<MaterializationBackendRoutingResult> RetireAsync(
+            OperationContext context,
+            MaterializationRetireBackendGenerationRequest request) => Fail<MaterializationBackendRoutingResult>();
+
+        public ValueTask<MaterializationBackendCleanupReservationResult> ReserveCleanupAsync(
+            OperationContext context,
+            MaterializationReserveBackendCleanupRequest request) => Fail<MaterializationBackendCleanupReservationResult>();
+
+        public ValueTask<MaterializationBackendRoutingResult> CleanupAsync(
+            OperationContext context,
+            MaterializationCleanupBackendGenerationRequest request) => Fail<MaterializationBackendRoutingResult>();
+
+        ValueTask<TResult> Fail<TResult>()
+        {
+            CallCount++;
+            return ValueTask.FromException<TResult>(new InvalidOperationException("Router I/O must not be reached."));
+        }
+    }
+
+    sealed class IndependentOutcomeRouter(MaterializationPlacementSliceFingerprint failedSlice)
+        : IMaterializationBackendRouter
+    {
+        public ValueTask<MaterializationBackendRoutingResult> AdmitCandidateAsync(
+            OperationContext context,
+            MaterializationAdmitBackendCandidateRequest request)
+        {
+            var revision = Next(request.Header.ExpectedRevision);
+            MaterializationBackendRoutingSnapshot snapshot = new(
+                placementSlice: request.Header.PlacementSlice,
+                revision,
+                latestFence: request.Header.Fence,
+                activeRead: null,
+                activeWrite: null,
+                candidate: request.Candidate,
+                draining: [],
+                retired: [],
+                cleaned: [],
+                pendingFollowUp: request.ExpectedFollowUp is null
+                    ? null
+                    : new(request.ExpectedFollowUp));
+            MaterializationBackendRoutingReceipt receipt = new(
+                request.Header.CommandId,
+                request.Header.PlacementSlice,
+                MaterializationBackendRoutingOperation.AdmitCandidate,
+                revision,
+                request.Header.Fence,
+                request.Header.IssuedAtUtc);
+            return ValueTask.FromResult(new MaterializationBackendRoutingResult(
+                MaterializationBackendRoutingDisposition.Applied,
+                snapshot,
+                receipt));
+        }
+
+        public ValueTask<MaterializationBackendRoutingResult> SwapAsync(
+            OperationContext context,
+            MaterializationSwapBackendRoutingRequest request)
+        {
+            if (request.Header.PlacementSlice.Fingerprint == failedSlice)
+            {
+                MaterializationBackendRoutingSnapshot rejected = new(
+                    placementSlice: request.Header.PlacementSlice,
+                    revision: request.Header.ExpectedRevision,
+                    latestFence: request.Header.Fence,
+                    activeRead: null,
+                    activeWrite: null,
+                    candidate: request.Write,
+                    draining: [],
+                    retired: [],
+                    cleaned: [],
+                    pendingFollowUp: new(request));
+                return ValueTask.FromResult(new MaterializationBackendRoutingResult(
+                    MaterializationBackendRoutingDisposition.EvidenceConflict,
+                    rejected,
+                    detail: "Injected independent-slice failure."));
+            }
+
+            var revision = Next(request.Header.ExpectedRevision);
+            MaterializationBackendRoutingSnapshot applied = new(
+                placementSlice: request.Header.PlacementSlice,
+                revision,
+                latestFence: request.Header.Fence,
+                activeRead: request.Read,
+                activeWrite: request.Write,
+                candidate: null,
+                draining: [],
+                retired: [],
+                cleaned: [],
+                configuration: request.Configuration);
+            MaterializationBackendRoutingReceipt receipt = new(
+                request.Header.CommandId,
+                request.Header.PlacementSlice,
+                MaterializationBackendRoutingOperation.Swap,
+                revision,
+                request.Header.Fence,
+                request.Header.IssuedAtUtc);
+            return ValueTask.FromResult(new MaterializationBackendRoutingResult(
+                MaterializationBackendRoutingDisposition.Applied,
+                applied,
+                receipt));
+        }
+
+        public ValueTask<MaterializationBackendRoutingSnapshot> InspectAsync(
+            OperationContext context,
+            MaterializationPlacementSliceReference placementSlice) => Unsupported<MaterializationBackendRoutingSnapshot>();
+
+        public ValueTask<MaterializationBackendRouteBinding> ResolveReadAsync(
+            OperationContext context,
+            MaterializationPlacementSliceReference placementSlice) => Unsupported<MaterializationBackendRouteBinding>();
+
+        public ValueTask<MaterializationBackendRouteBinding> ResolveWriteAsync(
+            OperationContext context,
+            MaterializationPlacementSliceReference placementSlice) => Unsupported<MaterializationBackendRouteBinding>();
+
+        public ValueTask<MaterializationBackendRoutingResult> AbandonCandidateAsync(
+            OperationContext context,
+            MaterializationAbandonBackendCandidateRequest request) => Unsupported<MaterializationBackendRoutingResult>();
+
+        public ValueTask<MaterializationBackendRoutingResult> CompleteDrainAsync(
+            OperationContext context,
+            MaterializationCompleteBackendDrainRequest request) => Unsupported<MaterializationBackendRoutingResult>();
+
+        public ValueTask<MaterializationBackendRoutingResult> RetireAsync(
+            OperationContext context,
+            MaterializationRetireBackendGenerationRequest request) => Unsupported<MaterializationBackendRoutingResult>();
+
+        public ValueTask<MaterializationBackendCleanupReservationResult> ReserveCleanupAsync(
+            OperationContext context,
+            MaterializationReserveBackendCleanupRequest request) => Unsupported<MaterializationBackendCleanupReservationResult>();
+
+        public ValueTask<MaterializationBackendRoutingResult> CleanupAsync(
+            OperationContext context,
+            MaterializationCleanupBackendGenerationRequest request) => Unsupported<MaterializationBackendRoutingResult>();
+
+        static MaterializationBackendRoutingRevision Next(MaterializationBackendRoutingRevision revision) =>
+            new((revision.Ordinal + 1).ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        static ValueTask<TResult> Unsupported<TResult>() =>
+            ValueTask.FromException<TResult>(new NotSupportedException());
+    }
 
     sealed record Scenario(
         MaterializationRebuildRequestDocument Request,

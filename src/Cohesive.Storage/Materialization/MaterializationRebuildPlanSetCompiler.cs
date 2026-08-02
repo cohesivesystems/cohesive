@@ -68,6 +68,9 @@ public static class MaterializationRebuildPlanningDiagnosticCodes
     /// <summary>A leaf rebuild plan implements another exact materialization definition.</summary>
     public const string LeafPlanMaterializationMismatch = "materialization.rebuildPlanning.planSet.leafMaterializationMismatch";
 
+    /// <summary>A leaf rebuild plan carries another placement slice, membership, pool, target, or subject assignment.</summary>
+    public const string LeafPlanPlacementMismatch = "materialization.rebuildPlanning.planSet.leafPlacementMismatch";
+
     /// <summary>A leaf target descriptor differs from the exact descriptor pinned by the backend pool.</summary>
     public const string LeafPlanTargetMismatch = "materialization.rebuildPlanning.planSet.leafTargetMismatch";
 
@@ -474,13 +477,7 @@ public static class MaterializationRebuildPlanSetCompiler
         var slices = validAssignments
             .GroupBy(static assignment => assignment.Target)
             .OrderBy(static group => group.Key.Value, StringComparer.Ordinal)
-            .Select(group => new MaterializationPlacementSliceReference(
-                schemaVersion: MaterializationPlacementSliceReference.CurrentSchemaVersion,
-                id: new($"placement-slice/{MaterializationStableIdentity.Digest(
-                    request.MaterializationReference.DefinitionFingerprint.Value,
-                    membership.Fingerprint.Value,
-                    pool.DefinitionFingerprint.Value,
-                    group.Key.Value)}"),
+            .Select(group => MaterializationPlacementSliceReference.Create(
                 materialization: request.MaterializationReference,
                 membership: membership.Fingerprint,
                 pool,
@@ -653,7 +650,12 @@ public static class MaterializationRebuildPlanSetLinker
             .Select(static group => group.Key.Value)
             .Order(StringComparer.Ordinal)
             .ToArray();
-        if (duplicatedTargets.Length > 0 || duplicatedReferences.Length > 0)
+        var duplicatedSlices = leaves.GroupBy(static leaf => leaf.PlacementSlice.Fingerprint)
+            .Where(static group => group.Skip(1).Any())
+            .Select(static group => group.Key.Value)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (duplicatedTargets.Length > 0 || duplicatedReferences.Length > 0 || duplicatedSlices.Length > 0)
         {
             diagnostics.Add(MaterializationRebuildPlanSetCompiler.Error(
                 MaterializationRebuildPlanningDiagnosticCodes.LeafPlanConflict,
@@ -663,7 +665,10 @@ public static class MaterializationRebuildPlanSetLinker
                 request,
                 [placementSource],
                 "one distinct leaf plan per placement target",
-                string.Join(",", duplicatedTargets.Concat(duplicatedReferences).Order(StringComparer.Ordinal))));
+                string.Join(",", duplicatedTargets
+                    .Concat(duplicatedReferences)
+                    .Concat(duplicatedSlices)
+                    .Order(StringComparer.Ordinal))));
         }
 
         foreach (var leaf in leaves)
@@ -693,6 +698,23 @@ public static class MaterializationRebuildPlanSetLinker
                     leafMaterialization.DefinitionFingerprint.Value));
             }
 
+            var expectedSlice = placement.Slices.SingleOrDefault(slice => slice.Target == leaf.Target.Id);
+            if (expectedSlice is not null
+                && (leaf.PlacementSlice.Fingerprint != expectedSlice.Fingerprint
+                    || leaf.PlacementSlice.Materialization != placement.Materialization
+                    || leaf.PlacementSlice.Pool != placement.Pool))
+            {
+                diagnostics.Add(MaterializationRebuildPlanSetCompiler.Error(
+                    MaterializationRebuildPlanningDiagnosticCodes.LeafPlanPlacementMismatch,
+                    "A leaf plan carries another exact placement slice, membership, pool, target, or subject assignment.",
+                    "/leafPlans",
+                    LinkStage,
+                    request,
+                    [placementSource, $"leaf:{leaf.Fingerprint.Value}"],
+                    expectedSlice.Fingerprint.Value,
+                    leaf.PlacementSlice.Fingerprint.Value));
+            }
+
             var pinnedTarget = placement.BackendPool.Definition.Members.SingleOrDefault(member => member.Id == leaf.Target.Id);
             if (pinnedTarget is not null && !MaterializationContract.CanonicalEquals(pinnedTarget, leaf.Target))
             {
@@ -708,18 +730,18 @@ public static class MaterializationRebuildPlanSetLinker
             }
         }
 
-        var sliceTargets = placement.Slices.Select(static slice => slice.Target).ToHashSet();
-        var leafTargets = leaves.Select(static leaf => leaf.Target.Id).ToHashSet();
+        var sliceFingerprints = placement.Slices.Select(static slice => slice.Fingerprint.Value).ToHashSet(StringComparer.Ordinal);
+        var leafSliceFingerprints = leaves.Select(static leaf => leaf.PlacementSlice.Fingerprint.Value).ToHashSet(StringComparer.Ordinal);
         AddLeafDifference(
             diagnostics,
-            sliceTargets.Except(leafTargets),
+            sliceFingerprints.Except(leafSliceFingerprints, StringComparer.Ordinal),
             MaterializationRebuildPlanningDiagnosticCodes.LeafPlanMissing,
             "No leaf plan covers one or more exact placement slices.",
             request,
             placementSource);
         AddLeafDifference(
             diagnostics,
-            leafTargets.Except(sliceTargets),
+            leafSliceFingerprints.Except(sliceFingerprints, StringComparer.Ordinal),
             MaterializationRebuildPlanningDiagnosticCodes.LeafPlanExtra,
             "One or more leaf plans address targets outside the exact placement slices.",
             request,
@@ -728,10 +750,10 @@ public static class MaterializationRebuildPlanSetLinker
         if (diagnostics.Count > 0)
             return MaterializationRebuildPlanSetCompiler.Failure<MaterializationRebuildPlanSet>(diagnostics);
 
-        var leavesByTarget = leaves.ToDictionary(static leaf => leaf.Target.Id);
+        var leavesBySlice = leaves.ToDictionary(static leaf => leaf.PlacementSlice.Fingerprint);
         var bindings = placement.Slices.Select(slice => new MaterializationRebuildLeafPlanBinding(
             slice,
-            new(leavesByTarget[slice.Target].Fingerprint))).ToImmutableArray();
+            MaterializationRebuildPlanReference.FromPlan(leavesBySlice[slice.Fingerprint]))).ToImmutableArray();
         var scheduling = RealizeScheduling(request, placement);
         var planSet = new MaterializationRebuildPlanSet(
             schemaVersion: MaterializationRebuildPlanSet.CurrentSchemaVersion,
@@ -843,13 +865,13 @@ public static class MaterializationRebuildPlanSetLinker
 
     static void AddLeafDifference(
         ICollection<DocumentValidationDiagnostic> diagnostics,
-        IEnumerable<MaterializationTargetId> targets,
+        IEnumerable<string> slices,
         string code,
         string message,
         MaterializationRebuildRequestDocument request,
         string placementSource)
     {
-        var values = targets.Select(static target => target.Value).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        var values = slices.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         if (values.Length == 0)
             return;
         diagnostics.Add(MaterializationRebuildPlanSetCompiler.Error(
@@ -859,7 +881,7 @@ public static class MaterializationRebuildPlanSetLinker
             LinkStage,
             request,
             [placementSource],
-            "exactly one leaf plan per placement target",
+            "exactly one leaf plan per placement slice",
             string.Join(",", values)));
     }
 

@@ -36,6 +36,19 @@ public sealed class MaterializationIndexSyncStatusProjectionTests
         Assert.Equal(ExecutionStatusDisclosure.Disclosed, extension.Value.Disclosure);
         Assert.True(PortableExecutionValidator.Validate(extension.Value.Value!).IsValid);
         Assert.Equal("pool/status", root.GetProperty("pool").GetRequiredString());
+        Assert.Equal(
+            fixture.Routing.PlacementSlice.Id.Value,
+            root.GetProperty("placementSlice").GetRequiredString());
+        var placementSliceFingerprint = root.GetProperty("placementSliceFingerprint");
+        Assert.Equal(
+            fixture.Routing.PlacementSlice.Fingerprint.Algorithm,
+            placementSliceFingerprint.GetProperty("algorithm").GetRequiredString());
+        Assert.Equal(
+            fixture.Routing.PlacementSlice.Fingerprint.Canonicalization,
+            placementSliceFingerprint.GetProperty("canonicalization").GetRequiredString());
+        Assert.Equal(
+            fixture.Routing.PlacementSlice.Fingerprint.Value,
+            placementSliceFingerprint.GetProperty("value").GetRequiredString());
         var poolDefinitionFingerprint = root.GetProperty("poolDefinitionFingerprint");
         Assert.Equal(
             fixture.Routing.PoolDefinitionFingerprint.Algorithm,
@@ -630,13 +643,12 @@ public sealed class MaterializationIndexSyncStatusProjectionTests
         var candidateLag = fixture.Observation.ChangeLag.Single(
             lag => lag.Observation.Request.Generation == candidate.GenerationId);
         MaterializationBackendRoutingSnapshot candidateOnly = new(
-            fixture.Routing.PoolId,
-            fixture.Routing.PoolDefinitionFingerprint,
+            fixture.Routing.PlacementSlice,
             new("1"),
             MaterializationBackendRoutingFence.Initial,
             activeRead: null,
             activeWrite: null,
-            candidate,
+            candidate: candidate,
             draining: [],
             retired: [],
             cleaned: []);
@@ -681,6 +693,72 @@ public sealed class MaterializationIndexSyncStatusProjectionTests
                 .Select(static shard => shard.GetProperty("target").GetRequiredString()));
     }
 
+    [Fact]
+    public void CreateExtension_DistinguishesSamePoolAndSliceIdentityByExactPlacementFingerprint()
+    {
+        var fixture = CreateFixture();
+        var original = fixture.Routing.PlacementSlice;
+        MaterializationPlacementSliceReference changedContent = new(
+            schemaVersion: MaterializationPlacementSliceReference.CurrentSchemaVersion,
+            id: original.Id,
+            materialization: original.Materialization,
+            membership: original.Membership,
+            pool: original.Pool,
+            target: original.Target,
+            subjects: [new("placement/status/changed")]);
+        Assert.Equal(original.Id, changedContent.Id);
+        Assert.NotEqual(original.Fingerprint, changedContent.Fingerprint);
+
+        var candidate = fixture.Routing.Candidate;
+        MaterializationBackendRoutingSnapshot originalRouting = new(
+            placementSlice: original,
+            revision: new("1"),
+            latestFence: MaterializationBackendRoutingFence.Initial,
+            activeRead: null,
+            activeWrite: null,
+            candidate: candidate,
+            draining: [],
+            retired: [],
+            cleaned: []);
+        MaterializationBackendRoutingSnapshot changedRouting = new(
+            placementSlice: changedContent,
+            revision: new("1"),
+            latestFence: MaterializationBackendRoutingFence.Initial,
+            activeRead: null,
+            activeWrite: null,
+            candidate: candidate,
+            draining: [],
+            retired: [],
+            cleaned: []);
+
+        var originalExtension = MaterializationIndexSyncStatusProjector.CreateExtension(
+            originalRouting,
+            progress: [],
+            generations: [],
+            control: [],
+            observation: new(),
+            provenance: fixture.Provenance);
+        var changedExtension = MaterializationIndexSyncStatusProjector.CreateExtension(
+            changedRouting,
+            progress: [],
+            generations: [],
+            control: [],
+            observation: new(),
+            provenance: fixture.Provenance);
+        var originalRoot = Root(originalExtension);
+        var changedRoot = Root(changedExtension);
+
+        Assert.Equal(
+            originalRoot.GetProperty("placementSlice").GetRequiredString(),
+            changedRoot.GetProperty("placementSlice").GetRequiredString());
+        Assert.NotEqual(
+            originalRoot.GetProperty("placementSliceFingerprint").GetProperty("value").GetRequiredString(),
+            changedRoot.GetProperty("placementSliceFingerprint").GetProperty("value").GetRequiredString());
+        Assert.NotEqual(
+            MaterializationIndexSyncStatusWireNames.PlacementStatusPath(original),
+            MaterializationIndexSyncStatusWireNames.PlacementStatusPath(changedContent));
+    }
+
     static StatusFixture CreateFixture()
     {
         var candidateDescriptor = MaterializationBackendPoolTestFixture.Descriptor("target/a");
@@ -693,6 +771,8 @@ public sealed class MaterializationIndexSyncStatusProjectionTests
             defaultTarget: candidateDescriptor.Id,
             poolId: "pool/status");
         var poolDocument = MaterializationBackendPoolDocument.FromDefinition(pool);
+        var placementSlice = CreatePlacementSlice(pool, poolDocument, candidateDescriptor.Id);
+        var activeGenerationPlacementSlice = CreatePlacementSlice(pool, poolDocument, activeDescriptor.Id);
         MaterializationBackendGenerationReference candidate = new(
             candidateDescriptor.Id,
             new("generation/a"),
@@ -714,13 +794,12 @@ public sealed class MaterializationIndexSyncStatusProjectionTests
             new("generation/c"),
             pool.DefinitionFingerprint);
         MaterializationReadableBackendReference read = new(
+            placementSlice,
             active,
-            new(
-                MaterializationActiveGenerationReference.CurrentSchemaVersion,
-                new("sha256", "tests/rebuild-plan/v1", "0123456789abcdef"),
-                pool.MaterializationId,
-                active.TargetId,
-                active.GenerationId,
+            new MaterializationActiveGenerationReference(
+                schemaVersion: MaterializationActiveGenerationReference.CurrentSchemaVersion,
+                authority: CreateAuthority(activeGenerationPlacementSlice),
+                generation: active.GenerationId,
                 targetRevision: new("4"),
                 promotion: new("promotion/z"),
                 promotionFence: new("2"),
@@ -737,17 +816,16 @@ public sealed class MaterializationIndexSyncStatusProjectionTests
                 "tests/profile-routing/v1",
                 new(readTarget: active.TargetId)));
         MaterializationBackendRoutingSnapshot routing = new(
-            pool.Id,
-            poolDocument.DefinitionFingerprint,
-            new("7"),
-            new("3"),
-            read,
-            active,
-            candidate,
+            placementSlice,
+            revision: new("7"),
+            latestFence: new("3"),
+            activeRead: read,
+            activeWrite: active,
+            candidate: candidate,
             draining: [new(draining, new("6"))],
             retired: [new(retired, new("5"))],
             cleaned: [cleaned],
-            configuration);
+            configuration: configuration);
 
         MaterializationIndexSyncGenerationStatus candidateStatus = new(
             candidate,
@@ -885,6 +963,52 @@ public sealed class MaterializationIndexSyncStatusProjectionTests
             [control],
             observation,
             provenance);
+    }
+
+    static MaterializationPlacementSliceReference CreatePlacementSlice(
+        MaterializationBackendPoolDefinition pool,
+        MaterializationBackendPoolDocument poolDocument,
+        MaterializationTargetId target) =>
+        MaterializationPlacementSliceReference.Create(
+            materialization: new(
+                MaterializationDefinitionReference.CurrentSchemaVersion,
+                pool.MaterializationId,
+                pool.DefinitionFingerprint),
+            membership: new(
+                algorithm: "sha256",
+                canonicalization: "tests/index-sync-status-membership/v1",
+                value: new string('d', 64)),
+            pool: MaterializationBackendPoolReference.FromDocument(poolDocument),
+            target: target,
+            subjects: [new("placement/status")]);
+
+    static MaterializationRebuildLeafExecutionAuthority CreateAuthority(
+        MaterializationPlacementSliceReference placementSlice)
+    {
+        MaterializationRebuildRequestReference request = new(
+            schemaVersion: MaterializationRebuildRequestReference.CurrentSchemaVersion,
+            materialization: placementSlice.Materialization,
+            request: new(
+                algorithm: "sha256",
+                canonicalization: "tests/index-sync-status-request/v1",
+                value: placementSlice.Fingerprint.Value));
+        MaterializationRebuildPlanSetReference planSet = new(
+            schemaVersion: MaterializationRebuildPlanSetReference.CurrentSchemaVersion,
+            request,
+            planSet: new(
+                algorithm: "sha256",
+                canonicalization: "tests/index-sync-status-plan-set/v1",
+                value: placementSlice.Fingerprint.Value));
+        MaterializationRebuildPlanReference leaf = new(
+            plan: new(
+                algorithm: "sha256",
+                canonicalization: "tests/index-sync-status-leaf/v1",
+                value: placementSlice.Fingerprint.Value),
+            placementSlice: placementSlice.Fingerprint);
+        return new(
+            schemaVersion: MaterializationRebuildLeafExecutionAuthority.CurrentSchemaVersion,
+            planSet,
+            binding: new(placementSlice, leaf));
     }
 
     static MaterializationProgressSnapshot Progress(

@@ -385,10 +385,11 @@ public sealed record MaterializationChangeFeedPlan
 public sealed record MaterializationRebuildPlan
 {
     /// <summary>Current persisted rebuild-plan schema version.</summary>
-    public const string CurrentSchemaVersion = "cohesive-materialization-rebuild-plan/v4";
+    public const string CurrentSchemaVersion = "cohesive-materialization-rebuild-plan/v5";
 
     /// <summary>Creates and fingerprints a rebuild realization plan.</summary>
     /// <param name="materialization">Exact canonical materialization document.</param>
+    /// <param name="placementSlice">Exact plan-set placement authority implemented by this leaf.</param>
     /// <param name="impactPlan">Exact compiled change-impact semantics interpreted during catch-up and maintenance.</param>
     /// <param name="sources">One rebuild-mode capability realization for every declared Relations source input.</param>
     /// <param name="target">Exact candidate-generation target descriptor.</param>
@@ -405,6 +406,7 @@ public sealed record MaterializationRebuildPlan
     /// <exception cref="ArgumentException">A definition, capability, source, shard, or fingerprint invariant is invalid.</exception>
     public MaterializationRebuildPlan(
         MaterializationDocument materialization,
+        MaterializationPlacementSliceReference placementSlice,
         MaterializationImpactPlan impactPlan,
         ImmutableArray<MaterializationRebuildSourcePlan> sources,
         MaterializationTargetDescriptor target,
@@ -418,6 +420,7 @@ public sealed record MaterializationRebuildPlan
         : this(
             schemaVersion: CurrentSchemaVersion,
             materialization: materialization,
+            placementSlice: placementSlice,
             impactPlan: impactPlan,
             sources: sources,
             target: target,
@@ -435,6 +438,7 @@ public sealed record MaterializationRebuildPlan
     /// <summary>Creates or deserializes an exactly fingerprinted rebuild realization plan.</summary>
     /// <param name="schemaVersion">Exact persisted plan schema version.</param>
     /// <param name="materialization">Exact canonical materialization document.</param>
+    /// <param name="placementSlice">Exact plan-set placement authority implemented by this leaf.</param>
     /// <param name="impactPlan">Exact compiled change-impact semantics interpreted during catch-up and maintenance.</param>
     /// <param name="sources">One rebuild-mode capability realization for every declared Relations source input.</param>
     /// <param name="target">Exact candidate-generation target descriptor.</param>
@@ -454,6 +458,7 @@ public sealed record MaterializationRebuildPlan
     public MaterializationRebuildPlan(
         string schemaVersion,
         MaterializationDocument materialization,
+        MaterializationPlacementSliceReference placementSlice,
         MaterializationImpactPlan impactPlan,
         ImmutableArray<MaterializationRebuildSourcePlan> sources,
         MaterializationTargetDescriptor target,
@@ -475,6 +480,7 @@ public sealed record MaterializationRebuildPlan
         }
 
         Materialization = Guard.RequireNotNull(materialization);
+        PlacementSlice = placementSlice ?? throw new ArgumentNullException(nameof(placementSlice));
         ImpactPlan = Guard.RequireNotNull(impactPlan);
         Target = Guard.RequireNotNull(target);
         TargetCapabilityMatch = Guard.RequireNotNull(targetCapabilityMatch);
@@ -488,10 +494,23 @@ public sealed record MaterializationRebuildPlan
                 nameof(limits));
         }
         ValidateMaterialization(materialization);
+        var materializationReference = MaterializationDefinitionReference.FromDocument(materialization);
+        if (placementSlice.Materialization != materializationReference)
+        {
+            throw new ArgumentException(
+                "A rebuild leaf must retain the exact materialization of its placement slice.",
+                nameof(placementSlice));
+        }
         ValidateExecutableImpactStrategies(impactPlan);
         _ = MaterializationImpactPlanLinker.Link(impactPlan, materialization.Definition);
         if (target.MaterializationId != materialization.Definition.Id)
             throw new ArgumentException("The selected target must belong to the exact materialization.", nameof(target));
+        if (placementSlice.Target != target.Id)
+        {
+            throw new ArgumentException(
+                "A rebuild leaf target must equal its independently promoted placement-slice target.",
+                nameof(placementSlice));
+        }
         if (!targetCapabilityMatch.IsSatisfied)
             throw new ArgumentException("A rebuild target requires a satisfied capability match.", nameof(targetCapabilityMatch));
 
@@ -525,6 +544,7 @@ public sealed record MaterializationRebuildPlan
         var computed = MaterializationRebuildPlanFingerprinter.Compute(
             SchemaVersion,
             Materialization,
+            PlacementSlice,
             ImpactPlan,
             Sources,
             Target,
@@ -545,6 +565,9 @@ public sealed record MaterializationRebuildPlan
 
     /// <summary>Exact canonical materialization document.</summary>
     public MaterializationDocument Materialization { get; }
+
+    /// <summary>Exact plan-set placement authority implemented by this one-target leaf.</summary>
+    public MaterializationPlacementSliceReference PlacementSlice { get; }
 
     /// <summary>Exact definition-linked impact plan interpreted for every source change.</summary>
     public MaterializationImpactPlan ImpactPlan { get; }
@@ -952,7 +975,7 @@ public static class MaterializationRebuildPlanFingerprinter
     public const string Algorithm = "sha256";
 
     /// <summary>Canonicalization profile used by the current synchronization-plan fence.</summary>
-    public const string Canonicalization = "cohesive-materialization-rebuild-plan/v4-c14n/v1";
+    public const string Canonicalization = "cohesive-materialization-rebuild-plan/v5-c14n/v1";
 
     /// <summary>Computes the fingerprint of one complete persisted rebuild plan.</summary>
     /// <param name="plan">Plan whose canonical content is fingerprinted.</param>
@@ -964,6 +987,7 @@ public static class MaterializationRebuildPlanFingerprinter
         return Compute(
             plan.SchemaVersion,
             plan.Materialization,
+            plan.PlacementSlice,
             plan.ImpactPlan,
             plan.Sources,
             plan.Target,
@@ -979,6 +1003,7 @@ public static class MaterializationRebuildPlanFingerprinter
     internal static MaterializationRebuildPlanFingerprint Compute(
         string schemaVersion,
         MaterializationDocument materialization,
+        MaterializationPlacementSliceReference placementSlice,
         MaterializationImpactPlan impactPlan,
         ImmutableArray<MaterializationRebuildSourcePlan> sources,
         MaterializationTargetDescriptor target,
@@ -993,6 +1018,7 @@ public static class MaterializationRebuildPlanFingerprinter
         var content = new FingerprintContent(
             schemaVersion,
             materialization,
+            placementSlice,
             impactPlan,
             sources,
             target,
@@ -1010,6 +1036,7 @@ public static class MaterializationRebuildPlanFingerprinter
     sealed record FingerprintContent(
         string SchemaVersion,
         MaterializationDocument Materialization,
+        MaterializationPlacementSliceReference PlacementSlice,
         MaterializationImpactPlan ImpactPlan,
         ImmutableArray<MaterializationRebuildSourcePlan> Sources,
         MaterializationTargetDescriptor Target,

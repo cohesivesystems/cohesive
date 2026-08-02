@@ -91,6 +91,7 @@ public sealed record MaterializationRebuildLeafPlanBinding
     /// <param name="slice">Independently fingerprinted placement authority.</param>
     /// <param name="leafPlan">Exact persisted one-target rebuild-plan reference.</param>
     /// <exception cref="ArgumentNullException">A required reference is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="leafPlan"/> carries another placement slice.</exception>
     [JsonConstructor]
     public MaterializationRebuildLeafPlanBinding(
         MaterializationPlacementSliceReference slice,
@@ -98,6 +99,12 @@ public sealed record MaterializationRebuildLeafPlanBinding
     {
         Slice = slice ?? throw new ArgumentNullException(nameof(slice));
         LeafPlan = leafPlan ?? throw new ArgumentNullException(nameof(leafPlan));
+        if (leafPlan.PlacementSlice != slice.Fingerprint)
+        {
+            throw new ArgumentException(
+                "A leaf-plan reference must retain the exact placement slice to which it is bound.",
+                nameof(leafPlan));
+        }
     }
 
     /// <summary>Independently fingerprinted placement authority.</summary>
@@ -117,7 +124,7 @@ public sealed record MaterializationRebuildLeafPlanBinding
 public sealed class MaterializationRebuildPlanSet : IEquatable<MaterializationRebuildPlanSet>
 {
     /// <summary>Current portable rebuild plan-set schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive-materialization-rebuild-plan-set/v1";
+    public const string CurrentSchemaVersion = "cohesive-materialization-rebuild-plan-set/v2";
 
     /// <summary>Creates and verifies one complete linked rebuild plan set.</summary>
     /// <param name="schemaVersion">Exact portable plan-set schema.</param>
@@ -315,5 +322,109 @@ public sealed record MaterializationRebuildPlanSetReference
     {
         ArgumentNullException.ThrowIfNull(planSet);
         return new(CurrentSchemaVersion, planSet.Request, planSet.Fingerprint);
+    }
+}
+
+/// <summary>
+/// Durable execution claim for one exact leaf of one content-addressed rebuild plan set.
+/// </summary>
+/// <remarks>
+/// The constructor proves internal affinity among the request, leaf reference, and placement slice, but a plan-set
+/// reference cannot by itself prove that the binding is a member of the referenced document. Producers should use
+/// <see cref="FromPlanSet"/>. Every execution or promotion resolver must reproduce the full fingerprinted plan set and
+/// verify the claim before target I/O.
+/// </remarks>
+public sealed record MaterializationRebuildLeafExecutionAuthority
+{
+    /// <summary>Current durable leaf-execution-authority schema.</summary>
+    public const string CurrentSchemaVersion = "cohesive-materialization-rebuild-leaf-execution-authority/v1";
+
+    /// <summary>Creates or deserializes one internally consistent linked-leaf execution claim.</summary>
+    /// <param name="schemaVersion">Exact durable authority schema.</param>
+    /// <param name="planSet">Exact linked plan-set authority.</param>
+    /// <param name="binding">Exact leaf-plan and full placement-slice binding retained by that plan set.</param>
+    /// <exception cref="ArgumentNullException">A required authority is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// The schema is unsupported or the binding addresses another materialization than the plan-set request.
+    /// </exception>
+    [JsonConstructor]
+    public MaterializationRebuildLeafExecutionAuthority(
+        string schemaVersion,
+        MaterializationRebuildPlanSetReference planSet,
+        MaterializationRebuildLeafPlanBinding binding)
+    {
+        SchemaVersion = Guard.RequireNotNullOrWhiteSpace(schemaVersion);
+        if (!string.Equals(schemaVersion, CurrentSchemaVersion, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"Leaf execution-authority schema '{schemaVersion}' is unsupported; expected '{CurrentSchemaVersion}'.",
+                nameof(schemaVersion));
+        }
+
+        PlanSet = planSet ?? throw new ArgumentNullException(nameof(planSet));
+        Binding = binding ?? throw new ArgumentNullException(nameof(binding));
+        if (planSet.Request.Materialization != binding.Slice.Materialization)
+        {
+            throw new ArgumentException(
+                "A leaf execution authority must address the exact materialization retained by its plan-set request.",
+                nameof(binding));
+        }
+    }
+
+    /// <summary>Exact durable authority schema.</summary>
+    public string SchemaVersion { get; }
+
+    /// <summary>Exact content-addressed plan set claimed to contain the leaf.</summary>
+    public MaterializationRebuildPlanSetReference PlanSet { get; }
+
+    /// <summary>Exact leaf-plan and full placement-slice binding to verify against <see cref="PlanSet"/>.</summary>
+    public MaterializationRebuildLeafPlanBinding Binding { get; }
+
+    /// <summary>Exact persisted leaf-plan reference.</summary>
+    [JsonIgnore]
+    public MaterializationRebuildPlanReference LeafPlan => Binding.LeafPlan;
+
+    /// <summary>Full independently promoted placement authority bound to the leaf.</summary>
+    [JsonIgnore]
+    public MaterializationPlacementSliceReference PlacementSlice => Binding.Slice;
+
+    /// <summary>Creates an authority only when a verified plan set contains the exact supplied leaf and slice.</summary>
+    /// <param name="planSet">Canonical constructor-verified linked plan set.</param>
+    /// <param name="leafPlan">Canonical constructor-verified leaf plan.</param>
+    /// <returns>The exact linked leaf execution authority.</returns>
+    /// <exception cref="ArgumentNullException">An argument is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="leafPlan"/> is detached from <paramref name="planSet"/>, its full placement slice differs, or
+    /// its target descriptor is not the exact member pinned by the plan set's backend pool.
+    /// </exception>
+    public static MaterializationRebuildLeafExecutionAuthority FromPlanSet(
+        MaterializationRebuildPlanSet planSet,
+        MaterializationRebuildPlan leafPlan)
+    {
+        ArgumentNullException.ThrowIfNull(planSet);
+        ArgumentNullException.ThrowIfNull(leafPlan);
+        var leafReference = MaterializationRebuildPlanReference.FromPlan(leafPlan);
+        var binding = planSet.LeafPlans.SingleOrDefault(candidate =>
+            candidate.LeafPlan == leafReference
+            && candidate.Slice.Equals(leafPlan.PlacementSlice));
+        if (binding is null)
+        {
+            throw new ArgumentException(
+                "The rebuild leaf and its full placement slice are not linked by the supplied verified plan set.",
+                nameof(leafPlan));
+        }
+        var pinnedTarget = planSet.Placement.BackendPool.Definition.Members.SingleOrDefault(
+            member => member.Id == binding.Slice.Target);
+        if (pinnedTarget is null || !MaterializationContract.CanonicalEquals(pinnedTarget, leafPlan.Target))
+        {
+            throw new ArgumentException(
+                "The rebuild leaf target differs from the exact descriptor pinned by its linked backend pool.",
+                nameof(leafPlan));
+        }
+
+        return new(
+            CurrentSchemaVersion,
+            MaterializationRebuildPlanSetReference.FromPlanSet(planSet),
+            binding);
     }
 }

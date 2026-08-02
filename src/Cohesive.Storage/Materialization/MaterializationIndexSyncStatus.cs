@@ -8,8 +8,10 @@ public static class MaterializationIndexSyncStatusWireNames
     /// <summary>Stable authority and extension identity for index-synchronization status.</summary>
     public const string SemanticAuthority = "cohesive.storage.index-sync.status";
 
-    /// <summary>Exact v2 portable payload schema version, including attributable adaptive Control state.</summary>
-    public const string CurrentSchemaVersion = "index-sync-status/v2";
+    /// <summary>
+    /// Exact v3 portable payload schema version, including attributable adaptive Control state and placement scope.
+    /// </summary>
+    public const string CurrentSchemaVersion = "index-sync-status/v3";
 
     /// <summary>Gets the typed execution-extension identity derived from <see cref="SemanticAuthority"/>.</summary>
     public static ExecutionExtensionId ExtensionId { get; } = new(SemanticAuthority);
@@ -17,21 +19,28 @@ public static class MaterializationIndexSyncStatusWireNames
     /// <summary>Gets the typed extension schema version derived from <see cref="CurrentSchemaVersion"/>.</summary>
     public static ExecutionExtensionSchemaVersion SchemaVersion { get; } = new(CurrentSchemaVersion);
 
-    /// <summary>Projects the canonical status semantic path for one exact backend-pool IR declaration.</summary>
-    /// <param name="definition">Canonical backend-pool definition owning the status instance.</param>
+    /// <summary>Projects the canonical status semantic path for one exact placement authority.</summary>
+    /// <param name="placementSlice">Exact placement slice owning the status instance.</param>
     /// <returns>
-    /// A stable path derived from the backend IR's materialization and pool identities, never from adapter names.
+    /// A stable path derived from the placement IR's materialization, pool, slice identity, and content fingerprint,
+    /// never from adapter names.
     /// </returns>
-    /// <exception cref="ArgumentNullException"><paramref name="definition"/> is <see langword="null"/>.</exception>
-    public static ExecutionSemanticPath PoolStatusPath(MaterializationBackendPoolDefinition definition)
+    /// <exception cref="ArgumentNullException"><paramref name="placementSlice"/> is <see langword="null"/>.</exception>
+    public static ExecutionSemanticPath PlacementStatusPath(MaterializationPlacementSliceReference placementSlice)
     {
-        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(placementSlice);
         return new(
         [
             "materializations",
-            definition.MaterializationId.Value,
+            placementSlice.Materialization.Materialization.Value,
             "backendPools",
-            definition.Id.Value,
+            placementSlice.Pool.Pool.Value,
+            "placementSlices",
+            placementSlice.Id.Value,
+            "fingerprints",
+            placementSlice.Fingerprint.Algorithm,
+            placementSlice.Fingerprint.Canonicalization,
+            placementSlice.Fingerprint.Value,
             "indexSyncStatus"
         ]);
     }

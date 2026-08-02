@@ -242,7 +242,7 @@ public static class MaterializationRebuildPlanningFingerprinters
     public static MaterializationRebuildPlanSetFingerprint ComputePlanSet(MaterializationRebuildPlanSet planSet)
     {
         ArgumentNullException.ThrowIfNull(planSet);
-        const string canonicalization = "cohesive-materialization-rebuild-plan-set/v1-c14n/v1";
+        const string canonicalization = "cohesive-materialization-rebuild-plan-set/v2-c14n/v1";
         return new(Algorithm, canonicalization, Digest(new PlanSetInput(
                 planSet.SchemaVersion,
                 planSet.Request,

@@ -25,6 +25,18 @@ public sealed class MaterializationRebuildProcessLifecycleTests
         canonicalization: "tests/materialization-rebuild-lifecycle/v1",
         value: new string('a', 64));
 
+    static readonly MaterializationId Materialization = new("materialization/lifecycle-tests");
+
+    static readonly MaterializationTargetId Target = new("target/lifecycle-tests");
+
+    static readonly MaterializationPlacementSliceReference PlacementSlice = CreatePlacementSlice();
+
+    static readonly MaterializationRebuildPlanReference PlanReference =
+        new(PlanFingerprint, PlacementSlice.Fingerprint);
+
+    static readonly MaterializationRebuildLeafExecutionAuthority LeafAuthority =
+        CreateLeafAuthority(planSetDigest: 'e');
+
     static readonly ImmutableArray<MaterializationRebuildShardId> Shards =
         [new("shard-a"), new("shard-b")];
 
@@ -50,11 +62,8 @@ public sealed class MaterializationRebuildProcessLifecycleTests
         var lifecycle = Lifecycle(store, new ExactExecutionResolver(execution), artifacts);
         var encodedPlan = malformed
             ? "not-json"
-            : MaterializationRebuildWorkReferenceJsonSerializer.SerializePlan(
-                new(new(
-                    algorithm: PlanFingerprint.Algorithm,
-                    canonicalization: PlanFingerprint.Canonicalization,
-                    value: new string('f', 64))));
+            : MaterializationRebuildWorkReferenceJsonSerializer.SerializeAuthority(
+                CreateLeafAuthority(planSetDigest: 'f'));
 
         var result = await lifecycle.InitializeAsync(
             Context(StartedAtUtc),
@@ -442,7 +451,7 @@ public sealed class MaterializationRebuildProcessLifecycleTests
         var lifecycle = new MaterializationRebuildProcessLifecycle(
             runtime,
             artifacts,
-            PlanFingerprint,
+            LeafAuthority,
             resolver);
         var restartAtUtc = StartedAtUtc.AddMinutes(1);
         resolver.Add(Execution(
@@ -507,7 +516,7 @@ public sealed class MaterializationRebuildProcessLifecycleTests
         var lifecycle = new MaterializationRebuildProcessLifecycle(
             runtime,
             artifacts,
-            PlanFingerprint,
+            LeafAuthority,
             new ExactExecutionResolver(execution));
 
         var activated = await lifecycle.ActivateAsync(
@@ -569,7 +578,7 @@ public sealed class MaterializationRebuildProcessLifecycleTests
         var lifecycle = new MaterializationRebuildProcessLifecycle(
             runtime,
             artifacts,
-            PlanFingerprint,
+            LeafAuthority,
             resolver);
         var initialized = await lifecycle.InitializeAsync(
             Context(StartedAtUtc),
@@ -662,12 +671,12 @@ public sealed class MaterializationRebuildProcessLifecycleTests
         var activationFacade = new MaterializationRebuildProcessLifecycle(
             runtime,
             artifacts,
-            PlanFingerprint,
+            LeafAuthority,
             resolver);
         var restartFacade = new MaterializationRebuildProcessLifecycle(
             runtime,
             artifacts,
-            PlanFingerprint,
+            LeafAuthority,
             resolver);
         var initialized = await activationFacade.InitializeAsync(
             Context(StartedAtUtc),
@@ -757,7 +766,7 @@ public sealed class MaterializationRebuildProcessLifecycleTests
         new(
             Runtime(store, maximumStoreAttempts),
             artifacts,
-            PlanFingerprint,
+            LeafAuthority,
             resolver);
 
     static ProcessDurableRuntime Runtime(
@@ -779,12 +788,12 @@ public sealed class MaterializationRebuildProcessLifecycleTests
         Func<OperationContext, Task<MaterializationRebuildInitializationResult>>? begin = null,
         Func<OperationContext, DateTimeOffset, Task<bool>>? abandon = null) =>
         new(
-            PlanFingerprint,
+            LeafAuthority,
             Shards,
             attempt,
             generation,
-            new("materialization/lifecycle-tests"),
-            new("target/lifecycle-tests"),
+            Materialization,
+            Target,
             begin ?? (_ => Task.FromResult(Initialization(generation))),
             (_, _) => Task.FromException<MaterializationRebuildShardResult>(
                 new InvalidOperationException("Lifecycle tests do not execute rebuild shards.")),
@@ -878,13 +887,61 @@ public sealed class MaterializationRebuildProcessLifecycleTests
             canonicalization: "tests/materialization-definition/v1",
             value: new string('b', 64));
 
+    static MaterializationPlacementSliceReference CreatePlacementSlice()
+    {
+        MaterializationDefinitionReference materialization = new(
+            MaterializationDefinitionReference.CurrentSchemaVersion,
+            Materialization,
+            DefinitionFingerprint());
+        MaterializationBackendPoolReference pool = new(
+            MaterializationBackendPoolReference.CurrentSchemaVersion,
+            new("pool/lifecycle-tests"),
+            materialization,
+            new(
+                algorithm: "sha256",
+                canonicalization: "tests/materialization-pool/v1",
+                value: new string('c', 64)));
+        MaterializationRebuildMembershipFingerprint membership = new(
+            algorithm: "sha256",
+            canonicalization: "tests/materialization-membership/v1",
+            value: new string('d', 64));
+        return MaterializationPlacementSliceReference.Create(
+            materialization,
+            membership,
+            pool,
+            Target,
+            [new("subject/lifecycle-tests")]);
+    }
+
+    static MaterializationRebuildLeafExecutionAuthority CreateLeafAuthority(char planSetDigest)
+    {
+        MaterializationRebuildRequestReference request = new(
+            MaterializationRebuildRequestReference.CurrentSchemaVersion,
+            PlacementSlice.Materialization,
+            new(
+                algorithm: "sha256",
+                canonicalization: "tests/materialization-rebuild-request/v1",
+                value: new string('d', 64)));
+        MaterializationRebuildPlanSetReference planSet = new(
+            MaterializationRebuildPlanSetReference.CurrentSchemaVersion,
+            request,
+            new(
+                algorithm: "sha256",
+                canonicalization: "tests/materialization-rebuild-plan-set/v1",
+                value: new string(planSetDigest, 64)));
+        return new(
+            MaterializationRebuildLeafExecutionAuthority.CurrentSchemaVersion,
+            planSet,
+            new(PlacementSlice, PlanReference));
+    }
+
     static ProcessStartReceipt Start(
         MaterializationRebuildProcessArtifacts artifacts,
         ProcessContinuationIdentity continuation,
         string? encodedPlan = null)
     {
         var planReference = encodedPlan
-            ?? MaterializationRebuildWorkReferenceJsonSerializer.SerializePlan(new(PlanFingerprint));
+            ?? MaterializationRebuildWorkReferenceJsonSerializer.SerializeAuthority(LeafAuthority);
         var request = new ProcessStartRequest(
             schemaVersion: ProcessStartRequest.CurrentSchemaVersion,
             definition: artifacts.CoordinatorPlan.DefinitionReference,
@@ -943,11 +1000,11 @@ public sealed class MaterializationRebuildProcessLifecycleTests
             executions.Add(execution.Attempt.Continuation, execution);
 
         public bool TryResolve(
-            MaterializationRebuildPlanFingerprint plan,
+            MaterializationRebuildLeafExecutionAuthority authority,
             ProcessContinuationIdentity continuation,
             out MaterializationRebuildExecution? execution)
         {
-            if (plan == PlanFingerprint && executions.TryGetValue(continuation, out var found))
+            if (authority == LeafAuthority && executions.TryGetValue(continuation, out var found))
             {
                 execution = found;
                 return true;

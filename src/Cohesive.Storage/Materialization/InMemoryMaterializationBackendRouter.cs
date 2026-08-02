@@ -3,29 +3,21 @@ using System.Collections.Immutable;
 namespace Cohesive.Storage.Materialization;
 
 /// <summary>
-/// Linearizable local reference interpretation of fenced backend-pool routing over explicit target dependencies.
+/// Linearizable local reference interpretation of fenced placement routing over explicit backend-pool dependencies.
 /// </summary>
 /// <remarks>
 /// The router never performs ambient feature-flag or dependency lookup. A caller resolves configuration into the
-/// canonical swap command, while this type owns the pool revision/fence linearization point. Physical target
-/// promotion remains target-owned and must precede read admission. Pool retirement stays orthogonal to a target's
-/// local generation state, and cleanup consumes an explicit adapter-owned physical receipt.
+/// canonical swap command, while this type owns each placement slice's revision/fence linearization point. Physical
+/// target promotion remains target-owned and must precede read admission. Placement retirement stays orthogonal to a
+/// target's local generation state, and cleanup consumes explicit reservation-bound adapter evidence.
 /// </remarks>
 public sealed class InMemoryMaterializationBackendRouter : IMaterializationBackendRouter, IDisposable
 {
     readonly SemaphoreSlim gate = new(initialCount: 1, maxCount: 1);
     readonly IMaterializationTargetPool targets;
     readonly TimeProvider timeProvider;
-    readonly Dictionary<MaterializationBackendRoutingCommandId, StoredCommandReceipt> receipts = [];
-    readonly Dictionary<MaterializationBackendGenerationReference, MaterializationBackendDrainState> draining = [];
-    readonly Dictionary<MaterializationBackendGenerationReference, MaterializationBackendRetirementState> retired = [];
-    readonly HashSet<MaterializationBackendGenerationReference> cleaned = [];
-    MaterializationBackendRoutingRevision revision = MaterializationBackendRoutingRevision.Initial;
-    MaterializationBackendRoutingFence? latestFence;
-    MaterializationReadableBackendReference? activeRead;
-    MaterializationBackendGenerationReference? activeWrite;
-    MaterializationBackendGenerationReference? candidate;
-    MaterializationBackendRoutingConfiguration? effectiveConfiguration;
+    readonly Dictionary<MaterializationPlacementSliceFingerprint, ScopeState> scopes = [];
+    readonly Dictionary<MaterializationBackendGenerationReference, PhysicalCleanupState> physicalCleanup = [];
     bool disposed;
 
     /// <summary>Creates an uninitialized router for one exact canonical backend-pool definition.</summary>
@@ -52,13 +44,16 @@ public sealed class InMemoryMaterializationBackendRouter : IMaterializationBacke
     public MaterializationBackendPoolDocument Document { get; }
 
     /// <inheritdoc />
-    public async ValueTask<MaterializationBackendRoutingSnapshot> InspectAsync(OperationContext context)
+    public async ValueTask<MaterializationBackendRoutingSnapshot> InspectAsync(
+        OperationContext context,
+        MaterializationPlacementSliceReference placementSlice)
     {
+        ArgumentNullException.ThrowIfNull(placementSlice);
         RequireContext(context);
         await EnterAsync(context).ConfigureAwait(false);
         try
         {
-            return Snapshot();
+            return Snapshot(GetOrCreateState(placementSlice));
         }
         finally
         {
@@ -67,15 +62,19 @@ public sealed class InMemoryMaterializationBackendRouter : IMaterializationBacke
     }
 
     /// <inheritdoc />
-    public async ValueTask<MaterializationBackendRouteBinding> ResolveReadAsync(OperationContext context)
+    public async ValueTask<MaterializationBackendRouteBinding> ResolveReadAsync(
+        OperationContext context,
+        MaterializationPlacementSliceReference placementSlice)
     {
+        ArgumentNullException.ThrowIfNull(placementSlice);
         RequireContext(context);
         await EnterAsync(context).ConfigureAwait(false);
         try
         {
-            var route = activeRead?.Generation
+            var state = GetOrCreateState(placementSlice);
+            var route = state.ActiveRead?.Generation
                 ?? throw new InvalidOperationException("Backend-pool read routing has not been initialized.");
-            return new(revision, route, targets.Resolve(route.TargetId));
+            return new(placementSlice, state.Revision, route, targets.Resolve(route.TargetId));
         }
         finally
         {
@@ -84,15 +83,19 @@ public sealed class InMemoryMaterializationBackendRouter : IMaterializationBacke
     }
 
     /// <inheritdoc />
-    public async ValueTask<MaterializationBackendRouteBinding> ResolveWriteAsync(OperationContext context)
+    public async ValueTask<MaterializationBackendRouteBinding> ResolveWriteAsync(
+        OperationContext context,
+        MaterializationPlacementSliceReference placementSlice)
     {
+        ArgumentNullException.ThrowIfNull(placementSlice);
         RequireContext(context);
         await EnterAsync(context).ConfigureAwait(false);
         try
         {
-            var route = activeWrite
+            var state = GetOrCreateState(placementSlice);
+            var route = state.ActiveWrite
                 ?? throw new InvalidOperationException("Backend-pool write routing has not been initialized.");
-            return new(revision, route, targets.Resolve(route.TargetId));
+            return new(placementSlice, state.Revision, route, targets.Resolve(route.TargetId));
         }
         finally
         {
@@ -110,32 +113,62 @@ public sealed class InMemoryMaterializationBackendRouter : IMaterializationBacke
         await EnterAsync(context).ConfigureAwait(false);
         try
         {
-            var prior = BeginCommand(request.Header, request);
+            var state = GetOrCreateState(request.Header.PlacementSlice);
+            var prior = BeginCommand(state, request.Header, request);
             if (prior is not null)
                 return prior;
 
-            if (candidate is not null)
-                return Reject(MaterializationBackendRoutingDisposition.StateConflict, "Another candidate is already admitted.");
-            if (ContainsLifecycleReference(request.Candidate)
-                || activeRead?.Generation == request.Candidate
-                || activeWrite == request.Candidate)
+            if (physicalCleanup.ContainsKey(request.Candidate))
             {
-                return Reject(MaterializationBackendRoutingDisposition.StateConflict, "The requested candidate already has an incompatible pool role.");
+                return Reject(
+                    state,
+                    MaterializationBackendRoutingDisposition.StateConflict,
+                    "A generation reserved or acknowledged for physical cleanup cannot be admitted again.");
+            }
+            if (state.Candidate is not null)
+                return Reject(state, MaterializationBackendRoutingDisposition.StateConflict, "Another candidate is already admitted.");
+            if (ContainsLifecycleReference(state, request.Candidate)
+                || state.ActiveRead?.Generation == request.Candidate
+                || state.ActiveWrite == request.Candidate)
+            {
+                return Reject(state, MaterializationBackendRoutingDisposition.StateConflict, "The requested candidate already has an incompatible placement role.");
+            }
+            if (request.Candidate.TargetId != state.PlacementSlice.Target)
+            {
+                return Reject(
+                    state,
+                    MaterializationBackendRoutingDisposition.EvidenceConflict,
+                    "A candidate must use the exact target assigned by its placement slice.");
             }
 
             var generation = await InspectGenerationAsync(context, request.Candidate).ConfigureAwait(false);
             if (generation is null)
-                return Reject(MaterializationBackendRoutingDisposition.NotFound, "The candidate generation is not retained by its backend.");
+                return Reject(state, MaterializationBackendRoutingDisposition.NotFound, "The candidate generation is not retained by its backend.");
             if (generation.State is not (MaterializationGenerationState.Loading
                 or MaterializationGenerationState.Sealed
                 or MaterializationGenerationState.Validated
                 or MaterializationGenerationState.Active))
             {
-                return Reject(MaterializationBackendRoutingDisposition.StateConflict, "The physical generation cannot be admitted as a candidate from its current lifecycle state.");
+                return Reject(state, MaterializationBackendRoutingDisposition.StateConflict, "The physical generation cannot be admitted as a candidate from its current lifecycle state.");
+            }
+            if (request.ExpectedFollowUp is { } expectedFollowUp
+                && state.Intents.ContainsKey(expectedFollowUp.Header.CommandId))
+            {
+                return Reject(
+                    state,
+                    MaterializationBackendRoutingDisposition.IdentityConflict,
+                    "The expected follow-up command identity is already reserved for different content.");
             }
 
-            candidate = request.Candidate;
-            return Commit(request.Header, request, MaterializationBackendRoutingOperation.AdmitCandidate);
+            state.Candidate = request.Candidate;
+            if (request.ExpectedFollowUp is { } followUp)
+            {
+                state.Intents.Add(
+                    followUp.Header.CommandId,
+                    StoredCommandIntent.ExpectedFollowUp(followUp));
+                state.PendingFollowUp = new(followUp);
+            }
+            return Commit(state, request.Header, request, MaterializationBackendRoutingOperation.AdmitCandidate);
         }
         finally
         {
@@ -153,31 +186,35 @@ public sealed class InMemoryMaterializationBackendRouter : IMaterializationBacke
         await EnterAsync(context).ConfigureAwait(false);
         try
         {
-            var prior = BeginCommand(request.Header, request);
+            var state = GetOrCreateState(request.Header.PlacementSlice);
+            var prior = BeginCommand(state, request.Header, request);
             if (prior is not null)
                 return prior;
-            if (candidate != request.Candidate)
-                return Reject(MaterializationBackendRoutingDisposition.NotFound, "The addressed generation is not the current candidate.");
-            if (activeRead?.Generation == request.Candidate || activeWrite == request.Candidate)
+            if (state.Candidate != request.Candidate)
+                return Reject(state, MaterializationBackendRoutingDisposition.NotFound, "The addressed generation is not the current candidate.");
+            if (state.ActiveRead?.Generation == request.Candidate || state.ActiveWrite == request.Candidate)
             {
                 return Reject(
+                    state,
                     MaterializationBackendRoutingDisposition.StateConflict,
-                    "A routed candidate must leave read and write admission before its pool role can be cleared.");
+                    "A routed candidate must leave read and write admission before its placement role can be cleared.");
             }
 
             var generation = await InspectGenerationAsync(context, request.Candidate).ConfigureAwait(false);
             if (generation is null)
-                return Reject(MaterializationBackendRoutingDisposition.NotFound, "The candidate generation is not retained by its backend.");
+                return Reject(state, MaterializationBackendRoutingDisposition.NotFound, "The candidate generation is not retained by its backend.");
             if (generation.State != MaterializationGenerationState.Retired
                 || generation.RetiredAtUtc != request.Abandonment.AbandonedAtUtc)
             {
                 return Reject(
+                    state,
                     MaterializationBackendRoutingDisposition.EvidenceConflict,
                     "A candidate role can be cleared only after target-owned permanent abandonment.");
             }
 
-            candidate = null;
-            return Commit(request.Header, request, MaterializationBackendRoutingOperation.AbandonCandidate);
+            ClearPendingFollowUpAfterAbandonment(state, request.Candidate);
+            state.Candidate = null;
+            return Commit(state, request.Header, request, MaterializationBackendRoutingOperation.AbandonCandidate);
         }
         finally
         {
@@ -195,51 +232,76 @@ public sealed class InMemoryMaterializationBackendRouter : IMaterializationBacke
         await EnterAsync(context).ConfigureAwait(false);
         try
         {
-            var prior = BeginCommand(request.Header, request);
+            var state = GetOrCreateState(request.Header.PlacementSlice);
+            var prior = BeginCommand(state, request.Header, request);
             if (prior is not null)
                 return prior;
             if (request.Read is null || request.Write is null)
-                return Reject(MaterializationBackendRoutingDisposition.EvidenceConflict, "A swap requires exact read and write routes.");
+                return Reject(state, MaterializationBackendRoutingDisposition.EvidenceConflict, "A swap requires exact read and write routes.");
+            if (request.Read.PlacementSlice != state.PlacementSlice)
+            {
+                return Reject(
+                    state,
+                    MaterializationBackendRoutingDisposition.EvidenceConflict,
+                    "The readable route belongs to another placement authority.");
+            }
             if (request.Read.Generation.DefinitionFingerprint != Document.Definition.DefinitionFingerprint
                 || request.Write.DefinitionFingerprint != Document.Definition.DefinitionFingerprint)
             {
-                return Reject(MaterializationBackendRoutingDisposition.EvidenceConflict, "A route implements another materialization definition.");
+                return Reject(state, MaterializationBackendRoutingDisposition.EvidenceConflict, "A route implements another materialization definition.");
             }
-            if (retired.ContainsKey(request.Read.Generation)
-                || retired.ContainsKey(request.Write)
-                || cleaned.Contains(request.Read.Generation)
-                || cleaned.Contains(request.Write))
+            if (physicalCleanup.ContainsKey(request.Read.Generation)
+                || physicalCleanup.ContainsKey(request.Write))
             {
-                return Reject(MaterializationBackendRoutingDisposition.StateConflict, "A retired or cleaned generation cannot be routed.");
+                return Reject(
+                    state,
+                    MaterializationBackendRoutingDisposition.StateConflict,
+                    "A generation reserved or acknowledged for physical cleanup cannot be routed.");
+            }
+            if (state.Retired.ContainsKey(request.Read.Generation)
+                || state.Retired.ContainsKey(request.Write)
+                || state.Cleaned.Contains(request.Read.Generation)
+                || state.Cleaned.Contains(request.Write))
+            {
+                return Reject(state, MaterializationBackendRoutingDisposition.StateConflict, "A retired or cleaned generation cannot be routed.");
             }
             if (request.Configuration.ReadTarget != request.Read.Generation.TargetId
                 || request.Configuration.WriteTarget != request.Write.TargetId)
             {
                 return Reject(
+                    state,
                     MaterializationBackendRoutingDisposition.EvidenceConflict,
                     "Resolved configuration must select the exact requested read and write targets.");
             }
+            if (request.Header.IssuedAtUtc < request.Read.Activation.ActivatedAtUtc)
+            {
+                return Reject(
+                    state,
+                    MaterializationBackendRoutingDisposition.EvidenceConflict,
+                    "A routing swap cannot predate the activation evidence it admits.");
+            }
 
-            var readValidation = await ValidateReadableAsync(context, request.Read).ConfigureAwait(false);
+            var readValidation = await ValidateReadableAsync(state, context, request.Read).ConfigureAwait(false);
             if (readValidation is not null)
                 return readValidation;
             var writeGeneration = await InspectGenerationAsync(context, request.Write).ConfigureAwait(false);
             if (writeGeneration is null)
-                return Reject(MaterializationBackendRoutingDisposition.NotFound, "The requested write generation is not retained.");
+                return Reject(state, MaterializationBackendRoutingDisposition.NotFound, "The requested write generation is not retained.");
             if (writeGeneration.State is not (MaterializationGenerationState.Loading or MaterializationGenerationState.Active))
             {
-                return Reject(MaterializationBackendRoutingDisposition.StateConflict, "The requested write generation is not writable.");
+                return Reject(state, MaterializationBackendRoutingDisposition.StateConflict, "The requested write generation is not writable.");
             }
 
-            var currentReadGeneration = activeRead?.Generation;
+            var currentReadGeneration = state.ActiveRead?.Generation;
             var readGenerationChanged = currentReadGeneration != request.Read.Generation;
-            var readEvidenceChanged = activeRead != request.Read;
-            var writeChanged = activeWrite != request.Write;
-            var configurationChanged = effectiveConfiguration != request.Configuration;
+            var readEvidenceChanged = state.ActiveRead != request.Read;
+            var writeChanged = state.ActiveWrite != request.Write;
+            var configurationChanged = state.EffectiveConfiguration != request.Configuration;
             if (!readEvidenceChanged && !writeChanged && !configurationChanged)
-                return Reject(MaterializationBackendRoutingDisposition.StateConflict, "A routing swap must change a route or its effective configuration.");
+                return Reject(state, MaterializationBackendRoutingDisposition.StateConflict, "A routing swap must change a route or its effective configuration.");
 
             var restoredGenerations = RestoredGenerations(
+                state,
                 request.Read.Generation,
                 readGenerationChanged,
                 request.Write,
@@ -247,43 +309,56 @@ public sealed class InMemoryMaterializationBackendRouter : IMaterializationBacke
             if (restoredGenerations.Length > 1)
             {
                 return Reject(
+                    state,
                     MaterializationBackendRoutingDisposition.EvidenceConflict,
                     "One atomic swap cannot restore multiple draining generations with a single equivalence proof.");
             }
             if (restoredGenerations.Length == 1
-                && !IsExactRollback(request.Rollback, restoredGenerations[0]))
+                && !IsExactRollback(state, request.Rollback, restoredGenerations[0]))
             {
                 return Reject(
+                    state,
                     MaterializationBackendRoutingDisposition.EvidenceConflict,
                     "Returning to a draining generation requires exact current-revision equivalence evidence.");
             }
             if (restoredGenerations.IsEmpty && request.Rollback is not null)
             {
-                return Reject(MaterializationBackendRoutingDisposition.EvidenceConflict, "Rollback evidence was supplied for a forward-only swap.");
+                return Reject(state, MaterializationBackendRoutingDisposition.EvidenceConflict, "Rollback evidence was supplied for a forward-only swap.");
             }
 
-            if (activeRead is not null
-                && (readGenerationChanged
-                        && !restoredGenerations.Contains(request.Read.Generation)
-                        && !IsLegalForwardRoute(request.Read.Generation)
-                    || writeChanged
-                        && !restoredGenerations.Contains(request.Write)
-                        && !IsLegalForwardRoute(request.Write)))
+            if (state.ActiveRead is null
+                && request.Write != request.Read.Generation
+                && request.Write != state.Candidate)
             {
                 return Reject(
+                    state,
+                    MaterializationBackendRoutingDisposition.StateConflict,
+                    "Initial write routing must select the readable generation or the placement's admitted candidate.");
+            }
+
+            if (state.ActiveRead is not null
+                && (readGenerationChanged
+                        && !restoredGenerations.Contains(request.Read.Generation)
+                        && !IsLegalForwardRoute(state, request.Read.Generation)
+                    || writeChanged
+                        && !restoredGenerations.Contains(request.Write)
+                        && !IsLegalForwardRoute(state, request.Write)))
+            {
+                return Reject(
+                    state,
                     MaterializationBackendRoutingDisposition.StateConflict,
                     "Each changed forward route must select the admitted candidate or an already-routed generation.");
             }
 
-            var nextRevision = revision.Next();
-            var priorRead = activeRead?.Generation;
-            var priorWrite = activeWrite;
+            var nextRevision = state.Revision.Next();
+            var priorRead = state.ActiveRead?.Generation;
+            var priorWrite = state.ActiveWrite;
             if (priorWrite is not null && writeChanged)
-                BeginDrain(priorWrite, nextRevision);
+                BeginDrain(state, priorWrite, nextRevision);
             if (priorRead is not null
                 && readGenerationChanged)
             {
-                BeginDrain(priorRead, nextRevision);
+                BeginDrain(state, priorRead, nextRevision);
             }
 
             if (restoredGenerations.Length == 1)
@@ -292,15 +367,17 @@ public sealed class InMemoryMaterializationBackendRouter : IMaterializationBacke
                 var simultaneouslyRemovedFromAnotherRoute = priorRead == restored && readGenerationChanged
                     || priorWrite == restored && writeChanged;
                 if (!simultaneouslyRemovedFromAnotherRoute)
-                    draining.Remove(restored);
+                    state.Draining.Remove(restored);
             }
-            activeRead = request.Read;
-            activeWrite = request.Write;
-            effectiveConfiguration = request.Configuration;
-            if (candidate == request.Read.Generation)
-                candidate = null;
+            state.ActiveRead = request.Read;
+            state.ActiveWrite = request.Write;
+            state.EffectiveConfiguration = request.Configuration;
+            if (state.Candidate == request.Read.Generation)
+                state.Candidate = null;
+            if (state.PendingFollowUp?.Request == request)
+                state.PendingFollowUp = null;
 
-            return Commit(request.Header, request, MaterializationBackendRoutingOperation.Swap, nextRevision);
+            return Commit(state, request.Header, request, MaterializationBackendRoutingOperation.Swap, nextRevision);
         }
         finally
         {
@@ -318,31 +395,33 @@ public sealed class InMemoryMaterializationBackendRouter : IMaterializationBacke
         await EnterAsync(context).ConfigureAwait(false);
         try
         {
-            var prior = BeginCommand(request.Header, request);
+            var state = GetOrCreateState(request.Header.PlacementSlice);
+            var prior = BeginCommand(state, request.Header, request);
             if (prior is not null)
                 return prior;
             if (request.Proof is null
-                || !draining.TryGetValue(request.Proof.Generation, out var drain))
+                || request.Proof.PlacementSlice != state.PlacementSlice
+                || !state.Draining.TryGetValue(request.Proof.Generation, out var drain))
             {
-                return Reject(MaterializationBackendRoutingDisposition.NotFound, "The addressed generation is not draining.");
+                return Reject(state, MaterializationBackendRoutingDisposition.NotFound, "The addressed generation is not draining under this placement authority.");
             }
-            if (activeRead?.Generation == request.Proof.Generation || activeWrite == request.Proof.Generation)
+            if (state.ActiveRead?.Generation == request.Proof.Generation || state.ActiveWrite == request.Proof.Generation)
             {
-                return Reject(MaterializationBackendRoutingDisposition.StateConflict, "A routed generation cannot complete drain.");
+                return Reject(state, MaterializationBackendRoutingDisposition.StateConflict, "A routed generation cannot complete drain.");
             }
             if (drain.Proof is not null
                 || drain.AdmissionsClosedAtRevision != request.Proof.AdmissionsClosedAtRevision)
             {
-                return Reject(MaterializationBackendRoutingDisposition.EvidenceConflict, "Drain evidence does not match the exact admission boundary.");
+                return Reject(state, MaterializationBackendRoutingDisposition.EvidenceConflict, "Drain evidence does not match the exact admission boundary.");
             }
             if (request.Header.IssuedAtUtc < request.Proof.ObservedAtUtc)
-                return Reject(MaterializationBackendRoutingDisposition.EvidenceConflict, "Drain completion cannot predate its quiescence observation.");
+                return Reject(state, MaterializationBackendRoutingDisposition.EvidenceConflict, "Drain completion cannot predate its quiescence observation.");
 
-            draining[request.Proof.Generation] = new(
+            state.Draining[request.Proof.Generation] = new(
                 generation: drain.Generation,
                 admissionsClosedAtRevision: drain.AdmissionsClosedAtRevision,
                 proof: request.Proof);
-            return Commit(request.Header, request, MaterializationBackendRoutingOperation.CompleteDrain);
+            return Commit(state, request.Header, request, MaterializationBackendRoutingOperation.CompleteDrain);
         }
         finally
         {
@@ -360,26 +439,98 @@ public sealed class InMemoryMaterializationBackendRouter : IMaterializationBacke
         await EnterAsync(context).ConfigureAwait(false);
         try
         {
-            var prior = BeginCommand(request.Header, request);
+            var state = GetOrCreateState(request.Header.PlacementSlice);
+            var prior = BeginCommand(state, request.Header, request);
             if (prior is not null)
                 return prior;
-            if (!draining.TryGetValue(request.Generation, out var drain) || drain.Proof is null)
+            if (!state.Draining.TryGetValue(request.Generation, out var drain) || drain.Proof is null)
             {
-                return Reject(MaterializationBackendRoutingDisposition.StateConflict, "Retirement requires completed quiescence evidence.");
+                return Reject(state, MaterializationBackendRoutingDisposition.StateConflict, "Retirement requires completed quiescence evidence.");
             }
-            if (activeRead?.Generation == request.Generation
-                || activeWrite == request.Generation
-                || candidate == request.Generation)
+            if (state.ActiveRead?.Generation == request.Generation
+                || state.ActiveWrite == request.Generation
+                || state.Candidate == request.Generation)
             {
-                return Reject(MaterializationBackendRoutingDisposition.StateConflict, "A routed or candidate generation cannot be retired.");
+                return Reject(state, MaterializationBackendRoutingDisposition.StateConflict, "A routed or candidate generation cannot be retired.");
             }
 
-            draining.Remove(request.Generation);
-            var nextRevision = revision.Next();
-            retired.Add(
+            state.Draining.Remove(request.Generation);
+            var nextRevision = state.Revision.Next();
+            state.Retired.Add(
                 request.Generation,
                 new(request.Generation, nextRevision));
-            return Commit(request.Header, request, MaterializationBackendRoutingOperation.Retire, nextRevision);
+            return Commit(state, request.Header, request, MaterializationBackendRoutingOperation.Retire, nextRevision);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<MaterializationBackendCleanupReservationResult> ReserveCleanupAsync(
+        OperationContext context,
+        MaterializationReserveBackendCleanupRequest request)
+    {
+        RequireContext(context);
+        ArgumentNullException.ThrowIfNull(request);
+        await EnterAsync(context).ConfigureAwait(false);
+        try
+        {
+            var state = GetOrCreateState(request.Header.PlacementSlice);
+            var prior = BeginCommand(state, request.Header, request);
+            if (prior is not null)
+            {
+                var replayedReservation = prior.Disposition == MaterializationBackendRoutingDisposition.Replayed
+                    && physicalCleanup.TryGetValue(request.Generation, out var replayedCleanup)
+                    && replayedCleanup.Reservation.Receipt == prior.Receipt
+                        ? replayedCleanup.Reservation
+                        : null;
+                return new(prior, replayedReservation);
+            }
+            if (!state.Retired.TryGetValue(request.Generation, out _))
+            {
+                return RejectedCleanupReservation(
+                    state,
+                    MaterializationBackendRoutingDisposition.StateConflict,
+                    "Physical cleanup reservation requires a placement-retired generation.");
+            }
+            if (physicalCleanup.ContainsKey(request.Generation))
+            {
+                return RejectedCleanupReservation(
+                    state,
+                    MaterializationBackendRoutingDisposition.StateConflict,
+                    "The physical generation already has a cleanup reservation or tombstone.");
+            }
+            if (HasLiveReference(request.Generation))
+            {
+                return RejectedCleanupReservation(
+                    state,
+                    MaterializationBackendRoutingDisposition.StateConflict,
+                    "Physical cleanup is unsafe while any placement retains a live routing or draining role.");
+            }
+
+            ImmutableArray<MaterializationBackendCleanupRetirementClaim> retirements =
+            [
+                .. scopes.Values
+                    .Where(scope => scope.Retired.ContainsKey(request.Generation))
+                    .Select(scope => new MaterializationBackendCleanupRetirementClaim(
+                        placementSlice: scope.PlacementSlice,
+                        retiredAtRevision: scope.Retired[request.Generation].RetiredAtRevision))
+                    .OrderBy(static claim => claim.PlacementSlice.Fingerprint.Value, StringComparer.Ordinal)
+            ];
+            var routing = Commit(
+                state,
+                request.Header,
+                request,
+                MaterializationBackendRoutingOperation.ReserveCleanup);
+            var reservation = new MaterializationBackendCleanupReservation(
+                generation: request.Generation,
+                retirements,
+                receipt: routing.Receipt!,
+                token: CreateCleanupReservationToken(request.Generation, retirements, routing.Receipt!));
+            physicalCleanup.Add(request.Generation, new(reservation));
+            return new(routing, reservation);
         }
         finally
         {
@@ -397,23 +548,74 @@ public sealed class InMemoryMaterializationBackendRouter : IMaterializationBacke
         await EnterAsync(context).ConfigureAwait(false);
         try
         {
-            var prior = BeginCommand(request.Header, request);
+            var state = GetOrCreateState(request.Header.PlacementSlice);
+            var prior = BeginCommand(state, request.Header, request);
             if (prior is not null)
                 return prior;
-            if (request.Proof is null)
-                return Reject(MaterializationBackendRoutingDisposition.EvidenceConflict, "Cleanup requires exact adapter-owned physical evidence.");
-            if (!retired.TryGetValue(request.Proof.Generation, out var retirement))
-                return Reject(MaterializationBackendRoutingDisposition.StateConflict, "Cleanup requires a pool-retired generation.");
+            if (request.Proof is null || request.Proof.PlacementSlice != state.PlacementSlice)
+                return Reject(state, MaterializationBackendRoutingDisposition.EvidenceConflict, "Cleanup requires exact placement-scoped adapter-owned physical evidence.");
+            if (!state.Retired.TryGetValue(request.Proof.Generation, out var retirement))
+                return Reject(state, MaterializationBackendRoutingDisposition.StateConflict, "Cleanup requires a placement-retired generation.");
             if (request.Proof.RetiredAtRevision != retirement.RetiredAtRevision)
             {
                 return Reject(
+                    state,
                     MaterializationBackendRoutingDisposition.EvidenceConflict,
-                    "Physical cleanup evidence must cite the exact retained pool-retirement revision.");
+                    "Physical cleanup evidence must cite the exact retained placement-retirement revision.");
             }
-
-            retired.Remove(request.Proof.Generation);
-            cleaned.Add(request.Proof.Generation);
-            return Commit(request.Header, request, MaterializationBackendRoutingOperation.Cleanup);
+            if (request.Header.IssuedAtUtc < request.Proof.ObservedAtUtc)
+            {
+                return Reject(
+                    state,
+                    MaterializationBackendRoutingDisposition.EvidenceConflict,
+                    "Cleanup acknowledgement cannot predate its physical completion observation.");
+            }
+            if (!physicalCleanup.TryGetValue(request.Proof.Generation, out var cleanup))
+            {
+                return Reject(
+                    state,
+                    MaterializationBackendRoutingDisposition.StateConflict,
+                    "Physical cleanup evidence requires a prior reservation from this routing authority.");
+            }
+            if (request.Proof.ObservedAtUtc < cleanup.Reservation.Receipt.CommittedAtUtc)
+            {
+                return Reject(
+                    state,
+                    MaterializationBackendRoutingDisposition.EvidenceConflict,
+                    "Physical cleanup completion evidence cannot predate its exact routing reservation.");
+            }
+            var reservationClaim = cleanup.Reservation.Retirements.FirstOrDefault(
+                claim => claim.PlacementSlice == state.PlacementSlice);
+            if (reservationClaim is null
+                || reservationClaim.RetiredAtRevision != retirement.RetiredAtRevision
+                || !string.Equals(
+                    cleanup.Reservation.Token,
+                    request.Proof.ReservationToken,
+                    StringComparison.Ordinal))
+            {
+                return Reject(
+                    state,
+                    MaterializationBackendRoutingDisposition.EvidenceConflict,
+                    "Physical cleanup evidence must cite the exact reservation and captured placement retirement.");
+            }
+            if (cleanup.Completion is { } priorCompletion
+                && (!string.Equals(
+                        priorCompletion.CleanupFingerprint,
+                        request.Proof.CleanupFingerprint,
+                        StringComparison.Ordinal)
+                    || priorCompletion.ObservedAtUtc != request.Proof.ObservedAtUtc))
+            {
+                return Reject(
+                    state,
+                    MaterializationBackendRoutingDisposition.EvidenceConflict,
+                    "All placement acknowledgements must cite the same physical cleanup completion evidence.");
+            }
+            cleanup.Completion ??= new(
+                CleanupFingerprint: request.Proof.CleanupFingerprint,
+                ObservedAtUtc: request.Proof.ObservedAtUtc);
+            state.Retired.Remove(request.Proof.Generation);
+            state.Cleaned.Add(request.Proof.Generation);
+            return Commit(state, request.Header, request, MaterializationBackendRoutingOperation.Cleanup);
         }
         finally
         {
@@ -431,26 +633,38 @@ public sealed class InMemoryMaterializationBackendRouter : IMaterializationBacke
     }
 
     async ValueTask<MaterializationBackendRoutingResult?> ValidateReadableAsync(
+        ScopeState state,
         OperationContext context,
         MaterializationReadableBackendReference route)
     {
-        if (route.Activation.Materialization != Document.Definition.MaterializationId)
-            return Reject(MaterializationBackendRoutingDisposition.EvidenceConflict, "Activation evidence belongs to another materialization.");
+        if (route.PlacementSlice != state.PlacementSlice
+            || route.Activation.Materialization != Document.Definition.MaterializationId
+            || route.Activation.PlacementSlice.Pool != state.PlacementSlice.Pool
+            || !route.Activation.PlacementSlice.Subjects.SequenceEqual(state.PlacementSlice.Subjects)
+            || route.Generation.DefinitionFingerprint != state.PlacementSlice.Materialization.DefinitionFingerprint)
+        {
+            return Reject(
+                state,
+                MaterializationBackendRoutingDisposition.EvidenceConflict,
+                "Activation evidence belongs to another placement or materialization definition.");
+        }
         var target = TryResolve(route.Generation.TargetId);
         if (target is null)
-            return Reject(MaterializationBackendRoutingDisposition.NotFound, "The read backend is absent from the pool.");
+            return Reject(state, MaterializationBackendRoutingDisposition.NotFound, "The read backend is absent from the pool.");
         var targetSnapshot = await target.InspectAsync(context).ConfigureAwait(false);
         var generation = await target.InspectGenerationAsync(context, route.Generation.GenerationId).ConfigureAwait(false);
         if (generation is null)
-            return Reject(MaterializationBackendRoutingDisposition.NotFound, "The read generation is not retained.");
+            return Reject(state, MaterializationBackendRoutingDisposition.NotFound, "The read generation is not retained.");
         if (targetSnapshot.ActiveGenerationId != route.Generation.GenerationId
             || targetSnapshot.Revision != route.Activation.TargetRevision
+            || targetSnapshot.LatestPromotionFence != route.Activation.PromotionFence
             || generation.State != MaterializationGenerationState.Active
             || generation.DefinitionFingerprint != route.Generation.DefinitionFingerprint
             || generation.ValidationReceipt is not { Validation.IsValid: true } validation
             || validation.Fingerprint != route.Activation.Validation)
         {
             return Reject(
+                state,
                 MaterializationBackendRoutingDisposition.EvidenceConflict,
                 "Reads require exact current target activation, definition, and successful validation evidence.");
         }
@@ -476,115 +690,231 @@ public sealed class InMemoryMaterializationBackendRouter : IMaterializationBacke
     }
 
     MaterializationBackendRoutingResult? BeginCommand(
+        ScopeState state,
         MaterializationBackendRoutingCommandHeader header,
         object request)
     {
         if (header is null)
-            return Reject(MaterializationBackendRoutingDisposition.EvidenceConflict, "A routing command requires a header.");
-        if (receipts.TryGetValue(header.CommandId, out var prior))
+            return Reject(state, MaterializationBackendRoutingDisposition.EvidenceConflict, "A routing command requires a header.");
+        if (header.PlacementSlice != state.PlacementSlice)
+            return Reject(state, MaterializationBackendRoutingDisposition.EvidenceConflict, "The command belongs to another placement authority.");
+        if (state.Receipts.TryGetValue(header.CommandId, out var prior))
         {
             if (Equals(prior.Request, request))
             {
                 return new(
                     MaterializationBackendRoutingDisposition.Replayed,
-                    Snapshot(),
+                    Snapshot(state),
                     prior.Receipt);
             }
 
-            AcceptFenceIfOwned(header);
-            return Reject(MaterializationBackendRoutingDisposition.IdentityConflict, "The command identity was reused for different content.");
-        }
-        if (header.PoolId != Document.Definition.Id
-            || header.PoolDefinitionFingerprint != Document.DefinitionFingerprint)
-        {
-            return Reject(MaterializationBackendRoutingDisposition.RevisionConflict, "The command addresses another pool definition.");
+            if (state.PendingFollowUp is null)
+                AcceptFence(state, header.Fence);
+            return Reject(state, MaterializationBackendRoutingDisposition.IdentityConflict, "The command identity was reused for different content.");
         }
 
-        var staleFence = latestFence is { } latest && header.Fence.Ordinal < latest.Ordinal;
-        AcceptFence(header.Fence);
+        if (state.Intents.TryGetValue(header.CommandId, out var intent))
+        {
+            if (intent.IsCancelled || !Equals(intent.Request, request))
+            {
+                if (state.PendingFollowUp is null)
+                    AcceptFence(state, header.Fence);
+                return Reject(
+                    state,
+                    MaterializationBackendRoutingDisposition.IdentityConflict,
+                    "The command identity was reused for different content.");
+            }
+        }
+        else
+        {
+            state.Intents.Add(header.CommandId, new(request));
+        }
+
+        if (state.PendingFollowUp is not null && !IsAllowedPendingFollowUpCommand(state, request))
+        {
+            return Reject(
+                state,
+                MaterializationBackendRoutingDisposition.StateConflict,
+                "Candidate admission reserved an exact follow-up; only that swap or exact candidate abandonment may mutate this placement.");
+        }
+
+        var staleFence = state.LatestFence is { } latest && header.Fence.Ordinal < latest.Ordinal;
+        AcceptFence(state, header.Fence);
         if (staleFence)
-            return Reject(MaterializationBackendRoutingDisposition.StaleFence, "A newer routing authority superseded the command.");
-        if (header.ExpectedRevision != revision)
-            return Reject(MaterializationBackendRoutingDisposition.RevisionConflict, "The expected routing revision is stale.");
-        if (revision.Ordinal == long.MaxValue)
-            return Reject(MaterializationBackendRoutingDisposition.StateConflict, "The routing revision space is exhausted.");
+            return Reject(state, MaterializationBackendRoutingDisposition.StaleFence, "A newer routing authority superseded the command.");
+        if (header.ExpectedRevision != state.Revision)
+            return Reject(state, MaterializationBackendRoutingDisposition.RevisionConflict, "The expected routing revision is stale.");
+        if (state.Revision.Ordinal == long.MaxValue)
+            return Reject(state, MaterializationBackendRoutingDisposition.StateConflict, "The routing revision space is exhausted.");
         return null;
     }
 
     MaterializationBackendRoutingResult Commit(
+        ScopeState state,
         MaterializationBackendRoutingCommandHeader header,
         object request,
         MaterializationBackendRoutingOperation operation,
         MaterializationBackendRoutingRevision? committedRevision = null)
     {
-        revision = committedRevision ?? revision.Next();
+        state.Revision = committedRevision ?? state.Revision.Next();
+        var committedAtUtc = timeProvider.GetUtcNow();
+        if (committedAtUtc < header.IssuedAtUtc)
+            committedAtUtc = header.IssuedAtUtc;
         var receipt = new MaterializationBackendRoutingReceipt(
             commandId: header.CommandId,
+            placementSlice: state.PlacementSlice,
             operation: operation,
-            revision: revision,
+            revision: state.Revision,
             fence: header.Fence,
-            committedAtUtc: timeProvider.GetUtcNow());
-        receipts.Add(header.CommandId, new(request, receipt));
-        return new(MaterializationBackendRoutingDisposition.Applied, Snapshot(), receipt);
+            committedAtUtc);
+        if (!state.Intents.TryGetValue(header.CommandId, out var intent)
+            || !Equals(intent.Request, request)
+            || intent.IsCancelled)
+        {
+            throw new InvalidOperationException("A routing command can commit only under its exact reserved intent.");
+        }
+        state.Receipts.Add(header.CommandId, new(request, receipt));
+        return new(MaterializationBackendRoutingDisposition.Applied, Snapshot(state), receipt);
     }
 
     MaterializationBackendRoutingResult Reject(
+        ScopeState state,
         MaterializationBackendRoutingDisposition disposition,
         string detail) =>
-        new(disposition, Snapshot(), detail: detail);
+        new(disposition, Snapshot(state), detail: detail);
 
-    MaterializationBackendRoutingSnapshot Snapshot() =>
+    MaterializationBackendCleanupReservationResult RejectedCleanupReservation(
+        ScopeState state,
+        MaterializationBackendRoutingDisposition disposition,
+        string detail) =>
+        new(Reject(state, disposition, detail));
+
+    static MaterializationBackendRoutingSnapshot Snapshot(ScopeState state) =>
         new(
-            poolId: Document.Definition.Id,
-            poolDefinitionFingerprint: Document.DefinitionFingerprint,
-            revision: revision,
-            latestFence: latestFence,
-            activeRead: activeRead,
-            activeWrite: activeWrite,
-            candidate: candidate,
-            draining: [.. draining.Values],
-            retired: [.. retired.Values],
-            cleaned: [.. cleaned],
-            configuration: effectiveConfiguration);
+            placementSlice: state.PlacementSlice,
+            revision: state.Revision,
+            latestFence: state.LatestFence,
+            activeRead: state.ActiveRead,
+            activeWrite: state.ActiveWrite,
+            candidate: state.Candidate,
+            draining: [.. state.Draining.Values],
+            retired: [.. state.Retired.Values],
+            cleaned: [.. state.Cleaned],
+            configuration: state.EffectiveConfiguration,
+            pendingFollowUp: state.PendingFollowUp);
 
     ImmutableArray<MaterializationBackendGenerationReference> RestoredGenerations(
+        ScopeState state,
         MaterializationBackendGenerationReference read,
         bool readChanged,
         MaterializationBackendGenerationReference write,
         bool writeChanged)
     {
         var restored = ImmutableArray.CreateBuilder<MaterializationBackendGenerationReference>(2);
-        if (readChanged && draining.ContainsKey(read))
+        if (readChanged && state.Draining.ContainsKey(read))
             restored.Add(read);
-        if (writeChanged && draining.ContainsKey(write) && !restored.Contains(write))
+        if (writeChanged && state.Draining.ContainsKey(write) && !restored.Contains(write))
             restored.Add(write);
         return restored.ToImmutable();
     }
 
-    bool IsLegalForwardRoute(MaterializationBackendGenerationReference generation) =>
-        !draining.ContainsKey(generation)
-        && (generation == candidate
-            || generation == activeRead?.Generation
-            || generation == activeWrite);
+    static bool IsLegalForwardRoute(ScopeState state, MaterializationBackendGenerationReference generation) =>
+        !state.Draining.ContainsKey(generation)
+        && (generation == state.Candidate
+            || generation == state.ActiveRead?.Generation
+            || generation == state.ActiveWrite);
 
-    bool IsExactRollback(
+    static bool IsExactRollback(
+        ScopeState state,
         MaterializationBackendRollbackProof? proof,
         MaterializationBackendGenerationReference generation) =>
         proof is not null
+        && proof.PlacementSlice == state.PlacementSlice
         && proof.Generation == generation
-        && proof.ExpectedRoutingRevision == revision
-        && proof.CurrentRead == activeRead
-        && proof.CurrentWrite == activeWrite;
+        && proof.ExpectedRoutingRevision == state.Revision
+        && proof.CurrentRead == state.ActiveRead
+        && proof.CurrentWrite == state.ActiveWrite;
 
-    void BeginDrain(
+    static void BeginDrain(
+        ScopeState state,
         MaterializationBackendGenerationReference generation,
         MaterializationBackendRoutingRevision admissionsClosedAtRevision)
     {
-        draining[generation] = new(generation, admissionsClosedAtRevision);
+        state.Draining[generation] = new(generation, admissionsClosedAtRevision);
     }
 
-    bool ContainsLifecycleReference(MaterializationBackendGenerationReference reference) =>
-        draining.ContainsKey(reference) || retired.ContainsKey(reference) || cleaned.Contains(reference);
+    static bool ContainsLifecycleReference(ScopeState state, MaterializationBackendGenerationReference reference) =>
+        state.Draining.ContainsKey(reference) || state.Retired.ContainsKey(reference) || state.Cleaned.Contains(reference);
+
+    static bool IsAllowedPendingFollowUpCommand(
+        ScopeState state,
+        object request) =>
+        state.PendingFollowUp is { } pending
+        && (request is MaterializationSwapBackendRoutingRequest swap && swap == pending.Request
+            || request is MaterializationAbandonBackendCandidateRequest abandonment
+                && abandonment.Candidate == pending.Candidate);
+
+    static void ClearPendingFollowUpAfterAbandonment(
+        ScopeState state,
+        MaterializationBackendGenerationReference candidate)
+    {
+        if (state.PendingFollowUp is not { } pending || pending.Candidate != candidate)
+            return;
+        if (!state.Intents.TryGetValue(pending.CommandId, out var intent)
+            || !intent.IsExpectedFollowUp
+            || !Equals(intent.Request, pending.Request))
+        {
+            throw new InvalidOperationException("A pending follow-up must retain its exact reserved command intent.");
+        }
+        intent.IsCancelled = true;
+        state.PendingFollowUp = null;
+    }
+
+    ScopeState GetOrCreateState(MaterializationPlacementSliceReference placementSlice)
+    {
+        var expectedPool = MaterializationBackendPoolReference.FromDocument(Document);
+        if (placementSlice.Pool != expectedPool
+            || placementSlice.Materialization.DefinitionFingerprint != Document.Definition.DefinitionFingerprint
+            || !Document.Definition.Members.Any(member => member.Id == placementSlice.Target))
+        {
+            throw new ArgumentException(
+                "The placement slice must identify this exact materialization, backend pool, and declared target.",
+                nameof(placementSlice));
+        }
+
+        if (scopes.TryGetValue(placementSlice.Fingerprint, out var state))
+            return state;
+        state = new(placementSlice);
+        scopes.Add(placementSlice.Fingerprint, state);
+        return state;
+    }
+
+    bool HasLiveReference(MaterializationBackendGenerationReference generation) =>
+        scopes.Values.Any(state =>
+            state.ActiveRead?.Generation == generation
+            || state.ActiveWrite == generation
+            || state.Candidate == generation
+            || state.Draining.ContainsKey(generation));
+
+    static string CreateCleanupReservationToken(
+        MaterializationBackendGenerationReference generation,
+        ImmutableArray<MaterializationBackendCleanupRetirementClaim> retirements,
+        MaterializationBackendRoutingReceipt receipt)
+    {
+        using MaterializationStableIdentity.DigestBuilder builder = new();
+        builder.Append("cohesive-materialization-backend-cleanup-reservation/v1");
+        builder.Append(generation.TargetId.Value);
+        builder.Append(generation.GenerationId.Value);
+        builder.Append(generation.DefinitionFingerprint.Value);
+        foreach (var retirement in retirements)
+        {
+            builder.Append(retirement.PlacementSlice.Fingerprint.Value);
+            builder.Append(retirement.RetiredAtRevision.Value);
+        }
+        builder.Append(receipt.CommandId.Value);
+        builder.Append(receipt.Revision.Value);
+        return $"cleanup-reservation/{builder.Complete()}";
+    }
 
     IMaterializationTarget? TryResolve(MaterializationTargetId targetId)
     {
@@ -602,19 +932,10 @@ public sealed class InMemoryMaterializationBackendRouter : IMaterializationBacke
         }
     }
 
-    void AcceptFenceIfOwned(MaterializationBackendRoutingCommandHeader header)
+    static void AcceptFence(ScopeState state, MaterializationBackendRoutingFence fence)
     {
-        if (header.PoolId == Document.Definition.Id
-            && header.PoolDefinitionFingerprint == Document.DefinitionFingerprint)
-        {
-            AcceptFence(header.Fence);
-        }
-    }
-
-    void AcceptFence(MaterializationBackendRoutingFence fence)
-    {
-        if (latestFence is null || fence.Ordinal > latestFence.Value.Ordinal)
-            latestFence = fence;
+        if (state.LatestFence is null || fence.Ordinal > state.LatestFence.Value.Ordinal)
+            state.LatestFence = fence;
     }
 
     async ValueTask EnterAsync(OperationContext context)
@@ -629,5 +950,55 @@ public sealed class InMemoryMaterializationBackendRouter : IMaterializationBacke
         context.CancellationToken.ThrowIfCancellationRequested();
     }
 
+    sealed class ScopeState(MaterializationPlacementSliceReference placementSlice)
+    {
+        internal MaterializationPlacementSliceReference PlacementSlice { get; } = placementSlice;
+
+        internal Dictionary<MaterializationBackendRoutingCommandId, StoredCommandReceipt> Receipts { get; } = [];
+
+        internal Dictionary<MaterializationBackendRoutingCommandId, StoredCommandIntent> Intents { get; } = [];
+
+        internal Dictionary<MaterializationBackendGenerationReference, MaterializationBackendDrainState> Draining { get; } = [];
+
+        internal Dictionary<MaterializationBackendGenerationReference, MaterializationBackendRetirementState> Retired { get; } = [];
+
+        internal HashSet<MaterializationBackendGenerationReference> Cleaned { get; } = [];
+
+        internal MaterializationBackendRoutingRevision Revision { get; set; } = MaterializationBackendRoutingRevision.Initial;
+
+        internal MaterializationBackendRoutingFence? LatestFence { get; set; }
+
+        internal MaterializationReadableBackendReference? ActiveRead { get; set; }
+
+        internal MaterializationBackendGenerationReference? ActiveWrite { get; set; }
+
+        internal MaterializationBackendGenerationReference? Candidate { get; set; }
+
+        internal MaterializationBackendFollowUpReservation? PendingFollowUp { get; set; }
+
+        internal MaterializationBackendRoutingConfiguration? EffectiveConfiguration { get; set; }
+    }
+
+    sealed class StoredCommandIntent(object request, bool isExpectedFollowUp = false)
+    {
+        internal object Request { get; } = request;
+
+        internal bool IsExpectedFollowUp { get; } = isExpectedFollowUp;
+
+        internal bool IsCancelled { get; set; }
+
+        internal static StoredCommandIntent ExpectedFollowUp(MaterializationSwapBackendRoutingRequest request) =>
+            new(request, isExpectedFollowUp: true);
+    }
+
     sealed record StoredCommandReceipt(object Request, MaterializationBackendRoutingReceipt Receipt);
+
+    sealed class PhysicalCleanupState(MaterializationBackendCleanupReservation reservation)
+    {
+        internal MaterializationBackendCleanupReservation Reservation { get; } = reservation;
+
+        internal PhysicalCleanupCompletion? Completion { get; set; }
+    }
+
+    sealed record PhysicalCleanupCompletion(string CleanupFingerprint, DateTimeOffset ObservedAtUtc);
 }
