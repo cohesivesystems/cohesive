@@ -5,6 +5,9 @@ using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.Execution;
+using Cohesive.Relations.IR;
+using Cohesive.Relations.Physical;
+using Cohesive.Relations.Realization;
 
 namespace Cohesive.Storage.Materialization;
 
@@ -299,6 +302,17 @@ public sealed record MaterializationImpactHydrationRequest
     public ImmutableArray<MaterializationAffectedRoot> Roots { get; }
 }
 
+/// <summary>Executes one explicitly bound non-direct affected-root resolution strategy.</summary>
+/// <param name="context">Explicit cancellation, time, identity, and tracing context.</param>
+/// <param name="request">Exact route, change, generation, and impact-plan request.</param>
+/// <returns>Complete affected roots before cross-delivery coalescing.</returns>
+/// <exception cref="ArgumentNullException">An argument is <see langword="null"/>.</exception>
+/// <exception cref="InvalidOperationException">Resolution is partial, inconclusive, or exceeds a physical boundary.</exception>
+/// <exception cref="OperationCanceledException">The operation is cancelled.</exception>
+public delegate ValueTask<ImmutableArray<MaterializationAffectedRoot>> MaterializationImpactRootResolver(
+    OperationContext context,
+    MaterializationImpactRootResolutionRequest request);
+
 /// <summary>Physical impact and hydration operations used by the canonical impact-plan interpreter.</summary>
 public interface IMaterializationImpactRuntime
 {
@@ -326,6 +340,189 @@ public interface IMaterializationImpactRuntime
     ValueTask<ImmutableArray<MaterializationRootProjection>> HydrateAsync(
         OperationContext context,
         MaterializationImpactHydrationRequest request);
+}
+
+/// <summary>
+/// Production impact runtime that hydrates affected roots through one exact canonical Relations physical plan.
+/// </summary>
+/// <remarks>
+/// Direct-root selection remains owned by <see cref="MaterializationImpactPlanInterpreter"/>. Non-direct routes must
+/// bind their physical inverse-resolution operation explicitly through <see cref="MaterializationImpactRootResolver"/>;
+/// the runtime never infers backend reads from the semantic impact IR.
+/// </remarks>
+public sealed class RelationQueryMaterializationImpactRuntime : IMaterializationImpactRuntime
+{
+    readonly RelationQueryMaterializationHydration hydration;
+    readonly ImmutableDictionary<RelationQueryInputId, RelationQuerySourceInputContract> roots;
+    readonly MaterializationImpactRootResolver? rootResolver;
+    readonly RelationOutputMode outputMode;
+
+    /// <summary>Creates one definition-linked incremental hydration runtime.</summary>
+    /// <param name="impactPlan">Persisted impact plan implemented by the runtime.</param>
+    /// <param name="definition">Canonical materialization definition that produced <paramref name="impactPlan"/>.</param>
+    /// <param name="physicalPlan">Exact physical plan whose relation roots are supplied for bounded hydration.</param>
+    /// <param name="realization">Exact successful realization report cited by <paramref name="physicalPlan"/>.</param>
+    /// <param name="sourceReaders">Readers for non-root Relations hydration inputs.</param>
+    /// <param name="rootResolver">
+    /// Optional explicit physical resolver for inverse routes; omit when only direct-root routes are executed.
+    /// </param>
+    /// <exception cref="ArgumentNullException">A required reference or collection is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// The impact plan is stale or foreign, the semantic-to-physical chain differs, the selected output is not a v1
+    /// one-per-root materialization, or a relation-root placement is not supplied.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">Canonical content cannot be fingerprinted.</exception>
+    /// <exception cref="System.Text.Json.JsonException">Canonical content cannot be serialized.</exception>
+    /// <exception cref="NotSupportedException">Canonical content contains an unsupported runtime value.</exception>
+    public RelationQueryMaterializationImpactRuntime(
+        MaterializationImpactPlan impactPlan,
+        MaterializationDefinition definition,
+        CompiledRelationQueryPhysicalPlan physicalPlan,
+        RelationQueryRealizationReport realization,
+        IEnumerable<IRelationQuerySourceReader> sourceReaders,
+        MaterializationImpactRootResolver? rootResolver = null)
+    {
+        var linkage = MaterializationImpactPlanLinker.Link(impactPlan, definition);
+        if (linkage.RelationPlan.Definition is not RelationDefinition relation
+            || definition.Relation.Output.Kind != RelationQueryOutputReferenceKind.Relation
+            || definition.Relation.Output.Relation != relation.Id
+            || relation.Output.Mode is RelationOutputMode.ManyPerRoot or RelationOutputMode.Set)
+        {
+            throw new ArgumentException(
+                "Incremental materialization hydration requires one complete one-per-root canonical Relation output.",
+                nameof(definition));
+        }
+
+        hydration = new(
+            linkage.RelationPlan,
+            physicalPlan,
+            realization,
+            definition.Relation.Output,
+            sourceReaders);
+        var builder = ImmutableDictionary.CreateBuilder<RelationQueryInputId, RelationQuerySourceInputContract>();
+        foreach (var root in hydration.RelationRoots.Values)
+        {
+            hydration.RequireSuppliedRoot(root.Input.Id, nameof(physicalPlan));
+            builder.Add(root.Input.Id, root);
+        }
+        if (builder.Count == 0)
+            throw new ArgumentException("Incremental materialization hydration requires at least one relation root.", nameof(definition));
+
+        roots = builder.ToImmutable();
+        this.rootResolver = rootResolver;
+        outputMode = relation.Output.Mode;
+        ImpactPlan = impactPlan.Fingerprint;
+    }
+
+    /// <inheritdoc />
+    public MaterializationImpactPlanFingerprint ImpactPlan { get; }
+
+    /// <inheritdoc />
+    /// <exception cref="ArgumentException">
+    /// The request names another impact plan.
+    /// </exception>
+    public async ValueTask<ImmutableArray<MaterializationAffectedRoot>> ResolveRootsAsync(
+        OperationContext context,
+        MaterializationImpactRootResolutionRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(request);
+        context.ThrowIfCancellationRequested();
+        if (request.Plan.Fingerprint != ImpactPlan)
+            throw new ArgumentException("Root resolution must use the exact impact plan bound to this runtime.", nameof(request));
+        if (rootResolver is null)
+        {
+            throw new InvalidOperationException(
+                $"Impact route '{request.Route.ChangeInput.Value}' requires an explicit physical affected-root resolver.");
+        }
+
+        var resolved = await rootResolver(context, request).ConfigureAwait(false);
+        context.ThrowIfCancellationRequested();
+        return resolved.IsDefault ? [] : resolved;
+    }
+
+    /// <inheritdoc />
+    /// <exception cref="ArgumentException">
+    /// The request names a non-root input or supplies an observation with another canonical shape.
+    /// </exception>
+    public async ValueTask<ImmutableArray<MaterializationRootProjection>> HydrateAsync(
+        OperationContext context,
+        MaterializationImpactHydrationRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(request);
+        context.ThrowIfCancellationRequested();
+
+        Dictionary<RelationQueryInputId, List<RelationQuerySourceReadObservation>> observationsByInput = new(
+            capacity: roots.Count);
+        foreach (var input in roots.Keys)
+            observationsByInput.Add(input, []);
+        foreach (var root in request.Roots)
+        {
+            if (!roots.TryGetValue(root.Input, out var contract))
+                throw new ArgumentException("Impact hydration named an input that is not a canonical relation root.", nameof(request));
+            if (root.Observation is { } observation)
+            {
+                if (observation.Shape != contract.Shape)
+                    throw new ArgumentException("Impact hydration root evidence has another canonical shape.", nameof(request));
+                observationsByInput[root.Input].Add(observation);
+            }
+        }
+
+        var supplied = ImmutableArray.CreateBuilder<RelationQuerySuppliedSourceInput>(roots.Count);
+        foreach (var root in roots.Values.OrderBy(static candidate => candidate.Input.Id.Value, StringComparer.Ordinal))
+        {
+            supplied.Add(new(
+                input: root.Input.Id,
+                completeness: RelationQueryEvidenceCompleteness.Complete,
+                observations: [.. observationsByInput[root.Input.Id]],
+                evidenceReference: request.Evaluation.Value));
+        }
+        var rows = await hydration.HydrateAsync(
+                context,
+                request.Evaluation,
+                supplied.MoveToImmutable())
+            .ConfigureAwait(false);
+
+        Dictionary<(ValueBindingId Binding, string Identity), MaterializationAffectedRoot> requestedByOccurrence = new(
+            capacity: request.Roots.Length);
+        foreach (var root in request.Roots)
+        {
+            var contract = roots[root.Input];
+            requestedByOccurrence.Add((contract.Binding, root.Identity), root);
+        }
+        Dictionary<MaterializationAffectedRoot, RelationQueryOutputRow> rowByRoot = new(
+            capacity: rows.Length,
+            comparer: ReferenceEqualityComparer.Instance);
+        foreach (var row in rows)
+        {
+            if (row.Root?.ObservationIdentity is not { } identity
+                || !requestedByOccurrence.TryGetValue((row.Root.Binding, identity), out var root))
+            {
+                throw new InvalidOperationException(
+                    "Canonical Relations hydration emitted a row outside the exact affected-root request.");
+            }
+            if (!rowByRoot.TryAdd(root, row))
+                throw new InvalidOperationException("Canonical Relations hydration emitted more than one row for one root.");
+        }
+
+        var projections = ImmutableArray.CreateBuilder<MaterializationRootProjection>(request.Roots.Length);
+        foreach (var root in request.Roots)
+        {
+            rowByRoot.Remove(root, out var row);
+            if (root.State == MaterializationRootState.Present
+                && outputMode == RelationOutputMode.OnePerRoot
+                && row is null)
+            {
+                throw new InvalidOperationException(
+                    $"One-per-root Relations hydration emitted no output for present root '{root.Identity}'.");
+            }
+            projections.Add(new(root, row));
+        }
+        if (rowByRoot.Count != 0)
+            throw new InvalidOperationException("Canonical Relations hydration retained an uncorrelated output row.");
+        return projections.MoveToImmutable();
+    }
 }
 
 /// <summary>Signals that physical impact resolution exceeded its compiled affected-root bound.</summary>
@@ -478,7 +675,14 @@ public sealed class MaterializationImpactPlanInterpreter
             .ThenBy(static root => root.Identity, StringComparer.Ordinal)
             .ToImmutableArray();
         var evaluation = new RelationQueryEvaluationId(
-            $"materialization-impact/v1/{feed.Id.Value}/{page.ThroughPosition.Value}");
+            $"cohesive.storage/materialization-impact-evaluation/v2/{MaterializationStableIdentity.Digest(
+                "cohesive.storage/materialization-impact-evaluation/v2",
+                linkage.Plan.Fingerprint.Value,
+                generation.Value,
+                MaterializationChannelSemantics.ToChannelScopeId(feed.Scope).Value,
+                feed.Id.Value,
+                page.ThroughPosition.FormatVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                page.ThroughPosition.Value)}");
         var projections = await runtime.HydrateAsync(
                 context,
                 new(evaluation, canonicalRoots))

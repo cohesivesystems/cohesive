@@ -610,20 +610,52 @@ public sealed class ProcessDurableRuntimeOperationTests
             fixture.Checkpoint,
             durableOperations: [operation]);
         var store = await InitializeStoreAsync(checkpoint, "in-flight-renewal");
-        var adapter = new DelayedSuccessAdapter(
-            fixture.Request.Contract,
-            TimeSpan.FromMilliseconds(1_250));
+        var adapter = new BlockingSuccessAdapter(fixture.Request.Contract);
         var runtime = Runtime(store, adapter, workerLease: lease);
+        var startedAtUtc = ProcessDurabilityTestFixture.CheckpointedAtUtc.AddMinutes(1);
+        var timeProvider = new MutableTimeProvider(initialUtcNow: startedAtUtc);
+        var context = OperationContext.Create(timeProvider: timeProvider);
 
-        var result = await runtime.AdvanceOperationAsync(
-            OperationContext.Create(timeProvider: TimeProvider.System),
+        var advance = runtime.AdvanceOperationAsync(
+            context,
             fixture.Plan,
             checkpoint.ContinuationIdentity.ProcessInstanceId,
             fixture.Request.Context.EmissionId);
+        await adapter.Entered.WaitAsync(TimeSpan.FromSeconds(5));
+        var initiallyOwned = Assert.IsType<ProcessDurableStoreSnapshot>(await store.LoadAsync(
+            context,
+            checkpoint.ContinuationIdentity.ProcessInstanceId));
+        var initialWorker = Assert.IsType<ProcessWorkerLease>(initiallyOwned.WorkerLease);
+        var initialAttempt = Assert.IsType<DurableOperationAttempt>(
+            Assert.Single(initiallyOwned.Checkpoint.DurableOperations).CurrentAttempt);
+        var firstRenewalAtUtc = startedAtUtc.AddMilliseconds(400);
+        var secondRenewalAtUtc = startedAtUtc.AddMilliseconds(800);
+        try
+        {
+            timeProvider.SetUtcNow(firstRenewalAtUtc);
+            await WaitForSnapshotAsync(
+                store,
+                context,
+                checkpoint.ContinuationIdentity.ProcessInstanceId,
+                snapshot => HasOperationOwnershipRenewalAt(snapshot, firstRenewalAtUtc));
+            timeProvider.SetUtcNow(secondRenewalAtUtc);
+            await WaitForSnapshotAsync(
+                store,
+                context,
+                checkpoint.ContinuationIdentity.ProcessInstanceId,
+                snapshot => HasOperationOwnershipRenewalAt(snapshot, secondRenewalAtUtc));
+            Assert.True(secondRenewalAtUtc > initialWorker.ExpiresAtUtc);
+            Assert.True(secondRenewalAtUtc > initialAttempt.Claim.ExpiresAtUtc);
+        }
+        finally
+        {
+            adapter.Complete();
+        }
+        var result = await advance.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(DurableOperationStatus.Dispositioned, result.Operation?.Status);
         var retainedAttempt = Assert.Single(Assert.IsType<DurableOperationState>(result.Operation).Attempts);
-        var invocation = Assert.Single(adapter.Invocations);
+        var invocation = Assert.IsType<DurableOperationInvocation>(adapter.Invocation);
         Assert.Equal(invocation.AttemptId, retainedAttempt.Claim.AttemptId);
         Assert.Equal(invocation.Fence, retainedAttempt.Claim.Fence);
         Assert.True(retainedAttempt.Claim.RenewedAtUtc > retainedAttempt.Claim.ClaimedAtUtc);
@@ -680,7 +712,9 @@ public sealed class ProcessDurableRuntimeOperationTests
         var lease = TimeSpan.FromMilliseconds(500);
         var adapter = new BlockingReconciledOutcomeAdapter(fixture.Request.Contract);
         var runtime = Runtime(store, adapter, workerLease: lease);
-        var context = OperationContext.Create(timeProvider: TimeProvider.System);
+        var startedAtUtc = ProcessDurabilityTestFixture.CheckpointedAtUtc.AddMinutes(1);
+        var timeProvider = new MutableTimeProvider(initialUtcNow: startedAtUtc);
+        var context = OperationContext.Create(timeProvider: timeProvider);
 
         var first = runtime.AdvanceOperationAsync(
             context,
@@ -688,18 +722,40 @@ public sealed class ProcessDurableRuntimeOperationTests
             checkpoint.ContinuationIdentity.ProcessInstanceId,
             fixture.Request.Context.EmissionId);
         await adapter.Entered.WaitAsync(TimeSpan.FromSeconds(5));
+        var initiallyOwned = Assert.IsType<ProcessDurableStoreSnapshot>(await store.LoadAsync(
+            context,
+            checkpoint.ContinuationIdentity.ProcessInstanceId));
+        var initialWorker = Assert.IsType<ProcessWorkerLease>(initiallyOwned.WorkerLease);
         var second = runtime.AdvanceOperationAsync(
             context,
             fixture.Plan,
             checkpoint.ContinuationIdentity.ProcessInstanceId,
             fixture.Request.Context.EmissionId);
-        await Task.Delay(TimeSpan.FromMilliseconds(1_250));
-
-        Assert.Equal(1, adapter.ReconciliationCalls);
-        Assert.False(second.IsCompleted);
-
-        adapter.Complete();
-        var results = await Task.WhenAll(first, second);
+        var firstRenewalAtUtc = startedAtUtc.AddMilliseconds(400);
+        var secondRenewalAtUtc = startedAtUtc.AddMilliseconds(800);
+        try
+        {
+            timeProvider.SetUtcNow(firstRenewalAtUtc);
+            await WaitForSnapshotAsync(
+                store,
+                context,
+                checkpoint.ContinuationIdentity.ProcessInstanceId,
+                snapshot => snapshot.WorkerLease?.RenewedAtUtc == firstRenewalAtUtc);
+            timeProvider.SetUtcNow(secondRenewalAtUtc);
+            await WaitForSnapshotAsync(
+                store,
+                context,
+                checkpoint.ContinuationIdentity.ProcessInstanceId,
+                snapshot => snapshot.WorkerLease?.RenewedAtUtc == secondRenewalAtUtc);
+            Assert.True(secondRenewalAtUtc > initialWorker.ExpiresAtUtc);
+            Assert.Equal(1, adapter.ReconciliationCalls);
+            Assert.False(second.IsCompleted);
+        }
+        finally
+        {
+            adapter.Complete();
+        }
+        var results = await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.All(results, result => Assert.Equal(DurableOperationStatus.Dispositioned, result.Operation?.Status));
         Assert.Equal(1, adapter.ReconciliationCalls);
@@ -1268,6 +1324,38 @@ public sealed class ProcessDurableRuntimeOperationTests
         Assert.Equal(ProcessStoreMutationDisposition.Applied, initialized.Disposition);
     }
 
+    static async Task<ProcessDurableStoreSnapshot> WaitForSnapshotAsync(
+        InMemoryProcessDurableStore store,
+        OperationContext context,
+        ProcessInstanceId instanceId,
+        Func<ProcessDurableStoreSnapshot, bool> predicate)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        try
+        {
+            while (true)
+            {
+                var snapshot = await store.LoadAsync(context, instanceId);
+                if (snapshot is not null && predicate(snapshot))
+                {
+                    return snapshot;
+                }
+                await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
+            }
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+            throw new TimeoutException("The expected durable Process snapshot was not observed within five seconds.");
+        }
+    }
+
+    static bool HasOperationOwnershipRenewalAt(
+        ProcessDurableStoreSnapshot snapshot,
+        DateTimeOffset expectedRenewedAtUtc) =>
+        snapshot.WorkerLease?.RenewedAtUtc == expectedRenewedAtUtc
+        && snapshot.Checkpoint.DurableOperations.Length == 1
+        && snapshot.Checkpoint.DurableOperations[0].CurrentAttempt?.Claim.RenewedAtUtc == expectedRenewedAtUtc;
+
     static ProcessDurableRuntime Runtime(
         IProcessDurableStore store,
         IDurableOperationAdapter adapter,
@@ -1634,39 +1722,12 @@ public sealed class ProcessDurableRuntimeOperationTests
             throw new InvalidOperationException("Capability preflight must prevent reconciliation.");
     }
 
-    sealed class DelayedSuccessAdapter(
-        RequestContractReference request,
-        TimeSpan delay) : IDurableOperationAdapter
-    {
-        readonly List<DurableOperationInvocation> invocations = [];
-
-        public DurableOperationAdapterCapabilities Capabilities { get; } = new(
-            DurableOperationIdempotencyEvidence.TargetDeduplication,
-            DurableOperationReconciliationCapability.Supported,
-            [request]);
-
-        internal IReadOnlyList<DurableOperationInvocation> Invocations => invocations;
-
-        public async ValueTask<DurableOperationAttemptObservation> ExecuteAsync(
-            OperationContext context,
-            DurableOperationInvocation invocation)
-        {
-            invocations.Add(invocation);
-            await Task.Delay(delay, context.TimeProvider, context.CancellationToken);
-            return Success("after-renewal");
-        }
-
-        public ValueTask<DurableOperationReconciliationObservation> ReconcileAsync(
-            OperationContext context,
-            DurableOperationReconciliationRequest request) =>
-            throw new InvalidOperationException("Successful delayed execution does not require reconciliation.");
-    }
-
     sealed class BlockingSuccessAdapter(RequestContractReference request)
         : IDurableOperationAdapter
     {
         readonly TaskCompletionSource entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         readonly TaskCompletionSource completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        DurableOperationInvocation? invocation;
         int executionCalls;
 
         public DurableOperationAdapterCapabilities Capabilities { get; } = new(
@@ -1678,6 +1739,8 @@ public sealed class ProcessDurableRuntimeOperationTests
 
         internal int ExecutionCalls => executionCalls;
 
+        internal DurableOperationInvocation? Invocation => Volatile.Read(ref invocation);
+
         internal void Complete() => completion.TrySetResult();
 
         public async ValueTask<DurableOperationAttemptObservation> ExecuteAsync(
@@ -1685,6 +1748,7 @@ public sealed class ProcessDurableRuntimeOperationTests
             DurableOperationInvocation invocation)
         {
             Interlocked.Increment(ref executionCalls);
+            Volatile.Write(ref this.invocation, invocation);
             entered.TrySetResult();
             await completion.Task.WaitAsync(context.CancellationToken);
             return Success("single-flight");

@@ -2,15 +2,331 @@ using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json.Serialization;
 using Cohesive.Adapters.Postgres;
+using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Physical;
 using Cohesive.Storage.Materialization;
+using Cohesive.Tests.Storage;
 using Npgsql;
 
 namespace Cohesive.Tests.Postgres;
 
 public sealed partial class PostgresRelationQuerySourceReaderTests
 {
+    internal static PullChangeSourceConformanceCase CreatePullChangeSourceConformanceCase() => new(
+        Adapter: "PostgreSQL logical replication",
+        SettlementCapability: MaterializationCapabilityKind.SourceSettlement,
+        ObserveBaselineReplayAsync: ObservePullBaselineReplayAsync,
+        ObservePositionedRedeliveryAsync: ObservePullPositionedRedeliveryAsync,
+        ObserveExplicitSettlementAsync: ObservePullExplicitSettlementAsync,
+        ObserveCancellationAsync: ObservePullCancellationAsync,
+        ObserveAffinityRejectionsAsync: ObservePullAffinityRejectionsAsync);
+
+    static async Task<PullBaselineReplayObservation> ObservePullBaselineReplayAsync()
+    {
+        const int MaximumItems = 1;
+        var conformance = await CreatePullConformanceFixtureAsync();
+        await using var fixture = conformance.Fixture;
+        var first = await fixture.Source.ReadPageAsync(
+            context: OperationContext.Create(),
+            request: new(
+                read: fixture.Read,
+                scope: fixture.Source.Scope,
+                continuation: null,
+                maximumItems: MaximumItems,
+                maximumBytes: 1_000_000));
+        var continuation = PullChangeSourceConformanceInputs.RequireContinuation(first);
+        var resumed = await fixture.Source.ReadPageAsync(
+            context: OperationContext.Create(),
+            request: new(
+                read: fixture.Read,
+                scope: fixture.Source.Scope,
+                continuation: continuation,
+                maximumItems: MaximumItems,
+                maximumBytes: 1_000_000));
+        var replayed = await fixture.Source.ReadPageAsync(
+            context: OperationContext.Create(),
+            request: new(
+                read: fixture.Read,
+                scope: fixture.Source.Scope,
+                continuation: continuation,
+                maximumItems: MaximumItems,
+                maximumBytes: 1_000_000));
+
+        return new(
+            MaximumItems: MaximumItems,
+            MaximumBytes: 1_000_000,
+            First: first,
+            Resumed: resumed,
+            Replayed: replayed,
+            ProviderReadAttempts: conformance.Baseline.Commands.Count);
+    }
+
+    static async Task<PullPositionedRedeliveryObservation> ObservePullPositionedRedeliveryAsync()
+    {
+        const int MaximumDeliveries = 1;
+        var conformance = await CreatePullConformanceFixtureAsync();
+        await using var fixture = conformance.Fixture;
+        var captured = await CaptureConformanceChangeStartAsync(
+            fixture: fixture,
+            transactionId: 90,
+            subjectIdentity: "item-a");
+        var settlementAttemptsBefore = fixture.Protocol.Settlements.Count;
+        var request = new MaterializationChangeReadRequest(
+            scope: fixture.Source.Scope,
+            afterPosition: captured,
+            maximumDeliveries: MaximumDeliveries,
+            maximumBytes: 1_000_000);
+        var initial = await fixture.Source.ReadChangesAsync(
+            context: OperationContext.Create(),
+            request: request);
+        var redelivered = await fixture.Source.ReadChangesAsync(
+            context: OperationContext.Create(),
+            request: request);
+
+        return new(
+            Scope: fixture.Source.Scope,
+            CapturedPosition: captured,
+            MaximumDeliveries: MaximumDeliveries,
+            MaximumBytes: 1_000_000,
+            Initial: initial,
+            Redelivered: redelivered,
+            ProviderSettlementAttemptsBeforeReads: settlementAttemptsBefore,
+            ProviderSettlementAttemptsAfterReads: fixture.Protocol.Settlements.Count);
+    }
+
+    static async Task<PullExplicitSettlementObservation> ObservePullExplicitSettlementAsync()
+    {
+        var conformance = await CreatePullConformanceFixtureAsync();
+        await using var fixture = conformance.Fixture;
+        var captured = await CaptureConformanceChangeStartAsync(
+            fixture: fixture,
+            transactionId: 91,
+            subjectIdentity: "item-a");
+        var page = await fixture.Source.ReadChangesAsync(
+            context: OperationContext.Create(),
+            request: new(
+                scope: fixture.Source.Scope,
+                afterPosition: captured,
+                maximumDeliveries: 1,
+                maximumBytes: 1_000_000));
+        var settlement = (IMaterializationSettlingSource)fixture.Source;
+        var checkpoint = new MaterializationCheckpointId("conformance/checkpoint");
+        var context = OperationContext.Create();
+        var request = new MaterializationSourceSettlementRequest(
+            id: PostgresLogicalReplicationMaterializationChangeSource.CreateSettlementId(
+                checkpoint: checkpoint,
+                position: page.ThroughPosition),
+            checkpoint: checkpoint,
+            position: page.ThroughPosition,
+            requestedAtUtc: context.UtcNow.ToUniversalTime());
+        var stateBefore = fixture.Protocol.Deployment.ConfirmedFlushPosition.ToString();
+
+        var acknowledged = await settlement.SettleAsync(
+            context: context,
+            request: request);
+        var replayed = await settlement.SettleAsync(
+            context: context,
+            request: request);
+
+        return new(
+            SettlementPortAvailable: true,
+            SettlementCapabilityAdvertised: fixture.Source.Descriptor.CapabilityProfile.Evidence.Any(
+                static evidence => evidence.Capability == MaterializationCapabilityKind.SourceSettlement),
+            Acknowledged: acknowledged,
+            Replayed: replayed,
+            ProviderSettlementAttempts: fixture.Protocol.Settlements.Count,
+            ProviderSettlementStateBefore: stateBefore,
+            ProviderSettlementStateAfter: fixture.Protocol.Deployment.ConfirmedFlushPosition.ToString());
+    }
+
+    static async Task<PullCancellationObservation> ObservePullCancellationAsync()
+    {
+        var conformance = await CreatePullConformanceFixtureAsync();
+        await using var fixture = conformance.Fixture;
+        var captured = await CaptureConformanceChangeStartAsync(
+            fixture: fixture,
+            transactionId: 92,
+            subjectIdentity: "item-a");
+        var providerReadsBefore = fixture.Protocol.Reads.Count;
+        var providerSettlementsBefore = fixture.Protocol.Settlements.Count;
+        var providerSettlementStateBefore = fixture.Protocol.Deployment.ConfirmedFlushPosition.ToString();
+        using CancellationTokenSource cancellation = new();
+        cancellation.Cancel();
+        var canceledContext = OperationContext.Create(cancellationToken: cancellation.Token);
+        var changeReadCancellationObserved = false;
+        try
+        {
+            _ = await fixture.Source.ReadChangesAsync(
+                context: canceledContext,
+                request: new(
+                    scope: fixture.Source.Scope,
+                    afterPosition: captured,
+                    maximumDeliveries: 1,
+                    maximumBytes: 1_000_000));
+        }
+        catch (OperationCanceledException)
+        {
+            changeReadCancellationObserved = true;
+        }
+
+        var checkpoint = new MaterializationCheckpointId("conformance/canceled-checkpoint");
+        var settlementRequest = new MaterializationSourceSettlementRequest(
+            id: PostgresLogicalReplicationMaterializationChangeSource.CreateSettlementId(
+                checkpoint: checkpoint,
+                position: captured),
+            checkpoint: checkpoint,
+            position: captured,
+            requestedAtUtc: DateTimeOffset.UtcNow);
+        var settlementCancellationObserved = false;
+        try
+        {
+            _ = await fixture.Source.SettleAsync(
+                context: canceledContext,
+                request: settlementRequest);
+        }
+        catch (OperationCanceledException)
+        {
+            settlementCancellationObserved = true;
+        }
+
+        return new(
+            ChangeReadCancellationObserved: changeReadCancellationObserved,
+            SettlementCancellationObserved: settlementCancellationObserved,
+            ProviderReadAttemptsBefore: providerReadsBefore,
+            ProviderReadAttemptsAfter: fixture.Protocol.Reads.Count,
+            ProviderSettlementAttemptsBefore: providerSettlementsBefore,
+            ProviderSettlementAttemptsAfter: fixture.Protocol.Settlements.Count,
+            ProviderSettlementStateBefore: providerSettlementStateBefore,
+            ProviderSettlementStateAfter: fixture.Protocol.Deployment.ConfirmedFlushPosition.ToString());
+    }
+
+    static async Task<PullAffinityRejectionObservation> ObservePullAffinityRejectionsAsync()
+    {
+        var conformance = await CreatePullConformanceFixtureAsync();
+        await using var fixture = conformance.Fixture;
+        var first = await fixture.Source.ReadPageAsync(
+            context: OperationContext.Create(),
+            request: new(
+                read: fixture.Read,
+                scope: fixture.Source.Scope,
+                continuation: null,
+                maximumItems: 1,
+                maximumBytes: 1_000_000));
+        var continuation = PullChangeSourceConformanceInputs.RequireContinuation(first);
+        var captured = await fixture.Source.CaptureCurrentPositionAsync(
+            context: OperationContext.Create(),
+            scope: fixture.Source.Scope);
+        var foreignScope = PullChangeSourceConformanceInputs.ForeignScope(fixture.Source.Scope);
+        var providerReadsBefore = PullConformanceProviderReads(conformance);
+        var providerSettlementsBefore = fixture.Protocol.Settlements.Count;
+
+        var scopeMismatchRejected = false;
+        try
+        {
+            _ = await fixture.Source.CaptureCurrentPositionAsync(
+                context: OperationContext.Create(),
+                scope: foreignScope);
+        }
+        catch (ArgumentException)
+        {
+            scopeMismatchRejected = true;
+        }
+
+        var readMismatchRejected = false;
+        try
+        {
+            _ = new MaterializationSourcePageRequest(
+                read: PullChangeSourceConformanceInputs.AlternateRead(fixture.Read),
+                scope: fixture.Source.Scope,
+                continuation: continuation,
+                maximumItems: 1,
+                maximumBytes: 1_000_000);
+        }
+        catch (ArgumentException)
+        {
+            readMismatchRejected = true;
+        }
+
+        var positionMismatchRejected = false;
+        try
+        {
+            _ = new MaterializationChangeReadRequest(
+                scope: foreignScope,
+                afterPosition: captured,
+                maximumDeliveries: 1,
+                maximumBytes: 1_000_000);
+        }
+        catch (ArgumentException)
+        {
+            positionMismatchRejected = true;
+        }
+
+        return new(
+            ScopeMismatchRejected: scopeMismatchRejected,
+            ReadMismatchRejected: readMismatchRejected,
+            PositionMismatchRejected: positionMismatchRejected,
+            ProviderReadAttemptsBefore: providerReadsBefore,
+            ProviderReadAttemptsAfter: PullConformanceProviderReads(conformance),
+            ProviderSettlementAttemptsBefore: providerSettlementsBefore,
+            ProviderSettlementAttemptsAfter: fixture.Protocol.Settlements.Count);
+    }
+
+    static async ValueTask<(LogicalFixture Fixture, TableExecutor Baseline)> CreatePullConformanceFixtureAsync()
+    {
+        TableExecutor baseline = new(
+        [
+            new(Id: "item-a", Name: "Alpha", Optional: null, ParentId: "parent-1"),
+            new(Id: "item-b", Name: "Beta", Optional: null, ParentId: "parent-1"),
+            new(Id: "item-c", Name: "Gamma", Optional: null, ParentId: "parent-1")
+        ]);
+        var fixture = await CreateLogicalFixtureAsync(
+            replicaIdentityKind: PostgresLogicalReplicationReplicaIdentityKind.Full,
+            baselineExecutor: baseline.ExecuteAsync);
+        return (fixture, baseline);
+    }
+
+    static async ValueTask<MaterializationSourcePosition> CaptureConformanceChangeStartAsync(
+        LogicalFixture fixture,
+        uint transactionId,
+        string subjectIdentity)
+    {
+        var captured = await fixture.Source.CaptureCurrentPositionAsync(
+            context: OperationContext.Create(),
+            scope: fixture.Source.Scope);
+        fixture.Protocol.Deployment = fixture.Protocol.Deployment with
+        {
+            CurrentWalPosition = new(250)
+        };
+        fixture.Protocol.Batch = new(
+            Transactions:
+            [
+                Transaction(
+                    transactionId: transactionId,
+                    endPosition: 250,
+                    mutations:
+                    [
+                        new PostgresLogicalReplicationMutation(
+                            Ordinal: 0,
+                            Kind: PostgresLogicalReplicationMutationKind.Insert,
+                            ReplicaIdentity: PostgresLogicalReplicationReplicaIdentityKind.Full,
+                            OldRow: null,
+                            NewRow: Row(
+                                Value(columnName: "load_id", value: subjectIdentity),
+                                Value(columnName: "load_name", value: "Alpha")))
+                    ])
+            ],
+            ScannedThrough: new(250),
+            ReachedUpperBoundary: true);
+        return captured;
+    }
+
+    static int PullConformanceProviderReads(
+        (LogicalFixture Fixture, TableExecutor Baseline) conformance) =>
+        conformance.Baseline.Commands.Count
+        + conformance.Fixture.Protocol.InspectCount
+        + conformance.Fixture.Protocol.Reads.Count;
+
     [Fact]
     public async Task LogicalReplication_KeyChangeRemainsAdjacentAndTransactionAligned()
     {
@@ -683,7 +999,8 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
         PostgresLogicalReplicationReplicaIdentityKind replicaIdentityKind,
         PostgresLogicalReplicationSourcePolicy? policy = null,
         bool fixedWidthOnly = false,
-        IPostgresLogicalReplicationObserver? observer = null)
+        IPostgresLogicalReplicationObserver? observer = null,
+        PostgresNpgsqlCommandExecutor? baselineExecutor = null)
     {
         static ValueTask<PostgresNpgsqlCommandResult> Execute(
             PostgresNpgsqlCommand command,
@@ -711,6 +1028,10 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
                 dataSource,
                 runtime,
                 Policy);
+            if (baselineExecutor is not null)
+            {
+                reader = reader.WithCommandExecutor(baselineExecutor);
+            }
             var placement = Assert.Single(canonical.PhysicalPlan.Placement.Bindings);
             var table = canonical.Storage.ResolveTable(placement.Id);
             var replicaIdentity = new PostgresLogicalReplicationReplicaIdentityBinding(replicaIdentityKind);
@@ -746,7 +1067,8 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
                 binding,
                 source,
                 protocol,
-                effectivePolicy);
+                effectivePolicy,
+                CanonicalSourceRead(canonical));
         }
         catch
         {
@@ -958,7 +1280,8 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
         PostgresLogicalReplicationBinding Binding,
         PostgresLogicalReplicationMaterializationChangeSource Source,
         FakeLogicalReplicationProtocol Protocol,
-        PostgresLogicalReplicationSourcePolicy Policy) : IAsyncDisposable
+        PostgresLogicalReplicationSourcePolicy Policy,
+        RelationQuerySourceReadRequest Read) : IAsyncDisposable
     {
         public ValueTask DisposeAsync() => DataSource.DisposeAsync();
     }
