@@ -876,6 +876,9 @@ public sealed class ProcessDurableRuntimeTests
             ProcessInputAdmissionDisposition.Consumed,
             Assert.IsType<ProcessInputReceipt>(consumedEntry.Receipt).Disposition);
         Assert.Equal(
+            ProcessInputAdmissionReason.Consumed,
+            Assert.IsType<ProcessInputReceipt>(consumedEntry.Receipt).Reason);
+        Assert.Equal(
             registeredCheckpoint.ContinuationIdentity,
             consumedEntry.DispositionContinuation);
         Assert.Equal(2, consumedCheckpoint.Activations.Length);
@@ -1268,17 +1271,20 @@ public sealed class ProcessDurableRuntimeTests
             ProcessStorageContentFingerprints.Input(fixture.PendingReply),
             ProcessStorageContentFingerprints.Input(terminalReceipt.Input));
         Assert.Equal(ProcessInputAdmissionDisposition.Observed, terminalReceipt.Disposition);
+        Assert.Equal(ProcessInputAdmissionReason.Late, terminalReceipt.Reason);
         Assert.Collection(
             inputTraces,
             bufferedTrace =>
             {
                 Assert.Equal("buffered:Buffered", bufferedTrace.Detail);
                 Assert.Equal(ProcessInputAdmissionDisposition.Buffered, bufferedTrace.InputDisposition);
+                Assert.Equal(ProcessInputAdmissionReason.WaitCandidate, bufferedTrace.InputReason);
             },
             terminalTrace =>
             {
                 Assert.Equal("terminal-late:Observed", terminalTrace.Detail);
                 Assert.Equal(terminalReceipt.Disposition, terminalTrace.InputDisposition);
+                Assert.Equal(terminalReceipt.Reason, terminalTrace.InputReason);
             });
         Assert.DoesNotContain(checkpoint.Inbox, static entry => entry.Receipt is null);
         Assert.Equal(1, host.RelationCalls);
@@ -1454,6 +1460,7 @@ public sealed class ProcessDurableRuntimeTests
 
         Assert.Equal(ProcessDurableRuntimeDisposition.Applied, restarted.Disposition);
         Assert.Equal(ProcessInputAdmissionDisposition.Stale, receipt.Disposition);
+        Assert.Equal(ProcessInputAdmissionReason.Stale, receipt.Reason);
         Assert.Equal(restartAtUtc, receipt.ObservedAtUtc);
         Assert.Equal(committedAtUtc, checkpoint.UpdatedAtUtc);
         Assert.Equal(closingContinuation, closed.DispositionContinuation);

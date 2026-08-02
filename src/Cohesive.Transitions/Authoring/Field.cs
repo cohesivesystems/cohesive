@@ -374,3 +374,18 @@ public class Field<T> : IAuthoredField
         return false;
     }
 }
+
+/// <summary>Portable collection predicates available only inside typed Transition authoring expressions.</summary>
+public static class FieldCollectionExpressionExtensions
+{
+    /// <summary>Tests whether a many-valued semantic field contains an exact canonical value.</summary>
+    /// <typeparam name="TValue">Element type of the semantic collection.</typeparam>
+    /// <param name="field">Many-valued field searched for <paramref name="value"/>.</param>
+    /// <param name="value">Candidate element compared using canonical value equality.</param>
+    /// <returns>An expression-only Boolean placeholder lowered to <see cref="ExprFunctionNames.Contains"/>.</returns>
+    /// <exception cref="InvalidOperationException">The method is evaluated outside an authoring expression.</exception>
+    public static bool Contains<TValue>(this Field<IReadOnlyList<TValue>> field, TValue value) =>
+        throw new InvalidOperationException(
+            $"Field '{field?.Name ?? "unknown"}' is a definition, not runtime state. "
+            + $"'{nameof(Contains)}' is only valid inside typed Transition authoring expressions.");
+}

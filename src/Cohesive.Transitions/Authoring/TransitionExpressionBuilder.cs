@@ -743,8 +743,14 @@ public sealed class TransitionExpressionBuilder<TEntity, TParameters> where TEnt
             if (TryResolveSnapshotEntityId(member, out var snapshotEntityIdExpr))
                 return snapshotEntityIdExpr;
 
-            if (TryResolveTransitionParameter(member, parametersParameter, out var parameterName))
-                return new ParameterExpr(parameterName);
+            if (TryResolveTransitionParameterPath(member, parametersParameter, out var parameterPath))
+            {
+                return parameterPath.Length == 1
+                    ? new ParameterExpr(parameterPath[0])
+                    : new FieldExpr(
+                        new([.. parameterPath.Select(FieldPathSegment.ForField)]),
+                        TransitionBindingIds.Input);
+            }
 
             if (TryTranslateCountProperty(
                     member: member,
@@ -849,6 +855,15 @@ public sealed class TransitionExpressionBuilder<TEntity, TParameters> where TEnt
                     out var concatExpr))
             {
                 return concatExpr;
+            }
+
+            if (TryTranslateCollectionContainsCall(
+                    call,
+                    entityParameter,
+                    parametersParameter,
+                    out var containsExpr))
+            {
+                return containsExpr;
             }
 
             if (TryResolveStateFieldGet(call, entityParameter, out var field))
@@ -1209,26 +1224,106 @@ public sealed class TransitionExpressionBuilder<TEntity, TParameters> where TEnt
             return true;
         }
 
-        bool TryResolveTransitionParameter(MemberExpression member, ParameterExpression parametersParameter, out string parameterName)
+        bool TryResolveTransitionParameterPath(
+            MemberExpression member,
+            ParameterExpression parametersParameter,
+            out string[] parameterPath)
         {
-            parameterName = string.Empty;
-            var source = member.Expression is null ? null : StripConvert(expression: member.Expression);
-            if (!ReferenceEquals(objA: source, objB: parametersParameter))
+            List<MemberInfo> reversedMembers = [];
+            Expression? current = member;
+            while (current is MemberExpression currentMember)
+            {
+                reversedMembers.Add(currentMember.Member);
+                current = currentMember.Expression is null
+                    ? null
+                    : StripConvert(currentMember.Expression);
+            }
+
+            if (!ReferenceEquals(current, parametersParameter))
+            {
+                parameterPath = [];
+                return false;
+            }
+
+            reversedMembers.Reverse();
+            List<string> reversedPath = new(reversedMembers.Count);
+            foreach (var parameterMember in reversedMembers)
+            {
+                if (parameterMember is not PropertyInfo property)
+                {
+                    throw new TransitionExpressionTranslationException(
+                        $"Transition parameter reference '{parameterMember.Name}' is not a property.");
+                }
+
+                reversedPath.Add(allowCapturedValues
+                    ? property.Name
+                    : DefaultClrTypeRefMapper.GetSerializedMemberName(property));
+            }
+
+            if (reversedPath.Count == 0 || !parameterNames.Contains(reversedPath[0]))
+            {
+                var undeclared = reversedPath.Count == 0 ? member.Member.Name : reversedPath[0];
+                throw new TransitionExpressionTranslationException(
+                    $"Transition parameter '{undeclared}' is not declared.");
+            }
+
+            parameterPath = [.. reversedPath];
+            return true;
+        }
+
+        bool TryTranslateCollectionContainsCall(
+            MethodCallExpression call,
+            ParameterExpression entityParameter,
+            ParameterExpression parametersParameter,
+            out Expr expression)
+        {
+            expression = null!;
+            Expression? collection = null;
+            Expression? candidate = null;
+            Type? elementType = null;
+
+            if (call.Method.IsStatic
+                && call.Method.DeclaringType == typeof(Enumerable)
+                && string.Equals(call.Method.Name, nameof(Enumerable.Contains), StringComparison.Ordinal)
+                && call.Arguments.Count == 2)
+            {
+                collection = call.Arguments[0];
+                candidate = call.Arguments[1];
+                elementType = call.Method.IsGenericMethod
+                    ? call.Method.GetGenericArguments()[0]
+                    : null;
+            }
+            else if (call.Method.IsStatic
+                     && call.Method.DeclaringType == typeof(FieldCollectionExpressionExtensions)
+                     && string.Equals(
+                         call.Method.Name,
+                         nameof(FieldCollectionExpressionExtensions.Contains),
+                         StringComparison.Ordinal)
+                     && call.Arguments.Count == 2)
+            {
+                collection = call.Arguments[0];
+                candidate = call.Arguments[1];
+                elementType = call.Method.IsGenericMethod
+                    ? call.Method.GetGenericArguments()[0]
+                    : null;
+            }
+            if (collection is null || candidate is null)
                 return false;
 
-            if (member.Member is not PropertyInfo property)
-            {
-                throw new TransitionExpressionTranslationException(message: $"Transition parameter reference '{member.Member.Name}' is not a property.");
-            }
-
-            parameterName = allowCapturedValues
-                ? property.Name
-                : DefaultClrTypeRefMapper.GetSerializedMemberName(property);
-            if (!parameterNames.Contains(parameterName))
-            {
-                throw new TransitionExpressionTranslationException(message: $"Transition parameter '{parameterName}' is not declared.");
-            }
-
+            expression = new CallExpr(
+                ExprFunctionNames.Contains,
+                [
+                    Translate(
+                        StripConvert(collection),
+                        entityParameter,
+                        parametersParameter),
+                    Translate(
+                        StripConvert(candidate),
+                        entityParameter,
+                        parametersParameter,
+                        constantTypeHint: elementType)
+                ],
+                ReturnType(typeof(bool)));
             return true;
         }
 
@@ -1312,7 +1407,7 @@ public sealed class TransitionExpressionBuilder<TEntity, TParameters> where TEnt
                     expression: collectionExpression,
                     entityParameter: entityParameter,
                     parametersParameter: parametersParameter)],
-                ReturnType(typeof(int)));
+                ReturnType(typeof(long)));
             return true;
         }
 
@@ -1362,7 +1457,7 @@ public sealed class TransitionExpressionBuilder<TEntity, TParameters> where TEnt
                     expression: StripConvert(expression: collectionExpression),
                     entityParameter: entityParameter,
                     parametersParameter: parametersParameter)],
-                ReturnType(typeof(int)));
+                ReturnType(typeof(long)));
             return true;
         }
 

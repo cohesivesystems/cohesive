@@ -145,6 +145,7 @@ public sealed class ProcessReferenceInterpreterTests
                     item.EmissionFingerprint,
                     item.OperationOccurrence,
                     item.InputDisposition,
+                    item.InputReason,
                     item.WaitRegistrationId)),
             replay.Evidence.Trace.Select(static item =>
                 (item.Sequence,
@@ -157,6 +158,7 @@ public sealed class ProcessReferenceInterpreterTests
                     item.EmissionFingerprint,
                     item.OperationOccurrence,
                     item.InputDisposition,
+                    item.InputReason,
                     item.WaitRegistrationId)));
     }
 
@@ -534,29 +536,29 @@ public sealed class ProcessReferenceInterpreterTests
         Assert.False(wait.Active);
         Assert.Equal(new ExecutionNodeId("clause/high"), wait.WinnerClause);
         Assert.Equal(high.Context.EmissionId, wait.WinnerInput);
-        Assert.Equal(
-            ProcessInputAdmissionDisposition.Observed,
-            first.State.InputReceipts.Single(receipt => receipt.Emission == low.Context.EmissionId).Disposition);
-        Assert.Equal(
-            ProcessInputAdmissionDisposition.Consumed,
-            first.State.InputReceipts.Single(receipt => receipt.Emission == high.Context.EmissionId).Disposition);
+        var superseded = first.State.InputReceipts.Single(receipt => receipt.Emission == low.Context.EmissionId);
+        Assert.Equal(ProcessInputAdmissionDisposition.Observed, superseded.Disposition);
+        Assert.Equal(ProcessInputAdmissionReason.Superseded, superseded.Reason);
+        var consumed = first.State.InputReceipts.Single(receipt => receipt.Emission == high.Context.EmissionId);
+        Assert.Equal(ProcessInputAdmissionDisposition.Consumed, consumed.Disposition);
+        Assert.Equal(ProcessInputAdmissionReason.Consumed, consumed.Reason);
         Assert.Equal(2, first.InputAdmissions.Length);
         Assert.Equal(
             [
-                (low.Context.EmissionId, ProcessInputAdmissionDisposition.Observed),
-                (high.Context.EmissionId, ProcessInputAdmissionDisposition.Consumed)
+                (low.Context.EmissionId, ProcessInputAdmissionDisposition.Observed, ProcessInputAdmissionReason.Superseded),
+                (high.Context.EmissionId, ProcessInputAdmissionDisposition.Consumed, ProcessInputAdmissionReason.Consumed)
             ],
             first.InputAdmissions
                 .OrderBy(static receipt => receipt.Emission.Value, StringComparer.Ordinal)
-                .Select(static receipt => (receipt.Emission, receipt.Disposition)));
+                .Select(static receipt => (receipt.Emission, receipt.Disposition, receipt.Reason)));
         Assert.Equal(new ExecutionNodeId("return-high"), Assert.Single(first.State.Tokens).Node);
         var replayWait = Assert.Single(replay.State.Waits);
         Assert.Equal(wait.RegistrationId, replayWait.RegistrationId);
         Assert.Equal(wait.WinnerClause, replayWait.WinnerClause);
         Assert.Equal(wait.WinnerInput, replayWait.WinnerInput);
         Assert.Equal(
-            first.State.InputReceipts.Select(static receipt => (receipt.Emission, receipt.Disposition)),
-            replay.State.InputReceipts.Select(static receipt => (receipt.Emission, receipt.Disposition)));
+            first.State.InputReceipts.Select(static receipt => (receipt.Emission, receipt.Disposition, receipt.Reason)),
+            replay.State.InputReceipts.Select(static receipt => (receipt.Emission, receipt.Disposition, receipt.Reason)));
 
         var conflictingPayload = ProcessReferenceInterpreter.Activate(
             plan,
@@ -580,6 +582,9 @@ public sealed class ProcessReferenceInterpreterTests
         Assert.Equal(
             ProcessInputAdmissionDisposition.IdentityConflict,
             Assert.Single(conflictingPayload.InputAdmissions).Disposition);
+        Assert.Equal(
+            ProcessInputAdmissionReason.IdentityConflict,
+            Assert.Single(conflictingPayload.InputAdmissions).Reason);
         Assert.Contains(
             conflictingPayload.Diagnostics,
             static diagnostic => diagnostic.Code == ProcessExecutionDiagnosticCodes.InputIdentityConflict);
@@ -608,6 +613,9 @@ public sealed class ProcessReferenceInterpreterTests
         Assert.Equal(
             ProcessInputAdmissionDisposition.IdentityConflict,
             Assert.Single(conflictingTarget.InputAdmissions).Disposition);
+        Assert.Equal(
+            ProcessInputAdmissionReason.IdentityConflict,
+            Assert.Single(conflictingTarget.InputAdmissions).Reason);
 
         var duplicate = ProcessReferenceInterpreter.Activate(
             plan,
@@ -623,6 +631,7 @@ public sealed class ProcessReferenceInterpreterTests
         Assert.Equal(
             ProcessInputAdmissionDisposition.Consumed,
             Assert.Single(duplicate.InputAdmissions).Disposition);
+        Assert.Equal(ProcessInputAdmissionReason.Duplicate, Assert.Single(duplicate.InputAdmissions).Reason);
         Assert.Equal(
             ProcessInputAdmissionDisposition.Consumed,
             duplicate.State.InputReceipts.Single(receipt => receipt.Emission == high.Context.EmissionId).Disposition);
@@ -702,8 +711,14 @@ public sealed class ProcessReferenceInterpreterTests
             ProcessInputAdmissionDisposition.Observed,
             decision.InputAdmissions.Single(receipt => receipt.Emission == awaited.Context.EmissionId).Disposition);
         Assert.Equal(
+            ProcessInputAdmissionReason.Stale,
+            decision.InputAdmissions.Single(receipt => receipt.Emission == awaited.Context.EmissionId).Reason);
+        Assert.Equal(
             ProcessInputAdmissionDisposition.DeadLettered,
             decision.InputAdmissions.Single(receipt => receipt.Emission == unrelated.Context.EmissionId).Disposition);
+        Assert.Equal(
+            ProcessInputAdmissionReason.MissingTarget,
+            decision.InputAdmissions.Single(receipt => receipt.Emission == unrelated.Context.EmissionId).Reason);
     }
 
     [Fact]

@@ -206,6 +206,7 @@ public sealed class ProcessDurableCheckpointContractTests
         var physicalOnlyReceipt = new ProcessInputReceipt(
             entry.Input,
             ProcessInputAdmissionDisposition.Buffered,
+            ProcessInputAdmissionReason.Early,
             fixture.Checkpoint.UpdatedAtUtc);
 
         Assert.Throws<ArgumentException>(() => ProcessDurabilityTestFixture.CopyCheckpoint(
@@ -635,12 +636,29 @@ public sealed class ProcessDurableCheckpointContractTests
             ProcessStorageContentFingerprints.Input(pending.Input),
             ProcessStorageContentFingerprints.Input(closed.Input));
         Assert.Equal(ProcessInputAdmissionDisposition.Stale, receipt.Disposition);
+        Assert.Equal(ProcessInputAdmissionReason.Stale, receipt.Reason);
         Assert.Equal(restartedAtUtc, receipt.ObservedAtUtc);
         Assert.Equal(closingContinuation, closed.DispositionContinuation);
         Assert.Empty(replacement.Continuation.InputReceipts);
         Assert.Empty(replacement.Continuation.BufferedInputs);
         Assert.Empty(replacement.Continuation.OutstandingRequests);
         Assert.True(compatibility.IsValid, FormatDiagnostics(compatibility));
+
+        var json = ProcessDurableCheckpointJsonSerializer.Serialize(replacement);
+        var restored = ProcessDurableCheckpointJsonSerializer.Deserialize(json, fixture.Plan);
+        Assert.Equal(
+            ProcessInputAdmissionReason.Stale,
+            Assert.IsType<ProcessInputReceipt>(Assert.Single(restored.Inbox).Receipt).Reason);
+
+        var missingReason = JsonNode.Parse(json)!.AsObject();
+        Assert.True(missingReason["inbox"]![0]!["receipt"]!.AsObject().Remove("reason"));
+        var missingReasonValidation = ProcessDurableCheckpointJsonSerializer.TryDeserialize(
+            missingReason.ToJsonString(),
+            fixture.Plan,
+            out var missingReasonCheckpoint);
+        Assert.Null(missingReasonCheckpoint);
+        Assert.Contains(missingReasonValidation.Diagnostics, static diagnostic =>
+            diagnostic.Code == ProcessCheckpointJsonDiagnosticCodes.DeserializationInvalid);
     }
 
     [Fact]

@@ -213,6 +213,156 @@ public sealed class CanonicalTransitionAuthoringTests
     }
 
     [Fact]
+    public void CollectionContains_LowersToPortableMembershipAndInterpretsAgainstTheCompleteCollection()
+    {
+        var authored = TransitionAuthoring.Create<ObservedIdentityEntity, EvaluationIdentityInput, string>(
+            ObservedIdentityEntity.Instance.Definition.Shape,
+            AuxiliaryMetadata(Identities.CollectionContainsDefinition, Identities.CollectionContainsBody),
+            transition => transition
+                .Requires(
+                    Identities.CollectionContainsAdmission,
+                    (entity, input) => entity.ObservedIds.Contains(input.EvaluationId),
+                    (_, _) => "missing")
+                .Return(
+                    Identities.CollectionContainsOutcome,
+                    TransitionOutcomeDisposition.NoChange,
+                    "observed"));
+
+        Assert.True(authored.IsValid, Format(authored.Validation));
+        var contains = Assert.IsType<CallExpr>(Assert.Single(authored.Definition.Preconditions).Predicate);
+        Assert.Equal(ExprFunctionNames.Contains, contains.Function);
+        Assert.Equal(
+            nameof(ObservedIdentityEntity.ObservedIds),
+            Assert.IsType<FieldExpr>(contains.Arguments[0]).Path.ToString());
+        Assert.Equal(
+            nameof(EvaluationIdentityInput.EvaluationId),
+            Assert.IsType<ParameterExpr>(contains.Arguments[1]).Parameter);
+
+        var compilation = authored.Compile();
+        Assert.True(compilation.IsSuccessful, Format(compilation.Validation));
+        var plan = Assert.IsType<CompiledTransitionPlan>(compilation.Plan);
+        var decision = TransitionReferenceInterpreter.DecideSparse(
+            plan,
+            new("ari-181/collection-contains"),
+            Object(
+                authored.Definition.Input,
+                (nameof(EvaluationIdentityInput.EvaluationId), ObservationValue.FromString("evaluation/first"))),
+            [
+                Entry(
+                    plan,
+                    nameof(ObservedIdentityEntity.ObservedIds),
+                    ObservationValue.FromArray([
+                        ObservationValue.FromString("evaluation/first"),
+                        ObservationValue.FromString("evaluation/intervening")
+                    ]))
+            ]);
+
+        Assert.Equal(TransitionDecisionKind.NoChange, decision.Kind);
+        Assert.Equal("observed", decision.Outcome?.Value?.String);
+    }
+
+    [Fact]
+    public void UnrelatedInstanceContains_IsNotReinterpretedAsPortableCollectionMembership()
+    {
+        var exception = Assert.Throws<TransitionExpressionTranslationException>(() =>
+            TransitionAuthoring.Create<ReviewEntity, UnrelatedMembershipInput, string>(
+                ReviewEntity.Instance.Definition.Shape,
+                AuxiliaryMetadata(Identities.UnrelatedContainsDefinition, Identities.UnrelatedContainsBody),
+                transition => transition
+                    .Requires(
+                        Identities.UnrelatedContainsAdmission,
+                        (_, input) => input.Membership.Contains(input.Candidate),
+                        (_, _) => "missing")
+                    .Return(
+                        Identities.UnrelatedContainsOutcome,
+                        TransitionOutcomeDisposition.NoChange,
+                        "observed")));
+
+        Assert.Contains("Unsupported method call", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CollectionCount_LowersToCanonicalInt64AndInterpretsInvariant()
+    {
+        var authored = TransitionAuthoring.Create<AlignedLedgerEntity, LedgerCountInput, string>(
+            AlignedLedgerEntity.Instance.Definition.Shape,
+            AuxiliaryMetadata(Identities.CollectionCountDefinition, Identities.CollectionCountBody),
+            transition =>
+            {
+                transition.Requires(
+                    Identities.CollectionCountAdmission,
+                    (entity, input) => input.ExpectedIds.Count() == entity.ObservedIds.Count,
+                    (_, _) => "unexpected-count");
+                transition.Return(
+                    Identities.CollectionCountOutcome,
+                    TransitionOutcomeDisposition.NoChange,
+                    "aligned");
+                transition.Invariant(
+                    Identities.CollectionCountInvariant,
+                    entity => entity.ObservedIds.Count == entity.Evaluations.Count);
+            });
+
+        Assert.True(authored.IsValid, Format(authored.Validation));
+        var admissionEquality = Assert.IsType<BinaryExpr>(Assert.Single(authored.Definition.Preconditions).Predicate);
+        var enumerableCount = Assert.IsType<CallExpr>(admissionEquality.Left);
+        Assert.Equal(ExprFunctionNames.Count, enumerableCount.Function);
+        Assert.Equal(new ScalarTypeRef(ScalarTypeKind.Int64), enumerableCount.ReturnType);
+        var equality = Assert.IsType<BinaryExpr>(Assert.Single(authored.Definition.Invariants).Predicate);
+        var left = Assert.IsType<CallExpr>(equality.Left);
+        var right = Assert.IsType<CallExpr>(equality.Right);
+        Assert.Equal(ExprFunctionNames.Count, left.Function);
+        Assert.Equal(ExprFunctionNames.Count, right.Function);
+        Assert.Equal(new ScalarTypeRef(ScalarTypeKind.Int64), left.ReturnType);
+        Assert.Equal(new ScalarTypeRef(ScalarTypeKind.Int64), right.ReturnType);
+
+        var compilation = authored.Compile();
+        Assert.True(compilation.IsSuccessful, Format(compilation.Validation));
+        var plan = Assert.IsType<CompiledTransitionPlan>(compilation.Plan);
+        var aligned = TransitionReferenceInterpreter.DecideSparse(
+            plan,
+            new("ari-181/collection-count/aligned"),
+            Object(
+                authored.Definition.Input,
+                (nameof(LedgerCountInput.ExpectedIds), ObservationValue.FromArray([
+                    ObservationValue.FromString("evaluation/1")
+                ]))),
+            [
+                Entry(
+                    plan,
+                    nameof(AlignedLedgerEntity.ObservedIds),
+                    ObservationValue.FromArray([ObservationValue.FromString("evaluation/1")])),
+                Entry(
+                    plan,
+                    nameof(AlignedLedgerEntity.Evaluations),
+                    ObservationValue.FromArray([ObservationValue.FromString("evaluation/1")]))
+            ]);
+        var misaligned = TransitionReferenceInterpreter.DecideSparse(
+            plan,
+            new("ari-181/collection-count/misaligned"),
+            Object(
+                authored.Definition.Input,
+                (nameof(LedgerCountInput.ExpectedIds), ObservationValue.FromArray([
+                    ObservationValue.FromString("evaluation/1")
+                ]))),
+            [
+                Entry(
+                    plan,
+                    nameof(AlignedLedgerEntity.ObservedIds),
+                    ObservationValue.FromArray([ObservationValue.FromString("evaluation/1")])),
+                Entry(
+                    plan,
+                    nameof(AlignedLedgerEntity.Evaluations),
+                    ObservationValue.FromArray([]))
+            ]);
+
+        Assert.Equal(TransitionDecisionKind.NoChange, aligned.Kind);
+        Assert.Equal(TransitionDecisionKind.InvalidDefinition, misaligned.Kind);
+        Assert.Contains(
+            misaligned.Diagnostics,
+            static diagnostic => diagnostic.Code == TransitionExecutionDiagnosticCodes.InvariantViolated);
+    }
+
+    [Fact]
     public void MatchThroughLocal_PreservesOptionalNullableAndSerializedInputContract()
     {
         var authored = TransitionAuthoring.Create<ReviewEntity, OptionalDecisionInput, string>(
@@ -577,6 +727,40 @@ public sealed class CanonicalTransitionAuthoringTests
         public Field<IReadOnlyList<OwnedChild>> Children { get; }
     }
 
+    sealed class ObservedIdentityEntity : Entity<ObservedIdentityEntity>
+    {
+        public ObservedIdentityEntity()
+        {
+            ObservedIds = MutableField<IReadOnlyList<string>>(nameof(ObservedIds));
+        }
+
+        public Field<IReadOnlyList<string>> ObservedIds { get; }
+    }
+
+    sealed class AlignedLedgerEntity : Entity<AlignedLedgerEntity>
+    {
+        public AlignedLedgerEntity()
+        {
+            ObservedIds = MutableField<IReadOnlyList<string>>(nameof(ObservedIds));
+            Evaluations = MutableField<IReadOnlyList<string>>(nameof(Evaluations));
+        }
+
+        public Field<IReadOnlyList<string>> ObservedIds { get; }
+
+        public Field<IReadOnlyList<string>> Evaluations { get; }
+    }
+
+    sealed record EvaluationIdentityInput(string EvaluationId);
+
+    sealed record LedgerCountInput(IReadOnlyList<string> ExpectedIds);
+
+    sealed record UnrelatedMembershipInput(UnrelatedMembership Membership, string Candidate);
+
+    sealed record UnrelatedMembership(string Token)
+    {
+        public bool Contains(string candidate) => string.Equals(Token, candidate, StringComparison.Ordinal);
+    }
+
     static class Identities
     {
         public static readonly ExecutionDefinitionId Definition = new("transition/review-decision");
@@ -620,6 +804,19 @@ public sealed class CanonicalTransitionAuthoringTests
         public static readonly ExecutionDefinitionId ProjectedDefinition = new("transition/review-projected");
         public static readonly ExecutionNodeId ProjectedBody = new("review-projected/body");
         public static readonly ExecutionNodeId ProjectedOutcome = new("review-projected/outcome");
+        public static readonly ExecutionDefinitionId CollectionContainsDefinition = new("transition/review-collection-contains");
+        public static readonly ExecutionNodeId CollectionContainsBody = new("review-collection-contains/body");
+        public static readonly ExecutionNodeId CollectionContainsAdmission = new("review-collection-contains/admission");
+        public static readonly ExecutionNodeId CollectionContainsOutcome = new("review-collection-contains/outcome");
+        public static readonly ExecutionDefinitionId UnrelatedContainsDefinition = new("transition/review-unrelated-contains");
+        public static readonly ExecutionNodeId UnrelatedContainsBody = new("review-unrelated-contains/body");
+        public static readonly ExecutionNodeId UnrelatedContainsAdmission = new("review-unrelated-contains/admission");
+        public static readonly ExecutionNodeId UnrelatedContainsOutcome = new("review-unrelated-contains/outcome");
+        public static readonly ExecutionDefinitionId CollectionCountDefinition = new("transition/review-collection-count");
+        public static readonly ExecutionNodeId CollectionCountBody = new("review-collection-count/body");
+        public static readonly ExecutionNodeId CollectionCountAdmission = new("review-collection-count/admission");
+        public static readonly ExecutionNodeId CollectionCountOutcome = new("review-collection-count/outcome");
+        public static readonly ExecutionNodeId CollectionCountInvariant = new("review-collection-count/invariant");
         public static readonly ExecutionDefinitionId OwnedDefinition = new("transition/review-owned-child");
         public static readonly ExecutionNodeId OwnedBody = new("review-owned-child/body");
         public static readonly ExecutionNodeId OwnedUpsert = new("review-owned-child/upsert");

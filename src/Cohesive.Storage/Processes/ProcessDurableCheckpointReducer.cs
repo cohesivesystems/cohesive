@@ -190,6 +190,7 @@ static class ProcessDurableCheckpointReducer
                 new(
                     entry.Input,
                     ProcessInputAdmissionDisposition.Stale,
+                    ProcessInputAdmissionReason.Stale,
                     observedAtUtc),
                 closingContinuation);
         }

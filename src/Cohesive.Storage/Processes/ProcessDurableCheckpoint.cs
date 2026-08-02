@@ -491,7 +491,7 @@ public sealed class ProcessDurableCheckpoint
 {
     /// <summary>Current exact physical checkpoint schema.</summary>
     public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } =
-        new("cohesive-process-durable-checkpoint/v2");
+        new("cohesive-process-durable-checkpoint/v3");
 
     /// <summary>Creates a complete validated physical Process checkpoint.</summary>
     /// <param name="schemaVersion">Exact physical checkpoint schema.</param>
@@ -927,6 +927,12 @@ public sealed class ProcessDurableCheckpoint
             if (entry.DispositionContinuation is { } decidingContinuation)
             {
                 RequireKnownAttempt(decidingContinuation, nameof(values));
+            }
+            if (entry.Receipt is { } receipt && !receipt.IsValidAdmissionEvidence())
+            {
+                throw new ArgumentException(
+                    "Inbox receipts require a closed semantic input-admission reason compatible with the policy disposition.",
+                    nameof(values));
             }
         }
 

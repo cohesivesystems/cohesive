@@ -472,7 +472,10 @@ public static class ProcessReferenceInterpreter
                     .ToArray();
                 if (candidates.Skip(1).Any(candidate => !SameInput(input, candidate)))
                 {
-                    var conflict = Receipt(input, ProcessInputAdmissionDisposition.IdentityConflict);
+                    var conflict = Receipt(
+                        input,
+                        ProcessInputAdmissionDisposition.IdentityConflict,
+                        ProcessInputAdmissionReason.IdentityConflict);
                     UpsertActivationAdmission(conflict);
                     diagnostics.AddRange(envelopeValidations.SelectMany(static validation => validation.Diagnostics));
                     diagnostics.Add(Diagnostic(
@@ -490,7 +493,10 @@ public static class ProcessReferenceInterpreter
                 var envelopeValidation = envelopeValidations[0];
                 if (!envelopeValidation.IsValid)
                 {
-                    var rejected = Receipt(input, ProcessInputAdmissionDisposition.Rejected);
+                    var rejected = Receipt(
+                        input,
+                        ProcessInputAdmissionDisposition.Rejected,
+                        ProcessInputAdmissionReason.InvalidEnvelope);
                     UpsertActivationAdmission(rejected);
                     receipts.Add(rejected);
                     diagnostics.AddRange(envelopeValidation.Diagnostics);
@@ -503,7 +509,10 @@ public static class ProcessReferenceInterpreter
                 {
                     if (!SameInput(prior.Input, input))
                     {
-                        var conflict = Receipt(input, ProcessInputAdmissionDisposition.IdentityConflict);
+                        var conflict = Receipt(
+                            input,
+                            ProcessInputAdmissionDisposition.IdentityConflict,
+                            ProcessInputAdmissionReason.IdentityConflict);
                         UpsertActivationAdmission(conflict);
                         diagnostics.Add(Diagnostic(
                             ProcessExecutionDiagnosticCodes.InputIdentityConflict,
@@ -515,6 +524,7 @@ public static class ProcessReferenceInterpreter
                     var duplicate = prior with
                     {
                         Disposition = DuplicateDisposition(prior),
+                        Reason = ProcessInputAdmissionReason.Duplicate,
                         ObservedAtUtc = activation.ObservedAtUtc
                     };
                     UpsertActivationAdmission(duplicate);
@@ -537,6 +547,7 @@ public static class ProcessReferenceInterpreter
                         policyWait is null
                             ? ProcessInputAdmissionDisposition.Stale
                             : StaleDisposition(policyWait, input),
+                        ProcessInputAdmissionReason.Stale,
                         policyWait?.RegistrationId);
                     UpsertActivationAdmission(stale);
                     receipts.Add(stale);
@@ -551,7 +562,10 @@ public static class ProcessReferenceInterpreter
                 var target = tokens.FirstOrDefault(candidate => candidate.Id == input.Target.Token);
                 if (target is null)
                 {
-                    var missing = Receipt(input, ProcessInputAdmissionDisposition.MissingTarget);
+                    var missing = Receipt(
+                        input,
+                        ProcessInputAdmissionDisposition.MissingTarget,
+                        ProcessInputAdmissionReason.MissingTarget);
                     UpsertActivationAdmission(missing);
                     receipts.Add(missing);
                     AddInputTrace(input, missing, "missing-target");
@@ -566,7 +580,10 @@ public static class ProcessReferenceInterpreter
                         && candidate.RegistrationId == exactRegistration);
                     if (addressedWait is null)
                     {
-                        var missing = Receipt(input, ProcessInputAdmissionDisposition.MissingTarget);
+                        var missing = Receipt(
+                            input,
+                            ProcessInputAdmissionDisposition.MissingTarget,
+                            ProcessInputAdmissionReason.MissingTarget);
                         UpsertActivationAdmission(missing);
                         receipts.Add(missing);
                         AddInputTrace(input, missing, "missing-wait-occurrence");
@@ -575,11 +592,18 @@ public static class ProcessReferenceInterpreter
 
                     if (!addressedWait.Active)
                     {
-                        var disposition = WaitAccepts(addressedWait, input.Envelope)
+                        var acceptedByWait = WaitAccepts(addressedWait, input.Envelope);
+                        var disposition = acceptedByWait
                             ? LateDisposition(addressedWait, input)
                             : MissingDisposition(addressedWait)
                               ?? ProcessInputAdmissionDisposition.MissingTarget;
-                        var closed = Receipt(input, disposition, addressedWait.RegistrationId);
+                        var closed = Receipt(
+                            input,
+                            disposition,
+                            acceptedByWait
+                                ? ProcessInputAdmissionReason.Late
+                                : ProcessInputAdmissionReason.MissingTarget,
+                            addressedWait.RegistrationId);
                         UpsertActivationAdmission(closed);
                         receipts.Add(closed);
                         AddInputTrace(input, closed, "closed-wait-occurrence");
@@ -603,7 +627,10 @@ public static class ProcessReferenceInterpreter
                         .ToArray();
                     if (!hasActiveCompatibleWait && compatibleTombstones.Length > 1)
                     {
-                        var ambiguous = Receipt(input, ProcessInputAdmissionDisposition.MissingTarget);
+                        var ambiguous = Receipt(
+                            input,
+                            ProcessInputAdmissionDisposition.MissingTarget,
+                            ProcessInputAdmissionReason.MissingTarget);
                         UpsertActivationAdmission(ambiguous);
                         receipts.Add(ambiguous);
                         diagnostics.Add(Diagnostic(
@@ -620,6 +647,7 @@ public static class ProcessReferenceInterpreter
                         var late = Receipt(
                             input,
                             LateDisposition(tombstone, input),
+                            ProcessInputAdmissionReason.Late,
                             tombstone.RegistrationId);
                         UpsertActivationAdmission(late);
                         receipts.Add(late);
@@ -634,7 +662,11 @@ public static class ProcessReferenceInterpreter
                     : MissingDisposition(activeWait);
                 if (missingDisposition is { } resolvedMissingDisposition)
                 {
-                    var missing = Receipt(input, resolvedMissingDisposition, activeWait!.RegistrationId);
+                    var missing = Receipt(
+                        input,
+                        resolvedMissingDisposition,
+                        ProcessInputAdmissionReason.MissingTarget,
+                        activeWait!.RegistrationId);
                     UpsertActivationAdmission(missing);
                     receipts.Add(missing);
                     AddInputTrace(input, missing, "incompatible-active-wait");
@@ -645,14 +677,26 @@ public static class ProcessReferenceInterpreter
                     or ExecutionTokenDisposition.Failed
                     or ExecutionTokenDisposition.Cancelled)
                 {
-                    var missing = Receipt(input, ProcessInputAdmissionDisposition.MissingTarget);
+                    var missing = Receipt(
+                        input,
+                        ProcessInputAdmissionDisposition.MissingTarget,
+                        ProcessInputAdmissionReason.MissingTarget);
                     UpsertActivationAdmission(missing);
                     receipts.Add(missing);
                     AddInputTrace(input, missing, "terminal-target");
                     continue;
                 }
 
-                var buffered = Receipt(input, ProcessInputAdmissionDisposition.Buffered);
+                var isWaitCandidate = activeWait is not null && WaitAccepts(activeWait, input.Envelope);
+                var buffered = Receipt(
+                    input,
+                    ProcessInputAdmissionDisposition.Buffered,
+                    isWaitCandidate
+                        ? ProcessInputAdmissionReason.WaitCandidate
+                        : ProcessInputAdmissionReason.Early,
+                    isWaitCandidate
+                        ? activeWait!.RegistrationId
+                        : null);
                 receipts.Add(buffered);
                 UpsertActivationAdmission(buffered);
                 bufferedInputs.Add(new(input, activation.ObservedAtUtc));
@@ -801,12 +845,18 @@ public static class ProcessReferenceInterpreter
                     DispositionInput(
                         candidate,
                         ProcessInputAdmissionDisposition.Rejected,
+                        ProcessInputAdmissionReason.ContractMismatch,
                         wait.RegistrationId,
                         "request-result-rejected");
                     continue;
                 }
 
-                DispositionInput(candidate, ProcessInputAdmissionDisposition.Consumed, wait.RegistrationId, "request-result");
+                DispositionInput(
+                    candidate,
+                    ProcessInputAdmissionDisposition.Consumed,
+                    ProcessInputAdmissionReason.Consumed,
+                    wait.RegistrationId,
+                    "request-result");
                 requests.Remove(outstanding);
                 DeactivateWait(wait, winnerClause: branch.Id, winnerInput: reply.Context.EmissionId);
                 ResolveChildResult(token, node.Id, outstanding.Emission, semantics.Contract, reply);
@@ -842,6 +892,7 @@ public static class ProcessReferenceInterpreter
                     DispositionInput(
                         candidate,
                         ProcessInputAdmissionDisposition.Rejected,
+                        ProcessInputAdmissionReason.ContractMismatch,
                         wait.RegistrationId,
                         "partition-result-rejected");
                     continue;
@@ -850,6 +901,7 @@ public static class ProcessReferenceInterpreter
                 DispositionInput(
                     candidate,
                     ProcessInputAdmissionDisposition.Consumed,
+                    ProcessInputAdmissionReason.Consumed,
                     wait.RegistrationId,
                     "partition-result");
                 requests.Remove(outstanding);
@@ -979,6 +1031,7 @@ public static class ProcessReferenceInterpreter
                 DispositionInput(
                     candidate,
                     LateDisposition(closedWait, candidate.Input),
+                    ProcessInputAdmissionReason.Late,
                     closedWait.RegistrationId,
                     "late-request-result");
             }
@@ -2059,6 +2112,7 @@ public static class ProcessReferenceInterpreter
                 DispositionInput(
                     stale,
                     Map(node.StaleInput, ProcessInputAdmissionDisposition.Stale),
+                    ProcessInputAdmissionReason.Stale,
                     wait.RegistrationId,
                     "await-stale");
             }
@@ -2086,6 +2140,7 @@ public static class ProcessReferenceInterpreter
                 DispositionInput(
                     winner.Input!,
                     ProcessInputAdmissionDisposition.Consumed,
+                    ProcessInputAdmissionReason.Consumed,
                     wait.RegistrationId,
                     "await-winner");
             }
@@ -2125,8 +2180,9 @@ public static class ProcessReferenceInterpreter
                 DispositionInput(
                     candidate,
                     Map(node.LateInput, ProcessInputAdmissionDisposition.Late),
+                    ProcessInputAdmissionReason.Superseded,
                     wait.RegistrationId,
-                    "await-loser");
+                    "await-superseded");
             }
         }
 
@@ -2802,9 +2858,11 @@ public static class ProcessReferenceInterpreter
         ProcessInputReceipt Receipt(
             ProcessActivationInput input,
             ProcessInputAdmissionDisposition disposition,
+            ProcessInputAdmissionReason reason,
             ProcessWaitRegistrationId? waitRegistrationId = null) => new(
             input,
             disposition,
+            reason,
             activation.ObservedAtUtc,
             waitRegistrationId);
 
@@ -2829,11 +2887,12 @@ public static class ProcessReferenceInterpreter
         void DispositionInput(
             ProcessBufferedInput buffered,
             ProcessInputAdmissionDisposition disposition,
+            ProcessInputAdmissionReason reason,
             ProcessWaitRegistrationId? registrationId,
             string detail)
         {
             bufferedInputs.Remove(buffered);
-            var receipt = Receipt(buffered.Input, disposition, registrationId);
+            var receipt = Receipt(buffered.Input, disposition, reason, registrationId);
             var index = receipts.FindIndex(candidate => candidate.Emission == receipt.Emission);
             if (index >= 0)
             {
@@ -2866,6 +2925,7 @@ public static class ProcessReferenceInterpreter
                 emission: input.Envelope.Context.EmissionId,
                 detail: $"{detail}:{receipt.Disposition}",
                 inputDisposition: receipt.Disposition,
+                inputReason: receipt.Reason,
                 waitRegistrationId: receipt.WaitRegistrationId);
         }
 
@@ -3017,6 +3077,9 @@ public static class ProcessReferenceInterpreter
                     tombstone is null
                         ? ProcessInputAdmissionDisposition.TerminalUnconsumed
                         : LateDisposition(tombstone, buffered.Input),
+                    tombstone is null
+                        ? ProcessInputAdmissionReason.TerminalUnconsumed
+                        : ProcessInputAdmissionReason.Late,
                     tombstone?.RegistrationId,
                     tombstone is null ? "terminal-unconsumed" : "terminal-late");
             }
@@ -3184,6 +3247,7 @@ public static class ProcessReferenceInterpreter
             InteractionEnvelopeContentFingerprint? emissionFingerprint = null,
             long? operationOccurrence = null,
             ProcessInputAdmissionDisposition? inputDisposition = null,
+            ProcessInputAdmissionReason? inputReason = null,
             ProcessWaitRegistrationId? waitRegistrationId = null)
         {
             var location = nodeIndexes.TryGetValue(node, out var index) ? $"/nodes/{index}" : null;
@@ -3204,6 +3268,7 @@ public static class ProcessReferenceInterpreter
                 emissionFingerprint,
                 operationOccurrence,
                 inputDisposition,
+                inputReason,
                 waitRegistrationId));
         }
 
