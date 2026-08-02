@@ -95,7 +95,9 @@ public sealed record MaterializationRebuildPlanSetChildTerminalEvidence
         PortableValue terminalResult)
     {
         if (!Enum.IsDefined(phase))
+        {
             throw new ArgumentOutOfRangeException(nameof(phase), phase, "Unsupported plan-set child phase.");
+        }
 
         Child = child ?? throw new ArgumentNullException(nameof(child));
         MaterializationContract.RequireDefinedIdentity(child.ProcessInstanceId.Value, nameof(child));
@@ -129,6 +131,7 @@ public sealed record MaterializationRebuildPlanSetLeafReceipt
     /// <param name="ready">Exact readiness evidence when the build child succeeded.</param>
     /// <param name="promotionChild">Attempt-bound promotion child, when promotion was initiated.</param>
     /// <param name="promotion">Exact independent-promotion result, when the route operation returned evidence.</param>
+    /// <param name="atomicManifestCommand">Complete-manifest command selecting this leaf, when atomically published.</param>
     /// <param name="compensationChild">Attempt-bound compensation child, when compensation was initiated.</param>
     /// <param name="compensation">Exact explicit compensation result, when routing returned evidence.</param>
     /// <param name="terminalEvidence">
@@ -150,6 +153,7 @@ public sealed record MaterializationRebuildPlanSetLeafReceipt
         MaterializationReadyGenerationReference? ready = null,
         ProcessContinuationIdentity? promotionChild = null,
         MaterializationIndependentPromotionResult? promotion = null,
+        MaterializationBackendRoutingCommandId? atomicManifestCommand = null,
         ProcessContinuationIdentity? compensationChild = null,
         MaterializationProgressivePromotionCompensationResult? compensation = null,
         MaterializationRebuildPlanSetChildTerminalEvidence? terminalEvidence = null,
@@ -159,7 +163,10 @@ public sealed record MaterializationRebuildPlanSetLeafReceipt
         BuildChild = buildChild ?? throw new ArgumentNullException(nameof(buildChild));
         RequireContinuation(buildChild, nameof(buildChild));
         if (!Enum.IsDefined(outcome))
+        {
             throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "Unsupported plan-set leaf outcome.");
+        }
+
         if (ready is not null
             && (ready.Authority != authority || ready.Attempt.Continuation != buildChild))
         {
@@ -171,7 +178,9 @@ public sealed record MaterializationRebuildPlanSetLeafReceipt
         {
             RequireContinuation(promotionChild, nameof(promotionChild));
             if (promotionChild == buildChild)
+            {
                 throw new ArgumentException("Build and promotion require distinct child Process continuations.", nameof(promotionChild));
+            }
         }
         if (promotion is not null
             && (ready is null
@@ -181,6 +190,24 @@ public sealed record MaterializationRebuildPlanSetLeafReceipt
             throw new ArgumentException(
                 "Independent-promotion evidence must consume this exact linked leaf readiness result.",
                 nameof(promotion));
+        }
+        if (atomicManifestCommand is { } atomicCommand)
+        {
+            MaterializationContract.RequireDefinedIdentity(atomicCommand.Value, nameof(atomicManifestCommand));
+            if (ready is null || promotionChild is not null || promotion is not null
+                || compensationChild is not null || compensation is not null)
+            {
+                throw new ArgumentException(
+                    "Atomic manifest publication cannot be combined with per-target promotion or compensation.",
+                    nameof(atomicManifestCommand));
+            }
+            if (outcome is not (MaterializationRebuildPlanSetLeafOutcome.Promoted
+                or MaterializationRebuildPlanSetLeafOutcome.Failed))
+            {
+                throw new ArgumentException(
+                    "An atomic manifest command must project either a promoted or failed leaf.",
+                    nameof(outcome));
+            }
         }
         if (compensationChild is not null)
         {
@@ -202,7 +229,10 @@ public sealed record MaterializationRebuildPlanSetLeafReceipt
                 nameof(compensation));
         }
         if (failure is not null && failure.Severity != DiagnosticSeverity.Error)
+        {
             throw new ArgumentException("Leaf failure evidence must be an error diagnostic.", nameof(failure));
+        }
+
         if (terminalEvidence is not null)
         {
             var expectedChild = terminalEvidence.Phase switch
@@ -236,7 +266,8 @@ public sealed record MaterializationRebuildPlanSetLeafReceipt
         {
             MaterializationRebuildPlanSetLeafOutcome.Failed => terminalEvidence is not null
                 && terminalEvidence.TerminalOutcome != MaterializationRebuildPlanSetProcessFactory.CancelledOutcome
-                && terminalEvidence.TerminalOutcome != MaterializationRebuildPlanSetProcessFactory.TerminatedOutcome,
+                && terminalEvidence.TerminalOutcome != MaterializationRebuildPlanSetProcessFactory.TerminatedOutcome
+                || atomicManifestCommand is not null && terminalEvidence is null,
             MaterializationRebuildPlanSetLeafOutcome.CompensationFailed => true,
             MaterializationRebuildPlanSetLeafOutcome.Cancelled =>
                 terminalEvidence?.TerminalOutcome == MaterializationRebuildPlanSetProcessFactory.CancelledOutcome,
@@ -252,11 +283,15 @@ public sealed record MaterializationRebuildPlanSetLeafReceipt
                 && compensationChild is null && compensation is null
                 && terminalEvidence is null && failure is null,
             MaterializationRebuildPlanSetLeafOutcome.Promoted =>
-                ready is not null && promotionChild is not null && promotion is { IsCurrentlySelected: true }
+                ready is not null
+                && (atomicManifestCommand is not null
+                    || promotionChild is not null && promotion is { IsCurrentlySelected: true })
                 && compensationChild is null && compensation is null
                 && terminalEvidence is null && failure is null,
             MaterializationRebuildPlanSetLeafOutcome.Failed =>
-                terminalEvidence is not null && failure is not null
+                failure is not null
+                && (atomicManifestCommand is not null && terminalEvidence is null
+                    || atomicManifestCommand is null && terminalEvidence is not null)
                 && promotion is not { IsCurrentlySelected: true }
                 && compensationChild is null && compensation is null,
             MaterializationRebuildPlanSetLeafOutcome.Cancelled or
@@ -289,6 +324,7 @@ public sealed record MaterializationRebuildPlanSetLeafReceipt
         Ready = ready;
         PromotionChild = promotionChild;
         Promotion = promotion;
+        AtomicManifestCommand = atomicManifestCommand;
         CompensationChild = compensationChild;
         Compensation = compensation;
         TerminalEvidence = terminalEvidence;
@@ -312,6 +348,9 @@ public sealed record MaterializationRebuildPlanSetLeafReceipt
 
     /// <summary>Exact independent-promotion result when routing returned conclusive evidence.</summary>
     public MaterializationIndependentPromotionResult? Promotion { get; }
+
+    /// <summary>Complete-manifest command selecting this exact leaf, or null for per-target publication.</summary>
+    public MaterializationBackendRoutingCommandId? AtomicManifestCommand { get; }
 
     /// <summary>Attempt-bound child Process that issued an explicit later compensation operation.</summary>
     public ProcessContinuationIdentity? CompensationChild { get; }
@@ -338,7 +377,7 @@ public sealed record MaterializationRebuildPlanSetLeafReceipt
 public sealed record MaterializationRebuildPlanSetReceipt
 {
     /// <summary>Current portable aggregate-receipt schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive-materialization-rebuild-plan-set-receipt/v2";
+    public const string CurrentSchemaVersion = "cohesive-materialization-rebuild-plan-set-receipt/v3";
 
     /// <summary>Creates or deserializes one internally exact aggregate receipt.</summary>
     /// <param name="schemaVersion">Exact portable receipt schema.</param>
@@ -350,6 +389,7 @@ public sealed record MaterializationRebuildPlanSetReceipt
     /// <param name="completedAtUtc">UTC aggregate terminal boundary.</param>
     /// <param name="promotionOrder">Exact deterministic placement-step order retained by the journal.</param>
     /// <param name="progressiveFailurePolicy">Explicit progressive partial-failure policy, when applicable.</param>
+    /// <param name="atomicRoutingManifest">Exact complete-manifest transaction result, when atomically published.</param>
     /// <exception cref="ArgumentNullException">A required value is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="outcome"/> is unsupported.</exception>
     /// <exception cref="ArgumentException">
@@ -365,17 +405,24 @@ public sealed record MaterializationRebuildPlanSetReceipt
         MaterializationRebuildReadyBarrier? readyBarrier,
         DateTimeOffset completedAtUtc,
         ImmutableArray<MaterializationPlacementSliceId> promotionOrder = default,
-        MaterializationProgressivePromotionFailurePolicy? progressiveFailurePolicy = null)
+        MaterializationProgressivePromotionFailurePolicy? progressiveFailurePolicy = null,
+        MaterializationAtomicRoutingManifestResult? atomicRoutingManifest = null)
     {
         SchemaVersion = Guard.RequireNotNullOrWhiteSpace(schemaVersion);
         if (!string.Equals(schemaVersion, CurrentSchemaVersion, StringComparison.Ordinal))
+        {
             throw new ArgumentException($"Rebuild plan-set receipt schema '{schemaVersion}' is unsupported.", nameof(schemaVersion));
+        }
+
         PlanSet = planSet ?? throw new ArgumentNullException(nameof(planSet));
         ParentContinuation = parentContinuation ?? throw new ArgumentNullException(nameof(parentContinuation));
         MaterializationContract.RequireDefinedIdentity(parentContinuation.ProcessInstanceId.Value, nameof(parentContinuation));
         MaterializationContract.RequireDefinedIdentity(parentContinuation.ProcessAttemptId.Value, nameof(parentContinuation));
         if (!Enum.IsDefined(outcome))
+        {
             throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "Unsupported plan-set aggregate outcome.");
+        }
+
         MaterializationContract.RequireUtc(completedAtUtc, nameof(completedAtUtc));
 
         var normalized = leaves.IsDefault ? [] : leaves;
@@ -401,14 +448,18 @@ public sealed record MaterializationRebuildPlanSetReceipt
         }
 
         var normalizedOrder = promotionOrder.IsDefault
-            ? [.. normalized.Select(static leaf => leaf.Authority.PlacementSlice.Id)]
+            ? atomicRoutingManifest is null
+                ? [.. normalized.Select(static leaf => leaf.Authority.PlacementSlice.Id)]
+                : []
             : promotionOrder;
-        if (normalizedOrder.Length != normalized.Length
-            || normalizedOrder.Distinct().Count() != normalizedOrder.Length
-            || !normalizedOrder.SequenceEqual(normalized.Select(static leaf => leaf.Authority.PlacementSlice.Id)))
+        if (atomicRoutingManifest is null
+            && (normalizedOrder.Length != normalized.Length
+                || normalizedOrder.Distinct().Count() != normalizedOrder.Length
+                || !normalizedOrder.SequenceEqual(normalized.Select(static leaf => leaf.Authority.PlacementSlice.Id)))
+            || atomicRoutingManifest is not null && !normalizedOrder.IsEmpty)
         {
             throw new ArgumentException(
-                "The durable promotion journal must retain each leaf exactly once in its declared execution order.",
+                "Per-target promotion requires exact journal order; one atomic manifest transaction has no leaf order.",
                 nameof(promotionOrder));
         }
         if (progressiveFailurePolicy is { } policy && !Enum.IsDefined(policy))
@@ -421,6 +472,21 @@ public sealed record MaterializationRebuildPlanSetReceipt
         Leaves = normalized;
         PromotionOrder = normalizedOrder;
         ProgressiveFailurePolicy = progressiveFailurePolicy;
+        AtomicRoutingManifest = atomicRoutingManifest;
+        if (atomicRoutingManifest is not null
+            && (progressiveFailurePolicy is not null
+                || !MaterializationAtomicRoutingManifestSemantics.SamePlanSet(
+                    atomicRoutingManifest.Request.Realization.Requirement.PlanSet,
+                    planSet)
+                || normalized.Any(leaf => leaf.AtomicManifestCommand != atomicRoutingManifest.Request.CommandId)
+                || atomicRoutingManifest.Request.DesiredEntries.Length != normalized.Length
+                || !atomicRoutingManifest.Request.DesiredEntries.Select(static entry => entry.PlacementSlice.Id)
+                    .SequenceEqual(normalized.Select(static leaf => leaf.Authority.PlacementSlice.Id))))
+        {
+            throw new ArgumentException(
+                "Atomic routing evidence must cover every exact leaf once under one command and no progressive policy.",
+                nameof(atomicRoutingManifest));
+        }
         ReadyBarrier = readyBarrier;
         if (readyBarrier is not null
             && (readyBarrier.PlanSet != planSet
@@ -442,6 +508,12 @@ public sealed record MaterializationRebuildPlanSetReceipt
             : promotedCount > 0
                 ? MaterializationRebuildPlanSetOutcome.PartiallyPromoted
                 : MaterializationRebuildPlanSetOutcome.Failed;
+        if (atomicRoutingManifest is not null)
+        {
+            expectedOutcome = atomicRoutingManifest.IsApplied
+                ? MaterializationRebuildPlanSetOutcome.Completed
+                : MaterializationRebuildPlanSetOutcome.Failed;
+        }
         if (outcome != expectedOutcome
             || outcome == MaterializationRebuildPlanSetOutcome.Completed && readyBarrier is null
             || outcome == MaterializationRebuildPlanSetOutcome.PartiallyPromoted && readyBarrier is null
@@ -463,8 +535,15 @@ public sealed record MaterializationRebuildPlanSetReceipt
             .Select(static value => value!.Value)
             .DefaultIfEmpty(DateTimeOffset.MinValue)
             .Max();
+        if (atomicRoutingManifest?.Receipt?.CommittedAtUtc is { } atomicCommittedAtUtc
+            && atomicCommittedAtUtc > latestEvidenceAtUtc)
+        {
+            latestEvidenceAtUtc = atomicCommittedAtUtc;
+        }
         if (completedAtUtc < latestEvidenceAtUtc)
+        {
             throw new ArgumentException("Aggregate completion cannot predate retained leaf evidence.", nameof(completedAtUtc));
+        }
 
         Outcome = outcome;
         CompletedAtUtc = completedAtUtc;
@@ -491,6 +570,9 @@ public sealed record MaterializationRebuildPlanSetReceipt
     /// <summary>Explicit progressive partial-failure policy, or null for independent promotion.</summary>
     public MaterializationProgressivePromotionFailurePolicy? ProgressiveFailurePolicy { get; }
 
+    /// <summary>Exact complete-manifest transaction result, or null for independently committed routing.</summary>
+    public MaterializationAtomicRoutingManifestResult? AtomicRoutingManifest { get; }
+
     /// <summary>Reusable all-leaf readiness barrier, when every build leaf became ready.</summary>
     public MaterializationRebuildReadyBarrier? ReadyBarrier { get; }
 
@@ -504,6 +586,7 @@ public sealed record MaterializationRebuildPlanSetReceipt
     /// <param name="leaves">Terminal linked-leaf receipts.</param>
     /// <param name="readyBarrier">Reusable exact all-leaf readiness barrier, when established.</param>
     /// <param name="completedAtUtc">UTC terminal boundary.</param>
+    /// <param name="atomicRoutingManifest">Exact complete-manifest result, when selected.</param>
     /// <returns>A canonical aggregate receipt with exact leaf coverage.</returns>
     /// <exception cref="ArgumentNullException">A required argument is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">Leaf coverage or another receipt invariant is violated.</exception>
@@ -513,7 +596,8 @@ public sealed record MaterializationRebuildPlanSetReceipt
         MaterializationRebuildPlanSetOutcome outcome,
         ImmutableArray<MaterializationRebuildPlanSetLeafReceipt> leaves,
         MaterializationRebuildReadyBarrier? readyBarrier,
-        DateTimeOffset completedAtUtc)
+        DateTimeOffset completedAtUtc,
+        MaterializationAtomicRoutingManifestResult? atomicRoutingManifest = null)
     {
         ArgumentNullException.ThrowIfNull(planSet);
         var receipt = new MaterializationRebuildPlanSetReceipt(
@@ -524,10 +608,17 @@ public sealed record MaterializationRebuildPlanSetReceipt
             leaves,
             readyBarrier,
             completedAtUtc,
-            promotionOrder: [.. planSet.LeafPlans.Select(static binding => binding.Slice.Id)],
-            progressiveFailurePolicy: planSet.Promotion.ProgressiveFailurePolicy);
+            promotionOrder: atomicRoutingManifest is null
+                ? [.. planSet.LeafPlans.Select(static binding => binding.Slice.Id)]
+                : [],
+            progressiveFailurePolicy: atomicRoutingManifest is null
+                ? planSet.Promotion.ProgressiveFailurePolicy
+                : null,
+            atomicRoutingManifest: atomicRoutingManifest);
         if (receipt.Leaves.Length != planSet.LeafPlans.Length)
+        {
             throw new ArgumentException("The aggregate receipt requires every and only linked plan-set leaf.", nameof(leaves));
+        }
 
         var expectedBySlice = planSet.LeafPlans.ToDictionary(static binding => binding.Slice.Id);
         foreach (var leaf in receipt.Leaves)
@@ -550,6 +641,7 @@ public sealed record MaterializationRebuildPlanSetReceipt
     /// <param name="planSet">Complete constructor-verified linked plan set.</param>
     /// <param name="parentPlan">Exact compiled parent Process specialized to <paramref name="planSet"/>.</param>
     /// <param name="checkpoint">Durable parent checkpoint retaining the build and promotion child ledgers.</param>
+    /// <param name="atomicRealization">Exact atomic parent specialization, when applicable.</param>
     /// <exception cref="ArgumentNullException">A required argument is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
     /// The receipt is incomplete, belongs to another parent attempt, or differs from the exact retained child
@@ -558,12 +650,13 @@ public sealed record MaterializationRebuildPlanSetReceipt
     public void ValidateAgainst(
         MaterializationRebuildPlanSet planSet,
         CompiledProcessPlan parentPlan,
-        ProcessDurableCheckpoint checkpoint)
+        ProcessDurableCheckpoint checkpoint,
+        MaterializationAtomicRoutingManifestRealization? atomicRealization = null)
     {
         ArgumentNullException.ThrowIfNull(planSet);
         ArgumentNullException.ThrowIfNull(parentPlan);
         ArgumentNullException.ThrowIfNull(checkpoint);
-        PlanSetProjection.ValidateParentContext(planSet, parentPlan, checkpoint);
+        PlanSetProjection.ValidateParentContext(planSet, parentPlan, checkpoint, atomicRealization);
         if (ParentContinuation != checkpoint.ContinuationIdentity)
         {
             throw new ArgumentException(
@@ -577,9 +670,12 @@ public sealed record MaterializationRebuildPlanSetReceipt
             Outcome,
             Leaves,
             ReadyBarrier,
-            CompletedAtUtc);
+            CompletedAtUtc,
+            AtomicRoutingManifest);
         if (validated != this)
+        {
             throw new ArgumentException("The aggregate receipt is not in canonical contextual form.", nameof(planSet));
+        }
 
         ImmutableArray<MaterializationRebuildPlanSetLeafReceipt> retainedLeaves;
         if (ReadyBarrier is null)
@@ -594,8 +690,25 @@ public sealed record MaterializationRebuildPlanSetReceipt
         }
         else
         {
-            ReadyBarrier.ValidateAgainst(planSet, parentPlan, checkpoint);
-            retainedLeaves = PlanSetProjection.ProjectPromotionLeaves(planSet, ReadyBarrier, checkpoint);
+            ReadyBarrier.ValidateAgainst(planSet, parentPlan, checkpoint, atomicRealization);
+            if (AtomicRoutingManifest is null)
+            {
+                retainedLeaves = PlanSetProjection.ProjectPromotionLeaves(planSet, ReadyBarrier, checkpoint);
+            }
+            else
+            {
+                retainedLeaves = PlanSetProjection.ProjectAtomicManifestLeaves(
+                    planSet,
+                    ReadyBarrier,
+                    checkpoint,
+                    out var retainedAtomic);
+                if (!MaterializationContract.CanonicalEquals(retainedAtomic, AtomicRoutingManifest))
+                {
+                    throw new ArgumentException(
+                        "The aggregate atomic result differs from the exact retained durable acknowledgement.",
+                        nameof(checkpoint));
+                }
+            }
         }
 
         if (!Leaves.SequenceEqual(retainedLeaves))
@@ -619,6 +732,9 @@ public sealed record MaterializationRebuildPlanSetReceipt
         && Leaves.SequenceEqual(other.Leaves)
         && PromotionOrder.SequenceEqual(other.PromotionOrder)
         && ProgressiveFailurePolicy == other.ProgressiveFailurePolicy
+        && (AtomicRoutingManifest is null && other.AtomicRoutingManifest is null
+            || AtomicRoutingManifest is not null && other.AtomicRoutingManifest is not null
+            && MaterializationContract.CanonicalEquals(AtomicRoutingManifest, other.AtomicRoutingManifest))
         && ReadyBarrier == other.ReadyBarrier
         && CompletedAtUtc == other.CompletedAtUtc;
 
@@ -632,10 +748,20 @@ public sealed record MaterializationRebuildPlanSetReceipt
         hash.Add(ParentContinuation);
         hash.Add(Outcome);
         foreach (var leaf in Leaves)
+        {
             hash.Add(leaf);
+        }
+
         foreach (var slice in PromotionOrder)
+        {
             hash.Add(slice);
+        }
+
         hash.Add(ProgressiveFailurePolicy);
+        hash.Add(AtomicRoutingManifest is null
+            ? null
+            : MaterializationStableIdentity.Digest(
+                MaterializationAtomicRoutingManifestJsonSerializer.SerializeResult(AtomicRoutingManifest)));
         hash.Add(ReadyBarrier);
         hash.Add(CompletedAtUtc);
         return hash.ToHashCode();

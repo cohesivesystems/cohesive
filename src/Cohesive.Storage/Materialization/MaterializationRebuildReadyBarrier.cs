@@ -144,6 +144,7 @@ public sealed record MaterializationRebuildReadyBarrier
     /// <param name="planSet">Complete constructor-verified linked plan set.</param>
     /// <param name="parentPlan">Exact compiled parent Process specialized to <paramref name="planSet"/>.</param>
     /// <param name="checkpoint">Durable parent checkpoint retaining the resolved build-child ledger.</param>
+    /// <param name="atomicRealization">Exact atomic parent specialization, when applicable.</param>
     /// <exception cref="ArgumentNullException">A required argument is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
     /// The barrier is incomplete, belongs to another parent attempt, or differs from exact retained build-child
@@ -152,12 +153,13 @@ public sealed record MaterializationRebuildReadyBarrier
     public void ValidateAgainst(
         MaterializationRebuildPlanSet planSet,
         CompiledProcessPlan parentPlan,
-        ProcessDurableCheckpoint checkpoint)
+        ProcessDurableCheckpoint checkpoint,
+        MaterializationAtomicRoutingManifestRealization? atomicRealization = null)
     {
         ArgumentNullException.ThrowIfNull(planSet);
         ArgumentNullException.ThrowIfNull(parentPlan);
         ArgumentNullException.ThrowIfNull(checkpoint);
-        PlanSetProjection.ValidateParentContext(planSet, parentPlan, checkpoint);
+        PlanSetProjection.ValidateParentContext(planSet, parentPlan, checkpoint, atomicRealization);
         if (ParentContinuation != checkpoint.ContinuationIdentity)
         {
             throw new ArgumentException(
@@ -167,7 +169,9 @@ public sealed record MaterializationRebuildReadyBarrier
 
         var validated = Create(planSet, ParentContinuation, ReadyGenerations);
         if (validated != this)
+        {
             throw new ArgumentException("The readiness barrier is not in canonical contextual form.", nameof(planSet));
+        }
 
         var leaves = PlanSetProjection.ProjectBuildLeaves(planSet, checkpoint, out var allReady);
         if (!allReady
@@ -199,7 +203,10 @@ public sealed record MaterializationRebuildReadyBarrier
         hash.Add(PlanSet);
         hash.Add(ParentContinuation);
         foreach (var ready in ReadyGenerations)
+        {
             hash.Add(ready);
+        }
+
         return hash.ToHashCode();
     }
 }

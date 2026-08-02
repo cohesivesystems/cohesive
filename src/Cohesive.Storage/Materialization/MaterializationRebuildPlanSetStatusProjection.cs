@@ -16,7 +16,7 @@ public static class MaterializationRebuildPlanSetStatusWireNames
     public const string SemanticAuthority = "cohesive.storage.materialization.rebuild-plan-set.status";
 
     /// <summary>Exact portable payload schema version.</summary>
-    public const string CurrentSchemaVersion = "materialization-rebuild-plan-set-status/v2";
+    public const string CurrentSchemaVersion = "materialization-rebuild-plan-set-status/v3";
 
     /// <summary>Typed execution-extension identity derived from <see cref="SemanticAuthority"/>.</summary>
     public static ExecutionExtensionId ExtensionId { get; } = new(SemanticAuthority);
@@ -102,6 +102,7 @@ public static class MaterializationRebuildPlanSetStatusProjector
         new("promotionTerminalOutcome", StringType, nullability: FieldNullability.Nullable),
         new("promotionChildResult", StringType, nullability: FieldNullability.Nullable),
         new("promotionResult", StringType, nullability: FieldNullability.Nullable),
+        new("atomicManifestCommand", StringType, nullability: FieldNullability.Nullable),
         new("retainedCandidate", BooleanType, nullability: FieldNullability.Nullable),
         new("compensationChild", ContinuationType, nullability: FieldNullability.Nullable),
         new("compensationDisposition", ChildDispositionType, nullability: FieldNullability.Nullable),
@@ -147,6 +148,8 @@ public static class MaterializationRebuildPlanSetStatusProjector
         new("progress", ProgressType),
         new("children", ChildType, cardinality: FieldCardinality.Many),
         new("readyBarrier", StringType, nullability: FieldNullability.Nullable),
+        new("atomicRoutingManifestRealization", StringType, nullability: FieldNullability.Nullable),
+        new("atomicRoutingManifest", StringType, nullability: FieldNullability.Nullable),
         new("aggregateOutcome", AggregateOutcomeType, nullability: FieldNullability.Nullable),
         new("aggregateReceipt", StringType, nullability: FieldNullability.Nullable)
     ]));
@@ -273,10 +276,10 @@ public static class MaterializationRebuildPlanSetStatusProjector
         root.Add(
             "promotionOrder",
             ObservationValue.FromImmutableArray(
-            [
-                .. planSet.LeafPlans.Select(static binding =>
-                    ObservationValue.FromString(binding.Slice.Id.Value))
-            ]));
+                artifacts.AtomicRoutingManifestRealization is null
+                    ? [.. planSet.LeafPlans.Select(static binding =>
+                        ObservationValue.FromString(binding.Slice.Id.Value))]
+                    : []));
         var visible = evidence.Children.Count(static child => child.IsRebuiltVisible);
         root.Add("mixedVisibility", ObservationValue.FromBool(visible > 0 && visible < evidence.Children.Length));
         root.Add("parentDefinition", ProjectDefinition(artifacts.ParentPlan.DefinitionReference));
@@ -294,6 +297,13 @@ public static class MaterializationRebuildPlanSetStatusProjector
         root.Add("progress", ProjectProgress(evidence));
         root.Add("children", ProjectChildren(evidence));
         root.Add("readyBarrier", StringOrNull(evidence.BarrierJson));
+        root.Add(
+            "atomicRoutingManifestRealization",
+            StringOrNull(artifacts.AtomicRoutingManifestRealization is null
+                ? null
+                : MaterializationAtomicRoutingManifestJsonSerializer.Serialize(
+                    artifacts.AtomicRoutingManifestRealization)));
+        root.Add("atomicRoutingManifest", StringOrNull(evidence.AtomicResultJson));
         root.Add("aggregateOutcome", StringOrNull(evidence.Receipt?.Outcome.ToString()));
         root.Add("aggregateReceipt", StringOrNull(evidence.ReceiptJson));
 
@@ -324,8 +334,15 @@ public static class MaterializationRebuildPlanSetStatusProjector
         ArgumentNullException.ThrowIfNull(snapshot);
         var planSetReference = MaterializationRebuildPlanSetReference.FromPlanSet(planSet);
         if (artifacts.PlanSet != planSetReference)
+        {
             throw new ArgumentException("Compiled Process artifacts belong to another rebuild plan set.", nameof(artifacts));
-        PlanSetProjection.ValidateParentContext(planSet, artifacts.ParentPlan, snapshot.Checkpoint);
+        }
+
+        PlanSetProjection.ValidateParentContext(
+            planSet,
+            artifacts.ParentPlan,
+            snapshot.Checkpoint,
+            artifacts.AtomicRoutingManifestRealization);
 
         var state = snapshot.Checkpoint.Continuation;
         var bindingBySlice = planSet.LeafPlans.ToDictionary(static binding => binding.Slice.Id.Value, StringComparer.Ordinal);
@@ -352,6 +369,7 @@ public static class MaterializationRebuildPlanSetStatusProjector
             artifacts.PromotionWorkerPlan.DefinitionReference,
             bindingBySlice,
             snapshot);
+        var (atomicResult, atomicResultJson) = ParseAtomicResult(artifacts, snapshot);
         var compensationBySlice = Children(
             state,
             MaterializationRebuildPlanSetProcessFactory.CompensateLeavesNodeId,
@@ -386,7 +404,10 @@ public static class MaterializationRebuildPlanSetStatusProjector
                 promotionChild,
                 promotion,
                 compensationChild,
-                compensation));
+                compensation,
+                atomicResult is { IsApplied: true }
+                    ? atomicResult.Request.CommandId
+                    : null));
         }
 
         var children = childEvidence.MoveToImmutable();
@@ -406,15 +427,25 @@ public static class MaterializationRebuildPlanSetStatusProjector
             children,
             ReadyBarrierBinding(artifacts),
             artifacts.ParentPlan,
+            artifacts.AtomicRoutingManifestRealization,
             snapshot);
         var (receipt, receiptJson) = ParseReceipt(
             planSet,
             state,
             barrier,
             artifacts.ParentPlan,
+            artifacts.AtomicRoutingManifestRealization,
             snapshot);
 
-        return new(planSetReference, children, barrier, barrierJson, receipt, receiptJson);
+        return new(
+            planSetReference,
+            children,
+            barrier,
+            barrierJson,
+            atomicResult,
+            atomicResultJson,
+            receipt,
+            receiptJson);
     }
 
     static Dictionary<string, MaterializationReadyGenerationReference> ValidatePartitions(
@@ -460,13 +491,17 @@ public static class MaterializationRebuildPlanSetStatusProjector
                     if (partition.Node == MaterializationRebuildPlanSetProcessFactory.BuildLeavesNodeId)
                     {
                         if (MaterializationRebuildWorkReferenceJsonSerializer.DeserializeAuthority(payload) != authority)
+                        {
                             throw new JsonException("Build work contains a substituted linked-leaf authority.");
+                        }
                     }
                     else
                     {
                         var ready = MaterializationReadyGenerationReferenceJsonSerializer.Deserialize(payload);
                         if (ready.Authority != authority || !promotionWork.TryAdd(slice, ready))
+                        {
                             throw new JsonException("Promotion work contains substituted or duplicate readiness evidence.");
+                        }
                     }
                 }
                 catch (Exception exception) when (exception is JsonException or ArgumentException)
@@ -552,7 +587,10 @@ public static class MaterializationRebuildPlanSetStatusProjector
             var ready = MaterializationReadyGenerationReferenceJsonSerializer.Deserialize(
                 RequireString(child.Result, "completed build child"));
             if (ready.Authority != authority || ready.Attempt.Continuation != child.Continuation)
+            {
                 throw new JsonException("Ready evidence does not belong to its exact linked build child.");
+            }
+
             return ready;
         }
         catch (Exception exception) when (exception is JsonException or ArgumentException)
@@ -618,12 +656,60 @@ public static class MaterializationRebuildPlanSetStatusProjector
         }
     }
 
+    static (MaterializationAtomicRoutingManifestResult? Result, string? Json) ParseAtomicResult(
+        MaterializationRebuildPlanSetProcessArtifacts artifacts,
+        ProcessDurableStoreSnapshot snapshot)
+    {
+        if (artifacts.AtomicRoutingManifestRealization is null)
+        {
+            return (null, null);
+        }
+
+        var operations = snapshot.Checkpoint.DurableOperations.Where(operation =>
+            operation.Request.Context.Origin is ProcessInteractionOrigin origin
+            && origin.Definition == artifacts.ParentPlan.DefinitionReference
+            && origin.Node == MaterializationRebuildPlanSetProcessFactory.ApplyAtomicRoutingManifestNodeId).ToArray();
+        if (operations.Length == 0 || operations is [var pending] && pending.Acknowledgement is null)
+        {
+            return (null, null);
+        }
+
+        if (operations is not [var operation]
+            || operation.Acknowledgement?.Outcome is not RequestResultOutcome acknowledgement
+            || acknowledgement.Id != MaterializationRebuildPlanSetProcessFactory.CompletedOutcome)
+        {
+            throw new ArgumentException(
+                "Atomic parent state contains conflicting or non-successful complete-manifest evidence.",
+                nameof(snapshot));
+        }
+        try
+        {
+            var result = MaterializationAtomicRoutingManifestJsonSerializer.DeserializeResult(
+                RequireString(acknowledgement.Value, "atomic manifest acknowledgement"));
+            if (!MaterializationContract.CanonicalEquals(
+                    result.Request.Realization,
+                    artifacts.AtomicRoutingManifestRealization))
+            {
+                throw new JsonException("Atomic result belongs to another capability realization.");
+            }
+            return (result, MaterializationAtomicRoutingManifestJsonSerializer.SerializeResult(result));
+        }
+        catch (Exception exception) when (exception is JsonException or ArgumentException)
+        {
+            throw new ArgumentException(
+                "The parent retained invalid or substituted atomic routing-manifest evidence.",
+                nameof(snapshot),
+                exception);
+        }
+    }
+
     static (MaterializationRebuildReadyBarrier? Barrier, string? Json) ParseBarrier(
         MaterializationRebuildPlanSet planSet,
         ProcessContinuationState state,
         ImmutableArray<LeafEvidence> children,
         ValueBindingId barrierBinding,
         Cohesive.Processes.Compilation.CompiledProcessPlan parentPlan,
+        MaterializationAtomicRoutingManifestRealization? atomicRealization,
         ProcessDurableStoreSnapshot snapshot)
     {
         var values = state.Tokens
@@ -634,9 +720,14 @@ public static class MaterializationRebuildPlanSetStatusProjector
             .Take(2)
             .ToArray();
         if (values.Length == 0)
+        {
             return (null, null);
+        }
+
         if (values.Length != 1)
+        {
             throw new ArgumentException("The parent continuation retains conflicting readiness-barrier binding evidence.", nameof(snapshot));
+        }
 
         try
         {
@@ -650,7 +741,7 @@ public static class MaterializationRebuildPlanSetStatusProjector
                 throw new JsonException("The readiness-barrier binding is not a concrete barrier result.");
             }
             var barrier = MaterializationRebuildReadyBarrierJsonSerializer.DeserializeStructural(json);
-            barrier.ValidateAgainst(planSet, parentPlan, snapshot.Checkpoint);
+            barrier.ValidateAgainst(planSet, parentPlan, snapshot.Checkpoint, atomicRealization);
             if (!barrier.ReadyGenerations.SequenceEqual(children.Select(static child => child.Ready!)))
             {
                 throw new JsonException("The readiness barrier differs from exact build-child evidence.");
@@ -671,6 +762,7 @@ public static class MaterializationRebuildPlanSetStatusProjector
         ProcessContinuationState state,
         MaterializationRebuildReadyBarrier? barrier,
         Cohesive.Processes.Compilation.CompiledProcessPlan parentPlan,
+        MaterializationAtomicRoutingManifestRealization? atomicRealization,
         ProcessDurableStoreSnapshot snapshot)
     {
         var terminalValue = state.Terminal.Detail?.Value;
@@ -698,9 +790,12 @@ public static class MaterializationRebuildPlanSetStatusProjector
                 throw new JsonException(
                     "Aggregate outcome and parent terminal kind contradict each other.");
             }
-            receipt.ValidateAgainst(planSet, parentPlan, snapshot.Checkpoint);
+            receipt.ValidateAgainst(planSet, parentPlan, snapshot.Checkpoint, atomicRealization);
             if (receipt.ReadyBarrier != barrier)
+            {
                 throw new JsonException("The aggregate receipt differs from exact parent-attempt evidence.");
+            }
+
             return (receipt, MaterializationRebuildPlanSetReceiptJsonSerializer.Serialize(receipt));
         }
         catch (Exception exception) when (exception is JsonException or ArgumentException)
@@ -763,6 +858,7 @@ public static class MaterializationRebuildPlanSetStatusProjector
             fields.Add("promotionResult", StringOrNull(child.Promotion is null
                 ? null
                 : MaterializationIndependentPromotionResultJsonSerializer.Serialize(child.Promotion)));
+            fields.Add("atomicManifestCommand", StringOrNull(child.AtomicManifestCommand?.Value));
             fields.Add("retainedCandidate", child.Promotion is null
                 ? ObservationValue.Null
                 : ObservationValue.FromBool(
@@ -908,11 +1004,13 @@ public static class MaterializationRebuildPlanSetStatusProjector
         ProcessChildState? PromotionChild,
         MaterializationIndependentPromotionResult? Promotion,
         ProcessChildState? CompensationChild,
-        MaterializationProgressivePromotionCompensationResult? Compensation)
+        MaterializationProgressivePromotionCompensationResult? Compensation,
+        MaterializationBackendRoutingCommandId? AtomicManifestCommand)
     {
         internal bool IsRebuiltVisible =>
-            Promotion is { IsCurrentlySelected: true }
-            && Compensation is not { IsRestored: true };
+            AtomicManifestCommand is not null
+            || Promotion is { IsCurrentlySelected: true }
+                && Compensation is not { IsRestored: true };
     }
 
     sealed record StatusEvidence(
@@ -920,6 +1018,8 @@ public static class MaterializationRebuildPlanSetStatusProjector
         ImmutableArray<LeafEvidence> Children,
         MaterializationRebuildReadyBarrier? Barrier,
         string? BarrierJson,
+        MaterializationAtomicRoutingManifestResult? AtomicResult,
+        string? AtomicResultJson,
         MaterializationRebuildPlanSetReceipt? Receipt,
         string? ReceiptJson);
 }
