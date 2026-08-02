@@ -868,6 +868,13 @@ public sealed record ForEachPartitionProcessNode : ProcessNode
     /// <param name="outcomeMapping">Total mapping from child terminal status to exact Request outcomes.</param>
     /// <param name="childInput">Portable child input expression evaluated with <paramref name="partition"/> visible.</param>
     /// <param name="limits">Explicit finite item, activation-start, and parallelism limits.</param>
+    /// <param name="failure">Explicit sibling-admission behavior after one child fails.</param>
+    /// <param name="capacityIdentity">
+    /// Optional portable String expression assigning each partition to a declared capacity domain.
+    /// </param>
+    /// <param name="capacityDomains">
+    /// Canonical identity-to-parallelism limits; empty exactly when <paramref name="capacityIdentity"/> is null.
+    /// </param>
     /// <param name="cancellation">Explicit parent-to-child cancellation behavior.</param>
     /// <param name="completed">Edge selected after every partition child completes successfully.</param>
     /// <param name="failed">Edge selected when bounded child work reaches its declared failed outcome.</param>
@@ -882,6 +889,9 @@ public sealed record ForEachPartitionProcessNode : ProcessNode
         ProcessChildOutcomeMapping outcomeMapping,
         Expr childInput,
         ProcessWorkLimits limits,
+        ProcessPartitionFailurePolicy failure,
+        Expr? capacityIdentity,
+        ImmutableArray<ProcessCapacityDomainLimit> capacityDomains,
         ProcessChildCancellationPolicy cancellation,
         ProcessEdge completed,
         ProcessEdge failed)
@@ -895,6 +905,11 @@ public sealed record ForEachPartitionProcessNode : ProcessNode
         OutcomeMapping = outcomeMapping;
         ChildInput = childInput;
         Limits = limits;
+        Failure = failure;
+        CapacityIdentity = capacityIdentity;
+        CapacityDomains = ProcessIrCollections.NormalizeSet(
+            capacityDomains,
+            CompareCapacityDomains);
         Cancellation = cancellation;
         Completed = completed;
         Failed = failed;
@@ -924,6 +939,15 @@ public sealed record ForEachPartitionProcessNode : ProcessNode
     /// <summary>Explicit finite work limits.</summary>
     public ProcessWorkLimits Limits { get; }
 
+    /// <summary>Explicit sibling-admission behavior after one child fails.</summary>
+    public ProcessPartitionFailurePolicy Failure { get; }
+
+    /// <summary>Optional portable String expression assigning each partition to a capacity domain.</summary>
+    public Expr? CapacityIdentity { get; }
+
+    /// <summary>Capacity-domain limits in deterministic ordinal identity order.</summary>
+    public ImmutableArray<ProcessCapacityDomainLimit> CapacityDomains { get; }
+
     /// <summary>Explicit parent-to-child cancellation behavior.</summary>
     public ProcessChildCancellationPolicy Cancellation { get; }
 
@@ -932,6 +956,65 @@ public sealed record ForEachPartitionProcessNode : ProcessNode
 
     /// <summary>Edge selected when bounded child work reaches its declared failed outcome.</summary>
     public ProcessEdge Failed { get; }
+
+    /// <summary>Compares bounded partition nodes by complete normalized persisted semantics.</summary>
+    /// <param name="other">Partition node to compare with this value.</param>
+    /// <returns><see langword="true"/> when every expression, child contract, policy, limit, and edge is equal.</returns>
+    public bool Equals(ForEachPartitionProcessNode? other) =>
+        ReferenceEquals(this, other)
+        || other is not null
+        && Id == other.Id
+        && Partitions == other.Partitions
+        && Partition == other.Partition
+        && ProgressIdentity == other.ProgressIdentity
+        && Process == other.Process
+        && Contract == other.Contract
+        && OutcomeMapping == other.OutcomeMapping
+        && ChildInput == other.ChildInput
+        && Limits == other.Limits
+        && Failure == other.Failure
+        && CapacityIdentity == other.CapacityIdentity
+        && Cancellation == other.Cancellation
+        && Completed == other.Completed
+        && Failed == other.Failed
+        && CapacityDomains.SequenceEqual(other.CapacityDomains);
+
+    /// <summary>Returns a structural hash code for complete bounded partition semantics.</summary>
+    /// <returns>A hash code aligned with <see cref="Equals(ForEachPartitionProcessNode?)"/>.</returns>
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Id);
+        hash.Add(Partitions);
+        hash.Add(Partition);
+        hash.Add(ProgressIdentity);
+        hash.Add(Process);
+        hash.Add(Contract);
+        hash.Add(OutcomeMapping);
+        hash.Add(ChildInput);
+        hash.Add(Limits);
+        hash.Add(Failure);
+        hash.Add(CapacityIdentity);
+        foreach (var domain in CapacityDomains)
+            hash.Add(domain);
+        hash.Add(Cancellation);
+        hash.Add(Completed);
+        hash.Add(Failed);
+        return hash.ToHashCode();
+    }
+
+    static int CompareCapacityDomains(
+        ProcessCapacityDomainLimit? left,
+        ProcessCapacityDomainLimit? right)
+    {
+        if (ReferenceEquals(left, right))
+            return 0;
+        if (left is null)
+            return -1;
+        if (right is null)
+            return 1;
+        return StringComparer.Ordinal.Compare(left.Identity, right.Identity);
+    }
 }
 
 /// <summary>

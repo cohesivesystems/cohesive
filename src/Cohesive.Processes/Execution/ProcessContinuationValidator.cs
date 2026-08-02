@@ -103,6 +103,9 @@ public static class ProcessContinuationValidator
         readonly Dictionary<EmissionId, (ProcessBufferedInput Input, int Index)> bufferedInputs = [];
         readonly Dictionary<EmissionId, (ProcessInputReceipt Receipt, int Index)> inputReceipts = [];
         readonly Dictionary<EmissionId, (ProcessOutstandingRequest Request, int Index)> requests = [];
+        static readonly PortableExpressionReferenceEvaluator ExpressionEvaluator = new(
+            ProcessExpressionLanguage.Capabilities,
+            "Process continuation validator");
 
         public DocumentValidationResult Validate()
         {
@@ -1819,6 +1822,12 @@ public static class ProcessContinuationValidator
                 string? previous = null;
                 HashSet<string> progressIds = new(StringComparer.Ordinal);
                 HashSet<string> childIds = new(StringComparer.Ordinal);
+                var capacityLimits = node.CapacityIdentity is null
+                    ? null
+                    : node.CapacityDomains.ToDictionary(
+                        static domain => domain.Identity,
+                        static domain => domain.MaximumParallelism,
+                        StringComparer.Ordinal);
                 for (var workIndex = 0; workIndex < partition.Work.Length; workIndex++)
                 {
                     var work = partition.Work[workIndex];
@@ -1848,6 +1857,15 @@ public static class ProcessContinuationValidator
                         && PortableExecutionValidator.Validate(
                             work.Partition,
                             plan.ValidationContext.ShapeGraph).IsValid
+                        && ProgressIdentityMatches(
+                            node,
+                            ownerFound ? owner.Token.Bindings : [],
+                            work)
+                        && CapacityIdentityMatches(
+                            node,
+                            capacityLimits,
+                            ownerFound ? owner.Token.Bindings : [],
+                            work)
                         && children.TryGetValue(work.ChildRegistrationId, out var child)
                         && child.Child.Owner == partition.Owner
                         && child.Child.Node == partition.Node
@@ -1860,7 +1878,7 @@ public static class ProcessContinuationValidator
                     {
                         Error(
                             ProcessContinuationDiagnosticCodes.PartitionStateMismatch,
-                            $"Partition work '{work.ProgressIdentity}' is noncanonical or contradicts its typed value and exact child occurrence.",
+                            $"Partition work '{work.ProgressIdentity}' is noncanonical or contradicts its typed value, derived progress or capacity identity, and exact child occurrence.",
                             workLocation,
                             subject: partition.RegistrationId);
                     }
@@ -1891,15 +1909,36 @@ public static class ProcessContinuationValidator
                     .ToArray();
                 var activeChildren = occurrenceChildren.Count(static child => child!.Disposition
                     == ProcessChildDisposition.Active);
-                var resolutionShapeValid = activeChildren <= node.Limits.MaximumParallelism
-                    && (partition.Resolved
-                        ? occurrenceChildren.All(static child => child!.Disposition is not (
-                            ProcessChildDisposition.Pending or ProcessChildDisposition.Active))
-                        : occurrenceChildren.All(static child => child!.Disposition is not (
+                var capacityShapeValid = capacityLimits is null
+                    || partition.Work
+                        .Where(work => work is not null
+                            && children.TryGetValue(work.ChildRegistrationId, out var child)
+                            && child.Child.Disposition == ProcessChildDisposition.Active
+                            && work.CapacityIdentity is not null)
+                        .GroupBy(static work => work.CapacityIdentity!, StringComparer.Ordinal)
+                        .All(group => capacityLimits.TryGetValue(group.Key, out var limit)
+                            && group.Count() <= limit);
+                var unresolvedLifecycleValid = node.Failure switch
+                {
+                    ProcessPartitionFailurePolicy.FailFast => occurrenceChildren.All(static child =>
+                        child!.Disposition is not (
                             ProcessChildDisposition.Failed
                             or ProcessChildDisposition.CancellationRequested
                             or ProcessChildDisposition.Detached
-                            or ProcessChildDisposition.CancelledBeforeStart)));
+                            or ProcessChildDisposition.CancelledBeforeStart)),
+                    ProcessPartitionFailurePolicy.AwaitAll => occurrenceChildren.All(static child =>
+                        child!.Disposition is not (
+                            ProcessChildDisposition.CancellationRequested
+                            or ProcessChildDisposition.Detached
+                            or ProcessChildDisposition.CancelledBeforeStart)),
+                    _ => false
+                };
+                var resolutionShapeValid = activeChildren <= node.Limits.MaximumParallelism
+                    && capacityShapeValid
+                    && (partition.Resolved
+                        ? occurrenceChildren.All(static child => child!.Disposition is not (
+                            ProcessChildDisposition.Pending or ProcessChildDisposition.Active))
+                        : unresolvedLifecycleValid);
                 if (!resolutionShapeValid)
                 {
                     Error(
@@ -1907,7 +1946,7 @@ public static class ProcessContinuationValidator
                         $"Partition registration '{partition.RegistrationId}' contradicts its parallelism bound or resolved child lifecycle.",
                         Child(location, "resolved"),
                         subject: partition.RegistrationId,
-                        expected: $"active <= {node.Limits.MaximumParallelism}; coherent resolution");
+                        expected: $"active <= {node.Limits.MaximumParallelism}; capacity-domain bounds; coherent resolution");
                 }
             }
 
@@ -1963,6 +2002,78 @@ public static class ProcessContinuationValidator
                         expected: "1",
                         observed: matching.ToString(CultureInfo.InvariantCulture));
                 }
+            }
+        }
+
+        bool ProgressIdentityMatches(
+            ForEachPartitionProcessNode node,
+            ImmutableArray<ProcessBindingValue> ownerBindings,
+            ProcessPartitionWorkState work) =>
+            !string.IsNullOrWhiteSpace(work.ProgressIdentity)
+            && PartitionIdentityMatches(
+                node.ProgressIdentity,
+                ownerBindings,
+                node.Partition.Binding,
+                work.Partition,
+                work.ProgressIdentity,
+                "ForEachPartition retained progress identity");
+
+        bool CapacityIdentityMatches(
+            ForEachPartitionProcessNode node,
+            IReadOnlyDictionary<string, int>? capacityLimits,
+            ImmutableArray<ProcessBindingValue> ownerBindings,
+            ProcessPartitionWorkState work)
+        {
+            if (node.CapacityIdentity is null)
+            {
+                return work.CapacityIdentity is null;
+            }
+            if (string.IsNullOrWhiteSpace(work.CapacityIdentity)
+                || capacityLimits is null
+                || !capacityLimits.ContainsKey(work.CapacityIdentity))
+            {
+                return false;
+            }
+
+            return PartitionIdentityMatches(
+                node.CapacityIdentity,
+                ownerBindings,
+                node.Partition.Binding,
+                work.Partition,
+                work.CapacityIdentity,
+                "ForEachPartition retained capacity identity");
+        }
+
+        static bool PartitionIdentityMatches(
+            Expr expression,
+            ImmutableArray<ProcessBindingValue> ownerBindings,
+            ValueBindingId partitionBinding,
+            PortableValue partition,
+            string expectedIdentity,
+            string operation)
+        {
+            try
+            {
+                var evaluated = ProcessExpressionReferenceEvaluation.Evaluate(
+                        ExpressionEvaluator,
+                        expression,
+                        ownerBindings,
+                        partitionBinding,
+                        partition)
+                    .RequireConcrete(operation);
+                return evaluated.Kind == ObservationValueKind.String
+                    && string.Equals(
+                        evaluated.String,
+                        expectedIdentity,
+                        StringComparison.Ordinal);
+            }
+            catch (PortableExpressionEvaluationException)
+            {
+                return false;
+            }
+            catch (ArgumentException)
+            {
+                return false;
             }
         }
 

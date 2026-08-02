@@ -163,6 +163,9 @@ public static class ProcessDefinitionDiagnosticCodes
     /// <summary>Bounded partition-work limits are non-positive or internally inconsistent.</summary>
     public const string WorkLimitsInvalid = "processes.ir.workLimitsInvalid";
 
+    /// <summary>A bounded partition capacity expression and its canonical domain limits are inconsistent.</summary>
+    public const string PartitionCapacityInvalid = "processes.ir.partitionCapacityInvalid";
+
     /// <summary>A bounded partition lexical binding does not describe one collection element.</summary>
     public const string PartitionBindingCardinalityInvalid = "processes.ir.partitionBindingCardinalityInvalid";
 
@@ -468,6 +471,9 @@ public static class ProcessDefinitionValidator
                 StringContract,
                 localBinding: partition.Partition);
 
+            ValidateEnum(partition.Failure, Child(location, "failure"));
+            ValidatePartitionCapacity(partition, location);
+
             var childLink = ResolveDefinition(
                 partition.Process,
                 ProcessDefinitionLinkKind.Process,
@@ -523,6 +529,84 @@ public static class ProcessDefinitionValidator
 
             RegisterEdge(partition.Completed, Child(location, "completed"), partition.Id);
             RegisterEdge(partition.Failed, Child(location, "failed"), partition.Id);
+        }
+
+        void ValidatePartitionCapacity(
+            ForEachPartitionProcessNode partition,
+            string location)
+        {
+            var capacityLocation = Child(location, "capacityDomains");
+            if (partition.CapacityIdentity is null)
+            {
+                if (!partition.CapacityDomains.IsEmpty)
+                {
+                    Error(
+                        ProcessDefinitionDiagnosticCodes.PartitionCapacityInvalid,
+                        "Capacity-domain limits require one partition-local capacity identity expression.",
+                        capacityLocation,
+                        subject: partition.Id.Value,
+                        expected: "empty");
+                }
+                return;
+            }
+
+            AddExpression(
+                partition.Id,
+                partition.CapacityIdentity,
+                Child(location, "capacityIdentity"),
+                StringContract,
+                localBinding: partition.Partition);
+            if (partition.CapacityDomains.IsEmpty)
+            {
+                Error(
+                    ProcessDefinitionDiagnosticCodes.PartitionCapacityInvalid,
+                    "A capacity identity expression requires at least one declared domain limit.",
+                    capacityLocation,
+                    subject: partition.Id.Value,
+                    expected: ">= 1");
+                return;
+            }
+
+            Dictionary<string, string> identities = new(StringComparer.Ordinal);
+            for (var index = 0; index < partition.CapacityDomains.Length; index++)
+            {
+                var domain = partition.CapacityDomains[index];
+                var domainLocation = $"{capacityLocation}/{index.ToString(CultureInfo.InvariantCulture)}";
+                if (domain is null)
+                {
+                    Missing(domainLocation, "A capacity-domain limit cannot be null.");
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(domain.Identity))
+                {
+                    Error(
+                        ProcessDefinitionDiagnosticCodes.PartitionCapacityInvalid,
+                        "A capacity-domain limit requires a stable non-empty identity.",
+                        Child(domainLocation, "identity"),
+                        subject: partition.Id.Value);
+                }
+                else if (!identities.TryAdd(domain.Identity, Child(domainLocation, "identity")))
+                {
+                    Error(
+                        ProcessDefinitionDiagnosticCodes.PartitionCapacityInvalid,
+                        $"Capacity-domain identity '{domain.Identity}' is declared more than once.",
+                        Child(domainLocation, "identity"),
+                        subject: domain.Identity,
+                        relatedLocations: [identities[domain.Identity]]);
+                }
+
+                if (domain.MaximumParallelism <= 0)
+                {
+                    Error(
+                        ProcessDefinitionDiagnosticCodes.PartitionCapacityInvalid,
+                        "A capacity-domain parallelism limit must be positive.",
+                        Child(domainLocation, "maximumParallelism"),
+                        subject: domain.Identity,
+                        expected: "> 0",
+                        observed: domain.MaximumParallelism.ToString(CultureInfo.InvariantCulture));
+                }
+            }
         }
 
         void ValidateRepeatAcrossActivation(

@@ -1,4 +1,3 @@
-using System.Collections.Immutable;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Compilation;
@@ -144,6 +143,229 @@ public sealed class ProcessChildDurableOperationAdapterTests
             fixture.ChildTarget.Continuation);
         Assert.Equal(ProcessDurableRuntimeDisposition.NotFound, inspected.Disposition);
         Assert.Equal(0, fixture.WorkerAdapter.ExecutionCalls);
+    }
+
+    [Fact]
+    public async Task PreventChildStart_AtomicallyPublishesReplayableCancelledCheckpoint()
+    {
+        var fixture = CreateFixture();
+        var cancellation = PreventionContext(fixture);
+
+        var prevented = await fixture.ChildRuntime.PreventChildStartAsync(
+            fixture.Context,
+            fixture.ChildPlan,
+            fixture.ParentRequest,
+            cancellation,
+            new("tests-parent-attempt-closed"));
+        var replayContext = OperationContext.Create(
+            timeProvider: new FixedTimeProvider(ObservedAtUtc.AddMinutes(1)));
+        var replayed = await fixture.ChildRuntime.PreventChildStartAsync(
+            replayContext,
+            fixture.ChildPlan,
+            fixture.ParentRequest,
+            cancellation,
+            new("tests-parent-attempt-closed"));
+
+        Assert.True(
+            prevented.Disposition == ProcessChildStartPreventionDisposition.Prevented,
+            string.Join(Environment.NewLine, prevented.Diagnostics.Select(static diagnostic =>
+                $"{diagnostic.Code}: {diagnostic.Message} ({diagnostic.Location})")));
+        Assert.Equal(ProcessChildStartPreventionDisposition.Replayed, replayed.Disposition);
+        var checkpoint = Assert.IsType<ProcessDurableStoreSnapshot>(replayed.Snapshot).Checkpoint;
+        Assert.Equal(ExecutionTerminalOutcomeKind.Cancelled, checkpoint.Continuation.Terminal.Kind);
+        var cancellationReceipt = Assert.Single(checkpoint.Activations);
+        Assert.Equal(ProcessActivationDisposition.Cancelled, cancellationReceipt.Disposition);
+        Assert.Equal(cancellation.CommandId, Assert.Single(checkpoint.Control.Receipts).Command.Context.CommandId);
+        Assert.Equal(0, fixture.WorkerAdapter.ExecutionCalls);
+
+        var delayed = Assert.IsType<DurableOperationOutcomeObservation>(
+            await fixture.ChildAdapter().ExecuteAsync(
+                fixture.Context,
+                Invocation(fixture.ParentRequest, fixture.ParentContracts.Binding, ordinal: 1)));
+        Assert.Equal(new RequestTerminalOutcomeId("child-cancelled"), delayed.Outcome.Id);
+        Assert.Equal(0, fixture.WorkerAdapter.ExecutionCalls);
+    }
+
+    [Fact]
+    public async Task PreventChildStart_ExactOrdinaryInitializationWinningRaceIsReportedAsStarted()
+    {
+        var fixture = CreateFixture();
+        var exactStart = ProcessChildStartSemantics.Create(
+            fixture.ParentRequest,
+            fixture.ChildTarget,
+            ObservedAtUtc);
+        var initialized = await fixture.ChildRuntime.InitializeAsync(
+            fixture.Context,
+            fixture.ChildPlan,
+            exactStart);
+
+        var prevention = await fixture.ChildRuntime.PreventChildStartAsync(
+            OperationContext.Create(
+                timeProvider: new FixedTimeProvider(ObservedAtUtc.AddMinutes(1))),
+            fixture.ChildPlan,
+            fixture.ParentRequest,
+            PreventionContext(fixture),
+            new("tests-parent-attempt-closed"));
+
+        Assert.Equal(ProcessDurableRuntimeDisposition.Applied, initialized.Disposition);
+        Assert.Equal(ProcessChildStartPreventionDisposition.ChildAlreadyStarted, prevention.Disposition);
+        Assert.Equal(
+            ExecutionTerminalOutcomeKind.None,
+            Assert.IsType<ProcessDurableStoreSnapshot>(prevention.Snapshot).Checkpoint.Continuation.Terminal.Kind);
+        Assert.Equal(0, fixture.WorkerAdapter.ExecutionCalls);
+    }
+
+    [Fact]
+    public async Task PreventChildStart_OrdinaryInitializationCancelledBeforeFirstActivationIsConclusiveReplay()
+    {
+        var fixture = CreateFixture();
+        var exactStart = ProcessChildStartSemantics.Create(
+            fixture.ParentRequest,
+            fixture.ChildTarget,
+            ObservedAtUtc);
+        var initialized = await fixture.ChildRuntime.InitializeAsync(
+            fixture.Context,
+            fixture.ChildPlan,
+            exactStart);
+        var initial = Assert.IsType<ProcessDurableStoreSnapshot>(initialized.Snapshot);
+        var cancellationContext = PreventionContext(fixture);
+        var reason = new ProcessControlReason("tests-parent-attempt-closed");
+        var cancel = new CancelProcessCommand(
+            ProcessControlCommand.CurrentSchemaVersion,
+            cancellationContext,
+            new(initial.Checkpoint.ContinuationIdentity, initial.Checkpoint.Control.Revision),
+            reason);
+        var cancelledAtUtc = ObservedAtUtc.AddMinutes(1);
+        var cancelled = await fixture.ChildRuntime.CancelAsync(
+            OperationContext.Create(timeProvider: new FixedTimeProvider(cancelledAtUtc)),
+            fixture.ChildPlan,
+            cancel,
+            new(
+                fixture.ParentRequest.Context.AuthorityScope,
+                fixture.ParentRequest.Context.CorrelationId,
+                fixture.ParentRequest.Context.Delivery,
+                fixture.ChildPlan.Document.Metadata.Provenance,
+                causationId: fixture.ParentRequest.Context.EmissionId,
+                ordering: fixture.ParentRequest.Context.Ordering));
+
+        var replay = await fixture.ChildRuntime.PreventChildStartAsync(
+            OperationContext.Create(
+                timeProvider: new FixedTimeProvider(cancelledAtUtc.AddMinutes(1))),
+            fixture.ChildPlan,
+            fixture.ParentRequest,
+            cancellationContext,
+            reason);
+
+        Assert.Equal(ProcessDurableRuntimeDisposition.Applied, cancelled.Disposition);
+        Assert.Equal(ProcessChildStartPreventionDisposition.Replayed, replay.Disposition);
+        var checkpoint = Assert.IsType<ProcessDurableStoreSnapshot>(replay.Snapshot).Checkpoint;
+        Assert.Equal(ExecutionTerminalOutcomeKind.Cancelled, checkpoint.Continuation.Terminal.Kind);
+        Assert.Single(checkpoint.Activations);
+        Assert.Empty(checkpoint.DurableOperations);
+        Assert.Equal(0, fixture.WorkerAdapter.ExecutionCalls);
+    }
+
+    [Fact]
+    public async Task PreventChildStart_AmbiguousCommittedPreventionReplaysAtLaterObservation()
+    {
+        var crash = new CrashOnce(
+            ProcessStoreMutationKind.Initialize,
+            ProcessStoreCrashPhase.AfterAtomicCommitBeforeReturn);
+        var fixture = CreateFixture(
+            store: new InMemoryProcessDurableStore(crash.ShouldCrash),
+            maximumAmbiguousStoreMutationAttempts: 1);
+        var cancellation = PreventionContext(fixture);
+
+        var interrupted = await fixture.ChildRuntime.PreventChildStartAsync(
+            fixture.Context,
+            fixture.ChildPlan,
+            fixture.ParentRequest,
+            cancellation,
+            new("tests-parent-attempt-closed"));
+        var recovered = await fixture.ChildRuntime.PreventChildStartAsync(
+            OperationContext.Create(
+                timeProvider: new FixedTimeProvider(ObservedAtUtc.AddMinutes(1))),
+            fixture.ChildPlan,
+            fixture.ParentRequest,
+            cancellation,
+            new("tests-parent-attempt-closed"));
+
+        Assert.Equal(ProcessChildStartPreventionDisposition.CommitOutcomeUnknown, interrupted.Disposition);
+        Assert.Equal(ProcessChildStartPreventionDisposition.Replayed, recovered.Disposition);
+        Assert.Equal(
+            ExecutionTerminalOutcomeKind.Cancelled,
+            Assert.IsType<ProcessDurableStoreSnapshot>(recovered.Snapshot).Checkpoint.Continuation.Terminal.Kind);
+        Assert.Equal(0, fixture.WorkerAdapter.ExecutionCalls);
+        Assert.Equal(1, crash.CrashCount);
+    }
+
+    [Fact]
+    public async Task PreventChildStart_DelayedExecuteWithStaleAbsentReadCannotInitializeOrRunChild()
+    {
+        var store = new PausedAbsentLoadStore(new InMemoryProcessDurableStore());
+        var fixture = CreateFixture(store: store);
+        var execute = fixture.ChildAdapter().ExecuteAsync(
+            fixture.Context,
+            Invocation(fixture.ParentRequest, fixture.ParentContracts.Binding, ordinal: 1)).AsTask();
+        await store.AbsentReadObserved;
+
+        var prevented = await fixture.ChildRuntime.PreventChildStartAsync(
+            fixture.Context,
+            fixture.ChildPlan,
+            fixture.ParentRequest,
+            PreventionContext(fixture),
+            new("tests-parent-attempt-closed"));
+        store.ReleaseAbsentRead();
+        var delayed = await execute;
+
+        Assert.True(
+            prevented.Disposition == ProcessChildStartPreventionDisposition.Prevented,
+            string.Join(Environment.NewLine, prevented.Diagnostics.Select(static diagnostic =>
+                $"{diagnostic.Code}: {diagnostic.Message} ({diagnostic.Location})")));
+        var completed = Assert.IsType<DurableOperationOutcomeObservation>(delayed);
+        Assert.Equal(new RequestTerminalOutcomeId("child-cancelled"), completed.Outcome.Id);
+        Assert.Equal(0, fixture.WorkerAdapter.ExecutionCalls);
+        var inspected = await fixture.ChildRuntime.InspectAsync(
+            fixture.Context,
+            fixture.ChildPlan,
+            fixture.ChildTarget.Continuation);
+        Assert.Equal(
+            ExecutionTerminalOutcomeKind.Cancelled,
+            Assert.IsType<ProcessDurableStoreSnapshot>(inspected.Snapshot).Checkpoint.Continuation.Terminal.Kind);
+    }
+
+    [Fact]
+    public async Task PreventChildStart_RejectsForeignAuthorityWithoutCreatingTombstone()
+    {
+        var fixture = CreateFixture();
+        var exact = PreventionContext(fixture);
+        var foreign = new ProcessControlCommandContext(
+            exact.CommandId,
+            exact.IdempotencyKey,
+            exact.ProcessInstanceId,
+            new(
+                exact.Authorization.Actor,
+                new("authority/foreign", "tenant/foreign"),
+                exact.Authorization.EvidenceReference),
+            exact.IssuedAtUtc,
+            exact.Provenance);
+
+        var rejected = await fixture.ChildRuntime.PreventChildStartAsync(
+            fixture.Context,
+            fixture.ChildPlan,
+            fixture.ParentRequest,
+            foreign,
+            new("tests-parent-attempt-closed"));
+
+        Assert.Equal(ProcessChildStartPreventionDisposition.Incompatible, rejected.Disposition);
+        Assert.Contains(
+            rejected.Diagnostics,
+            static diagnostic => diagnostic.Code == ProcessChildDurableOperationDiagnosticCodes.ChildIncompatible);
+        var inspected = await fixture.ChildRuntime.InspectAsync(
+            fixture.Context,
+            fixture.ChildPlan,
+            fixture.ChildTarget.Continuation);
+        Assert.Equal(ProcessDurableRuntimeDisposition.NotFound, inspected.Disposition);
     }
 
     [Fact]
@@ -323,7 +545,7 @@ public sealed class ProcessChildDurableOperationAdapterTests
     }
 
     static Fixture CreateFixture(
-        InMemoryProcessDurableStore? store = null,
+        IProcessDurableStore? store = null,
         int maximumAmbiguousStoreMutationAttempts = 3,
         DurableOperationTestFixture? workerContracts = null,
         ICountingWorkerAdapter? workerAdapter = null,
@@ -346,7 +568,9 @@ public sealed class ProcessChildDurableOperationAdapterTests
                 new("result"),
                 new("failure"),
                 new("child-cancelled"),
-                new("child-terminated")));
+                new("child-terminated")),
+            ownerToken: new("token/parent"),
+            occurrence: 0);
         var parentRequest = ParentRequest(parentContracts, childTarget);
         store ??= new InMemoryProcessDurableStore();
         workerAdapter ??= new EchoWorkerAdapter(workerContracts.RequestContract);
@@ -584,6 +808,18 @@ public sealed class ProcessChildDurableOperationAdapterTests
     static OperationContext Context() =>
         OperationContext.Create(timeProvider: new FixedTimeProvider(ObservedAtUtc));
 
+    static ProcessControlCommandContext PreventionContext(Fixture fixture) =>
+        new(
+            new("control/process-child-adapter-tests/prevent-start"),
+            new("idempotency/process-child-adapter-tests/prevent-start"),
+            fixture.ChildTarget.Continuation.ProcessInstanceId,
+            new(
+                "tests.process-child-adapter.lifecycle",
+                fixture.ParentRequest.Context.AuthorityScope,
+                "tests/parent-attempt-closed"),
+            ObservedAtUtc,
+            fixture.ParentRequest.Context.Provenance);
+
     static ExecutionProvenance Provenance(string role) =>
         new(
             new("process-child-adapter-tests", "1"),
@@ -636,6 +872,80 @@ public sealed class ProcessChildDurableOperationAdapterTests
             resolved = adapter.Capabilities.Supports(request.Contract) ? adapter : null;
             return resolved is not null;
         }
+    }
+
+    sealed class PausedAbsentLoadStore(IProcessDurableStore inner) : IProcessDurableStore
+    {
+        readonly TaskCompletionSource absentReadObserved = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        readonly TaskCompletionSource releaseAbsentRead = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        int pauseNextAbsentRead = 1;
+
+        internal Task AbsentReadObserved => absentReadObserved.Task;
+
+        public ProcessDurableStoreCapabilities Capabilities => inner.Capabilities;
+
+        internal void ReleaseAbsentRead() => releaseAbsentRead.TrySetResult();
+
+        public async Task<ProcessDurableStoreSnapshot?> LoadAsync(
+            OperationContext context,
+            ProcessInstanceId instanceId)
+        {
+            var snapshot = await inner.LoadAsync(context, instanceId);
+            if (snapshot is null && Interlocked.Exchange(ref pauseNextAbsentRead, 0) == 1)
+            {
+                absentReadObserved.TrySetResult();
+                await releaseAbsentRead.Task.WaitAsync(context.CancellationToken);
+            }
+            return snapshot;
+        }
+
+        public Task<ProcessStoreMutationResult> InitializeAsync(
+            OperationContext context,
+            ProcessCommitId commitId,
+            ProcessDurableCheckpoint checkpoint) =>
+            inner.InitializeAsync(context, commitId, checkpoint);
+
+        public Task<ProcessStoreMutationResult> AdmitInputAsync(
+            OperationContext context,
+            ProcessInstanceId instanceId,
+            ProcessActivationInput input,
+            DateTimeOffset admittedAtUtc) =>
+            inner.AdmitInputAsync(context, instanceId, input, admittedAtUtc);
+
+        public Task<ProcessStoreMutationResult> AcquireWorkerAsync(
+            OperationContext context,
+            ProcessInstanceId instanceId,
+            ProcessStorageRevision expectedRevision,
+            string owner,
+            TimeSpan leaseDuration,
+            DateTimeOffset observedAtUtc) =>
+            inner.AcquireWorkerAsync(
+                context,
+                instanceId,
+                expectedRevision,
+                owner,
+                leaseDuration,
+                observedAtUtc);
+
+        public Task<ProcessStoreMutationResult> RenewWorkerAsync(
+            OperationContext context,
+            ProcessInstanceId instanceId,
+            string owner,
+            ProcessWorkerFence fence,
+            TimeSpan leaseDuration,
+            DateTimeOffset observedAtUtc) =>
+            inner.RenewWorkerAsync(
+                context,
+                instanceId,
+                owner,
+                fence,
+                leaseDuration,
+                observedAtUtc);
+
+        public Task<ProcessStoreMutationResult> CommitAsync(
+            OperationContext context,
+            ProcessDurableCommit commit) =>
+            inner.CommitAsync(context, commit);
     }
 
     interface ICountingWorkerAdapter : IDurableOperationAdapter

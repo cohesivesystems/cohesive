@@ -16,7 +16,7 @@ public sealed class ExecutionDefinitionSerializationTests
     {
         var document = CreateDocument();
         const string Expected =
-            "{\"definition\":{\"entry\":\"start\",\"orderedSteps\":[\"reserve\",\"commit\"],\"semanticObject\":{\"alpha\":1,\"zeta\":2}},\"extensions\":[],\"kind\":\"transition\",\"schemaVersion\":\"cohesive-execution/v2\"}";
+            "{\"definition\":{\"entry\":\"start\",\"orderedSteps\":[\"reserve\",\"commit\"],\"semanticObject\":{\"alpha\":1,\"zeta\":2}},\"extensions\":[],\"kind\":\"transition\",\"schemaVersion\":\"cohesive-execution/v3\"}";
 
         var normalized = ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(document);
 
@@ -26,7 +26,7 @@ public sealed class ExecutionDefinitionSerializationTests
             ExecutionDefinitionFingerprinter.Canonicalization,
             document.Metadata.Fingerprint.Canonicalization);
         Assert.Equal(
-            "2aad02b26fbb921b257feae707ff9d0990c53217983b32fcc1ed2334ca806424",
+            "9335a2b3c4682ff1b1bfb440d6fab2cdc430377ca0eafaf0da574181a27e920b",
             document.Metadata.Fingerprint.Value);
         Assert.Equal(document.Metadata.Fingerprint, ExecutionDefinitionFingerprinter.Compute(document));
     }

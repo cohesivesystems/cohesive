@@ -81,7 +81,7 @@ public sealed record ExecutionDefinitionExtension
 public sealed record ExecutionDefinitionDocument
 {
     /// <summary>Current shared execution-definition document schema version.</summary>
-    public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } = new("cohesive-execution/v2");
+    public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } = new("cohesive-execution/v3");
 
     /// <summary>Creates a portable execution-definition document.</summary>
     /// <param name="kind">Stable semantic family of the definition payload.</param>

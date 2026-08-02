@@ -100,7 +100,13 @@ public sealed class ProcessHigherOrderReferenceInterpreterTests
             var childState = first.State.Children.Single(candidate =>
                 candidate.RequestEmission == request.Context.EmissionId);
             Assert.Equal(
-                new ProcessChildRequestTarget(childState.Process, childState.Continuation, ChildOutcomeMapping),
+                new ProcessChildRequestTarget(
+                    childState.Process,
+                    childState.Continuation,
+                    ChildOutcomeMapping,
+                    childState.Owner,
+                    childState.Occurrence,
+                    childState.ProgressIdentity),
                 request.ChildTarget);
         });
 
@@ -139,7 +145,13 @@ public sealed class ProcessHigherOrderReferenceInterpreterTests
             var childState = restored.Continuation.Children.Single(candidate =>
                 candidate.RequestEmission == request.Context.EmissionId);
             Assert.Equal(
-                new ProcessChildRequestTarget(childState.Process, childState.Continuation, ChildOutcomeMapping),
+                new ProcessChildRequestTarget(
+                    childState.Process,
+                    childState.Continuation,
+                    ChildOutcomeMapping,
+                    childState.Owner,
+                    childState.Occurrence,
+                    childState.ProgressIdentity),
                 request.ChildTarget);
         });
 
@@ -257,6 +269,388 @@ public sealed class ProcessHigherOrderReferenceInterpreterTests
         Assert.Contains(
             ProcessContinuationValidator.Validate(plan, missingPartitionTombstone).Diagnostics,
             static diagnostic => diagnostic.Code == ProcessContinuationDiagnosticCodes.PartitionStateMismatch);
+    }
+
+    [Fact]
+    public void ForEachPartition_RestoreRejectsSelfConsistentSubstitutedPendingChildProgressIdentity()
+    {
+        var contracts = ChildRequestContracts.Create();
+        var child = DefinitionReference("process/progress-identity-index-shard", '9');
+        var plan = Compile(
+            Definition(
+                StringCollectionContract,
+                "partitions",
+                [
+                    PartitionNode(
+                        child,
+                        contracts.Request,
+                        ProcessChildCancellationPolicy.Propagate,
+                        limits: new(
+                            maximumItems: 3,
+                            maximumStartsPerActivation: 2,
+                            maximumParallelism: 2)),
+                    new ReturnProcessNode(new("return"), Expr.Const("index-generation-ready")),
+                    new FailProcessNode(new("fail"), Expr.Const("index-generation-failed"))
+                ]),
+            contracts.Catalog,
+            [new(
+                child,
+                ProcessDefinitionLinkKind.Process,
+                StringContract,
+                StringContract,
+                [],
+                ProcessRecoveryPolicy.ContinueAttempt)],
+            definitionId: "process/progress-identity-index-coordinator");
+        var continuation = Continuation("process-instance/progress-identity-index-coordinator");
+        var activation = Activation("activation/progress-identity-index-start", ProcessActivationCause.Start);
+        var retained = ProcessReferenceInterpreter.Activate(
+            plan,
+            ProcessReferenceInterpreter.Create(
+                plan,
+                continuation,
+                CollectionValue("shard-a", "shard-b", "shard-c")),
+            activation,
+            RejectingHost.Instance);
+        var substituted = ProcessReferenceInterpreter.Activate(
+            plan,
+            ProcessReferenceInterpreter.Create(
+                plan,
+                continuation,
+                CollectionValue("shard-a", "shard-b", "shard-z")),
+            activation,
+            RejectingHost.Instance);
+        var retainedPartition = Assert.Single(retained.State.Partitions);
+        var substitutedPartition = Assert.Single(substituted.State.Partitions);
+        var retainedPending = Assert.Single(
+            retained.State.Children,
+            static candidate => candidate.Disposition == ProcessChildDisposition.Pending);
+        var substitutedPending = Assert.Single(
+            substituted.State.Children,
+            static candidate => candidate.Disposition == ProcessChildDisposition.Pending);
+        var retainedWorkIndex = Enumerable.Range(0, retainedPartition.Work.Length).Single(index =>
+            retainedPartition.Work[index].ChildRegistrationId == retainedPending.RegistrationId);
+        var retainedWork = retainedPartition.Work[retainedWorkIndex];
+        var substitutedWork = substitutedPartition.Work.Single(candidate =>
+            candidate.ChildRegistrationId == substitutedPending.RegistrationId);
+        var hostileWork = retainedWork with
+        {
+            ProgressIdentity = substitutedWork.ProgressIdentity,
+            ChildRegistrationId = substitutedWork.ChildRegistrationId
+        };
+        var hostilePartition = NewPartition(
+            retainedPartition.RegistrationId,
+            retainedPartition.Owner,
+            retainedPartition.Node,
+            retainedPartition.Occurrence,
+            retainedPartition.Work.SetItem(retainedWorkIndex, hostileWork),
+            retainedPartition.Resolved);
+        var hostileChildren = retained.State.Children
+            .Where(candidate => candidate.RegistrationId != retainedPending.RegistrationId)
+            .Append(substitutedPending)
+            .OrderBy(static candidate => candidate.RegistrationId, StringComparer.Ordinal)
+            .ToImmutableArray();
+        var hostileState = CopyState(
+            retained.State,
+            children: hostileChildren,
+            partitions: [hostilePartition]);
+
+        Assert.NotEqual(retainedPending.RegistrationId, substitutedPending.RegistrationId);
+        Assert.NotEqual(retainedPending.Token, substitutedPending.Token);
+        Assert.NotEqual(retainedPending.Continuation, substitutedPending.Continuation);
+        Assert.Equal(StringValue("shard-c"), hostileWork.Partition);
+        Assert.Equal("shard-z", hostileWork.ProgressIdentity);
+        var validation = ProcessContinuationValidator.Validate(plan, hostileState);
+        Assert.DoesNotContain(
+            validation.Diagnostics,
+            static diagnostic => diagnostic.Code == ProcessContinuationDiagnosticCodes.ChildStateMismatch);
+        Assert.Contains(
+            validation.Diagnostics,
+            diagnostic => diagnostic.Code == ProcessContinuationDiagnosticCodes.PartitionStateMismatch
+                          && diagnostic.Location == $"/partitions/0/work/{retainedWorkIndex}");
+    }
+
+    [Fact]
+    public void ForEachPartition_AwaitAllContinuesAdmissionAfterFailureAndRetainsEveryTerminalOutcome()
+    {
+        var contracts = ChildRequestContracts.Create();
+        var child = DefinitionReference("process/await-all-index-shard", 'b');
+        var plan = Compile(
+            Definition(
+                StringCollectionContract,
+                "partitions",
+                [
+                    PartitionNode(
+                        child,
+                        contracts.Request,
+                        ProcessChildCancellationPolicy.Propagate,
+                        limits: new(
+                            maximumItems: 3,
+                            maximumStartsPerActivation: 2,
+                            maximumParallelism: 2),
+                        failure: ProcessPartitionFailurePolicy.AwaitAll),
+                    new ReturnProcessNode(new("return"), Expr.Const("index-generation-ready")),
+                    new FailProcessNode(new("fail"), Expr.Const("index-generation-failed"))
+                ]),
+            contracts.Catalog,
+            [new(
+                child,
+                ProcessDefinitionLinkKind.Process,
+                StringContract,
+                StringContract,
+                [],
+                ProcessRecoveryPolicy.ContinueAttempt)],
+            definitionId: "process/await-all-index-coordinator");
+        var initial = ProcessReferenceInterpreter.Create(
+            plan,
+            Continuation("process-instance/await-all-index-coordinator"),
+            CollectionValue("shard-c", "shard-a", "shard-b"));
+        var started = ProcessReferenceInterpreter.Activate(
+            plan,
+            initial,
+            Activation("activation/await-all-start", ProcessActivationCause.Start),
+            RejectingHost.Instance);
+        var shardARequest = started.Emissions
+            .OfType<RequestEnvelope>()
+            .Single(request => request.Payload == StringValue("shard-a"));
+        var shardBRequest = started.Emissions
+            .OfType<RequestEnvelope>()
+            .Single(request => request.Payload == StringValue("shard-b"));
+        var shardAChild = started.State.Children.Single(childState =>
+            childState.RequestEmission == shardARequest.Context.EmissionId);
+        var shardAFailure = Reply(
+            shardAChild,
+            shardARequest,
+            contracts.FailedReply,
+            new RequestFailureOutcome(ChildOutcomeMapping.Failed, StringValue("failed/shard-a")),
+            "emission/await-all-shard-a-failed");
+
+        var continued = ProcessReferenceInterpreter.Activate(
+            plan,
+            started.State,
+            Activation(
+                "activation/await-all-after-failure",
+                ProcessActivationCause.Interaction,
+                StartedAtUtc.AddMinutes(1),
+                inputs:
+                [
+                    new(
+                        Assert.IsType<ProcessTokenInteractionTarget>(shardARequest.ResponseTarget),
+                        shardAFailure)
+                ]),
+            RejectingHost.Instance);
+
+        Assert.Equal(ProcessActivationDisposition.DurableCut, continued.Disposition);
+        var shardCRequest = Assert.IsType<RequestEnvelope>(Assert.Single(continued.Emissions));
+        Assert.Equal(StringValue("shard-c"), shardCRequest.Payload);
+        Assert.False(Assert.Single(continued.State.Partitions).Resolved);
+        Assert.Single(continued.State.Children,
+            static childState => childState.Disposition == ProcessChildDisposition.Failed);
+        Assert.Equal(2, continued.State.Children.Count(
+            static childState => childState.Disposition == ProcessChildDisposition.Active));
+        Assert.DoesNotContain(continued.State.Children, static childState => childState.Disposition is
+            ProcessChildDisposition.CancellationRequested
+            or ProcessChildDisposition.CancelledBeforeStart
+            or ProcessChildDisposition.Detached);
+        var continuedValidation = ProcessContinuationValidator.Validate(plan, continued.State);
+        Assert.True(continuedValidation.IsValid, FormatDiagnostics(continuedValidation));
+
+        var shardBChild = continued.State.Children.Single(childState =>
+            childState.RequestEmission == shardBRequest.Context.EmissionId);
+        var shardCChild = continued.State.Children.Single(childState =>
+            childState.RequestEmission == shardCRequest.Context.EmissionId);
+        var shardBReply = Reply(
+            shardBChild,
+            shardBRequest,
+            contracts.CompletedReply,
+            ChildOutcomeMapping.Completed,
+            "indexed/shard-b",
+            "emission/await-all-shard-b-completed");
+        var shardCReply = Reply(
+            shardCChild,
+            shardCRequest,
+            contracts.CompletedReply,
+            ChildOutcomeMapping.Completed,
+            "indexed/shard-c",
+            "emission/await-all-shard-c-completed");
+        var settled = ProcessReferenceInterpreter.Activate(
+            plan,
+            continued.State,
+            Activation(
+                "activation/await-all-settled",
+                ProcessActivationCause.Interaction,
+                StartedAtUtc.AddMinutes(2),
+                inputs:
+                [
+                    new(
+                        Assert.IsType<ProcessTokenInteractionTarget>(shardBRequest.ResponseTarget),
+                        shardBReply),
+                    new(
+                        Assert.IsType<ProcessTokenInteractionTarget>(shardCRequest.ResponseTarget),
+                        shardCReply)
+                ]),
+            RejectingHost.Instance);
+
+        Assert.Equal(ProcessActivationDisposition.Failed, settled.Disposition);
+        Assert.True(Assert.Single(settled.State.Partitions).Resolved);
+        Assert.Equal(StringValue("index-generation-failed"), settled.State.Terminal.Detail?.Value);
+        Assert.Contains(settled.State.Tokens, static token =>
+            token.Disposition == ExecutionTokenDisposition.Failed
+            && token.Failure?.Code == ProcessExecutionDiagnosticCodes.AuthoredFailure);
+        var failedChild = Assert.Single(settled.State.Children,
+            static childState => childState.Disposition == ProcessChildDisposition.Failed);
+        Assert.Equal(ChildOutcomeMapping.Failed, failedChild.TerminalOutcome);
+        Assert.Equal(StringValue("failed/shard-a"), failedChild.Result);
+        Assert.Equal(2, settled.State.Children.Count(
+            static childState => childState.Disposition == ProcessChildDisposition.Completed));
+        var settledValidation = ProcessContinuationValidator.Validate(plan, settled.State);
+        Assert.True(settledValidation.IsValid, FormatDiagnostics(settledValidation));
+    }
+
+    [Fact]
+    public void ForEachPartition_CapacityDomainsSkipSaturatedTargetsDeterministicallyAndValidateRestoreBounds()
+    {
+        var contracts = ChildRequestContracts.Create();
+        var child = DefinitionReference("process/capacity-bound-index-shard", 'c');
+        var plan = Compile(
+            Definition(
+                StringCollectionContract,
+                "partitions",
+                [
+                    PartitionNode(
+                        child,
+                        contracts.Request,
+                        ProcessChildCancellationPolicy.Propagate,
+                        limits: new(
+                            maximumItems: 4,
+                            maximumStartsPerActivation: 3,
+                            maximumParallelism: 3),
+                        capacityIdentity: CapacityDomainByShard,
+                        capacityDomains:
+                        [
+                            new("target/a", maximumParallelism: 1),
+                            new("target/b", maximumParallelism: 1)
+                        ]),
+                    new ReturnProcessNode(new("return"), Expr.Const("index-generation-ready")),
+                    new FailProcessNode(new("fail"), Expr.Const("index-generation-failed"))
+                ]),
+            contracts.Catalog,
+            [new(
+                child,
+                ProcessDefinitionLinkKind.Process,
+                StringContract,
+                StringContract,
+                [],
+                ProcessRecoveryPolicy.ContinueAttempt)],
+            definitionId: "process/capacity-bound-index-coordinator");
+        var initial = ProcessReferenceInterpreter.Create(
+            plan,
+            Continuation("process-instance/capacity-bound-index-coordinator"),
+            CollectionValue("shard-d", "shard-b", "shard-c", "shard-a"));
+
+        var started = ProcessReferenceInterpreter.Activate(
+            plan,
+            initial,
+            Activation("activation/capacity-bound-start", ProcessActivationCause.Start),
+            RejectingHost.Instance);
+
+        Assert.Equal(ProcessActivationDisposition.DurableCut, started.Disposition);
+        Assert.Equal(
+            ["shard-a", "shard-c"],
+            started.Emissions
+                .OfType<RequestEnvelope>()
+                .Select(static request => request.Payload.Value.GetValueOrDefault().String)
+                .Order(StringComparer.Ordinal));
+        var partition = Assert.Single(started.State.Partitions);
+        Assert.Equal(
+            ["target/a", "target/a", "target/b", "target/b"],
+            partition.Work.Select(static work => work.CapacityIdentity));
+        Assert.Equal(2, started.State.Children.Count(
+            static childState => childState.Disposition == ProcessChildDisposition.Active));
+        Assert.Equal(2, started.State.Children.Count(
+            static childState => childState.Disposition == ProcessChildDisposition.Pending));
+        var startedValidation = ProcessContinuationValidator.Validate(plan, started.State);
+        Assert.True(startedValidation.IsValid, FormatDiagnostics(startedValidation));
+
+        var shardDWorkIndex = Enumerable.Range(0, partition.Work.Length).Single(index =>
+            partition.Work[index].ProgressIdentity == "shard-d");
+        var capacityForgedWork = partition.Work.SetItem(
+            shardDWorkIndex,
+            partition.Work[shardDWorkIndex] with { CapacityIdentity = "target/a" });
+        var capacityForgedPartition = NewPartition(
+            partition.RegistrationId,
+            partition.Owner,
+            partition.Node,
+            partition.Occurrence,
+            capacityForgedWork,
+            partition.Resolved);
+        var capacityForgedState = CopyState(started.State, partitions: [capacityForgedPartition]);
+        var capacityForgedValidation = ProcessContinuationValidator.Validate(
+            plan,
+            capacityForgedState);
+        Assert.Contains(
+            capacityForgedValidation.Diagnostics,
+            diagnostic => diagnostic.Code == ProcessContinuationDiagnosticCodes.PartitionStateMismatch
+                          && diagnostic.Location == $"/partitions/0/work/{shardDWorkIndex}");
+
+        var shardCWorkIndex = Enumerable.Range(0, partition.Work.Length).Single(index =>
+            partition.Work[index].ProgressIdentity == "shard-c");
+        var forgedWork = partition.Work.SetItem(
+            shardCWorkIndex,
+            partition.Work[shardCWorkIndex] with { CapacityIdentity = "target/a" });
+        var forgedPartition = NewPartition(
+            partition.RegistrationId,
+            partition.Owner,
+            partition.Node,
+            partition.Occurrence,
+            forgedWork,
+            partition.Resolved);
+        var forgedState = CopyState(started.State, partitions: [forgedPartition]);
+        Assert.NotEqual(
+            ProcessStorageContentFingerprints.Continuation(started.State),
+            ProcessStorageContentFingerprints.Continuation(forgedState));
+        var forgedValidation = ProcessContinuationValidator.Validate(
+            plan,
+            forgedState);
+        Assert.Contains(
+            forgedValidation.Diagnostics,
+            static diagnostic => diagnostic.Code == ProcessContinuationDiagnosticCodes.PartitionStateMismatch
+                                 && diagnostic.Location == "/partitions/0/resolved");
+
+        var shardARequest = started.Emissions
+            .OfType<RequestEnvelope>()
+            .Single(request => request.Payload == StringValue("shard-a"));
+        var shardAChild = started.State.Children.Single(childState =>
+            childState.RequestEmission == shardARequest.Context.EmissionId);
+        var shardAReply = Reply(
+            shardAChild,
+            shardARequest,
+            contracts.CompletedReply,
+            ChildOutcomeMapping.Completed,
+            "indexed/shard-a",
+            "emission/capacity-bound-shard-a-completed");
+
+        var admitted = ProcessReferenceInterpreter.Activate(
+            plan,
+            started.State,
+            Activation(
+                "activation/capacity-bound-admit-next",
+                ProcessActivationCause.Interaction,
+                StartedAtUtc.AddMinutes(1),
+                inputs:
+                [
+                    new(
+                        Assert.IsType<ProcessTokenInteractionTarget>(shardARequest.ResponseTarget),
+                        shardAReply)
+                ]),
+            RejectingHost.Instance);
+
+        var nextRequest = Assert.IsType<RequestEnvelope>(Assert.Single(admitted.Emissions));
+        Assert.Equal(StringValue("shard-b"), nextRequest.Payload);
+        Assert.Single(admitted.State.Children,
+            childState => childState.ProgressIdentity == "shard-d"
+                          && childState.Disposition == ProcessChildDisposition.Pending);
+        var admittedValidation = ProcessContinuationValidator.Validate(plan, admitted.State);
+        Assert.True(admittedValidation.IsValid, FormatDiagnostics(admittedValidation));
     }
 
     [Fact]
@@ -653,6 +1047,9 @@ public sealed class ProcessHigherOrderReferenceInterpreterTests
                         partition.OutcomeMapping,
                         partition.ChildInput,
                         partition.Limits,
+                        partition.Failure,
+                        partition.CapacityIdentity,
+                        partition.CapacityDomains,
                         partition.Cancellation,
                         Edge("edge/partitions-join", "join"),
                         Edge("edge/partitions-failed-join", "join")),
@@ -1072,7 +1469,13 @@ public sealed class ProcessHigherOrderReferenceInterpreterTests
         Assert.Equal(childState.RegistrationId, replayChild.RegistrationId);
         Assert.Equal(request.Context.EmissionId, childState.RequestEmission);
         Assert.Equal(
-            new ProcessChildRequestTarget(childState.Process, childState.Continuation, ChildOutcomeMapping),
+            new ProcessChildRequestTarget(
+                childState.Process,
+                childState.Continuation,
+                ChildOutcomeMapping,
+                childState.Owner,
+                childState.Occurrence,
+                childState.ProgressIdentity),
             request.ChildTarget);
         Assert.Equal(
             request.Context.EmissionId,
@@ -1788,7 +2191,10 @@ public sealed class ProcessHigherOrderReferenceInterpreterTests
         RequestContractReference request,
         ProcessChildCancellationPolicy cancellation,
         Func<ValueBindingId, Expr>? childInput = null,
-        ProcessWorkLimits? limits = null)
+        ProcessWorkLimits? limits = null,
+        ProcessPartitionFailurePolicy failure = ProcessPartitionFailurePolicy.FailFast,
+        Func<ValueBindingId, Expr>? capacityIdentity = null,
+        ImmutableArray<ProcessCapacityDomainLimit> capacityDomains = default)
     {
         ProcessOutputBinding partition = new(new("partition.item"), StringContract);
         return new(
@@ -1801,6 +2207,9 @@ public sealed class ProcessHigherOrderReferenceInterpreterTests
             ChildOutcomeMapping,
             childInput?.Invoke(partition.Binding) ?? Expr.BoundValue(partition.Binding),
             limits ?? new(maximumItems: 3, maximumStartsPerActivation: 2, maximumParallelism: 2),
+            failure,
+            capacityIdentity?.Invoke(partition.Binding),
+            capacityDomains.IsDefault ? [] : capacityDomains,
             cancellation,
             Edge("edge/partitions-completed", "return"),
             Edge("edge/partitions-failed", "fail"));
@@ -1816,6 +2225,20 @@ public sealed class ProcessHigherOrderReferenceInterpreterTests
             Expr.Eq(value, Expr.Const("shard-b")),
             new ConditionalExpr(numericFailure, value, value, StringContract.Type),
             value,
+            StringContract.Type);
+    }
+
+    static Expr CapacityDomainByShard(ValueBindingId partition)
+    {
+        var value = Expr.BoundValue(partition);
+        return new ConditionalExpr(
+            Expr.Eq(value, Expr.Const("shard-a")),
+            Expr.Const("target/a"),
+            new ConditionalExpr(
+                Expr.Eq(value, Expr.Const("shard-b")),
+                Expr.Const("target/a"),
+                Expr.Const("target/b"),
+                StringContract.Type),
             StringContract.Type);
     }
 
@@ -2044,6 +2467,22 @@ public sealed class ProcessHigherOrderReferenceInterpreterTests
         string payload,
         string emission,
         ExecutionDefinitionReference? originDefinition = null,
+        ProcessContinuationIdentity? originContinuation = null) => Reply(
+            child,
+            request,
+            replyContract,
+            new RequestResultOutcome(outcome, StringValue(payload)),
+            emission,
+            originDefinition,
+            originContinuation);
+
+    static ReplyEnvelope Reply(
+        ProcessChildState child,
+        RequestEnvelope request,
+        ReplyContractReference replyContract,
+        RequestTerminalOutcome outcome,
+        string emission,
+        ExecutionDefinitionReference? originDefinition = null,
         ProcessContinuationIdentity? originContinuation = null)
     {
         var target = Assert.IsType<ProcessTokenInteractionTarget>(request.ResponseTarget);
@@ -2068,7 +2507,7 @@ public sealed class ProcessHigherOrderReferenceInterpreterTests
                 Provenance()),
             replyContract,
             request.Context.EmissionId,
-            new RequestResultOutcome(outcome, StringValue(payload)));
+            outcome);
     }
 
     static ProcessContinuationState CopyState(
@@ -2266,12 +2705,14 @@ public sealed class ProcessHigherOrderReferenceInterpreterTests
             InteractionContractCatalog catalog,
             RequestContractReference request,
             ReplyContractReference completedReply,
+            ReplyContractReference failedReply,
             ReplyContractReference unrelatedCompletedReply,
             DurableRequestBinding binding)
         {
             Catalog = catalog;
             Request = request;
             CompletedReply = completedReply;
+            FailedReply = failedReply;
             UnrelatedCompletedReply = unrelatedCompletedReply;
             Binding = binding;
         }
@@ -2281,6 +2722,8 @@ public sealed class ProcessHigherOrderReferenceInterpreterTests
         internal RequestContractReference Request { get; }
 
         internal ReplyContractReference CompletedReply { get; }
+
+        internal ReplyContractReference FailedReply { get; }
 
         internal ReplyContractReference UnrelatedCompletedReply { get; }
 
@@ -2402,6 +2845,7 @@ public sealed class ProcessHigherOrderReferenceInterpreterTests
                 Assert.IsType<InteractionContractCatalog>(catalog),
                 request,
                 completed,
+                failed,
                 unrelatedCompleted,
                 binding);
         }

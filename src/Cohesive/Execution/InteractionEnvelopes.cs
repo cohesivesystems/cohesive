@@ -485,7 +485,8 @@ public sealed record ProcessChildOutcomeMapping
 /// <remarks>
 /// This metadata lets the existing Request binding and adapter pipeline realize a child start without introducing
 /// a second operation model. The Request's <see cref="RequestEnvelope.ResponseTarget"/> remains the parent wait that
-/// consumes the eventual Reply.
+/// consumes the eventual Reply. Owner, occurrence, and partition-progress evidence let Process interpretations
+/// rederive the child continuation even after RestartAttempt removes the abandoned continuation's child ledger.
 /// </remarks>
 public sealed record ProcessChildRequestTarget
 {
@@ -493,18 +494,42 @@ public sealed record ProcessChildRequestTarget
     /// <param name="definition">Pinned child Process definition, revision, and fingerprint.</param>
     /// <param name="continuation">Interpreter-derived child Process instance and first attempt.</param>
     /// <param name="outcomeMapping">Authored total mapping from child terminal status to Request outcome.</param>
+    /// <param name="ownerToken">Parent coordination token that owns the child occurrence.</param>
+    /// <param name="occurrence">Zero-based child-bearing node occurrence in the owner token history.</param>
+    /// <param name="progressIdentity">Partition progress identity, or null for a direct child invocation.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="definition"/> or <paramref name="continuation"/> is <see langword="null"/>.
     /// </exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="ownerToken"/> or a present <paramref name="progressIdentity"/> is empty or white-space.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="occurrence"/> is negative.</exception>
     [JsonConstructor]
     public ProcessChildRequestTarget(
         ExecutionDefinitionReference definition,
         ProcessContinuationIdentity continuation,
-        ProcessChildOutcomeMapping outcomeMapping)
+        ProcessChildOutcomeMapping outcomeMapping,
+        TokenId ownerToken,
+        long occurrence,
+        string? progressIdentity = null)
     {
+        if (string.IsNullOrWhiteSpace(ownerToken.Value))
+            throw new ArgumentException("A child Request target requires its parent owner token.", nameof(ownerToken));
+        if (occurrence < 0)
+            throw new ArgumentOutOfRangeException(nameof(occurrence), occurrence, "A child occurrence cannot be negative.");
+        if (progressIdentity is not null && string.IsNullOrWhiteSpace(progressIdentity))
+        {
+            throw new ArgumentException(
+                "A present partition progress identity cannot be empty or white-space.",
+                nameof(progressIdentity));
+        }
+
         Definition = Guard.RequireNotNull(definition);
         Continuation = Guard.RequireNotNull(continuation);
         OutcomeMapping = Guard.RequireNotNull(outcomeMapping);
+        OwnerToken = ownerToken;
+        Occurrence = occurrence;
+        ProgressIdentity = progressIdentity;
     }
 
     /// <summary>Pinned child Process definition, revision, and fingerprint.</summary>
@@ -515,6 +540,15 @@ public sealed record ProcessChildRequestTarget
 
     /// <summary>Authored total mapping from child terminal status to Request outcome.</summary>
     public ProcessChildOutcomeMapping OutcomeMapping { get; }
+
+    /// <summary>Parent coordination token that owns the child occurrence.</summary>
+    public TokenId OwnerToken { get; }
+
+    /// <summary>Zero-based child-bearing node occurrence in the owner token history.</summary>
+    public long Occurrence { get; }
+
+    /// <summary>Partition progress identity, or null for a direct child invocation.</summary>
+    public string? ProgressIdentity { get; }
 }
 
 /// <summary>Common immutable identity, causality, scope, ordering, delivery, and provenance context.</summary>
@@ -733,7 +767,7 @@ public abstract record InteractionEnvelope
 {
     /// <summary>Current canonical interaction-envelope schema version.</summary>
     public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } =
-        new("cohesive-interaction-envelope/v2");
+        new("cohesive-interaction-envelope/v3");
 
     /// <summary>Creates a canonical interaction envelope.</summary>
     /// <param name="schemaVersion">Exact interaction-envelope schema version.</param>

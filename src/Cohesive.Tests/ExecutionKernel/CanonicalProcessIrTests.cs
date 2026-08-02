@@ -59,7 +59,7 @@ public sealed class CanonicalProcessIrTests
         }
         Assert.Equal(definition, restoredDefinition);
         Assert.Equal(
-            "4122dba3b69d8a0a4d83ca9ab519bfe5da1366cfb6c692b3725625ba2027aec1",
+            "e3e5f9db7e4a5f1de252aebbb87f6317eb0371a76e1a7078f193454e4e9950b7",
             document.Metadata.Fingerprint.Value);
     }
 
@@ -154,6 +154,9 @@ public sealed class CanonicalProcessIrTests
                 ChildOutcomeMapping,
                 Expr.Const("review"),
                 new(maximumItems: 10, maximumStartsPerActivation: 2, maximumParallelism: 2),
+                ProcessPartitionFailurePolicy.FailFast,
+                capacityIdentity: null,
+                capacityDomains: [],
                 ProcessChildCancellationPolicy.Propagate,
                 next,
                 next),
@@ -369,6 +372,93 @@ public sealed class CanonicalProcessIrTests
         ];
 
         Assert.Equal(fingerprints.Length, fingerprints.Distinct().Count());
+    }
+
+    [Fact]
+    public void ForEachPartition_FailureAndCapacitySemanticsNormalizeRoundTripAndBearFingerprints()
+    {
+        var baseline = PartitionDefinition(
+            ProcessPartitionFailurePolicy.AwaitAll,
+            [
+                new("target/b", maximumParallelism: 2),
+                new("target/a", maximumParallelism: 1)
+            ]);
+        var reordered = PartitionDefinition(
+            ProcessPartitionFailurePolicy.AwaitAll,
+            [
+                new("target/a", maximumParallelism: 1),
+                new("target/b", maximumParallelism: 2)
+            ]);
+        var changedFailure = PartitionDefinition(
+            ProcessPartitionFailurePolicy.FailFast,
+            [
+                new("target/a", maximumParallelism: 1),
+                new("target/b", maximumParallelism: 2)
+            ]);
+        var changedCapacity = PartitionDefinition(
+            ProcessPartitionFailurePolicy.AwaitAll,
+            [
+                new("target/a", maximumParallelism: 2),
+                new("target/b", maximumParallelism: 2)
+            ]);
+
+        Assert.Equal(baseline, reordered);
+        Assert.Equal(Fingerprint(baseline), Fingerprint(reordered));
+        Assert.NotEqual(Fingerprint(baseline), Fingerprint(changedFailure));
+        Assert.NotEqual(Fingerprint(baseline), Fingerprint(changedCapacity));
+        var baselineNode = Assert.Single(baseline.Nodes.OfType<ForEachPartitionProcessNode>());
+        Assert.Equal(ProcessPartitionFailurePolicy.AwaitAll, baselineNode.Failure);
+        Assert.Equal(["target/a", "target/b"], baselineNode.CapacityDomains.Select(static domain => domain.Identity));
+
+        var options = ExecutionDefinitionJsonSerializer.CreateOptions();
+        var json = JsonSerializer.Serialize<CanonicalProcessNode>(baselineNode, options);
+        var restoredNode = Assert.IsType<ForEachPartitionProcessNode>(
+            JsonSerializer.Deserialize<CanonicalProcessNode>(json, options));
+
+        Assert.Equal(baselineNode, restoredNode);
+        Assert.Equal(json, JsonSerializer.Serialize<CanonicalProcessNode>(restoredNode, options));
+        Assert.Equal(ProcessPartitionFailurePolicy.AwaitAll, restoredNode.Failure);
+        Assert.NotNull(restoredNode.CapacityIdentity);
+        Assert.Equal(
+            [("target/a", 1), ("target/b", 2)],
+            restoredNode.CapacityDomains.Select(static domain =>
+                (domain.Identity, domain.MaximumParallelism)));
+
+        static CanonicalProcessDefinition PartitionDefinition(
+            ProcessPartitionFailurePolicy failure,
+            ImmutableArray<ProcessCapacityDomainLimit> capacityDomains)
+        {
+            var input = new ValueContract(
+                new ScalarTypeRef(ScalarTypeKind.String),
+                cardinality: FieldCardinality.Many);
+            ProcessOutputBinding partition = new(new("partition"), StringContract);
+            ForEachPartitionProcessNode node = new(
+                new("partitions"),
+                Expr.BoundValue(ProcessBindingIds.Input),
+                partition,
+                Expr.BoundValue(partition.Binding),
+                DefinitionReference("process/partition-child"),
+                new(DefinitionReference("request/partition-child")),
+                ChildOutcomeMapping,
+                Expr.BoundValue(partition.Binding),
+                new(maximumItems: 10, maximumStartsPerActivation: 2, maximumParallelism: 2),
+                failure,
+                Expr.Const("target/a"),
+                capacityDomains,
+                ProcessChildCancellationPolicy.Propagate,
+                Edge("edge/partitions-completed", "return"),
+                Edge("edge/partitions-failed", "fail"));
+            return new(
+                input,
+                StringContract,
+                node.Id,
+                [
+                    node,
+                    new ReturnProcessNode(new("return"), Expr.Const("done")),
+                    new FailProcessNode(new("fail"), Expr.Const("failed"))
+                ],
+                ProcessRecoveryPolicy.ContinueAttempt);
+        }
     }
 
     [Fact]

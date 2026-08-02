@@ -1,12 +1,9 @@
 using System.Collections.Immutable;
 using Cohesive.Execution;
-using Cohesive.Model;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Execution;
-using Cohesive.Processes.Compilation;
 using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Compilation;
-using Cohesive.Relations.Execution;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Physical;
 using Cohesive.Relations.TestFixtures;
@@ -15,7 +12,7 @@ using Cohesive.Storage.Processes;
 
 namespace Cohesive.Tests.Storage;
 
-public sealed class MaterializationRebuildProcessConformanceTests
+public sealed partial class MaterializationRebuildProcessConformanceTests
 {
     const long ReadBytes = 1_000_000;
     const long WriteBytes = 1_000_000;
@@ -29,7 +26,7 @@ public sealed class MaterializationRebuildProcessConformanceTests
         new("authority/materialization-rebuild-conformance", "tenant/cohesive");
 
     [Fact]
-    public async Task CanonicalCoordinator_DrivesRealBaselineCatchUpAndPromotionToAnActiveGeneration()
+    public async Task CanonicalLeafCoordinator_DrivesBaselineCatchUpToReadyThenActivationConsumesExactEvidence()
     {
         var artifacts = MaterializationRebuildProcessFactory.Create();
         ProcessContinuationIdentity coordinatorContinuation = new(
@@ -50,8 +47,8 @@ public sealed class MaterializationRebuildProcessConformanceTests
         var shardAdapter = new MaterializationRebuildShardDurableOperationAdapter(
             request: artifacts.ShardRebuildRequest,
             resolver: executionResolver);
-        var activationAdapter = new MaterializationSynchronizationActivationDurableOperationAdapter(
-            request: artifacts.SynchronizationActivationRequest,
+        var preparationAdapter = new MaterializationSynchronizationPreparationDurableOperationAdapter(
+            request: artifacts.SynchronizationPreparationRequest,
             resolver: executionResolver);
         var workerRuntime = new ProcessDurableRuntime(
             store: new InMemoryProcessDurableStore(),
@@ -75,10 +72,10 @@ public sealed class MaterializationRebuildProcessConformanceTests
                 [
                     artifacts.InitializationBinding,
                     artifacts.WorkerInvocationBinding,
-                    artifacts.SynchronizationActivationBinding
+                    artifacts.SynchronizationPreparationBinding
                 ]),
             operationAdapterResolver: new ExactAdapterResolver(
-                [initializationAdapter, childAdapter, activationAdapter]));
+                [initializationAdapter, childAdapter, preparationAdapter]));
         var context = OperationContext.Create(timeProvider: new FixedTimeProvider(StartedAtUtc));
         var start = Start(artifacts, coordinatorContinuation, materialization.Resolved.Authority);
 
@@ -180,7 +177,7 @@ public sealed class MaterializationRebuildProcessConformanceTests
             Assert.Equal(MaterializationCheckpointKind.ChangeProgress, progress.LatestChangeCheckpoint?.Kind);
         });
 
-        var activationRequested = await coordinatorRuntime.ActivateAsync(
+        var preparationRequested = await coordinatorRuntime.ActivateAsync(
             context,
             artifacts.CoordinatorPlan,
             coordinatorContinuation,
@@ -188,22 +185,22 @@ public sealed class MaterializationRebuildProcessConformanceTests
                 artifacts,
                 Assert.IsType<ProcessDurableStoreSnapshot>(finalAdvanced.Snapshot).Checkpoint,
                 id: "activation/coordinator/request-synchronization"));
-        var activationRequestedCheckpoint = Assert.IsType<ProcessDurableStoreSnapshot>(
-            activationRequested.Snapshot).Checkpoint;
-        var activationOperation = Assert.Single(
-            activationRequestedCheckpoint.DurableOperations,
-            operation => operation.Request.Contract == artifacts.SynchronizationActivationRequest
+        var preparationRequestedCheckpoint = Assert.IsType<ProcessDurableStoreSnapshot>(
+            preparationRequested.Snapshot).Checkpoint;
+        var preparationOperation = Assert.Single(
+            preparationRequestedCheckpoint.DurableOperations,
+            operation => operation.Request.Contract == artifacts.SynchronizationPreparationRequest
                 && operation.Status != DurableOperationStatus.Dispositioned);
 
-        var activationAdvanced = await coordinatorRuntime.AdvanceOperationAsync(
+        var preparationAdvanced = await coordinatorRuntime.AdvanceOperationAsync(
             context,
             artifacts.CoordinatorPlan,
             coordinatorContinuation.ProcessInstanceId,
-            activationOperation.OperationId);
-        Assert.Equal(DurableOperationStatus.Dispositioned, activationAdvanced.Operation?.Status);
+            preparationOperation.OperationId);
+        Assert.Equal(DurableOperationStatus.Dispositioned, preparationAdvanced.Operation?.Status);
         Assert.Equal(
-            MaterializationRebuildProcessFactory.ActiveOutcome,
-            activationAdvanced.Operation?.Acknowledgement?.Outcome.Id);
+            MaterializationRebuildProcessFactory.ReadyOutcome,
+            preparationAdvanced.Operation?.Acknowledgement?.Outcome.Id);
 
         var completed = await coordinatorRuntime.ActivateAsync(
             context,
@@ -211,21 +208,30 @@ public sealed class MaterializationRebuildProcessConformanceTests
             coordinatorContinuation,
             NextActivation(
                 artifacts,
-                Assert.IsType<ProcessDurableStoreSnapshot>(activationAdvanced.Snapshot).Checkpoint,
+                Assert.IsType<ProcessDurableStoreSnapshot>(preparationAdvanced.Snapshot).Checkpoint,
                 id: "activation/coordinator/complete"));
         var completedCheckpoint = Assert.IsType<ProcessDurableStoreSnapshot>(completed.Snapshot).Checkpoint;
 
         Assert.Equal(ExecutionTerminalOutcomeKind.Completed, completedCheckpoint.Continuation.Terminal.Kind);
-        var activeGenerationReference = MaterializationActiveGenerationReferenceJsonSerializer.Deserialize(
+        var readyGenerationReference = MaterializationReadyGenerationReferenceJsonSerializer.Deserialize(
             Assert.IsType<ObservationValue>(
                     Assert.IsType<PortableValue>(completedCheckpoint.Continuation.Terminal.Detail?.Value).Value)
                 .GetRequiredString());
-        Assert.Equal(materialization.Plan.Fingerprint, activeGenerationReference.Plan);
-        Assert.Equal(execution.Generation, activeGenerationReference.Generation);
-        Assert.Equal(materialization.Plan.Target.Id, activeGenerationReference.Target);
+        Assert.Equal(materialization.Plan.Fingerprint, readyGenerationReference.Plan);
+        Assert.Equal(execution.Authority, readyGenerationReference.Authority);
+        Assert.Equal(attempt, readyGenerationReference.Attempt);
+        Assert.Equal(execution.Generation, readyGenerationReference.Generation);
+        Assert.True(readyGenerationReference.Preparation.IsReady);
         Assert.Equal(3, truthfulOrigins.Count);
         Assert.Equal(3, truthfulOrigins.Select(static origin => origin.Continuation).Distinct().Count());
 
+        var readyGeneration = await materialization.Target.InspectGenerationAsync(context, execution.Generation);
+        var readyTarget = await materialization.Target.InspectAsync(context);
+        Assert.Equal(MaterializationGenerationState.Validated, readyGeneration?.State);
+        Assert.Null(readyTarget.ActiveGenerationId);
+
+        var activation = await execution.ActivateReadyAsync(context, readyGenerationReference);
+        Assert.Equal(MaterializationGenerationActivationDisposition.Active, activation.Disposition);
         var generation = await materialization.Target.InspectGenerationAsync(context, execution.Generation);
         var target = await materialization.Target.InspectAsync(context);
         var items = await materialization.Target.InspectItemsAsync(
@@ -496,7 +502,9 @@ public sealed class MaterializationRebuildProcessConformanceTests
             {
                 var matchingShard = plan.Shards.SingleOrDefault(shard => shard.Scope == feed.Scope);
                 if (matchingShard is not null)
+                {
                     return sourceByShard[matchingShard.Id];
+                }
 
                 var sourcePlan = plan.Sources.Single(source => source.Input == feed.Scope.Input);
                 var reader = physicalScenario.Readers.Single(candidate =>

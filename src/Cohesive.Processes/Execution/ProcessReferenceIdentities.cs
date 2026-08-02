@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using Cohesive.Execution;
+using Cohesive.Processes.IR;
 
 namespace Cohesive.Processes.Execution;
 
@@ -13,7 +14,7 @@ namespace Cohesive.Processes.Execution;
 /// the field order, encoding, or meaning requires a new convention version so persisted continuation identities
 /// never silently change interpretation.
 /// </remarks>
-internal static class ProcessReferenceIdentities
+public static class ProcessReferenceIdentities
 {
     internal const string Version = "cohesive.processes.reference-identities/v1";
 
@@ -185,6 +186,99 @@ internal static class ProcessReferenceIdentities
         return new(
             new(Derive(ChildInstancePrefix, ChildInstancePurpose, fields)),
             new(Derive(ChildAttemptPrefix, ChildAttemptPurpose, fields)));
+    }
+
+    /// <summary>
+    /// Attempts to verify a child Request's unique reference-interpreter identity evidence and derive its child
+    /// registration.
+    /// </summary>
+    /// <param name="parent">Exact parent Process definition that authored the Request.</param>
+    /// <param name="node">Canonical direct or partitioned child-bearing Process node.</param>
+    /// <param name="request">Canonical child Request envelope to verify.</param>
+    /// <param name="registration">
+    /// Receives the replay-stable child registration when every identity rederives; otherwise null.
+    /// </param>
+    /// <returns>
+    /// <see langword="true"/> when the parent, child definition, outcome mapping, continuation, emission,
+    /// idempotency key, response wait, owner occurrence, and optional partition progress all rederive exactly.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="parent"/>, <paramref name="node"/>, or <paramref name="request"/> is
+    /// <see langword="null"/>.
+    /// </exception>
+    public static bool TryGetCanonicalChildRegistration(
+        ExecutionDefinitionReference parent,
+        ProcessNode node,
+        RequestEnvelope request,
+        out string? registration)
+    {
+        ArgumentNullException.ThrowIfNull(parent);
+        ArgumentNullException.ThrowIfNull(node);
+        ArgumentNullException.ThrowIfNull(request);
+        registration = null;
+        if (!ProcessRequestSemantics.TryProjectChild(node, out var child)
+            || request.Contract != child.Contract
+            || request.ChildTarget is not { } target
+            || request.Context.Origin is not ProcessInteractionOrigin origin
+            || origin.Definition != parent
+            || origin.Node != node.Id
+            || origin.Entity is not null
+            || origin.Transition is not null
+            || origin.Outcome is not null
+            || request.ResponseTarget is not ProcessTokenInteractionTarget responseTarget)
+        {
+            return false;
+        }
+
+        var partitioned = child.Multiplicity == ProcessChildRequestMultiplicity.Partitioned;
+        if (partitioned != (target.ProgressIdentity is not null))
+            return false;
+
+        var requestToken = partitioned
+            ? PartitionToken(
+                origin.Continuation,
+                target.OwnerToken,
+                node.Id,
+                target.Occurrence,
+                target.ProgressIdentity!)
+            : target.OwnerToken;
+        var tokenStep = partitioned ? 0 : target.Occurrence;
+        var emission = Emission(
+            origin.Continuation,
+            origin.Activation,
+            requestToken,
+            node.Id,
+            tokenStep);
+        var continuation = ChildContinuation(
+            origin.Continuation,
+            target.OwnerToken,
+            node.Id,
+            target.Occurrence,
+            target.ProgressIdentity,
+            child.Process);
+        var valid = origin.Token == requestToken
+            && target.Definition == child.Process
+            && target.OutcomeMapping == child.OutcomeMapping
+            && target.Continuation == continuation
+            && request.Context.EmissionId == emission
+            && request.Context.IdempotencyKey == Idempotency(emission)
+            && responseTarget.Continuation == origin.Continuation
+            && responseTarget.Token == requestToken
+            && responseTarget.WaitRegistrationId == WaitRegistration(
+                origin.Continuation,
+                requestToken,
+                node.Id,
+                tokenStep);
+        if (valid)
+        {
+            registration = ChildRegistration(
+                origin.Continuation,
+                target.OwnerToken,
+                node.Id,
+                target.Occurrence,
+                target.ProgressIdentity);
+        }
+        return valid;
     }
 
     /// <summary>Derives one replay-stable child cancellation-intent identity.</summary>

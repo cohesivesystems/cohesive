@@ -982,6 +982,7 @@ public sealed class ProcessDurableRuntimeOperationTests
         Assert.True(
             restarted.Disposition == ProcessDurableRuntimeDisposition.Applied,
             FormatDiagnostics(restarted.Diagnostics));
+        var restartedSnapshot = Assert.IsType<ProcessDurableStoreSnapshot>(restarted.Snapshot);
 
         var result = await runtime.AdvanceOperationAsync(
             Context(restartAt.AddSeconds(1)),
@@ -991,7 +992,55 @@ public sealed class ProcessDurableRuntimeOperationTests
 
         Assert.Equal(ProcessDurableRuntimeDisposition.Terminal, result.Disposition);
         Assert.Equal(operation.Status, result.Operation?.Status);
+        Assert.Equal(restartedSnapshot.Revision, result.Snapshot?.Revision);
         Assert.Empty(adapter.Invocations);
+    }
+
+    [Fact]
+    public async Task Ek06_ClosedOriginAttemptCannotReconcileAmbiguousPhysicalWork()
+    {
+        var fixture = ProcessDurabilityTestFixture.Create(
+            definitionId: "process/durable-runtime-operation/closed-origin-reconciliation",
+            semanticVariant: "closed-origin-reconciliation",
+            recoveryPolicy: ProcessRecoveryPolicy.RestartAttempt,
+            durableOperationRetry: RequestRetrySemantics.ReconcileBeforeRetry);
+        var operation = CreateReconciliationRequiredOperation(fixture);
+        var checkpoint = ProcessDurabilityTestFixture.CopyCheckpoint(
+            fixture.Checkpoint,
+            durableOperations: [operation]);
+        var store = await InitializeStoreAsync(checkpoint, "closed-origin-reconciliation");
+        var adapter = new ReconciliationProbeAdapter(fixture.Request.Contract);
+        var runtime = Runtime(store, adapter);
+        var commands = ProcessControlTestFixture.Create();
+        var restartAt = ProcessDurabilityTestFixture.CheckpointedAtUtc.AddSeconds(1);
+        var restarted = await runtime.ApplyControlAsync(
+            Context(restartAt),
+            fixture.Plan,
+            commands.Restart(
+                checkpoint.Control,
+                newAttemptId: "process-attempt/closed-origin-reconciliation",
+                id: "restart/closed-origin-reconciliation",
+                issuedAtUtc: restartAt));
+        Assert.True(
+            restarted.Disposition == ProcessDurableRuntimeDisposition.Applied,
+            FormatDiagnostics(restarted.Diagnostics));
+        var restartedSnapshot = Assert.IsType<ProcessDurableStoreSnapshot>(restarted.Snapshot);
+
+        var result = await runtime.AdvanceOperationAsync(
+            Context(restartAt.AddSeconds(1)),
+            fixture.Plan,
+            checkpoint.ContinuationIdentity.ProcessInstanceId,
+            fixture.Request.Context.EmissionId);
+
+        Assert.Equal(ProcessDurableRuntimeDisposition.Terminal, result.Disposition);
+        Assert.Equal(DurableOperationStatus.ReconciliationRequired, result.Operation?.Status);
+        Assert.Equal(restartedSnapshot.Revision, result.Snapshot?.Revision);
+        Assert.Equal(0, adapter.ExecutionCalls);
+        Assert.Equal(0, adapter.ReconciliationCalls);
+        Assert.Contains(
+            result.Diagnostics,
+            static diagnostic =>
+                diagnostic.Code == ProcessDurableRuntimeDiagnosticCodes.OperationRecoveryRequired);
     }
 
     [Theory]
@@ -1091,7 +1140,7 @@ public sealed class ProcessDurableRuntimeOperationTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Ek06_ClosedOriginRetainedClaimMayFinishUnderItsExactOperationFence(bool dispatched)
+    public async Task Ek06_ClosedOriginRetainedClaimCannotStartOrResumePhysicalWork(bool dispatched)
     {
         var stage = dispatched ? "dispatched" : "claimed";
         var fixture = ProcessDurabilityTestFixture.Create(
@@ -1118,7 +1167,7 @@ public sealed class ProcessDurableRuntimeOperationTests
             durableOperations: [retained]);
         var store = await InitializeStoreAsync(checkpoint, $"retained-{stage}-origin-restart");
         var adapter = new DurableOperationFakeAdapter(fixture.Request.Contract)
-            .Script(fixture.Request.Context.EmissionId, Success($"retained-{stage}"));
+            .Script(fixture.Request.Context.EmissionId, Success("must-not-run"));
         var runtime = Runtime(store, adapter);
         var commands = ProcessControlTestFixture.Create();
         var restartAt = claimedAtUtc.AddSeconds(1);
@@ -1133,6 +1182,7 @@ public sealed class ProcessDurableRuntimeOperationTests
         Assert.True(
             restarted.Disposition == ProcessDurableRuntimeDisposition.Applied,
             FormatDiagnostics(restarted.Diagnostics));
+        var restartedSnapshot = Assert.IsType<ProcessDurableStoreSnapshot>(restarted.Snapshot);
 
         var result = await runtime.AdvanceOperationAsync(
             Context(restartAt.AddSeconds(1)),
@@ -1140,13 +1190,137 @@ public sealed class ProcessDurableRuntimeOperationTests
             checkpoint.ContinuationIdentity.ProcessInstanceId,
             fixture.Request.Context.EmissionId);
 
-        Assert.Equal(DurableOperationStatus.Dispositioned, result.Operation?.Status);
-        var invocation = Assert.Single(adapter.Invocations);
-        Assert.Equal(claim.AttemptId, invocation.AttemptId);
-        Assert.Equal(claim.Fence, invocation.Fence);
+        Assert.Equal(ProcessDurableRuntimeDisposition.Terminal, result.Disposition);
+        Assert.Equal(retained.Status, result.Operation?.Status);
+        Assert.Equal(restartedSnapshot.Revision, result.Snapshot?.Revision);
+        Assert.Empty(adapter.Invocations);
         var finalAttempt = Assert.Single(Assert.IsType<DurableOperationState>(result.Operation).Attempts);
         Assert.Equal(claim.AttemptId, finalAttempt.Claim.AttemptId);
         Assert.Equal(claim.Fence, finalAttempt.Claim.Fence);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Ek06_ExpiredClosedOriginClaimIsNormalizedWithoutPhysicalWork(bool dispatched)
+    {
+        var stage = dispatched ? "dispatched" : "claimed";
+        var fixture = ProcessDurabilityTestFixture.Create(
+            definitionId: $"process/durable-runtime-operation/expired-retained-{stage}-origin-restart",
+            semanticVariant: $"expired-retained-{stage}-origin-restart",
+            recoveryPolicy: ProcessRecoveryPolicy.RestartAttempt,
+            durableOperationRetry: dispatched
+                ? RequestRetrySemantics.ReconcileBeforeRetry
+                : RequestRetrySemantics.StableIdentity);
+        var executor = Executor(fixture);
+        var claimedAtUtc = ProcessDurabilityTestFixture.CheckpointedAtUtc;
+        var claimed = executor.Claim(
+            fixture.DurableOperation,
+            new($"operation-attempt/expired-retained-{stage}"),
+            "worker/runtime-operation-tests",
+            claimedAtUtc);
+        var claim = Assert.IsType<DurableOperationClaim>(claimed.Claim);
+        var retained = dispatched
+            ? executor.BeginDispatch(
+                claimed.State,
+                claim.AttemptId,
+                claim.Fence,
+                claimedAtUtc).State
+            : claimed.State;
+        var checkpoint = ProcessDurabilityTestFixture.CopyCheckpoint(
+            fixture.Checkpoint,
+            durableOperations: [retained]);
+        var store = await InitializeStoreAsync(checkpoint, $"expired-retained-{stage}-origin-restart");
+        var adapter = new DurableOperationFakeAdapter(fixture.Request.Contract)
+            .Script(fixture.Request.Context.EmissionId, Success("must-not-run"));
+        var runtime = Runtime(store, adapter);
+        var commands = ProcessControlTestFixture.Create();
+        var restartAt = claimedAtUtc.AddSeconds(1);
+        var restarted = await runtime.ApplyControlAsync(
+            Context(restartAt),
+            fixture.Plan,
+            commands.Restart(
+                checkpoint.Control,
+                newAttemptId: $"process-attempt/after-expired-retained-{stage}",
+                id: $"restart/after-expired-retained-{stage}",
+                issuedAtUtc: restartAt));
+        Assert.True(
+            restarted.Disposition == ProcessDurableRuntimeDisposition.Applied,
+            FormatDiagnostics(restarted.Diagnostics));
+        var restartedSnapshot = Assert.IsType<ProcessDurableStoreSnapshot>(restarted.Snapshot);
+
+        var result = await runtime.AdvanceOperationAsync(
+            Context(claim.ExpiresAtUtc.AddTicks(1)),
+            fixture.Plan,
+            checkpoint.ContinuationIdentity.ProcessInstanceId,
+            fixture.Request.Context.EmissionId);
+
+        Assert.Equal(ProcessDurableRuntimeDisposition.Terminal, result.Disposition);
+        var finalSnapshot = Assert.IsType<ProcessDurableStoreSnapshot>(result.Snapshot);
+        Assert.True(finalSnapshot.Revision.Ordinal > restartedSnapshot.Revision.Ordinal);
+        Assert.Empty(adapter.Invocations);
+        var operation = Assert.IsType<DurableOperationState>(result.Operation);
+        Assert.Equal(
+            dispatched
+                ? DurableOperationStatus.ReconciliationRequired
+                : DurableOperationStatus.RetryEligible,
+            operation.Status);
+        var finalAttempt = Assert.Single(operation.Attempts);
+        Assert.Equal(DurableOperationAttemptStage.Failed, finalAttempt.Stage);
+        Assert.Equal(claim.AttemptId, finalAttempt.Claim.AttemptId);
+        Assert.Equal(claim.Fence, finalAttempt.Claim.Fence);
+        Assert.Equal(
+            dispatched
+                ? DurableOperationFailurePhase.InCall
+                : DurableOperationFailurePhase.PreCall,
+            finalAttempt.Failure?.Phase);
+        Assert.Equal(
+            dispatched
+                ? DurableOperationEffectEvidence.Ambiguous
+                : DurableOperationEffectEvidence.NotExecuted,
+            finalAttempt.Failure?.EffectEvidence);
+    }
+
+    [Fact]
+    public async Task Ek06_RestartBetweenInitialLoadAndWorkerAcquisitionPreventsPhysicalWork()
+    {
+        var fixture = ProcessDurabilityTestFixture.Create(
+            definitionId: "process/durable-runtime-operation/inter-load-origin-restart",
+            semanticVariant: "inter-load-origin-restart",
+            recoveryPolicy: ProcessRecoveryPolicy.RestartAttempt);
+        var inner = await InitializeStoreAsync(fixture, "inter-load-origin-restart");
+        var adapter = new DurableOperationFakeAdapter(fixture.Request.Contract)
+            .Script(fixture.Request.Context.EmissionId, Success("must-not-run"));
+        var restartRuntime = Runtime(inner, adapter);
+        var restartAt = ProcessDurabilityTestFixture.CheckpointedAtUtc.AddSeconds(1);
+        ProcessDurableControlResult? restart = null;
+        var interleaved = new BeforeSecondLoadStore(inner, async () =>
+        {
+            restart = await restartRuntime.ApplyControlAsync(
+                Context(restartAt),
+                fixture.Plan,
+                ProcessControlTestFixture.Create().Restart(
+                    fixture.Checkpoint.Control,
+                    newAttemptId: "process-attempt/after-inter-load-restart",
+                    id: "restart/between-operation-loads",
+                    issuedAtUtc: restartAt));
+            Assert.Equal(ProcessDurableRuntimeDisposition.Applied, restart.Disposition);
+        });
+        var advancingRuntime = Runtime(interleaved, adapter);
+
+        var result = await advancingRuntime.AdvanceOperationAsync(
+            Context(restartAt.Add(WorkerLease).AddSeconds(1)),
+            fixture.Plan,
+            fixture.Checkpoint.ContinuationIdentity.ProcessInstanceId,
+            fixture.Request.Context.EmissionId);
+
+        Assert.NotNull(restart);
+        Assert.Equal(ProcessDurableRuntimeDisposition.Terminal, result.Disposition);
+        Assert.Equal(DurableOperationStatus.Pending, result.Operation?.Status);
+        Assert.Equal(
+            "process-attempt/after-inter-load-restart",
+            result.Snapshot?.Checkpoint.ContinuationIdentity.ProcessAttemptId.Value);
+        Assert.Empty(adapter.Invocations);
     }
 
     [Fact]
@@ -1498,6 +1672,72 @@ public sealed class ProcessDurableRuntimeOperationTests
 
         internal void SetUtcNow(DateTimeOffset utcNow) =>
             Interlocked.Exchange(ref utcTicks, utcNow.UtcTicks);
+    }
+
+    sealed class BeforeSecondLoadStore(
+        IProcessDurableStore inner,
+        Func<Task> beforeSecondLoad) : IProcessDurableStore
+    {
+        int loadCount;
+
+        public ProcessDurableStoreCapabilities Capabilities => inner.Capabilities;
+
+        public async Task<ProcessDurableStoreSnapshot?> LoadAsync(
+            OperationContext context,
+            ProcessInstanceId instanceId)
+        {
+            if (Interlocked.Increment(ref loadCount) == 2)
+                await beforeSecondLoad();
+            return await inner.LoadAsync(context, instanceId);
+        }
+
+        public Task<ProcessStoreMutationResult> InitializeAsync(
+            OperationContext context,
+            ProcessCommitId commitId,
+            ProcessDurableCheckpoint checkpoint) =>
+            inner.InitializeAsync(context, commitId, checkpoint);
+
+        public Task<ProcessStoreMutationResult> AdmitInputAsync(
+            OperationContext context,
+            ProcessInstanceId instanceId,
+            ProcessActivationInput input,
+            DateTimeOffset admittedAtUtc) =>
+            inner.AdmitInputAsync(context, instanceId, input, admittedAtUtc);
+
+        public Task<ProcessStoreMutationResult> AcquireWorkerAsync(
+            OperationContext context,
+            ProcessInstanceId instanceId,
+            ProcessStorageRevision expectedRevision,
+            string owner,
+            TimeSpan leaseDuration,
+            DateTimeOffset observedAtUtc) =>
+            inner.AcquireWorkerAsync(
+                context,
+                instanceId,
+                expectedRevision,
+                owner,
+                leaseDuration,
+                observedAtUtc);
+
+        public Task<ProcessStoreMutationResult> RenewWorkerAsync(
+            OperationContext context,
+            ProcessInstanceId instanceId,
+            string owner,
+            ProcessWorkerFence fence,
+            TimeSpan leaseDuration,
+            DateTimeOffset observedAtUtc) =>
+            inner.RenewWorkerAsync(
+                context,
+                instanceId,
+                owner,
+                fence,
+                leaseDuration,
+                observedAtUtc);
+
+        public Task<ProcessStoreMutationResult> CommitAsync(
+            OperationContext context,
+            ProcessDurableCommit commit) =>
+            inner.CommitAsync(context, commit);
     }
 
     sealed class SingleAdapterResolver(IDurableOperationAdapter adapter)

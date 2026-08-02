@@ -29,8 +29,8 @@ public sealed class MaterializationRebuildProcessArtifactsTests
         Assert.Equal(artifacts.WorkerInvocationRequest, artifacts.WorkerInvocationBinding.Request);
         Assert.Equal(artifacts.ShardRebuildRequest, artifacts.ShardRebuildBinding.Request);
         Assert.Equal(
-            artifacts.SynchronizationActivationRequest,
-            artifacts.SynchronizationActivationBinding.Request);
+            artifacts.SynchronizationPreparationRequest,
+            artifacts.SynchronizationPreparationBinding.Request);
         AssertReconciliation(
             artifacts,
             artifacts.InitializationRequest,
@@ -51,10 +51,10 @@ public sealed class MaterializationRebuildProcessArtifactsTests
             MaterializationRebuildProcessFactory.WorkerRequestNodeId);
         AssertReconciliation(
             artifacts,
-            artifacts.SynchronizationActivationRequest,
-            artifacts.SynchronizationActivationBinding,
+            artifacts.SynchronizationPreparationRequest,
+            artifacts.SynchronizationPreparationBinding,
             artifacts.CoordinatorPlan.DefinitionReference,
-            MaterializationRebuildProcessFactory.CoordinatorSynchronizationActivationNodeId);
+            MaterializationRebuildProcessFactory.CoordinatorSynchronizationPreparationNodeId);
 
         var workerRequest = Assert.IsType<RequestProcessNode>(
             artifacts.WorkerPlan.GetNode(MaterializationRebuildProcessFactory.WorkerRequestNodeId));
@@ -96,13 +96,13 @@ public sealed class MaterializationRebuildProcessArtifactsTests
         Assert.Equal(MaterializationRebuildProcessFactory.MaximumParallelism, partitions.Limits.MaximumParallelism);
         Assert.Equal(ProcessChildCancellationPolicy.Propagate, partitions.Cancellation);
         Assert.Equal(
-            MaterializationRebuildProcessFactory.CoordinatorSynchronizationActivationNodeId,
+            MaterializationRebuildProcessFactory.CoordinatorSynchronizationPreparationNodeId,
             partitions.Completed.Target);
 
         var synchronization = Assert.IsType<RequestProcessNode>(
             artifacts.CoordinatorPlan.GetNode(
-                MaterializationRebuildProcessFactory.CoordinatorSynchronizationActivationNodeId));
-        Assert.Equal(artifacts.SynchronizationActivationRequest, synchronization.Contract);
+                MaterializationRebuildProcessFactory.CoordinatorSynchronizationPreparationNodeId));
+        Assert.Equal(artifacts.SynchronizationPreparationRequest, synchronization.Contract);
         Assert.Equal(
             MaterializationRebuildProcessFactory.CoordinatorSynchronizationRecurrenceNodeId,
             synchronization.Outcomes.Single(static branch =>
@@ -110,7 +110,7 @@ public sealed class MaterializationRebuildProcessArtifactsTests
         Assert.Equal(
             MaterializationRebuildProcessFactory.CoordinatorReturnNodeId,
             synchronization.Outcomes.Single(static branch =>
-                branch.Outcome == MaterializationRebuildProcessFactory.ActiveOutcome).Continuation.Edge.Target);
+                branch.Outcome == MaterializationRebuildProcessFactory.ReadyOutcome).Continuation.Edge.Target);
 
         var recurrence = Assert.IsType<RepeatAcrossActivationProcessNode>(
             artifacts.CoordinatorPlan.GetNode(
@@ -123,7 +123,7 @@ public sealed class MaterializationRebuildProcessArtifactsTests
             MaterializationRebuildProcessFactory.MaximumUnchangedSynchronizationOccurrences,
             recurrence.Policy.MaximumUnchangedProgressOccurrences);
         Assert.Equal(
-            MaterializationRebuildProcessFactory.CoordinatorSynchronizationActivationNodeId,
+            MaterializationRebuildProcessFactory.CoordinatorSynchronizationPreparationNodeId,
             recurrence.Repeat.Target);
         Assert.Equal(MaterializationRebuildProcessFactory.CoordinatorFailNodeId, recurrence.Exhausted.Target);
         Assert.Equal(MaterializationRebuildProcessFactory.CoordinatorFailNodeId, recurrence.Stalled.Target);
@@ -131,8 +131,30 @@ public sealed class MaterializationRebuildProcessArtifactsTests
         var coordinatorReturn = Assert.IsType<ReturnProcessNode>(
             artifacts.CoordinatorPlan.GetNode(MaterializationRebuildProcessFactory.CoordinatorReturnNodeId));
         Assert.Equal(
-            Expr.BoundValue(new("coordinator.active-generation")),
+            Expr.BoundValue(new("coordinator.ready-generation")),
             coordinatorReturn.Result);
+    }
+
+    [Fact]
+    public void CreateChild_UsesContinueAttemptWhileStandaloneCoordinatorRestarts()
+    {
+        var standalone = MaterializationRebuildProcessFactory.Create();
+        var child = MaterializationRebuildProcessFactory.CreateChild();
+
+        Assert.Equal(ProcessRecoveryPolicy.RestartAttempt, standalone.CoordinatorPlan.Definition.RecoveryPolicy);
+        Assert.Equal(ProcessRecoveryPolicy.ContinueAttempt, child.CoordinatorPlan.Definition.RecoveryPolicy);
+        Assert.Equal(
+            MaterializationRebuildProcessFactory.CoordinatorDefinitionId,
+            standalone.CoordinatorPlan.DefinitionReference.DefinitionId);
+        Assert.Equal(
+            MaterializationRebuildProcessFactory.ChildCoordinatorDefinitionId,
+            child.CoordinatorPlan.DefinitionReference.DefinitionId);
+        Assert.Equal(
+            standalone.CoordinatorPlan.Document.Metadata.Fingerprint,
+            MaterializationRebuildProcessFactory.Create().CoordinatorPlan.Document.Metadata.Fingerprint);
+        Assert.Equal(
+            child.CoordinatorPlan.Document.Metadata.Fingerprint,
+            MaterializationRebuildProcessFactory.CreateChild().CoordinatorPlan.Document.Metadata.Fingerprint);
     }
 
     static void AssertReconciliation(
@@ -266,7 +288,7 @@ public sealed class MaterializationRebuildProcessArtifactsTests
     }
 
     [Fact]
-    public void Coordinator_WorkRemainingCrossesActivationBoundaryThenActiveReferenceCompletes()
+    public void Coordinator_WorkRemainingCrossesActivationBoundaryThenReadyReferenceCompletes()
     {
         var artifacts = MaterializationRebuildProcessFactory.Create();
         var start = Start(
@@ -302,13 +324,13 @@ public sealed class MaterializationRebuildProcessArtifactsTests
                 ObservationValue.FromString(MaterializationRebuildProcessFactory.BaselineCompleteCatchUpRequired)),
             activationId: "activation/materialization-rebuild/child-completed");
         var synchronizationRequest = Assert.IsType<RequestEnvelope>(Assert.Single(synchronizationRequested.Emissions));
-        Assert.Equal(artifacts.SynchronizationActivationRequest, synchronizationRequest.Contract);
+        Assert.Equal(artifacts.SynchronizationPreparationRequest, synchronizationRequest.Contract);
 
         var workRemaining = Reply(
             artifacts,
             synchronizationRequested.State,
             synchronizationRequest,
-            artifacts.SynchronizationActivationBinding,
+            artifacts.SynchronizationPreparationBinding,
             MaterializationRebuildProcessFactory.WorkRemainingOutcome,
             PortableValue.Concrete(
                 new(new ScalarTypeRef(ScalarTypeKind.String)),
@@ -336,26 +358,26 @@ public sealed class MaterializationRebuildProcessArtifactsTests
                     provenance: artifacts.CoordinatorProcessDocument.Metadata.Provenance)),
             RejectingHost.Instance);
         var repeatedRequest = Assert.IsType<RequestEnvelope>(Assert.Single(repeated.Emissions));
-        Assert.Equal(artifacts.SynchronizationActivationRequest, repeatedRequest.Contract);
+        Assert.Equal(artifacts.SynchronizationPreparationRequest, repeatedRequest.Contract);
 
-        const string activeReference = "{\"schemaVersion\":\"active-generation-reference/test-v1\"}";
-        var active = Reply(
+        const string readyReference = "{\"schemaVersion\":\"ready-generation-reference/test-v1\"}";
+        var ready = Reply(
             artifacts,
             repeated.State,
             repeatedRequest,
-            artifacts.SynchronizationActivationBinding,
-            MaterializationRebuildProcessFactory.ActiveOutcome,
+            artifacts.SynchronizationPreparationBinding,
+            MaterializationRebuildProcessFactory.ReadyOutcome,
             PortableValue.Concrete(
                 new(new ScalarTypeRef(ScalarTypeKind.String)),
-                ObservationValue.FromString(activeReference)),
-            activationId: "activation/materialization-rebuild/active");
+                ObservationValue.FromString(readyReference)),
+            activationId: "activation/materialization-rebuild/ready");
 
-        Assert.Equal(ProcessActivationDisposition.Completed, active.Disposition);
-        Assert.Equal(ExecutionTerminalOutcomeKind.Completed, active.State.Terminal.Kind);
+        Assert.Equal(ProcessActivationDisposition.Completed, ready.Disposition);
+        Assert.Equal(ExecutionTerminalOutcomeKind.Completed, ready.State.Terminal.Kind);
         Assert.Equal(
-            activeReference,
+            readyReference,
             Assert.IsType<ObservationValue>(
-                    Assert.IsType<PortableValue>(active.State.Terminal.Detail?.Value).Value)
+                    Assert.IsType<PortableValue>(ready.State.Terminal.Detail?.Value).Value)
                 .GetRequiredString());
     }
 

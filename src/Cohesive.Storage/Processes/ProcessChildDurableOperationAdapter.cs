@@ -125,6 +125,60 @@ public sealed record ProcessDurableInspectionResult
     public ImmutableArray<DocumentValidationDiagnostic> Diagnostics { get; }
 }
 
+/// <summary>Observable outcome of atomically preventing an exact child Process from starting.</summary>
+public enum ProcessChildStartPreventionDisposition
+{
+    /// <summary>No disposition was supplied; invalid in a completed result.</summary>
+    Unspecified = 0,
+
+    /// <summary>The already-cancelled child checkpoint won the atomic initialization boundary.</summary>
+    Prevented = 1,
+
+    /// <summary>The exact previously initialized prevention checkpoint was replayed.</summary>
+    Replayed = 2,
+
+    /// <summary>Another exact child initialization won the atomic boundary and must be closed as started work.</summary>
+    ChildAlreadyStarted = 3,
+
+    /// <summary>The request, target, plan, command context, or retained child evidence was not exact.</summary>
+    Incompatible = 4,
+
+    /// <summary>The atomic initialization outcome remains unknown after bounded exact retries.</summary>
+    CommitOutcomeUnknown = 5
+}
+
+/// <summary>Result of one exact atomic child-start prevention request.</summary>
+public sealed record ProcessChildStartPreventionResult
+{
+    internal ProcessChildStartPreventionResult(
+        ProcessChildStartPreventionDisposition disposition,
+        ProcessDurableStoreSnapshot? snapshot = null,
+        ImmutableArray<DocumentValidationDiagnostic> diagnostics = default)
+    {
+        if (!Enum.IsDefined(disposition)
+            || disposition == ProcessChildStartPreventionDisposition.Unspecified)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(disposition),
+                disposition,
+                "A child-start prevention disposition must be explicit.");
+        }
+
+        Disposition = disposition;
+        Snapshot = snapshot;
+        Diagnostics = diagnostics.IsDefault ? [] : diagnostics;
+    }
+
+    /// <summary>Whether prevention applied, replayed, lost to a child start, or could not be established.</summary>
+    public ProcessChildStartPreventionDisposition Disposition { get; }
+
+    /// <summary>Current coherent child aggregate when one exists.</summary>
+    public ProcessDurableStoreSnapshot? Snapshot { get; }
+
+    /// <summary>Structured capability, compatibility, or exact-evidence diagnostics.</summary>
+    public ImmutableArray<DocumentValidationDiagnostic> Diagnostics { get; }
+}
+
 public sealed partial class ProcessDurableRuntime
 {
     /// <summary>Loads and validates one exact durable Process continuation without mutating it.</summary>
@@ -185,6 +239,285 @@ public sealed partial class ProcessDurableRuntime
 
         return new(ProcessDurableRuntimeDisposition.Replayed, snapshot);
     }
+
+    /// <summary>
+    /// Atomically creates an already-cancelled checkpoint for an exact child Request when the child is absent.
+    /// </summary>
+    /// <remarks>
+    /// This is the durable child-start tombstone. It contends with ordinary child initialization at the same
+    /// store boundary: when prevention wins, a delayed executor can only observe the terminal checkpoint; when
+    /// ordinary initialization wins, the result reports <see cref="ProcessChildStartPreventionDisposition.ChildAlreadyStarted"/>
+    /// and the caller must close that admitted child normally.
+    /// </remarks>
+    /// <param name="context">Explicit cancellation, clock, identity, and tracing context.</param>
+    /// <param name="plan">Exact compiled child Process definition selected by the parent Request.</param>
+    /// <param name="request">Canonical parent Request carrying the exact child target and start input.</param>
+    /// <param name="cancellationContext">
+    /// Stable command identity, authority, earliest closure time, and provenance for pre-start cancellation.
+    /// The durable command observation uses the fresh physical prevention time from <paramref name="context"/>.
+    /// </param>
+    /// <param name="reason">Typed reason for preventing child start.</param>
+    /// <returns>
+    /// Conclusive prevention, exact replay, evidence that the child already started, incompatibility, or an
+    /// unresolved atomic commit outcome.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">Any argument is <see langword="null"/>.</exception>
+    /// <exception cref="OperationCanceledException">The operation is cancelled before a physical boundary.</exception>
+    public async Task<ProcessChildStartPreventionResult> PreventChildStartAsync(
+        OperationContext context,
+        CompiledProcessPlan plan,
+        RequestEnvelope request,
+        ProcessControlCommandContext cancellationContext,
+        ProcessControlReason reason)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(cancellationContext);
+        ArgumentNullException.ThrowIfNull(reason);
+        context.ThrowIfCancellationRequested();
+
+        if (request.ChildTarget is not { } target)
+        {
+            return PreventionIncompatible(
+                ProcessChildDurableOperationDiagnosticCodes.ChildTargetMissing,
+                "Atomic child-start prevention requires an exact child target.",
+                "/request/childTarget");
+        }
+        if (plan.DefinitionReference != target.Definition)
+        {
+            return PreventionIncompatible(
+                ProcessChildDurableOperationDiagnosticCodes.PlanInexact,
+                "Atomic child-start prevention requires the exact pinned child Process definition.",
+                "/request/childTarget/definition");
+        }
+        var preventedAtUtc = context.UtcNow;
+        if (cancellationContext.ProcessInstanceId != target.Continuation.ProcessInstanceId
+            || cancellationContext.Authorization.AuthorityScope != request.Context.AuthorityScope
+            || cancellationContext.Provenance != request.Context.Provenance
+            || cancellationContext.IssuedAtUtc > preventedAtUtc)
+        {
+            return PreventionIncompatible(
+                ProcessChildDurableOperationDiagnosticCodes.ChildIncompatible,
+                "Child-start prevention context must retain the exact child instance, authority scope, Request provenance, and a nonfuture closure time.",
+                "/cancellationContext");
+        }
+
+        var start = ProcessChildStartSemantics.Create(request, target, preventedAtUtc);
+        var initialControl = start.CreateInitialState();
+        var command = new CancelProcessCommand(
+            ProcessControlCommand.CurrentSchemaVersion,
+            cancellationContext,
+            new(target.Continuation, initialControl.Revision),
+            reason);
+        var activationContext = new ProcessActivationContext(
+            request.Context.AuthorityScope,
+            request.Context.CorrelationId,
+            request.Context.Delivery,
+            plan.Document.Metadata.Provenance,
+            causationId: request.Context.EmissionId,
+            ordering: request.Context.Ordering);
+        var initialized = await InitializeCancelledChildAsync(
+                context,
+                plan,
+                start,
+                command,
+                activationContext,
+                preventedAtUtc)
+            .ConfigureAwait(false);
+
+        var snapshot = initialized.Snapshot;
+        var resultDiagnostics = initialized.Diagnostics;
+        if (initialized.Disposition == ProcessDurableRuntimeDisposition.IdentityConflict)
+        {
+            var retained = await InspectAsync(context, plan, target.Continuation).ConfigureAwait(false);
+            if (retained.Disposition != ProcessDurableRuntimeDisposition.Replayed
+                || retained.Snapshot is null)
+            {
+                return new(
+                    ProcessChildStartPreventionDisposition.Incompatible,
+                    retained.Snapshot ?? snapshot,
+                    retained.Diagnostics);
+            }
+
+            snapshot = retained.Snapshot;
+            resultDiagnostics = retained.Diagnostics;
+        }
+        if (snapshot is not null
+            && !ProcessChildStartSemantics.Matches(snapshot.Checkpoint.Start, request, target))
+        {
+            return new(
+                ProcessChildStartPreventionDisposition.Incompatible,
+                snapshot,
+                [Error(
+                    ProcessChildDurableOperationDiagnosticCodes.ChildIncompatible,
+                    "The retained child aggregate carries another canonical start intent.",
+                    "/checkpoint/start")]);
+        }
+        var exactPrevention = snapshot is not null
+            && ProcessChildStartSemantics.IsExactPrevention(
+                snapshot,
+                plan,
+                request,
+                target,
+                cancellationContext,
+                reason);
+
+        return initialized.Disposition switch
+        {
+            ProcessDurableRuntimeDisposition.Applied when exactPrevention => new(
+                ProcessChildStartPreventionDisposition.Prevented,
+                snapshot,
+                resultDiagnostics),
+            ProcessDurableRuntimeDisposition.Replayed when exactPrevention => new(
+                ProcessChildStartPreventionDisposition.Replayed,
+                snapshot,
+                resultDiagnostics),
+            ProcessDurableRuntimeDisposition.IdentityConflict when exactPrevention => new(
+                ProcessChildStartPreventionDisposition.Replayed,
+                snapshot,
+                resultDiagnostics),
+            ProcessDurableRuntimeDisposition.IdentityConflict when snapshot is not null => new(
+                ProcessChildStartPreventionDisposition.ChildAlreadyStarted,
+                snapshot,
+                resultDiagnostics),
+            ProcessDurableRuntimeDisposition.CommitOutcomeUnknown => new(
+                ProcessChildStartPreventionDisposition.CommitOutcomeUnknown,
+                snapshot,
+                resultDiagnostics),
+            _ => new(
+                ProcessChildStartPreventionDisposition.Incompatible,
+                snapshot,
+                resultDiagnostics)
+        };
+    }
+
+    async Task<ProcessDurableInitializationResult> InitializeCancelledChildAsync(
+        OperationContext context,
+        CompiledProcessPlan plan,
+        ProcessStartReceipt start,
+        CancelProcessCommand command,
+        ProcessActivationContext activationContext,
+        DateTimeOffset preventedAtUtc)
+    {
+        var capabilityDiagnostics = ValidateCapabilities();
+        if (!capabilityDiagnostics.IsEmpty)
+        {
+            return new(ProcessDurableRuntimeDisposition.Incompatible, diagnostics: capabilityDiagnostics);
+        }
+
+        var continuation = ProcessReferenceInterpreter.Create(plan, start);
+        var checkpoint = new ProcessDurableCheckpoint(
+            ProcessDurableCheckpoint.CurrentSchemaVersion,
+            start,
+            continuation,
+            start.CreateInitialState(),
+            createdAtUtc: start.AcceptedAtUtc,
+            updatedAtUtc: start.AcceptedAtUtc);
+        var controller = ControlExecutor(plan);
+        var controlDecision = controller.Apply(
+            checkpoint.Control,
+            command,
+            preventedAtUtc);
+        if (controlDecision.Disposition != ProcessControlDecisionDisposition.Applied
+            || controlDecision.Intent is not ProcessCancellationIntent cancellation)
+        {
+            return new(
+                ProcessDurableRuntimeDisposition.Incompatible,
+                diagnostics: controlDecision.Diagnostics);
+        }
+
+        var activation = new ProcessActivation(
+            ProcessDurableRuntimeIdentities.CancellationActivation(
+                checkpoint.ContinuationIdentity,
+                command.Context.CommandId),
+            ProcessActivationCause.Control,
+            preventedAtUtc,
+            activationContext,
+            cancellation: cancellation);
+        var activationDecision = ProcessReferenceInterpreter.Activate(
+            plan,
+            checkpoint.Continuation,
+            activation,
+            host);
+        if (activationDecision.Disposition != ProcessActivationDisposition.Cancelled)
+        {
+            return new(
+                ProcessDurableRuntimeDisposition.Incompatible,
+                diagnostics: activationDecision.Diagnostics);
+        }
+        if (!ProcessDurableCheckpointReducer.TryApplyActivation(
+                plan,
+                checkpoint,
+                activation,
+                activationDecision,
+                controlDecision.State,
+                [],
+                bindingResolver,
+                preventedAtUtc,
+                out var replacement,
+                out var reductionDiagnostics))
+        {
+            return new(
+                ProcessDurableRuntimeDisposition.Incompatible,
+                diagnostics: reductionDiagnostics);
+        }
+
+        var candidate = replacement
+            ?? throw new InvalidOperationException("A successful pre-start cancellation reduction returned no checkpoint.");
+        var compatibility = ProcessCheckpointCompatibilityValidator.Validate(plan, candidate);
+        if (!compatibility.IsValid)
+        {
+            return new(
+                ProcessDurableRuntimeDisposition.Incompatible,
+                diagnostics: compatibility.Diagnostics);
+        }
+
+        var gate = instanceGates.GetOrAdd(candidate.ContinuationIdentity.ProcessInstanceId, static _ => new(1, 1));
+        await gate.WaitAsync(context.CancellationToken).ConfigureAwait(false);
+        try
+        {
+            var result = await InitializeExactAsync(
+                    context,
+                    ProcessDurableRuntimeIdentities.Initialization(start),
+                    candidate)
+                .ConfigureAwait(false);
+            if (result is null)
+            {
+                return new(ProcessDurableRuntimeDisposition.CommitOutcomeUnknown);
+            }
+
+            var disposition = result.Disposition switch
+            {
+                ProcessStoreMutationDisposition.Applied => ProcessDurableRuntimeDisposition.Applied,
+                ProcessStoreMutationDisposition.Replayed => ProcessDurableRuntimeDisposition.Replayed,
+                ProcessStoreMutationDisposition.AlreadyExists => ProcessDurableRuntimeDisposition.IdentityConflict,
+                ProcessStoreMutationDisposition.IdentityConflict => ProcessDurableRuntimeDisposition.IdentityConflict,
+                _ => MapStoreDisposition(result.Disposition)
+            };
+            var snapshot = result.Snapshot;
+            if (disposition is ProcessDurableRuntimeDisposition.Applied or ProcessDurableRuntimeDisposition.Replayed)
+            {
+                snapshot = await store.LoadAsync(
+                        context,
+                        candidate.ContinuationIdentity.ProcessInstanceId)
+                    .ConfigureAwait(false);
+            }
+            return new(disposition, snapshot);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    static ProcessChildStartPreventionResult PreventionIncompatible(
+        string code,
+        string message,
+        string location) =>
+        new(
+            ProcessChildStartPreventionDisposition.Incompatible,
+            diagnostics: [Error(code, message, location)]);
 }
 
 /// <summary>
@@ -199,8 +532,6 @@ public sealed partial class ProcessDurableRuntime
 /// </remarks>
 public sealed class ProcessChildDurableOperationAdapter : IDurableOperationAdapter
 {
-    const string StartActor = "cohesive.storage.process-child-adapter";
-
     readonly ProcessDurableRuntime runtime;
     readonly IProcessChildPlanResolver planResolver;
     readonly ProcessChildDurableOperationAdapterOptions options;
@@ -326,19 +657,36 @@ public sealed class ProcessChildDurableOperationAdapter : IDurableOperationAdapt
                 return ChildDriveResult.Absent();
             }
 
-            var start = CreateStart(request, target, context.UtcNow);
+            var start = ProcessChildStartSemantics.Create(request, target, context.UtcNow);
             var initialized = await runtime.InitializeAsync(context, plan, start).ConfigureAwait(false);
-            if (initialized.Disposition is not (
+            if (initialized.Disposition is ProcessDurableRuntimeDisposition.IdentityConflict)
+            {
+                // A concurrent exact initialization won after the preceding absent read. Continue from its
+                // retained state; in particular, an atomic pre-start cancellation must fence this stale Execute.
+                var retained = await runtime.InspectAsync(context, plan, target.Continuation).ConfigureAwait(false);
+                if (retained.Disposition != ProcessDurableRuntimeDisposition.Replayed
+                    || retained.Snapshot is null
+                    || !ProcessChildStartSemantics.Matches(retained.Snapshot.Checkpoint.Start, request, target))
+                {
+                    return ChildDriveResult.Failed(
+                        TerminalFailure(ProcessChildDurableOperationDiagnosticCodes.ChildIncompatible));
+                }
+                snapshot = retained.Snapshot;
+            }
+            else if (initialized.Disposition is (
                     ProcessDurableRuntimeDisposition.Applied
                     or ProcessDurableRuntimeDisposition.Replayed)
-                || initialized.Snapshot is null)
+                && initialized.Snapshot is not null)
+            {
+                snapshot = initialized.Snapshot;
+            }
+            else
             {
                 return ChildDriveResult.Failed(
                     InitializationMayHaveCommitted(initialized)
                         ? AmbiguousFailure(ProcessChildDurableOperationDiagnosticCodes.ChildRuntimeRejected)
                         : TerminalFailure(ProcessChildDurableOperationDiagnosticCodes.ChildRuntimeRejected));
             }
-            snapshot = initialized.Snapshot;
         }
         else if (inspection.Disposition == ProcessDurableRuntimeDisposition.Replayed
                  && inspection.Snapshot is not null)
@@ -351,7 +699,7 @@ public sealed class ProcessChildDurableOperationAdapter : IDurableOperationAdapt
                 TerminalFailure(ProcessChildDurableOperationDiagnosticCodes.ChildIncompatible));
         }
 
-        if (!MatchesStart(snapshot.Checkpoint.Start, request, target))
+        if (!ProcessChildStartSemantics.Matches(snapshot.Checkpoint.Start, request, target))
         {
             return ChildDriveResult.Failed(
                 TerminalFailure(ProcessChildDurableOperationDiagnosticCodes.ChildIncompatible));
@@ -434,39 +782,6 @@ public sealed class ProcessChildDurableOperationAdapter : IDurableOperationAdapt
             snapshot = activated.Snapshot;
         }
     }
-
-    static ProcessStartReceipt CreateStart(
-        RequestEnvelope request,
-        ProcessChildRequestTarget target,
-        DateTimeOffset observedAtUtc)
-    {
-        var start = new ProcessStartRequest(
-            ProcessStartRequest.CurrentSchemaVersion,
-            target.Definition,
-            new(
-                StartCommandId(request),
-                StartIdempotencyKey(request),
-                target.Continuation.ProcessInstanceId,
-                StartAuthorization(request),
-                observedAtUtc,
-                request.Context.Provenance),
-            target.Continuation,
-            request.Payload);
-        return new(start, observedAtUtc);
-    }
-
-    static bool MatchesStart(
-        ProcessStartReceipt retained,
-        RequestEnvelope request,
-        ProcessChildRequestTarget target) =>
-        retained.Request.Definition == target.Definition
-        && retained.Request.InitialContinuation == target.Continuation
-        && retained.Request.Context.CommandId == StartCommandId(request)
-        && retained.Request.Context.IdempotencyKey == StartIdempotencyKey(request)
-        && retained.Request.Context.ProcessInstanceId == target.Continuation.ProcessInstanceId
-        && retained.Request.Context.Authorization == StartAuthorization(request)
-        && retained.Request.Context.Provenance == request.Context.Provenance
-        && retained.Request.Input == request.Payload;
 
     static bool InitializationMayHaveCommitted(ProcessDurableInitializationResult result) =>
         result.Snapshot is not null
@@ -620,12 +935,12 @@ public sealed class ProcessChildDurableOperationAdapter : IDurableOperationAdapt
     static bool TerminalMatches(
         ProcessActivationDisposition disposition,
         ExecutionTerminalOutcomeKind terminal) => (disposition, terminal) switch
-    {
-        (ProcessActivationDisposition.Completed, ExecutionTerminalOutcomeKind.Completed) => true,
-        (ProcessActivationDisposition.Failed, ExecutionTerminalOutcomeKind.Failed or ExecutionTerminalOutcomeKind.Terminated) => true,
-        (ProcessActivationDisposition.Cancelled, ExecutionTerminalOutcomeKind.Cancelled) => true,
-        _ => false
-    };
+        {
+            (ProcessActivationDisposition.Completed, ExecutionTerminalOutcomeKind.Completed) => true,
+            (ProcessActivationDisposition.Failed, ExecutionTerminalOutcomeKind.Failed or ExecutionTerminalOutcomeKind.Terminated) => true,
+            (ProcessActivationDisposition.Cancelled, ExecutionTerminalOutcomeKind.Cancelled) => true,
+            _ => false
+        };
 
     static DurableOperationFailure AmbiguousFailure(string code) => new(
         DurableOperationFailurePhase.PostCommitPreAcknowledgement,
@@ -638,18 +953,6 @@ public sealed class ProcessChildDurableOperationAdapter : IDurableOperationAdapt
         DurableOperationEffectEvidence.NotExecuted,
         DurableOperationFailureDisposition.Terminal,
         code);
-
-    static ProcessControlCommandId StartCommandId(RequestEnvelope request) =>
-        new($"process-child-start/{request.Context.EmissionId.Value}");
-
-    static ProcessControlIdempotencyKey StartIdempotencyKey(RequestEnvelope request) =>
-        new($"process-child-start/{request.Context.IdempotencyKey.Value}");
-
-    static ProcessControlAuthorizationContext StartAuthorization(RequestEnvelope request) =>
-        new(
-            StartActor,
-            request.Context.AuthorityScope,
-            $"request/{request.Context.EmissionId.Value}");
 
     sealed record ChildDriveResult(
         RequestTerminalOutcome? Outcome,
@@ -668,4 +971,134 @@ public sealed class ProcessChildDurableOperationAdapter : IDurableOperationAdapt
         internal static ChildDriveResult Absent() =>
             new(Outcome: null, Origin: null, Failure: null, ChildAbsent: true);
     }
+}
+
+static class ProcessChildStartSemantics
+{
+    const string StartActor = "cohesive.storage.process-child-adapter";
+
+    internal static ProcessStartReceipt Create(
+        RequestEnvelope request,
+        ProcessChildRequestTarget target,
+        DateTimeOffset observedAtUtc)
+    {
+        var start = new ProcessStartRequest(
+            ProcessStartRequest.CurrentSchemaVersion,
+            target.Definition,
+            new(
+                CommandId(request),
+                IdempotencyKey(request),
+                target.Continuation.ProcessInstanceId,
+                Authorization(request),
+                observedAtUtc,
+                request.Context.Provenance),
+            target.Continuation,
+            request.Payload);
+        return new(start, observedAtUtc);
+    }
+
+    internal static bool Matches(
+        ProcessStartReceipt retained,
+        RequestEnvelope request,
+        ProcessChildRequestTarget target) =>
+        retained.Request.Definition == target.Definition
+        && retained.Request.InitialContinuation == target.Continuation
+        && retained.Request.Context.CommandId == CommandId(request)
+        && retained.Request.Context.IdempotencyKey == IdempotencyKey(request)
+        && retained.Request.Context.ProcessInstanceId == target.Continuation.ProcessInstanceId
+        && retained.Request.Context.Authorization == Authorization(request)
+        && retained.Request.Context.Provenance == request.Context.Provenance
+        && retained.Request.Input == request.Payload;
+
+    internal static bool IsExactPrevention(
+        ProcessDurableStoreSnapshot snapshot,
+        CompiledProcessPlan plan,
+        RequestEnvelope request,
+        ProcessChildRequestTarget target,
+        ProcessControlCommandContext requestedCancellationContext,
+        ProcessControlReason reason)
+    {
+        var checkpoint = snapshot.Checkpoint;
+        if (!snapshot.LocalState.IsEmpty
+            || !Matches(checkpoint.Start, request, target)
+            || checkpoint.ContinuationIdentity != target.Continuation
+            || checkpoint.Continuation.Terminal.Kind != ExecutionTerminalOutcomeKind.Cancelled
+            || checkpoint.Continuation.Terminal.OccurredAtUtc != checkpoint.UpdatedAtUtc
+            || checkpoint.Continuation.CompletedActivationCount != 1
+            || checkpoint.Control.Mode != ProcessControlMode.Cancelled
+            || checkpoint.Control.UpdatedAtUtc != checkpoint.UpdatedAtUtc
+            || !checkpoint.Operations.IsEmpty
+            || !checkpoint.Inbox.IsEmpty
+            || !checkpoint.Emissions.IsEmpty
+            || !checkpoint.DurableOperations.IsEmpty
+            || checkpoint.Start.AcceptedAtUtc != checkpoint.CreatedAtUtc
+            || checkpoint.Start.Request.Context.IssuedAtUtc != checkpoint.CreatedAtUtc)
+        {
+            return false;
+        }
+
+        var activation = checkpoint.Activations.Length == 1
+            ? checkpoint.Activations[0]
+            : null;
+        var receipt = checkpoint.Control.Receipts.Length == 1
+            ? checkpoint.Control.Receipts[0]
+            : null;
+        if (activation is null
+            || receipt is null
+            || receipt.Command is not CancelProcessCommand cancellation
+            || receipt.Disposition != ProcessControlReceiptDisposition.Applied
+            || cancellation.Context != requestedCancellationContext
+            || cancellation.Expectation is not { } expectation
+            || expectation.Continuation != target.Continuation
+            || expectation.Revision != checkpoint.Start.CreateInitialState().Revision
+            || cancellation.Reason != reason
+            || receipt.RecordedAtUtc != checkpoint.UpdatedAtUtc
+            || activation.Sequence != 1
+            || activation.Continuation != target.Continuation
+            || activation.Disposition != ProcessActivationDisposition.Cancelled
+            || activation.Activation.Id != ProcessDurableRuntimeIdentities.CancellationActivation(
+                target.Continuation,
+                cancellation.Context.CommandId)
+            || activation.Activation.Cause != ProcessActivationCause.Control
+            || activation.Activation.ObservedAtUtc != checkpoint.UpdatedAtUtc
+            || !activation.Activation.Inputs.IsEmpty
+            || activation.Activation.Cancellation is not { } cancellationIntent
+            || cancellationIntent.AttemptId != target.Continuation.ProcessAttemptId
+            || cancellationIntent.Reason != reason
+            || activation.Evidence.Trace.Length != 1
+            || activation.Evidence.Trace[0].Kind != ProcessTraceEventKind.CancellationApplied
+            || activation.Activation.Context.AuthorityScope != request.Context.AuthorityScope
+            || activation.Activation.Context.CorrelationId != request.Context.CorrelationId
+            || activation.Activation.Context.Delivery != request.Context.Delivery
+            || activation.Activation.Context.Provenance != plan.Document.Metadata.Provenance
+            || activation.Activation.Context.CausationId != request.Context.EmissionId
+            || activation.Activation.Context.Ordering != request.Context.Ordering
+            || activation.BeforeContinuation != ProcessStorageContentFingerprints.Continuation(
+                ProcessReferenceInterpreter.Create(plan, checkpoint.Start))
+            || activation.AfterContinuation != ProcessStorageContentFingerprints.Continuation(
+                checkpoint.Continuation)
+            || activation.CommittedAtUtc != checkpoint.UpdatedAtUtc)
+        {
+            return false;
+        }
+
+        var currentAttempt = checkpoint.Control.CurrentAttempt;
+        return currentAttempt.AttemptId == target.Continuation.ProcessAttemptId
+            && currentAttempt.Disposition == ProcessControlAttemptDisposition.Cancelled
+            && currentAttempt.Closure is { } closure
+            && closure.CommandId == cancellation.Context.CommandId
+            && closure.OccurredAtUtc == checkpoint.UpdatedAtUtc;
+    }
+
+    static ProcessControlCommandId CommandId(RequestEnvelope request) =>
+        new($"process-child-start/{request.Context.EmissionId.Value}");
+
+    static ProcessControlIdempotencyKey IdempotencyKey(RequestEnvelope request) =>
+        new($"process-child-start/{request.Context.IdempotencyKey.Value}");
+
+    static ProcessControlAuthorizationContext Authorization(RequestEnvelope request) =>
+        new(
+            StartActor,
+            request.Context.AuthorityScope,
+            $"request/{request.Context.EmissionId.Value}/{ProcessStorageContentFingerprints.Envelope(request).Value}");
 }

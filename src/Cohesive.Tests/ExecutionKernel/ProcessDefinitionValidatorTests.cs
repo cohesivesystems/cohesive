@@ -409,6 +409,9 @@ public sealed class ProcessDefinitionValidatorTests
                     ChildOutcomeMapping(),
                     Expr.Const("review"),
                     new(maximumItems: 10, maximumStartsPerActivation: 2, maximumParallelism: 2),
+                    ProcessPartitionFailurePolicy.FailFast,
+                    capacityIdentity: null,
+                    capacityDomains: [],
                     ProcessChildCancellationPolicy.Propagate,
                     Edge("edge/completed", "return"),
                     Edge("edge/failed", "return")),
@@ -433,6 +436,111 @@ public sealed class ProcessDefinitionValidatorTests
             validation,
             ProcessDefinitionDiagnosticCodes.PartitionBindingCardinalityInvalid,
             "/nodes/0/partition/contract/cardinality");
+    }
+
+    [Fact]
+    public void Validate_ForEachPartitionRequiresExplicitFailureAndConsistentCapacityDomains()
+    {
+        var child = DefinitionReference("process/capacity-bound-partition-child");
+        var requestDocument = InteractionDocument(
+            "interaction/request/capacity-bound-partition-child",
+            SingleOutcomeRequestDefinition());
+        var request = new RequestContractReference(Reference(requestDocument));
+        var manyStrings = new ValueContract(
+            new ScalarTypeRef(ScalarTypeKind.String),
+            cardinality: FieldCardinality.Many);
+        ProcessDefinitionValidationContext context = new(
+            definitions:
+            [
+                new ProcessDefinitionLink(
+                    child,
+                    ProcessDefinitionLinkKind.Process,
+                    StringContract,
+                    StringContract,
+                    processDependencies: [],
+                    recoveryPolicy: ProcessRecoveryPolicy.ContinueAttempt)
+            ],
+            interactionContracts: Catalog(requestDocument));
+
+        var unspecifiedFailure = ProcessDefinitionValidator.Validate(
+            CapacityDefinition(
+                ProcessPartitionFailurePolicy.Unspecified,
+                capacityIdentity: null,
+                capacityDomains: []),
+            context);
+        AssertDiagnostic(
+            unspecifiedFailure,
+            ProcessDefinitionDiagnosticCodes.EnumUnsupported,
+            "/nodes/0/failure");
+
+        var limitsWithoutIdentity = ProcessDefinitionValidator.Validate(
+            CapacityDefinition(
+                ProcessPartitionFailurePolicy.FailFast,
+                capacityIdentity: null,
+                capacityDomains: [new("target/a", maximumParallelism: 1)]),
+            context);
+        AssertDiagnostic(
+            limitsWithoutIdentity,
+            ProcessDefinitionDiagnosticCodes.PartitionCapacityInvalid,
+            "/nodes/0/capacityDomains");
+
+        var identityWithoutLimits = ProcessDefinitionValidator.Validate(
+            CapacityDefinition(
+                ProcessPartitionFailurePolicy.FailFast,
+                capacityIdentity: Expr.Const("target/a"),
+                capacityDomains: []),
+            context);
+        AssertDiagnostic(
+            identityWithoutLimits,
+            ProcessDefinitionDiagnosticCodes.PartitionCapacityInvalid,
+            "/nodes/0/capacityDomains");
+
+        var malformedLimits = ProcessDefinitionValidator.Validate(
+            CapacityDefinition(
+                ProcessPartitionFailurePolicy.AwaitAll,
+                capacityIdentity: Expr.BoundValue(new("partition")),
+                capacityDomains:
+                [
+                    new("target/b", maximumParallelism: 1),
+                    new("target/a", maximumParallelism: 0),
+                    new("target/a", maximumParallelism: 2)
+                ]),
+            context);
+        AssertDiagnostic(
+            malformedLimits,
+            ProcessDefinitionDiagnosticCodes.PartitionCapacityInvalid,
+            "/nodes/0/capacityDomains/0/maximumParallelism");
+        AssertDiagnostic(
+            malformedLimits,
+            ProcessDefinitionDiagnosticCodes.PartitionCapacityInvalid,
+            "/nodes/0/capacityDomains/1/identity");
+
+        CanonicalProcessDefinition CapacityDefinition(
+            ProcessPartitionFailurePolicy failure,
+            Expr? capacityIdentity,
+            ImmutableArray<ProcessCapacityDomainLimit> capacityDomains) => Definition(
+            entry: "partitions",
+            input: manyStrings,
+            nodes:
+            [
+                new ForEachPartitionProcessNode(
+                    new("partitions"),
+                    Expr.BoundValue(ProcessBindingIds.Input),
+                    new(new("partition"), StringContract),
+                    Expr.BoundValue(new("partition")),
+                    child,
+                    request,
+                    ChildOutcomeMapping(),
+                    Expr.BoundValue(new("partition")),
+                    new(maximumItems: 10, maximumStartsPerActivation: 2, maximumParallelism: 2),
+                    failure,
+                    capacityIdentity,
+                    capacityDomains,
+                    ProcessChildCancellationPolicy.Propagate,
+                    Edge("edge/completed", "return"),
+                    Edge("edge/failed", "return")),
+                new ReturnProcessNode(new("return"), Expr.Const("done"))
+            ]);
     }
 
     [Fact]
@@ -586,6 +694,9 @@ public sealed class ProcessDefinitionValidatorTests
                 ChildOutcomeMapping(),
                 Expr.BoundValue(new("partition")),
                 new(maximumItems: 2, maximumStartsPerActivation: 1, maximumParallelism: 1),
+                ProcessPartitionFailurePolicy.FailFast,
+                capacityIdentity: null,
+                capacityDomains: [],
                 ProcessChildCancellationPolicy.Propagate,
                 Edge("edge/completed", "return"),
                 Edge("edge/failed", "return"))

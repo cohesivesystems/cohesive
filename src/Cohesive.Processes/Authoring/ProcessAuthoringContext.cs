@@ -319,6 +319,18 @@ internal sealed class ProcessAuthoringContext
                 AddConstruct(entries, partition.OutcomeMapping, path.Add("outcomeMapping"), nodeSource);
                 AddConstruct(entries, partition.ChildInput, path.Add("childInput"), nodeSource);
                 AddConstruct(entries, partition.Limits, path.Add("limits"), nodeSource);
+                if (partition.CapacityIdentity is not null)
+                {
+                    AddConstruct(entries, partition.CapacityIdentity, path.Add("capacityIdentity"), nodeSource);
+                }
+                for (var index = 0; index < partition.CapacityDomains.Length; index++)
+                {
+                    AddConstruct(
+                        entries,
+                        partition.CapacityDomains[index],
+                        path.Add("capacityDomains").Add(Index(index)),
+                        nodeSource);
+                }
                 AddEdge(entries, partition.Completed, path.Add("completed"), nodeSource);
                 AddEdge(entries, partition.Failed, path.Add("failed"), nodeSource);
                 break;

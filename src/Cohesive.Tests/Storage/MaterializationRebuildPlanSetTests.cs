@@ -2,9 +2,7 @@ using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Cohesive.Execution;
-using Cohesive.Model;
 using Cohesive.Model.Serialization;
-using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.TestFixtures;
 using Cohesive.Storage.Materialization;
@@ -692,6 +690,204 @@ public sealed class MaterializationRebuildPlanSetTests
     }
 
     [Fact]
+    public void IndependentPromotion_FullFingerprintCoordinatesCannotAliasAttributionOrCommands()
+    {
+        var scenario = CreateScenario(
+            reverseInputs: false,
+            promotion: new(MaterializationRebuildPromotionMode.Independent));
+        var leaf = scenario.Leaves[0];
+        var authority = MaterializationRebuildLeafExecutionAuthority.FromPlanSet(scenario.PlanSet, leaf);
+        MaterializationActiveGenerationReference active = new(
+            schemaVersion: MaterializationActiveGenerationReference.CurrentSchemaVersion,
+            authority,
+            generation: new("generation/independent-coordinate-alias"),
+            targetRevision: new("1"),
+            promotion: new("promotion/independent-coordinate-alias"),
+            promotionFence: new("1"),
+            validation: new("validation/independent-coordinate-alias"),
+            activatedAtUtc: new(2026, 8, 2, 11, 0, 0, TimeSpan.Zero));
+        MaterializationBackendRoutingRevision revision = new("1");
+        MaterializationBackendRoutingFence fence = new("1");
+        var admitIssuedAtUtc = active.ActivatedAtUtc.AddSeconds(1);
+        var swapIssuedAtUtc = admitIssuedAtUtc.AddTicks(1);
+        var baseline = MaterializationIndependentPromotionExecutor.CreateCommandIdentities(
+            planSet: authority.PlanSet,
+            leafPlan: authority.LeafPlan,
+            placementSlice: authority.PlacementSlice.Fingerprint,
+            activeGeneration: active,
+            expectedRevision: revision,
+            fence,
+            admitIssuedAtUtc,
+            swapIssuedAtUtc);
+
+        MaterializationRebuildPlanSetReference planSetAlgorithmAlias = new(
+            schemaVersion: authority.PlanSet.SchemaVersion,
+            request: authority.PlanSet.Request,
+            planSet: new(
+                algorithm: "sha256-alias",
+                canonicalization: authority.PlanSet.PlanSet.Canonicalization,
+                value: authority.PlanSet.PlanSet.Value));
+        MaterializationRebuildPlanSetReference planSetCanonicalizationAlias = new(
+            schemaVersion: authority.PlanSet.SchemaVersion,
+            request: authority.PlanSet.Request,
+            planSet: new(
+                algorithm: authority.PlanSet.PlanSet.Algorithm,
+                canonicalization: "tests/independent-promotion/plan-set-alias/v1",
+                value: authority.PlanSet.PlanSet.Value));
+        MaterializationRebuildPlanReference leafAlgorithmAlias = new(
+            plan: new(
+                algorithm: "sha256-alias",
+                canonicalization: authority.LeafPlan.Plan.Canonicalization,
+                value: authority.LeafPlan.Plan.Value),
+            placementSlice: authority.LeafPlan.PlacementSlice);
+        MaterializationRebuildPlanReference leafCanonicalizationAlias = new(
+            plan: new(
+                algorithm: authority.LeafPlan.Plan.Algorithm,
+                canonicalization: "tests/independent-promotion/leaf-alias/v1",
+                value: authority.LeafPlan.Plan.Value),
+            placementSlice: authority.LeafPlan.PlacementSlice);
+        MaterializationPlacementSliceFingerprint sliceAlgorithmAlias = new(
+            algorithm: "sha256-alias",
+            canonicalization: authority.PlacementSlice.Fingerprint.Canonicalization,
+            value: authority.PlacementSlice.Fingerprint.Value);
+        MaterializationPlacementSliceFingerprint sliceCanonicalizationAlias = new(
+            algorithm: authority.PlacementSlice.Fingerprint.Algorithm,
+            canonicalization: "tests/independent-promotion/slice-alias/v1",
+            value: authority.PlacementSlice.Fingerprint.Value);
+
+        Assert.Equal(authority.PlanSet.PlanSet.Value, planSetAlgorithmAlias.PlanSet.Value);
+        Assert.Equal(authority.PlanSet.PlanSet.Value, planSetCanonicalizationAlias.PlanSet.Value);
+        Assert.NotEqual(
+            MaterializationIndependentPromotionExecutor.ConfigurationAuthority(authority.PlanSet),
+            MaterializationIndependentPromotionExecutor.ConfigurationAuthority(planSetAlgorithmAlias));
+        Assert.NotEqual(
+            MaterializationIndependentPromotionExecutor.ConfigurationAuthority(authority.PlanSet),
+            MaterializationIndependentPromotionExecutor.ConfigurationAuthority(planSetCanonicalizationAlias));
+
+        (MaterializationRebuildPlanSetReference PlanSet,
+            MaterializationRebuildPlanReference Leaf,
+            MaterializationPlacementSliceFingerprint Slice)[] aliases =
+        [
+            (planSetAlgorithmAlias, authority.LeafPlan, authority.PlacementSlice.Fingerprint),
+            (planSetCanonicalizationAlias, authority.LeafPlan, authority.PlacementSlice.Fingerprint),
+            (authority.PlanSet, leafAlgorithmAlias, authority.PlacementSlice.Fingerprint),
+            (authority.PlanSet, leafCanonicalizationAlias, authority.PlacementSlice.Fingerprint),
+            (authority.PlanSet,
+                new(authority.LeafPlan.Plan, sliceAlgorithmAlias),
+                sliceAlgorithmAlias),
+            (authority.PlanSet,
+                new(authority.LeafPlan.Plan, sliceCanonicalizationAlias),
+                sliceCanonicalizationAlias)
+        ];
+        foreach (var alias in aliases)
+        {
+            var aliased = MaterializationIndependentPromotionExecutor.CreateCommandIdentities(
+                planSet: alias.PlanSet,
+                leafPlan: alias.Leaf,
+                placementSlice: alias.Slice,
+                activeGeneration: active,
+                expectedRevision: revision,
+                fence,
+                admitIssuedAtUtc,
+                swapIssuedAtUtc);
+            Assert.NotEqual(baseline.Admit, aliased.Admit);
+            Assert.NotEqual(baseline.Swap, aliased.Swap);
+        }
+    }
+
+    [Fact]
+    public void Generation_FullDefinitionAndLeafFingerprintCoordinatesCannotAlias()
+    {
+        var scenario = CreateScenario(reverseInputs: false);
+        var authority = MaterializationRebuildLeafExecutionAuthority.FromPlanSet(
+            scenario.PlanSet,
+            scenario.Leaves[0]);
+        MaterializationRebuildAttempt attempt = new(
+            continuation: new(
+                processInstanceId: new("process-instance/generation-coordinate-alias"),
+                processAttemptId: new("process-attempt/generation-coordinate-alias/1")),
+            startedAtUtc: new(2026, 8, 2, 11, 0, 0, TimeSpan.Zero));
+        var baseline = MaterializationRebuildIdentities.Generation(authority, attempt);
+        var definition = authority.PlacementSlice.Materialization.DefinitionFingerprint;
+        var plan = authority.LeafPlan.Plan;
+        MaterializationRebuildLeafExecutionAuthority[] aliases =
+        [
+            WithDefinitionFingerprint(authority, new(
+                algorithm: "sha256-alias",
+                canonicalization: definition.Canonicalization,
+                value: definition.Value)),
+            WithDefinitionFingerprint(authority, new(
+                algorithm: definition.Algorithm,
+                canonicalization: "tests/materialization-generation/definition-alias/v1",
+                value: definition.Value)),
+            WithLeafFingerprint(authority, new(
+                algorithm: "sha256-alias",
+                canonicalization: plan.Canonicalization,
+                value: plan.Value)),
+            WithLeafFingerprint(authority, new(
+                algorithm: plan.Algorithm,
+                canonicalization: "tests/materialization-generation/leaf-alias/v1",
+                value: plan.Value))
+        ];
+
+        Assert.StartsWith("materialization-rebuild/v2/generation/", baseline.Value);
+        Assert.Equal(
+            baseline,
+            MaterializationRebuildIdentities.Generation(scenario.Leaves[0], attempt));
+        Assert.All(aliases, alias => Assert.NotEqual(
+            baseline,
+            MaterializationRebuildIdentities.Generation(alias, attempt)));
+    }
+
+    static MaterializationRebuildLeafExecutionAuthority WithLeafFingerprint(
+        MaterializationRebuildLeafExecutionAuthority authority,
+        MaterializationRebuildPlanFingerprint fingerprint) =>
+        new(
+            MaterializationRebuildLeafExecutionAuthority.CurrentSchemaVersion,
+            authority.PlanSet,
+            new(
+                authority.PlacementSlice,
+                new(fingerprint, authority.PlacementSlice.Fingerprint)));
+
+    static MaterializationRebuildLeafExecutionAuthority WithDefinitionFingerprint(
+        MaterializationRebuildLeafExecutionAuthority authority,
+        ExecutionDefinitionFingerprint fingerprint)
+    {
+        var sourceSlice = authority.PlacementSlice;
+        MaterializationDefinitionReference materialization = new(
+            MaterializationDefinitionReference.CurrentSchemaVersion,
+            sourceSlice.Materialization.Materialization,
+            fingerprint);
+        MaterializationBackendPoolReference pool = new(
+            MaterializationBackendPoolReference.CurrentSchemaVersion,
+            sourceSlice.Pool.Pool,
+            materialization,
+            sourceSlice.Pool.DefinitionFingerprint);
+        MaterializationPlacementSliceReference slice = new(
+            MaterializationPlacementSliceReference.CurrentSchemaVersion,
+            sourceSlice.Id,
+            materialization,
+            sourceSlice.Membership,
+            pool,
+            sourceSlice.Target,
+            sourceSlice.Subjects);
+        MaterializationRebuildRequestReference request = new(
+            MaterializationRebuildRequestReference.CurrentSchemaVersion,
+            materialization,
+            authority.PlanSet.Request.Request);
+        MaterializationRebuildPlanSetReference planSet = new(
+            MaterializationRebuildPlanSetReference.CurrentSchemaVersion,
+            request,
+            authority.PlanSet.PlanSet);
+        return new(
+            MaterializationRebuildLeafExecutionAuthority.CurrentSchemaVersion,
+            planSet,
+            new(
+                slice,
+                new(authority.LeafPlan.Plan, slice.Fingerprint)));
+    }
+
+    [Fact]
     public async Task IndependentPromotion_RejectsForeignAuthorityBeforeRouterIo()
     {
         var progressive = CreateScenario(reverseInputs: false);
@@ -767,7 +963,14 @@ public sealed class MaterializationRebuildPlanSetTests
         var json = MaterializationIndependentPromotionRequestJsonSerializer.Serialize(valid);
         var restored = MaterializationIndependentPromotionRequestJsonSerializer.Deserialize(json);
         Assert.Equal(valid, restored);
-        Assert.Equal("cohesive-materialization-independent-promotion-request/v1", restored.SchemaVersion);
+        Assert.Equal("cohesive-materialization-independent-promotion-request/v2", restored.SchemaVersion);
+        Assert.StartsWith("materialization-independent-promotion/v2/admit/", restored.AdmitCommandId.Value);
+        Assert.StartsWith("materialization-independent-promotion/v2/swap/", restored.SwapCommandId.Value);
+        Assert.All(
+            restored.Configuration.Configuration,
+            decision => Assert.StartsWith(
+                "cohesive.storage/materialization-independent-promotion/configuration/v2/plan-set/",
+                decision.Authority));
         Assert.Equal(
             json,
             MaterializationIndependentPromotionRequestJsonSerializer.Serialize(restored));
@@ -791,7 +994,7 @@ public sealed class MaterializationRebuildPlanSetTests
         Assert.Throws<JsonException>(() => MaterializationIndependentPromotionRequestJsonSerializer.Deserialize(
             missingFence.ToJsonString()));
         var foreignSchema = JsonNode.Parse(json)!.AsObject();
-        foreignSchema["schemaVersion"] = "cohesive-materialization-independent-promotion-request/v0";
+        foreignSchema["schemaVersion"] = "cohesive-materialization-independent-promotion-request/v1";
         Assert.Throws<JsonException>(() => MaterializationIndependentPromotionRequestJsonSerializer.Deserialize(
             foreignSchema.ToJsonString()));
         var substitutedSlice = JsonNode.Parse(json)!.AsObject();
@@ -828,7 +1031,7 @@ public sealed class MaterializationRebuildPlanSetTests
             scenario.Pool.Definition,
             new MaterializationBackendRoutingConfigurationLayer(
                 origin: EffectiveConfigurationOrigin.Explicit,
-                authority: $"plan-set:{foreignPlanSet.PlanSet.Value}",
+                authority: MaterializationIndependentPromotionExecutor.ConfigurationAuthority(foreignPlanSet),
                 settings: new(readTarget: binding.Slice.Target, writeTarget: binding.Slice.Target)));
         MaterializationIndependentPromotionRequest foreign = new(
             schemaVersion: valid.SchemaVersion,
@@ -919,8 +1122,29 @@ public sealed class MaterializationRebuildPlanSetTests
     static Scenario CreateScenario(
         bool reverseInputs,
         MaterializationRebuildPromotionPolicy? promotion = null)
+        => CreateScenario(CreateLeaves(), reverseInputs, promotion);
+
+    internal static (
+        MaterializationRebuildPlanSet PlanSet,
+        ImmutableArray<MaterializationRebuildPlan> Leaves) CreateIndependentTwoLeafScenario(
+        MaterializationRebuildPlan firstLeaf)
     {
-        var leaves = CreateLeaves();
+        ArgumentNullException.ThrowIfNull(firstLeaf);
+        var leaves = ImmutableArray.Create(
+            firstLeaf,
+            CloneLeaf(firstLeaf, "tests/rebuild-process-target/secondary"));
+        var scenario = CreateScenario(
+            leaves,
+            reverseInputs: false,
+            promotion: new(MaterializationRebuildPromotionMode.Independent));
+        return (scenario.PlanSet, scenario.Leaves);
+    }
+
+    static Scenario CreateScenario(
+        ImmutableArray<MaterializationRebuildPlan> leaves,
+        bool reverseInputs,
+        MaterializationRebuildPromotionPolicy? promotion)
+    {
         if (reverseInputs)
             leaves = [.. leaves.Reverse()];
         var pool = CreatePool(leaves, reverseMembers: reverseInputs);

@@ -31,6 +31,42 @@ public enum ProcessChildCancellationPolicy
     Detach = 2
 }
 
+/// <summary>How one bounded partition-work occurrence responds to a terminal child failure.</summary>
+public enum ProcessPartitionFailurePolicy
+{
+    /// <summary>No failure behavior was declared; invalid in canonical Process IR.</summary>
+    Unspecified = 0,
+
+    /// <summary>Stop admitting sibling work and close the occurrence as soon as one child fails.</summary>
+    FailFast = 1,
+
+    /// <summary>
+    /// Continue admitting bounded sibling work, retain every terminal outcome, and close only after every child
+    /// settles.
+    /// </summary>
+    AwaitAll = 2
+}
+
+/// <summary>One named concurrent-work limit within a bounded partition-work occurrence.</summary>
+public sealed record ProcessCapacityDomainLimit
+{
+    /// <summary>Creates one capacity-domain limit.</summary>
+    /// <param name="identity">Stable domain identity produced by the partition-local capacity expression.</param>
+    /// <param name="maximumParallelism">Maximum simultaneously active children assigned to the domain.</param>
+    [JsonConstructor]
+    public ProcessCapacityDomainLimit(string identity, int maximumParallelism)
+    {
+        Identity = identity;
+        MaximumParallelism = maximumParallelism;
+    }
+
+    /// <summary>Stable domain identity produced by the partition-local capacity expression.</summary>
+    public string Identity { get; }
+
+    /// <summary>Maximum simultaneously active children assigned to this domain.</summary>
+    public int MaximumParallelism { get; }
+}
+
 /// <summary>Finite limits for one bounded partition-work occurrence.</summary>
 public sealed record ProcessWorkLimits
 {

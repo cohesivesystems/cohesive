@@ -1,11 +1,8 @@
 using System.Collections.Immutable;
 using System.Text.Json;
 using Cohesive.Execution;
-using Cohesive.Model;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Acquisition;
-using Cohesive.Relations.Compilation;
-using Cohesive.Relations.IR;
 using Cohesive.Relations.Physical;
 using Cohesive.Storage.Materialization;
 
@@ -27,7 +24,8 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
             processAttemptId: new("attempt/1")),
         startedAtUtc: StartedAtUtc);
 
-    static readonly MaterializationGenerationId Generation = new("generation/materialization-rebuild/1");
+    static MaterializationGenerationId Generation =>
+        MaterializationRebuildIdentities.Generation(LeafAuthority, CoordinatorAttempt);
 
     static readonly MaterializationId Materialization = new("materialization/test");
 
@@ -173,7 +171,7 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
     }
 
     [Fact]
-    public async Task SynchronizationActivation_RejectsAnAuthorityForAnotherPlanSetBeforeExecution()
+    public async Task SynchronizationPreparation_RejectsAnAuthorityForAnotherPlanSetBeforeExecution()
     {
         var artifacts = MaterializationRebuildProcessFactory.Create();
         var activationCalls = 0;
@@ -183,21 +181,21 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
             return Task.FromException<MaterializationGenerationActivationResult>(
                 new InvalidOperationException("A mismatched placement must be rejected before activation I/O."));
         });
-        var adapter = new MaterializationSynchronizationActivationDurableOperationAdapter(
-            artifacts.SynchronizationActivationRequest,
+        var adapter = new MaterializationSynchronizationPreparationDurableOperationAdapter(
+            artifacts.SynchronizationPreparationRequest,
             new ExactResolver(execution));
         var request = Request(
-            artifacts.SynchronizationActivationRequest,
+            artifacts.SynchronizationPreparationRequest,
             MaterializationRebuildWorkReferenceJsonSerializer.SerializeAuthority(
                 CreateAuthority(planSetDigest: 'f')),
             CoordinatorAttempt.Continuation,
             artifacts.CoordinatorPlan.DefinitionReference,
-            MaterializationRebuildProcessFactory.CoordinatorSynchronizationActivationNodeId);
+            MaterializationRebuildProcessFactory.CoordinatorSynchronizationPreparationNodeId);
 
         var observation = Assert.IsType<DurableOperationOutcomeObservation>(
             await adapter.ExecuteAsync(
                 OperationContext.Create(),
-                Invocation(request, artifacts.SynchronizationActivationBinding, artifacts.InteractionCatalog)));
+                Invocation(request, artifacts.SynchronizationPreparationBinding, artifacts.InteractionCatalog)));
         var outcome = Assert.IsType<RequestFailureOutcome>(observation.Outcome);
         var evidence = Assert.IsType<ObservationValue>(outcome.Value.Value).GetRequiredString();
 
@@ -299,24 +297,24 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
             calls.Add((invocation, worker));
             return Task.FromResult(result);
         });
-        var adapter = new MaterializationSynchronizationActivationDurableOperationAdapter(
-            artifacts.SynchronizationActivationRequest,
+        var adapter = new MaterializationSynchronizationPreparationDurableOperationAdapter(
+            artifacts.SynchronizationPreparationRequest,
             new ExactResolver(execution));
         var request = Request(
-            artifacts.SynchronizationActivationRequest,
+            artifacts.SynchronizationPreparationRequest,
             MaterializationRebuildWorkReferenceJsonSerializer.SerializeAuthority(LeafAuthority),
             CoordinatorAttempt.Continuation,
             artifacts.CoordinatorPlan.DefinitionReference,
-            MaterializationRebuildProcessFactory.CoordinatorSynchronizationActivationNodeId);
+            MaterializationRebuildProcessFactory.CoordinatorSynchronizationPreparationNodeId);
 
         var executed = Assert.IsType<DurableOperationOutcomeObservation>(
             await adapter.ExecuteAsync(
                 OperationContext.Create(),
-                Invocation(request, artifacts.SynchronizationActivationBinding, artifacts.InteractionCatalog)));
+                Invocation(request, artifacts.SynchronizationPreparationBinding, artifacts.InteractionCatalog)));
         var reconciled = Assert.IsType<DurableOperationReconciledOutcome>(
             await ReconcileAsync(
                 request,
-                artifacts.SynchronizationActivationBinding,
+                artifacts.SynchronizationPreparationBinding,
                 artifacts.InteractionCatalog,
                 adapter));
 
@@ -363,24 +361,24 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
                     new InjectedAmbiguousActivationException())
                 : Task.FromResult(retained);
         });
-        var adapter = new MaterializationSynchronizationActivationDurableOperationAdapter(
-            artifacts.SynchronizationActivationRequest,
+        var adapter = new MaterializationSynchronizationPreparationDurableOperationAdapter(
+            artifacts.SynchronizationPreparationRequest,
             new ExactResolver(execution));
         var request = Request(
-            artifacts.SynchronizationActivationRequest,
+            artifacts.SynchronizationPreparationRequest,
             MaterializationRebuildWorkReferenceJsonSerializer.SerializeAuthority(LeafAuthority),
             CoordinatorAttempt.Continuation,
             artifacts.CoordinatorPlan.DefinitionReference,
-            MaterializationRebuildProcessFactory.CoordinatorSynchronizationActivationNodeId);
+            MaterializationRebuildProcessFactory.CoordinatorSynchronizationPreparationNodeId);
 
         await Assert.ThrowsAsync<InjectedAmbiguousActivationException>(async () =>
             await adapter.ExecuteAsync(
                 OperationContext.Create(),
-                Invocation(request, artifacts.SynchronizationActivationBinding, artifacts.InteractionCatalog)));
+                Invocation(request, artifacts.SynchronizationPreparationBinding, artifacts.InteractionCatalog)));
         var reconciled = Assert.IsType<DurableOperationReconciledOutcome>(
             await ReconcileAsync(
                 request,
-                artifacts.SynchronizationActivationBinding,
+                artifacts.SynchronizationPreparationBinding,
                 artifacts.InteractionCatalog,
                 adapter));
 
@@ -426,6 +424,269 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
                     MaterializationActiveGenerationReference.CurrentSchemaVersion,
                     "cohesive-materialization-active-generation-reference/v1",
                     StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void ReadyGenerationReference_RoundTripsCanonicalExactPreparationEvidence()
+    {
+        var preparation = ReadyPreparation();
+        var reference = new MaterializationReadyGenerationReference(
+            schemaVersion: MaterializationReadyGenerationReference.CurrentSchemaVersion,
+            authority: LeafAuthority,
+            attempt: CoordinatorAttempt,
+            generation: Generation,
+            preparation: preparation);
+
+        var json = MaterializationReadyGenerationReferenceJsonSerializer.Serialize(reference);
+        var restored = MaterializationReadyGenerationReferenceJsonSerializer.Deserialize(json);
+
+        Assert.Equal(reference, restored);
+        Assert.Equal(LeafAuthority, restored.Authority);
+        Assert.Equal(CoordinatorAttempt, restored.Attempt);
+        Assert.Equal(Generation, restored.Generation);
+        Assert.Equal(preparation.Convergence, restored.Convergence);
+        Assert.Equal(preparation.ValidationReceipt, restored.Validation);
+        Assert.Equal(preparation.PromotionRequest, restored.PromotionIntent);
+        Assert.True(restored.Preparation.IsReady);
+        using var document = JsonDocument.Parse(json);
+        Assert.False(document.RootElement.TryGetProperty("plan", out _));
+        Assert.False(document.RootElement.TryGetProperty("placementSlice", out _));
+        Assert.Equal(json, MaterializationReadyGenerationReferenceJsonSerializer.Serialize(restored));
+        Assert.Throws<JsonException>(() =>
+            MaterializationReadyGenerationReferenceJsonSerializer.Deserialize(
+                json.Replace(
+                    MaterializationReadyGenerationReference.CurrentSchemaVersion,
+                    "cohesive-materialization-ready-generation-reference/v0",
+                    StringComparison.Ordinal)));
+        Assert.Throws<JsonException>(() =>
+            MaterializationReadyGenerationReferenceJsonSerializer.Deserialize(
+                json[..^1] + ",\"unexpected\":true}"));
+    }
+
+    [Fact]
+    public void ReadyBarrier_CreateRejectsMissingLinkedLeafEvidence()
+    {
+        var planSet = MaterializationRebuildPlanJsonSerializerTests.CreateSinglePlanSet(
+            MaterializationRebuildPlanJsonSerializerTests.CreateControlledPlan([], []));
+        ProcessContinuationIdentity parent = new(
+            processInstanceId: new("process/materialization-rebuild-plan-set/barrier"),
+            processAttemptId: new("attempt/parent/1"));
+
+        var exception = Assert.Throws<ArgumentException>(() => MaterializationRebuildReadyBarrier.Create(
+            planSet: planSet,
+            parentContinuation: parent,
+            readyGenerations: []));
+
+        Assert.Contains("every linked leaf", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ReadyBarrier_RoundTripsAndRejectsDuplicateOrForeignEvidence()
+    {
+        var ready = new MaterializationReadyGenerationReference(
+            schemaVersion: MaterializationReadyGenerationReference.CurrentSchemaVersion,
+            authority: LeafAuthority,
+            attempt: CoordinatorAttempt,
+            generation: Generation,
+            preparation: ReadyPreparation());
+        ProcessContinuationIdentity parent = new(
+            processInstanceId: new("process/materialization-rebuild-plan-set/barrier"),
+            processAttemptId: new("attempt/parent/1"));
+        var barrier = new MaterializationRebuildReadyBarrier(
+            schemaVersion: MaterializationRebuildReadyBarrier.CurrentSchemaVersion,
+            planSet: LeafAuthority.PlanSet,
+            parentContinuation: parent,
+            readyGenerations: [ready]);
+
+        var json = MaterializationRebuildReadyBarrierJsonSerializer.Serialize(barrier);
+        var restored = MaterializationRebuildReadyBarrierJsonSerializer.DeserializeStructural(json);
+
+        Assert.Equal(barrier, restored);
+        Assert.Equal(json, MaterializationRebuildReadyBarrierJsonSerializer.Serialize(restored));
+        Assert.Throws<ArgumentException>(() => new MaterializationRebuildReadyBarrier(
+            schemaVersion: barrier.SchemaVersion,
+            planSet: barrier.PlanSet,
+            parentContinuation: parent,
+            readyGenerations: [ready, ready]));
+        Assert.Throws<ArgumentException>(() => new MaterializationRebuildReadyBarrier(
+            schemaVersion: barrier.SchemaVersion,
+            planSet: CreateAuthority(planSetDigest: 'f').PlanSet,
+            parentContinuation: parent,
+            readyGenerations: [ready]));
+    }
+
+    [Fact]
+    public async Task SynchronizationPreparation_ReturnsCanonicalReadyEvidenceWithoutApplyingActivation()
+    {
+        var artifacts = MaterializationRebuildProcessFactory.Create();
+        var preparation = ReadyPreparation();
+        var activationCalls = 0;
+        var execution = Execution(
+            activate: (_, _, _) =>
+            {
+                activationCalls++;
+                return Task.FromException<MaterializationGenerationActivationResult>(
+                    new InvalidOperationException("Preparation must not invoke composed activation."));
+            },
+            prepare: (_, _, _) => Task.FromResult(new MaterializationGenerationActivationResult(
+                MaterializationGenerationActivationDisposition.Ready,
+                Generation,
+                activation: preparation)));
+        var adapter = new MaterializationSynchronizationPreparationDurableOperationAdapter(
+            artifacts.SynchronizationPreparationRequest,
+            new ExactResolver(execution));
+        var request = Request(
+            artifacts.SynchronizationPreparationRequest,
+            MaterializationRebuildWorkReferenceJsonSerializer.SerializeAuthority(LeafAuthority),
+            CoordinatorAttempt.Continuation,
+            artifacts.CoordinatorPlan.DefinitionReference,
+            MaterializationRebuildProcessFactory.CoordinatorSynchronizationPreparationNodeId);
+
+        var observation = Assert.IsType<DurableOperationOutcomeObservation>(
+            await adapter.ExecuteAsync(
+                OperationContext.Create(),
+                Invocation(request, artifacts.SynchronizationPreparationBinding, artifacts.InteractionCatalog)));
+        var outcome = Assert.IsType<RequestResultOutcome>(observation.Outcome);
+        var ready = MaterializationReadyGenerationReferenceJsonSerializer.Deserialize(
+            Assert.IsType<ObservationValue>(outcome.Value.Value).GetRequiredString());
+
+        Assert.Equal(MaterializationRebuildProcessFactory.ReadyOutcome, outcome.Id);
+        Assert.Equal(0, activationCalls);
+        Assert.Equal(execution.Authority, ready.Authority);
+        Assert.Equal(execution.Attempt, ready.Attempt);
+        Assert.Equal(execution.Generation, ready.Generation);
+        Assert.Equal(preparation, ready.Preparation);
+    }
+
+    [Fact]
+    public async Task ReadyActivation_ResolvesTheRetainedChildAttemptAndReturnsCanonicalActiveEvidence()
+    {
+        var planSetArtifacts = CreatePlanSetArtifacts();
+        var preparation = ReadyPreparation();
+        var ready = new MaterializationReadyGenerationReference(
+            schemaVersion: MaterializationReadyGenerationReference.CurrentSchemaVersion,
+            authority: LeafAuthority,
+            attempt: CoordinatorAttempt,
+            generation: Generation,
+            preparation: preparation);
+        var requestIntent = preparation.PromotionRequest!;
+        MaterializationPromotionReceipt promotion = new(
+            promotionId: requestIntent.PromotionId,
+            targetId: Target,
+            generationId: Generation,
+            previousGenerationId: requestIntent.ExpectedActiveGenerationId,
+            targetRevision: new("1"),
+            generationWorkerFence: requestIntent.GenerationWorkerFence,
+            promotionFence: requestIntent.PromotionFence,
+            validationFingerprint: requestIntent.ValidationFingerprint,
+            promotedAtUtc: requestIntent.PromotedAtUtc);
+        var completed = new MaterializationGenerationActivationState(
+            preparation.Convergence,
+            preparation.SealRequest,
+            preparation.SealReceipt,
+            preparation.ValidationRequest,
+            preparation.ValidationReceipt,
+            requestIntent,
+            promotion);
+        var activeResult = new MaterializationGenerationActivationResult(
+            MaterializationGenerationActivationDisposition.Active,
+            Generation,
+            activation: completed,
+            target: new(
+                targetId: Target,
+                materializationId: Materialization,
+                revision: promotion.TargetRevision,
+                activeGenerationId: Generation,
+                latestPromotionFence: promotion.PromotionFence,
+                retainedGenerationCount: 1));
+        MaterializationReadyGenerationReference? observedReady = null;
+        var execution = Execution(activateReady: (_, observed) =>
+        {
+            observedReady = observed;
+            return Task.FromResult(activeResult);
+        });
+        var resolver = new ExactResolver(execution);
+        var adapter = new MaterializationReadyGenerationActivationDurableOperationAdapter(
+            planSetArtifacts.ActivateReadyRequest,
+            resolver,
+            planSetArtifacts.PromotionWorkerPlan);
+        ProcessContinuationIdentity parentContinuation = new(
+            processInstanceId: new("process/materialization-rebuild/parent"),
+            processAttemptId: new("attempt/parent/1"));
+        var request = Request(
+            planSetArtifacts.ActivateReadyRequest,
+            MaterializationReadyGenerationReferenceJsonSerializer.Serialize(ready),
+            parentContinuation,
+            planSetArtifacts.PromotionWorkerPlan.DefinitionReference,
+            MaterializationRebuildPlanSetProcessFactory.PromotionActivateNodeId);
+
+        var observation = Assert.IsType<DurableOperationOutcomeObservation>(
+            await adapter.ExecuteAsync(
+                OperationContext.Create(),
+                Invocation(
+                    request,
+                    planSetArtifacts.ActivateReadyBinding,
+                    planSetArtifacts.InteractionCatalog)));
+        var outcome = Assert.IsType<RequestResultOutcome>(observation.Outcome);
+        var active = MaterializationActiveGenerationReferenceJsonSerializer.Deserialize(
+            Assert.IsType<ObservationValue>(outcome.Value.Value).GetRequiredString());
+
+        Assert.Equal(MaterializationRebuildProcessFactory.ActiveOutcome, outcome.Id);
+        Assert.Equal(ready, observedReady);
+        Assert.Equal(CoordinatorAttempt.Continuation, resolver.LastContinuation);
+        Assert.NotEqual(parentContinuation, resolver.LastContinuation);
+        Assert.Equal(LeafAuthority, active.Authority);
+        Assert.Equal(Generation, active.Generation);
+        Assert.Equal(Target, active.Target);
+        Assert.Equal(promotion.TargetRevision, active.TargetRevision);
+        Assert.Equal(promotion.PromotionId, active.Promotion);
+    }
+
+    [Fact]
+    public async Task ReadyActivation_RejectsForeignProcessOriginBeforeTargetPromotion()
+    {
+        var artifacts = MaterializationRebuildProcessFactory.Create();
+        var planSetArtifacts = CreatePlanSetArtifacts();
+        var preparation = ReadyPreparation();
+        var ready = new MaterializationReadyGenerationReference(
+            schemaVersion: MaterializationReadyGenerationReference.CurrentSchemaVersion,
+            authority: LeafAuthority,
+            attempt: CoordinatorAttempt,
+            generation: Generation,
+            preparation);
+        var activationCalls = 0;
+        var execution = Execution(activateReady: (_, _) =>
+        {
+            activationCalls++;
+            return Task.FromException<MaterializationGenerationActivationResult>(
+                new InvalidOperationException("A foreign Process origin must not reach target activation."));
+        });
+        var adapter = new MaterializationReadyGenerationActivationDurableOperationAdapter(
+            planSetArtifacts.ActivateReadyRequest,
+            new ExactResolver(execution),
+            planSetArtifacts.PromotionWorkerPlan);
+        var request = Request(
+            planSetArtifacts.ActivateReadyRequest,
+            MaterializationReadyGenerationReferenceJsonSerializer.Serialize(ready),
+            CoordinatorAttempt.Continuation,
+            artifacts.CoordinatorPlan.DefinitionReference,
+            MaterializationRebuildProcessFactory.CoordinatorSynchronizationPreparationNodeId);
+
+        var observation = Assert.IsType<DurableOperationOutcomeObservation>(
+            await adapter.ExecuteAsync(
+                OperationContext.Create(),
+                Invocation(
+                    request,
+                    planSetArtifacts.ActivateReadyBinding,
+                    planSetArtifacts.InteractionCatalog)));
+        var outcome = Assert.IsType<RequestFailureOutcome>(observation.Outcome);
+        var evidence = Assert.IsType<ObservationValue>(outcome.Value.Value).GetRequiredString();
+
+        Assert.Equal(0, activationCalls);
+        Assert.Contains(
+            MaterializationRebuildDurableOperationDiagnosticCodes.RequestOriginInvalid,
+            evidence,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -553,7 +814,11 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
         Func<OperationContext, Task<MaterializationRebuildInitializationResult>>? begin = null,
         Func<OperationContext, MaterializationRebuildShardId, Task<MaterializationRebuildShardResult>>? run = null,
         Func<OperationContext, MaterializationSynchronizationInvocationId, MaterializationSynchronizationWorkerId,
-            Task<MaterializationGenerationActivationResult>>? activate = null) =>
+            Task<MaterializationGenerationActivationResult>>? activate = null,
+        Func<OperationContext, MaterializationSynchronizationInvocationId, MaterializationSynchronizationWorkerId,
+            Task<MaterializationGenerationActivationResult>>? prepare = null,
+        Func<OperationContext, MaterializationReadyGenerationReference,
+            Task<MaterializationGenerationActivationResult>>? activateReady = null) =>
         new(
             LeafAuthority,
             Shards,
@@ -566,7 +831,9 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
                 MaterializationRebuildShardDisposition.BaselineCompleteCatchUpRequired,
                 diagnostics: []))),
             activate ?? ((_, _, _) => Task.FromException<MaterializationGenerationActivationResult>(
-                new InvalidOperationException("This test does not activate a generation."))));
+                new InvalidOperationException("This test does not activate a generation."))),
+            synchronizeAndPrepare: prepare,
+            activateReady: activateReady);
 
     static MaterializationPlacementSliceReference CreatePlacementSlice()
     {
@@ -618,6 +885,13 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
             MaterializationRebuildLeafExecutionAuthority.CurrentSchemaVersion,
             planSet,
             new(PlacementSlice, PlanReference));
+    }
+
+    static MaterializationRebuildPlanSetProcessArtifacts CreatePlanSetArtifacts()
+    {
+        var plan = MaterializationRebuildPlanJsonSerializerTests.CreateControlledPlan([], []);
+        var planSet = MaterializationRebuildPlanJsonSerializerTests.CreateSinglePlanSet(plan);
+        return MaterializationRebuildPlanSetProcessFactory.Create(planSet);
     }
 
     sealed class InjectedAmbiguousActivationException()
@@ -744,6 +1018,89 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
         algorithm: "sha256",
         canonicalization: "tests/materialization-definition/v1",
         value: new string('c', 64));
+
+    static MaterializationGenerationActivationState ReadyPreparation()
+    {
+        var scope = Scope(new("shard-a"));
+        MaterializationSourcePosition position = new(
+            formatVersion: 1,
+            scope,
+            value: "position/ready");
+        MaterializationSynchronizationWorkKey synchronization = new(
+            materialization: Materialization,
+            definitionFingerprint: PlacementSlice.Materialization.DefinitionFingerprint,
+            rebuildPlanFingerprint: PlanFingerprint,
+            impactPlanFingerprint: new(
+                algorithm: "sha256",
+                canonicalization: "tests/materialization-impact-plan/v1",
+                value: new string('f', 64)),
+            generation: Generation);
+        MaterializationConvergenceReceipt convergence = new(
+            schemaVersion: MaterializationConvergenceReceipt.CurrentSchemaVersion,
+            synchronization,
+            feeds:
+            [
+                new(
+                    feed: new("feed/ready"),
+                    scope,
+                    latestChangeCheckpoint: new("checkpoint/ready"),
+                    throughPosition: position,
+                    caughtUpReadStartedAtUtc: StartedAtUtc,
+                    caughtUpReadCompletedAtUtc: StartedAtUtc.AddSeconds(1),
+                    checkpointCommittedAtUtc: StartedAtUtc.AddSeconds(2),
+                    settlementRequirement: MaterializationConvergenceSettlementRequirement.NotRequired)
+            ],
+            evaluatedAtUtc: StartedAtUtc.AddSeconds(3),
+            freshnessDemand: new(maximumLagMilliseconds: 60_000),
+            validation: DocumentValidationResult.Valid);
+        MaterializationSealGenerationRequest sealRequest = new(
+            sealId: new("seal/ready"),
+            generationId: Generation,
+            expectedRevision: new("10"),
+            workerFence: new("1"),
+            sealedAtUtc: StartedAtUtc.AddSeconds(4));
+        MaterializationSealReceipt sealReceipt = new(
+            sealId: sealRequest.SealId,
+            generationId: Generation,
+            generationRevision: new("11"),
+            visibleItemCount: 7,
+            fingerprint: new("seal-fingerprint/ready"),
+            sealedAtUtc: sealRequest.SealedAtUtc);
+        MaterializationValidateGenerationRequest validationRequest = new(
+            validationId: new("validation/ready"),
+            generationId: Generation,
+            expectedRevision: sealReceipt.GenerationRevision,
+            expectedSealFingerprint: sealReceipt.Fingerprint,
+            expectedVisibleItemCount: sealReceipt.VisibleItemCount,
+            validator: "tests/activation-validator/v1",
+            workerFence: sealRequest.WorkerFence,
+            validatedAtUtc: StartedAtUtc.AddSeconds(5));
+        MaterializationValidationReceipt validationReceipt = new(
+            validationId: validationRequest.ValidationId,
+            generationId: Generation,
+            generationRevision: new("12"),
+            sealFingerprint: sealReceipt.Fingerprint,
+            fingerprint: new("validation-fingerprint/ready"),
+            validation: DocumentValidationResult.Valid,
+            validatedAtUtc: validationRequest.ValidatedAtUtc);
+        MaterializationPromoteGenerationRequest promotionRequest = new(
+            promotionId: new("promotion/ready"),
+            generationId: Generation,
+            expectedGenerationRevision: validationReceipt.GenerationRevision,
+            validationFingerprint: validationReceipt.Fingerprint,
+            expectedActiveGenerationId: null,
+            expectedTargetRevision: MaterializationTargetRevision.Initial,
+            generationWorkerFence: sealRequest.WorkerFence,
+            promotionFence: MaterializationPromotionFence.Initial,
+            promotedAtUtc: StartedAtUtc.AddSeconds(6));
+        return new(
+            convergence,
+            sealRequest,
+            sealReceipt,
+            validationRequest,
+            validationReceipt,
+            promotionRequest);
+    }
 
     static RequestEnvelope ShardRequest(
         MaterializationRebuildProcessArtifacts artifacts,
