@@ -53,6 +53,10 @@ public static class MaterializationRebuildPlanSetDurableOperationDiagnosticCodes
     /// <summary>An explicit compensation child returned malformed or inexact routing evidence.</summary>
     public const string CompensationResultInexact =
         "storage.materialization.rebuild.planSet.adapter.compensation.resultInexact";
+
+    /// <summary>The exact atomic manifest capability, scope, prior state, or retained intent is unavailable or inexact.</summary>
+    public const string AtomicRoutingManifestInexact =
+        "storage.materialization.rebuild.planSet.adapter.atomicRoutingManifest.inexact";
 }
 
 /// <summary>Resolves one exact persisted rebuild plan set.</summary>
@@ -126,7 +130,10 @@ public sealed class MaterializationRebuildPlanSetInitializationDurableOperationA
     RequestTerminalOutcome? Run(RequestEnvelope request, bool remainUnresolved)
     {
         if (!Capabilities.Supports(request.Contract))
+        {
             return PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.RequestUnsupported);
+        }
+
         if (!PlanSetProjection.TryReadString(request.Payload, out var payload)
             || !PlanSetProjection.TryReadPlanSetReference(payload, out var reference)
             || reference is null)
@@ -228,7 +235,10 @@ public sealed class MaterializationRebuildReadyBarrierDurableOperationAdapter : 
     {
         context.ThrowIfCancellationRequested();
         if (!Capabilities.Supports(request.Contract))
+        {
             return PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.RequestUnsupported);
+        }
+
         if (!PlanSetProjection.TryReadString(request.Payload, out var payload)
             || !PlanSetProjection.TryReadPlanSetReference(payload, out var reference)
             || reference is null)
@@ -388,7 +398,10 @@ public sealed class MaterializationIndependentPromotionPreparationDurableOperati
     {
         context.ThrowIfCancellationRequested();
         if (!Capabilities.Supports(request.Contract))
+        {
             return PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.RequestUnsupported);
+        }
+
         if (!PlanSetProjection.TryReadString(request.Payload, out var payload)
             || !PlanSetProjection.TryDeserialize(payload, MaterializationActiveGenerationReferenceJsonSerializer.Deserialize, out MaterializationActiveGenerationReference? active)
             || active is null)
@@ -517,7 +530,10 @@ public sealed class MaterializationIndependentPromotionDurableOperationAdapter :
     {
         context.ThrowIfCancellationRequested();
         if (!Capabilities.Supports(request.Contract))
+        {
             return PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.RequestUnsupported);
+        }
+
         if (!PlanSetProjection.TryReadString(request.Payload, out var payload)
             || !PlanSetProjection.TryDeserialize(payload, MaterializationIndependentPromotionRequestJsonSerializer.Deserialize, out MaterializationIndependentPromotionRequest? promotionRequest)
             || promotionRequest is null)
@@ -617,7 +633,10 @@ public sealed class MaterializationProgressiveCompensationWorkDurableOperationAd
     {
         context.ThrowIfCancellationRequested();
         if (!Capabilities.Supports(request.Contract))
+        {
             return PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.RequestUnsupported);
+        }
+
         if (!PlanSetProjection.TryReadString(request.Payload, out var payload)
             || !PlanSetProjection.TryDeserialize(
                 payload,
@@ -733,7 +752,10 @@ public sealed class MaterializationProgressiveCompensationPreparationDurableOper
     {
         context.ThrowIfCancellationRequested();
         if (!Capabilities.Supports(request.Contract))
+        {
             return PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.RequestUnsupported);
+        }
+
         if (!PlanSetProjection.TryReadString(request.Payload, out var payload)
             || !PlanSetProjection.TryDeserialize(
                 payload,
@@ -756,11 +778,17 @@ public sealed class MaterializationProgressiveCompensationPreparationDurableOper
             compensationPlan,
             MaterializationRebuildPlanSetProcessFactory.CompensationPrepareNodeId).ConfigureAwait(false);
         if (loaded.Checkpoint is null)
+        {
             return PlanSetProjection.Failure(loaded.FailureCode!);
+        }
+
         var current = await router.InspectAsync(context, promotion.PlacementSlice).ConfigureAwait(false);
         var proof = await proofProvider.ResolveAsync(context, promotion, current).ConfigureAwait(false);
         if (proof is null)
+        {
             return PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.CompensationUnavailable);
+        }
+
         try
         {
             var fence = current.LatestFence is null
@@ -847,7 +875,10 @@ public sealed class MaterializationProgressiveCompensationDurableOperationAdapte
     {
         context.ThrowIfCancellationRequested();
         if (!Capabilities.Supports(request.Contract))
+        {
             return PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.RequestUnsupported);
+        }
+
         if (request.Context.Origin is not ProcessInteractionOrigin origin
             || origin.Definition != compensationPlan.DefinitionReference
             || origin.Node != MaterializationRebuildPlanSetProcessFactory.CompensationApplyNodeId
@@ -884,28 +915,276 @@ public sealed class MaterializationProgressiveCompensationDurableOperationAdapte
 }
 
 /// <summary>Projects exact settled promotion children into one honest aggregate plan-set receipt.</summary>
+public sealed class MaterializationAtomicRoutingManifestPreparationDurableOperationAdapter : IDurableOperationAdapter
+{
+    readonly IMaterializationRebuildPlanSetExecutionResolver resolver;
+    readonly IMaterializationAtomicRoutingManifestAuthority authority;
+    readonly MaterializationAtomicRoutingManifestRealization realization;
+    readonly IProcessDurableStore store;
+    readonly CompiledProcessPlan parentPlan;
+
+    /// <summary>Creates a read-only adapter that captures one exact complete-manifest transaction intent.</summary>
+    /// <param name="request">Exact atomic-manifest preparation Request contract.</param>
+    /// <param name="resolver">Resolver for the content-addressed plan set.</param>
+    /// <param name="authority">Single capability-proven manifest authority.</param>
+    /// <param name="realization">Exact compiler-selected capability match.</param>
+    /// <param name="store">Durable parent Process store.</param>
+    /// <param name="parentPlan">Exact compiled atomic parent Process.</param>
+    /// <exception cref="ArgumentNullException">A required argument is null.</exception>
+    public MaterializationAtomicRoutingManifestPreparationDurableOperationAdapter(
+        RequestContractReference request,
+        IMaterializationRebuildPlanSetExecutionResolver resolver,
+        IMaterializationAtomicRoutingManifestAuthority authority,
+        MaterializationAtomicRoutingManifestRealization realization,
+        IProcessDurableStore store,
+        CompiledProcessPlan parentPlan)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        this.resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
+        this.authority = authority ?? throw new ArgumentNullException(nameof(authority));
+        this.realization = realization ?? throw new ArgumentNullException(nameof(realization));
+        this.store = store ?? throw new ArgumentNullException(nameof(store));
+        this.parentPlan = parentPlan ?? throw new ArgumentNullException(nameof(parentPlan));
+        Capabilities = new(
+            idempotencyEvidence: DurableOperationIdempotencyEvidence.NaturallyIdempotent,
+            reconciliation: DurableOperationReconciliationCapability.Supported,
+            supportedRequests: [request]);
+    }
+
+    /// <inheritdoc />
+    public DurableOperationAdapterCapabilities Capabilities { get; }
+
+    /// <inheritdoc />
+    public async ValueTask<DurableOperationAttemptObservation> ExecuteAsync(
+        OperationContext context,
+        DurableOperationInvocation invocation)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(invocation);
+        var outcome = await RunAsync(context, invocation.Request).ConfigureAwait(false);
+        return new DurableOperationOutcomeObservation(outcome);
+    }
+
+    /// <inheritdoc />
+    public ValueTask<DurableOperationReconciliationObservation> ReconcileAsync(
+        OperationContext context,
+        DurableOperationReconciliationRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(request);
+        context.ThrowIfCancellationRequested();
+        DurableOperationReconciliationObservation observation = Capabilities.Supports(request.Request.Contract)
+            ? new DurableOperationConfirmedNotExecuted()
+            : new DurableOperationUnresolved();
+        return ValueTask.FromResult(observation);
+    }
+
+    async Task<RequestTerminalOutcome> RunAsync(OperationContext context, RequestEnvelope request)
+    {
+        context.ThrowIfCancellationRequested();
+        if (!Capabilities.Supports(request.Contract))
+        {
+            return PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.RequestUnsupported);
+        }
+
+        if (!PlanSetProjection.TryReadString(request.Payload, out var payload)
+            || !PlanSetProjection.TryDeserialize(
+                payload,
+                MaterializationRebuildReadyBarrierJsonSerializer.DeserializeStructural,
+                out MaterializationRebuildReadyBarrier? barrier)
+            || barrier is null)
+        {
+            return PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.RequestPayloadInvalid);
+        }
+        if (!PlanSetProjection.IsExactParentSpecialization(parentPlan, barrier.PlanSet, realization)
+            || !resolver.TryResolve(barrier.PlanSet, out var planSet)
+            || planSet is null
+            || MaterializationRebuildPlanSetReference.FromPlanSet(planSet) != barrier.PlanSet)
+        {
+            return PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.ExecutionInexact);
+        }
+        var loaded = await PlanSetProjection.LoadCheckpointAsync(
+                context,
+                request,
+                store,
+                parentPlan,
+                MaterializationRebuildPlanSetProcessFactory.PrepareAtomicRoutingManifestNodeId)
+            .ConfigureAwait(false);
+        if (loaded.Checkpoint is null)
+        {
+            return PlanSetProjection.Failure(loaded.FailureCode!);
+        }
+
+        try
+        {
+            barrier.ValidateAgainst(planSet, parentPlan, loaded.Checkpoint);
+            var executor = new MaterializationAtomicRoutingManifestExecutor(planSet, realization);
+            var prior = await authority.InspectAsync(context, barrier.PlanSet).ConfigureAwait(false);
+            var fence = prior.LatestFence is null
+                ? MaterializationBackendRoutingFence.Initial
+                : new MaterializationBackendRoutingFence(
+                    checked(prior.LatestFence.Value.Ordinal + 1).ToString(CultureInfo.InvariantCulture));
+            var intent = executor.CreateRequest(
+                barrier: barrier,
+                prior: prior,
+                fence: fence,
+                issuedAtUtc: loaded.RequestBoundary!.Value);
+            return new RequestResultOutcome(
+                MaterializationRebuildPlanSetProcessFactory.CompletedOutcome,
+                PlanSetProjection.StringValue(
+                    MaterializationAtomicRoutingManifestJsonSerializer.SerializeRequest(intent)));
+        }
+        catch (ArgumentException)
+        {
+            return PlanSetProjection.Failure(
+                MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.AtomicRoutingManifestInexact);
+        }
+        catch (OverflowException)
+        {
+            return PlanSetProjection.Failure(
+                MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.AtomicRoutingManifestInexact);
+        }
+    }
+}
+
+/// <summary>Applies and reconciles one already-persisted complete routing-manifest transaction.</summary>
+public sealed class MaterializationAtomicRoutingManifestDurableOperationAdapter : IDurableOperationAdapter
+{
+    readonly IMaterializationRebuildPlanSetExecutionResolver resolver;
+    readonly IMaterializationAtomicRoutingManifestAuthority authority;
+    readonly MaterializationAtomicRoutingManifestRealization realization;
+    readonly CompiledProcessPlan parentPlan;
+
+    /// <summary>Creates an adapter for one exact atomic complete-manifest application Request.</summary>
+    /// <param name="request">Exact atomic-manifest application Request contract.</param>
+    /// <param name="resolver">Resolver for the content-addressed plan set.</param>
+    /// <param name="authority">Single capability-proven manifest authority.</param>
+    /// <param name="realization">Exact compiler-selected capability match.</param>
+    /// <param name="parentPlan">Exact compiled atomic parent Process.</param>
+    /// <exception cref="ArgumentNullException">A required argument is null.</exception>
+    public MaterializationAtomicRoutingManifestDurableOperationAdapter(
+        RequestContractReference request,
+        IMaterializationRebuildPlanSetExecutionResolver resolver,
+        IMaterializationAtomicRoutingManifestAuthority authority,
+        MaterializationAtomicRoutingManifestRealization realization,
+        CompiledProcessPlan parentPlan)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        this.resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
+        this.authority = authority ?? throw new ArgumentNullException(nameof(authority));
+        this.realization = realization ?? throw new ArgumentNullException(nameof(realization));
+        this.parentPlan = parentPlan ?? throw new ArgumentNullException(nameof(parentPlan));
+        Capabilities = new(
+            idempotencyEvidence: DurableOperationIdempotencyEvidence.TargetDeduplication,
+            reconciliation: DurableOperationReconciliationCapability.Supported,
+            supportedRequests: [request]);
+    }
+
+    /// <inheritdoc />
+    public DurableOperationAdapterCapabilities Capabilities { get; }
+
+    /// <inheritdoc />
+    public async ValueTask<DurableOperationAttemptObservation> ExecuteAsync(
+        OperationContext context,
+        DurableOperationInvocation invocation)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(invocation);
+        var outcome = await RunAsync(context, invocation.Request, remainUnresolved: false).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("Execute must project a terminal atomic-manifest outcome.");
+        return new DurableOperationOutcomeObservation(outcome);
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<DurableOperationReconciliationObservation> ReconcileAsync(
+        OperationContext context,
+        DurableOperationReconciliationRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(request);
+        var outcome = await RunAsync(context, request.Request, remainUnresolved: true).ConfigureAwait(false);
+        return outcome is null
+            ? new DurableOperationUnresolved()
+            : new DurableOperationReconciledOutcome(outcome);
+    }
+
+    async Task<RequestTerminalOutcome?> RunAsync(
+        OperationContext context,
+        RequestEnvelope request,
+        bool remainUnresolved)
+    {
+        context.ThrowIfCancellationRequested();
+        if (!Capabilities.Supports(request.Contract))
+        {
+            return PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.RequestUnsupported);
+        }
+
+        if (!PlanSetProjection.TryReadString(request.Payload, out var payload)
+            || !PlanSetProjection.TryDeserialize(
+                payload,
+                MaterializationAtomicRoutingManifestJsonSerializer.DeserializeRequest,
+                out MaterializationAtomicRoutingManifestRequest? intent)
+            || intent is null)
+        {
+            return PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.RequestPayloadInvalid);
+        }
+        if (request.Context.Origin is not ProcessInteractionOrigin origin
+            || origin.Definition != parentPlan.DefinitionReference
+            || origin.Node != MaterializationRebuildPlanSetProcessFactory.ApplyAtomicRoutingManifestNodeId)
+        {
+            return PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.RequestOriginInvalid);
+        }
+        if (!resolver.TryResolve(intent.Realization.Requirement.PlanSet, out var planSet)
+            || planSet is null)
+        {
+            return remainUnresolved
+                ? null
+                : PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.ExecutionUnavailable);
+        }
+        try
+        {
+            var executor = new MaterializationAtomicRoutingManifestExecutor(planSet, realization);
+            var result = await executor.ExecuteAsync(context, intent, authority).ConfigureAwait(false);
+            return new RequestResultOutcome(
+                MaterializationRebuildPlanSetProcessFactory.CompletedOutcome,
+                PlanSetProjection.StringValue(
+                    MaterializationAtomicRoutingManifestJsonSerializer.SerializeResult(result)));
+        }
+        catch (ArgumentException)
+        {
+            return PlanSetProjection.Failure(
+                MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.AtomicRoutingManifestInexact);
+        }
+    }
+}
+
+/// <summary>Projects exact build and promotion evidence into the aggregate terminal receipt.</summary>
 public sealed class MaterializationRebuildPlanSetFinalizationDurableOperationAdapter : IDurableOperationAdapter
 {
     readonly IMaterializationRebuildPlanSetExecutionResolver resolver;
     readonly IProcessDurableStore store;
     readonly CompiledProcessPlan parentPlan;
+    readonly MaterializationAtomicRoutingManifestRealization? atomicRealization;
 
     /// <summary>Creates an adapter for one exact parent finalization Request.</summary>
     /// <param name="request">Exact aggregate-finalization Request contract.</param>
     /// <param name="resolver">Resolver for the exact content-addressed plan-set execution.</param>
     /// <param name="store">Durable Process store containing both bounded child ledgers.</param>
     /// <param name="parentPlan">Exact compiled parent Process selected for checkpoint validation.</param>
+    /// <param name="atomicRealization">Exact atomic specialization, or null for per-target publication.</param>
     /// <exception cref="ArgumentNullException">An argument is <see langword="null"/>.</exception>
     public MaterializationRebuildPlanSetFinalizationDurableOperationAdapter(
         RequestContractReference request,
         IMaterializationRebuildPlanSetExecutionResolver resolver,
         IProcessDurableStore store,
-        CompiledProcessPlan parentPlan)
+        CompiledProcessPlan parentPlan,
+        MaterializationAtomicRoutingManifestRealization? atomicRealization = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         this.resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
         this.store = store ?? throw new ArgumentNullException(nameof(store));
         this.parentPlan = parentPlan ?? throw new ArgumentNullException(nameof(parentPlan));
+        this.atomicRealization = atomicRealization;
         Capabilities = new(
             idempotencyEvidence: DurableOperationIdempotencyEvidence.NaturallyIdempotent,
             reconciliation: DurableOperationReconciliationCapability.Supported,
@@ -947,14 +1226,19 @@ public sealed class MaterializationRebuildPlanSetFinalizationDurableOperationAda
     {
         context.ThrowIfCancellationRequested();
         if (!Capabilities.Supports(request.Contract))
+        {
             return PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.RequestUnsupported);
+        }
+
         if (!PlanSetProjection.TryReadString(request.Payload, out var payload)
             || !PlanSetProjection.TryDeserialize(payload, MaterializationRebuildReadyBarrierJsonSerializer.DeserializeStructural, out MaterializationRebuildReadyBarrier? barrier)
             || barrier is null)
         {
             return PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.RequestPayloadInvalid);
         }
-        if (!PlanSetProjection.IsExactParentSpecialization(parentPlan, barrier.PlanSet))
+        if (!(atomicRealization is null
+                ? PlanSetProjection.IsExactParentSpecialization(parentPlan, barrier.PlanSet)
+                : PlanSetProjection.IsExactParentSpecialization(parentPlan, barrier.PlanSet, atomicRealization)))
         {
             return PlanSetProjection.Failure(
                 MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.ExecutionInexact);
@@ -993,10 +1277,17 @@ public sealed class MaterializationRebuildPlanSetFinalizationDurableOperationAda
         }
 
         ImmutableArray<MaterializationRebuildPlanSetLeafReceipt> leaves;
+        MaterializationAtomicRoutingManifestResult? atomicResult = null;
         try
         {
-            barrier.ValidateAgainst(planSet, parentPlan, loaded.Checkpoint);
-            leaves = PlanSetProjection.ProjectPromotionLeaves(planSet, barrier, loaded.Checkpoint);
+            barrier.ValidateAgainst(planSet, parentPlan, loaded.Checkpoint, atomicRealization);
+            leaves = atomicRealization is null
+                ? PlanSetProjection.ProjectPromotionLeaves(planSet, barrier, loaded.Checkpoint)
+                : PlanSetProjection.ProjectAtomicManifestLeaves(
+                    planSet,
+                    barrier,
+                    loaded.Checkpoint,
+                    out atomicResult);
         }
         catch (ArgumentException)
         {
@@ -1020,8 +1311,10 @@ public sealed class MaterializationRebuildPlanSetFinalizationDurableOperationAda
             readyBarrier: barrier,
             completedAtUtc: PlanSetProjection.CompletionBoundary(
                 loaded.RequestBoundary!.Value,
-                leaves));
-        receipt.ValidateAgainst(planSet, parentPlan, loaded.Checkpoint);
+                leaves,
+                atomicResult),
+            atomicRoutingManifest: atomicResult);
+        receipt.ValidateAgainst(planSet, parentPlan, loaded.Checkpoint, atomicRealization);
         var value = PlanSetProjection.StringValue(MaterializationRebuildPlanSetReceiptJsonSerializer.Serialize(receipt));
         return outcome == MaterializationRebuildPlanSetOutcome.Failed
             ? new RequestFailureOutcome(MaterializationRebuildPlanSetProcessFactory.FailedOutcome, value)
@@ -1066,6 +1359,14 @@ static class PlanSetProjection
             == MaterializationRebuildPlanSetProcessFactory.GetParentDefinitionId(planSet)
         && parentPlan.DefinitionReference.RevisionId == MaterializationRebuildPlanSetProcessFactory.RevisionId;
 
+    internal static bool IsExactParentSpecialization(
+        CompiledProcessPlan parentPlan,
+        MaterializationRebuildPlanSetReference planSet,
+        MaterializationAtomicRoutingManifestRealization atomicRealization) =>
+        parentPlan.DefinitionReference.DefinitionId
+            == MaterializationRebuildPlanSetProcessFactory.GetParentDefinitionId(planSet, atomicRealization)
+        && parentPlan.DefinitionReference.RevisionId == MaterializationRebuildPlanSetProcessFactory.RevisionId;
+
     internal static bool HasExactParentStart(
         ProcessStartReceipt start,
         CompiledProcessPlan parentPlan,
@@ -1092,13 +1393,16 @@ static class PlanSetProjection
     internal static void ValidateParentContext(
         MaterializationRebuildPlanSet planSet,
         CompiledProcessPlan parentPlan,
-        ProcessDurableCheckpoint checkpoint)
+        ProcessDurableCheckpoint checkpoint,
+        MaterializationAtomicRoutingManifestRealization? atomicRealization = null)
     {
         ArgumentNullException.ThrowIfNull(planSet);
         ArgumentNullException.ThrowIfNull(parentPlan);
         ArgumentNullException.ThrowIfNull(checkpoint);
         var reference = MaterializationRebuildPlanSetReference.FromPlanSet(planSet);
-        if (!IsExactParentSpecialization(parentPlan, reference)
+        if (!(atomicRealization is null
+                ? IsExactParentSpecialization(parentPlan, reference)
+                : IsExactParentSpecialization(parentPlan, reference, atomicRealization))
             || !HasExactParentStart(checkpoint.Start, parentPlan, reference))
         {
             throw new ArgumentException(
@@ -1429,6 +1733,81 @@ static class PlanSetProjection
                 : forward;
     }
 
+    internal static ImmutableArray<MaterializationRebuildPlanSetLeafReceipt> ProjectAtomicManifestLeaves(
+        MaterializationRebuildPlanSet planSet,
+        MaterializationRebuildReadyBarrier barrier,
+        ProcessDurableCheckpoint checkpoint,
+        out MaterializationAtomicRoutingManifestResult result)
+    {
+        var operations = checkpoint.DurableOperations.Where(operation =>
+            operation.Request.Context.Origin is ProcessInteractionOrigin origin
+            && origin.Definition == checkpoint.Start.Request.Definition
+            && origin.Node == MaterializationRebuildPlanSetProcessFactory.ApplyAtomicRoutingManifestNodeId).ToArray();
+        if (operations is not [var operation]
+            || operation.Acknowledgement?.Outcome is not RequestResultOutcome acknowledgement
+            || acknowledgement.Id != MaterializationRebuildPlanSetProcessFactory.CompletedOutcome
+            || !TryReadString(operation.Request.Payload, out var requestJson)
+            || !TryDeserialize(
+                requestJson,
+                MaterializationAtomicRoutingManifestJsonSerializer.DeserializeRequest,
+                out MaterializationAtomicRoutingManifestRequest? request)
+            || request is null
+            || !TryReadString(acknowledgement.Value, out var resultJson)
+            || !TryDeserialize(
+                resultJson,
+                MaterializationAtomicRoutingManifestJsonSerializer.DeserializeResult,
+                out MaterializationAtomicRoutingManifestResult? observed)
+            || observed is null
+            || !MaterializationContract.CanonicalEquals(observed.Request, request)
+            || observed.Request.Realization.Requirement.PlanSet
+                != MaterializationRebuildPlanSetReference.FromPlanSet(planSet))
+        {
+            throw new ArgumentException(
+                "The parent atomic-manifest operation does not retain one exact acknowledged transaction result.",
+                nameof(checkpoint));
+        }
+
+        var build = ProjectBuildLeaves(planSet, checkpoint, out var allReady);
+        if (!allReady || barrier.ReadyGenerations.Length != build.Length)
+        {
+            throw new ArgumentException("Atomic publication requires the exact complete ready barrier.", nameof(checkpoint));
+        }
+
+        var readiness = barrier.ReadyGenerations.ToDictionary(static ready => ready.PlacementSlice.Id);
+        var desired = observed.Request.DesiredEntries.ToDictionary(static entry => entry.PlacementSlice.Id);
+        var leaves = ImmutableArray.CreateBuilder<MaterializationRebuildPlanSetLeafReceipt>(build.Length);
+        foreach (var leaf in build)
+        {
+            var ready = readiness[leaf.Authority.PlacementSlice.Id];
+            if (!desired.TryGetValue(leaf.Authority.PlacementSlice.Id, out var entry)
+                || !MaterializationContract.CanonicalEquals(entry.Readiness!, ready))
+            {
+                throw new ArgumentException(
+                    "The atomic manifest desired state substitutes a ready leaf.",
+                    nameof(checkpoint));
+            }
+            leaves.Add(observed.IsApplied
+                ? new(
+                    authority: leaf.Authority,
+                    buildChild: leaf.BuildChild,
+                    outcome: MaterializationRebuildPlanSetLeafOutcome.Promoted,
+                    ready: ready,
+                    atomicManifestCommand: observed.Request.CommandId)
+                : new(
+                    authority: leaf.Authority,
+                    buildChild: leaf.BuildChild,
+                    outcome: MaterializationRebuildPlanSetLeafOutcome.Failed,
+                    ready: ready,
+                    atomicManifestCommand: observed.Request.CommandId,
+                    failure: Error(
+                        MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.AtomicRoutingManifestInexact,
+                        observed.Detail ?? "The complete routing manifest was not atomically selected.",
+                        leaf.Authority.PlacementSlice.Id.Value)));
+        }
+        result = observed;
+        return leaves.MoveToImmutable();
+    }
+
     static ImmutableArray<MaterializationRebuildPlanSetLeafReceipt> ApplyCompensationLeaves(
         MaterializationRebuildPlanSet planSet,
         ProcessDurableCheckpoint checkpoint,
@@ -1525,7 +1904,8 @@ static class PlanSetProjection
 
     internal static DateTimeOffset CompletionBoundary(
         DateTimeOffset requestBoundary,
-        ImmutableArray<MaterializationRebuildPlanSetLeafReceipt> leaves)
+        ImmutableArray<MaterializationRebuildPlanSetLeafReceipt> leaves,
+        MaterializationAtomicRoutingManifestResult? atomicResult = null)
     {
         var boundary = requestBoundary;
         foreach (var leaf in leaves)
@@ -1535,13 +1915,16 @@ static class PlanSetProjection
             AdvanceBoundary(ref boundary, leaf.Promotion?.Routing?.Receipt?.CommittedAtUtc);
             AdvanceBoundary(ref boundary, leaf.Compensation?.Routing.Receipt?.CommittedAtUtc);
         }
+        AdvanceBoundary(ref boundary, atomicResult?.Receipt?.CommittedAtUtc);
         return boundary;
     }
 
     static void AdvanceBoundary(ref DateTimeOffset boundary, DateTimeOffset? evidenceAtUtc)
     {
         if (evidenceAtUtc is { } evidence && evidence > boundary)
+        {
             boundary = evidence;
+        }
     }
 
     static ProcessPartitionState? ExactPartition(
@@ -1613,7 +1996,10 @@ static class PlanSetProjection
         var authorities = ImmutableArray.CreateBuilder<MaterializationRebuildLeafExecutionAuthority>(
             planSet.LeafPlans.Length);
         foreach (var binding in planSet.LeafPlans)
+        {
             authorities.Add(MaterializationRebuildLeafExecutionAuthority.FromPlanSet(planSet, binding));
+        }
+
         return authorities.MoveToImmutable();
     }
 

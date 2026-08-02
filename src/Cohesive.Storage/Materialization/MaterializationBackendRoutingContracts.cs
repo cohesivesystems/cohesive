@@ -6,7 +6,7 @@ using Cohesive.Model.Serialization;
 
 namespace Cohesive.Storage.Materialization;
 
-/// <summary>Monotonic compare-and-swap revision of one exact placement slice's routing state.</summary>
+/// <summary>Monotonic compare-and-swap revision owned by one exact routing authority scope.</summary>
 [JsonConverter(typeof(SingleValueWrapperJsonConverter))]
 public readonly record struct MaterializationBackendRoutingRevision
 {
@@ -39,7 +39,7 @@ public readonly record struct MaterializationBackendRoutingRevision
         new(checked(Ordinal + 1).ToString(CultureInfo.InvariantCulture));
 }
 
-/// <summary>Monotonic ownership fence for one exact placement slice's routing authority.</summary>
+/// <summary>Monotonic ownership fence for one exact routing authority scope.</summary>
 [JsonConverter(typeof(SingleValueWrapperJsonConverter))]
 public readonly record struct MaterializationBackendRoutingFence
 {
@@ -69,7 +69,7 @@ public readonly record struct MaterializationBackendRoutingFence
     public override string ToString() => Value;
 }
 
-/// <summary>Stable idempotency identity of one placement-scoped backend routing command.</summary>
+/// <summary>Stable idempotency identity of one exact backend routing command.</summary>
 [JsonConverter(typeof(SingleValueWrapperJsonConverter))]
 public readonly record struct MaterializationBackendRoutingCommandId
 {
@@ -232,12 +232,21 @@ public sealed record MaterializationBackendDrainProof
         PlacementSlice = placementSlice ?? throw new ArgumentNullException(nameof(placementSlice));
         Generation = generation ?? throw new ArgumentNullException(nameof(generation));
         if (generation.DefinitionFingerprint != placementSlice.Materialization.DefinitionFingerprint)
+        {
             throw new ArgumentException("Drain evidence must implement the placement slice's exact definition.", nameof(generation));
+        }
+
         MaterializationContract.RequireDefinedIdentity(admissionsClosedAtRevision.Value, nameof(admissionsClosedAtRevision));
         if (admissionsClosedAtRevision.Ordinal == 0)
+        {
             throw new ArgumentException("Drain evidence must follow a committed routing transition.", nameof(admissionsClosedAtRevision));
+        }
+
         if (inFlightOperationCount != 0)
+        {
             throw new ArgumentOutOfRangeException(nameof(inFlightOperationCount), inFlightOperationCount, "Quiescence requires an exact zero in-flight count.");
+        }
+
         QuiescenceToken = MaterializationContract.RequireUnicodeIdentity(quiescenceToken, nameof(quiescenceToken));
         MaterializationContract.RequireUtc(observedAtUtc, nameof(observedAtUtc));
         AdmissionsClosedAtRevision = admissionsClosedAtRevision;
@@ -360,7 +369,10 @@ public sealed record MaterializationBackendDrainState
     {
         Generation = generation ?? throw new ArgumentNullException(nameof(generation));
         if (admissionsClosedAtRevision.Ordinal == 0)
+        {
             throw new ArgumentException("A drain begins only after a committed routing transition.", nameof(admissionsClosedAtRevision));
+        }
+
         if (proof is not null
             && (proof.Generation != generation || proof.AdmissionsClosedAtRevision != admissionsClosedAtRevision))
         {
@@ -396,7 +408,10 @@ public sealed record MaterializationBackendRetirementState
     {
         Generation = generation ?? throw new ArgumentNullException(nameof(generation));
         if (retiredAtRevision.Ordinal == 0)
+        {
             throw new ArgumentException("Placement retirement requires a committed routing revision.", nameof(retiredAtRevision));
+        }
+
         RetiredAtRevision = retiredAtRevision;
     }
 
@@ -422,7 +437,10 @@ public sealed record MaterializationBackendCleanupRetirementClaim
     {
         PlacementSlice = placementSlice ?? throw new ArgumentNullException(nameof(placementSlice));
         if (retiredAtRevision.Ordinal == 0)
+        {
             throw new ArgumentException("A cleanup retirement claim requires a committed routing revision.", nameof(retiredAtRevision));
+        }
+
         RetiredAtRevision = retiredAtRevision;
     }
 
@@ -464,7 +482,10 @@ public sealed class MaterializationBackendCleanupReservation : IEquatable<Materi
         Token = MaterializationContract.RequireUnicodeIdentity(token, nameof(token));
         var normalized = retirements.IsDefault ? [] : retirements;
         if (normalized.IsEmpty || normalized.Any(static claim => claim is null))
+        {
             throw new ArgumentException("A cleanup reservation requires at least one retirement claim.", nameof(retirements));
+        }
+
         if (normalized.Any(claim =>
                 claim.PlacementSlice.Materialization.DefinitionFingerprint != generation.DefinitionFingerprint))
         {
@@ -479,13 +500,18 @@ public sealed class MaterializationBackendCleanupReservation : IEquatable<Materi
                 nameof(retirements));
         }
         if (normalized.Select(static claim => claim.PlacementSlice.Fingerprint).Distinct().Count() != normalized.Length)
+        {
             throw new ArgumentException("Cleanup retirement claims must be placement-unique.", nameof(retirements));
+        }
 
         var canonical = normalized
             .OrderBy(static claim => claim.PlacementSlice.Fingerprint.Value, StringComparer.Ordinal)
             .ToImmutableArray();
         if (!normalized.SequenceEqual(canonical))
+        {
             throw new ArgumentException("Cleanup retirement claims must use canonical placement-fingerprint order.", nameof(retirements));
+        }
+
         var receiptClaim = canonical.FirstOrDefault(claim => claim.PlacementSlice == receipt.PlacementSlice);
         if (receipt.Operation != MaterializationBackendRoutingOperation.ReserveCleanup || receiptClaim is null)
         {
@@ -540,7 +566,10 @@ public sealed class MaterializationBackendCleanupReservation : IEquatable<Materi
         hash.Add(Receipt);
         hash.Add(Token, StringComparer.Ordinal);
         foreach (var retirement in Retirements)
+        {
             hash.Add(retirement);
+        }
+
         return hash.ToHashCode();
     }
 }
@@ -583,9 +612,15 @@ public sealed record MaterializationBackendCleanupProof
         PlacementSlice = placementSlice ?? throw new ArgumentNullException(nameof(placementSlice));
         Generation = generation ?? throw new ArgumentNullException(nameof(generation));
         if (generation.DefinitionFingerprint != placementSlice.Materialization.DefinitionFingerprint)
+        {
             throw new ArgumentException("Cleanup evidence must implement the placement slice's exact definition.", nameof(generation));
+        }
+
         if (retiredAtRevision.Ordinal == 0)
+        {
             throw new ArgumentException("Physical cleanup must cite a committed placement-retirement revision.", nameof(retiredAtRevision));
+        }
+
         ReservationToken = MaterializationContract.RequireUnicodeIdentity(reservationToken, nameof(reservationToken));
         CleanupFingerprint = MaterializationContract.RequireUnicodeIdentity(cleanupFingerprint, nameof(cleanupFingerprint));
         MaterializationContract.RequireUtc(observedAtUtc, nameof(observedAtUtc));
@@ -925,7 +960,7 @@ public sealed record MaterializationCleanupBackendGenerationRequest
     public MaterializationBackendCleanupProof Proof { get; }
 }
 
-/// <summary>Observable outcome of one placement-scoped backend routing command.</summary>
+/// <summary>Observable outcome of one exact backend routing command.</summary>
 [JsonConverter(typeof(StrictStringEnumJsonConverterFactory))]
 public enum MaterializationBackendRoutingDisposition
 {
@@ -1012,7 +1047,10 @@ public sealed record MaterializationBackendRoutingReceipt
                 "Unsupported backend-routing operation.");
         }
         if (revision.Ordinal == 0)
+        {
             throw new ArgumentException("A routing receipt requires a committed revision.", nameof(revision));
+        }
+
         MaterializationContract.RequireDefinedIdentity(fence.Value, nameof(fence));
         MaterializationContract.RequireUtc(committedAtUtc, nameof(committedAtUtc));
         CommandId = commandId;
@@ -1078,13 +1116,25 @@ public sealed record MaterializationBackendRoutingSnapshot
         PlacementSlice = placementSlice ?? throw new ArgumentNullException(nameof(placementSlice));
         MaterializationContract.RequireDefinedIdentity(revision.Value, nameof(revision));
         if (latestFence is { } acceptedFence)
+        {
             MaterializationContract.RequireDefinedIdentity(acceptedFence.Value, nameof(latestFence));
+        }
+
         if (revision.Ordinal > 0 && latestFence is null)
+        {
             throw new ArgumentException("Committed routing state requires an accepted authority fence.", nameof(latestFence));
+        }
+
         if ((activeRead is null) != (activeWrite is null))
+        {
             throw new ArgumentException("Initialized routing requires both an active read and active write slot.", nameof(activeWrite));
+        }
+
         if ((activeRead is null) != (configuration is null))
+        {
             throw new ArgumentException("Only initialized routing carries effective target configuration.", nameof(configuration));
+        }
+
         if (configuration is not null
             && (configuration.ReadTarget != activeRead!.Generation.TargetId
                 || configuration.WriteTarget != activeWrite!.TargetId))
@@ -1092,9 +1142,15 @@ public sealed record MaterializationBackendRoutingSnapshot
             throw new ArgumentException("Effective configuration must select the exact active read and write targets.", nameof(configuration));
         }
         if (activeRead is not null && activeRead.PlacementSlice != placementSlice)
+        {
             throw new ArgumentException("The readable route belongs to another placement authority.", nameof(activeRead));
+        }
+
         if (candidate is not null && candidate.TargetId != placementSlice.Target)
+        {
             throw new ArgumentException("The candidate belongs to another placement target.", nameof(candidate));
+        }
+
         if (pendingFollowUp is not null && pendingFollowUp.Candidate != candidate)
         {
             throw new ArgumentException(
@@ -1128,35 +1184,60 @@ public sealed record MaterializationBackendRoutingSnapshot
                 nameof(revision));
         }
         if (normalizedDraining.Any(drain => drain.AdmissionsClosedAtRevision.Ordinal > revision.Ordinal))
+        {
             throw new ArgumentException("A drain boundary cannot follow the containing routing revision.", nameof(draining));
+        }
+
         if (normalizedRetired.Any(retirement => retirement.RetiredAtRevision.Ordinal > revision.Ordinal))
+        {
             throw new ArgumentException("A retirement boundary cannot follow the containing routing revision.", nameof(retired));
+        }
+
         RequirePlacementDefinition(activeRead?.Generation);
         RequirePlacementDefinition(activeWrite);
         RequirePlacementDefinition(candidate);
         foreach (var drain in normalizedDraining)
+        {
             RequirePlacementDefinition(drain.Generation);
+        }
+
         foreach (var retirement in normalizedRetired)
+        {
             RequirePlacementDefinition(retirement.Generation);
+        }
+
         foreach (var generation in normalizedCleaned)
+        {
             RequirePlacementDefinition(generation);
+        }
 
         var terminal = new HashSet<MaterializationBackendGenerationReference>(
             normalizedRetired.Select(static retirement => retirement.Generation));
         terminal.UnionWith(normalizedCleaned);
         if (terminal.Count != normalizedRetired.Length + normalizedCleaned.Length)
+        {
             throw new ArgumentException("A generation cannot be both retired and cleaned.", nameof(cleaned));
+        }
+
         if (normalizedDraining.Any(drain => terminal.Contains(drain.Generation)))
+        {
             throw new ArgumentException("A draining generation cannot be retired or cleaned.", nameof(draining));
+        }
+
         if (candidate is not null && terminal.Contains(candidate))
+        {
             throw new ArgumentException("A candidate cannot be retired or cleaned.", nameof(candidate));
+        }
+
         if (activeRead is { } read && terminal.Contains(read.Generation)
             || activeWrite is { } write && terminal.Contains(write))
         {
             throw new ArgumentException("A retired or cleaned generation cannot be routed.", nameof(activeRead));
         }
         if (candidate is not null && activeRead?.Generation == candidate)
+        {
             throw new ArgumentException("A candidate must be cleared before it becomes readable.", nameof(candidate));
+        }
 
         Revision = revision;
         LatestFence = latestFence;
@@ -1172,13 +1253,18 @@ public sealed record MaterializationBackendRoutingSnapshot
         foreach (var drain in normalizedDraining)
         {
             if (drain.Proof is { } proof && proof.PlacementSlice != placementSlice)
+            {
                 throw new ArgumentException("Drain evidence belongs to another placement authority.", nameof(draining));
+            }
         }
 
         void RequirePlacementDefinition(MaterializationBackendGenerationReference? generation)
         {
             if (generation is null)
+            {
                 return;
+            }
+
             if (generation.DefinitionFingerprint != placementSlice.Materialization.DefinitionFingerprint)
             {
                 throw new ArgumentException(
@@ -1238,15 +1324,30 @@ public sealed record MaterializationBackendRoutingSnapshot
         ArgumentNullException.ThrowIfNull(generation);
         var roles = ImmutableArray.CreateBuilder<MaterializationBackendRole>(3);
         if (ActiveRead?.Generation == generation)
+        {
             roles.Add(MaterializationBackendRole.ActiveRead);
+        }
+
         if (ActiveWrite == generation)
+        {
             roles.Add(MaterializationBackendRole.ActiveWrite);
+        }
+
         if (Candidate == generation)
+        {
             roles.Add(MaterializationBackendRole.Candidate);
+        }
+
         if (Draining.Any(drain => drain.Generation == generation))
+        {
             roles.Add(MaterializationBackendRole.Draining);
+        }
+
         if (Retired.Any(retirement => retirement.Generation == generation))
+        {
             roles.Add(MaterializationBackendRole.Retired);
+        }
+
         return roles.ToImmutable();
     }
 
@@ -1322,7 +1423,10 @@ public sealed record MaterializationBackendRoutingResult
         string? detail = null)
     {
         if (!Enum.IsDefined(disposition))
+        {
             throw new ArgumentOutOfRangeException(nameof(disposition), disposition, "Unsupported routing disposition.");
+        }
+
         Snapshot = snapshot ?? throw new ArgumentNullException(nameof(snapshot));
         if ((disposition is MaterializationBackendRoutingDisposition.Applied or MaterializationBackendRoutingDisposition.Replayed)
             != (receipt is not null))
@@ -1330,7 +1434,10 @@ public sealed record MaterializationBackendRoutingResult
             throw new ArgumentException("Only applied or replayed routing results carry a receipt.", nameof(receipt));
         }
         if (receipt is not null && receipt.PlacementSlice != snapshot.PlacementSlice)
+        {
             throw new ArgumentException("A routing receipt must belong to the resulting snapshot's placement authority.", nameof(receipt));
+        }
+
         if (receipt is not null
             && (receipt.Revision.Ordinal > snapshot.Revision.Ordinal
                 || disposition == MaterializationBackendRoutingDisposition.Applied
@@ -1423,7 +1530,10 @@ public sealed record MaterializationBackendRouteBinding
         PlacementSlice = placementSlice ?? throw new ArgumentNullException(nameof(placementSlice));
         MaterializationContract.RequireDefinedIdentity(revision.Value, nameof(revision));
         if (revision.Ordinal == 0)
+        {
             throw new ArgumentException("An admitted route binding requires a committed routing revision.", nameof(revision));
+        }
+
         Generation = generation ?? throw new ArgumentNullException(nameof(generation));
         Target = target ?? throw new ArgumentNullException(nameof(target));
         if (generation.DefinitionFingerprint != placementSlice.Materialization.DefinitionFingerprint

@@ -127,6 +127,18 @@ public static class MaterializationRebuildProcessFactory
     static readonly ValueContract StringCollectionContract = new(
         new ScalarTypeRef(ScalarTypeKind.String),
         cardinality: FieldCardinality.Many);
+    static readonly Lazy<MaterializationRebuildProcessArtifacts> StandaloneArtifacts = new(
+        () => CreateCore(
+            CoordinatorDefinitionId,
+            ProcessRecoveryPolicy.RestartAttempt,
+            source: "ari-194/materialization-rebuild-coordinator"),
+        LazyThreadSafetyMode.ExecutionAndPublication);
+    static readonly Lazy<MaterializationRebuildProcessArtifacts> ChildArtifacts = new(
+        () => CreateCore(
+            ChildCoordinatorDefinitionId,
+            ProcessRecoveryPolicy.ContinueAttempt,
+            source: "ari-194/materialization-rebuild-leaf"),
+        LazyThreadSafetyMode.ExecutionAndPublication);
 
     /// <summary>Exact semantic revision shared by the coordinated reference protocol.</summary>
     public static ExecutionRevisionId RevisionId { get; } = new("revision/3");
@@ -272,11 +284,7 @@ public static class MaterializationRebuildProcessFactory
     /// <exception cref="InvalidOperationException">
     /// The framework rejects an internally authored contract, Process link, or Process compilation.
     /// </exception>
-    public static MaterializationRebuildProcessArtifacts Create() =>
-        CreateCore(
-            CoordinatorDefinitionId,
-            ProcessRecoveryPolicy.RestartAttempt,
-            source: "ari-194/materialization-rebuild-coordinator");
+    public static MaterializationRebuildProcessArtifacts Create() => StandaloneArtifacts.Value;
 
     /// <summary>Creates the parent-owned leaf variant whose recovery continues its exact child attempt.</summary>
     /// <returns>
@@ -285,11 +293,7 @@ public static class MaterializationRebuildProcessFactory
     /// <exception cref="InvalidOperationException">
     /// The framework rejects an internally authored contract, Process link, or Process compilation.
     /// </exception>
-    public static MaterializationRebuildProcessArtifacts CreateChild() =>
-        CreateCore(
-            ChildCoordinatorDefinitionId,
-            ProcessRecoveryPolicy.ContinueAttempt,
-            source: "ari-194/materialization-rebuild-leaf");
+    public static MaterializationRebuildProcessArtifacts CreateChild() => ChildArtifacts.Value;
 
     static MaterializationRebuildProcessArtifacts CreateCore(
         ExecutionDefinitionId coordinatorDefinitionId,
@@ -554,9 +558,13 @@ public static class MaterializationRebuildProcessFactory
                         target: outcome.Target),
                     output)));
             if (outcome.Successful)
+            {
                 nodes.Add(new ReturnProcessNode(outcome.Target, Expr.BoundValue(outcome.Output)));
+            }
             else
+            {
                 nodes.Add(new FailProcessNode(outcome.Target, Expr.BoundValue(outcome.Output)));
+            }
         }
 
         nodes.Add(new RequestProcessNode(
@@ -663,7 +671,9 @@ public static class MaterializationRebuildProcessFactory
     static void RequireValid(DocumentValidationResult validation, string stage)
     {
         if (validation.IsValid)
+        {
             return;
+        }
 
         throw new InvalidOperationException(
             $"Canonical {stage} failed: {string.Join("; ", validation.Diagnostics.Select(static diagnostic =>
