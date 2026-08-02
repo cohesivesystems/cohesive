@@ -28,6 +28,65 @@ public readonly record struct MaterializationBackendPoolId
     public override string ToString() => Value;
 }
 
+/// <summary>Exact portable reference to one canonical materialization backend-pool definition.</summary>
+public sealed record MaterializationBackendPoolReference
+{
+    /// <summary>Current durable backend-pool reference schema.</summary>
+    public const string CurrentSchemaVersion = "cohesive-materialization-backend-pool-reference/v1";
+
+    /// <summary>Creates or deserializes one exact backend-pool reference.</summary>
+    /// <param name="schemaVersion">Exact durable reference schema.</param>
+    /// <param name="pool">Stable backend-pool identity.</param>
+    /// <param name="materialization">Exact materialization definition served by the pool.</param>
+    /// <param name="definitionFingerprint">Fingerprint of the complete canonical pool definition.</param>
+    /// <exception cref="ArgumentNullException">A required reference component is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">The schema or pool identity is invalid.</exception>
+    [JsonConstructor]
+    public MaterializationBackendPoolReference(
+        string schemaVersion,
+        MaterializationBackendPoolId pool,
+        MaterializationDefinitionReference materialization,
+        ExecutionDefinitionFingerprint definitionFingerprint)
+    {
+        SchemaVersion = Guard.RequireNotNullOrWhiteSpace(schemaVersion);
+        if (!string.Equals(schemaVersion, CurrentSchemaVersion, StringComparison.Ordinal))
+            throw new ArgumentException($"Backend-pool reference schema '{schemaVersion}' is unsupported.", nameof(schemaVersion));
+        MaterializationContract.RequireDefinedIdentity(pool.Value, nameof(pool));
+        Pool = pool;
+        Materialization = materialization ?? throw new ArgumentNullException(nameof(materialization));
+        DefinitionFingerprint = definitionFingerprint ?? throw new ArgumentNullException(nameof(definitionFingerprint));
+    }
+
+    /// <summary>Exact durable backend-pool reference schema.</summary>
+    public string SchemaVersion { get; }
+
+    /// <summary>Stable backend-pool identity.</summary>
+    public MaterializationBackendPoolId Pool { get; }
+
+    /// <summary>Exact materialization definition served by the pool.</summary>
+    public MaterializationDefinitionReference Materialization { get; }
+
+    /// <summary>Fingerprint of the complete canonical pool definition.</summary>
+    public ExecutionDefinitionFingerprint DefinitionFingerprint { get; }
+
+    /// <summary>Creates an exact reference to a verified backend-pool document.</summary>
+    /// <param name="document">Canonical backend-pool document.</param>
+    /// <returns>A reference fencing the pool identity, materialization definition, and pool definition.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="document"/> is <see langword="null"/>.</exception>
+    public static MaterializationBackendPoolReference FromDocument(MaterializationBackendPoolDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        return new(
+            CurrentSchemaVersion,
+            document.Definition.Id,
+            new(
+                MaterializationDefinitionReference.CurrentSchemaVersion,
+                document.Definition.MaterializationId,
+                document.Definition.DefinitionFingerprint),
+            document.DefinitionFingerprint);
+    }
+}
+
 /// <summary>Canonical static IR declaring the targets available to one materialization backend pool.</summary>
 /// <remarks>
 /// This definition owns pool membership and the optional safe framework-default target. Runtime read/write

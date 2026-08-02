@@ -850,7 +850,8 @@ public static class RelationQueryPhysicalPlanner
                         $"Join '{join.Id.Value}' does not retain exact compiled field inputs for both equality keys.");
                     continue;
                 }
-                if (!IsIdentityField(leftInput) && !IsIdentityField(rightInput))
+                if (!RelationQueryFieldSemantics.IsSingleStringIdentityField(plan, leftInput.Field)
+                    && !RelationQueryFieldSemantics.IsSingleStringIdentityField(plan, rightInput.Field))
                 {
                     Error(
                         RelationQueryPhysicalPlanningDiagnosticCodes.LocalWorkUnbounded,
@@ -965,25 +966,6 @@ public static class RelationQueryPhysicalPlanner
                 placementBinding is { } binding ? [binding] : [],
                 lowering,
                 [new RelationQueryPhysicalPlanningDecisionId($"policy/{policy.Id.Value}/{lowering.Value}")]);
-        }
-
-        bool IsIdentityField(RelationQueryFieldInput input)
-        {
-            if (input.Field.Path.Segments.Length != 1
-                || !input.Field.Path.Segments[0].TryGetFieldIdentity(out var fieldName))
-            {
-                return false;
-            }
-
-            var graph = plan.Provenance.ShapeDocuments
-                .SingleOrDefault(document => document.Graph.Id == input.Field.Shape.GraphId)
-                ?.Graph;
-            var shape = graph?.TryGetShape(input.Field.Shape);
-            return shape is not null
-                && shape.TryGetField(fieldName, out var field)
-                && field.Role == FieldRole.Identity
-                && field.Cardinality == FieldCardinality.Single
-                && field.Type is ScalarTypeRef { Kind: ScalarTypeKind.String };
         }
 
         static bool TryGetEquijoin(JoinQueryNode join, out FieldExpr left, out FieldExpr right)

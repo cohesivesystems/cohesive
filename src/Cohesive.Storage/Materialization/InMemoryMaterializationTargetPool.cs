@@ -1,5 +1,3 @@
-using Cohesive.Model.Serialization;
-
 namespace Cohesive.Storage.Materialization;
 
 /// <summary>Exact-ID dependency pool implementing one canonical materialization backend-pool definition.</summary>
@@ -72,7 +70,7 @@ public sealed class InMemoryMaterializationTargetPool : IMaterializationTargetPo
                     nameof(targets));
             }
 
-            if (!CanonicalDescriptorEquals(descriptor, expected))
+            if (!MaterializationContract.CanonicalEquals(descriptor, expected))
             {
                 throw new ArgumentException(
                     $"Target '{descriptor.Id.Value}' does not implement its exact canonical pool descriptor.",
@@ -113,13 +111,4 @@ public sealed class InMemoryMaterializationTargetPool : IMaterializationTargetPo
                 $"Target '{targetId.Value}' is not a member of backend pool '{Definition.Id.Value}'.");
     }
 
-    static bool CanonicalDescriptorEquals(
-        MaterializationTargetDescriptor left,
-        MaterializationTargetDescriptor right)
-    {
-        var options = MaterializationJsonSerializer.CreateOptions();
-        var leftBytes = StrictDocumentJson.GetCanonicalBytes(left, options);
-        var rightBytes = StrictDocumentJson.GetCanonicalBytes(right, options);
-        return leftBytes.AsSpan().SequenceEqual(rightBytes);
-    }
 }
