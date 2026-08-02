@@ -117,6 +117,10 @@ public enum ProcessTraceEventKind
 /// Exact semantic disposition for a <see cref="ProcessTraceEventKind.InputAdmitted"/> event; null for every other
 /// event kind.
 /// </param>
+/// <param name="InputReason">
+/// Exact semantic classification for a <see cref="ProcessTraceEventKind.InputAdmitted"/> event; null for every
+/// other event kind.
+/// </param>
 /// <param name="WaitRegistrationId">
 /// Exact wait occurrence named by an input disposition, when one participated in the decision.
 /// </param>
@@ -135,6 +139,7 @@ public sealed record ProcessTraceEvent(
     InteractionEnvelopeContentFingerprint? EmissionFingerprint = null,
     long? OperationOccurrence = null,
     ProcessInputAdmissionDisposition? InputDisposition = null,
+    ProcessInputAdmissionReason? InputReason = null,
     ProcessWaitRegistrationId? WaitRegistrationId = null);
 
 /// <summary>Attributable deterministic evidence returned by one finite Process activation.</summary>

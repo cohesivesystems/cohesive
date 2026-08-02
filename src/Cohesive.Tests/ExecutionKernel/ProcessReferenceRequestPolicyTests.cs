@@ -89,6 +89,7 @@ public sealed class ProcessReferenceRequestPolicyTests
         Assert.Equal(ProcessActivationDisposition.Quiescent, buffered.Disposition);
         Assert.True(Assert.Single(buffered.State.Waits).Active);
         Assert.Equal(ProcessInputAdmissionDisposition.Buffered, Assert.Single(buffered.InputAdmissions).Disposition);
+        Assert.Equal(ProcessInputAdmissionReason.Early, Assert.Single(buffered.InputAdmissions).Reason);
         Assert.Null(Assert.Single(buffered.InputAdmissions).WaitRegistrationId);
         Assert.Equal(followUpEvent.Context.EmissionId, Assert.Single(buffered.State.BufferedInputs).Input.Envelope.Context.EmissionId);
         Assert.Empty(buffered.Emissions);
@@ -119,8 +120,15 @@ public sealed class ProcessReferenceRequestPolicyTests
             resumed.State.InputReceipts.Single(
                 receipt => receipt.Emission == followUpEvent.Context.EmissionId).Disposition);
         Assert.Equal(
+            ProcessInputAdmissionReason.Consumed,
+            resumed.State.InputReceipts.Single(
+                receipt => receipt.Emission == followUpEvent.Context.EmissionId).Reason);
+        Assert.Equal(
             ProcessInputAdmissionDisposition.Consumed,
             resumed.State.InputReceipts.Single(receipt => receipt.Emission == reply.Context.EmissionId).Disposition);
+        Assert.Equal(
+            ProcessInputAdmissionReason.Consumed,
+            resumed.State.InputReceipts.Single(receipt => receipt.Emission == reply.Context.EmissionId).Reason);
         Assert.Equal(new ExecutionNodeId("return"), Assert.Single(resumed.State.Tokens).Node);
         Assert.Empty(resumed.Emissions);
 
@@ -211,9 +219,16 @@ public sealed class ProcessReferenceRequestPolicyTests
             ProcessInputAdmissionDisposition.Consumed,
             resolved.State.InputReceipts.Single(receipt => receipt.Emission == winner.Context.EmissionId).Disposition);
         Assert.Equal(
+            ProcessInputAdmissionReason.Consumed,
+            resolved.State.InputReceipts.Single(receipt => receipt.Emission == winner.Context.EmissionId).Reason);
+        Assert.Equal(
             expectedLateDisposition,
             resolved.State.InputReceipts.Single(
                 receipt => receipt.Emission == sameActivationLoser.Context.EmissionId).Disposition);
+        Assert.Equal(
+            ProcessInputAdmissionReason.Late,
+            resolved.State.InputReceipts.Single(
+                receipt => receipt.Emission == sameActivationLoser.Context.EmissionId).Reason);
         Assert.Equal(requestWait.RegistrationId, resolved.State.InputReceipts.Single(
             receipt => receipt.Emission == sameActivationLoser.Context.EmissionId).WaitRegistrationId);
 
@@ -241,6 +256,7 @@ public sealed class ProcessReferenceRequestPolicyTests
         Assert.Single(completed.State.Tokens);
         Assert.Equal(StringValue("winner-value"), completed.State.Terminal.Detail?.Value);
         Assert.Equal(expectedLateDisposition, Assert.Single(completed.InputAdmissions).Disposition);
+        Assert.Equal(ProcessInputAdmissionReason.Late, Assert.Single(completed.InputAdmissions).Reason);
         Assert.Equal(requestWait.RegistrationId, Assert.Single(completed.InputAdmissions).WaitRegistrationId);
         Assert.Equal(winner.Context.EmissionId, completed.State.Waits.Single(
             static wait => wait.Kind == ProcessWaitKind.Request).WinnerInput);

@@ -794,6 +794,22 @@ public static class ProcessContinuationValidator
 
         void ValidateInputs()
         {
+            foreach (var (emission, entry) in inputReceipts)
+            {
+                if (entry.Receipt.IsValidAdmissionEvidence())
+                {
+                    continue;
+                }
+
+                Error(
+                    ProcessContinuationDiagnosticCodes.InputStateMismatch,
+                    $"Input receipt '{emission.Value}' requires a closed semantic reason compatible with its policy disposition.",
+                    Child(ItemLocation("/inputReceipts", entry.Index), "reason"),
+                    subject: emission.Value,
+                    expected: "defined compatible admission reason and disposition",
+                    observed: $"{entry.Receipt.Reason}:{entry.Receipt.Disposition}");
+            }
+
             foreach (var (emission, entry) in bufferedInputs)
             {
                 if (inputReceipts.TryGetValue(emission, out var receipt)

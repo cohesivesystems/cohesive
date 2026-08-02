@@ -138,9 +138,16 @@ public static class ProcessCheckpointCompatibilityValidator
                         ? trace.InputDisposition is { } inputDisposition
                             && Enum.IsDefined(inputDisposition)
                             && inputDisposition != ProcessInputAdmissionDisposition.Unspecified
+                            && trace.InputReason is { } inputReason
+                            && ProcessInputReceipt.IsValidAdmissionEvidence(
+                                inputDisposition,
+                                inputReason,
+                                trace.WaitRegistrationId)
                             && (trace.WaitRegistrationId is not { } waitRegistration
                                 || !string.IsNullOrWhiteSpace(waitRegistration.Value))
-                        : trace.InputDisposition is null && trace.WaitRegistrationId is null))
+                        : trace.InputDisposition is null
+                            && trace.InputReason is null
+                            && trace.WaitRegistrationId is null))
                 {
                     continue;
                 }
@@ -319,6 +326,15 @@ public static class ProcessCheckpointCompatibilityValidator
                 continue;
             }
 
+            if (!receipt.IsValidAdmissionEvidence())
+            {
+                diagnostics.Add(Error(
+                    ProcessCheckpointDiagnosticCodes.InboxReceiptIncompatible,
+                    "Inbox receipt lacks a closed semantic input-admission reason compatible with its policy disposition.",
+                    $"/inbox/{inboxIndex}/receipt/reason"));
+                continue;
+            }
+
             var decidingActivation = checkpoint.Activations.FirstOrDefault(activation =>
                 activation.Continuation == continuation
                 && activation.Activation.ObservedAtUtc == receipt.ObservedAtUtc
@@ -327,6 +343,7 @@ public static class ProcessCheckpointCompatibilityValidator
                     && trace.Continuation == continuation
                     && trace.Emission == entry.EmissionId
                     && trace.InputDisposition == receipt.Disposition
+                    && trace.InputReason == receipt.Reason
                     && trace.WaitRegistrationId == receipt.WaitRegistrationId));
             var witnessed = decidingActivation is not null
                 && checkpoint.Activations.Any(activation =>
@@ -351,7 +368,8 @@ public static class ProcessCheckpointCompatibilityValidator
         ProcessInputReceipt receipt,
         ProcessContinuationIdentity continuation)
     {
-        if (receipt.Disposition != ProcessInputAdmissionDisposition.Stale)
+        if (receipt.Disposition != ProcessInputAdmissionDisposition.Stale
+            || receipt.Reason != ProcessInputAdmissionReason.Stale)
         {
             return false;
         }

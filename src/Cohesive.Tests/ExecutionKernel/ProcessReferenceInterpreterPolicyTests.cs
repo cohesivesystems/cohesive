@@ -61,8 +61,14 @@ public sealed class ProcessReferenceInterpreterPolicyTests
             ProcessInputAdmissionDisposition.TerminalUnconsumed,
             Assert.Single(decision.InputAdmissions).Disposition);
         Assert.Equal(
+            ProcessInputAdmissionReason.TerminalUnconsumed,
+            Assert.Single(decision.InputAdmissions).Reason);
+        Assert.Equal(
             ProcessInputAdmissionDisposition.TerminalUnconsumed,
             Assert.Single(decision.State.InputReceipts).Disposition);
+        Assert.Equal(
+            ProcessInputAdmissionReason.TerminalUnconsumed,
+            Assert.Single(decision.State.InputReceipts).Reason);
         Assert.DoesNotContain(
             decision.Evidence.Trace,
             static item => item.Kind == ProcessTraceEventKind.NodeEntered);
@@ -641,6 +647,7 @@ public sealed class ProcessReferenceInterpreterPolicyTests
 
         var receipt = Assert.Single(decision.InputAdmissions);
         Assert.Equal(ProcessInputAdmissionDisposition.MissingTarget, receipt.Disposition);
+        Assert.Equal(ProcessInputAdmissionReason.MissingTarget, receipt.Reason);
         Assert.Null(receipt.Target.WaitRegistrationId);
         Assert.Null(receipt.WaitRegistrationId);
         Assert.Contains(decision.Diagnostics, static diagnostic =>
@@ -657,6 +664,7 @@ public sealed class ProcessReferenceInterpreterPolicyTests
             && trace.Emission == ambiguousInput.Context.EmissionId);
         Assert.Equal("ambiguous-wait-occurrence:MissingTarget", admissionTrace.Detail);
         Assert.Equal(ProcessInputAdmissionDisposition.MissingTarget, admissionTrace.InputDisposition);
+        Assert.Equal(ProcessInputAdmissionReason.MissingTarget, admissionTrace.InputReason);
         Assert.Null(admissionTrace.WaitRegistrationId);
     }
 
@@ -667,6 +675,9 @@ public sealed class ProcessReferenceInterpreterPolicyTests
         Assert.Equal(
             ProcessInputAdmissionDisposition.IdentityConflict,
             Assert.Single(decision.InputAdmissions).Disposition);
+        Assert.Equal(
+            ProcessInputAdmissionReason.IdentityConflict,
+            Assert.Single(decision.InputAdmissions).Reason);
         Assert.Contains(
             decision.Diagnostics,
             static diagnostic => diagnostic.Code == ProcessExecutionDiagnosticCodes.InputIdentityConflict);
@@ -690,6 +701,7 @@ public sealed class ProcessReferenceInterpreterPolicyTests
         InteractionEnvelopeContentFingerprint? EmissionFingerprint,
         long? OperationOccurrence,
         ProcessInputAdmissionDisposition? InputDisposition,
+        ProcessInputAdmissionReason? InputReason,
         ProcessWaitRegistrationId? WaitRegistrationId) TraceProjection(ProcessTraceEvent item) =>
         (item.Sequence,
             item.Kind,
@@ -701,6 +713,7 @@ public sealed class ProcessReferenceInterpreterPolicyTests
             item.EmissionFingerprint,
             item.OperationOccurrence,
             item.InputDisposition,
+            item.InputReason,
             item.WaitRegistrationId);
 
     static CompiledProcessPlan Compile(

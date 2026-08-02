@@ -656,6 +656,100 @@ public sealed class ProcessContinuationValidatorTests
             && diagnostic.Location == "/forks/0/resolved");
     }
 
+    [Theory]
+    [InlineData(ProcessInputAdmissionReason.Unspecified)]
+    [InlineData(ProcessInputAdmissionReason.Early)]
+    [InlineData((ProcessInputAdmissionReason)999)]
+    public void InputReceipt_RequiresAClosedReasonCompatibleWithItsPolicyDisposition(
+        ProcessInputAdmissionReason reason)
+    {
+        var fixture = ProcessDurabilityTestFixture.Create();
+        var initial = ProcessReferenceInterpreter.Create(fixture.Plan, fixture.Start);
+        var token = Assert.Single(initial.Tokens);
+        var receipt = Receipt(fixture.Plan, initial, token.Id, "emission/invalid-reason") with
+        {
+            Reason = reason
+        };
+        var malformed = CopyState(initial, inputReceipts: [receipt]);
+
+        var validation = ProcessContinuationValidator.Validate(fixture.Plan, malformed);
+
+        var diagnostic = Assert.Single(validation.Diagnostics, static candidate =>
+            candidate.Code == ProcessContinuationDiagnosticCodes.InputStateMismatch
+            && candidate.Location == "/inputReceipts/0/reason");
+        Assert.Equal("processContinuationRestore", diagnostic.Evidence?.Stage);
+    }
+
+    [Fact]
+    public void InputAdmissionEvidence_RequiresTheExactReasonDispositionAndWaitOccurrenceMatrix()
+    {
+        ProcessWaitRegistrationId wait = new("wait/input-admission-matrix");
+        HashSet<(ProcessInputAdmissionDisposition Disposition, ProcessInputAdmissionReason Reason)> validPairs =
+        [
+            (ProcessInputAdmissionDisposition.Buffered, ProcessInputAdmissionReason.Early),
+            (ProcessInputAdmissionDisposition.Buffered, ProcessInputAdmissionReason.WaitCandidate),
+            (ProcessInputAdmissionDisposition.Consumed, ProcessInputAdmissionReason.Consumed),
+            (ProcessInputAdmissionDisposition.Buffered, ProcessInputAdmissionReason.Duplicate),
+            (ProcessInputAdmissionDisposition.Consumed, ProcessInputAdmissionReason.Duplicate),
+            (ProcessInputAdmissionDisposition.Duplicate, ProcessInputAdmissionReason.Duplicate),
+            (ProcessInputAdmissionDisposition.Late, ProcessInputAdmissionReason.Duplicate),
+            (ProcessInputAdmissionDisposition.Stale, ProcessInputAdmissionReason.Duplicate),
+            (ProcessInputAdmissionDisposition.MissingTarget, ProcessInputAdmissionReason.Duplicate),
+            (ProcessInputAdmissionDisposition.Rejected, ProcessInputAdmissionReason.Duplicate),
+            (ProcessInputAdmissionDisposition.Observed, ProcessInputAdmissionReason.Duplicate),
+            (ProcessInputAdmissionDisposition.DeadLettered, ProcessInputAdmissionReason.Duplicate),
+            (ProcessInputAdmissionDisposition.Late, ProcessInputAdmissionReason.Late),
+            (ProcessInputAdmissionDisposition.Rejected, ProcessInputAdmissionReason.Late),
+            (ProcessInputAdmissionDisposition.Observed, ProcessInputAdmissionReason.Late),
+            (ProcessInputAdmissionDisposition.Consumed, ProcessInputAdmissionReason.Late),
+            (ProcessInputAdmissionDisposition.Stale, ProcessInputAdmissionReason.Stale),
+            (ProcessInputAdmissionDisposition.Rejected, ProcessInputAdmissionReason.Stale),
+            (ProcessInputAdmissionDisposition.Observed, ProcessInputAdmissionReason.Stale),
+            (ProcessInputAdmissionDisposition.Consumed, ProcessInputAdmissionReason.Stale),
+            (ProcessInputAdmissionDisposition.MissingTarget, ProcessInputAdmissionReason.MissingTarget),
+            (ProcessInputAdmissionDisposition.Rejected, ProcessInputAdmissionReason.MissingTarget),
+            (ProcessInputAdmissionDisposition.Observed, ProcessInputAdmissionReason.MissingTarget),
+            (ProcessInputAdmissionDisposition.DeadLettered, ProcessInputAdmissionReason.MissingTarget),
+            (ProcessInputAdmissionDisposition.Late, ProcessInputAdmissionReason.Superseded),
+            (ProcessInputAdmissionDisposition.Rejected, ProcessInputAdmissionReason.Superseded),
+            (ProcessInputAdmissionDisposition.Observed, ProcessInputAdmissionReason.Superseded),
+            (ProcessInputAdmissionDisposition.Consumed, ProcessInputAdmissionReason.Superseded),
+            (ProcessInputAdmissionDisposition.IdentityConflict, ProcessInputAdmissionReason.IdentityConflict),
+            (ProcessInputAdmissionDisposition.TerminalUnconsumed, ProcessInputAdmissionReason.TerminalUnconsumed),
+            (ProcessInputAdmissionDisposition.Rejected, ProcessInputAdmissionReason.InvalidEnvelope),
+            (ProcessInputAdmissionDisposition.Rejected, ProcessInputAdmissionReason.ContractMismatch)
+        ];
+        HashSet<ProcessInputAdmissionReason> waitRequired =
+        [
+            ProcessInputAdmissionReason.WaitCandidate,
+            ProcessInputAdmissionReason.Consumed,
+            ProcessInputAdmissionReason.Late,
+            ProcessInputAdmissionReason.Superseded,
+            ProcessInputAdmissionReason.ContractMismatch
+        ];
+        HashSet<ProcessInputAdmissionReason> waitForbidden =
+        [
+            ProcessInputAdmissionReason.Early,
+            ProcessInputAdmissionReason.TerminalUnconsumed
+        ];
+
+        foreach (var disposition in Enum.GetValues<ProcessInputAdmissionDisposition>())
+        {
+            foreach (var reason in Enum.GetValues<ProcessInputAdmissionReason>())
+            {
+                foreach (var waitRegistrationId in new ProcessWaitRegistrationId?[] { null, wait })
+                {
+                    var expected = validPairs.Contains((disposition, reason))
+                        && (!waitRequired.Contains(reason) || waitRegistrationId is not null)
+                        && (!waitForbidden.Contains(reason) || waitRegistrationId is null);
+                    Assert.Equal(
+                        expected,
+                        ProcessInputReceipt.IsValidAdmissionEvidence(disposition, reason, waitRegistrationId));
+                }
+            }
+        }
+    }
+
     [Fact]
     public void TerminalContinuation_CannotRetainBufferedInputs()
     {
@@ -921,6 +1015,7 @@ public sealed class ProcessContinuationValidatorTests
         return new(
             new(target, envelope),
             ProcessInputAdmissionDisposition.Observed,
+            ProcessInputAdmissionReason.MissingTarget,
             ObservedAtUtc);
     }
 

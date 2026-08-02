@@ -14,6 +14,7 @@ public sealed class ProcessDurableCheckpointChronologyTests
         var receipt = new ProcessInputReceipt(
             entry.Input,
             ProcessInputAdmissionDisposition.Stale,
+            ProcessInputAdmissionReason.Stale,
             entry.AdmittedAtUtc.AddTicks(-1));
 
         Assert.Throws<ArgumentException>(() => new ProcessDurableInboxEntry(

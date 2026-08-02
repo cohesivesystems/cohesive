@@ -525,6 +525,49 @@ public enum ProcessInputAdmissionDisposition
     TerminalUnconsumed = 11
 }
 
+/// <summary>Semantic classification that caused one presented Process input to receive its policy disposition.</summary>
+public enum ProcessInputAdmissionReason
+{
+    /// <summary>No classification was supplied; invalid for canonical admission evidence.</summary>
+    Unspecified = 0,
+
+    /// <summary>The input arrived before a compatible durable wait existed and was retained for later inspection.</summary>
+    Early = 1,
+
+    /// <summary>The input won a compatible wait and advanced exactly one continuation.</summary>
+    Consumed = 2,
+
+    /// <summary>The same logical input and canonical content had already been presented.</summary>
+    Duplicate = 3,
+
+    /// <summary>The input targeted a compatible wait occurrence that had already resolved.</summary>
+    Late = 4,
+
+    /// <summary>The input targeted an incompatible Process attempt, continuation, or guarded wait state.</summary>
+    Stale = 5,
+
+    /// <summary>No unambiguous compatible token or wait occurrence could receive the input.</summary>
+    MissingTarget = 6,
+
+    /// <summary>Another input or timer won the same exclusive AwaitMatch arbitration.</summary>
+    Superseded = 7,
+
+    /// <summary>The logical emission identity was reused for different canonical input content or target.</summary>
+    IdentityConflict = 8,
+
+    /// <summary>The owning token became terminal before its retained early input could be consumed.</summary>
+    TerminalUnconsumed = 9,
+
+    /// <summary>The presented interaction envelope violated its exact canonical contract.</summary>
+    InvalidEnvelope = 10,
+
+    /// <summary>A valid envelope did not satisfy the exact outstanding Request or authored terminal-outcome contract.</summary>
+    ContractMismatch = 11,
+
+    /// <summary>The input matched an already active wait and was staged for deterministic arbitration.</summary>
+    WaitCandidate = 12
+}
+
 /// <summary>One input retained until a compatible durable wait can inspect it.</summary>
 /// <param name="Input">Exact canonical input and target.</param>
 /// <param name="BufferedAtUtc">Explicit UTC admission time.</param>
@@ -532,12 +575,14 @@ public sealed record ProcessBufferedInput(ProcessActivationInput Input, DateTime
 
 /// <summary>Durable semantic disposition evidence for one presented canonical input occurrence.</summary>
 /// <param name="Input">Exact canonical envelope and token target used to detect replay or identity conflict.</param>
-/// <param name="Disposition">Semantic admission disposition.</param>
+/// <param name="Disposition">Policy action or fallback disposition applied to the input.</param>
+/// <param name="Reason">Semantic classification that caused the disposition.</param>
 /// <param name="ObservedAtUtc">Explicit UTC decision time.</param>
 /// <param name="WaitRegistrationId">Compatible wait registration when one was resolved.</param>
 public sealed record ProcessInputReceipt(
     ProcessActivationInput Input,
     ProcessInputAdmissionDisposition Disposition,
+    ProcessInputAdmissionReason Reason,
     DateTimeOffset ObservedAtUtc,
     ProcessWaitRegistrationId? WaitRegistrationId = null)
 {
@@ -546,6 +591,98 @@ public sealed record ProcessInputReceipt(
 
     /// <summary>Exact token target projected from <see cref="Input"/>.</summary>
     public ProcessTokenInteractionTarget Target => Input.Target;
+
+    /// <summary>Determines whether this receipt carries a valid closed reason and compatible policy disposition.</summary>
+    /// <returns><see langword="true"/> when the admission evidence is canonical; otherwise, <see langword="false"/>.</returns>
+    public bool IsValidAdmissionEvidence() =>
+        IsValidAdmissionEvidence(Disposition, Reason, WaitRegistrationId);
+
+    /// <summary>
+    /// Determines whether an input-admission reason, policy disposition, and wait occurrence form valid canonical
+    /// evidence.
+    /// </summary>
+    /// <param name="disposition">Policy action or fallback disposition to validate.</param>
+    /// <param name="reason">Semantic admission classification to validate.</param>
+    /// <param name="waitRegistrationId">Exact wait occurrence participating in the decision, when required.</param>
+    /// <returns>
+    /// <see langword="true"/> when the values are closed, mutually compatible, and carry the required wait
+    /// occurrence; otherwise, <see langword="false"/>.
+    /// </returns>
+    public static bool IsValidAdmissionEvidence(
+        ProcessInputAdmissionDisposition disposition,
+        ProcessInputAdmissionReason reason,
+        ProcessWaitRegistrationId? waitRegistrationId)
+    {
+        if (!Enum.IsDefined(disposition)
+            || disposition == ProcessInputAdmissionDisposition.Unspecified
+            || !Enum.IsDefined(reason)
+            || reason == ProcessInputAdmissionReason.Unspecified)
+        {
+            return false;
+        }
+
+        var pairIsValid = reason switch
+        {
+            ProcessInputAdmissionReason.Early =>
+                disposition == ProcessInputAdmissionDisposition.Buffered,
+            ProcessInputAdmissionReason.Consumed =>
+                disposition == ProcessInputAdmissionDisposition.Consumed,
+            ProcessInputAdmissionReason.Duplicate => disposition is
+                ProcessInputAdmissionDisposition.Buffered
+                or ProcessInputAdmissionDisposition.Consumed
+                or ProcessInputAdmissionDisposition.Duplicate
+                or ProcessInputAdmissionDisposition.Late
+                or ProcessInputAdmissionDisposition.Stale
+                or ProcessInputAdmissionDisposition.MissingTarget
+                or ProcessInputAdmissionDisposition.Rejected
+                or ProcessInputAdmissionDisposition.Observed
+                or ProcessInputAdmissionDisposition.DeadLettered,
+            ProcessInputAdmissionReason.Late => disposition is
+                ProcessInputAdmissionDisposition.Late
+                or ProcessInputAdmissionDisposition.Rejected
+                or ProcessInputAdmissionDisposition.Observed
+                or ProcessInputAdmissionDisposition.Consumed,
+            ProcessInputAdmissionReason.Stale => disposition is
+                ProcessInputAdmissionDisposition.Stale
+                or ProcessInputAdmissionDisposition.Rejected
+                or ProcessInputAdmissionDisposition.Observed
+                or ProcessInputAdmissionDisposition.Consumed,
+            ProcessInputAdmissionReason.MissingTarget => disposition is
+                ProcessInputAdmissionDisposition.MissingTarget
+                or ProcessInputAdmissionDisposition.Rejected
+                or ProcessInputAdmissionDisposition.Observed
+                or ProcessInputAdmissionDisposition.DeadLettered,
+            ProcessInputAdmissionReason.Superseded => disposition is
+                ProcessInputAdmissionDisposition.Late
+                or ProcessInputAdmissionDisposition.Rejected
+                or ProcessInputAdmissionDisposition.Observed
+                or ProcessInputAdmissionDisposition.Consumed,
+            ProcessInputAdmissionReason.IdentityConflict =>
+                disposition == ProcessInputAdmissionDisposition.IdentityConflict,
+            ProcessInputAdmissionReason.TerminalUnconsumed =>
+                disposition == ProcessInputAdmissionDisposition.TerminalUnconsumed,
+            ProcessInputAdmissionReason.InvalidEnvelope or ProcessInputAdmissionReason.ContractMismatch =>
+                disposition == ProcessInputAdmissionDisposition.Rejected,
+            ProcessInputAdmissionReason.WaitCandidate =>
+                disposition == ProcessInputAdmissionDisposition.Buffered,
+            _ => false
+        };
+
+        if (!pairIsValid)
+            return false;
+
+        return reason switch
+        {
+            ProcessInputAdmissionReason.WaitCandidate
+                or ProcessInputAdmissionReason.Consumed
+                or ProcessInputAdmissionReason.Late
+                or ProcessInputAdmissionReason.Superseded
+                or ProcessInputAdmissionReason.ContractMismatch => waitRegistrationId is not null,
+            ProcessInputAdmissionReason.Early
+                or ProcessInputAdmissionReason.TerminalUnconsumed => waitRegistrationId is null,
+            _ => true
+        };
+    }
 }
 
 /// <summary>One emitted Request obligation awaiting a terminal Reply.</summary>
