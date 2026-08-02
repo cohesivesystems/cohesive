@@ -56,7 +56,7 @@ public sealed class TransitionReferenceInterpreterTests
             input,
             sparse);
 
-        AssertEquivalent(fullDecision, sparseDecision);
+        Assert.Equivalent(fullDecision, sparseDecision, strict: true);
         Assert.Equal(expectedKind, fullDecision.Kind);
         Assert.Equal(expectedEmission ? 1 : 0, fullDecision.Emissions.Length);
         Assert.Equal(expectedEmission || expectedStatus is not null, fullDecision.GuaranteeDemands.CommitRequired);
@@ -487,7 +487,7 @@ public sealed class TransitionReferenceInterpreterTests
                 Entry(plan, "eligible", ObservationValue.FromBool(false))
             ]);
 
-        AssertEquivalent(full, sparse);
+        Assert.Equivalent(full, sparse, strict: true);
         Assert.Equal(TransitionDecisionKind.Applied, full.Kind);
         Assert.Equal(["raw", "normalized", "eligible"], full.Patch.Select(static patch => patch.Path.ToString()));
         AssertTraceOrder(
@@ -580,7 +580,7 @@ public sealed class TransitionReferenceInterpreterTests
             EmptyInput(definition.Input),
             fullState);
 
-        AssertEquivalent(full, sparse);
+        Assert.Equivalent(full, sparse, strict: true);
         Assert.Equal(TransitionDecisionKind.NoChange, sparse.Kind);
         Assert.Equal(expectedOutcome, sparse.Outcome?.Value?.String);
     }
@@ -638,8 +638,8 @@ public sealed class TransitionReferenceInterpreterTests
                     PortableValue.Concrete(ContractAt(plan, "profile"), profile))
             ]);
 
-        AssertEquivalent(full, exact);
-        AssertEquivalent(full, covering);
+        Assert.Equivalent(full, exact, strict: true);
+        Assert.Equivalent(full, covering, strict: true);
         Assert.Equal(
             ["profile.status"],
             full.Evidence.ActualReads.Select(static access => access.Path!.Value.ToString()).ToArray());
@@ -758,7 +758,7 @@ public sealed class TransitionReferenceInterpreterTests
             EmptyInput(definition.Input),
             [Entry(validPlan, "status", ObservationValue.FromString("closed"))]);
 
-        AssertEquivalent(full, sparse);
+        Assert.Equivalent(full, sparse, strict: true);
         Assert.Equal(TransitionDecisionKind.Applied, full.Kind);
         Assert.Single(full.MachineMovements);
         Assert.Equal("approved", Assert.Single(full.Patch).After.Value?.String);
@@ -891,7 +891,10 @@ public sealed class TransitionReferenceInterpreterTests
 
         var first = TransitionReferenceInterpreter.Decide(fixture.Plan, activation);
         for (var iteration = 0; iteration < 64; iteration++)
-            AssertEquivalent(first, TransitionReferenceInterpreter.Decide(fixture.Plan, activation));
+            Assert.Equivalent(
+                first,
+                TransitionReferenceInterpreter.Decide(fixture.Plan, activation),
+                strict: true);
         Assert.Equal(Enumerable.Range(0, first.Evidence.Trace.Length), first.Evidence.Trace.Select(static item => item.Sequence));
     }
 
@@ -961,7 +964,7 @@ public sealed class TransitionReferenceInterpreterTests
                 sparse,
                 freshSparse);
 
-            AssertEquivalent(full, sparseDecision);
+            Assert.Equivalent(full, sparseDecision, strict: true);
             Assert.Equal(conflict ? TransitionDecisionKind.Conflict : full.Kind, sparseDecision.Kind);
         }
     }
@@ -1151,59 +1154,6 @@ public sealed class TransitionReferenceInterpreterTests
                 nullability: field.Nullability);
         }
         return current;
-    }
-
-    static void AssertEquivalent(TransitionDecision expected, TransitionDecision actual)
-    {
-        Assert.Equal(expected.Kind, actual.Kind);
-        Assert.Equal(expected.Outcome, actual.Outcome);
-        Assert.Equal(expected.Patch.Length, actual.Patch.Length);
-        for (var index = 0; index < expected.Patch.Length; index++)
-        {
-            Assert.Equal(expected.Patch[index].Node, actual.Patch[index].Node);
-            Assert.Equal(expected.Patch[index].Path, actual.Patch[index].Path);
-            Assert.Equal(expected.Patch[index].Operation, actual.Patch[index].Operation);
-            Assert.Equal(expected.Patch[index].Before, actual.Patch[index].Before);
-            Assert.Equal(expected.Patch[index].After, actual.Patch[index].After);
-        }
-        Assert.Equal(expected.Emissions.ToArray(), actual.Emissions.ToArray());
-        Assert.Equal(expected.MachineMovements.Length, actual.MachineMovements.Length);
-        for (var index = 0; index < expected.MachineMovements.Length; index++)
-        {
-            Assert.Equal(expected.MachineMovements[index].Node, actual.MachineMovements[index].Node);
-            Assert.Equal(expected.MachineMovements[index].Machine, actual.MachineMovements[index].Machine);
-            Assert.Equal(expected.MachineMovements[index].Edge, actual.MachineMovements[index].Edge);
-            Assert.Equal(
-                expected.MachineMovements[index].Assignments.Select(static patch => patch.Path).ToArray(),
-                actual.MachineMovements[index].Assignments.Select(static patch => patch.Path).ToArray());
-        }
-        Assert.Equal(expected.GuaranteeDemands.CommitRequired, actual.GuaranteeDemands.CommitRequired);
-        Assert.Equal(expected.GuaranteeDemands.AtomicPatchAndEmissions, actual.GuaranteeDemands.AtomicPatchAndEmissions);
-        Assert.Equal(
-            expected.GuaranteeDemands.ConcurrencyObservations.ToArray(),
-            actual.GuaranteeDemands.ConcurrencyObservations.ToArray());
-        Assert.Equal(expected.Conflicts.ToArray(), actual.Conflicts.ToArray());
-        Assert.Equal(expected.Diagnostics.ToArray(), actual.Diagnostics.ToArray());
-        Assert.Equal(expected.Evidence.Definition, actual.Evidence.Definition);
-        Assert.Equal(expected.Evidence.Activation, actual.Evidence.Activation);
-        Assert.Equal(expected.Evidence.Trace.Length, actual.Evidence.Trace.Length);
-        for (var index = 0; index < expected.Evidence.Trace.Length; index++)
-        {
-            var expectedEvent = expected.Evidence.Trace[index];
-            var actualEvent = actual.Evidence.Trace[index];
-            Assert.Equal(expectedEvent.Sequence, actualEvent.Sequence);
-            Assert.Equal(expectedEvent.Kind, actualEvent.Kind);
-            Assert.Equal(expectedEvent.Node, actualEvent.Node);
-            Assert.Equal(expectedEvent.Access, actualEvent.Access);
-            Assert.Equal(expectedEvent.Path, actualEvent.Path);
-            Assert.Equal(expectedEvent.SelectedCase, actualEvent.SelectedCase);
-            Assert.Equal(expectedEvent.Before, actualEvent.Before);
-            Assert.Equal(expectedEvent.After, actualEvent.After);
-            Assert.Equal(expectedEvent.Changed, actualEvent.Changed);
-            Assert.Equal(expectedEvent.Contract, actualEvent.Contract);
-            Assert.Equal(expectedEvent.Edge, actualEvent.Edge);
-            Assert.Equal(expectedEvent.Detail, actualEvent.Detail);
-        }
     }
 
     static void AssertNoCommitArtifacts(TransitionDecision decision)

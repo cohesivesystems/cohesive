@@ -78,9 +78,7 @@ public sealed class MotionDqDurableProcessConformanceTests
             out var restored);
         Assert.True(restoreValidation.IsValid, Format(restoreValidation));
         var restoredCheckpoint = Assert.IsType<ProcessDurableCheckpoint>(restored);
-        Assert.Equal(
-            ProcessStorageContentFingerprints.Continuation(checkpoint.Continuation),
-            ProcessStorageContentFingerprints.Continuation(restoredCheckpoint.Continuation));
+        Assert.Equivalent(checkpoint.Continuation, restoredCheckpoint.Continuation, strict: true);
 
         store = new InMemoryProcessDurableStore();
         var restoredStore = await store.InitializeAsync(
@@ -139,7 +137,7 @@ public sealed class MotionDqDurableProcessConformanceTests
     }
 
     [Fact]
-    public async Task HoldCycle_RestoresFreshWait_ThenHireConvergesWithoutReusingPriorRegistration()
+    public async Task HoldCycle_RestoresFreshWait_ThenHigherPriorityHireBeatsDueTimer()
     {
         var fixture = MotionDqProcess.Version1;
         var clock = new ScenarioClock(new(2026, 8, 2, 8, 0, 0, TimeSpan.Zero));
@@ -153,29 +151,14 @@ public sealed class MotionDqDurableProcessConformanceTests
             fixture.Plan,
             Start(fixture, input, clock.Next(), clock.Next()));
         var checkpoint = Assert.IsType<ProcessDurableStoreSnapshot>(initialized.Snapshot).Checkpoint;
-        checkpoint = await ActivateAndCompareAsync(
+        checkpoint = await ReachReviewWaitAsync(
             store,
             runtime,
             fixture,
             durableHost,
-            new("activation/motion-dq/hold-cycle/start"),
-            ProcessActivationCause.Start,
-            clock.Next());
-        checkpoint = await AdvanceAtNodeAsync(
-            runtime,
-            fixture,
             checkpoint,
-            "motion-dq/review/create-task",
-            clock.Next());
-        checkpoint = await ActivateAndCompareAsync(
-            store,
-            runtime,
-            fixture,
-            durableHost,
-            new("activation/motion-dq/hold-cycle/review-task-created"),
-            ProcessActivationCause.Interaction,
-            clock.Next(),
-            PendingInputs(checkpoint));
+            clock,
+            scenario: "hold-cycle");
 
         var initialWait = Assert.Single(
             checkpoint.Continuation.Waits,
@@ -227,6 +210,7 @@ public sealed class MotionDqDurableProcessConformanceTests
             out var restored);
         Assert.True(restoreValidation.IsValid, Format(restoreValidation));
         var restoredCheckpoint = Assert.IsType<ProcessDurableCheckpoint>(restored);
+        Assert.Equivalent(checkpoint.Continuation, restoredCheckpoint.Continuation, strict: true);
         store = new InMemoryProcessDurableStore();
         var restoredStore = await store.InitializeAsync(
             Context(clock.Next()),
@@ -251,11 +235,12 @@ public sealed class MotionDqDurableProcessConformanceTests
                 fixture,
                 restoredTarget,
                 MotionDqReviewDecisionKind.Hire));
+        var arbitrationAtUtc = clock.AdvanceTo(input.ReviewDueAtUtc);
         var hireAdmission = await store.AdmitInputAsync(
-            Context(clock.Next()),
+            Context(arbitrationAtUtc),
             checkpoint.ContinuationIdentity.ProcessInstanceId,
             hireInput,
-            clock.Peek);
+            arbitrationAtUtc);
         Assert.Equal(ProcessStoreMutationDisposition.Applied, hireAdmission.Disposition);
         checkpoint = Assert.IsType<ProcessDurableStoreSnapshot>(hireAdmission.Snapshot).Checkpoint;
         checkpoint = await ActivateAndCompareAsync(
@@ -271,9 +256,20 @@ public sealed class MotionDqDurableProcessConformanceTests
         Assert.Equal(
             MotionDqCaseMilestone.InsuranceTerms,
             durableHost.CaseMilestone(input.Prequalification.CaseId));
-        Assert.False(Assert.Single(
+        var resolvedRestoredWait = Assert.Single(
             checkpoint.Continuation.Waits,
-            wait => wait.RegistrationId == restoredWait.RegistrationId).Active);
+            wait => wait.RegistrationId == restoredWait.RegistrationId);
+        Assert.False(resolvedRestoredWait.Active);
+        Assert.Equal(
+            "motion-dq/review/hire",
+            resolvedRestoredWait.WinnerClause?.Value);
+        Assert.Equal(hireInput.Envelope.Context.EmissionId, resolvedRestoredWait.WinnerInput);
+        var hireReceipt = Assert.Single(
+            checkpoint.Continuation.InputReceipts,
+            receipt => receipt.Emission == hireInput.Envelope.Context.EmissionId);
+        Assert.Equal(ProcessInputAdmissionDisposition.Consumed, hireReceipt.Disposition);
+        Assert.Equal(ProcessInputAdmissionReason.Consumed, hireReceipt.Reason);
+        Assert.Equal(restoredWait.RegistrationId, hireReceipt.WaitRegistrationId);
         checkpoint = await AdvanceAtNodeAsync(
             runtime,
             fixture,
@@ -300,6 +296,80 @@ public sealed class MotionDqDurableProcessConformanceTests
 
         Assert.Equal(ExecutionTerminalOutcomeKind.Completed, checkpoint.Continuation.Terminal.Kind);
         AssertAuthoritativeCompletedState(durableHost, input);
+    }
+
+    [Fact]
+    public async Task ReviewTimeout_RestoresExactWait_AndConvergesWithoutLiveExecution()
+    {
+        var fixture = MotionDqProcess.Version1;
+        var clock = new ScenarioClock(new(2026, 8, 2, 10, 0, 0, TimeSpan.Zero));
+        var input = Input(clock.Peek.AddDays(1));
+        var durableHost = new StatefulTransitionHost(fixture, input);
+        var adapter = new MotionDqScenarioAdapter(fixture);
+        var store = new InMemoryProcessDurableStore();
+        var runtime = Runtime(store, fixture, durableHost, adapter);
+        var initialized = await runtime.InitializeAsync(
+            Context(clock.Next()),
+            fixture.Plan,
+            Start(fixture, input, clock.Next(), clock.Next()));
+        var checkpoint = Assert.IsType<ProcessDurableStoreSnapshot>(initialized.Snapshot).Checkpoint;
+        checkpoint = await ReachReviewWaitAsync(
+            store,
+            runtime,
+            fixture,
+            durableHost,
+            checkpoint,
+            clock,
+            scenario: "review-timeout");
+        var wait = Assert.Single(
+            checkpoint.Continuation.Waits,
+            static candidate => candidate.Active && candidate.Node.Value == "motion-dq/review/await-match");
+        var timer = Assert.Single(wait.Timers);
+        Assert.Equal("motion-dq/review/timed-out", timer.Clause.Value);
+        Assert.Equal(input.ReviewDueAtUtc, timer.DueAtUtc);
+        var inputReceiptCount = checkpoint.Continuation.InputReceipts.Length;
+
+        var checkpointJson = ProcessDurableCheckpointJsonSerializer.Serialize(checkpoint);
+        var restoreValidation = ProcessDurableCheckpointJsonSerializer.TryDeserialize(
+            checkpointJson,
+            fixture.Plan,
+            out var restored);
+        Assert.True(restoreValidation.IsValid, Format(restoreValidation));
+        var restoredCheckpoint = Assert.IsType<ProcessDurableCheckpoint>(restored);
+        Assert.Equivalent(checkpoint.Continuation, restoredCheckpoint.Continuation, strict: true);
+
+        store = new InMemoryProcessDurableStore();
+        var restoredStore = await store.InitializeAsync(
+            Context(clock.Next()),
+            new("commit/motion-dq/restore-before-review-timeout"),
+            restoredCheckpoint);
+        Assert.Equal(ProcessStoreMutationDisposition.Applied, restoredStore.Disposition);
+        checkpoint = Assert.IsType<ProcessDurableStoreSnapshot>(restoredStore.Snapshot).Checkpoint;
+        runtime = Runtime(store, fixture, durableHost, adapter);
+
+        checkpoint = await ActivateAndCompareAsync(
+            store,
+            runtime,
+            fixture,
+            durableHost,
+            new("activation/motion-dq/review-timeout/timer"),
+            ProcessActivationCause.Timer,
+            clock.AdvanceTo(input.ReviewDueAtUtc));
+
+        var resolvedWait = Assert.Single(
+            checkpoint.Continuation.Waits,
+            candidate => candidate.RegistrationId == wait.RegistrationId);
+        Assert.False(resolvedWait.Active);
+        Assert.Equal("motion-dq/review/timed-out", resolvedWait.WinnerClause?.Value);
+        Assert.Null(resolvedWait.WinnerInput);
+        Assert.Equal(inputReceiptCount, checkpoint.Continuation.InputReceipts.Length);
+        Assert.Equal(ExecutionTerminalOutcomeKind.Completed, checkpoint.Continuation.Terminal.Kind);
+        Assert.Equal(
+            MotionDqOnboardingOutcome.ReviewTimedOut.ToString(),
+            checkpoint.Continuation.Terminal.Detail?.Value?.Value?.GetRequiredString());
+        Assert.Equal(
+            MotionDqCaseMilestone.Cancelled,
+            durableHost.CaseMilestone(input.Prequalification.CaseId));
     }
 
     [Fact]
@@ -441,29 +511,14 @@ public sealed class MotionDqDurableProcessConformanceTests
         ScenarioClock clock,
         string scenario)
     {
-        checkpoint = await ActivateAndCompareAsync(
+        checkpoint = await ReachReviewWaitAsync(
             store,
             runtime,
             fixture,
             durableHost,
-            new($"activation/motion-dq/{scenario}/start"),
-            ProcessActivationCause.Start,
-            clock.Next());
-        checkpoint = await AdvanceAtNodeAsync(
-            runtime,
-            fixture,
             checkpoint,
-            "motion-dq/review/create-task",
-            clock.Next());
-        checkpoint = await ActivateAndCompareAsync(
-            store,
-            runtime,
-            fixture,
-            durableHost,
-            new($"activation/motion-dq/{scenario}/review-task-created"),
-            ProcessActivationCause.Interaction,
-            clock.Next(),
-            PendingInputs(checkpoint));
+            clock,
+            scenario);
 
         var reviewWait = Assert.Single(
             checkpoint.Continuation.Waits,
@@ -523,6 +578,45 @@ public sealed class MotionDqDurableProcessConformanceTests
         }
 
         Assert.Equal(7, PendingVendorOperations(checkpoint).Length);
+        return checkpoint;
+    }
+
+    static async Task<ProcessDurableCheckpoint> ReachReviewWaitAsync(
+        InMemoryProcessDurableStore store,
+        ProcessDurableRuntime runtime,
+        MotionDqProcess fixture,
+        StatefulTransitionHost durableHost,
+        ProcessDurableCheckpoint checkpoint,
+        ScenarioClock clock,
+        string scenario)
+    {
+        checkpoint = await ActivateAndCompareAsync(
+            store,
+            runtime,
+            fixture,
+            durableHost,
+            new($"activation/motion-dq/{scenario}/start"),
+            ProcessActivationCause.Start,
+            clock.Next());
+        checkpoint = await AdvanceAtNodeAsync(
+            runtime,
+            fixture,
+            checkpoint,
+            "motion-dq/review/create-task",
+            clock.Next());
+        checkpoint = await ActivateAndCompareAsync(
+            store,
+            runtime,
+            fixture,
+            durableHost,
+            new($"activation/motion-dq/{scenario}/review-task-created"),
+            ProcessActivationCause.Interaction,
+            clock.Next(),
+            PendingInputs(checkpoint));
+
+        _ = Assert.Single(
+            checkpoint.Continuation.Waits,
+            static wait => wait.Active && wait.Node.Value == "motion-dq/review/await-match");
         return checkpoint;
     }
 
@@ -602,51 +696,10 @@ public sealed class MotionDqDurableProcessConformanceTests
         var checkpoint = Assert.IsType<ProcessDurableStoreSnapshot>(result.Snapshot).Checkpoint;
 
         Assert.Equal(ProcessDurableRuntimeDisposition.Applied, result.Disposition);
-        Assert.Equal(expected.Disposition, actual.Disposition);
-        Assert.Equal(expected.Evidence.Definition, actual.Evidence.Definition);
-        Assert.Equal(expected.Evidence.Activation, actual.Evidence.Activation);
-        Assert.Equal(expected.Evidence.Cause, actual.Evidence.Cause);
-        Assert.Equal(expected.Evidence.SafePointNode, actual.Evidence.SafePointNode);
-        AssertTraceEqual(expected.Evidence.Trace, actual.Evidence.Trace);
-        Assert.True(expected.Diagnostics.SequenceEqual(actual.Diagnostics));
-        Assert.True(expected.InputAdmissions.SequenceEqual(actual.InputAdmissions));
-        Assert.True(expected.Emissions.SequenceEqual(actual.Emissions));
-        Assert.Equal(
-            ProcessStorageContentFingerprints.Continuation(expected.State),
-            ProcessStorageContentFingerprints.Continuation(actual.State));
-        Assert.Equal(
-            ProcessStorageContentFingerprints.Continuation(expected.State),
-            ProcessStorageContentFingerprints.Continuation(checkpoint.Continuation));
+        Assert.Equivalent(expected, actual, strict: true);
+        Assert.Equivalent(expected.State, checkpoint.Continuation, strict: true);
         oracleState.AssertAuthoritativeStateEquals(durableHost);
         return checkpoint;
-    }
-
-    static void AssertTraceEqual(
-        ImmutableArray<ProcessTraceEvent> expected,
-        ImmutableArray<ProcessTraceEvent> actual)
-    {
-        Assert.Equal(expected.Length, actual.Length);
-        for (var index = 0; index < expected.Length; index++)
-        {
-            var left = expected[index];
-            var right = actual[index];
-            Assert.Equal(left.Sequence, right.Sequence);
-            Assert.Equal(left.Kind, right.Kind);
-            Assert.Equal(left.Definition, right.Definition);
-            Assert.Equal(left.Continuation, right.Continuation);
-            Assert.Equal(left.Activation, right.Activation);
-            Assert.Equal(left.Token, right.Token);
-            Assert.Equal(left.Node, right.Node);
-            Assert.Equal(left.BranchOrClause, right.BranchOrClause);
-            Assert.Equal(left.Emission, right.Emission);
-            Assert.Equal(left.Detail, right.Detail);
-            Assert.True(left.SourceReferences.SequenceEqual(right.SourceReferences));
-            Assert.Equal(left.EmissionFingerprint, right.EmissionFingerprint);
-            Assert.Equal(left.OperationOccurrence, right.OperationOccurrence);
-            Assert.Equal(left.InputDisposition, right.InputDisposition);
-            Assert.Equal(left.InputReason, right.InputReason);
-            Assert.Equal(left.WaitRegistrationId, right.WaitRegistrationId);
-        }
     }
 
     static async Task<ProcessDurableCheckpoint> AdvanceAtNodeAsync(
@@ -1468,6 +1521,14 @@ public sealed class MotionDqDurableProcessConformanceTests
         {
             current = current.AddSeconds(1);
             return current;
+        }
+
+        internal DateTimeOffset AdvanceTo(DateTimeOffset value)
+        {
+            if (value > current)
+                current = value;
+
+            return Next();
         }
     }
 

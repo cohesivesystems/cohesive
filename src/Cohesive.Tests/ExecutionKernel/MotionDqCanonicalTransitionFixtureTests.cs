@@ -550,6 +550,35 @@ public sealed class MotionDqCanonicalTransitionFixtureTests
             crossCaseCollision,
             TransitionDecisionKind.AdmissionRejected,
             MotionDqTransitionOutcome.CaseReferenceMismatch);
+
+        var invariantFailure = Decide(
+            plan,
+            acceptedReceipt,
+            RequirementEntry(plan, nameof(MotionDqCaseRequirementEntity.CaseId), requirement.CaseId),
+            RequirementEntry(plan, nameof(MotionDqCaseRequirementEntity.RequirementId), requirement.RequirementId),
+            RequirementEntry(plan, nameof(MotionDqCaseRequirementEntity.Status), MotionDqRequirementStatus.Satisfied),
+            RequirementEntry(
+                plan,
+                nameof(MotionDqCaseRequirementEntity.AuthoritativeEvaluationId),
+                acceptedReceipt.EvaluationId),
+            RequirementEntry(
+                plan,
+                nameof(MotionDqCaseRequirementEntity.ObservedEvaluationIds),
+                Array.Empty<string>()),
+            RequirementEntry(
+                plan,
+                nameof(MotionDqCaseRequirementEntity.Evaluations),
+                new[] { acceptedReceipt }));
+
+        Assert.Equal(TransitionDecisionKind.InvalidDefinition, invariantFailure.Kind);
+        Assert.Contains(
+            invariantFailure.Diagnostics,
+            static diagnostic => diagnostic.Code == TransitionExecutionDiagnosticCodes.InvariantViolated);
+        Assert.Empty(invariantFailure.Patch);
+        Assert.Empty(invariantFailure.Emissions);
+        Assert.Contains(
+            invariantFailure.Evidence.Trace,
+            static item => item.Kind == TransitionTraceEventKind.InvariantEvaluated);
     }
 
     [Fact]
@@ -676,6 +705,16 @@ public sealed class MotionDqCanonicalTransitionFixtureTests
             decision,
             TransitionDecisionKind.Applied,
             MotionDqTransitionOutcome.ReviewDecisionRecorded);
+        var expectedCase = kind switch
+        {
+            MotionDqReviewDecisionKind.Hire => "motion-dq/review/case/hire",
+            MotionDqReviewDecisionKind.Hold => "motion-dq/review/case/hold",
+            MotionDqReviewDecisionKind.NotEligible => "motion-dq/review/case/not-eligible",
+            _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported review decision kind.")
+        };
+        Assert.Equal(
+            [expectedCase],
+            decision.Evidence.SelectedCases.Select(static selectedCase => selectedCase.Value));
         AssertPatch(decision, nameof(MotionDqOnboardingCaseEntity.LastReviewDecisionId), decisionId);
         AssertPatch(decision, nameof(MotionDqOnboardingCaseEntity.Milestone), expectedMilestone);
     }
@@ -733,11 +772,26 @@ public sealed class MotionDqCanonicalTransitionFixtureTests
     static TransitionDecision Decide<TInput>(
         CompiledTransitionPlan plan,
         TInput input,
-        params TransitionObservationEntry[] observations) => TransitionReferenceInterpreter.DecideSparse(
-        plan,
-        new($"ari-181/{plan.Document.Metadata.DefinitionId.Value}"),
-        PortableValue.Concrete(plan.Definition.Input, ObservationValue.FromObject(input)),
-        observations);
+        params TransitionObservationEntry[] observations)
+    {
+        var activation = new ActivationId($"ari-200/{plan.Document.Metadata.DefinitionId.Value}");
+        var value = PortableValue.Concrete(
+            plan.Definition.Input,
+            ObservationValue.FromObject(input));
+        var reference = TransitionReferenceInterpreter.DecideSparse(
+            plan,
+            activation,
+            value,
+            observations);
+        var replay = TransitionReferenceInterpreter.DecideSparse(
+            plan,
+            activation,
+            value,
+            observations);
+
+        Assert.Equivalent(reference, replay, strict: true);
+        return reference;
+    }
 
     static CompiledTransitionPlan Compile(ExecutionDefinitionDocument document)
     {
