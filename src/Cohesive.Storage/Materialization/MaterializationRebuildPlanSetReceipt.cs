@@ -40,7 +40,16 @@ public enum MaterializationRebuildPlanSetLeafOutcome
     Cancelled = 3,
 
     /// <summary>The leaf was forcibly terminated.</summary>
-    Terminated = 4
+    Terminated = 4,
+
+    /// <summary>Progressive admission stopped before this ready leaf's forward step started.</summary>
+    Skipped = 5,
+
+    /// <summary>A later explicit compensation operation restored the exact prior paired route.</summary>
+    Compensated = 6,
+
+    /// <summary>The forward step committed, but its later explicit compensation did not restore the prior route.</summary>
+    CompensationFailed = 7
 }
 
 /// <summary>Parent coordination phase in which one exact child produced terminal evidence.</summary>
@@ -51,7 +60,10 @@ public enum MaterializationRebuildPlanSetLeafPhase
     Build = 0,
 
     /// <summary>The child was activating and independently routing one ready generation.</summary>
-    Promotion = 1
+    Promotion = 1,
+
+    /// <summary>The child was issuing a later explicit compensation operation.</summary>
+    Compensation = 2
 }
 
 /// <summary>
@@ -117,6 +129,8 @@ public sealed record MaterializationRebuildPlanSetLeafReceipt
     /// <param name="ready">Exact readiness evidence when the build child succeeded.</param>
     /// <param name="promotionChild">Attempt-bound promotion child, when promotion was initiated.</param>
     /// <param name="promotion">Exact independent-promotion result, when the route operation returned evidence.</param>
+    /// <param name="compensationChild">Attempt-bound compensation child, when compensation was initiated.</param>
+    /// <param name="compensation">Exact explicit compensation result, when routing returned evidence.</param>
     /// <param name="terminalEvidence">
     /// Exact terminal outcome and typed result for a failed, cancelled, or terminated child.
     /// </param>
@@ -136,6 +150,8 @@ public sealed record MaterializationRebuildPlanSetLeafReceipt
         MaterializationReadyGenerationReference? ready = null,
         ProcessContinuationIdentity? promotionChild = null,
         MaterializationIndependentPromotionResult? promotion = null,
+        ProcessContinuationIdentity? compensationChild = null,
+        MaterializationProgressivePromotionCompensationResult? compensation = null,
         MaterializationRebuildPlanSetChildTerminalEvidence? terminalEvidence = null,
         DocumentValidationDiagnostic? failure = null)
     {
@@ -166,6 +182,25 @@ public sealed record MaterializationRebuildPlanSetLeafReceipt
                 "Independent-promotion evidence must consume this exact linked leaf readiness result.",
                 nameof(promotion));
         }
+        if (compensationChild is not null)
+        {
+            RequireContinuation(compensationChild, nameof(compensationChild));
+            if (compensationChild == buildChild || compensationChild == promotionChild)
+            {
+                throw new ArgumentException(
+                    "Build, promotion, and compensation require distinct child Process continuations.",
+                    nameof(compensationChild));
+            }
+        }
+        if (compensation is not null
+            && (promotion is null
+                || compensation.Request.Promotion != promotion
+                || compensation.Request.Promotion.Request.Authority != authority))
+        {
+            throw new ArgumentException(
+                "Compensation evidence must consume this exact committed forward-promotion result.",
+                nameof(compensation));
+        }
         if (failure is not null && failure.Severity != DiagnosticSeverity.Error)
             throw new ArgumentException("Leaf failure evidence must be an error diagnostic.", nameof(failure));
         if (terminalEvidence is not null)
@@ -174,6 +209,7 @@ public sealed record MaterializationRebuildPlanSetLeafReceipt
             {
                 MaterializationRebuildPlanSetLeafPhase.Build => buildChild,
                 MaterializationRebuildPlanSetLeafPhase.Promotion => promotionChild,
+                MaterializationRebuildPlanSetLeafPhase.Compensation => compensationChild,
                 _ => null
             };
             if (expectedChild is null || terminalEvidence.Child != expectedChild)
@@ -190,6 +226,9 @@ public sealed record MaterializationRebuildPlanSetLeafReceipt
                 ready is null && promotionChild is null && promotion is null,
             MaterializationRebuildPlanSetLeafPhase.Promotion =>
                 ready is not null && promotionChild is not null,
+            MaterializationRebuildPlanSetLeafPhase.Compensation =>
+                ready is not null && promotionChild is not null && promotion is not null
+                && compensationChild is not null,
             null => true,
             _ => false
         };
@@ -198,6 +237,7 @@ public sealed record MaterializationRebuildPlanSetLeafReceipt
             MaterializationRebuildPlanSetLeafOutcome.Failed => terminalEvidence is not null
                 && terminalEvidence.TerminalOutcome != MaterializationRebuildPlanSetProcessFactory.CancelledOutcome
                 && terminalEvidence.TerminalOutcome != MaterializationRebuildPlanSetProcessFactory.TerminatedOutcome,
+            MaterializationRebuildPlanSetLeafOutcome.CompensationFailed => true,
             MaterializationRebuildPlanSetLeafOutcome.Cancelled =>
                 terminalEvidence?.TerminalOutcome == MaterializationRebuildPlanSetProcessFactory.CancelledOutcome,
             MaterializationRebuildPlanSetLeafOutcome.Terminated =>
@@ -209,16 +249,33 @@ public sealed record MaterializationRebuildPlanSetLeafReceipt
         {
             MaterializationRebuildPlanSetLeafOutcome.Ready =>
                 ready is not null && promotionChild is null && promotion is null
+                && compensationChild is null && compensation is null
                 && terminalEvidence is null && failure is null,
             MaterializationRebuildPlanSetLeafOutcome.Promoted =>
                 ready is not null && promotionChild is not null && promotion is { IsCurrentlySelected: true }
+                && compensationChild is null && compensation is null
                 && terminalEvidence is null && failure is null,
             MaterializationRebuildPlanSetLeafOutcome.Failed =>
                 terminalEvidence is not null && failure is not null
-                && promotion is not { IsCurrentlySelected: true },
+                && promotion is not { IsCurrentlySelected: true }
+                && compensationChild is null && compensation is null,
             MaterializationRebuildPlanSetLeafOutcome.Cancelled or
                 MaterializationRebuildPlanSetLeafOutcome.Terminated =>
-                promotion is null && terminalEvidence is not null && failure is null,
+                promotion is null && compensation is null && terminalEvidence is not null && failure is null,
+            MaterializationRebuildPlanSetLeafOutcome.Skipped =>
+                ready is not null && promotionChild is not null && promotion is null
+                && compensationChild is null && compensation is null
+                && terminalEvidence is null && failure is null,
+            MaterializationRebuildPlanSetLeafOutcome.Compensated =>
+                ready is not null && promotion is { IsCurrentlySelected: true }
+                && compensationChild is not null && compensation is { IsRestored: true }
+                && terminalEvidence is null && failure is null,
+            MaterializationRebuildPlanSetLeafOutcome.CompensationFailed =>
+                ready is not null && promotion is { IsCurrentlySelected: true }
+                && compensationChild is not null && compensation is not { IsRestored: true }
+                && failure is not null
+                && (compensation is not null || terminalEvidence?.Phase
+                    == MaterializationRebuildPlanSetLeafPhase.Compensation),
             _ => false
         };
         if (!valid || !terminalPhaseValid || !terminalOutcomeValid)
@@ -232,6 +289,8 @@ public sealed record MaterializationRebuildPlanSetLeafReceipt
         Ready = ready;
         PromotionChild = promotionChild;
         Promotion = promotion;
+        CompensationChild = compensationChild;
+        Compensation = compensation;
         TerminalEvidence = terminalEvidence;
         Failure = failure;
     }
@@ -254,6 +313,12 @@ public sealed record MaterializationRebuildPlanSetLeafReceipt
     /// <summary>Exact independent-promotion result when routing returned conclusive evidence.</summary>
     public MaterializationIndependentPromotionResult? Promotion { get; }
 
+    /// <summary>Attempt-bound child Process that issued an explicit later compensation operation.</summary>
+    public ProcessContinuationIdentity? CompensationChild { get; }
+
+    /// <summary>Exact explicit compensation result when routing returned conclusive evidence.</summary>
+    public MaterializationProgressivePromotionCompensationResult? Compensation { get; }
+
     /// <summary>
     /// Exact child terminal outcome and typed result when the leaf failed, was cancelled, or was terminated.
     /// </summary>
@@ -273,7 +338,7 @@ public sealed record MaterializationRebuildPlanSetLeafReceipt
 public sealed record MaterializationRebuildPlanSetReceipt
 {
     /// <summary>Current portable aggregate-receipt schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive-materialization-rebuild-plan-set-receipt/v1";
+    public const string CurrentSchemaVersion = "cohesive-materialization-rebuild-plan-set-receipt/v2";
 
     /// <summary>Creates or deserializes one internally exact aggregate receipt.</summary>
     /// <param name="schemaVersion">Exact portable receipt schema.</param>
@@ -283,6 +348,8 @@ public sealed record MaterializationRebuildPlanSetReceipt
     /// <param name="leaves">Terminal linked-leaf receipts.</param>
     /// <param name="readyBarrier">Reusable all-leaf readiness barrier, when every build leaf became ready.</param>
     /// <param name="completedAtUtc">UTC aggregate terminal boundary.</param>
+    /// <param name="promotionOrder">Exact deterministic placement-step order retained by the journal.</param>
+    /// <param name="progressiveFailurePolicy">Explicit progressive partial-failure policy, when applicable.</param>
     /// <exception cref="ArgumentNullException">A required value is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="outcome"/> is unsupported.</exception>
     /// <exception cref="ArgumentException">
@@ -296,7 +363,9 @@ public sealed record MaterializationRebuildPlanSetReceipt
         MaterializationRebuildPlanSetOutcome outcome,
         ImmutableArray<MaterializationRebuildPlanSetLeafReceipt> leaves,
         MaterializationRebuildReadyBarrier? readyBarrier,
-        DateTimeOffset completedAtUtc)
+        DateTimeOffset completedAtUtc,
+        ImmutableArray<MaterializationPlacementSliceId> promotionOrder = default,
+        MaterializationProgressivePromotionFailurePolicy? progressiveFailurePolicy = null)
     {
         SchemaVersion = Guard.RequireNotNullOrWhiteSpace(schemaVersion);
         if (!string.Equals(schemaVersion, CurrentSchemaVersion, StringComparison.Ordinal))
@@ -331,10 +400,27 @@ public sealed record MaterializationRebuildPlanSetReceipt
                 nameof(leaves));
         }
 
-        Leaves =
-        [
-            .. normalized.OrderBy(static leaf => leaf.Authority.PlacementSlice.Id.Value, StringComparer.Ordinal)
-        ];
+        var normalizedOrder = promotionOrder.IsDefault
+            ? [.. normalized.Select(static leaf => leaf.Authority.PlacementSlice.Id)]
+            : promotionOrder;
+        if (normalizedOrder.Length != normalized.Length
+            || normalizedOrder.Distinct().Count() != normalizedOrder.Length
+            || !normalizedOrder.SequenceEqual(normalized.Select(static leaf => leaf.Authority.PlacementSlice.Id)))
+        {
+            throw new ArgumentException(
+                "The durable promotion journal must retain each leaf exactly once in its declared execution order.",
+                nameof(promotionOrder));
+        }
+        if (progressiveFailurePolicy is { } policy && !Enum.IsDefined(policy))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(progressiveFailurePolicy),
+                progressiveFailurePolicy,
+                "Unsupported progressive partial-failure policy.");
+        }
+        Leaves = normalized;
+        PromotionOrder = normalizedOrder;
+        ProgressiveFailurePolicy = progressiveFailurePolicy;
         ReadyBarrier = readyBarrier;
         if (readyBarrier is not null
             && (readyBarrier.PlanSet != planSet
@@ -348,7 +434,9 @@ public sealed record MaterializationRebuildPlanSetReceipt
                 nameof(readyBarrier));
         }
 
-        var promotedCount = Leaves.Count(static leaf => leaf.Outcome == MaterializationRebuildPlanSetLeafOutcome.Promoted);
+        var promotedCount = Leaves.Count(static leaf => leaf.Outcome is
+            MaterializationRebuildPlanSetLeafOutcome.Promoted
+            or MaterializationRebuildPlanSetLeafOutcome.CompensationFailed);
         var expectedOutcome = promotedCount == Leaves.Length
             ? MaterializationRebuildPlanSetOutcome.Completed
             : promotedCount > 0
@@ -367,7 +455,8 @@ public sealed record MaterializationRebuildPlanSetReceipt
         }
 
         var latestEvidenceAtUtc = Leaves
-            .Select(static leaf => leaf.Promotion?.Routing?.Receipt?.CommittedAtUtc
+            .Select(static leaf => leaf.Compensation?.Routing.Receipt?.CommittedAtUtc
+                ?? leaf.Promotion?.Routing?.Receipt?.CommittedAtUtc
                 ?? leaf.Promotion?.Admission.Receipt?.CommittedAtUtc
                 ?? leaf.Ready?.ReadyAtUtc)
             .Where(static value => value.HasValue)
@@ -395,6 +484,12 @@ public sealed record MaterializationRebuildPlanSetReceipt
 
     /// <summary>Terminal linked-leaf receipts in canonical placement-slice order.</summary>
     public ImmutableArray<MaterializationRebuildPlanSetLeafReceipt> Leaves { get; }
+
+    /// <summary>Exact deterministic placement-step order of the durable promotion journal.</summary>
+    public ImmutableArray<MaterializationPlacementSliceId> PromotionOrder { get; }
+
+    /// <summary>Explicit progressive partial-failure policy, or null for independent promotion.</summary>
+    public MaterializationProgressivePromotionFailurePolicy? ProgressiveFailurePolicy { get; }
 
     /// <summary>Reusable all-leaf readiness barrier, when every build leaf became ready.</summary>
     public MaterializationRebuildReadyBarrier? ReadyBarrier { get; }
@@ -428,7 +523,9 @@ public sealed record MaterializationRebuildPlanSetReceipt
             outcome,
             leaves,
             readyBarrier,
-            completedAtUtc);
+            completedAtUtc,
+            promotionOrder: [.. planSet.LeafPlans.Select(static binding => binding.Slice.Id)],
+            progressiveFailurePolicy: planSet.Promotion.ProgressiveFailurePolicy);
         if (receipt.Leaves.Length != planSet.LeafPlans.Length)
             throw new ArgumentException("The aggregate receipt requires every and only linked plan-set leaf.", nameof(leaves));
 
@@ -520,6 +617,8 @@ public sealed record MaterializationRebuildPlanSetReceipt
         && ParentContinuation == other.ParentContinuation
         && Outcome == other.Outcome
         && Leaves.SequenceEqual(other.Leaves)
+        && PromotionOrder.SequenceEqual(other.PromotionOrder)
+        && ProgressiveFailurePolicy == other.ProgressiveFailurePolicy
         && ReadyBarrier == other.ReadyBarrier
         && CompletedAtUtc == other.CompletedAtUtc;
 
@@ -534,6 +633,9 @@ public sealed record MaterializationRebuildPlanSetReceipt
         hash.Add(Outcome);
         foreach (var leaf in Leaves)
             hash.Add(leaf);
+        foreach (var slice in PromotionOrder)
+            hash.Add(slice);
+        hash.Add(ProgressiveFailurePolicy);
         hash.Add(ReadyBarrier);
         hash.Add(CompletedAtUtc);
         return hash.ToHashCode();

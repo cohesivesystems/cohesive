@@ -888,12 +888,12 @@ public sealed class MaterializationRebuildPlanSetTests
     }
 
     [Fact]
-    public async Task IndependentPromotion_RejectsForeignAuthorityBeforeRouterIo()
+    public async Task PlacementPromotion_AdmitsProgressiveCoordinationAndRejectsForeignAuthorityBeforeRouterIo()
     {
         var progressive = CreateScenario(reverseInputs: false);
-        Assert.Throws<ArgumentException>(() => new MaterializationIndependentPromotionExecutor(
+        _ = new MaterializationIndependentPromotionExecutor(
             progressive.PlanSet,
-            progressive.Leaves[0]));
+            progressive.Leaves[0]);
 
         var scenario = CreateScenario(
             reverseInputs: false,
@@ -1117,6 +1117,168 @@ public sealed class MaterializationRebuildPlanSetTests
         Assert.NotEqual(selected.PlacementSlice.Fingerprint, failed.PlacementSlice.Fingerprint);
         Assert.Equal(selected.Generation, selected.Routing.Snapshot.ActiveRead!.Generation);
         Assert.Null(failed.Routing.Snapshot.ActiveRead);
+    }
+
+    [Fact]
+    public async Task ProgressiveCompensation_IsExplicitReplayStableAndRestoresOnlyWithExactProof()
+    {
+        var scenario = CreateScenario(
+            reverseInputs: false,
+            promotion: new(
+                MaterializationRebuildPromotionMode.AllReadyProgressive,
+                MaterializationProgressivePromotionFailurePolicy.CompensatePromoted));
+        var leaf = scenario.Leaves[0];
+        var binding = scenario.PlanSet.LeafPlans.Single(candidate => candidate.LeafPlan.Plan == leaf.Fingerprint);
+        var authority = MaterializationRebuildLeafExecutionAuthority.FromPlanSet(scenario.PlanSet, leaf);
+        var priorActive = new MaterializationActiveGenerationReference(
+            schemaVersion: MaterializationActiveGenerationReference.CurrentSchemaVersion,
+            authority: authority,
+            generation: new("generation/progressive/prior"),
+            targetRevision: new("1"),
+            promotion: new("promotion/progressive/prior"),
+            promotionFence: new("1"),
+            validation: new("validation/progressive/prior"),
+            activatedAtUtc: new(2026, 8, 2, 12, 0, 0, TimeSpan.Zero));
+        var priorGeneration = new MaterializationBackendGenerationReference(
+            targetId: binding.Slice.Target,
+            generationId: priorActive.Generation,
+            definitionFingerprint: binding.Slice.Materialization.DefinitionFingerprint);
+        var priorRead = new MaterializationReadableBackendReference(binding.Slice, priorGeneration, priorActive);
+        var priorConfiguration = MaterializationBackendRoutingConfigurationResolver.Resolve(
+            scenario.Pool.Definition,
+            new MaterializationBackendRoutingConfigurationLayer(
+                origin: EffectiveConfigurationOrigin.Explicit,
+                authority: "tests/progressive/prior-route/v1",
+                settings: new(readTarget: binding.Slice.Target, writeTarget: binding.Slice.Target)));
+        var candidateActive = new MaterializationActiveGenerationReference(
+            schemaVersion: MaterializationActiveGenerationReference.CurrentSchemaVersion,
+            authority: authority,
+            generation: new("generation/progressive/candidate"),
+            targetRevision: new("2"),
+            promotion: new("promotion/progressive/candidate"),
+            promotionFence: new("2"),
+            validation: new("validation/progressive/candidate"),
+            activatedAtUtc: priorActive.ActivatedAtUtc.AddMinutes(1));
+        var candidate = new MaterializationBackendGenerationReference(
+            targetId: binding.Slice.Target,
+            generationId: candidateActive.Generation,
+            definitionFingerprint: binding.Slice.Materialization.DefinitionFingerprint);
+        var before = new MaterializationBackendRoutingSnapshot(
+            placementSlice: binding.Slice,
+            revision: new("5"),
+            latestFence: new("5"),
+            activeRead: priorRead,
+            activeWrite: priorGeneration,
+            candidate: null,
+            draining: [],
+            retired: [],
+            cleaned: [],
+            configuration: priorConfiguration);
+        var forwardExecutor = new MaterializationIndependentPromotionExecutor(scenario.PlanSet, authority);
+        var forwardRequest = forwardExecutor.CreateRequest(
+            activeGeneration: candidateActive,
+            snapshot: before,
+            fence: new("6"),
+            issuedAtUtc: candidateActive.ActivatedAtUtc.AddMinutes(1));
+        var admitted = new MaterializationBackendRoutingSnapshot(
+            placementSlice: binding.Slice,
+            revision: new("6"),
+            latestFence: forwardRequest.Fence,
+            activeRead: priorRead,
+            activeWrite: priorGeneration,
+            candidate: candidate,
+            draining: [],
+            retired: [],
+            cleaned: [],
+            configuration: priorConfiguration);
+        var selectedRead = new MaterializationReadableBackendReference(binding.Slice, candidate, candidateActive);
+        var selected = new MaterializationBackendRoutingSnapshot(
+            placementSlice: binding.Slice,
+            revision: new("7"),
+            latestFence: forwardRequest.Fence,
+            activeRead: selectedRead,
+            activeWrite: candidate,
+            candidate: null,
+            draining: [new(priorGeneration, new("7"))],
+            retired: [],
+            cleaned: [],
+            configuration: forwardRequest.Configuration);
+        var forward = new MaterializationIndependentPromotionResult(
+            MaterializationIndependentPromotionResult.CurrentSchemaVersion,
+            forwardRequest,
+            new(
+                MaterializationBackendRoutingDisposition.Applied,
+                admitted,
+                new(
+                    forwardRequest.AdmitCommandId,
+                    binding.Slice,
+                    MaterializationBackendRoutingOperation.AdmitCandidate,
+                    new("6"),
+                    forwardRequest.Fence,
+                    forwardRequest.AdmitIssuedAtUtc)),
+            new(
+                MaterializationBackendRoutingDisposition.Applied,
+                selected,
+                new(
+                    forwardRequest.SwapCommandId,
+                    binding.Slice,
+                    MaterializationBackendRoutingOperation.Swap,
+                    new("7"),
+                    forwardRequest.Fence,
+                    forwardRequest.SwapIssuedAtUtc)));
+        var proof = new MaterializationBackendRollbackProof(
+            placementSlice: binding.Slice,
+            generation: priorGeneration,
+            currentRead: selectedRead,
+            currentWrite: candidate,
+            expectedRoutingRevision: selected.Revision,
+            equivalenceFingerprint: "equivalence/progressive/exact-source-cut",
+            observedAtUtc: candidateActive.ActivatedAtUtc.AddMinutes(3));
+        var compensationExecutor = new MaterializationProgressivePromotionCompensationExecutor(
+            scenario.PlanSet,
+            authority);
+        var compensationRequest = compensationExecutor.CreateRequest(
+            promotion: forward,
+            proof: proof,
+            fence: new("7"),
+            issuedAtUtc: proof.ObservedAtUtc.AddMinutes(1));
+        var restored = new MaterializationBackendRoutingSnapshot(
+            placementSlice: binding.Slice,
+            revision: new("8"),
+            latestFence: compensationRequest.Fence,
+            activeRead: priorRead,
+            activeWrite: priorGeneration,
+            candidate: null,
+            draining: [new(candidate, new("8"))],
+            retired: [],
+            cleaned: [],
+            configuration: priorConfiguration);
+        var router = new CompensationOutcomeRouter(restored);
+
+        var first = await compensationExecutor.ExecuteAsync(
+            OperationContext.Create(),
+            compensationRequest,
+            router);
+        var replay = await compensationExecutor.ExecuteAsync(
+            OperationContext.Create(),
+            compensationRequest,
+            router);
+
+        Assert.True(first.IsRestored);
+        Assert.True(replay.IsRestored);
+        Assert.Equal(first.Request, replay.Request);
+        Assert.Equal(first.Routing.Snapshot, replay.Routing.Snapshot);
+        Assert.Equal(MaterializationBackendRoutingDisposition.Applied, first.Routing.Disposition);
+        Assert.Equal(MaterializationBackendRoutingDisposition.Replayed, replay.Routing.Disposition);
+        Assert.Equal(2, router.Requests.Count);
+        Assert.All(router.Requests, request => Assert.Equal(compensationRequest.Proof, request.Rollback));
+        Assert.Single(router.Requests.Select(static request => request.Header.CommandId).Distinct());
+        var json = MaterializationProgressivePromotionCompensationJsonSerializer.SerializeResult(first);
+        var restoredResult = MaterializationProgressivePromotionCompensationJsonSerializer.DeserializeResult(json);
+        Assert.True(restoredResult.IsRestored);
+        Assert.Equal(compensationRequest.CommandId, restoredResult.Request.CommandId);
+        Assert.Equal(json, MaterializationProgressivePromotionCompensationJsonSerializer.SerializeResult(restoredResult));
+        Assert.Contains("compensate", compensationRequest.CommandId.Value, StringComparison.Ordinal);
     }
 
     static Scenario CreateScenario(
@@ -1539,6 +1701,70 @@ public sealed class MaterializationRebuildPlanSetTests
 
         static ValueTask<TResult> Unsupported<TResult>() =>
             ValueTask.FromException<TResult>(new NotSupportedException());
+    }
+
+    sealed class CompensationOutcomeRouter(MaterializationBackendRoutingSnapshot restored)
+        : IMaterializationBackendRouter
+    {
+        internal List<MaterializationSwapBackendRoutingRequest> Requests { get; } = [];
+
+        public ValueTask<MaterializationBackendRoutingResult> SwapAsync(
+            OperationContext context,
+            MaterializationSwapBackendRoutingRequest request)
+        {
+            Requests.Add(request);
+            return ValueTask.FromResult(new MaterializationBackendRoutingResult(
+                Requests.Count == 1
+                    ? MaterializationBackendRoutingDisposition.Applied
+                    : MaterializationBackendRoutingDisposition.Replayed,
+                restored,
+                new(
+                    request.Header.CommandId,
+                    request.Header.PlacementSlice,
+                    MaterializationBackendRoutingOperation.Swap,
+                    restored.Revision,
+                    request.Header.Fence,
+                    request.Header.IssuedAtUtc)));
+        }
+
+        public ValueTask<MaterializationBackendRoutingSnapshot> InspectAsync(
+            OperationContext context,
+            MaterializationPlacementSliceReference placementSlice) => Unsupported<MaterializationBackendRoutingSnapshot>();
+
+        public ValueTask<MaterializationBackendRouteBinding> ResolveReadAsync(
+            OperationContext context,
+            MaterializationPlacementSliceReference placementSlice) => Unsupported<MaterializationBackendRouteBinding>();
+
+        public ValueTask<MaterializationBackendRouteBinding> ResolveWriteAsync(
+            OperationContext context,
+            MaterializationPlacementSliceReference placementSlice) => Unsupported<MaterializationBackendRouteBinding>();
+
+        public ValueTask<MaterializationBackendRoutingResult> AdmitCandidateAsync(
+            OperationContext context,
+            MaterializationAdmitBackendCandidateRequest request) => Unsupported<MaterializationBackendRoutingResult>();
+
+        public ValueTask<MaterializationBackendRoutingResult> AbandonCandidateAsync(
+            OperationContext context,
+            MaterializationAbandonBackendCandidateRequest request) => Unsupported<MaterializationBackendRoutingResult>();
+
+        public ValueTask<MaterializationBackendRoutingResult> CompleteDrainAsync(
+            OperationContext context,
+            MaterializationCompleteBackendDrainRequest request) => Unsupported<MaterializationBackendRoutingResult>();
+
+        public ValueTask<MaterializationBackendRoutingResult> RetireAsync(
+            OperationContext context,
+            MaterializationRetireBackendGenerationRequest request) => Unsupported<MaterializationBackendRoutingResult>();
+
+        public ValueTask<MaterializationBackendCleanupReservationResult> ReserveCleanupAsync(
+            OperationContext context,
+            MaterializationReserveBackendCleanupRequest request) => Unsupported<MaterializationBackendCleanupReservationResult>();
+
+        public ValueTask<MaterializationBackendRoutingResult> CleanupAsync(
+            OperationContext context,
+            MaterializationCleanupBackendGenerationRequest request) => Unsupported<MaterializationBackendRoutingResult>();
+
+        static ValueTask<T> Unsupported<T>() =>
+            ValueTask.FromException<T>(new InvalidOperationException("Unexpected compensation-router operation."));
     }
 
     sealed record Scenario(

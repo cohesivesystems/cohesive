@@ -16,7 +16,7 @@ public static class MaterializationRebuildPlanSetStatusWireNames
     public const string SemanticAuthority = "cohesive.storage.materialization.rebuild-plan-set.status";
 
     /// <summary>Exact portable payload schema version.</summary>
-    public const string CurrentSchemaVersion = "materialization-rebuild-plan-set-status/v1";
+    public const string CurrentSchemaVersion = "materialization-rebuild-plan-set-status/v2";
 
     /// <summary>Typed execution-extension identity derived from <see cref="SemanticAuthority"/>.</summary>
     public static ExecutionExtensionId ExtensionId { get; } = new(SemanticAuthority);
@@ -54,6 +54,7 @@ public static class MaterializationRebuildPlanSetStatusProjector
     static readonly ScalarTypeRef StringType = new(ScalarTypeKind.String);
     static readonly ScalarTypeRef IntegerType = new(ScalarTypeKind.Int64);
     static readonly ScalarTypeRef InstantType = new(ScalarTypeKind.Instant);
+    static readonly ScalarTypeRef BooleanType = new(ScalarTypeKind.Bool);
     static readonly EnumTypeRef TerminalOutcomeType = EnumType<ExecutionTerminalOutcomeKind>();
     static readonly EnumTypeRef ChildDispositionType = EnumType<ProcessChildDisposition>();
     static readonly EnumTypeRef LeafOutcomeType = EnumType<MaterializationRebuildPlanSetLeafOutcome>();
@@ -90,6 +91,7 @@ public static class MaterializationRebuildPlanSetStatusProjector
         new("placementSliceFingerprint", FingerprintType),
         new("subjects", StringType, cardinality: FieldCardinality.Many),
         new("capacityDomain", StringType),
+        new("promotionOrdinal", IntegerType),
         new("buildChild", ContinuationType, nullability: FieldNullability.Nullable),
         new("buildDisposition", ChildDispositionType, nullability: FieldNullability.Nullable),
         new("buildTerminalOutcome", StringType, nullability: FieldNullability.Nullable),
@@ -100,6 +102,12 @@ public static class MaterializationRebuildPlanSetStatusProjector
         new("promotionTerminalOutcome", StringType, nullability: FieldNullability.Nullable),
         new("promotionChildResult", StringType, nullability: FieldNullability.Nullable),
         new("promotionResult", StringType, nullability: FieldNullability.Nullable),
+        new("retainedCandidate", BooleanType, nullability: FieldNullability.Nullable),
+        new("compensationChild", ContinuationType, nullability: FieldNullability.Nullable),
+        new("compensationDisposition", ChildDispositionType, nullability: FieldNullability.Nullable),
+        new("compensationTerminalOutcome", StringType, nullability: FieldNullability.Nullable),
+        new("compensationChildResult", StringType, nullability: FieldNullability.Nullable),
+        new("compensationResult", StringType, nullability: FieldNullability.Nullable),
         new("leafOutcome", LeafOutcomeType, nullability: FieldNullability.Nullable),
         new("failureEvidence", StringType, nullability: FieldNullability.Nullable)
     ]);
@@ -110,7 +118,11 @@ public static class MaterializationRebuildPlanSetStatusProjector
         new("ready", IntegerType),
         new("promotionStarted", IntegerType),
         new("promotionSettled", IntegerType),
-        new("promoted", IntegerType)
+        new("promoted", IntegerType),
+        new("compensationStarted", IntegerType),
+        new("compensationSettled", IntegerType),
+        new("compensated", IntegerType),
+        new("compensationFailed", IntegerType)
     ]);
     static readonly ValueContract StatusContract = new(new ObjectTypeRef(
     [
@@ -120,6 +132,8 @@ public static class MaterializationRebuildPlanSetStatusProjector
         new("placementFingerprint", FingerprintType),
         new("promotionMode", PromotionModeType),
         new("progressiveFailurePolicy", ProgressiveFailurePolicyType, nullability: FieldNullability.Nullable),
+        new("promotionOrder", StringType, cardinality: FieldCardinality.Many),
+        new("mixedVisibility", BooleanType),
         new("parentDefinition", DefinitionType),
         new("parentContinuation", ContinuationType),
         new("storageRevision", StringType),
@@ -164,7 +178,9 @@ public static class MaterializationRebuildPlanSetStatusProjector
             ProcessChildDisposition.Active or ProcessChildDisposition.CancellationRequested);
         var pendingChildren = state.Children.Count(static child => child.Disposition == ProcessChildDisposition.Pending);
         var settledChildren = state.Children.Count(static child => IsSettled(child.Disposition));
-        var totalMilestones = checked((long)planSet.LeafPlans.Length * 2);
+        var totalMilestones = checked((long)planSet.LeafPlans.Length
+            * (planSet.Promotion.ProgressiveFailurePolicy
+                == MaterializationProgressivePromotionFailurePolicy.CompensatePromoted ? 3 : 2));
         var health = evidence.Receipt?.Outcome == MaterializationRebuildPlanSetOutcome.PartiallyPromoted
             ? ExecutionHealthStatus.Degraded
             : state.Terminal.Kind is ExecutionTerminalOutcomeKind.Failed
@@ -254,6 +270,15 @@ public static class MaterializationRebuildPlanSetStatusProjector
         root.Add(
             "progressiveFailurePolicy",
             StringOrNull(planSet.Promotion.ProgressiveFailurePolicy?.ToString()));
+        root.Add(
+            "promotionOrder",
+            ObservationValue.FromImmutableArray(
+            [
+                .. planSet.LeafPlans.Select(static binding =>
+                    ObservationValue.FromString(binding.Slice.Id.Value))
+            ]));
+        var visible = evidence.Children.Count(static child => child.IsRebuiltVisible);
+        root.Add("mixedVisibility", ObservationValue.FromBool(visible > 0 && visible < evidence.Children.Length));
         root.Add("parentDefinition", ProjectDefinition(artifacts.ParentPlan.DefinitionReference));
         root.Add("parentContinuation", ProjectContinuation(state.Continuation));
         root.Add("storageRevision", ObservationValue.FromString(snapshot.Revision.Value));
@@ -327,12 +352,19 @@ public static class MaterializationRebuildPlanSetStatusProjector
             artifacts.PromotionWorkerPlan.DefinitionReference,
             bindingBySlice,
             snapshot);
+        var compensationBySlice = Children(
+            state,
+            MaterializationRebuildPlanSetProcessFactory.CompensateLeavesNodeId,
+            artifacts.CompensationWorkerPlan.DefinitionReference,
+            bindingBySlice,
+            snapshot);
         var childEvidence = ImmutableArray.CreateBuilder<LeafEvidence>(planSet.LeafPlans.Length);
         foreach (var binding in planSet.LeafPlans)
         {
             var slice = binding.Slice.Id.Value;
             buildBySlice.TryGetValue(slice, out var build);
             promotionBySlice.TryGetValue(slice, out var promotionChild);
+            compensationBySlice.TryGetValue(slice, out var compensationChild);
             var authority = new MaterializationRebuildLeafExecutionAuthority(
                 MaterializationRebuildLeafExecutionAuthority.CurrentSchemaVersion,
                 planSetReference,
@@ -343,13 +375,18 @@ public static class MaterializationRebuildPlanSetStatusProjector
             var promotion = promotionChild is { Disposition: ProcessChildDisposition.Completed }
                 ? ParsePromotion(promotionChild, authority, ready, snapshot)
                 : null;
+            var compensation = compensationChild is { Disposition: ProcessChildDisposition.Completed }
+                ? ParseCompensation(compensationChild, authority, promotion, snapshot)
+                : null;
             childEvidence.Add(new(
                 binding,
                 capacityBySlice[slice],
                 build,
                 ready,
                 promotionChild,
-                promotion));
+                promotion,
+                compensationChild,
+                compensation));
         }
 
         var children = childEvidence.MoveToImmutable();
@@ -403,9 +440,10 @@ public static class MaterializationRebuildPlanSetStatusProjector
             HashSet<string> observed = new(StringComparer.Ordinal);
             foreach (var work in partition.Work)
             {
-                if (!bindingBySlice.TryGetValue(work.ProgressIdentity, out var binding)
-                    || !observed.Add(work.ProgressIdentity)
-                    || !capacityBySlice.TryGetValue(work.ProgressIdentity, out var capacity)
+                var (slice, payload) = RequireWorkPayload(work);
+                if (!bindingBySlice.TryGetValue(slice, out var binding)
+                    || !observed.Add(slice)
+                    || !capacityBySlice.TryGetValue(slice, out var capacity)
                     || !string.Equals(work.CapacityIdentity, capacity, StringComparison.Ordinal))
                 {
                     throw new ArgumentException(
@@ -415,7 +453,6 @@ public static class MaterializationRebuildPlanSetStatusProjector
 
                 try
                 {
-                    var payload = RequireWorkPayload(work, capacity);
                     var authority = new MaterializationRebuildLeafExecutionAuthority(
                         MaterializationRebuildLeafExecutionAuthority.CurrentSchemaVersion,
                         planSet,
@@ -428,7 +465,7 @@ public static class MaterializationRebuildPlanSetStatusProjector
                     else
                     {
                         var ready = MaterializationReadyGenerationReferenceJsonSerializer.Deserialize(payload);
-                        if (ready.Authority != authority || !promotionWork.TryAdd(work.ProgressIdentity, ready))
+                        if (ready.Authority != authority || !promotionWork.TryAdd(slice, ready))
                             throw new JsonException("Promotion work contains substituted or duplicate readiness evidence.");
                     }
                 }
@@ -452,18 +489,20 @@ public static class MaterializationRebuildPlanSetStatusProjector
         return promotionWork;
     }
 
-    static string RequireWorkPayload(ProcessPartitionWorkState work, string capacityDomain)
+    static (string Slice, string Payload) RequireWorkPayload(ProcessPartitionWorkState work)
     {
         var partition = work.Partition;
         if (partition.State != PortableValueState.Concrete
             || partition.Value is not { Kind: ObservationValueKind.Object } root
-            || root.Fields is not { Count: 3 }
+            || root.Fields is not { Count: 4 }
+            || !root.TryGetProperty("progressId", out var progressValue)
+            || progressValue.Kind != ObservationValueKind.String
+            || !string.Equals(progressValue.String, work.ProgressIdentity, StringComparison.Ordinal)
             || !root.TryGetProperty("sliceId", out var sliceValue)
             || sliceValue.Kind != ObservationValueKind.String
-            || !string.Equals(sliceValue.String, work.ProgressIdentity, StringComparison.Ordinal)
             || !root.TryGetProperty("capacityDomain", out var capacityValue)
             || capacityValue.Kind != ObservationValueKind.String
-            || !string.Equals(capacityValue.String, capacityDomain, StringComparison.Ordinal)
+            || !string.Equals(capacityValue.String, work.CapacityIdentity, StringComparison.Ordinal)
             || !root.TryGetProperty("payload", out var payloadValue)
             || payloadValue.Kind != ObservationValueKind.String
             || payloadValue.String is not { } payload)
@@ -472,7 +511,7 @@ public static class MaterializationRebuildPlanSetStatusProjector
                 "Partition work must retain exact slice, capacity-domain, and payload fields.",
                 nameof(work));
         }
-        return payload;
+        return (sliceValue.String!, payload);
     }
 
     static Dictionary<string, ProcessChildState> Children(
@@ -483,9 +522,14 @@ public static class MaterializationRebuildPlanSetStatusProjector
         ProcessDurableStoreSnapshot snapshot)
     {
         Dictionary<string, ProcessChildState> result = new(StringComparer.Ordinal);
+        var workByRegistration = state.Partitions
+            .Where(partition => partition.Node == node)
+            .SelectMany(static partition => partition.Work)
+            .ToDictionary(static work => work.ChildRegistrationId, StringComparer.Ordinal);
         foreach (var child in state.Children.Where(child => child.Node == node))
         {
-            if (child.ProgressIdentity is not { } slice
+            if (!workByRegistration.TryGetValue(child.RegistrationId, out var work)
+                || RequireWorkPayload(work).Slice is not { } slice
                 || !bindingBySlice.ContainsKey(slice)
                 || child.Process != expectedProcess
                 || !result.TryAdd(slice, child))
@@ -542,6 +586,33 @@ public static class MaterializationRebuildPlanSetStatusProjector
         {
             throw new ArgumentException(
                 "A completed promotion child retained invalid or inexact independent-promotion evidence.",
+                nameof(snapshot),
+                exception);
+        }
+    }
+
+    static MaterializationProgressivePromotionCompensationResult ParseCompensation(
+        ProcessChildState child,
+        MaterializationRebuildLeafExecutionAuthority authority,
+        MaterializationIndependentPromotionResult? promotion,
+        ProcessDurableStoreSnapshot snapshot)
+    {
+        try
+        {
+            var compensation = MaterializationProgressivePromotionCompensationJsonSerializer.DeserializeResult(
+                RequireString(child.Result, "completed compensation child"));
+            if (promotion is null
+                || compensation.Request.Promotion != promotion
+                || compensation.Request.Promotion.Request.Authority != authority)
+            {
+                throw new JsonException("Compensation evidence does not consume the exact committed forward step.");
+            }
+            return compensation;
+        }
+        catch (Exception exception) when (exception is JsonException or ArgumentException)
+        {
+            throw new ArgumentException(
+                "A completed compensation child retained invalid or inexact explicit compensation evidence.",
                 nameof(snapshot),
                 exception);
         }
@@ -660,8 +731,9 @@ public static class MaterializationRebuildPlanSetStatusProjector
     static ObservationValue ProjectChildren(StatusEvidence evidence)
     {
         var values = ImmutableArray.CreateBuilder<ObservationValue>(evidence.Children.Length);
-        foreach (var child in evidence.Children)
+        for (var ordinal = 0; ordinal < evidence.Children.Length; ordinal++)
         {
+            var child = evidence.Children[ordinal];
             var receipt = evidence.Receipt?.Leaves.Single(candidate =>
                 candidate.Authority.PlacementSlice.Id == child.Binding.Slice.Id);
             var fields = ImmutableDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
@@ -676,6 +748,7 @@ public static class MaterializationRebuildPlanSetStatusProjector
                         ObservationValue.FromString(subject.Value))
                 ]));
             fields.Add("capacityDomain", ObservationValue.FromString(child.CapacityDomain));
+            fields.Add("promotionOrdinal", ObservationValue.FromInt64(ordinal));
             fields.Add("buildChild", ProjectContinuationOrNull(child.Build?.Continuation));
             fields.Add("buildDisposition", StringOrNull(child.Build?.Disposition.ToString()));
             fields.Add("buildTerminalOutcome", StringOrNull(child.Build?.TerminalOutcome?.Value));
@@ -690,6 +763,18 @@ public static class MaterializationRebuildPlanSetStatusProjector
             fields.Add("promotionResult", StringOrNull(child.Promotion is null
                 ? null
                 : MaterializationIndependentPromotionResultJsonSerializer.Serialize(child.Promotion)));
+            fields.Add("retainedCandidate", child.Promotion is null
+                ? ObservationValue.Null
+                : ObservationValue.FromBool(
+                    child.Promotion.Admission.Snapshot.Candidate is not null
+                    && !child.Promotion.IsCurrentlySelected));
+            fields.Add("compensationChild", ProjectContinuationOrNull(child.CompensationChild?.Continuation));
+            fields.Add("compensationDisposition", StringOrNull(child.CompensationChild?.Disposition.ToString()));
+            fields.Add("compensationTerminalOutcome", StringOrNull(child.CompensationChild?.TerminalOutcome?.Value));
+            fields.Add("compensationChildResult", StringOrNull(CanonicalJson(child.CompensationChild?.Result)));
+            fields.Add("compensationResult", StringOrNull(child.Compensation is null
+                ? null
+                : MaterializationProgressivePromotionCompensationJsonSerializer.SerializeResult(child.Compensation)));
             fields.Add("leafOutcome", StringOrNull(receipt?.Outcome.ToString()));
             fields.Add("failureEvidence", StringOrNull(receipt?.Failure is null
                 ? null
@@ -710,7 +795,16 @@ public static class MaterializationRebuildPlanSetStatusProjector
         fields.Add("promotionSettled", ObservationValue.FromInt64(evidence.Children.Count(static child =>
             child.PromotionChild is { } promotion && IsSettled(promotion.Disposition))));
         fields.Add("promoted", ObservationValue.FromInt64(evidence.Children.Count(static child =>
-            child.Promotion is { IsCurrentlySelected: true })));
+            child.IsRebuiltVisible)));
+        fields.Add("compensationStarted", ObservationValue.FromInt64(evidence.Children.Count(static child =>
+            child.CompensationChild is not null)));
+        fields.Add("compensationSettled", ObservationValue.FromInt64(evidence.Children.Count(static child =>
+            child.CompensationChild is { } compensation && IsSettled(compensation.Disposition))));
+        fields.Add("compensated", ObservationValue.FromInt64(evidence.Children.Count(static child =>
+            child.Compensation is { IsRestored: true })));
+        fields.Add("compensationFailed", ObservationValue.FromInt64(evidence.Children.Count(static child =>
+            child.CompensationChild is { Disposition: ProcessChildDisposition.Failed }
+            || child.Compensation is { IsRestored: false })));
         return ObservationValue.FromObject(fields.ToImmutable());
     }
 
@@ -812,7 +906,14 @@ public static class MaterializationRebuildPlanSetStatusProjector
         ProcessChildState? Build,
         MaterializationReadyGenerationReference? Ready,
         ProcessChildState? PromotionChild,
-        MaterializationIndependentPromotionResult? Promotion);
+        MaterializationIndependentPromotionResult? Promotion,
+        ProcessChildState? CompensationChild,
+        MaterializationProgressivePromotionCompensationResult? Compensation)
+    {
+        internal bool IsRebuiltVisible =>
+            Promotion is { IsCurrentlySelected: true }
+            && Compensation is not { IsRestored: true };
+    }
 
     sealed record StatusEvidence(
         MaterializationRebuildPlanSetReference PlanSet,

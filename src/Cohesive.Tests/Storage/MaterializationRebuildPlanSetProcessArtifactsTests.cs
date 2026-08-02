@@ -79,7 +79,7 @@ public sealed class MaterializationRebuildPlanSetProcessArtifactsTests
     }
 
     [Fact]
-    public void Create_RejectsPromotionModesOutsideTheInitialIndependentRealization()
+    public void Create_RealizesProgressivePoliciesSequentiallyAndRejectsAtomicVisibility()
     {
         var plan = MaterializationRebuildPlanJsonSerializerTests.CreateControlledPlan([], []);
         var independent = MaterializationRebuildPlanJsonSerializerTests.CreateSinglePlanSet(plan);
@@ -95,7 +95,66 @@ public sealed class MaterializationRebuildPlanSetProcessArtifactsTests
             leafPlans: independent.LeafPlans,
             provenance: independent.Provenance);
 
-        Assert.Throws<ArgumentException>(() => MaterializationRebuildPlanSetProcessFactory.Create(progressive));
+        var progressiveArtifacts = MaterializationRebuildPlanSetProcessFactory.Create(progressive);
+        var promote = Assert.IsType<ForEachPartitionProcessNode>(progressiveArtifacts.ParentPlan.GetNode(
+            MaterializationRebuildPlanSetProcessFactory.PromoteLeavesNodeId));
+
+        Assert.Equal(1, promote.Limits.MaximumParallelism);
+        Assert.Equal(1, promote.Limits.MaximumStartsPerActivation);
+        Assert.Equal(ProcessPartitionFailurePolicy.FailFast, promote.Failure);
+
+        var continueProgressive = new MaterializationRebuildPlanSet(
+            schemaVersion: independent.SchemaVersion,
+            request: independent.Request,
+            membership: independent.Membership,
+            placement: independent.Placement,
+            scheduling: independent.Scheduling,
+            promotion: new(
+                MaterializationRebuildPromotionMode.AllReadyProgressive,
+                MaterializationProgressivePromotionFailurePolicy.RetainPromotedAndContinue),
+            leafPlans: independent.LeafPlans,
+            provenance: independent.Provenance);
+        var continueArtifacts = MaterializationRebuildPlanSetProcessFactory.Create(continueProgressive);
+        Assert.Equal(
+            ProcessPartitionFailurePolicy.AwaitAll,
+            Assert.IsType<ForEachPartitionProcessNode>(continueArtifacts.ParentPlan.GetNode(
+                MaterializationRebuildPlanSetProcessFactory.PromoteLeavesNodeId)).Failure);
+        Assert.NotEqual(progressiveArtifacts.PlanSet.PlanSet, continueArtifacts.PlanSet.PlanSet);
+        Assert.NotEqual(
+            progressiveArtifacts.ParentPlan.DefinitionReference.Fingerprint,
+            continueArtifacts.ParentPlan.DefinitionReference.Fingerprint);
+
+        var compensate = new MaterializationRebuildPlanSet(
+            schemaVersion: independent.SchemaVersion,
+            request: independent.Request,
+            membership: independent.Membership,
+            placement: independent.Placement,
+            scheduling: independent.Scheduling,
+            promotion: new(
+                MaterializationRebuildPromotionMode.AllReadyProgressive,
+                MaterializationProgressivePromotionFailurePolicy.CompensatePromoted),
+            leafPlans: independent.LeafPlans,
+            provenance: independent.Provenance);
+        var compensateArtifacts = MaterializationRebuildPlanSetProcessFactory.Create(compensate);
+        Assert.NotNull(compensateArtifacts.CompensationWorkBinding);
+        Assert.NotNull(compensateArtifacts.CompensationInvocationBinding);
+        Assert.IsType<RequestProcessNode>(compensateArtifacts.ParentPlan.GetNode(
+            MaterializationRebuildPlanSetProcessFactory.PrepareCompensationWorkNodeId));
+        var compensateLeaves = Assert.IsType<ForEachPartitionProcessNode>(compensateArtifacts.ParentPlan.GetNode(
+            MaterializationRebuildPlanSetProcessFactory.CompensateLeavesNodeId));
+        Assert.Equal(1, compensateLeaves.Limits.MaximumParallelism);
+        Assert.Equal(ProcessPartitionFailurePolicy.AwaitAll, compensateLeaves.Failure);
+
+        var atomic = new MaterializationRebuildPlanSet(
+            schemaVersion: independent.SchemaVersion,
+            request: independent.Request,
+            membership: independent.Membership,
+            placement: independent.Placement,
+            scheduling: independent.Scheduling,
+            promotion: new(MaterializationRebuildPromotionMode.AtomicVisibility),
+            leafPlans: independent.LeafPlans,
+            provenance: independent.Provenance);
+        Assert.Throws<ArgumentException>(() => MaterializationRebuildPlanSetProcessFactory.Create(atomic));
     }
 
     [Fact]

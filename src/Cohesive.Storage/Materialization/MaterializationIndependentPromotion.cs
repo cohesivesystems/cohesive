@@ -316,7 +316,12 @@ public static class MaterializationIndependentPromotionResultJsonSerializer
     }
 }
 
-/// <summary>Storage-owned one-leaf interpretation of independent plan-set promotion semantics.</summary>
+/// <summary>Storage-owned one-leaf interpretation of a placement-scoped plan-set promotion step.</summary>
+/// <remarks>
+/// Independent promotion and all-ready progressive promotion deliberately share this exact routing primitive. The
+/// parent Process supplies their different coordination semantics; this executor only commits one independently
+/// addressable placement transition.
+/// </remarks>
 public sealed class MaterializationIndependentPromotionExecutor
 {
     const string CommandPrefix = MaterializationIndependentPromotionIntentProtocol.CommandPrefix;
@@ -325,11 +330,11 @@ public sealed class MaterializationIndependentPromotionExecutor
 
     MaterializationRebuildLeafPlanBinding Binding => authority.Binding;
 
-    /// <summary>Creates an executor for one exact linked leaf in an independent-promotion plan set.</summary>
+    /// <summary>Creates an executor for one exact linked leaf in a placement-addressable promotion plan set.</summary>
     /// <param name="planSet">Canonical linked plan set.</param>
     /// <param name="leafPlan">Exact leaf plan embedded by one plan-set binding.</param>
     /// <exception cref="ArgumentNullException">An argument is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException">The plan set is not independent or the leaf is detached, substituted, or inexact.</exception>
+    /// <exception cref="ArgumentException">The plan set requests atomic visibility or the leaf is detached, substituted, or inexact.</exception>
     public MaterializationIndependentPromotionExecutor(
         MaterializationRebuildPlanSet planSet,
         MaterializationRebuildPlan leafPlan)
@@ -346,7 +351,7 @@ public sealed class MaterializationIndependentPromotionExecutor
     /// <param name="authority">Exact leaf binding claimed against <paramref name="planSet"/>.</param>
     /// <exception cref="ArgumentNullException">An argument is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
-    /// The plan set is not independent, or <paramref name="authority"/> is detached, substituted, or inexact.
+    /// The plan set requests atomic visibility, or <paramref name="authority"/> is detached, substituted, or inexact.
     /// </exception>
     public MaterializationIndependentPromotionExecutor(
         MaterializationRebuildPlanSet planSet,
@@ -354,8 +359,12 @@ public sealed class MaterializationIndependentPromotionExecutor
     {
         this.planSet = planSet ?? throw new ArgumentNullException(nameof(planSet));
         this.authority = authority ?? throw new ArgumentNullException(nameof(authority));
-        if (planSet.Promotion.Mode != MaterializationRebuildPromotionMode.Independent)
-            throw new ArgumentException("This executor realizes only explicitly independent promotion demand.", nameof(planSet));
+        if (planSet.Promotion.Mode == MaterializationRebuildPromotionMode.AtomicVisibility)
+        {
+            throw new ArgumentException(
+                "A placement-scoped promotion step cannot realize globally atomic visibility.",
+                nameof(planSet));
+        }
 
         MaterializationRebuildLeafExecutionAuthority expected;
         try

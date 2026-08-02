@@ -129,15 +129,155 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
         await AssertDurableAndReferenceEquivalentAsync(fixture, continuation, start, terminal, receipt);
     }
 
+    [Theory]
+    [InlineData(MaterializationProgressivePromotionFailurePolicy.RetainPromotedAndStop)]
+    [InlineData(MaterializationProgressivePromotionFailurePolicy.RetainPromotedAndContinue)]
+    public async Task ProgressivePromotion_UsesDeclaredSequentialPartialFailurePolicy(
+        MaterializationProgressivePromotionFailurePolicy policy)
+    {
+        using var fixture = CreateAggregateFixture(
+            AggregateFailureMode.OnePromotion,
+            promotion: new(MaterializationRebuildPromotionMode.AllReadyProgressive, policy),
+            rejectFirstPromotion: true);
+        ProcessContinuationIdentity continuation = new(
+            processInstanceId: new($"process-instance/materialization-plan-set/progressive/{policy}"),
+            processAttemptId: new($"process-attempt/materialization-plan-set/progressive/{policy}/1"));
+        var start = PlanSetStart(fixture.PlanSet, fixture.Artifacts, continuation, StartedAtUtc);
+
+        var terminal = await RunPlanSetToTerminalAsync(fixture, continuation, start);
+        var receipt = TerminalReceipt(terminal);
+
+        Assert.Equal(
+            policy == MaterializationProgressivePromotionFailurePolicy.RetainPromotedAndContinue
+                ? MaterializationRebuildPlanSetOutcome.PartiallyPromoted
+                : MaterializationRebuildPlanSetOutcome.Failed,
+            receipt.Outcome);
+        Assert.Equal(policy, receipt.ProgressiveFailurePolicy);
+        Assert.Equal(
+            fixture.PlanSet.LeafPlans.Select(static binding => binding.Slice.Id),
+            receipt.PromotionOrder);
+        Assert.Single(receipt.Leaves, static leaf => leaf.Outcome == MaterializationRebuildPlanSetLeafOutcome.Failed);
+        var siblingOutcome = policy == MaterializationProgressivePromotionFailurePolicy.RetainPromotedAndContinue
+            ? MaterializationRebuildPlanSetLeafOutcome.Promoted
+            : MaterializationRebuildPlanSetLeafOutcome.Skipped;
+        Assert.Single(receipt.Leaves, leaf => leaf.Outcome == siblingOutcome);
+        var promotionPartition = Assert.Single(terminal.Checkpoint.Continuation.Partitions,
+            partition => partition.Node == MaterializationRebuildPlanSetProcessFactory.PromoteLeavesNodeId);
+        Assert.Equal(
+            policy == MaterializationProgressivePromotionFailurePolicy.RetainPromotedAndContinue ? 2 : 1,
+            terminal.Checkpoint.Continuation.Children.Count(child =>
+                child.Node == MaterializationRebuildPlanSetProcessFactory.PromoteLeavesNodeId
+                && child.Disposition != ProcessChildDisposition.CancelledBeforeStart));
+        Assert.True(promotionPartition.Resolved);
+    }
+
+    [Fact]
+    public async Task ProgressivePromotion_CompensationFailureRemainsExplicitAndRecoverable()
+    {
+        using var fixture = CreateAggregateFixture(
+            AggregateFailureMode.OnePromotion,
+            promotion: new(
+                MaterializationRebuildPromotionMode.AllReadyProgressive,
+                MaterializationProgressivePromotionFailurePolicy.CompensatePromoted));
+        ProcessContinuationIdentity continuation = new(
+            processInstanceId: new("process-instance/materialization-plan-set/progressive/compensate"),
+            processAttemptId: new("process-attempt/materialization-plan-set/progressive/compensate/1"));
+        var start = PlanSetStart(fixture.PlanSet, fixture.Artifacts, continuation, StartedAtUtc);
+
+        var terminal = await RunPlanSetToTerminalAsync(fixture, continuation, start);
+        var receipt = TerminalReceipt(terminal);
+
+        Assert.Equal(MaterializationRebuildPlanSetOutcome.PartiallyPromoted, receipt.Outcome);
+        Assert.Equal(
+            MaterializationProgressivePromotionFailurePolicy.CompensatePromoted,
+            receipt.ProgressiveFailurePolicy);
+        var compensationFailure = Assert.Single(receipt.Leaves,
+            static leaf => leaf.Outcome == MaterializationRebuildPlanSetLeafOutcome.CompensationFailed);
+        Assert.NotNull(compensationFailure.Promotion);
+        Assert.NotNull(compensationFailure.CompensationChild);
+        Assert.Null(compensationFailure.Compensation);
+        Assert.Equal(
+            MaterializationRebuildPlanSetLeafPhase.Compensation,
+            compensationFailure.TerminalEvidence?.Phase);
+        Assert.Single(receipt.Leaves, static leaf => leaf.Outcome == MaterializationRebuildPlanSetLeafOutcome.Failed);
+        Assert.Contains(terminal.Checkpoint.Continuation.Partitions,
+            partition => partition.Node == MaterializationRebuildPlanSetProcessFactory.CompensateLeavesNodeId
+                && partition.Resolved);
+        var status = MaterializationRebuildPlanSetStatusProjector.CreateRuntimeDetails(
+            fixture.PlanSet,
+            fixture.Artifacts,
+            terminal,
+            Provenance("ari-195/progressive-compensation-failure"));
+        var root = Assert.IsType<ObservationValue>(Assert.Single(status.Extensions).Value.Value!.Value);
+        Assert.True(root.GetProperty("mixedVisibility").Bool);
+        Assert.Equal(1, root.GetProperty("progress").GetProperty("compensationFailed").Int64);
+        Assert.Equal(
+            fixture.PlanSet.LeafPlans.Select(static binding => binding.Slice.Id.Value),
+            root.GetProperty("promotionOrder").EnumerateArray().Select(static value => value.GetRequiredString()));
+        var compensationStatus = Assert.Single(
+            root.GetProperty("children").EnumerateArray(),
+            child => child.GetProperty("leafOutcome").GetRequiredString()
+                == MaterializationRebuildPlanSetLeafOutcome.CompensationFailed.ToString());
+        Assert.Equal(
+            ProcessChildDisposition.Failed.ToString(),
+            compensationStatus.GetProperty("compensationDisposition").GetRequiredString());
+    }
+
+    [Theory]
+    [InlineData(MaterializationProgressivePromotionFailurePolicy.RetainPromotedAndStop)]
+    [InlineData(MaterializationProgressivePromotionFailurePolicy.RetainPromotedAndContinue)]
+    [InlineData(MaterializationProgressivePromotionFailurePolicy.CompensatePromoted)]
+    public async Task ProgressivePromotion_EveryFailurePolicyConvergesAfterCommittedParentCrash(
+        MaterializationProgressivePromotionFailurePolicy policy)
+    {
+        using var fixture = CreateAggregateFixture(
+            AggregateFailureMode.OnePromotion,
+            promotion: new(MaterializationRebuildPromotionMode.AllReadyProgressive, policy),
+            injectParentCrash: true);
+        ProcessContinuationIdentity continuation = new(
+            processInstanceId: new($"process-instance/materialization-plan-set/progressive/crash/{policy}"),
+            processAttemptId: new($"process-attempt/materialization-plan-set/progressive/crash/{policy}/1"));
+        var start = PlanSetStart(fixture.PlanSet, fixture.Artifacts, continuation, StartedAtUtc);
+
+        var terminal = await RunPlanSetToTerminalAsync(fixture, continuation, start);
+        var receipt = TerminalReceipt(terminal);
+
+        Assert.True(Assert.IsType<ArmableCrashOnce>(fixture.ParentCrash).Crashed);
+        Assert.Equal(policy, receipt.ProgressiveFailurePolicy);
+        Assert.Equal(
+            fixture.PlanSet.LeafPlans.Select(static binding => binding.Slice.Id),
+            receipt.PromotionOrder);
+        Assert.Single(receipt.Leaves, static leaf => leaf.Outcome == MaterializationRebuildPlanSetLeafOutcome.Failed);
+        Assert.Single(receipt.Leaves, leaf => leaf.Outcome == (policy
+            == MaterializationProgressivePromotionFailurePolicy.CompensatePromoted
+                ? MaterializationRebuildPlanSetLeafOutcome.CompensationFailed
+                : MaterializationRebuildPlanSetLeafOutcome.Promoted));
+        await AssertDurableAndReferenceEquivalentAsync(fixture, continuation, start, terminal, receipt);
+    }
+
     const string InjectedBuildFailure = "tests.materialization-plan-set.build.injected-failure";
     const string InjectedPromotionFailure = "tests.materialization-plan-set.promotion.injected-failure";
 
-    static AggregatePlanSetFixture CreateAggregateFixture(AggregateFailureMode failureMode)
+    static AggregatePlanSetFixture CreateAggregateFixture(
+        AggregateFailureMode failureMode,
+        MaterializationRebuildPromotionPolicy? promotion = null,
+        bool rejectFirstPromotion = false,
+        bool injectParentCrash = false)
     {
         var materialization = CreateMaterializationFixture();
         var scenario = MaterializationRebuildPlanSetTests.CreateIndependentTwoLeafScenario(
             materialization.Plan);
-        var planSet = scenario.PlanSet;
+        var planSet = promotion is null
+            ? scenario.PlanSet
+            : new MaterializationRebuildPlanSet(
+                schemaVersion: scenario.PlanSet.SchemaVersion,
+                request: scenario.PlanSet.Request,
+                membership: scenario.PlanSet.Membership,
+                placement: scenario.PlanSet.Placement,
+                scheduling: scenario.PlanSet.Scheduling,
+                promotion: promotion,
+                leafPlans: scenario.PlanSet.LeafPlans,
+                provenance: scenario.PlanSet.Provenance);
         var artifacts = MaterializationRebuildPlanSetProcessFactory.Create(planSet);
         var targets = scenario.Leaves.Select(leaf => leaf.Target.Id == materialization.Target.Descriptor.Id
                 ? materialization.Target
@@ -211,7 +351,9 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
             resolver: planSetResolver,
             router,
             promotionPlan: artifacts.PromotionWorkerPlan);
-        var rejectedPromotionTarget = scenario.Leaves[^1].Target.Id;
+        var rejectedPromotionTarget = rejectFirstPromotion
+            ? planSet.LeafPlans[0].Slice.Target
+            : planSet.LeafPlans[^1].Slice.Target;
         IDurableOperationAdapter applyPromotionAdapter = failureMode == AggregateFailureMode.OnePromotion
             ? new InjectedOutcomeAdapter(
                 applyPromotion,
@@ -219,6 +361,9 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
                 MaterializationRebuildPlanSetProcessFactory.FailedOutcome,
                 InjectedPromotionFailure)
             : applyPromotion;
+        var parentCrash = injectParentCrash ? new ArmableCrashOnce() : null;
+        if (parentCrash is not null)
+            applyPromotionAdapter = new CompletionObservingAdapter(applyPromotionAdapter, parentCrash.Arm);
         var promotionRuntime = new ProcessDurableRuntime(
             store: promotionStore,
             host: RejectingHost.Instance,
@@ -244,7 +389,35 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
                 applyPromotionAdapter
             ]));
 
-        var parentStore = new InMemoryProcessDurableStore();
+        var compensationStore = new InMemoryProcessDurableStore();
+        var compensationRuntime = new ProcessDurableRuntime(
+            store: compensationStore,
+            host: RejectingHost.Instance,
+            options: RuntimeOptions("worker/materialization-plan-set/aggregate/compensations"),
+            bindingResolver: new ExactBindingResolver(
+            [
+                artifacts.PrepareCompensationBinding,
+                artifacts.ApplyCompensationBinding
+            ]),
+            operationAdapterResolver: new ExactAdapterResolver(
+            [
+                new MaterializationProgressiveCompensationPreparationDurableOperationAdapter(
+                    request: artifacts.PrepareCompensationRequest,
+                    resolver: planSetResolver,
+                    router: router,
+                    proofProvider: NoCompensationProofProvider.Instance,
+                    store: compensationStore,
+                    compensationPlan: artifacts.CompensationWorkerPlan),
+                new MaterializationProgressiveCompensationDurableOperationAdapter(
+                    request: artifacts.ApplyCompensationRequest,
+                    resolver: planSetResolver,
+                    router: router,
+                    compensationPlan: artifacts.CompensationWorkerPlan)
+            ]));
+
+        var parentStore = parentCrash is null
+            ? new InMemoryProcessDurableStore()
+            : new InMemoryProcessDurableStore(parentCrash.ShouldCrash);
         var parentRuntime = new ProcessDurableRuntime(
             store: parentStore,
             host: RejectingHost.Instance,
@@ -255,6 +428,12 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
                 artifacts.LeafInvocationBinding,
                 artifacts.ReadinessBarrierBinding,
                 artifacts.PromotionInvocationBinding,
+                .. artifacts.CompensationWorkBinding is null
+                    ? []
+                    : new[] { artifacts.CompensationWorkBinding },
+                .. artifacts.CompensationInvocationBinding is null
+                    ? []
+                    : new[] { artifacts.CompensationInvocationBinding },
                 artifacts.FinalizeBinding
             ]),
             operationAdapterResolver: new ExactAdapterResolver(
@@ -276,6 +455,20 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
                     runtime: promotionRuntime,
                     planResolver: new ExactChildPlanResolver(artifacts.PromotionWorkerPlan),
                     supportedRequests: [artifacts.PromotionInvocationRequest]),
+                .. artifacts.CompensationWorkBinding is null
+                    ? []
+                    : new IDurableOperationAdapter[]
+                    {
+                        new MaterializationProgressiveCompensationWorkDurableOperationAdapter(
+                            request: artifacts.CompensationWorkRequest,
+                            resolver: planSetResolver,
+                            store: parentStore,
+                            parentPlan: artifacts.ParentPlan),
+                        new ProcessChildDurableOperationAdapter(
+                            runtime: compensationRuntime,
+                            planResolver: new ExactChildPlanResolver(artifacts.CompensationWorkerPlan),
+                            supportedRequests: [artifacts.CompensationInvocationRequest])
+                    },
                 new MaterializationRebuildPlanSetFinalizationDurableOperationAdapter(
                     request: artifacts.FinalizeRequest,
                     resolver: planSetResolver,
@@ -288,7 +481,8 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
             parentRuntime,
             parentStore,
             router,
-            rejectedPromotionTarget);
+            rejectedPromotionTarget,
+            parentCrash);
     }
 
     static async Task<ProcessDurableStoreSnapshot> RunPlanSetToTerminalAsync(
@@ -399,13 +593,31 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
                 ObservationValue.FromString(detail)));
     }
 
+    sealed class NoCompensationProofProvider : IMaterializationProgressiveCompensationProofProvider
+    {
+        public static NoCompensationProofProvider Instance { get; } = new();
+
+        public ValueTask<MaterializationBackendRollbackProof?> ResolveAsync(
+            OperationContext context,
+            MaterializationIndependentPromotionResult promotion,
+            MaterializationBackendRoutingSnapshot current)
+        {
+            ArgumentNullException.ThrowIfNull(context);
+            ArgumentNullException.ThrowIfNull(promotion);
+            ArgumentNullException.ThrowIfNull(current);
+            context.ThrowIfCancellationRequested();
+            return ValueTask.FromResult<MaterializationBackendRollbackProof?>(null);
+        }
+    }
+
     sealed record AggregatePlanSetFixture(
         MaterializationRebuildPlanSet PlanSet,
         MaterializationRebuildPlanSetProcessArtifacts Artifacts,
         ProcessDurableRuntime ParentRuntime,
         InMemoryProcessDurableStore ParentStore,
         InMemoryMaterializationBackendRouter Router,
-        MaterializationTargetId RejectedPromotionTarget) : IDisposable
+        MaterializationTargetId RejectedPromotionTarget,
+        ArmableCrashOnce? ParentCrash) : IDisposable
     {
         public void Dispose() => Router.Dispose();
     }

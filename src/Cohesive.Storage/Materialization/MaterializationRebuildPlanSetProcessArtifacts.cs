@@ -30,10 +30,20 @@ public sealed class MaterializationRebuildPlanSetProcessArtifacts
         DurableRequestBinding preparePromotionBinding,
         RequestContractReference applyPromotionRequest,
         DurableRequestBinding applyPromotionBinding,
+        RequestContractReference compensationWorkRequest,
+        DurableRequestBinding? compensationWorkBinding,
+        RequestContractReference compensationInvocationRequest,
+        DurableRequestBinding? compensationInvocationBinding,
+        RequestContractReference prepareCompensationRequest,
+        DurableRequestBinding prepareCompensationBinding,
+        RequestContractReference applyCompensationRequest,
+        DurableRequestBinding applyCompensationBinding,
         RequestContractReference finalizeRequest,
         DurableRequestBinding finalizeBinding,
         ExecutionDefinitionDocument promotionWorkerProcessDocument,
         CompiledProcessPlan promotionWorkerPlan,
+        ExecutionDefinitionDocument compensationWorkerProcessDocument,
+        CompiledProcessPlan compensationWorkerPlan,
         ExecutionDefinitionDocument parentProcessDocument,
         CompiledProcessPlan parentPlan)
     {
@@ -55,30 +65,43 @@ public sealed class MaterializationRebuildPlanSetProcessArtifacts
         PreparePromotionBinding = preparePromotionBinding;
         ApplyPromotionRequest = applyPromotionRequest;
         ApplyPromotionBinding = applyPromotionBinding;
+        CompensationWorkRequest = compensationWorkRequest;
+        CompensationWorkBinding = compensationWorkBinding;
+        CompensationInvocationRequest = compensationInvocationRequest;
+        CompensationInvocationBinding = compensationInvocationBinding;
+        PrepareCompensationRequest = prepareCompensationRequest;
+        PrepareCompensationBinding = prepareCompensationBinding;
+        ApplyCompensationRequest = applyCompensationRequest;
+        ApplyCompensationBinding = applyCompensationBinding;
         FinalizeRequest = finalizeRequest;
         FinalizeBinding = finalizeBinding;
         PromotionWorkerProcessDocument = promotionWorkerProcessDocument;
         PromotionWorkerPlan = promotionWorkerPlan;
+        CompensationWorkerProcessDocument = compensationWorkerProcessDocument;
+        CompensationWorkerPlan = compensationWorkerPlan;
         ParentProcessDocument = parentProcessDocument;
         ParentPlan = parentPlan;
-        ProcessDocuments =
-        [
-            .. leaf.ProcessDocuments,
-            promotionWorkerProcessDocument,
-            parentProcessDocument
-        ];
-        DurableRequestBindings =
-        [
-            .. leaf.DurableRequestBindings,
-            initializationBinding,
-            leafInvocationBinding,
-            readinessBarrierBinding,
-            promotionInvocationBinding,
-            activateReadyBinding,
-            preparePromotionBinding,
-            applyPromotionBinding,
-            finalizeBinding
-        ];
+        ProcessDocuments = compensationWorkBinding is null
+            ? [.. leaf.ProcessDocuments, promotionWorkerProcessDocument, parentProcessDocument]
+            : [.. leaf.ProcessDocuments, promotionWorkerProcessDocument, compensationWorkerProcessDocument, parentProcessDocument];
+        var bindings = ImmutableArray.CreateBuilder<DurableRequestBinding>();
+        bindings.AddRange(leaf.DurableRequestBindings);
+        bindings.Add(initializationBinding);
+        bindings.Add(leafInvocationBinding);
+        bindings.Add(readinessBarrierBinding);
+        bindings.Add(promotionInvocationBinding);
+        bindings.Add(activateReadyBinding);
+        bindings.Add(preparePromotionBinding);
+        bindings.Add(applyPromotionBinding);
+        if (compensationWorkBinding is not null)
+        {
+            bindings.Add(compensationWorkBinding);
+            bindings.Add(compensationInvocationBinding!);
+            bindings.Add(prepareCompensationBinding);
+            bindings.Add(applyCompensationBinding);
+        }
+        bindings.Add(finalizeBinding);
+        DurableRequestBindings = bindings.ToImmutable();
     }
 
     /// <summary>Exact content-addressed plan-set authority embedded by the parent Process.</summary>
@@ -135,6 +158,30 @@ public sealed class MaterializationRebuildPlanSetProcessArtifacts
     /// <summary>Durable binding for independent routing execution and reconciliation.</summary>
     public DurableRequestBinding ApplyPromotionBinding { get; }
 
+    /// <summary>Request that projects committed forward steps into reverse-order compensation work.</summary>
+    public RequestContractReference CompensationWorkRequest { get; }
+
+    /// <summary>Parent compensation-work binding, or null when the selected policy never compensates.</summary>
+    public DurableRequestBinding? CompensationWorkBinding { get; }
+
+    /// <summary>Parent-to-compensation child Process Request.</summary>
+    public RequestContractReference CompensationInvocationRequest { get; }
+
+    /// <summary>Parent compensation-child binding, or null when the selected policy never compensates.</summary>
+    public DurableRequestBinding? CompensationInvocationBinding { get; }
+
+    /// <summary>Read-only Request that captures an exact compensation routing intent.</summary>
+    public RequestContractReference PrepareCompensationRequest { get; }
+
+    /// <summary>Durable binding for compensation-intent preparation.</summary>
+    public DurableRequestBinding PrepareCompensationBinding { get; }
+
+    /// <summary>Request that applies one already-persisted compensation intent.</summary>
+    public RequestContractReference ApplyCompensationRequest { get; }
+
+    /// <summary>Durable binding for explicit compensation routing and reconciliation.</summary>
+    public DurableRequestBinding ApplyCompensationBinding { get; }
+
     /// <summary>Request that projects exact child receipts into the terminal aggregate receipt.</summary>
     public RequestContractReference FinalizeRequest { get; }
 
@@ -147,13 +194,19 @@ public sealed class MaterializationRebuildPlanSetProcessArtifacts
     /// <summary>Compiled independent-promotion worker plan.</summary>
     public CompiledProcessPlan PromotionWorkerPlan { get; }
 
+    /// <summary>Canonical explicit-compensation worker Process document.</summary>
+    public ExecutionDefinitionDocument CompensationWorkerProcessDocument { get; }
+
+    /// <summary>Compiled explicit-compensation worker plan.</summary>
+    public CompiledProcessPlan CompensationWorkerPlan { get; }
+
     /// <summary>Canonical exact plan-set parent Process document.</summary>
     public ExecutionDefinitionDocument ParentProcessDocument { get; }
 
     /// <summary>Compiled exact plan-set parent Process.</summary>
     public CompiledProcessPlan ParentPlan { get; }
 
-    /// <summary>Leaf worker, leaf coordinator, promotion worker, then parent documents.</summary>
+    /// <summary>Leaf, promotion, selected compensation, then parent Process documents.</summary>
     public ImmutableArray<ExecutionDefinitionDocument> ProcessDocuments { get; }
 
     /// <summary>Complete durable Request bindings required by the Process graph.</summary>
@@ -169,6 +222,7 @@ internal static class MaterializationRebuildPlanSetPortableContracts
 
     internal static ObjectTypeRef WorkItemType { get; } = new(
     [
+        new("progressId", StringType),
         new("sliceId", StringType),
         new("capacityDomain", StringType),
         new("payload", StringType)
@@ -184,13 +238,13 @@ internal static class MaterializationRebuildPlanSetPortableContracts
     ]));
 }
 
-/// <summary>Builds one exact durable parent Process for a linked independent-promotion plan set.</summary>
+/// <summary>Builds one exact durable parent Process for a linked placement-addressable promotion plan set.</summary>
 public static class MaterializationRebuildPlanSetProcessFactory
 {
     const string ProtocolPrefix = "interaction/request/cohesive-storage-materialization-rebuild-plan-set";
 
     /// <summary>Exact semantic revision of the parent plan-set protocol.</summary>
-    public static ExecutionRevisionId RevisionId { get; } = new("revision/1");
+    public static ExecutionRevisionId RevisionId { get; } = new("revision/2");
 
     /// <summary>Stable identity prefix of the exact plan-set parent Process family.</summary>
     public static ExecutionDefinitionId ParentDefinitionFamilyId { get; } =
@@ -210,6 +264,10 @@ public static class MaterializationRebuildPlanSetProcessFactory
     public static ExecutionDefinitionId PromotionWorkerDefinitionId { get; } =
         new("process/cohesive-storage-materialization-independent-promotion");
 
+    /// <summary>Stable identity of the explicit progressive-compensation child Process family.</summary>
+    public static ExecutionDefinitionId CompensationWorkerDefinitionId { get; } =
+        new("process/cohesive-storage-materialization-progressive-compensation");
+
     /// <summary>Stable input-authority admission node.</summary>
     public static ExecutionNodeId AdmissionNodeId { get; } = new("plan-set.admit");
 
@@ -224,6 +282,13 @@ public static class MaterializationRebuildPlanSetProcessFactory
 
     /// <summary>Stable bounded independent-promotion node.</summary>
     public static ExecutionNodeId PromoteLeavesNodeId { get; } = new("plan-set.promote-leaves");
+
+    /// <summary>Stable projection of successfully committed forward steps into reverse compensation work.</summary>
+    public static ExecutionNodeId PrepareCompensationWorkNodeId { get; } =
+        new("plan-set.prepare-compensation-work");
+
+    /// <summary>Stable sequential explicit-compensation node.</summary>
+    public static ExecutionNodeId CompensateLeavesNodeId { get; } = new("plan-set.compensate-leaves");
 
     /// <summary>Stable aggregate finalization node.</summary>
     public static ExecutionNodeId FinalizeNodeId { get; } = new("plan-set.finalize");
@@ -245,6 +310,15 @@ public static class MaterializationRebuildPlanSetProcessFactory
 
     /// <summary>Stable promotion worker successful terminal node.</summary>
     public static ExecutionNodeId PromotionReturnNodeId { get; } = new("promotion.return");
+
+    /// <summary>Stable compensation-worker intent-preparation node.</summary>
+    public static ExecutionNodeId CompensationPrepareNodeId { get; } = new("compensation.prepare-routing");
+
+    /// <summary>Stable compensation-worker routing-application node.</summary>
+    public static ExecutionNodeId CompensationApplyNodeId { get; } = new("compensation.apply-routing");
+
+    /// <summary>Stable compensation-worker successful terminal node.</summary>
+    public static ExecutionNodeId CompensationReturnNodeId { get; } = new("compensation.return");
 
     /// <summary>Stable successful Request or child outcome.</summary>
     public static RequestTerminalOutcomeId CompletedOutcome { get; } = new("completed");
@@ -272,19 +346,19 @@ public static class MaterializationRebuildPlanSetProcessFactory
         CancelledOutcome,
         TerminatedOutcome);
 
-    /// <summary>Creates, links, and compiles the exact parent Process graph for one independent plan set.</summary>
+    /// <summary>Creates, links, and compiles the exact parent Process graph for one supported plan set.</summary>
     /// <param name="planSet">Complete constructor-verified linked plan set.</param>
     /// <returns>Canonical descendant and parent artifacts with complete durable bindings.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="planSet"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException">The plan set requests a promotion mode outside this first realization.</exception>
+    /// <exception cref="ArgumentException">The plan set requests globally atomic visibility.</exception>
     /// <exception cref="InvalidOperationException">A canonical contract, link, or Process compilation is invalid.</exception>
     public static MaterializationRebuildPlanSetProcessArtifacts Create(MaterializationRebuildPlanSet planSet)
     {
         ArgumentNullException.ThrowIfNull(planSet);
-        if (planSet.Promotion.Mode != MaterializationRebuildPromotionMode.Independent)
+        if (planSet.Promotion.Mode == MaterializationRebuildPromotionMode.AtomicVisibility)
         {
             throw new ArgumentException(
-                "The initial parent Process realizes only explicitly independent promotion.",
+                "The plan-set parent cannot claim globally atomic visibility through placement-scoped routing.",
                 nameof(planSet));
         }
 
@@ -320,6 +394,24 @@ public static class MaterializationRebuildPlanSetProcessFactory
             ]);
         var preparePromotion = StringProtocol($"{ProtocolPrefix}-prepare-promotion", "plan-set-prepare-promotion");
         var applyPromotion = StringProtocol($"{ProtocolPrefix}-apply-promotion", "plan-set-apply-promotion");
+        var compensationWork = Protocol(
+            $"{ProtocolPrefix}-prepare-compensation-work",
+            "plan-set-prepare-compensation-work",
+            [
+                Success(CompletedOutcome, WorkItemsContract),
+                Failure(FailedOutcome),
+                Failure(CancelledOutcome),
+                Failure(TerminatedOutcome)
+            ]);
+        var compensationInvocation = StringProtocol(
+            $"{ProtocolPrefix}-compensation",
+            "plan-set-compensation");
+        var prepareCompensation = StringProtocol(
+            $"{ProtocolPrefix}-prepare-compensation",
+            "plan-set-prepare-compensation");
+        var applyCompensation = StringProtocol(
+            $"{ProtocolPrefix}-apply-compensation",
+            "plan-set-apply-compensation");
         var finalize = StringProtocol($"{ProtocolPrefix}-finalize", "plan-set-finalize");
 
         ImmutableArray<ExecutionDefinitionDocument> ownInteractionDocuments =
@@ -331,6 +423,10 @@ public static class MaterializationRebuildPlanSetProcessFactory
             .. activateReady.Documents,
             .. preparePromotion.Documents,
             .. applyPromotion.Documents,
+            .. compensationWork.Documents,
+            .. compensationInvocation.Documents,
+            .. prepareCompensation.Documents,
+            .. applyCompensation.Documents,
             .. finalize.Documents
         ];
         ImmutableArray<ExecutionDefinitionDocument> allInteractionDocuments =
@@ -358,6 +454,21 @@ public static class MaterializationRebuildPlanSetProcessFactory
         var promotionPlan = promotionCompilation.Plan
             ?? throw new InvalidOperationException("A valid independent-promotion worker plan was not produced.");
 
+        var compensationDefinition = CompensationWorkerDefinition(
+            prepareCompensation.Request,
+            applyCompensation.Request);
+        var compensationDocument = ProcessDefinitionDocuments.Create(
+            CompensationWorkerDefinitionId,
+            RevisionId,
+            compensationDefinition,
+            Provenance("ari-195/materialization-progressive-compensation-worker"));
+        var compensationCompilation = ProcessStaticCompiler.Compile(
+            compensationDocument,
+            new ProcessDefinitionValidationContext(interactionContracts: exactCatalog));
+        RequireValid(compensationCompilation.Validation, "progressive-compensation worker compilation");
+        var compensationPlan = compensationCompilation.Plan
+            ?? throw new InvalidOperationException("A valid progressive-compensation worker plan was not produced.");
+
         ProcessDefinitionLink leafWorkerLink = new(
             leaf.WorkerPlan.DefinitionReference,
             ProcessDefinitionLinkKind.Process,
@@ -379,14 +490,24 @@ public static class MaterializationRebuildPlanSetProcessFactory
             promotionPlan.Definition.Result,
             processDependencies: [],
             recoveryPolicy: ProcessRecoveryPolicy.ContinueAttempt);
+        ProcessDefinitionLink compensationLink = new(
+            compensationPlan.DefinitionReference,
+            ProcessDefinitionLinkKind.Process,
+            compensationPlan.Definition.Input,
+            compensationPlan.Definition.Result,
+            processDependencies: [],
+            recoveryPolicy: ProcessRecoveryPolicy.ContinueAttempt);
         var parentDefinition = ParentDefinition(
             planSet,
             leaf.CoordinatorPlan.DefinitionReference,
             promotionPlan.DefinitionReference,
+            compensationPlan.DefinitionReference,
             initialization.Request,
             leafInvocation.Request,
             barrier.Request,
             promotionInvocation.Request,
+            compensationWork.Request,
+            compensationInvocation.Request,
             finalize.Request);
         var parentDocument = ProcessDefinitionDocuments.Create(
             GetParentDefinitionId(MaterializationRebuildPlanSetReference.FromPlanSet(planSet)),
@@ -396,7 +517,7 @@ public static class MaterializationRebuildPlanSetProcessFactory
                 $"ari-194/materialization-rebuild-plan-set/{MaterializationRebuildIdentities.PlanSetIdentity(
                     MaterializationRebuildPlanSetReference.FromPlanSet(planSet))}"));
         var parentContext = new ProcessDefinitionValidationContext(
-            definitions: [leafWorkerLink, leafLink, promotionLink],
+            definitions: [leafWorkerLink, leafLink, promotionLink, compensationLink],
             interactionContracts: exactCatalog);
         var parentCompilation = ProcessStaticCompiler.Compile(parentDocument, parentContext);
         RequireValid(parentCompilation.Validation, "rebuild plan-set parent compilation");
@@ -438,6 +559,32 @@ public static class MaterializationRebuildPlanSetProcessFactory
             promotionPlan,
             PromotionApplyNodeId,
             DurableOperationIdempotencyEvidence.TargetDeduplication);
+        DurableRequestBinding? compensationWorkBinding = null;
+        DurableRequestBinding? compensationInvocationBinding = null;
+        if (planSet.Promotion.ProgressiveFailurePolicy
+            == MaterializationProgressivePromotionFailurePolicy.CompensatePromoted)
+        {
+            compensationWorkBinding = DurableBinding(
+                compensationWork,
+                parentPlan,
+                PrepareCompensationWorkNodeId,
+                DurableOperationIdempotencyEvidence.NaturallyIdempotent);
+            compensationInvocationBinding = DurableBinding(
+                compensationInvocation,
+                parentPlan,
+                CompensateLeavesNodeId,
+                DurableOperationIdempotencyEvidence.TargetDeduplication);
+        }
+        var prepareCompensationBinding = DurableBinding(
+            prepareCompensation,
+            compensationPlan,
+            CompensationPrepareNodeId,
+            DurableOperationIdempotencyEvidence.NaturallyIdempotent);
+        var applyCompensationBinding = DurableBinding(
+            applyCompensation,
+            compensationPlan,
+            CompensationApplyNodeId,
+            DurableOperationIdempotencyEvidence.TargetDeduplication);
         var finalizeBinding = DurableBinding(
             finalize,
             parentPlan,
@@ -463,10 +610,20 @@ public static class MaterializationRebuildPlanSetProcessFactory
             preparePromotionBinding,
             applyPromotion.Request,
             applyPromotionBinding,
+            compensationWork.Request,
+            compensationWorkBinding,
+            compensationInvocation.Request,
+            compensationInvocationBinding,
+            prepareCompensation.Request,
+            prepareCompensationBinding,
+            applyCompensation.Request,
+            applyCompensationBinding,
             finalize.Request,
             finalizeBinding,
             promotionDocument,
             promotionPlan,
+            compensationDocument,
+            compensationPlan,
             parentDocument,
             parentPlan);
     }
@@ -475,10 +632,13 @@ public static class MaterializationRebuildPlanSetProcessFactory
         MaterializationRebuildPlanSet planSet,
         ExecutionDefinitionReference leaf,
         ExecutionDefinitionReference promotionWorker,
+        ExecutionDefinitionReference compensationWorker,
         RequestContractReference initializationRequest,
         RequestContractReference leafInvocationRequest,
         RequestContractReference barrierRequest,
         RequestContractReference promotionInvocationRequest,
+        RequestContractReference compensationWorkRequest,
+        RequestContractReference compensationInvocationRequest,
         RequestContractReference finalizeRequest)
     {
         var planSetJson = MaterializationRebuildPlanSetReferenceJsonSerializer.Serialize(
@@ -487,6 +647,8 @@ public static class MaterializationRebuildPlanSetProcessFactory
         ProcessOutputBinding buildPartition = new(new("plan-set.build-partition"), new(WorkItemType));
         ProcessOutputBinding barrierResult = new(new("plan-set.barrier-result"), BarrierResultContract);
         ProcessOutputBinding promotionPartition = new(new("plan-set.promotion-partition"), new(WorkItemType));
+        ProcessOutputBinding compensationWork = new(new("plan-set.compensation-work"), WorkItemsContract);
+        ProcessOutputBinding compensationPartition = new(new("plan-set.compensation-partition"), new(WorkItemType));
         ProcessOutputBinding finalReceipt = new(new("plan-set.final-receipt"), StringContract);
         var nodes = ImmutableArray.CreateBuilder<ProcessNode>();
         nodes.Add(new ChoiceProcessNode(
@@ -514,11 +676,13 @@ public static class MaterializationRebuildPlanSetProcessFactory
         var limits = WorkLimits(planSet);
         var capacityDomains = CapacityDomains(planSet);
         var hasCapacity = !planSet.LeafPlans.IsEmpty;
+        var compensates = planSet.Promotion.ProgressiveFailurePolicy
+            == MaterializationProgressivePromotionFailurePolicy.CompensatePromoted;
         nodes.Add(new ForEachPartitionProcessNode(
             BuildLeavesNodeId,
             Expr.BoundValue(buildWork.Binding),
             buildPartition,
-            Expr.Field(buildPartition.Binding, "sliceId"),
+            Expr.Field(buildPartition.Binding, "progressId"),
             leaf,
             leafInvocationRequest,
             ChildOutcomeMapping,
@@ -542,18 +706,57 @@ public static class MaterializationRebuildPlanSetProcessFactory
             PromoteLeavesNodeId,
             Expr.Field(barrierResult.Binding, "work"),
             promotionPartition,
-            Expr.Field(promotionPartition.Binding, "sliceId"),
+            Expr.Field(promotionPartition.Binding, "progressId"),
             promotionWorker,
             promotionInvocationRequest,
             ChildOutcomeMapping,
             Expr.Field(promotionPartition.Binding, "payload"),
-            limits,
-            ProcessPartitionFailurePolicy.AwaitAll,
+            PromotionLimits(planSet, limits),
+            PromotionFailurePolicy(planSet),
             hasCapacity ? Expr.Field(promotionPartition.Binding, "capacityDomain") : null,
             capacityDomains,
             ProcessChildCancellationPolicy.Propagate,
             Edge("plan-set.promote-leaves.settled", FinalizeNodeId),
-            Edge("plan-set.promote-leaves.failed-settled", FinalizeNodeId)));
+            Edge(
+                "plan-set.promote-leaves.failed-settled",
+                compensates ? PrepareCompensationWorkNodeId : FinalizeNodeId)));
+        if (compensates)
+        {
+            nodes.Add(new RequestProcessNode(
+                PrepareCompensationWorkNodeId,
+                compensationWorkRequest,
+                Expr.Field(barrierResult.Binding, "barrier"),
+                [
+                    Branch(
+                        "plan-set.prepare-compensation-work.completed",
+                        CompletedOutcome,
+                        CompensateLeavesNodeId,
+                        compensationWork),
+                    .. FailureBranches(
+                        "plan-set.prepare-compensation-work",
+                        "compensation-work",
+                        nodes)
+                ]));
+            nodes.Add(new ForEachPartitionProcessNode(
+                CompensateLeavesNodeId,
+                Expr.BoundValue(compensationWork.Binding),
+                compensationPartition,
+                Expr.Field(compensationPartition.Binding, "progressId"),
+                compensationWorker,
+                compensationInvocationRequest,
+                ChildOutcomeMapping,
+                Expr.Field(compensationPartition.Binding, "payload"),
+                new(
+                    maximumItems: limits.MaximumItems,
+                    maximumStartsPerActivation: 1,
+                    maximumParallelism: 1),
+                ProcessPartitionFailurePolicy.AwaitAll,
+                hasCapacity ? Expr.Field(compensationPartition.Binding, "capacityDomain") : null,
+                capacityDomains,
+                ProcessChildCancellationPolicy.Propagate,
+                Edge("plan-set.compensate-leaves.settled", FinalizeNodeId),
+                Edge("plan-set.compensate-leaves.failed-settled", FinalizeNodeId)));
+        }
         nodes.Add(new RequestProcessNode(
             FinalizeNodeId,
             finalizeRequest,
@@ -615,6 +818,46 @@ public static class MaterializationRebuildPlanSetProcessFactory
             ProcessRecoveryPolicy.ContinueAttempt);
     }
 
+    static CanonicalProcessDefinition CompensationWorkerDefinition(
+        RequestContractReference prepareCompensationRequest,
+        RequestContractReference applyCompensationRequest)
+    {
+        ProcessOutputBinding request = new(new("compensation.routing-request"), StringContract);
+        ProcessOutputBinding result = new(new("compensation.routing-result"), StringContract);
+        var nodes = ImmutableArray.CreateBuilder<ProcessNode>();
+        nodes.Add(new RequestProcessNode(
+            CompensationPrepareNodeId,
+            prepareCompensationRequest,
+            Expr.BoundValue(ProcessBindingIds.Input),
+            [
+                Branch(
+                    "compensation.prepare-routing.completed",
+                    CompletedOutcome,
+                    CompensationApplyNodeId,
+                    request),
+                .. FailureBranches("compensation.prepare-routing", "prepare", nodes)
+            ]));
+        nodes.Add(new RequestProcessNode(
+            CompensationApplyNodeId,
+            applyCompensationRequest,
+            Expr.BoundValue(request.Binding),
+            [
+                Branch(
+                    "compensation.apply-routing.completed",
+                    CompletedOutcome,
+                    CompensationReturnNodeId,
+                    result),
+                .. FailureBranches("compensation.apply-routing", "apply", nodes)
+            ]));
+        nodes.Add(new ReturnProcessNode(CompensationReturnNodeId, Expr.BoundValue(result.Binding)));
+        return new(
+            StringContract,
+            StringContract,
+            CompensationPrepareNodeId,
+            nodes.ToImmutable(),
+            ProcessRecoveryPolicy.ContinueAttempt);
+    }
+
     static ImmutableArray<ProcessRequestOutcomeBranch> FailureBranches(
         string prefix,
         string role,
@@ -649,6 +892,24 @@ public static class MaterializationRebuildPlanSetProcessFactory
         maximumStartsPerActivation: Math.Max(1, planSet.Scheduling.MaximumStartsPerActivation),
         maximumParallelism: Math.Max(1, planSet.Scheduling.MaximumParallelism));
 
+    static ProcessWorkLimits PromotionLimits(
+        MaterializationRebuildPlanSet planSet,
+        ProcessWorkLimits independentLimits) =>
+        planSet.Promotion.Mode == MaterializationRebuildPromotionMode.AllReadyProgressive
+            ? new(
+                maximumItems: independentLimits.MaximumItems,
+                maximumStartsPerActivation: 1,
+                maximumParallelism: 1)
+            : independentLimits;
+
+    static ProcessPartitionFailurePolicy PromotionFailurePolicy(MaterializationRebuildPlanSet planSet) =>
+        planSet.Promotion.ProgressiveFailurePolicy
+            == MaterializationProgressivePromotionFailurePolicy.RetainPromotedAndContinue
+                ? ProcessPartitionFailurePolicy.AwaitAll
+                : planSet.Promotion.Mode == MaterializationRebuildPromotionMode.AllReadyProgressive
+                    ? ProcessPartitionFailurePolicy.FailFast
+                    : ProcessPartitionFailurePolicy.AwaitAll;
+
     static ImmutableArray<ProcessCapacityDomainLimit> CapacityDomains(MaterializationRebuildPlanSet planSet) =>
         planSet.LeafPlans.IsEmpty
             ? []
@@ -678,7 +939,7 @@ public static class MaterializationRebuildPlanSetProcessFactory
         var terminalOutcomes = ImmutableArray.CreateBuilder<RequestTerminalOutcomeDefinition>(outcomes.Length);
         foreach (var outcome in outcomes)
         {
-            var schema = ValueSchema(outcome.Contract, $"{authority}/{outcome.Outcome.Value}/v1");
+            var schema = ValueSchema(outcome.Contract, $"{authority}/{outcome.Outcome.Value}/v2");
             terminalOutcomes.Add(outcome.Successful
                 ? new RequestResultDefinition(outcome.Outcome, schema)
                 : new RequestFailureDefinition(outcome.Outcome, schema));
@@ -687,7 +948,7 @@ public static class MaterializationRebuildPlanSetProcessFactory
             requestId,
             RevisionId,
             new RequestContractDefinition(
-                ValueSchema(StringContract, $"{authority}/payload/v1"),
+                ValueSchema(StringContract, $"{authority}/payload/v2"),
                 new(
                     terminalOutcomes.MoveToImmutable(),
                     RequestOptionalTerminalSemantics.Unsupported,

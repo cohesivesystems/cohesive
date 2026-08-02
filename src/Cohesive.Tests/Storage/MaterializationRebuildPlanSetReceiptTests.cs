@@ -332,12 +332,14 @@ public sealed class MaterializationRebuildPlanSetReceiptTests
             MaterializationRebuildPlanSetProcessFactory.FailedOutcome,
             childResult);
         var work = new ProcessPartitionWorkState(
-            ProgressIdentity: sliceId,
+            ProgressIdentity: PlanSetProjection.ProgressIdentity(0, authority),
             CapacityIdentity: capacityDomain,
             Partition: PortableValue.Concrete(
                 buildNode.Partition.Contract,
                 ObservationValue.FromObject(new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
                 {
+                    ["progressId"] = ObservationValue.FromString(
+                        PlanSetProjection.ProgressIdentity(0, authority)),
                     ["sliceId"] = ObservationValue.FromString(sliceId),
                     ["capacityDomain"] = ObservationValue.FromString(capacityDomain),
                     ["payload"] = ObservationValue.FromString(

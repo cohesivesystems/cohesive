@@ -233,7 +233,7 @@ public sealed record MaterializationRebuildPlanSetProcessLifecycleResult
     /// <summary>Canonical parent Process outcome, or null when validation or cleanup prevented an operation.</summary>
     public ProcessDurableRuntimeDisposition? ProcessDisposition { get; }
 
-    /// <summary>Independent Storage-owned lifecycle realization.</summary>
+    /// <summary>Storage-owned lifecycle realization for the exact selected promotion policy.</summary>
     public MaterializationRebuildPlanSetProcessRealization Realization { get; }
 
     /// <summary>Latest coherent parent aggregate snapshot when available.</summary>
@@ -594,11 +594,8 @@ public sealed class MaterializationRebuildPlanSetProcessLifecycle
                 before.Checkpoint.Continuation.Children,
                 after.Checkpoint.Continuation.Children)
             || !HasExactContent(
-                LeafOperations(before.Checkpoint),
-                LeafOperations(after.Checkpoint))
-            || !HasExactContent(
-                PromotionOperations(before.Checkpoint),
-                PromotionOperations(after.Checkpoint)))
+                before.Checkpoint.DurableOperations,
+                after.Checkpoint.DurableOperations))
         {
             return new(
                 controlled.Disposition,

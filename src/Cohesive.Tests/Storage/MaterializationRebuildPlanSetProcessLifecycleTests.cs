@@ -1179,6 +1179,8 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
 
         internal void Arm() => armed = true;
 
+        internal bool Crashed => crashed;
+
         internal bool ShouldCrash(ProcessStoreCrashContext context)
         {
             if (!armed

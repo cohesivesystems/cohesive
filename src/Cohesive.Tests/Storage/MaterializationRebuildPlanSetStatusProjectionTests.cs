@@ -391,6 +391,7 @@ public sealed class MaterializationRebuildPlanSetStatusProjectionTests
             binding);
         var workItem = ObservationValue.FromObject(new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
         {
+            ["progressId"] = ObservationValue.FromString(PlanSetProjection.ProgressIdentity(0, authority)),
             ["sliceId"] = ObservationValue.FromString(binding.Slice.Id.Value),
             ["capacityDomain"] = ObservationValue.FromString(
                 Assert.Single(planSet.Placement.CapacityBindings).CapacityDomain.Value),
@@ -424,7 +425,7 @@ public sealed class MaterializationRebuildPlanSetStatusProjectionTests
         Assert.Single(snapshot.Checkpoint.Continuation.Partitions);
         var retainedChild = Assert.Single(snapshot.Checkpoint.Continuation.Children);
         Assert.Equal(MaterializationRebuildPlanSetProcessFactory.BuildLeavesNodeId, retainedChild.Node);
-        Assert.Equal(planSet.LeafPlans[0].Slice.Id.Value, retainedChild.ProgressIdentity);
+        Assert.Equal(PlanSetProjection.ProgressIdentity(0, authority), retainedChild.ProgressIdentity);
 
         var runtimeDetails = MaterializationRebuildPlanSetStatusProjector.CreateRuntimeDetails(
             planSet,
