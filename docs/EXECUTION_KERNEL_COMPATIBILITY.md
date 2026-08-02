@@ -19,11 +19,13 @@ atomic reference store, and a Storage-owned durable reference driver with compat
 admission, exact activation replay, CAS revisions, worker fencing, Request dispatch/recovery, lifecycle control,
 and crash-cut injection. EK-06 and EK-07 pass in the provider-neutral reference profile. The Process identity,
 attempt, recovery, affinity, bounded child coordination, baseline materialization, incremental synchronization,
-convergence, target-local activation, and backend-pool routing portions of EK-08 pass in the provider-neutral
-reference profiles. Deterministic production-shaped Cosmos DB/PostgreSQL-to-Elasticsearch vertical slices now
-compose those authorities through canonical Relations hydration and readback, adaptive rejection feedback,
-generation recovery, promotion, and an explicit pool route swap. The complete scenario remains Partial until
-production Process and backend-routing stores pass the same crash, fencing, and replay matrix. EK-11 passes in the
+convergence, target-local activation, canonical rebuild planning, placement-bound leaves, independent promotion, and
+placement-scoped backend routing portions of EK-08 pass in the provider-neutral reference profiles. Deterministic
+production-shaped Cosmos DB/PostgreSQL-to-Elasticsearch vertical slices compose the leaf authorities through
+canonical Relations hydration and readback, adaptive rejection feedback, generation recovery, target promotion, and
+an explicit route swap. The complete scenario remains Partial until production Process and backend-routing stores
+pass the same crash, fencing, and replay matrix and durable parent interpreters realize multi-leaf scheduling plus
+the declared coordinated promotion modes. EK-11 passes in the
 provider-neutral reference profile through
 exact Relation evaluation, bounded durable recurrence, progress retention, and checkpoint restore.
 Canonical Process IR and its pure reference interpreter now
@@ -48,7 +50,7 @@ activations. The remaining scenarios retain the classifications recorded below.
 | EK-05 — capability-safe multi-entity coordination | Partial | Generic entity-local Transitions retain independent case, requirement, applicant, carrier/owner-operator, driver, truck, and trailer authority. The Process carries bounded commands and references rather than copied business-state snapshots, admits carrier activation before a four-way independent subject fork, and supplies each activation as an exact gate decision. Static compilation rejects `WholeDefinition` atomicity because the workflow crosses durable and external boundaries. | Canonical branch-result aggregation for deriving activation admissions, authored nested scope regions, target capability evidence, and realization proof. Until an explicit merge construct exists, gate truth must be issued as exact Transition input and cannot be inferred from adapter-local routing or fork-local bindings. |
 | EK-06 — durable effect crash matrix | Pass | The Request `EmissionId` is the logical operation identity and its scoped deduplication key survives every physical attempt. The durable driver atomically commits origin progress plus pending operation, records claim and dispatch before adapter I/O, repeats only the same fenced invocation when idempotency evidence permits, routes ambiguous outcomes to authored reconciliation, persists one acknowledgement, and atomically couples final operation disposition with Reply inbox admission. Exact store retries resolve pre/post-boundary crashes without changing intent, and stale fences cannot publish returned evidence. | None in the provider-neutral reference profile. Concrete store and operation adapters must pass the same crash matrix for their claimed realization. |
 | EK-07 — signal arbitration | Pass | Canonical Signal commands enter the durable inbox exactly once by logical `EmissionId`; duplicate admission replays. The durable driver then restores the exact wait topology and uses the reference interpreter's priority, clause-identity, and emission-identity ordering to select one winner, retain loser/tombstone dispositions, and prevent stale exact wait occurrences from routing to later waits. Inbox admission and activation commit share one CAS revision, closing the registration/commit lost-wakeup cut. | None in the provider-neutral reference profile. Production signal and timer adapters must pass the same arbitration scenario. |
-| EK-08 — index rebuild recovery | Partial | One fingerprinted rebuild realization plan revalidates and pins the materialization IR, impact plan, exact source/target capability evidence, stable shards and complete feed catalogs, scan requests, hydration physical plans, Control realizations, and finite operating bounds. Canonical coordinator and worker Processes execute bounded baseline work and recurrent activation through durable Requests. Storage allocates an isolated Loading candidate, captures exact change cuts, scans and hydrates bounded canonical Relations pages, writes replay-stable idempotent bulks, and checkpoints independent baseline and change tracks. Incremental synchronization durably prepares impact-derived target intent, applies it, commits application progress, and only then settles capable sources; catalog-complete convergence authorizes persisted seal, validation, and fenced target-local promotion. Generation-scoped adaptive Control changes admission and batch bounds only at safe points. Pause and Continue retain attempt, generation, progress, and Control epoch; RestartAttempt durably excludes the abandoned generation before creating one replacement. The reference backend pool separately admits candidates and swaps exact read/write routes. Deterministic Cosmos DB and PostgreSQL pull sources now pass one shared conformance suite and compose with the same materialization, Elasticsearch target, canonical row/count readback, retryable rejection feedback, recovery, target promotion, and explicit pool swap. | Production durable Process and backend-routing stores; real-service deployment evidence remains an optional adapter qualification layer rather than part of the deterministic reference profile. |
+| EK-08 — index rebuild recovery | Partial | A canonical rebuild request freezes complete membership, compiles explicit subject-to-target placement and bounded scheduling evidence, and links one exact placement-bound leaf plan per slice into a fingerprinted plan set with declared promotion semantics. Each leaf plan revalidates and pins the materialization IR, impact plan, exact source/target capability evidence, stable shards and complete feed catalogs, scan requests, hydration physical plans, Control realizations, and finite operating bounds. Canonical coordinator and worker Processes execute bounded baseline work and recurrent activation through durable Requests. Storage allocates an isolated Loading candidate, captures exact change cuts, scans and hydrates bounded canonical Relations pages, writes replay-stable idempotent bulks, and checkpoints independent baseline and change tracks. Incremental synchronization durably prepares impact-derived target intent, applies it, commits application progress, and only then settles capable sources; catalog-complete convergence authorizes persisted seal, validation, and fenced target-local promotion. Generation-scoped adaptive Control changes admission and batch bounds only at safe points. Pause and Continue retain attempt, generation, progress, and Control epoch; RestartAttempt durably excludes the abandoned generation before creating one replacement. The reference router isolates revisions, ownership fences, idempotency receipts, routes, and lifecycle state by exact placement-slice fingerprint. A strict durable independent-promotion request binds the plan set, leaf, slice, active generation, routing cut, fence, command identities, and timestamps before admitting and atomically switching that slice's paired routes. Deterministic Cosmos DB and PostgreSQL pull sources pass one shared conformance suite and compose with the same materialization, Elasticsearch target, canonical row/count readback, retryable rejection feedback, recovery, target promotion, and explicit route swap. | Production durable Process and backend-routing stores; a durable parent scheduler; coordination interpreters for `AllReadyProgressive` and `AtomicVisibility`; real-service deployment evidence remains an optional adapter qualification layer rather than part of the deterministic reference profile. |
 | EK-09 — C# and IR equivalence | Pass | Representative typed C# Transition and Process authoring lowers immediately to the same canonical definitions and fingerprints as direct IR. Process authoring covers the closed node union and nested bindings, edges, branches, clauses, outcomes, bounded work, recurrence, child purposes, and terminal outcomes. Typed selectors become portable paths immediately; no callback survives construction. Strict document round trips preserve identity, type information, semantics, diagnostics, provenance, and source maps, and static compilation consumes only the persisted document plus explicit linking evidence. | None for representative Transition and Process equivalence. Each future authoring frontend remains responsible for the same normalization, round-trip, and source-attribution conformance. |
 | EK-11 — durable polling recurrence | Pass | `RepeatAcrossActivation` evaluates a typed progress value and Boolean continuation condition, admits at most one repeat between durable cuts, retains exact occurrence and unchanged-progress counts, and routes deterministically to Completed, Exhausted, or Stalled. The durable runtime serializes, restores, validates, and resumes recurrence progress without a suspended host frame or free graph cycle. | None in the provider-neutral reference profile. Concrete Relation and Process-store adapters must pass the same recurrence and restore scenarios for their claimed realization. |
 
@@ -300,13 +302,20 @@ allocate a second generation. Cohesive.Storage remains the authority for allocat
 retiring, and eventually cleaning up or promoting physical generations. `ProcessDurableRuntime` continues to own
 only canonical Process durability and does not perform target I/O inside its atomic control commit.
 
+The outer planning chain retains a fingerprinted request, complete frozen membership, explicit subject-to-target
+placement with separate physical-capacity evidence, a bounded effective scheduling realization, and one exact leaf
+binding per independently promoted placement slice. Its linked plan set preserves the declared `Independent`,
+`AllReadyProgressive`, or `AtomicVisibility` guarantee and the progressive failure policy when required. Link and
+replay validation reject any substituted membership, pool, target, subject assignment, slice fingerprint, or leaf.
+
 The baseline interpreter retains batch enumeration and incremental Channel progress as independent durable tracks.
-Its fingerprinted plan revalidates the complete materialization definition and pins both canonical scan requests and
-the exact Relations physical plan used for hydration. The v1 page interpreter accepts `OnePerRoot` and
-`ZeroOrOnePerRoot`; it rejects `Set` and unbounded `ManyPerRoot` outputs until their whole-set or expansion semantics
-can be represented without weakening finite execution. For each stable root shard it captures the initial change
-boundary, reads bounded source pages, hydrates complete Relations output, applies deterministic per-item mutations in
-bounded bulks, and advances only the baseline track. Each checkpoint carries a cumulative one-based page ordinal that
+Its fingerprinted leaf plan revalidates the complete materialization definition, retains the full exact placement
+slice, and pins both canonical scan requests and the exact Relations physical plan used for hydration. The durable
+plan reference and active-generation evidence carry the same slice fingerprint. The v1 page interpreter accepts
+`OnePerRoot` and `ZeroOrOnePerRoot`; it rejects `Set` and unbounded `ManyPerRoot` outputs until their whole-set or
+expansion semantics can be represented without weakening finite execution. For each stable root shard it captures
+the initial change boundary, reads bounded source pages, hydrates complete Relations output, applies deterministic
+per-item mutations in bounded bulks, and advances only the baseline track. Each checkpoint carries a cumulative one-based page ordinal that
 survives activation and process crashes and cannot exceed the persisted shard bound. Exhausted `Partial`, `Failed`,
 or `Inconclusive` source evidence stops before hydration or target I/O.
 
@@ -328,17 +337,26 @@ AIMD recommendations; source, transform, and target concurrency or batch limits 
 remain inside physical capability bounds, and retain a realtime-first non-preemptive admission reservation.
 Pause/Continue retains that Control epoch, while a new generation starts a fresh epoch.
 
-Target-local promotion does not silently change backend dependency routing. The in-memory reference backend pool and
-router separately admit one candidate, atomically replace explicit read/write routes under revision and ownership
-fences, require exact equivalence evidence for rollback, and order drain completion, pool retirement, adapter cleanup,
-and the retained cleanup tombstone.
+Target-local promotion does not silently change backend dependency routing. The in-memory reference router owns an
+independent state machine for every exact placement-slice fingerprint: inspection, read/write resolution, commands,
+proofs, receipts, revisions, ownership fences, routes, and lifecycle evidence all retain that scope. The strict
+independent-promotion request binds the linked plan set, exact leaf and slice, active-generation evidence,
+pre-admission revision, fence, command identities, and timestamps. Its executor admits the activated candidate and
+atomically replaces that slice's paired read/write routes; exact recovery replays the retained request. Rollback still
+requires current-slice equivalence evidence. Physical cleanup first reserves the shared generation under each router
+authority that can address it, captures that router's placement-retirement claims, and terminally excludes future
+admission there; each slice then acknowledges the same reservation-bound physical proof independently. A single pool
+router does not claim global deletion authority across other pools or definition versions. Index-sync status schema v3
+projects slice ID and fingerprint under the unique
+`PlacementStatusPath` rather than a pool-global status key.
 
-These behaviors are covered by provider-neutral and adapter component tests plus the ARI-180 deterministic,
-production-shaped Cosmos DB/PostgreSQL-to-Elasticsearch vertical slices. Both providers execute the same canonical
-materialization through bounded baseline recovery, incremental update/delete convergence, adaptive Elasticsearch
-rejection feedback, target-local activation, canonical active-alias row and exact-count readback, restart generation
-isolation, and an explicit backend-pool route swap. Production durable Process and backend-routing stores must still
-pass the same matrices, so EK-08 remains **Partial**.
+These behaviors are covered by provider-neutral planning, routing, Process, and adapter component tests plus the
+ARI-180 deterministic, production-shaped Cosmos DB/PostgreSQL-to-Elasticsearch vertical slices. Both providers
+execute the same canonical leaf materialization through bounded baseline recovery, incremental update/delete
+convergence, adaptive Elasticsearch rejection feedback, target-local activation, canonical active-alias row and
+exact-count readback, restart generation isolation, and an explicit route swap. Production durable Process and
+backend-routing stores, a durable plan-set scheduler, and coordination interpreters for `AllReadyProgressive` and
+`AtomicVisibility` must still pass the corresponding matrices, so EK-08 remains **Partial**.
 
 ## Canonical finite Process IR
 

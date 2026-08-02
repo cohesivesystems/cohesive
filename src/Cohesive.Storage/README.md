@@ -211,7 +211,7 @@ explicit settlement, fenced idempotent versioned writes, generation isolation, e
 promotion. `MaterializationCapabilityMatcher` resolves those requirements against attributable adapter evidence and
 returns structured diagnostics instead of weakening a guarantee.
 
-The persisted `cohesive-materialization-rebuild-plan/v4` realization also contains the deterministic result of
+The persisted `cohesive-materialization-rebuild-plan/v5` realization also contains the deterministic result of
 compiling explicitly workload-bound Control loops against those plan and adapter limits. A generation-scoped
 `MaterializationIndexSyncControlRuntime` owns one durable CAS state per exact materialization, effective Control
 definition, plan, physical target, generation, workload, and loop. Source, transform, and target operating points
@@ -232,14 +232,28 @@ Capability matching establishes whether a binding can satisfy the declared consi
 that a particular run acquired a coordinated snapshot or baseline/change-feed cut. The later execution planner must
 persist the concrete run-scoped snapshot, feed-position, and retention evidence before it authorizes work.
 
-`MaterializationRebuildPlan` is that run-scoped authority for the reference baseline interpreter. Its strict
+The outer rebuild-planning chain is canonical and durable. `MaterializationRebuildRequestDocument` retains the exact
+materialization, subject selection, pinned backend pool, scheduling demand, and promotion guarantee.
+`MaterializationRebuildPlanSetCompiler` freezes complete membership at an attributable cut and compiles explicit
+subject-to-target placement with separate physical-capacity evidence. `MaterializationRebuildPlanSetLinker` then
+requires one exact leaf per placement slice and produces a fingerprinted `MaterializationRebuildPlanSet` containing
+the effective schedule and declared promotion/partial-failure policy. Linking and replay reject changed membership,
+pool, target, subjects, slice fingerprint, leaf content, or promotion semantics; slice identity alone is never
+sufficient authority.
+
+`MaterializationRebuildPlan` is the one-target realization consumed by the reference baseline interpreter. Its strict
 fingerprinted document revalidates and pins the complete materialization IR, exact source and target capability
-matches, stable root shards, each canonical scan request, each hydration physical-plan fingerprint, and finite page,
-bulk, activation, parallelism, and cumulative per-shard bounds. Runtime bindings must reproduce all of that evidence;
+matches, its exact independently promoted placement slice, stable root shards, each canonical scan request, each
+hydration physical-plan fingerprint, and finite page, bulk, activation, parallelism, and cumulative per-shard bounds.
+`MaterializationRebuildLeafExecutionAuthority` binds the exact plan-set reference, leaf-plan reference, and full
+placement slice into the single durable authority used for execution and promotion. A resolved execution requires
+the verified plan set itself and rejects a detached leaf before any target I/O; shard work and active-generation
+evidence retain that same authority rather than independently recombining fingerprints. Runtime bindings must
+reproduce all of that evidence;
 a restart cannot silently select another Relations lowering or reader placement under the same plan. The v1 page
 interpreter admits only `OnePerRoot` and `ZeroOrOnePerRoot` outputs. `Set` requires whole-set evaluation and
 `ManyPerRoot` requires an explicit expansion bound, so both fail plan validation instead of weakening boundedness.
-Canonical coordinator and worker Processes carry only exact plan and attempt-bound shard references. The Storage
+Canonical coordinator and worker Processes carry only exact linked-leaf authority and attempt-bound shard references. The Storage
 interpreter creates an isolated Loading candidate, captures one change position per shard, hydrates each bounded
 baseline page through the pinned canonical Relations realization, writes deterministic idempotent bulks, and
 terminates at `baseline-complete/catch-up-required`. It does not seal, promote, or make that candidate readable.
@@ -324,6 +338,34 @@ Ordinary target snapshots expose bounded lifecycle metadata rather than all
 materialized items. Pause and Continue retain the same generation, while a Process restart creates a fresh generation. `InMemoryMaterializationSource`,
 `InMemoryMaterializationProgressStore`, and `InMemoryMaterializationTarget` are deterministic reference fakes for adapter
 and engine conformance tests, not production durability implementations.
+
+`IMaterializationBackendRouter` owns routing independently for every exact
+`MaterializationPlacementSliceReference`. Inspect and read/write resolution require the full slice, and every routing
+command, proof, snapshot, binding, and receipt retains it. Revisions, ownership fences, command idempotency, routes,
+and lifecycle state are isolated by the slice fingerprint rather than shared by pool or slice ID. The router can
+therefore expose two independently promoted slices from the same pool without letting one slice's command identity,
+takeover fence, or route transition affect the other. A readable generation activated under an earlier target or
+membership cut may initialize a newer slice only when both authorities retain the exact materialization, pool
+definition, and canonical subject set.
+Subject-set merges, splits, additions, or removals require an explicit future placement-transition/coverage proof;
+the low-level router never infers that equivalence. Physical cleanup is a two-phase cross-slice protocol: each
+router authority durably captures all of its retired placement claims and terminally excludes future admission before
+the adapter deletes data; each captured slice then acknowledges the same reservation-bound physical proof
+independently. A coordinator must aggregate reservations from every pool or router that can address shared physical
+storage—one router's reservation alone is not cross-authority deletion permission.
+
+`MaterializationIndependentPromotionExecutor` realizes the currently supported high-level plan-set promotion mode.
+Its strict `MaterializationIndependentPromotionRequest` durably binds the exact plan set, placement-bound leaf, full
+slice, active-generation evidence, pre-admission routing revision, fence, command identities, and timestamps. Exact
+execution admits the activated candidate and atomically switches that slice's paired read/write routes; recovery
+replays the same retained request. `AllReadyProgressive` and `AtomicVisibility` are canonical declared requirements,
+but still need durable parent coordination interpreters before they can be executed without weakening their
+readiness, partial-failure, compensation, or all-or-none guarantees.
+
+Index-sync status schema `index-sync-status/v3` includes the placement-slice ID and complete fingerprint. Publish each
+projection under `MaterializationIndexSyncStatusWireNames.PlacementStatusPath(slice)`, which includes materialization,
+pool, slice identity, and fingerprint components. Do not collapse independently revisioned slices into one
+pool-global status key or use slice ID without its fingerprint.
 
 `PostgresMaterializationSource` is a production source-side binding for rebuild and reconciliation. It reuses the
 canonical PostgreSQL Relations reader, applies explicit item and canonical encoded-byte page bounds, and resumes with

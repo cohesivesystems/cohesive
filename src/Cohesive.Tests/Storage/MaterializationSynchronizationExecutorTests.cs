@@ -927,6 +927,7 @@ public sealed partial class MaterializationRebuildExecutorTests
             harness.Rebuild.Plan.Materialization.Definition,
             runtime);
         var resolved = new ResolvedMaterializationRebuildPlan(
+            planSet: MaterializationRebuildPlanJsonSerializerTests.CreateSinglePlanSet(harness.Rebuild.Plan),
             plan: harness.Rebuild.Plan,
             target: harness.Rebuild.Target,
             progressStore: progressStore ?? harness.Rebuild.Resolved.ProgressStore,

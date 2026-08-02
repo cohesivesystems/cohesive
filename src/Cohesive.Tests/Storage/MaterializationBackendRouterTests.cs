@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
@@ -23,11 +24,14 @@ public sealed class MaterializationBackendRouterTests
     static readonly MaterializationBackendRoutingFence FenceTwo = new("2");
 
     [Fact]
-    public void RoutingWire_UsesStrictClosedEnumAndOperationContracts()
+    public async Task RoutingWire_UsesStrictClosedEnumAndOperationContracts()
     {
+        using var rig = await RoutingRig.CreateAsync(secondBackendActive: false);
+        var (initialRequest, initialized) = await InitializeAsync(rig);
         var options = StrictDocumentJson.CreateOptions();
         MaterializationBackendRoutingReceipt receipt = new(
             commandId: new("command/wire"),
+            placementSlice: rig.Scope,
             operation: MaterializationBackendRoutingOperation.Swap,
             revision: new("1"),
             fence: FenceOne,
@@ -38,6 +42,138 @@ public sealed class MaterializationBackendRouterTests
 
         Assert.Equal(receipt, restored);
         Assert.Contains("\"operation\":\"Swap\"", json);
+        MaterializationBackendRoutingReceipt reservationReceipt = new(
+            commandId: new("command/wire-cleanup-reservation"),
+            placementSlice: rig.Scope,
+            operation: MaterializationBackendRoutingOperation.ReserveCleanup,
+            revision: new("2"),
+            fence: FenceOne,
+            committedAtUtc: Epoch);
+        MaterializationBackendCleanupReservation reservation = new(
+            generation: rig.First.Generation,
+            retirements: [new(rig.Scope, new("1"))],
+            receipt: reservationReceipt,
+            token: "cleanup-reservation/wire");
+        var reservationJson = JsonSerializer.Serialize(reservation, options);
+        var restoredReservation = JsonSerializer.Deserialize<MaterializationBackendCleanupReservation>(
+            reservationJson,
+            options);
+        Assert.Equal(reservation, restoredReservation);
+        var openReservation = JsonNode.Parse(reservationJson)!.AsObject();
+        openReservation["unexpected"] = true;
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<MaterializationBackendCleanupReservation>(
+            openReservation.ToJsonString(),
+            options));
+        var incompleteReservation = JsonNode.Parse(reservationJson)!.AsObject();
+        incompleteReservation.Remove("token");
+        Assert.Throws<ArgumentNullException>(() => JsonSerializer.Deserialize<MaterializationBackendCleanupReservation>(
+            incompleteReservation.ToJsonString(),
+            options));
+        MaterializationBackendRoutingReceipt noncausalReservationReceipt = new(
+            commandId: new("command/wire-noncausal-cleanup-reservation"),
+            placementSlice: rig.Scope,
+            operation: MaterializationBackendRoutingOperation.ReserveCleanup,
+            revision: new("1"),
+            fence: FenceOne,
+            committedAtUtc: Epoch);
+        Assert.Throws<ArgumentException>(() => new MaterializationBackendCleanupReservation(
+            generation: rig.First.Generation,
+            retirements: [new(rig.Scope, new("1"))],
+            receipt: noncausalReservationReceipt,
+            token: "cleanup-reservation/noncausal"));
+        MaterializationBackendPoolReference foreignPool = new(
+            schemaVersion: MaterializationBackendPoolReference.CurrentSchemaVersion,
+            pool: new("pool/backend-routing-foreign"),
+            materialization: rig.Scope.Materialization,
+            definitionFingerprint: new(
+                algorithm: "sha256",
+                canonicalization: "tests/materialization-backend-routing-pool/v1",
+                value: new string('9', 64)));
+        var foreignPoolSlice = MaterializationPlacementSliceReference.Create(
+            materialization: rig.Scope.Materialization,
+            membership: rig.Scope.Membership,
+            pool: foreignPool,
+            target: rig.Scope.Target,
+            subjects: rig.Scope.Subjects);
+        ImmutableArray<MaterializationBackendCleanupRetirementClaim> crossPoolClaims =
+        [
+            .. new[]
+            {
+                new MaterializationBackendCleanupRetirementClaim(rig.Scope, new("1")),
+                new MaterializationBackendCleanupRetirementClaim(foreignPoolSlice, new("1"))
+            }.OrderBy(static claim => claim.PlacementSlice.Fingerprint.Value, StringComparer.Ordinal)
+        ];
+        Assert.Throws<ArgumentException>(() => new MaterializationBackendCleanupReservation(
+            generation: rig.First.Generation,
+            retirements: crossPoolClaims,
+            receipt: reservationReceipt,
+            token: "cleanup-reservation/cross-pool"));
+        var headerJson = JsonSerializer.Serialize(initialRequest.Header, options);
+        var restoredHeader = JsonSerializer.Deserialize<MaterializationBackendRoutingCommandHeader>(headerJson, options);
+        Assert.Equal(initialRequest.Header, restoredHeader);
+        Assert.DoesNotContain("poolId", headerJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("poolDefinitionFingerprint", headerJson, StringComparison.Ordinal);
+
+        var snapshotJson = JsonSerializer.Serialize(initialized.Snapshot, options);
+        var restoredSnapshot = JsonSerializer.Deserialize<MaterializationBackendRoutingSnapshot>(snapshotJson, options);
+        Assert.NotNull(restoredSnapshot);
+        Assert.Equal(initialized.Snapshot.PlacementSlice, restoredSnapshot.PlacementSlice);
+        Assert.Equal(initialized.Snapshot.Revision, restoredSnapshot.Revision);
+        Assert.Equal(initialized.Snapshot.ActiveRead, restoredSnapshot.ActiveRead);
+        Assert.Equal(initialized.Snapshot.ActiveWrite, restoredSnapshot.ActiveWrite);
+        Assert.Equal(initialized.Snapshot.Configuration, restoredSnapshot.Configuration);
+
+        MaterializationSwapBackendRoutingRequest reservedFollowUp = new(
+            Header(
+                rig,
+                "command/wire-reserved-follow-up",
+                new("1"),
+                FenceOne,
+                At(2)),
+            FabricateReadableReference(rig.Scope, rig.Second.Generation, At(2)),
+            rig.Second.Generation,
+            Configuration(rig, rig.Second.Target, rig.Second.Target));
+        MaterializationBackendRoutingSnapshot pendingSnapshot = new(
+            placementSlice: rig.Scope,
+            revision: new("1"),
+            latestFence: FenceOne,
+            activeRead: null,
+            activeWrite: null,
+            candidate: rig.Second.Generation,
+            draining: [],
+            retired: [],
+            cleaned: [],
+            pendingFollowUp: new(reservedFollowUp));
+        var pendingJson = JsonSerializer.Serialize(pendingSnapshot, options);
+        var stalePending = JsonNode.Parse(pendingJson)!.AsObject();
+        stalePending["pendingFollowUp"]!["request"]!["header"]!["expectedRevision"] = "2";
+        Assert.Throws<ArgumentException>(() => JsonSerializer.Deserialize<MaterializationBackendRoutingSnapshot>(
+            stalePending.ToJsonString(),
+            options));
+        var foreignFencePending = JsonNode.Parse(pendingJson)!.AsObject();
+        foreignFencePending["pendingFollowUp"]!["request"]!["header"]!["fence"] = "2";
+        Assert.Throws<ArgumentException>(() => JsonSerializer.Deserialize<MaterializationBackendRoutingSnapshot>(
+            foreignFencePending.ToJsonString(),
+            options));
+        var siblingPending = JsonNode.Parse(pendingJson)!.AsObject();
+        var siblingSlice = JsonSerializer.SerializeToNode(rig.AlternateScope, options)!;
+        siblingPending["pendingFollowUp"]!["request"]!["header"]!["placementSlice"] = siblingSlice.DeepClone();
+        siblingPending["pendingFollowUp"]!["request"]!["read"]!["placementSlice"] = siblingSlice.DeepClone();
+        Assert.Throws<ArgumentException>(() => JsonSerializer.Deserialize<MaterializationBackendRoutingSnapshot>(
+            siblingPending.ToJsonString(),
+            options));
+
+        MaterializationBackendDrainProof drainProof = new(
+            placementSlice: rig.Scope,
+            generation: rig.First.Generation,
+            admissionsClosedAtRevision: initialized.Snapshot.Revision,
+            inFlightOperationCount: 0,
+            quiescenceToken: "quiescence/wire",
+            observedAtUtc: At(2));
+        var proofJson = JsonSerializer.Serialize(drainProof, options);
+        Assert.Equal(
+            drainProof,
+            JsonSerializer.Deserialize<MaterializationBackendDrainProof>(proofJson, options));
         Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<MaterializationBackendRole>("0", options));
         Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<MaterializationBackendRole>("\"activeRead\"", options));
         Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<MaterializationBackendRoutingDisposition>("0", options));
@@ -46,6 +182,7 @@ public sealed class MaterializationBackendRouterTests
         Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<MaterializationBackendRoutingOperation>("\"swap\"", options));
         Assert.Throws<ArgumentOutOfRangeException>(() => new MaterializationBackendRoutingReceipt(
             commandId: new("command/invalid-operation"),
+            placementSlice: rig.Scope,
             operation: (MaterializationBackendRoutingOperation)int.MaxValue,
             revision: new("1"),
             fence: FenceOne,
@@ -63,7 +200,7 @@ public sealed class MaterializationBackendRouterTests
             Context(),
             new(
                 Header(rig, "command/read-incomplete", new("2"), FenceOne, At(3)),
-                FabricateReadableReference(rig.Second.Generation, At(3)),
+                FabricateReadableReference(rig.Scope, rig.Second.Generation, At(3)),
                 rig.Second.Generation,
                 Configuration(rig, rig.Second.Target, rig.Second.Target)));
 
@@ -73,7 +210,7 @@ public sealed class MaterializationBackendRouterTests
         Assert.Equal(rig.First.Read, rejected.Snapshot.ActiveRead);
         Assert.Equal(rig.First.Generation, rejected.Snapshot.ActiveWrite);
         Assert.Equal(rig.Second.Generation, rejected.Snapshot.Candidate);
-        Assert.Equal(rig.First.Generation, (await rig.Router.ResolveReadAsync(Context())).Generation);
+        Assert.Equal(rig.First.Generation, (await rig.Router.ResolveReadAsync(Context(), rig.Scope)).Generation);
         Assert.Equal(
             MaterializationGenerationState.Loading,
             (await rig.Second.Target.InspectGenerationAsync(Context(), rig.Second.Generation.GenerationId))!.State);
@@ -108,8 +245,8 @@ public sealed class MaterializationBackendRouterTests
             swapped.Snapshot.GetRoles(rig.Second.Generation).SequenceEqual(
                 [MaterializationBackendRole.ActiveRead, MaterializationBackendRole.ActiveWrite]));
 
-        var read = await rig.Router.ResolveReadAsync(Context());
-        var write = await rig.Router.ResolveWriteAsync(Context());
+        var read = await rig.Router.ResolveReadAsync(Context(), rig.Scope);
+        var write = await rig.Router.ResolveWriteAsync(Context(), rig.Scope);
         Assert.Equal(swapped.Snapshot.Revision, read.Revision);
         Assert.Equal(swapped.Snapshot.Revision, write.Revision);
         Assert.Same(rig.Second.Target, read.Target);
@@ -143,8 +280,8 @@ public sealed class MaterializationBackendRouterTests
         Assert.True(
             staged.Snapshot.GetRoles(rig.Second.Generation).SequenceEqual(
                 [MaterializationBackendRole.ActiveWrite, MaterializationBackendRole.Candidate]));
-        Assert.Equal(rig.First.Generation, (await rig.Router.ResolveReadAsync(Context())).Generation);
-        Assert.Equal(rig.Second.Generation, (await rig.Router.ResolveWriteAsync(Context())).Generation);
+        Assert.Equal(rig.First.Generation, (await rig.Router.ResolveReadAsync(Context(), rig.Scope)).Generation);
+        Assert.Equal(rig.Second.Generation, (await rig.Router.ResolveWriteAsync(Context(), rig.Scope)).Generation);
     }
 
     [Fact]
@@ -294,6 +431,7 @@ public sealed class MaterializationBackendRouterTests
                 rig.Second.Generation,
                 abandonment.Receipt!));
         MaterializationBackendRollbackProof rollbackProof = new(
+            rig.Scope,
             rig.First.Generation,
             staged.Snapshot.ActiveRead!,
             staged.Snapshot.ActiveWrite!,
@@ -343,8 +481,7 @@ public sealed class MaterializationBackendRouterTests
             foreignFingerprint);
 
         Assert.Throws<ArgumentException>(() => new MaterializationBackendRoutingSnapshot(
-            rig.Definition.Id,
-            rig.Document.DefinitionFingerprint,
+            rig.Scope,
             new("1"),
             FenceOne,
             rig.First.Read,
@@ -354,6 +491,29 @@ public sealed class MaterializationBackendRouterTests
             retired: [],
             cleaned: [],
             Configuration(rig, rig.First.Target, rig.First.Target)));
+
+        var candidateOnly = new MaterializationBackendRoutingSnapshot(
+            placementSlice: rig.Scope,
+            revision: new("1"),
+            latestFence: FenceOne,
+            activeRead: null,
+            activeWrite: null,
+            candidate: rig.Second.Generation,
+            draining: [],
+            retired: [],
+            cleaned: []);
+        var options = StrictDocumentJson.CreateOptions();
+        var forgedDocument = JsonNode.Parse(JsonSerializer.Serialize(candidateOnly, options))!.AsObject();
+        forgedDocument["candidate"]!["definitionFingerprint"]!["value"] = foreignFingerprint.Value;
+
+        Assert.Throws<ArgumentException>(() => JsonSerializer.Deserialize<MaterializationBackendRoutingSnapshot>(
+            forgedDocument.ToJsonString(),
+            options));
+        Assert.Throws<ArgumentException>(() => new MaterializationBackendRouteBinding(
+            rig.Scope,
+            new("1"),
+            foreignWrite,
+            rig.First.Target));
     }
 
     [Fact]
@@ -361,8 +521,7 @@ public sealed class MaterializationBackendRouterTests
     {
         using var rig = await RoutingRig.CreateAsync(secondBackendActive: false);
         var acceptedFenceOnly = new MaterializationBackendRoutingSnapshot(
-            poolId: rig.Definition.Id,
-            poolDefinitionFingerprint: rig.Document.DefinitionFingerprint,
+            placementSlice: rig.Scope,
             revision: MaterializationBackendRoutingRevision.Initial,
             latestFence: FenceOne,
             activeRead: null,
@@ -374,8 +533,7 @@ public sealed class MaterializationBackendRouterTests
 
         Assert.Equal(FenceOne, acceptedFenceOnly.LatestFence);
         Assert.Throws<ArgumentException>(() => new MaterializationBackendRoutingSnapshot(
-            poolId: rig.Definition.Id,
-            poolDefinitionFingerprint: rig.Document.DefinitionFingerprint,
+            placementSlice: rig.Scope,
             revision: MaterializationBackendRoutingRevision.Initial,
             latestFence: FenceOne,
             activeRead: null,
@@ -385,8 +543,7 @@ public sealed class MaterializationBackendRouterTests
             retired: [],
             cleaned: []));
         Assert.Throws<ArgumentException>(() => new MaterializationBackendRoutingSnapshot(
-            poolId: rig.Definition.Id,
-            poolDefinitionFingerprint: rig.Document.DefinitionFingerprint,
+            placementSlice: rig.Scope,
             revision: new("1"),
             latestFence: default(MaterializationBackendRoutingFence),
             activeRead: null,
@@ -396,8 +553,7 @@ public sealed class MaterializationBackendRouterTests
             retired: [],
             cleaned: []));
         Assert.Throws<ArgumentException>(() => new MaterializationBackendRoutingSnapshot(
-            poolId: rig.Definition.Id,
-            poolDefinitionFingerprint: rig.Document.DefinitionFingerprint,
+            placementSlice: rig.Scope,
             revision: new("1"),
             latestFence: FenceOne,
             activeRead: null,
@@ -407,8 +563,7 @@ public sealed class MaterializationBackendRouterTests
             retired: [],
             cleaned: []));
         Assert.Throws<ArgumentException>(() => new MaterializationBackendRoutingSnapshot(
-            poolId: rig.Definition.Id,
-            poolDefinitionFingerprint: rig.Document.DefinitionFingerprint,
+            placementSlice: rig.Scope,
             revision: new("1"),
             latestFence: FenceOne,
             activeRead: null,
@@ -418,6 +573,7 @@ public sealed class MaterializationBackendRouterTests
             retired: [new(rig.Second.Generation, new("2"))],
             cleaned: []));
         Assert.Throws<ArgumentException>(() => new MaterializationBackendRouteBinding(
+            rig.Scope,
             MaterializationBackendRoutingRevision.Initial,
             rig.First.Generation,
             rig.First.Target));
@@ -440,7 +596,9 @@ public sealed class MaterializationBackendRouterTests
         Assert.Equal(rig.Definition, restored.Definition);
         Assert.Equal(rig.Definition.GetHashCode(), restored.Definition.GetHashCode());
         Assert.Equal(restored.DefinitionFingerprint, router.Document.DefinitionFingerprint);
-        Assert.Equal(MaterializationBackendRoutingRevision.Initial, (await router.InspectAsync(Context())).Revision);
+        Assert.Equal(
+            MaterializationBackendRoutingRevision.Initial,
+            (await router.InspectAsync(Context(), rig.Scope)).Revision);
     }
 
     [Fact]
@@ -548,6 +706,282 @@ public sealed class MaterializationBackendRouterTests
     }
 
     [Fact]
+    public async Task RejectedCommandIntent_StillPreventsChangedContentFromReusingItsIdentity()
+    {
+        using var rig = await RoutingRig.CreateAsync(secondBackendActive: false);
+        await InitializeAsync(rig);
+        var rejectedRequest = new MaterializationAdmitBackendCandidateRequest(
+            Header(
+                rig,
+                "command/rejected-intent",
+                MaterializationBackendRoutingRevision.Initial,
+                FenceTwo,
+                At(2)),
+            rig.Second.Generation);
+
+        var rejected = await rig.Router.AdmitCandidateAsync(Context(), rejectedRequest);
+        var changed = await rig.Router.AdmitCandidateAsync(
+            Context(),
+            new(
+                Header(rig, "command/rejected-intent", new("1"), FenceTwo, At(3)),
+                rig.Second.Generation));
+        var exactRetry = await rig.Router.AdmitCandidateAsync(Context(), rejectedRequest);
+        var refreshedAttempt = await rig.Router.AdmitCandidateAsync(
+            Context(),
+            new(
+                Header(rig, "command/rejected-intent-refreshed", new("1"), FenceTwo, At(3)),
+                rig.Second.Generation));
+
+        Assert.Equal(MaterializationBackendRoutingDisposition.RevisionConflict, rejected.Disposition);
+        Assert.Equal(FenceTwo, rejected.Snapshot.LatestFence);
+        Assert.Equal(MaterializationBackendRoutingDisposition.IdentityConflict, changed.Disposition);
+        Assert.Equal(MaterializationBackendRoutingDisposition.RevisionConflict, exactRetry.Disposition);
+        Assert.Null(changed.Snapshot.Candidate);
+        Assert.Equal(MaterializationBackendRoutingDisposition.Applied, refreshedAttempt.Disposition);
+        Assert.Equal(rig.Second.Generation, refreshedAttempt.Snapshot.Candidate);
+        Assert.Equal(new MaterializationBackendRoutingRevision("1"), changed.Snapshot.Revision);
+    }
+
+    [Fact]
+    public async Task CandidateAdmission_ReservesExactSwapAndBlocksInterleavingWithoutAdvancingFence()
+    {
+        using var rig = await RoutingRig.CreateAsync(secondBackendActive: true);
+        await InitializeAsync(rig);
+        MaterializationBackendRoutingCommandId swapCommandId = new("command/reserved-follow-up-swap");
+        var reservedSwap = SwapRequest(
+            rig,
+            swapCommandId.Value,
+            expectedRevision: new("2"),
+            issuedAtUtc: At(4),
+            rig.Second.Read!,
+            rig.Second.Generation);
+        var admissionRequest = new MaterializationAdmitBackendCandidateRequest(
+            Header(rig, "command/admit-with-follow-up", new("1"), FenceOne, At(2)),
+            rig.Second.Generation,
+            expectedFollowUp: reservedSwap);
+
+        var admitted = await rig.Router.AdmitCandidateAsync(Context(), admissionRequest);
+        var blocked = await rig.Router.AdmitCandidateAsync(
+            Context(),
+            new(
+                Header(rig, "command/interleaving-mutation", new("2"), FenceTwo, At(3)),
+                rig.Second.Generation));
+        var malformedSameIdentity = await rig.Router.SwapAsync(
+            Context(),
+            SwapRequest(
+                rig,
+                swapCommandId.Value,
+                expectedRevision: new("2"),
+                issuedAtUtc: At(4),
+                rig.First.Read!,
+                rig.First.Generation));
+        var swapped = await rig.Router.SwapAsync(Context(), reservedSwap);
+        var replayedAdmission = await rig.Router.AdmitCandidateAsync(Context(), admissionRequest);
+
+        Assert.Equal(MaterializationBackendRoutingDisposition.Applied, admitted.Disposition);
+        Assert.Equal(
+            new MaterializationBackendFollowUpReservation(reservedSwap),
+            admitted.Snapshot.PendingFollowUp);
+        Assert.Equal(MaterializationBackendRoutingDisposition.StateConflict, blocked.Disposition);
+        Assert.Equal(FenceOne, blocked.Snapshot.LatestFence);
+        Assert.Equal(admitted.Snapshot.Revision, blocked.Snapshot.Revision);
+        Assert.Equal(MaterializationBackendRoutingDisposition.IdentityConflict, malformedSameIdentity.Disposition);
+        Assert.Equal(admitted.Snapshot.Revision, malformedSameIdentity.Snapshot.Revision);
+        Assert.Equal(admitted.Snapshot.PendingFollowUp, malformedSameIdentity.Snapshot.PendingFollowUp);
+        Assert.Equal(MaterializationBackendRoutingDisposition.Applied, swapped.Disposition);
+        Assert.Null(swapped.Snapshot.PendingFollowUp);
+        Assert.Null(swapped.Snapshot.Candidate);
+        Assert.Equal(rig.Second.Generation, swapped.Snapshot.ActiveRead!.Generation);
+        Assert.Equal(MaterializationBackendRoutingDisposition.Replayed, replayedAdmission.Disposition);
+        Assert.Equal(admitted.Receipt, replayedAdmission.Receipt);
+        Assert.Null(replayedAdmission.Snapshot.PendingFollowUp);
+    }
+
+    [Fact]
+    public async Task ExactCandidateAbandonment_ClearsFollowUpReservationButKeepsPromisedIdentityConsumed()
+    {
+        using var rig = await RoutingRig.CreateAsync(secondBackendActive: false);
+        await InitializeAsync(rig);
+        MaterializationBackendRoutingCommandId swapCommandId = new("command/abandoned-follow-up-swap");
+        var reservedSwap = SwapRequest(
+            rig,
+            swapCommandId.Value,
+            expectedRevision: new("2"),
+            issuedAtUtc: At(5),
+            FabricateReadableReference(rig.Scope, rig.Second.Generation, At(4)),
+            rig.Second.Generation);
+        var admitted = await rig.Router.AdmitCandidateAsync(
+            Context(),
+            new(
+                Header(rig, "command/admit-before-abandon", new("1"), FenceOne, At(2)),
+                rig.Second.Generation,
+                expectedFollowUp: reservedSwap));
+        var abandonment = await rig.Second.Target.AbandonGenerationAsync(
+            Context(),
+            new(
+                new("abandonment/follow-up-candidate"),
+                rig.Second.Generation.GenerationId,
+                abandonedAtUtc: At(3)));
+        var cleared = await rig.Router.AbandonCandidateAsync(
+            Context(),
+            new(
+                Header(rig, "command/clear-follow-up-candidate", admitted.Snapshot.Revision, FenceOne, At(4)),
+                rig.Second.Generation,
+                abandonment.Receipt!));
+        var promisedIdentityReuse = await rig.Router.SwapAsync(Context(), reservedSwap);
+
+        Assert.Equal(MaterializationBackendRoutingDisposition.Applied, admitted.Disposition);
+        Assert.Equal(MaterializationBackendRoutingDisposition.Applied, cleared.Disposition);
+        Assert.Null(cleared.Snapshot.Candidate);
+        Assert.Null(cleared.Snapshot.PendingFollowUp);
+        Assert.Equal(MaterializationBackendRoutingDisposition.IdentityConflict, promisedIdentityReuse.Disposition);
+        Assert.Equal(cleared.Snapshot.Revision, promisedIdentityReuse.Snapshot.Revision);
+    }
+
+    [Fact]
+    public async Task PlacementSlices_IsolateRevisionsFencesCommandIdentityRoutesAndReceipts()
+    {
+        using var rig = await RoutingRig.CreateAsync(secondBackendActive: false);
+        const string sharedCommandId = "command/shared-across-placement-slices";
+        var primaryRequest = SwapRequest(
+            rig,
+            sharedCommandId,
+            MaterializationBackendRoutingRevision.Initial,
+            At(1),
+            rig.First.Read!,
+            rig.First.Generation);
+        MaterializationReadableBackendReference alternateRead = new(
+            rig.AlternateScope,
+            rig.First.Generation,
+            rig.First.Activation!);
+        MaterializationSwapBackendRoutingRequest alternateRequest = new(
+            Header(
+                rig,
+                rig.AlternateScope,
+                sharedCommandId,
+                MaterializationBackendRoutingRevision.Initial,
+                FenceTwo,
+                At(2)),
+            alternateRead,
+            rig.First.Generation,
+            Configuration(rig, rig.First.Target, rig.First.Target));
+
+        var primaryInitialized = await rig.Router.SwapAsync(Context(), primaryRequest);
+        var alternateInitialized = await rig.Router.SwapAsync(Context(), alternateRequest);
+        var primaryAdvanced = await rig.Router.AdmitCandidateAsync(
+            Context(),
+            new(
+                Header(rig, "command/advance-primary-only", new("1"), FenceOne, At(3)),
+                rig.Second.Generation));
+        var primarySnapshot = await rig.Router.InspectAsync(Context(), rig.Scope);
+        var alternateSnapshot = await rig.Router.InspectAsync(Context(), rig.AlternateScope);
+        var primaryRead = await rig.Router.ResolveReadAsync(Context(), rig.Scope);
+        var alternateReadBinding = await rig.Router.ResolveReadAsync(Context(), rig.AlternateScope);
+        var primaryReplay = await rig.Router.SwapAsync(Context(), primaryRequest);
+        var alternateReplay = await rig.Router.SwapAsync(Context(), alternateRequest);
+
+        Assert.Equal(MaterializationBackendRoutingDisposition.Applied, primaryInitialized.Disposition);
+        Assert.Equal(MaterializationBackendRoutingDisposition.Applied, alternateInitialized.Disposition);
+        Assert.Equal(primaryInitialized.Receipt!.CommandId, alternateInitialized.Receipt!.CommandId);
+        Assert.Equal(rig.Scope, primaryInitialized.Receipt.PlacementSlice);
+        Assert.Equal(rig.AlternateScope, alternateInitialized.Receipt.PlacementSlice);
+        Assert.NotEqual(primaryInitialized.Receipt, alternateInitialized.Receipt);
+        Assert.Equal(MaterializationBackendRoutingDisposition.Applied, primaryAdvanced.Disposition);
+        Assert.Equal(new MaterializationBackendRoutingRevision("2"), primarySnapshot.Revision);
+        Assert.Equal(FenceOne, primarySnapshot.LatestFence);
+        Assert.Equal(rig.Second.Generation, primarySnapshot.Candidate);
+        Assert.Equal(new MaterializationBackendRoutingRevision("1"), alternateSnapshot.Revision);
+        Assert.Equal(FenceTwo, alternateSnapshot.LatestFence);
+        Assert.Null(alternateSnapshot.Candidate);
+        Assert.Equal(rig.Scope, primaryRead.PlacementSlice);
+        Assert.Equal(rig.AlternateScope, alternateReadBinding.PlacementSlice);
+        Assert.Equal(rig.First.Generation, primaryRead.Generation);
+        Assert.Equal(rig.First.Generation, alternateReadBinding.Generation);
+        Assert.Equal(MaterializationBackendRoutingDisposition.Replayed, primaryReplay.Disposition);
+        Assert.Equal(primaryInitialized.Receipt, primaryReplay.Receipt);
+        Assert.Equal(primarySnapshot.Revision, primaryReplay.Snapshot.Revision);
+        Assert.Equal(MaterializationBackendRoutingDisposition.Replayed, alternateReplay.Disposition);
+        Assert.Equal(alternateInitialized.Receipt, alternateReplay.Receipt);
+        Assert.Equal(alternateSnapshot.Revision, alternateReplay.Snapshot.Revision);
+    }
+
+    [Fact]
+    public async Task ReadableRoute_RejectsActivationForAnotherPlacementSubjectSet()
+    {
+        using var rig = await RoutingRig.CreateAsync(secondBackendActive: false);
+        var foreignSubjects = PlacementSlice(
+            rig.Document,
+            rig.First.Target.Descriptor.Id,
+            subject: "routing-foreign-subject",
+            membershipDigestCharacter: 'f');
+
+        Assert.Throws<ArgumentException>(() => new MaterializationReadableBackendReference(
+            placementSlice: foreignSubjects,
+            generation: rig.First.Generation,
+            activation: rig.First.Activation!));
+    }
+
+    [Fact]
+    public async Task InitialSwap_RejectsUnadmittedWriteGeneration()
+    {
+        using var rig = await RoutingRig.CreateAsync(secondBackendActive: false);
+
+        var rejected = await rig.Router.SwapAsync(
+            Context(),
+            new(
+                Header(
+                    rig,
+                    "command/initial-unadmitted-write",
+                    MaterializationBackendRoutingRevision.Initial,
+                    FenceOne,
+                    At(1)),
+                rig.First.Read!,
+                rig.Second.Generation,
+                Configuration(rig, rig.First.Target, rig.Second.Target)));
+
+        Assert.Equal(MaterializationBackendRoutingDisposition.StateConflict, rejected.Disposition);
+        Assert.Equal(MaterializationBackendRoutingRevision.Initial, rejected.Snapshot.Revision);
+        Assert.Null(rejected.Snapshot.ActiveRead);
+        Assert.Null(rejected.Snapshot.ActiveWrite);
+    }
+
+    [Fact]
+    public async Task InitialSwap_RejectsActivationWithAnotherPromotionFence()
+    {
+        using var rig = await RoutingRig.CreateAsync(secondBackendActive: false);
+        var activation = rig.First.Activation!;
+        MaterializationActiveGenerationReference foreignFenceActivation = new(
+            schemaVersion: activation.SchemaVersion,
+            authority: activation.Authority,
+            generation: activation.Generation,
+            targetRevision: activation.TargetRevision,
+            promotion: activation.Promotion,
+            promotionFence: new("2"),
+            validation: activation.Validation,
+            activatedAtUtc: activation.ActivatedAtUtc);
+        MaterializationReadableBackendReference read = new(
+            placementSlice: rig.Scope,
+            generation: rig.First.Generation,
+            activation: foreignFenceActivation);
+
+        var rejected = await rig.Router.SwapAsync(
+            Context(),
+            new(
+                Header(
+                    rig,
+                    "command/initial-foreign-promotion-fence",
+                    MaterializationBackendRoutingRevision.Initial,
+                    FenceOne,
+                    At(1)),
+                read,
+                rig.First.Generation,
+                Configuration(rig, rig.First.Target, rig.First.Target)));
+
+        Assert.Equal(MaterializationBackendRoutingDisposition.EvidenceConflict, rejected.Disposition);
+        Assert.Equal(MaterializationBackendRoutingRevision.Initial, rejected.Snapshot.Revision);
+    }
+
+    [Fact]
     public async Task ConcurrentSameRevisionSwap_AdmitsExactlyOneCommand()
     {
         using var rig = await RoutingRig.CreateAsync(secondBackendActive: true);
@@ -574,7 +1008,7 @@ public sealed class MaterializationBackendRouterTests
 
         Assert.Single(results, static result => result.Disposition == MaterializationBackendRoutingDisposition.Applied);
         Assert.Single(results, static result => result.Disposition == MaterializationBackendRoutingDisposition.RevisionConflict);
-        var snapshot = await rig.Router.InspectAsync(Context());
+        var snapshot = await rig.Router.InspectAsync(Context(), rig.Scope);
         Assert.Equal(new MaterializationBackendRoutingRevision("3"), snapshot.Revision);
         Assert.Equal(rig.Second.Read, snapshot.ActiveRead);
         Assert.Equal(rig.Second.Generation, snapshot.ActiveWrite);
@@ -587,6 +1021,7 @@ public sealed class MaterializationBackendRouterTests
         using var rig = await RoutingRig.CreateAsync(secondBackendActive: true);
         var current = await SwapToSecondAsync(rig);
         MaterializationBackendRollbackProof staleProof = new(
+            rig.Scope,
             rig.First.Generation,
             current.ActiveRead!,
             current.ActiveWrite!,
@@ -605,6 +1040,7 @@ public sealed class MaterializationBackendRouterTests
                 rig.First.Generation,
                 staleProof));
         MaterializationBackendRollbackProof exactProof = new(
+            rig.Scope,
             rig.First.Generation,
             current.ActiveRead!,
             current.ActiveWrite!,
@@ -640,6 +1076,7 @@ public sealed class MaterializationBackendRouterTests
         var current = await SwapToSecondAsync(rig);
         var drain = Assert.Single(current.Draining);
         MaterializationBackendDrainProof staleProof = new(
+            rig.Scope,
             rig.First.Generation,
             admissionsClosedAtRevision: new("2"),
             inFlightOperationCount: 0,
@@ -652,6 +1089,7 @@ public sealed class MaterializationBackendRouterTests
                 Header(rig, "command/drain-stale-proof", current.Revision, FenceOne, At(5)),
                 staleProof));
         MaterializationBackendDrainProof exactProof = new(
+            rig.Scope,
             rig.First.Generation,
             drain.AdmissionsClosedAtRevision,
             inFlightOperationCount: 0,
@@ -684,6 +1122,7 @@ public sealed class MaterializationBackendRouterTests
                 rig.First.Generation));
         var drain = Assert.Single(swapped.Draining);
         MaterializationBackendDrainProof drainProof = new(
+            rig.Scope,
             rig.First.Generation,
             drain.AdmissionsClosedAtRevision,
             inFlightOperationCount: 0,
@@ -695,8 +1134,10 @@ public sealed class MaterializationBackendRouterTests
                 Header(rig, "command/complete-drain", swapped.Revision, FenceOne, At(6)),
                 drainProof));
         MaterializationBackendCleanupProof prematureCleanupProof = new(
+            rig.Scope,
             rig.First.Generation,
             retiredAtRevision: completedDrain.Snapshot.Revision,
+            reservationToken: "cleanup-reservation/not-yet-reserved",
             cleanupFingerprint: "cleanup/physical-receipt",
             observedAtUtc: At(7));
         var prematureCleanup = await rig.Router.CleanupAsync(
@@ -712,20 +1153,61 @@ public sealed class MaterializationBackendRouterTests
         var targetStateAfterRetirement = await rig.First.Target.InspectGenerationAsync(
             Context(),
             rig.First.Generation.GenerationId);
-        MaterializationBackendCleanupProof cleanupProof = new(
+        var reservationRequest = new MaterializationReserveBackendCleanupRequest(
+            Header(rig, "command/reserve-cleanup", retired.Snapshot.Revision, FenceOne, At(10)),
+            rig.First.Generation);
+        var reserved = await rig.Router.ReserveCleanupAsync(Context(), reservationRequest);
+        var replayedReservation = await rig.Router.ReserveCleanupAsync(Context(), reservationRequest);
+        MaterializationBackendCleanupProof preReservationCleanupProof = new(
+            rig.Scope,
             rig.First.Generation,
             retiredAtRevision: retired.Snapshot.Revision,
+            reservationToken: reserved.Reservation!.Token,
+            cleanupFingerprint: "cleanup/pre-reservation-physical-receipt",
+            observedAtUtc: At(99));
+        var preReservationCleanup = await rig.Router.CleanupAsync(
+            Context(),
+            new(
+                Header(
+                    rig,
+                    "command/cleanup-with-pre-reservation-proof",
+                    reserved.Routing.Snapshot.Revision,
+                    FenceOne,
+                    At(101)),
+                preReservationCleanupProof));
+        MaterializationBackendCleanupProof wrongReservationProof = new(
+            rig.Scope,
+            rig.First.Generation,
+            retiredAtRevision: retired.Snapshot.Revision,
+            reservationToken: "cleanup-reservation/wrong",
+            cleanupFingerprint: "cleanup/wrong-reservation-token",
+            observedAtUtc: At(101));
+        var wrongReservationCleanup = await rig.Router.CleanupAsync(
+            Context(),
+            new(
+                Header(
+                    rig,
+                    "command/cleanup-with-wrong-reservation",
+                    reserved.Routing.Snapshot.Revision,
+                    FenceOne,
+                    At(102)),
+                wrongReservationProof));
+        MaterializationBackendCleanupProof cleanupProof = new(
+            rig.Scope,
+            rig.First.Generation,
+            retiredAtRevision: retired.Snapshot.Revision,
+            reservationToken: reserved.Reservation!.Token,
             cleanupFingerprint: "cleanup/physical-receipt",
-            observedAtUtc: At(10));
+            observedAtUtc: At(101));
         var cleanupRequest = new MaterializationCleanupBackendGenerationRequest(
-            Header(rig, "command/cleanup", retired.Snapshot.Revision, FenceOne, At(11)),
+            Header(rig, "command/cleanup", reserved.Routing.Snapshot.Revision, FenceOne, At(102)),
             cleanupProof);
         var cleaned = await rig.Router.CleanupAsync(Context(), cleanupRequest);
         var replayedCleanup = await rig.Router.CleanupAsync(Context(), cleanupRequest);
         var readmission = await rig.Router.AdmitCandidateAsync(
             Context(),
             new(
-                Header(rig, "command/readmit-cleaned", cleaned.Snapshot.Revision, FenceOne, At(12)),
+                Header(rig, "command/readmit-cleaned", cleaned.Snapshot.Revision, FenceOne, At(103)),
                 rig.First.Generation));
         var targetStateAfterCleanup = await rig.First.Target.InspectGenerationAsync(
             Context(),
@@ -739,6 +1221,16 @@ public sealed class MaterializationBackendRouterTests
         Assert.Equal(rig.First.Generation, retirement.Generation);
         Assert.Equal(retired.Snapshot.Revision, retirement.RetiredAtRevision);
         Assert.Equal(MaterializationGenerationState.Active, targetStateAfterRetirement!.State);
+        Assert.Equal(MaterializationBackendRoutingDisposition.Applied, reserved.Routing.Disposition);
+        Assert.Equal(MaterializationBackendRoutingOperation.ReserveCleanup, reserved.Routing.Receipt!.Operation);
+        Assert.Equal(rig.First.Generation, reserved.Reservation!.Generation);
+        Assert.Equal(rig.Scope, Assert.Single(reserved.Reservation.Retirements).PlacementSlice);
+        Assert.Equal(MaterializationBackendRoutingDisposition.Replayed, replayedReservation.Routing.Disposition);
+        Assert.Equal(reserved.Reservation, replayedReservation.Reservation);
+        Assert.Equal(MaterializationBackendRoutingDisposition.EvidenceConflict, preReservationCleanup.Disposition);
+        Assert.Equal(reserved.Routing.Snapshot.Revision, preReservationCleanup.Snapshot.Revision);
+        Assert.Equal(MaterializationBackendRoutingDisposition.EvidenceConflict, wrongReservationCleanup.Disposition);
+        Assert.Equal(reserved.Routing.Snapshot.Revision, wrongReservationCleanup.Snapshot.Revision);
         Assert.Equal(MaterializationBackendRoutingDisposition.Applied, cleaned.Disposition);
         Assert.Equal(MaterializationBackendRoutingOperation.Cleanup, cleaned.Receipt!.Operation);
         Assert.Empty(cleaned.Snapshot.Retired);
@@ -749,7 +1241,215 @@ public sealed class MaterializationBackendRouterTests
         Assert.Equal(MaterializationBackendRoutingDisposition.StateConflict, readmission.Disposition);
         Assert.Equal(cleaned.Snapshot.Revision, readmission.Snapshot.Revision);
         Assert.Equal(MaterializationGenerationState.Active, targetStateAfterCleanup!.State);
-        Assert.Equal(rig.Second.Generation, (await rig.Router.ResolveReadAsync(Context())).Generation);
+        Assert.Equal(rig.Second.Generation, (await rig.Router.ResolveReadAsync(Context(), rig.Scope)).Generation);
+    }
+
+    [Fact]
+    public async Task SharedRetiredGeneration_UsesOneCleanupReservationAndIndependentPlacementAcknowledgements()
+    {
+        using var rig = await RoutingRig.CreateAsync(secondBackendActive: true);
+        await InitializeAsync(rig);
+        MaterializationReadableBackendReference alternateFirstRead = new(
+            rig.AlternateScope,
+            rig.First.Generation,
+            rig.First.Activation!);
+        MaterializationReadableBackendReference alternateSecondRead = new(
+            rig.AlternateScope,
+            rig.Second.Generation,
+            rig.Second.Activation!);
+        var alternateInitialized = await rig.Router.SwapAsync(
+            Context(),
+            new(
+                Header(
+                    rig,
+                    rig.AlternateScope,
+                    "command/alternate-initialize-cleanup",
+                    MaterializationBackendRoutingRevision.Initial,
+                    FenceOne,
+                    At(1)),
+                alternateFirstRead,
+                rig.First.Generation,
+                Configuration(rig, rig.First.Target, rig.First.Target)));
+        await AdmitSecondAsync(rig, expectedRevision: new("1"), issuedAtUtc: At(2));
+        var alternateAdmitted = await rig.Router.AdmitCandidateAsync(
+            Context(),
+            new(
+                Header(
+                    rig,
+                    rig.AlternateScope,
+                    "command/alternate-admit-cleanup",
+                    alternateInitialized.Snapshot.Revision,
+                    FenceOne,
+                    At(2)),
+                rig.Second.Generation));
+        var primarySwapped = await rig.Router.SwapAsync(
+            Context(),
+            SwapRequest(
+                rig,
+                "command/primary-swap-cleanup",
+                expectedRevision: new("2"),
+                issuedAtUtc: At(3),
+                rig.Second.Read!,
+                rig.Second.Generation));
+        var alternateSwapped = await rig.Router.SwapAsync(
+            Context(),
+            new(
+                Header(
+                    rig,
+                    rig.AlternateScope,
+                    "command/alternate-swap-cleanup",
+                    alternateAdmitted.Snapshot.Revision,
+                    FenceOne,
+                    At(3)),
+                alternateSecondRead,
+                rig.Second.Generation,
+                Configuration(rig, rig.Second.Target, rig.Second.Target)));
+        var primaryDrain = Assert.Single(primarySwapped.Snapshot.Draining);
+        var alternateDrain = Assert.Single(alternateSwapped.Snapshot.Draining);
+        var primaryCompleted = await rig.Router.CompleteDrainAsync(
+            Context(),
+            new(
+                Header(rig, "command/primary-complete-shared-drain", primarySwapped.Snapshot.Revision, FenceOne, At(5)),
+                new MaterializationBackendDrainProof(
+                    placementSlice: rig.Scope,
+                    generation: rig.First.Generation,
+                    admissionsClosedAtRevision: primaryDrain.AdmissionsClosedAtRevision,
+                    inFlightOperationCount: 0,
+                    quiescenceToken: "quiescence/shared-primary",
+                    observedAtUtc: At(4))));
+        var alternateCompleted = await rig.Router.CompleteDrainAsync(
+            Context(),
+            new(
+                Header(
+                    rig,
+                    rig.AlternateScope,
+                    "command/alternate-complete-shared-drain",
+                    alternateSwapped.Snapshot.Revision,
+                    FenceOne,
+                    At(5)),
+                new MaterializationBackendDrainProof(
+                    placementSlice: rig.AlternateScope,
+                    generation: rig.First.Generation,
+                    admissionsClosedAtRevision: alternateDrain.AdmissionsClosedAtRevision,
+                    inFlightOperationCount: 0,
+                    quiescenceToken: "quiescence/shared-alternate",
+                    observedAtUtc: At(4))));
+        var primaryRetired = await rig.Router.RetireAsync(
+            Context(),
+            new(
+                Header(rig, "command/primary-retire-shared", primaryCompleted.Snapshot.Revision, FenceOne, At(6)),
+                rig.First.Generation));
+        var prematureReservation = await rig.Router.ReserveCleanupAsync(
+            Context(),
+            new(
+                Header(
+                    rig,
+                    "command/reserve-shared-cleanup-before-all-retired",
+                    primaryRetired.Snapshot.Revision,
+                    FenceOne,
+                    At(7)),
+                rig.First.Generation));
+        var alternateRetired = await rig.Router.RetireAsync(
+            Context(),
+            new(
+                Header(
+                    rig,
+                    rig.AlternateScope,
+                    "command/alternate-retire-shared",
+                    alternateCompleted.Snapshot.Revision,
+                    FenceOne,
+                    At(6)),
+                rig.First.Generation));
+        var reserved = await rig.Router.ReserveCleanupAsync(
+            Context(),
+            new(
+                Header(rig, "command/reserve-shared-cleanup", primaryRetired.Snapshot.Revision, FenceOne, At(8)),
+                rig.First.Generation));
+        var reservation = reserved.Reservation!;
+        var primaryCleaned = await rig.Router.CleanupAsync(
+            Context(),
+            new(
+                Header(rig, "command/acknowledge-primary-cleanup", reserved.Routing.Snapshot.Revision, FenceOne, At(102)),
+                new MaterializationBackendCleanupProof(
+                    placementSlice: rig.Scope,
+                    generation: rig.First.Generation,
+                    retiredAtRevision: primaryRetired.Snapshot.Revision,
+                    reservationToken: reservation.Token,
+                    cleanupFingerprint: "cleanup/shared-physical-receipt",
+                    observedAtUtc: At(101))));
+        var conflictingAlternateCleanup = await rig.Router.CleanupAsync(
+            Context(),
+            new(
+                Header(
+                    rig,
+                    rig.AlternateScope,
+                    "command/acknowledge-conflicting-alternate-cleanup",
+                    alternateRetired.Snapshot.Revision,
+                    FenceOne,
+                    At(102)),
+                new MaterializationBackendCleanupProof(
+                    placementSlice: rig.AlternateScope,
+                    generation: rig.First.Generation,
+                    retiredAtRevision: alternateRetired.Snapshot.Revision,
+                    reservationToken: reservation.Token,
+                    cleanupFingerprint: "cleanup/conflicting-physical-receipt",
+                    observedAtUtc: At(101))));
+        var alternateCleaned = await rig.Router.CleanupAsync(
+            Context(),
+            new(
+                Header(
+                    rig,
+                    rig.AlternateScope,
+                    "command/acknowledge-alternate-cleanup",
+                    alternateRetired.Snapshot.Revision,
+                    FenceOne,
+                    At(102)),
+                new MaterializationBackendCleanupProof(
+                    placementSlice: rig.AlternateScope,
+                    generation: rig.First.Generation,
+                    retiredAtRevision: alternateRetired.Snapshot.Revision,
+                    reservationToken: reservation.Token,
+                    cleanupFingerprint: "cleanup/shared-physical-receipt",
+                    observedAtUtc: At(101))));
+        var futureScope = PlacementSlice(
+            rig.Document,
+            rig.First.Target.Descriptor.Id,
+            subject: "routing-shared-subject",
+            membershipDigestCharacter: '1');
+        var futureAdmission = await rig.Router.SwapAsync(
+            Context(),
+            new(
+                Header(
+                    rig,
+                    futureScope,
+                    "command/route-cleaned-generation-from-new-scope",
+                    MaterializationBackendRoutingRevision.Initial,
+                    FenceOne,
+                    At(103)),
+                new MaterializationReadableBackendReference(
+                    futureScope,
+                    rig.First.Generation,
+                    rig.First.Activation!),
+                rig.First.Generation,
+                Configuration(rig, rig.First.Target, rig.First.Target)));
+
+        Assert.Equal(MaterializationBackendRoutingDisposition.StateConflict, prematureReservation.Routing.Disposition);
+        Assert.Equal(primaryRetired.Snapshot.Revision, prematureReservation.Routing.Snapshot.Revision);
+        Assert.Null(prematureReservation.Reservation);
+        Assert.Equal(MaterializationBackendRoutingDisposition.Applied, reserved.Routing.Disposition);
+        Assert.Equal(2, reservation.Retirements.Length);
+        Assert.Contains(reservation.Retirements, claim => claim.PlacementSlice == rig.Scope);
+        Assert.Contains(reservation.Retirements, claim => claim.PlacementSlice == rig.AlternateScope);
+        Assert.Equal(MaterializationBackendRoutingDisposition.Applied, primaryCleaned.Disposition);
+        Assert.Equal(
+            MaterializationBackendRoutingDisposition.EvidenceConflict,
+            conflictingAlternateCleanup.Disposition);
+        Assert.Equal(alternateRetired.Snapshot.Revision, conflictingAlternateCleanup.Snapshot.Revision);
+        Assert.Equal(MaterializationBackendRoutingDisposition.Applied, alternateCleaned.Disposition);
+        Assert.Contains(rig.First.Generation, primaryCleaned.Snapshot.Cleaned);
+        Assert.Contains(rig.First.Generation, alternateCleaned.Snapshot.Cleaned);
+        Assert.Equal(MaterializationBackendRoutingDisposition.StateConflict, futureAdmission.Disposition);
+        Assert.Equal(MaterializationBackendRoutingRevision.Initial, futureAdmission.Snapshot.Revision);
     }
 
     static async Task<(MaterializationSwapBackendRoutingRequest Request, MaterializationBackendRoutingResult Result)>
@@ -824,10 +1524,18 @@ public sealed class MaterializationBackendRouterTests
         MaterializationBackendRoutingRevision expectedRevision,
         MaterializationBackendRoutingFence fence,
         DateTimeOffset issuedAtUtc) =>
+        Header(rig, rig.Scope, commandId, expectedRevision, fence, issuedAtUtc);
+
+    static MaterializationBackendRoutingCommandHeader Header(
+        RoutingRig rig,
+        MaterializationPlacementSliceReference placementSlice,
+        string commandId,
+        MaterializationBackendRoutingRevision expectedRevision,
+        MaterializationBackendRoutingFence fence,
+        DateTimeOffset issuedAtUtc) =>
         new(
             new(commandId),
-            rig.Definition.Id,
-            rig.Document.DefinitionFingerprint,
+            placementSlice,
             expectedRevision,
             fence,
             issuedAtUtc);
@@ -850,15 +1558,15 @@ public sealed class MaterializationBackendRouterTests
                 new(read, write)));
 
     static MaterializationReadableBackendReference FabricateReadableReference(
+        MaterializationPlacementSliceReference placementSlice,
         MaterializationBackendGenerationReference generation,
         DateTimeOffset activatedAtUtc) =>
         new(
+            placementSlice,
             generation,
             new(
                 MaterializationActiveGenerationReference.CurrentSchemaVersion,
-                PlanFingerprint,
-                MaterializationId,
-                generation.TargetId,
+                Authority(placementSlice),
                 generation.GenerationId,
                 targetRevision: new("1"),
                 promotion: new("promotion/incomplete"),
@@ -869,6 +1577,46 @@ public sealed class MaterializationBackendRouterTests
     static DateTimeOffset At(int minute) => Epoch.AddHours(2).AddMinutes(minute);
 
     static OperationContext Context() => OperationContext.Create();
+
+    static MaterializationPlacementSliceReference PlacementSlice(
+        MaterializationBackendPoolDocument document,
+        MaterializationTargetId target,
+        string subject,
+        char membershipDigestCharacter) =>
+        MaterializationPlacementSliceReference.Create(
+            materialization: MaterializationBackendPoolReference.FromDocument(document).Materialization,
+            membership: new(
+                algorithm: "sha256",
+                canonicalization: "tests/materialization-backend-routing-membership/v1",
+                value: new string(membershipDigestCharacter, 64)),
+            pool: MaterializationBackendPoolReference.FromDocument(document),
+            target,
+            subjects: [new($"placement-subject/{subject}")]);
+
+    static MaterializationRebuildLeafExecutionAuthority Authority(
+        MaterializationPlacementSliceReference placementSlice)
+    {
+        MaterializationRebuildRequestReference request = new(
+            MaterializationRebuildRequestReference.CurrentSchemaVersion,
+            placementSlice.Materialization,
+            new(
+                algorithm: "sha256",
+                canonicalization: "tests/materialization-backend-routing-request/v1",
+                value: new string('f', 64)));
+        MaterializationRebuildPlanSetReference planSet = new(
+            MaterializationRebuildPlanSetReference.CurrentSchemaVersion,
+            request,
+            new(
+                algorithm: "sha256",
+                canonicalization: "tests/materialization-backend-routing-plan-set/v1",
+                value: new string('0', 64)));
+        return new(
+            MaterializationRebuildLeafExecutionAuthority.CurrentSchemaVersion,
+            planSet,
+            new(
+                placementSlice,
+                new(PlanFingerprint, placementSlice.Fingerprint)));
+    }
 
     static MaterializationTargetDescriptor Descriptor(MaterializationTargetId targetId)
     {
@@ -947,11 +1695,13 @@ public sealed class MaterializationBackendRouterTests
         return new(
             target,
             new(target.Descriptor.Id, generationId, DefinitionFingerprint),
+            Activation: null,
             Read: null);
     }
 
     static async Task<BackendFixture> ActivateAsync(
         InMemoryMaterializationTarget target,
+        MaterializationPlacementSliceReference placementSlice,
         string suffix,
         DateTimeOffset createdAtUtc)
     {
@@ -1008,21 +1758,20 @@ public sealed class MaterializationBackendRouterTests
         var receipt = promoted.Receipt!;
         MaterializationActiveGenerationReference activation = new(
             MaterializationActiveGenerationReference.CurrentSchemaVersion,
-            PlanFingerprint,
-            MaterializationId,
-            fixture.Generation.TargetId,
+            Authority(placementSlice),
             fixture.Generation.GenerationId,
             receipt.TargetRevision,
             receipt.PromotionId,
             receipt.PromotionFence,
             receipt.ValidationFingerprint,
             receipt.PromotedAtUtc);
-        return fixture with { Read = new(fixture.Generation, activation) };
+        return fixture with { Activation = activation };
     }
 
     sealed record BackendFixture(
         InMemoryMaterializationTarget Target,
         MaterializationBackendGenerationReference Generation,
+        MaterializationActiveGenerationReference? Activation,
         MaterializationReadableBackendReference? Read);
 
     sealed class RoutingRig : IDisposable
@@ -1031,12 +1780,16 @@ public sealed class MaterializationBackendRouterTests
             MaterializationBackendPoolDefinition definition,
             MaterializationBackendPoolDocument document,
             InMemoryMaterializationBackendRouter router,
+            MaterializationPlacementSliceReference scope,
+            MaterializationPlacementSliceReference alternateScope,
             BackendFixture first,
             BackendFixture second)
         {
             Definition = definition;
             Document = document;
             Router = router;
+            Scope = scope;
+            AlternateScope = alternateScope;
             First = first;
             Second = second;
         }
@@ -1046,6 +1799,10 @@ public sealed class MaterializationBackendRouterTests
         internal MaterializationBackendPoolDocument Document { get; }
 
         internal InMemoryMaterializationBackendRouter Router { get; }
+
+        internal MaterializationPlacementSliceReference Scope { get; }
+
+        internal MaterializationPlacementSliceReference AlternateScope { get; }
 
         internal BackendFixture First { get; }
 
@@ -1067,13 +1824,52 @@ public sealed class MaterializationBackendRouterTests
                     DocumentOrigin.Generated));
             var document = MaterializationBackendPoolDocument.FromDefinition(definition);
             var pool = new InMemoryMaterializationTargetPool(definition, [firstTarget, secondTarget]);
-            var first = await ActivateAsync(firstTarget, "backend-a", Epoch);
+            var scope = PlacementSlice(
+                document,
+                secondTarget.Descriptor.Id,
+                subject: "routing-shared-subject",
+                membershipDigestCharacter: 'c');
+            var alternateScope = PlacementSlice(
+                document,
+                secondTarget.Descriptor.Id,
+                subject: "routing-shared-subject",
+                membershipDigestCharacter: 'd');
+            var firstActivationScope = PlacementSlice(
+                document,
+                firstTarget.Descriptor.Id,
+                subject: "routing-shared-subject",
+                membershipDigestCharacter: 'e');
+            var first = await ActivateAsync(firstTarget, firstActivationScope, "backend-a", Epoch);
             var second = secondBackendActive
-                ? await ActivateAsync(secondTarget, "backend-b", Epoch.AddMinutes(10))
+                ? await ActivateAsync(secondTarget, scope, "backend-b", Epoch.AddMinutes(10))
                 : await BeginLoadingAsync(secondTarget, "backend-b", Epoch.AddMinutes(10));
-            return new(definition, document, new(document, pool), first, second);
+            first = first with
+            {
+                Read = new(scope, first.Generation, first.Activation!)
+            };
+            if (second.Activation is not null)
+            {
+                second = second with
+                {
+                    Read = new(scope, second.Generation, second.Activation)
+                };
+            }
+
+            return new(
+                definition,
+                document,
+                new(document, pool, timeProvider: new FixedTimeProvider(At(100))),
+                scope,
+                alternateScope,
+                first,
+                second);
         }
 
         public void Dispose() => Router.Dispose();
+    }
+
+    sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }

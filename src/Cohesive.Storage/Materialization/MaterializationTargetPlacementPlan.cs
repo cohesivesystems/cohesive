@@ -164,6 +164,43 @@ public sealed class MaterializationPlacementSliceReference : IEquatable<Material
     /// <summary>Current durable placement-slice schema.</summary>
     public const string CurrentSchemaVersion = "cohesive-materialization-placement-slice/v1";
 
+    /// <summary>Creates one canonical slice using the framework placement-identity convention.</summary>
+    /// <param name="materialization">Exact materialization definition.</param>
+    /// <param name="membership">Exact frozen membership fingerprint from which this slice was drawn.</param>
+    /// <param name="pool">Pinned backend-pool definition.</param>
+    /// <param name="target">One independently promoted target namespace.</param>
+    /// <param name="subjects">Exact non-empty subjects assigned to <paramref name="target"/>.</param>
+    /// <returns>A canonical placement slice whose identity is derived from its exact authorities and target.</returns>
+    /// <exception cref="ArgumentNullException">A required reference is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">An identity, subject catalog, or authority affinity is invalid.</exception>
+    /// <exception cref="System.Text.Json.JsonException">Canonical slice content cannot be serialized.</exception>
+    /// <exception cref="NotSupportedException">Canonical slice content contains an unsupported value.</exception>
+    /// <exception cref="InvalidOperationException">Canonical slice content has no portable representation.</exception>
+    public static MaterializationPlacementSliceReference Create(
+        MaterializationDefinitionReference materialization,
+        MaterializationRebuildMembershipFingerprint membership,
+        MaterializationBackendPoolReference pool,
+        MaterializationTargetId target,
+        ImmutableArray<MaterializationPlacementSubjectId> subjects)
+    {
+        ArgumentNullException.ThrowIfNull(materialization);
+        ArgumentNullException.ThrowIfNull(membership);
+        ArgumentNullException.ThrowIfNull(pool);
+        MaterializationContract.RequireDefinedIdentity(target.Value, nameof(target));
+        return new(
+            schemaVersion: CurrentSchemaVersion,
+            id: new($"placement-slice/{MaterializationStableIdentity.Digest(
+                materialization.DefinitionFingerprint.Value,
+                membership.Value,
+                pool.DefinitionFingerprint.Value,
+                target.Value)}"),
+            materialization,
+            membership,
+            pool,
+            target,
+            subjects);
+    }
+
     /// <summary>Creates and verifies one independently fingerprinted target slice.</summary>
     /// <param name="schemaVersion">Exact durable slice schema.</param>
     /// <param name="id">Stable slice identity.</param>
@@ -241,6 +278,24 @@ public sealed class MaterializationPlacementSliceReference : IEquatable<Material
     /// <returns><see langword="true"/> when both slices have identical routing and promotion content.</returns>
     public bool Equals(MaterializationPlacementSliceReference? other) =>
         ReferenceEquals(this, other) || other is not null && Fingerprint == other.Fingerprint;
+
+    /// <summary>Compares two placement slices by their constructor-verified canonical fingerprints.</summary>
+    /// <param name="left">Left placement slice.</param>
+    /// <param name="right">Right placement slice.</param>
+    /// <returns><see langword="true"/> when both references are null or carry identical canonical content.</returns>
+    public static bool operator ==(
+        MaterializationPlacementSliceReference? left,
+        MaterializationPlacementSliceReference? right) =>
+        ReferenceEquals(left, right) || left is not null && left.Equals(right);
+
+    /// <summary>Compares two placement slices by their constructor-verified canonical fingerprints.</summary>
+    /// <param name="left">Left placement slice.</param>
+    /// <param name="right">Right placement slice.</param>
+    /// <returns><see langword="true"/> when exactly one reference is null or their canonical content differs.</returns>
+    public static bool operator !=(
+        MaterializationPlacementSliceReference? left,
+        MaterializationPlacementSliceReference? right) =>
+        !(left == right);
 
     /// <summary>Compares an object with this slice by canonical fingerprint.</summary>
     /// <param name="obj">Object to compare.</param>

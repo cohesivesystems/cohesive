@@ -540,6 +540,8 @@ public static class MaterializationIndexSyncStatusProjector
     [
         new("pool", StringType),
         new("poolDefinitionFingerprint", DefinitionFingerprintType),
+        new("placementSlice", StringType),
+        new("placementSliceFingerprint", DefinitionFingerprintType),
         new("routingRevision", IntegerType),
         new("routingFence", StringType, nullability: FieldNullability.Nullable),
         new("activeReadTarget", StringType, nullability: FieldNullability.Nullable),
@@ -566,7 +568,7 @@ public static class MaterializationIndexSyncStatusProjector
         new(typeof(TEnum).Name, [.. Enum.GetNames<TEnum>()]);
 
     /// <summary>Creates a disclosed typed status extension by projecting existing durable state and observations.</summary>
-    /// <param name="routing">Current backend-pool routing authority.</param>
+    /// <param name="routing">Current exact placement-scoped routing snapshot.</param>
     /// <param name="progress">Current bounded per-source progress snapshots.</param>
     /// <param name="generations">Current exact backend coordinates and bounded target generation snapshots.</param>
     /// <param name="control">Current compiled Control realizations paired with their exact durable loop state.</param>
@@ -594,6 +596,10 @@ public static class MaterializationIndexSyncStatusProjector
         var root = ImmutableDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
         root.Add("pool", ObservationValue.FromString(routing.PoolId.Value));
         root.Add("poolDefinitionFingerprint", ProjectFingerprint(routing.PoolDefinitionFingerprint));
+        root.Add("placementSlice", ObservationValue.FromString(routing.PlacementSlice.Id.Value));
+        root.Add(
+            "placementSliceFingerprint",
+            ProjectFingerprint(routing.PlacementSlice.Fingerprint));
         root.Add("routingRevision", ObservationValue.FromInt64(routing.Revision.Ordinal));
         root.Add("routingFence", StringOrNull(routing.LatestFence?.Value));
         root.Add("activeReadTarget", StringOrNull(routing.ActiveRead?.Generation.TargetId.Value));
@@ -1252,6 +1258,9 @@ public static class MaterializationIndexSyncStatusProjector
         => ProjectFingerprint(fingerprint.Algorithm, fingerprint.Canonicalization, fingerprint.Value);
 
     static ObservationValue ProjectFingerprint(MaterializationRebuildPlanFingerprint fingerprint)
+        => ProjectFingerprint(fingerprint.Algorithm, fingerprint.Canonicalization, fingerprint.Value);
+
+    static ObservationValue ProjectFingerprint(MaterializationPlacementSliceFingerprint fingerprint)
         => ProjectFingerprint(fingerprint.Algorithm, fingerprint.Canonicalization, fingerprint.Value);
 
     static ObservationValue ProjectFingerprint(string algorithm, string canonicalization, string value)

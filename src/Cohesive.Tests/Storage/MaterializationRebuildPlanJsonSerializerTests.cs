@@ -37,8 +37,9 @@ public sealed class MaterializationRebuildPlanJsonSerializerTests
         Assert.Equal(
             MaterializationRebuildPlanJsonSerializer.GetCanonicalBytes(plan),
             MaterializationRebuildPlanJsonSerializer.GetCanonicalBytes(restored));
-        Assert.Equal("cohesive-materialization-rebuild-plan/v4", restored.SchemaVersion);
-        Assert.Equal("cohesive-materialization-rebuild-plan/v4-c14n/v1", restored.Fingerprint.Canonicalization);
+        Assert.Equal("cohesive-materialization-rebuild-plan/v5", restored.SchemaVersion);
+        Assert.Equal("cohesive-materialization-rebuild-plan/v5-c14n/v1", restored.Fingerprint.Canonicalization);
+        Assert.Equal(plan.PlacementSlice.Fingerprint, restored.PlacementSlice.Fingerprint);
         Assert.Equal(
             plan.ChangeFeedCatalogs.Select(static catalog => catalog.EvidenceReference),
             restored.ChangeFeedCatalogs.Select(static catalog => catalog.EvidenceReference));
@@ -178,6 +179,67 @@ public sealed class MaterializationRebuildPlanJsonSerializerTests
     }
 
     [Fact]
+    public void Plan_PlacementSliceIsMandatoryFingerprintAndGenerationAuthority()
+    {
+        var plan = CreatePlan();
+        MaterializationRebuildMembershipFingerprint changedMembership = new(
+            algorithm: "sha256",
+            canonicalization: "tests/materialization-membership/changed/v1",
+            value: new string('e', 64));
+        var changedSlice = MaterializationPlacementSliceReference.Create(
+            plan.PlacementSlice.Materialization,
+            changedMembership,
+            plan.PlacementSlice.Pool,
+            plan.Target.Id,
+            plan.PlacementSlice.Subjects);
+        var changed = RebuildPlan(
+            plan,
+            plan.ChangeFeedCatalogs,
+            plan.ChangeFeeds,
+            plan.Limits,
+            changedSlice);
+        MaterializationRebuildAttempt attempt = new(
+            continuation: new(
+                processInstanceId: new("process/placement-fingerprint"),
+                processAttemptId: new("attempt/1")),
+            startedAtUtc: new(2026, 8, 2, 12, 0, 0, TimeSpan.Zero));
+
+        Assert.NotEqual(plan.PlacementSlice.Fingerprint, changed.PlacementSlice.Fingerprint);
+        Assert.NotEqual(plan.Fingerprint, changed.Fingerprint);
+        Assert.NotEqual(
+            MaterializationRebuildIdentities.Generation(plan, attempt),
+            MaterializationRebuildIdentities.Generation(changed, attempt));
+
+        var root = JsonNode.Parse(MaterializationRebuildPlanJsonSerializer.Serialize(plan))!.AsObject();
+        Assert.True(root.Remove("placementSlice"));
+        Assert.Throws<JsonException>(() =>
+            MaterializationRebuildPlanJsonSerializer.Deserialize(root.ToJsonString()));
+    }
+
+    [Fact]
+    public void Plan_RejectsAPlacementSliceForAnotherTarget()
+    {
+        var plan = CreatePlan();
+        var mismatched = new MaterializationPlacementSliceReference(
+            schemaVersion: MaterializationPlacementSliceReference.CurrentSchemaVersion,
+            id: new("placement-slice/mismatched-target"),
+            materialization: plan.PlacementSlice.Materialization,
+            membership: plan.PlacementSlice.Membership,
+            pool: plan.PlacementSlice.Pool,
+            target: new("target/other"),
+            subjects: plan.PlacementSlice.Subjects);
+
+        var exception = Assert.Throws<ArgumentException>(() => RebuildPlan(
+            plan,
+            plan.ChangeFeedCatalogs,
+            plan.ChangeFeeds,
+            plan.Limits,
+            mismatched));
+
+        Assert.Equal("placementSlice", exception.ParamName);
+    }
+
+    [Fact]
     public void Plan_RejectsAForgedPersistedFingerprint()
     {
         var plan = CreatePlan();
@@ -224,6 +286,7 @@ public sealed class MaterializationRebuildPlanJsonSerializerTests
 
         var exception = Assert.Throws<ArgumentException>(() => new MaterializationRebuildPlan(
             materialization: plan.Materialization,
+            placementSlice: plan.PlacementSlice,
             impactPlan: ledgerImpactPlan,
             sources: plan.Sources,
             target: plan.Target,
@@ -314,6 +377,7 @@ public sealed class MaterializationRebuildPlanJsonSerializerTests
 
         var exception = Assert.Throws<ArgumentException>(() => new MaterializationRebuildPlan(
             forgedDocument,
+            valid.PlacementSlice,
             valid.ImpactPlan,
             valid.Sources,
             valid.Target,
@@ -335,9 +399,11 @@ public sealed class MaterializationRebuildPlanJsonSerializerTests
         MaterializationRebuildPlan plan,
         ImmutableArray<MaterializationChangeFeedCatalogEvidence> changeFeedCatalogs,
         ImmutableArray<MaterializationChangeFeedPlan> changeFeeds,
-        MaterializationRebuildLimits limits) =>
+        MaterializationRebuildLimits limits,
+        MaterializationPlacementSliceReference? placementSlice = null) =>
         new(
             materialization: plan.Materialization,
+            placementSlice: placementSlice ?? plan.PlacementSlice,
             impactPlan: plan.ImpactPlan,
             sources: plan.Sources,
             target: plan.Target,
@@ -589,6 +655,7 @@ public sealed class MaterializationRebuildPlanJsonSerializerTests
 
         return new(
             materialization,
+            placementSlice: CreateSinglePlacementSlice(materialization, target),
             impactPlan,
             sourcePlans,
             target,
@@ -607,6 +674,78 @@ public sealed class MaterializationRebuildPlanJsonSerializerTests
                 maximumChangeFeedsPerConvergenceActivation: 16),
             provenance: Provenance());
     }
+
+    internal static MaterializationPlacementSliceReference CreateSinglePlacementSlice(
+        MaterializationDocument materialization,
+        MaterializationTargetDescriptor target) =>
+        CreateSinglePlacementScenario(materialization, target).Placement.Slices.Single();
+
+    internal static MaterializationRebuildPlanSet CreateSinglePlanSet(MaterializationRebuildPlan plan)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        var scenario = CreateSinglePlacementScenario(plan.Materialization, plan.Target);
+        if (!scenario.Placement.Slices.Single().Equals(plan.PlacementSlice))
+            throw new ArgumentException("The leaf does not carry the canonical single-target placement slice.", nameof(plan));
+        return RequireArtifact(MaterializationRebuildPlanSetLinker.Link(
+            scenario.Request,
+            scenario.Membership,
+            scenario.Placement,
+            [plan],
+            Provenance()));
+    }
+
+    static SinglePlacementScenario CreateSinglePlacementScenario(
+        MaterializationDocument materialization,
+        MaterializationTargetDescriptor target)
+    {
+        var pool = MaterializationBackendPoolDocument.FromDefinition(new(
+            id: new($"pool/single/{target.Id.Value}"),
+            materializationId: materialization.Definition.Id,
+            definitionFingerprint: materialization.DefinitionFingerprint,
+            members: [target],
+            defaultTarget: target.Id,
+            provenance: Provenance()));
+        MaterializationPlacementSubjectId subject = new("placement/single");
+        MaterializationRebuildRequestDocument request = new(
+            schemaVersion: MaterializationRebuildRequestDocument.CurrentSchemaVersion,
+            materialization,
+            selection: new MaterializationExplicitPlacementSubjectSelection([subject]),
+            placement: new(MaterializationBackendPoolReference.FromDocument(pool)),
+            scheduling: new(maximumStartsPerActivation: 1, maximumParallelism: 1),
+            promotion: new(MaterializationRebuildPromotionMode.Independent),
+            provenance: Provenance());
+        var membership = RequireArtifact(MaterializationRebuildPlanSetCompiler.FreezeMembership(
+            request,
+            [subject],
+            new(
+                authority: "tests/materialization-single-placement",
+                revision: "revision/1",
+                cut: "cut/1",
+                completeness: MaterializationRebuildMembershipCompleteness.Complete,
+                evidenceReferences: ["tests/materialization-single-placement/membership"]),
+            Provenance()));
+        MaterializationPhysicalCapacityDomainId capacityDomainId = new("capacity/single");
+        var placement = RequireArtifact(MaterializationRebuildPlanSetCompiler.CompilePlacement(
+            request,
+            membership,
+            pool,
+            assignments: [new(subject, target.Id)],
+            capacityDomains: [new(capacityDomainId, maximumParallelism: 1, ["tests/capacity/single"])],
+            capacityAssignments: [new(target.Id, capacityDomainId)],
+            provenance: Provenance()));
+        return new(request, membership, placement);
+    }
+
+    static TArtifact RequireArtifact<TArtifact>(MaterializationRebuildPlanningResult<TArtifact> result)
+        where TArtifact : class =>
+        result.Artifact ?? throw new InvalidOperationException(string.Join(
+            Environment.NewLine,
+            result.Diagnostics.Select(static diagnostic => diagnostic.Message)));
+
+    sealed record SinglePlacementScenario(
+        MaterializationRebuildRequestDocument Request,
+        MaterializationRebuildMembershipEvidence Membership,
+        MaterializationTargetPlacementPlan Placement);
 
     static MaterializationDefinition CreateDefinition(
         MaterializationFailureDisposition exhaustedDisposition,

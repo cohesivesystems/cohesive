@@ -210,6 +210,7 @@ public sealed partial class MaterializationRebuildExecutorTests
     {
         var retained = harness.Rebuild.Resolved;
         var resolved = new ResolvedMaterializationRebuildPlan(
+            planSet: MaterializationRebuildPlanJsonSerializerTests.CreateSinglePlanSet(harness.Rebuild.Plan),
             plan: harness.Rebuild.Plan,
             target: target,
             progressStore: retained.ProgressStore,

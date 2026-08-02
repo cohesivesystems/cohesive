@@ -244,6 +244,7 @@ public sealed class MaterializationIndexSyncControlRuntimeTests
         Assert.Throws<ArgumentException>(() => new MaterializationRebuildPlan(
             schemaVersion: plan.SchemaVersion,
             materialization: plan.Materialization,
+            placementSlice: plan.PlacementSlice,
             impactPlan: plan.ImpactPlan,
             sources: plan.Sources,
             target: plan.Target,

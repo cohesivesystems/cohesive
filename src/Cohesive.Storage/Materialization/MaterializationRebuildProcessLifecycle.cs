@@ -148,25 +148,25 @@ public sealed class MaterializationRebuildProcessLifecycle
 {
     readonly ProcessDurableRuntime runtime;
     readonly MaterializationRebuildProcessArtifacts artifacts;
-    readonly MaterializationRebuildPlanFingerprint plan;
+    readonly MaterializationRebuildLeafExecutionAuthority authority;
     readonly IMaterializationRebuildExecutionResolver executionResolver;
     readonly ConcurrentDictionary<ProcessInstanceId, SemaphoreSlim> instanceGates = [];
 
     /// <summary>Creates the lifecycle facade for one exact persisted rebuild plan and canonical Process protocol.</summary>
     /// <param name="runtime">Storage-owned durable Process runtime.</param>
     /// <param name="artifacts">Exact canonical rebuild Process and interaction artifacts.</param>
-    /// <param name="plan">Exact persisted rebuild-plan fingerprint supplied as coordinator input.</param>
+    /// <param name="authority">Exact linked plan-set, rebuild leaf, and placement authority supplied as coordinator input.</param>
     /// <param name="executionResolver">Resolver for exact attempt-scoped rebuild executions.</param>
     /// <exception cref="ArgumentNullException">Any argument is <see langword="null"/>.</exception>
     public MaterializationRebuildProcessLifecycle(
         ProcessDurableRuntime runtime,
         MaterializationRebuildProcessArtifacts artifacts,
-        MaterializationRebuildPlanFingerprint plan,
+        MaterializationRebuildLeafExecutionAuthority authority,
         IMaterializationRebuildExecutionResolver executionResolver)
     {
         this.runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         this.artifacts = artifacts ?? throw new ArgumentNullException(nameof(artifacts));
-        this.plan = plan ?? throw new ArgumentNullException(nameof(plan));
+        this.authority = authority ?? throw new ArgumentNullException(nameof(authority));
         this.executionResolver = executionResolver ?? throw new ArgumentNullException(nameof(executionResolver));
     }
 
@@ -191,9 +191,9 @@ public sealed class MaterializationRebuildProcessLifecycle
                 MaterializationRebuildProcessRealization.Rejected,
                 diagnostics: [Error(
                     MaterializationRebuildProcessLifecycleDiagnosticCodes.StartPlanInexact,
-                    "The coordinator start input must be the exact canonical rebuild-plan reference configured for this lifecycle.",
+                    "The coordinator start input must be the exact canonical linked leaf execution authority configured for this lifecycle.",
                     "/start/request/input",
-                    plan.Value)]);
+                    authority.LeafPlan.Plan.Value)]);
         }
         var instanceId = start.Request.InitialContinuation.ProcessInstanceId;
         return await WithInstanceGateAsync(
@@ -733,7 +733,7 @@ public sealed class MaterializationRebuildProcessLifecycle
         var continuation = new ProcessContinuationIdentity(
             snapshot.Checkpoint.ContinuationIdentity.ProcessInstanceId,
             attempt.AttemptId);
-        if (!executionResolver.TryResolve(plan, continuation, out var execution) || execution is null)
+        if (!executionResolver.TryResolve(authority, continuation, out var execution) || execution is null)
         {
             return Unresolved(
                 snapshot,
@@ -743,7 +743,7 @@ public sealed class MaterializationRebuildProcessLifecycle
                 attempt.AttemptId.Value);
         }
 
-        if (execution.PlanFingerprint != plan
+        if (execution.Authority != authority
             || execution.Attempt.Continuation != continuation
             || execution.Attempt.StartedAtUtc != attempt.StartedAtUtc)
         {
@@ -845,11 +845,11 @@ public sealed class MaterializationRebuildProcessLifecycle
             return false;
         }
 
-        return MaterializationRebuildWorkReferenceJsonSerializer.TryDeserializePlan(
+        return MaterializationRebuildWorkReferenceJsonSerializer.TryDeserializeAuthority(
                 value.GetRequiredString(),
                 out var reference,
                 out _)
-            && reference?.Plan == plan;
+            && reference == authority;
     }
 
     static MaterializationRebuildProcessLifecycleResult Result(

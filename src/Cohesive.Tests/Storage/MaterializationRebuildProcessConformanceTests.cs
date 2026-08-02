@@ -80,7 +80,7 @@ public sealed class MaterializationRebuildProcessConformanceTests
             operationAdapterResolver: new ExactAdapterResolver(
                 [initializationAdapter, childAdapter, activationAdapter]));
         var context = OperationContext.Create(timeProvider: new FixedTimeProvider(StartedAtUtc));
-        var start = Start(artifacts, coordinatorContinuation, materialization.Plan.Fingerprint);
+        var start = Start(artifacts, coordinatorContinuation, materialization.Resolved.Authority);
 
         var initialized = await coordinatorRuntime.InitializeAsync(
             context,
@@ -275,9 +275,9 @@ public sealed class MaterializationRebuildProcessConformanceTests
     static ProcessStartReceipt Start(
         MaterializationRebuildProcessArtifacts artifacts,
         ProcessContinuationIdentity continuation,
-        MaterializationRebuildPlanFingerprint plan)
+        MaterializationRebuildLeafExecutionAuthority authority)
     {
-        var planReference = MaterializationRebuildWorkReferenceJsonSerializer.SerializePlan(new(plan));
+        var planReference = MaterializationRebuildWorkReferenceJsonSerializer.SerializeAuthority(authority);
         var request = new ProcessStartRequest(
             schemaVersion: ProcessStartRequest.CurrentSchemaVersion,
             definition: artifacts.CoordinatorPlan.DefinitionReference,
@@ -430,6 +430,9 @@ public sealed class MaterializationRebuildProcessConformanceTests
             channelCanonicalization: "tests/materialization-rebuild-process-channel/v1");
         var plan = new MaterializationRebuildPlan(
             materialization,
+            placementSlice: MaterializationRebuildPlanJsonSerializerTests.CreateSinglePlacementSlice(
+                materialization,
+                targetDescriptor),
             impactPlan,
             sources: sourcePlans,
             target: targetDescriptor,
@@ -501,7 +504,9 @@ public sealed class MaterializationRebuildProcessConformanceTests
                 return new InMemoryMaterializationSource(
                     new MaterializationQuerySourceDescriptor(reader, sourcePlan.Profile));
             });
+        var planSet = MaterializationRebuildPlanJsonSerializerTests.CreateSinglePlanSet(plan);
         var resolved = new ResolvedMaterializationRebuildPlan(
+            planSet,
             plan,
             target,
             progress,
@@ -774,11 +779,11 @@ public sealed class MaterializationRebuildProcessConformanceTests
         : IMaterializationRebuildExecutionResolver
     {
         public bool TryResolve(
-            MaterializationRebuildPlanFingerprint plan,
+            MaterializationRebuildLeafExecutionAuthority authority,
             ProcessContinuationIdentity continuation,
             out MaterializationRebuildExecution? resolved)
         {
-            resolved = execution.PlanFingerprint == plan && execution.Attempt.Continuation == continuation
+            resolved = execution.Authority == authority && execution.Attempt.Continuation == continuation
                 ? execution
                 : null;
             return resolved is not null;

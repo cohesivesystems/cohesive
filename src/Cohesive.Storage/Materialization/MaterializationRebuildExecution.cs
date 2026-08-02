@@ -431,6 +431,7 @@ public sealed class ResolvedMaterializationRebuildPlan
     readonly ImmutableDictionary<MaterializationChangeFeedId, MaterializationChangeFeedBinding> changeFeeds;
 
     /// <summary>Resolves a persisted plan against exact runtime ports.</summary>
+    /// <param name="planSet">Verified linked plan set containing the exact leaf.</param>
     /// <param name="plan">Persisted rebuild realization plan.</param>
     /// <param name="target">Exact candidate-generation target.</param>
     /// <param name="progressStore">Durable application-progress authority.</param>
@@ -440,6 +441,7 @@ public sealed class ResolvedMaterializationRebuildPlan
     /// <exception cref="ArgumentNullException">A required argument or collection is null.</exception>
     /// <exception cref="ArgumentException">A binding is missing, duplicated, stale, or incompatible.</exception>
     public ResolvedMaterializationRebuildPlan(
+        MaterializationRebuildPlanSet planSet,
         MaterializationRebuildPlan plan,
         IMaterializationTarget target,
         IMaterializationProgressStore progressStore,
@@ -448,6 +450,9 @@ public sealed class ResolvedMaterializationRebuildPlan
         MaterializationIndexSyncControlRuntimeProvider? controlRuntimeProvider = null)
     {
         Plan = Guard.RequireNotNull(plan);
+        Authority = MaterializationRebuildLeafExecutionAuthority.FromPlanSet(
+            planSet ?? throw new ArgumentNullException(nameof(planSet)),
+            plan);
         Target = Guard.RequireNotNull(target);
         ProgressStore = Guard.RequireNotNull(progressStore);
         ArgumentNullException.ThrowIfNull(shardBindings);
@@ -528,6 +533,9 @@ public sealed class ResolvedMaterializationRebuildPlan
         }
         ControlRuntimeProvider = controlRuntimeProvider;
     }
+
+    /// <summary>Exact linked plan-set, leaf-plan, and full placement-slice execution authority.</summary>
+    public MaterializationRebuildLeafExecutionAuthority Authority { get; }
 
     /// <summary>Exact persisted rebuild realization plan.</summary>
     public MaterializationRebuildPlan Plan { get; }

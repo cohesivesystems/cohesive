@@ -56,26 +56,23 @@ public static class MaterializationRebuildDurableOperationDiagnosticCodes
 public sealed record MaterializationActiveGenerationReference
 {
     /// <summary>Current active-generation-reference wire schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive-materialization-active-generation-reference/v1";
+    public const string CurrentSchemaVersion = "cohesive-materialization-active-generation-reference/v2";
 
     /// <summary>Creates one exact active-generation reference.</summary>
     /// <param name="schemaVersion">Exact supported wire schema version.</param>
-    /// <param name="plan">Pinned rebuild plan whose candidate became active.</param>
-    /// <param name="materialization">Logical materialization served by the target.</param>
-    /// <param name="target">Physical target whose active pointer changed.</param>
+    /// <param name="authority">Exact linked plan-set, leaf-plan, and placement-slice promotion authority.</param>
     /// <param name="generation">Exact newly active generation.</param>
     /// <param name="targetRevision">Committed target-pointer revision.</param>
     /// <param name="promotion">Stable promotion operation identity.</param>
     /// <param name="promotionFence">Accepted independent target-pointer fence.</param>
     /// <param name="validation">Validation evidence authorizing promotion.</param>
     /// <param name="activatedAtUtc">UTC promotion boundary.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="authority"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">An identity is invalid, the schema is unsupported, or time is not UTC.</exception>
     [JsonConstructor]
     public MaterializationActiveGenerationReference(
         string schemaVersion,
-        MaterializationRebuildPlanFingerprint plan,
-        MaterializationId materialization,
-        MaterializationTargetId target,
+        MaterializationRebuildLeafExecutionAuthority authority,
         MaterializationGenerationId generation,
         MaterializationTargetRevision targetRevision,
         MaterializationPromotionId promotion,
@@ -85,9 +82,7 @@ public sealed record MaterializationActiveGenerationReference
     {
         if (!string.Equals(schemaVersion, CurrentSchemaVersion, StringComparison.Ordinal))
             throw new ArgumentException("The active-generation reference schema is unsupported.", nameof(schemaVersion));
-        Plan = plan ?? throw new ArgumentNullException(nameof(plan));
-        MaterializationContract.RequireDefinedIdentity(materialization.Value, nameof(materialization));
-        MaterializationContract.RequireDefinedIdentity(target.Value, nameof(target));
+        Authority = authority ?? throw new ArgumentNullException(nameof(authority));
         MaterializationContract.RequireDefinedIdentity(generation.Value, nameof(generation));
         if (targetRevision.Ordinal <= 0)
             throw new ArgumentException("An active generation requires a committed target revision.", nameof(targetRevision));
@@ -96,8 +91,6 @@ public sealed record MaterializationActiveGenerationReference
         MaterializationContract.RequireDefinedIdentity(validation.Value, nameof(validation));
         MaterializationContract.RequireUtc(activatedAtUtc, nameof(activatedAtUtc));
         SchemaVersion = schemaVersion;
-        Materialization = materialization;
-        Target = target;
         Generation = generation;
         TargetRevision = targetRevision;
         Promotion = promotion;
@@ -109,14 +102,24 @@ public sealed record MaterializationActiveGenerationReference
     /// <summary>Exact wire schema version.</summary>
     public string SchemaVersion { get; }
 
-    /// <summary>Pinned rebuild plan whose candidate became active.</summary>
-    public MaterializationRebuildPlanFingerprint Plan { get; }
+    /// <summary>Exact linked plan-set, leaf-plan, and full placement-slice promotion authority.</summary>
+    public MaterializationRebuildLeafExecutionAuthority Authority { get; }
 
-    /// <summary>Logical materialization served by the target.</summary>
-    public MaterializationId Materialization { get; }
+    /// <summary>Pinned rebuild-plan fingerprint projected from <see cref="Authority"/>.</summary>
+    [JsonIgnore]
+    public MaterializationRebuildPlanFingerprint Plan => Authority.LeafPlan.Plan;
 
-    /// <summary>Physical target whose active pointer changed.</summary>
-    public MaterializationTargetId Target { get; }
+    /// <summary>Exact independently promoted placement authority projected from <see cref="Authority"/>.</summary>
+    [JsonIgnore]
+    public MaterializationPlacementSliceReference PlacementSlice => Authority.PlacementSlice;
+
+    /// <summary>Logical materialization projected from the exact placement authority.</summary>
+    [JsonIgnore]
+    public MaterializationId Materialization => Authority.PlacementSlice.Materialization.Materialization;
+
+    /// <summary>Physical target projected from the exact placement authority.</summary>
+    [JsonIgnore]
+    public MaterializationTargetId Target => Authority.PlacementSlice.Target;
 
     /// <summary>Exact newly active generation.</summary>
     public MaterializationGenerationId Generation { get; }
@@ -146,6 +149,9 @@ public static class MaterializationActiveGenerationReferenceJsonSerializer
     /// <param name="reference">Exact active-generation reference.</param>
     /// <returns>Canonical JSON preserving the complete reference.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="reference"/> is <see langword="null"/>.</exception>
+    /// <exception cref="JsonException">The reference cannot be serialized under its strict wire contract.</exception>
+    /// <exception cref="NotSupportedException">A contained value has no supported JSON representation.</exception>
+    /// <exception cref="InvalidOperationException">The reference has no canonical JSON representation.</exception>
     public static string Serialize(MaterializationActiveGenerationReference reference)
     {
         ArgumentNullException.ThrowIfNull(reference);
@@ -176,12 +182,12 @@ public static class MaterializationActiveGenerationReferenceJsonSerializer
 }
 
 /// <summary>
-/// Exact attempt-scoped runtime binding resolved from a persisted rebuild-plan fingerprint and Process continuation.
+/// Exact attempt-scoped runtime binding resolved from a linked leaf execution authority and Process continuation.
 /// </summary>
 /// <remarks>
 /// The public constructor binds one <see cref="ResolvedMaterializationRebuildPlan"/> to its reference executor. The
-/// adapter consumes only the canonical plan fingerprint, shard catalog, attempt, and expected generation so runtime
-/// objects do not leak into durable Request payloads.
+/// adapter consumes only the canonical linked leaf authority, shard catalog, attempt, and expected generation
+/// so runtime objects do not leak into durable Request payloads.
 /// </remarks>
 public sealed class MaterializationRebuildExecution
 {
@@ -211,7 +217,7 @@ public sealed class MaterializationRebuildExecution
         ArgumentNullException.ThrowIfNull(resolved);
         ArgumentNullException.ThrowIfNull(synchronizationWorkStore);
         Attempt = Guard.RequireNotNull(attempt);
-        PlanFingerprint = resolved.Plan.Fingerprint;
+        Authority = resolved.Authority;
         Shards = NormalizeShards(resolved.Plan.Shards.Select(static shard => shard.Id));
         ChangeFeedCount = resolved.Plan.ChangeFeeds.Length;
         Generation = MaterializationRebuildIdentities.Generation(resolved.Plan, attempt);
@@ -230,7 +236,7 @@ public sealed class MaterializationRebuildExecution
     }
 
     internal MaterializationRebuildExecution(
-        MaterializationRebuildPlanFingerprint planFingerprint,
+        MaterializationRebuildLeafExecutionAuthority authority,
         ImmutableArray<MaterializationRebuildShardId> shards,
         MaterializationRebuildAttempt attempt,
         MaterializationGenerationId generation,
@@ -243,7 +249,7 @@ public sealed class MaterializationRebuildExecution
         Func<OperationContext, DateTimeOffset, Task<bool>>? abandonAttempt = null,
         int? changeFeedCount = null)
     {
-        PlanFingerprint = Guard.RequireNotNull(planFingerprint);
+        Authority = authority ?? throw new ArgumentNullException(nameof(authority));
         Shards = NormalizeShards(shards);
         Attempt = Guard.RequireNotNull(attempt);
         MaterializationContract.RequireDefinedIdentity(generation.Value, nameof(generation));
@@ -251,6 +257,13 @@ public sealed class MaterializationRebuildExecution
         MaterializationContract.RequireDefinedIdentity(materialization.Value, nameof(materialization));
         Materialization = materialization;
         MaterializationContract.RequireDefinedIdentity(target.Value, nameof(target));
+        if (Authority.PlacementSlice.Materialization.Materialization != materialization
+            || Authority.PlacementSlice.Target != target)
+        {
+            throw new ArgumentException(
+                "A rebuild execution placement slice must address its exact materialization and target.",
+                nameof(authority));
+        }
         Target = target;
         ChangeFeedCount = changeFeedCount ?? Shards.Length;
         if (ChangeFeedCount <= 0)
@@ -262,8 +275,17 @@ public sealed class MaterializationRebuildExecution
         this.abandonAttempt = abandonAttempt ?? ((_, _) => Task.FromResult(false));
     }
 
+    /// <summary>Exact linked plan-set, leaf-plan, and full placement-slice authority resolved for this execution.</summary>
+    public MaterializationRebuildLeafExecutionAuthority Authority { get; }
+
+    /// <summary>Exact persisted leaf-plan reference projected from <see cref="Authority"/>.</summary>
+    public MaterializationRebuildPlanReference PlanReference => Authority.LeafPlan;
+
+    /// <summary>Exact independently promoted placement authority projected from <see cref="Authority"/>.</summary>
+    public MaterializationPlacementSliceReference PlacementSlice => Authority.PlacementSlice;
+
     /// <summary>Exact persisted plan fingerprint resolved for this execution.</summary>
-    public MaterializationRebuildPlanFingerprint PlanFingerprint { get; }
+    public MaterializationRebuildPlanFingerprint PlanFingerprint => PlanReference.Plan;
 
     /// <summary>Finite canonical shard catalog projected from the exact persisted plan.</summary>
     public ImmutableArray<MaterializationRebuildShardId> Shards { get; }
@@ -381,24 +403,24 @@ public sealed class MaterializationRebuildExecution
     }
 }
 
-/// <summary>Resolves one exact persisted rebuild plan, runtime binding, executor, and Process attempt.</summary>
+/// <summary>Resolves one exact linked leaf, runtime binding, executor, and Process attempt.</summary>
 /// <remarks>
-/// Implementations should index persisted plans by their complete fingerprint and retain one stable UTC start time
+/// Implementations should index persisted leaves by their complete execution authority and retain one stable UTC start time
 /// for each exact coordinator continuation. Returning an earlier or replacement continuation is never a compatible
 /// fallback; rejecting stale child work is part of the port's fencing contract.
 /// </remarks>
 public interface IMaterializationRebuildExecutionResolver
 {
     /// <summary>Attempts to resolve one exact attempt-scoped rebuild execution.</summary>
-    /// <param name="plan">Exact persisted rebuild-plan fingerprint.</param>
+    /// <param name="authority">Exact linked plan-set, leaf-plan, and full placement-slice authority.</param>
     /// <param name="continuation">Exact owning coordinator Process continuation.</param>
     /// <param name="execution">Receives the exact execution when available.</param>
     /// <returns><see langword="true"/> when the exact plan and attempt are currently resolvable.</returns>
     /// <exception cref="ArgumentNullException">
-    /// <paramref name="plan"/> or <paramref name="continuation"/> is <see langword="null"/>.
+    /// <paramref name="authority"/> or <paramref name="continuation"/> is <see langword="null"/>.
     /// </exception>
     bool TryResolve(
-        MaterializationRebuildPlanFingerprint plan,
+        MaterializationRebuildLeafExecutionAuthority authority,
         ProcessContinuationIdentity continuation,
         out MaterializationRebuildExecution? execution);
 }
@@ -483,7 +505,7 @@ public sealed class MaterializationRebuildInitializationDurableOperationAdapter 
             return MaterializationRebuildDurableOperationProjection.Failure(
                 MaterializationRebuildDurableOperationDiagnosticCodes.RequestPayloadInvalid);
         }
-        if (!MaterializationRebuildWorkReferenceJsonSerializer.TryDeserializePlan(
+        if (!MaterializationRebuildWorkReferenceJsonSerializer.TryDeserializeAuthority(
                 payload,
                 out var reference,
                 out _)
@@ -495,25 +517,25 @@ public sealed class MaterializationRebuildInitializationDurableOperationAdapter 
         if (request.Context.Origin is not ProcessInteractionOrigin origin)
             return MaterializationRebuildDurableOperationProjection.Failure(
                 MaterializationRebuildDurableOperationDiagnosticCodes.RequestOriginInvalid,
-                plan: reference.Plan);
-        if (!resolver.TryResolve(reference.Plan, origin.Continuation, out var execution)
+                plan: reference.LeafPlan.Plan);
+        if (!resolver.TryResolve(reference, origin.Continuation, out var execution)
             || execution is null)
         {
             if (resolutionFailureMode == MaterializationRebuildExecutionResolutionFailureMode.RemainUnresolved)
                 return null;
             return MaterializationRebuildDurableOperationProjection.Failure(
                 MaterializationRebuildDurableOperationDiagnosticCodes.ExecutionUnavailable,
-                plan: reference.Plan,
+                plan: reference.LeafPlan.Plan,
                 continuation: origin.Continuation);
         }
-        if (execution.PlanFingerprint != reference.Plan
+        if (execution.Authority != reference
             || execution.Attempt.Continuation != origin.Continuation)
         {
             if (resolutionFailureMode == MaterializationRebuildExecutionResolutionFailureMode.RemainUnresolved)
                 return null;
             return MaterializationRebuildDurableOperationProjection.Failure(
                 MaterializationRebuildDurableOperationDiagnosticCodes.ExecutionInexact,
-                plan: reference.Plan,
+                plan: reference.LeafPlan.Plan,
                 continuation: origin.Continuation);
         }
 
@@ -546,7 +568,7 @@ public sealed class MaterializationRebuildInitializationDurableOperationAdapter 
         for (var index = 0; index < execution.Shards.Length; index++)
         {
             var referenceValue = new MaterializationRebuildShardWorkReference(
-                execution.PlanFingerprint,
+                execution.Authority,
                 execution.Attempt,
                 execution.Shards[index]);
             work.Add(ObservationValue.FromString(
@@ -648,7 +670,7 @@ public sealed class MaterializationRebuildShardDurableOperationAdapter : IDurabl
             return MaterializationRebuildDurableOperationProjection.Failure(
                 MaterializationRebuildDurableOperationDiagnosticCodes.WorkReferenceInvalid);
         }
-        if (!resolver.TryResolve(reference.Plan, reference.Attempt.Continuation, out var execution)
+        if (!resolver.TryResolve(reference.Authority, reference.Attempt.Continuation, out var execution)
             || execution is null)
         {
             if (resolutionFailureMode == MaterializationRebuildExecutionResolutionFailureMode.RemainUnresolved)
@@ -657,7 +679,7 @@ public sealed class MaterializationRebuildShardDurableOperationAdapter : IDurabl
                 MaterializationRebuildDurableOperationDiagnosticCodes.ExecutionUnavailable,
                 reference);
         }
-        if (execution.PlanFingerprint != reference.Plan || execution.Attempt != reference.Attempt)
+        if (execution.Authority != reference.Authority || execution.Attempt != reference.Attempt)
         {
             if (resolutionFailureMode == MaterializationRebuildExecutionResolutionFailureMode.RemainUnresolved)
                 return null;
@@ -796,7 +818,7 @@ public sealed class MaterializationSynchronizationActivationDurableOperationAdap
             return MaterializationRebuildDurableOperationProjection.Failure(
                 MaterializationRebuildDurableOperationDiagnosticCodes.RequestPayloadInvalid);
         }
-        if (!MaterializationRebuildWorkReferenceJsonSerializer.TryDeserializePlan(
+        if (!MaterializationRebuildWorkReferenceJsonSerializer.TryDeserializeAuthority(
                 payload,
                 out var reference,
                 out _)
@@ -809,26 +831,26 @@ public sealed class MaterializationSynchronizationActivationDurableOperationAdap
         {
             return MaterializationRebuildDurableOperationProjection.Failure(
                 MaterializationRebuildDurableOperationDiagnosticCodes.RequestOriginInvalid,
-                plan: reference.Plan);
+                plan: reference.LeafPlan.Plan);
         }
-        if (!resolver.TryResolve(reference.Plan, origin.Continuation, out var execution)
+        if (!resolver.TryResolve(reference, origin.Continuation, out var execution)
             || execution is null)
         {
             if (resolutionFailureMode == MaterializationRebuildExecutionResolutionFailureMode.RemainUnresolved)
                 return null;
             return MaterializationRebuildDurableOperationProjection.Failure(
                 MaterializationRebuildDurableOperationDiagnosticCodes.ExecutionUnavailable,
-                plan: reference.Plan,
+                plan: reference.LeafPlan.Plan,
                 continuation: origin.Continuation);
         }
-        if (execution.PlanFingerprint != reference.Plan
+        if (execution.Authority != reference
             || execution.Attempt.Continuation != origin.Continuation)
         {
             if (resolutionFailureMode == MaterializationRebuildExecutionResolutionFailureMode.RemainUnresolved)
                 return null;
             return MaterializationRebuildDurableOperationProjection.Failure(
                 MaterializationRebuildDurableOperationDiagnosticCodes.ExecutionInexact,
-                plan: reference.Plan,
+                plan: reference.LeafPlan.Plan,
                 continuation: origin.Continuation);
         }
 
@@ -878,9 +900,7 @@ public sealed class MaterializationSynchronizationActivationDurableOperationAdap
 
             var active = new MaterializationActiveGenerationReference(
                 schemaVersion: MaterializationActiveGenerationReference.CurrentSchemaVersion,
-                plan: execution.PlanFingerprint,
-                materialization: execution.Materialization,
-                target: execution.Target,
+                authority: execution.Authority,
                 generation: execution.Generation,
                 targetRevision: promotion.TargetRevision,
                 promotion: promotion.PromotionId,

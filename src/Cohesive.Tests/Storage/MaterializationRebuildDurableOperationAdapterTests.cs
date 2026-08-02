@@ -33,23 +33,32 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
 
     static readonly MaterializationTargetId Target = new("target/test");
 
+    static readonly MaterializationPlacementSliceReference PlacementSlice = CreatePlacementSlice();
+
+    static readonly MaterializationRebuildPlanReference PlanReference =
+        new(PlanFingerprint, PlacementSlice.Fingerprint);
+
+    static readonly MaterializationRebuildLeafExecutionAuthority LeafAuthority =
+        CreateAuthority(planSetDigest: 'e');
+
     static readonly ImmutableArray<MaterializationRebuildShardId> Shards =
         [new("shard-b"), new("shard-a")];
 
     [Fact]
     public void WorkReferences_RoundTripCanonicalPlanAttemptAndShardEvidence()
     {
-        var planReference = new MaterializationRebuildPlanReference(PlanFingerprint);
+        var planReference = PlanReference;
         var shardReference = new MaterializationRebuildShardWorkReference(
-            PlanFingerprint,
+            LeafAuthority,
             CoordinatorAttempt,
             new("shard-a"));
 
         var planJson = MaterializationRebuildWorkReferenceJsonSerializer.SerializePlan(planReference);
+        var authorityJson = MaterializationRebuildWorkReferenceJsonSerializer.SerializeAuthority(LeafAuthority);
         var shardJson = MaterializationRebuildWorkReferenceJsonSerializer.SerializeShard(shardReference);
         var changedAttemptJson = MaterializationRebuildWorkReferenceJsonSerializer.SerializeShard(
             new(
-                PlanFingerprint,
+                LeafAuthority,
                 new(
                     new(
                         CoordinatorAttempt.Continuation.ProcessInstanceId,
@@ -61,6 +70,10 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
             planReference,
             MaterializationRebuildWorkReferenceJsonSerializer.DeserializePlan(planJson));
         Assert.Equal(
+            LeafAuthority,
+            MaterializationRebuildWorkReferenceJsonSerializer.DeserializeAuthority(authorityJson));
+        Assert.Equal(PlacementSlice.Fingerprint, planReference.PlacementSlice);
+        Assert.Equal(
             shardReference,
             MaterializationRebuildWorkReferenceJsonSerializer.DeserializeShard(shardJson));
         Assert.NotEqual(shardJson, changedAttemptJson);
@@ -68,7 +81,7 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
             MaterializationRebuildWorkReferenceJsonSerializer.DeserializeShard(
                 shardJson.Replace(
                     MaterializationRebuildShardWorkReference.CurrentSchemaVersion,
-                    "cohesive-materialization-rebuild-shard-work-reference/v2",
+                    "cohesive-materialization-rebuild-shard-work-reference/v1",
                     StringComparison.Ordinal)));
     }
 
@@ -90,8 +103,7 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
             resolver);
         var request = Request(
             artifacts.InitializationRequest,
-            MaterializationRebuildWorkReferenceJsonSerializer.SerializePlan(
-                new(PlanFingerprint)),
+            MaterializationRebuildWorkReferenceJsonSerializer.SerializeAuthority(LeafAuthority),
             CoordinatorAttempt.Continuation,
             artifacts.CoordinatorPlan.DefinitionReference,
             MaterializationRebuildProcessFactory.CoordinatorInitializationNodeId);
@@ -123,6 +135,77 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
             Assert.Equal(PlanFingerprint, item.Plan);
             Assert.Equal(CoordinatorAttempt, item.Attempt);
         });
+    }
+
+    [Fact]
+    public async Task Initialization_RejectsAnAuthorityForAnotherPlanSetBeforeExecution()
+    {
+        var artifacts = MaterializationRebuildProcessFactory.Create();
+        var beginCalls = 0;
+        var execution = Execution(begin: _ =>
+        {
+            beginCalls++;
+            return Task.FromResult(InitializationResult());
+        });
+        var adapter = new MaterializationRebuildInitializationDurableOperationAdapter(
+            artifacts.InitializationRequest,
+            new ExactResolver(execution));
+        var request = Request(
+            artifacts.InitializationRequest,
+            MaterializationRebuildWorkReferenceJsonSerializer.SerializeAuthority(
+                CreateAuthority(planSetDigest: 'f')),
+            CoordinatorAttempt.Continuation,
+            artifacts.CoordinatorPlan.DefinitionReference,
+            MaterializationRebuildProcessFactory.CoordinatorInitializationNodeId);
+
+        var observation = Assert.IsType<DurableOperationOutcomeObservation>(
+            await adapter.ExecuteAsync(
+                OperationContext.Create(),
+                Invocation(request, artifacts.InitializationBinding, artifacts.InteractionCatalog)));
+        var outcome = Assert.IsType<RequestFailureOutcome>(observation.Outcome);
+        var evidence = Assert.IsType<ObservationValue>(outcome.Value.Value).GetRequiredString();
+
+        Assert.Equal(0, beginCalls);
+        Assert.Contains(
+            MaterializationRebuildDurableOperationDiagnosticCodes.ExecutionInexact,
+            evidence,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SynchronizationActivation_RejectsAnAuthorityForAnotherPlanSetBeforeExecution()
+    {
+        var artifacts = MaterializationRebuildProcessFactory.Create();
+        var activationCalls = 0;
+        var execution = Execution(activate: (_, _, _) =>
+        {
+            activationCalls++;
+            return Task.FromException<MaterializationGenerationActivationResult>(
+                new InvalidOperationException("A mismatched placement must be rejected before activation I/O."));
+        });
+        var adapter = new MaterializationSynchronizationActivationDurableOperationAdapter(
+            artifacts.SynchronizationActivationRequest,
+            new ExactResolver(execution));
+        var request = Request(
+            artifacts.SynchronizationActivationRequest,
+            MaterializationRebuildWorkReferenceJsonSerializer.SerializeAuthority(
+                CreateAuthority(planSetDigest: 'f')),
+            CoordinatorAttempt.Continuation,
+            artifacts.CoordinatorPlan.DefinitionReference,
+            MaterializationRebuildProcessFactory.CoordinatorSynchronizationActivationNodeId);
+
+        var observation = Assert.IsType<DurableOperationOutcomeObservation>(
+            await adapter.ExecuteAsync(
+                OperationContext.Create(),
+                Invocation(request, artifacts.SynchronizationActivationBinding, artifacts.InteractionCatalog)));
+        var outcome = Assert.IsType<RequestFailureOutcome>(observation.Outcome);
+        var evidence = Assert.IsType<ObservationValue>(outcome.Value.Value).GetRequiredString();
+
+        Assert.Equal(0, activationCalls);
+        Assert.Contains(
+            MaterializationRebuildDurableOperationDiagnosticCodes.ExecutionInexact,
+            evidence,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -221,7 +304,7 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
             new ExactResolver(execution));
         var request = Request(
             artifacts.SynchronizationActivationRequest,
-            MaterializationRebuildWorkReferenceJsonSerializer.SerializePlan(new(PlanFingerprint)),
+            MaterializationRebuildWorkReferenceJsonSerializer.SerializeAuthority(LeafAuthority),
             CoordinatorAttempt.Continuation,
             artifacts.CoordinatorPlan.DefinitionReference,
             MaterializationRebuildProcessFactory.CoordinatorSynchronizationActivationNodeId);
@@ -285,7 +368,7 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
             new ExactResolver(execution));
         var request = Request(
             artifacts.SynchronizationActivationRequest,
-            MaterializationRebuildWorkReferenceJsonSerializer.SerializePlan(new(PlanFingerprint)),
+            MaterializationRebuildWorkReferenceJsonSerializer.SerializeAuthority(LeafAuthority),
             CoordinatorAttempt.Continuation,
             artifacts.CoordinatorPlan.DefinitionReference,
             MaterializationRebuildProcessFactory.CoordinatorSynchronizationActivationNodeId);
@@ -314,9 +397,7 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
     {
         var reference = new MaterializationActiveGenerationReference(
             schemaVersion: MaterializationActiveGenerationReference.CurrentSchemaVersion,
-            plan: PlanFingerprint,
-            materialization: Materialization,
-            target: Target,
+            authority: LeafAuthority,
             generation: Generation,
             targetRevision: new("3"),
             promotion: new("promotion/test"),
@@ -328,6 +409,14 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
         var restored = MaterializationActiveGenerationReferenceJsonSerializer.Deserialize(json);
 
         Assert.Equal(reference, restored);
+        Assert.Equal(LeafAuthority, restored.Authority);
+        Assert.Equal(PlanFingerprint, restored.Plan);
+        Assert.Equal(PlacementSlice, restored.PlacementSlice);
+        Assert.Equal(Materialization, restored.Materialization);
+        Assert.Equal(Target, restored.Target);
+        using var document = JsonDocument.Parse(json);
+        Assert.False(document.RootElement.TryGetProperty("materialization", out _));
+        Assert.False(document.RootElement.TryGetProperty("target", out _));
         Assert.Equal(
             json,
             MaterializationActiveGenerationReferenceJsonSerializer.Serialize(restored));
@@ -335,7 +424,7 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
             MaterializationActiveGenerationReferenceJsonSerializer.Deserialize(
                 json.Replace(
                     MaterializationActiveGenerationReference.CurrentSchemaVersion,
-                    "cohesive-materialization-active-generation-reference/v2",
+                    "cohesive-materialization-active-generation-reference/v1",
                     StringComparison.Ordinal)));
     }
 
@@ -350,7 +439,7 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
                 new("attempt/replacement")),
             StartedAtUtc.AddMinutes(1));
         var execution = new MaterializationRebuildExecution(
-            PlanFingerprint,
+            LeafAuthority,
             Shards,
             replacementAttempt,
             new("generation/replacement"),
@@ -397,7 +486,7 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
             resolver);
         var request = Request(
             artifacts.InitializationRequest,
-            MaterializationRebuildWorkReferenceJsonSerializer.SerializePlan(new(PlanFingerprint)),
+            MaterializationRebuildWorkReferenceJsonSerializer.SerializeAuthority(LeafAuthority),
             CoordinatorAttempt.Continuation,
             artifacts.CoordinatorPlan.DefinitionReference,
             MaterializationRebuildProcessFactory.CoordinatorInitializationNodeId);
@@ -466,7 +555,7 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
         Func<OperationContext, MaterializationSynchronizationInvocationId, MaterializationSynchronizationWorkerId,
             Task<MaterializationGenerationActivationResult>>? activate = null) =>
         new(
-            PlanFingerprint,
+            LeafAuthority,
             Shards,
             CoordinatorAttempt,
             Generation,
@@ -478,6 +567,58 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
                 diagnostics: []))),
             activate ?? ((_, _, _) => Task.FromException<MaterializationGenerationActivationResult>(
                 new InvalidOperationException("This test does not activate a generation."))));
+
+    static MaterializationPlacementSliceReference CreatePlacementSlice()
+    {
+        var definition = new ExecutionDefinitionFingerprint(
+            algorithm: "sha256",
+            canonicalization: "tests/materialization-definition/v1",
+            value: new string('b', 64));
+        MaterializationDefinitionReference materialization = new(
+            MaterializationDefinitionReference.CurrentSchemaVersion,
+            Materialization,
+            definition);
+        MaterializationBackendPoolReference pool = new(
+            MaterializationBackendPoolReference.CurrentSchemaVersion,
+            new("pool/test"),
+            materialization,
+            new(
+                algorithm: "sha256",
+                canonicalization: "tests/materialization-pool/v1",
+                value: new string('c', 64)));
+        MaterializationRebuildMembershipFingerprint membership = new(
+            algorithm: "sha256",
+            canonicalization: "tests/materialization-membership/v1",
+            value: new string('d', 64));
+        return MaterializationPlacementSliceReference.Create(
+            materialization,
+            membership,
+            pool,
+            Target,
+            [new("subject/test")]);
+    }
+
+    static MaterializationRebuildLeafExecutionAuthority CreateAuthority(char planSetDigest)
+    {
+        MaterializationRebuildRequestReference request = new(
+            MaterializationRebuildRequestReference.CurrentSchemaVersion,
+            PlacementSlice.Materialization,
+            new(
+                algorithm: "sha256",
+                canonicalization: "tests/materialization-rebuild-request/v1",
+                value: new string('d', 64)));
+        MaterializationRebuildPlanSetReference planSet = new(
+            MaterializationRebuildPlanSetReference.CurrentSchemaVersion,
+            request,
+            new(
+                algorithm: "sha256",
+                canonicalization: "tests/materialization-rebuild-plan-set/v1",
+                value: new string(planSetDigest, 64)));
+        return new(
+            MaterializationRebuildLeafExecutionAuthority.CurrentSchemaVersion,
+            planSet,
+            new(PlacementSlice, PlanReference));
+    }
 
     sealed class InjectedAmbiguousActivationException()
         : Exception("Injected ambiguous synchronization-and-activation I/O failure.");
@@ -609,7 +750,7 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
         MaterializationRebuildShardId shard) => Request(
             artifacts.ShardRebuildRequest,
             MaterializationRebuildWorkReferenceJsonSerializer.SerializeShard(
-                new(PlanFingerprint, CoordinatorAttempt, shard)),
+                new(LeafAuthority, CoordinatorAttempt, shard)),
             new(new("process/worker/1"), new("attempt/worker/1")),
             artifacts.WorkerPlan.DefinitionReference,
             MaterializationRebuildProcessFactory.WorkerRequestNodeId);
@@ -730,12 +871,13 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
         public ProcessContinuationIdentity? LastContinuation { get; private set; }
 
         public bool TryResolve(
-            MaterializationRebuildPlanFingerprint plan,
+            MaterializationRebuildLeafExecutionAuthority authority,
             ProcessContinuationIdentity continuation,
             out MaterializationRebuildExecution? resolved)
         {
             LastContinuation = continuation;
-            resolved = plan == execution.PlanFingerprint && continuation == execution.Attempt.Continuation
+            resolved = authority.LeafPlan.Plan == execution.PlanFingerprint
+                && continuation == execution.Attempt.Continuation
                 ? execution
                 : null;
             return resolved is not null;
@@ -746,7 +888,7 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
         : IMaterializationRebuildExecutionResolver
     {
         public bool TryResolve(
-            MaterializationRebuildPlanFingerprint plan,
+            MaterializationRebuildLeafExecutionAuthority authority,
             ProcessContinuationIdentity continuation,
             out MaterializationRebuildExecution? resolved)
         {
@@ -760,7 +902,7 @@ public sealed class MaterializationRebuildDurableOperationAdapterTests
         public int Calls { get; private set; }
 
         public bool TryResolve(
-            MaterializationRebuildPlanFingerprint plan,
+            MaterializationRebuildLeafExecutionAuthority authority,
             ProcessContinuationIdentity continuation,
             out MaterializationRebuildExecution? execution)
         {
