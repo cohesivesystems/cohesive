@@ -1,6 +1,5 @@
 using System.Collections.Immutable;
 using System.Globalization;
-using Cohesive.Model;
 using Cohesive.Model.Serialization;
 
 namespace Cohesive.Storage.Materialization;
@@ -24,7 +23,7 @@ public static class MaterializationGenerationActivationDiagnosticCodes
     public const string RestartRequired = "materialization.activation.restartRequired";
 }
 
-/// <summary>Terminal disposition of one bounded catch-up and generation-activation invocation.</summary>
+/// <summary>Terminal disposition of one bounded catch-up, readiness, or generation-activation invocation.</summary>
 public enum MaterializationGenerationActivationDisposition
 {
     /// <summary>The exact generation is durably activated and remains the target's current read generation.</summary>
@@ -43,7 +42,10 @@ public enum MaterializationGenerationActivationDisposition
     Fenced = 4,
 
     /// <summary>The exact durable attempt can no longer activate safely and must resume with a new generation.</summary>
-    RestartRequired = 5
+    RestartRequired = 5,
+
+    /// <summary>The exact generation is sealed and validated with its target-pointer promotion intent retained.</summary>
+    Ready = 6
 }
 
 /// <summary>Typed evidence produced by one bounded catch-up and candidate-activation invocation.</summary>
@@ -99,6 +101,13 @@ public sealed record MaterializationGenerationActivationResult
                 "Work-remaining activation evidence requires a work-remaining synchronization result.",
                 nameof(synchronization));
         }
+        if (disposition == MaterializationGenerationActivationDisposition.Ready
+            && (activation is not { IsReady: true } || target is not null))
+        {
+            throw new ArgumentException(
+                "A ready result requires successful validation, an exact retained promotion intent, and no active target pointer.",
+                nameof(activation));
+        }
 
         Disposition = disposition;
         Generation = generation;
@@ -128,12 +137,13 @@ public sealed record MaterializationGenerationActivationResult
 }
 
 /// <summary>
-/// Storage-owned durable interpreter that converges, seals, validates, and atomically promotes one generation.
+/// Storage-owned durable interpreter that prepares one generation and can separately reconcile its retained promotion.
 /// </summary>
 /// <remarks>
-/// Every target lifecycle request is persisted before its effect. Resume therefore reconciles the exact retained
-/// request before deriving the next request, and never reconstructs a compare-and-swap expectation from later target
-/// state. A completed activation is successful only while the target still points at its generation.
+/// Every target lifecycle request is persisted before its effect. Preparation stops after persisting successful
+/// validation and the exact target-pointer compare-and-swap request. Activation later reloads that prefix, revalidates
+/// it when the target effect has not happened, and never reconstructs an expectation from later target state. A
+/// completed activation is successful only while the target still points at its generation.
 /// </remarks>
 public sealed class MaterializationGenerationActivationExecutor
 {
@@ -167,12 +177,14 @@ public sealed class MaterializationGenerationActivationExecutor
     public MaterializationSynchronizationWorkKey GetWorkKey(MaterializationRebuildAttempt attempt) =>
         synchronization.GetWorkKey(attempt);
 
-    /// <summary>Runs or resumes bounded convergence and prefix-ordered activation for one Process attempt.</summary>
+    /// <summary>
+    /// Runs or resumes bounded convergence, sealing, and validation without applying the retained promotion intent.
+    /// </summary>
     /// <param name="context">Explicit cancellation, time, identity, and tracing context.</param>
     /// <param name="attempt">Exact Process attempt retaining the candidate generation.</param>
     /// <param name="invocation">Stable bounded invocation identity retained across an exact durable retry.</param>
     /// <param name="worker">Explicit physical worker identity used to fence overlapping activations.</param>
-    /// <returns>Active, work-remaining, not-ready, failed, fenced, or restart-required evidence.</returns>
+    /// <returns>Ready, already-active, work-remaining, not-ready, failed, fenced, or restart-required evidence.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="context"/> or <paramref name="attempt"/> is null.</exception>
     /// <exception cref="ArgumentException"><paramref name="invocation"/> or <paramref name="worker"/> is default.</exception>
     /// <exception cref="OperationCanceledException">The operation is cancelled.</exception>
@@ -181,7 +193,7 @@ public sealed class MaterializationGenerationActivationExecutor
     /// exception is propagated so the owning durable Request attempt remains ambiguous and can reconcile the exact
     /// persisted intent.
     /// </exception>
-    public async Task<MaterializationGenerationActivationResult> ActivateAsync(
+    public async Task<MaterializationGenerationActivationResult> PrepareAsync(
         OperationContext context,
         MaterializationRebuildAttempt attempt,
         MaterializationSynchronizationInvocationId invocation,
@@ -201,6 +213,8 @@ public sealed class MaterializationGenerationActivationExecutor
         work = await workStore.LoadAsync(context, key).ConfigureAwait(false);
         if (work?.Activation is { IsComplete: true } completed)
             return await CompletedAsync(context, generation, completed, synchronizationResult).ConfigureAwait(false);
+        if (work?.Activation is { IsReady: true } ready)
+            return Ready(generation, synchronizationResult, ready);
         if (work?.Activation is { ValidationReceipt.Validation.IsValid: false } invalid)
             return InvalidValidation(generation, synchronizationResult, invalid);
 
@@ -368,16 +382,149 @@ public sealed class MaterializationGenerationActivationExecutor
                 return InvalidValidation(generation, synchronizationResult, activation);
             if (activation.PromotionReceipt is null)
             {
-                var outcome = await ReconcilePromotionAsync(context, generation, synchronizationResult, work, activation)
-                    .ConfigureAwait(false);
-                if (outcome.Result is not null)
-                    return outcome.Result;
-                work = outcome.Work!;
-                continue;
+                return Ready(generation, synchronizationResult, activation);
             }
             return await CompletedAsync(context, generation, activation, synchronizationResult).ConfigureAwait(false);
         }
     }
+
+    /// <summary>Reconciles only the exact target-pointer promotion retained by a ready-generation reference.</summary>
+    /// <param name="context">Explicit cancellation, time, identity, and tracing context.</param>
+    /// <param name="attempt">Exact Process attempt retaining the candidate generation.</param>
+    /// <param name="ready">Exact durable successful-validation and promotion-intent evidence.</param>
+    /// <returns>Active, not-ready, failed, fenced, or restart-required evidence.</returns>
+    /// <exception cref="ArgumentNullException">An argument is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="ready"/> belongs to another leaf, attempt, or generation.</exception>
+    /// <exception cref="OperationCanceledException">The operation is cancelled.</exception>
+    /// <exception cref="Exception">
+    /// A delegated durable-store or target operation fails without a conclusive typed disposition. The exception is
+    /// propagated so the owning durable Request can reconcile the exact retained intent.
+    /// </exception>
+    public async Task<MaterializationGenerationActivationResult> ActivateReadyAsync(
+        OperationContext context,
+        MaterializationRebuildAttempt attempt,
+        MaterializationReadyGenerationReference ready)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(attempt);
+        ArgumentNullException.ThrowIfNull(ready);
+        context.ThrowIfCancellationRequested();
+
+        var generation = MaterializationRebuildIdentities.Generation(resolved.Plan, attempt);
+        if (ready.Authority != resolved.Authority
+            || ready.Attempt != attempt
+            || ready.Generation != generation)
+        {
+            throw new ArgumentException(
+                "Ready-generation evidence belongs to another linked leaf, Process attempt, or generation.",
+                nameof(ready));
+        }
+
+        var key = synchronization.GetWorkKey(attempt);
+        if (ready.Convergence.Synchronization != key)
+        {
+            throw new ArgumentException(
+                "Ready-generation convergence belongs to another exact synchronization-work aggregate.",
+                nameof(ready));
+        }
+
+        var work = await workStore.LoadAsync(context, key).ConfigureAwait(false);
+        if (work?.Activation is not { } activation)
+        {
+            return Failure(
+                MaterializationGenerationActivationDisposition.NotReady,
+                generation,
+                synchronizationResult: null,
+                activation: null,
+                MaterializationGenerationActivationDiagnosticCodes.NotReady,
+                "The exact durable readiness prefix is unavailable.");
+        }
+        if (!HasExactPreparation(activation, ready.Preparation))
+        {
+            return Failure(
+                MaterializationGenerationActivationDisposition.RestartRequired,
+                generation,
+                synchronizationResult: null,
+                activation,
+                MaterializationGenerationActivationDiagnosticCodes.RestartRequired,
+                "Durable activation state no longer retains the exact supplied readiness prefix.");
+        }
+        if (activation.IsComplete)
+            return await CompletedAsync(context, generation, activation, synchronizationResult: null).ConfigureAwait(false);
+        if (!activation.IsReady)
+        {
+            return Failure(
+                MaterializationGenerationActivationDisposition.NotReady,
+                generation,
+                synchronizationResult: null,
+                activation,
+                MaterializationGenerationActivationDiagnosticCodes.NotReady,
+                "The exact durable generation is not ready for target-pointer promotion.");
+        }
+
+        var outcome = await ReconcilePromotionAsync(
+                context,
+                generation,
+                synchronizationResult: null,
+                work,
+                activation)
+            .ConfigureAwait(false);
+        if (outcome.Result is not null)
+            return outcome.Result;
+        return await CompletedAsync(
+                context,
+                generation,
+                outcome.Work!.Activation!,
+                synchronizationResult: null)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>Runs preparation and immediately consumes its exact ready-generation evidence for activation.</summary>
+    /// <param name="context">Explicit cancellation, time, identity, and tracing context.</param>
+    /// <param name="attempt">Exact Process attempt retaining the candidate generation.</param>
+    /// <param name="invocation">Stable bounded invocation identity retained across an exact durable retry.</param>
+    /// <param name="worker">Explicit physical worker identity used to fence overlapping activations.</param>
+    /// <returns>Active, work-remaining, not-ready, failed, fenced, or restart-required evidence.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="context"/> or <paramref name="attempt"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="invocation"/> or <paramref name="worker"/> is default.</exception>
+    /// <exception cref="OperationCanceledException">The operation is cancelled.</exception>
+    /// <exception cref="Exception">A delegated source, durable-store, or target operation fails inconclusively.</exception>
+    public async Task<MaterializationGenerationActivationResult> ActivateAsync(
+        OperationContext context,
+        MaterializationRebuildAttempt attempt,
+        MaterializationSynchronizationInvocationId invocation,
+        MaterializationSynchronizationWorkerId worker)
+    {
+        var prepared = await PrepareAsync(context, attempt, invocation, worker).ConfigureAwait(false);
+        if (prepared.Disposition != MaterializationGenerationActivationDisposition.Ready)
+            return prepared;
+        var ready = new MaterializationReadyGenerationReference(
+            MaterializationReadyGenerationReference.CurrentSchemaVersion,
+            resolved.Authority,
+            attempt,
+            prepared.Generation,
+            prepared.Activation!);
+        var activated = await ActivateReadyAsync(context, attempt, ready).ConfigureAwait(false);
+        return prepared.Synchronization is null
+            ? activated
+            : new(
+                activated.Disposition,
+                activated.Generation,
+                prepared.Synchronization,
+                activated.Activation,
+                activated.Target,
+                activated.Diagnostics);
+    }
+
+    static bool HasExactPreparation(
+        MaterializationGenerationActivationState observed,
+        MaterializationGenerationActivationState expected) =>
+        observed.Convergence == expected.Convergence
+        && observed.SealRequest == expected.SealRequest
+        && observed.SealReceipt == expected.SealReceipt
+        && observed.ValidationRequest == expected.ValidationRequest
+        && observed.ValidationReceipt == expected.ValidationReceipt
+        && observed.PromotionRequest == expected.PromotionRequest;
 
     async Task<ActivationStep> ReconcileSealAsync(
         OperationContext context,
@@ -710,6 +857,17 @@ public sealed class MaterializationGenerationActivationExecutor
         && candidate.GenerationId == request.GenerationId
         && candidate.Revision == request.ExpectedGenerationRevision
         && candidate.State == MaterializationGenerationState.Validated;
+
+    static MaterializationGenerationActivationResult Ready(
+        MaterializationGenerationId generation,
+        MaterializationSynchronizationRunResult? synchronizationResult,
+        MaterializationGenerationActivationState preparation) =>
+        new(
+            MaterializationGenerationActivationDisposition.Ready,
+            generation,
+            synchronizationResult,
+            preparation,
+            target: null);
 
     async Task<MaterializationGenerationActivationResult> CompletedAsync(
         OperationContext context,

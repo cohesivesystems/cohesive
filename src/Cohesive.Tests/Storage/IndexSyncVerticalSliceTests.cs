@@ -8,13 +8,10 @@ using Cohesive.Adapters.Elastic;
 using Cohesive.Adapters.Postgres;
 using Cohesive.Control;
 using Cohesive.Execution;
-using Cohesive.Model;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Execution;
 using Cohesive.Relations.Acquisition;
-using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Compilation;
-using Cohesive.Relations.Execution;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Physical;
 using Cohesive.Relations.Realization;
@@ -1254,7 +1251,10 @@ public sealed class IndexSyncVerticalSliceTests
         Assert.Equal(promotedDescriptor.Id, promoted.Routing.Snapshot.Configuration.WriteTarget);
         Assert.All(
             promoted.Routing.Snapshot.Configuration.Configuration,
-            decision => Assert.Equal($"plan-set:{fixture.PlanSet.Fingerprint.Value}", decision.Authority));
+            decision => Assert.Equal(
+                MaterializationIndependentPromotionExecutor.ConfigurationAuthority(
+                    MaterializationRebuildPlanSetReference.FromPlanSet(fixture.PlanSet)),
+                decision.Authority));
     }
 
     static MaterializationBackendRoutingConfiguration RouteConfiguration(

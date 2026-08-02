@@ -5,6 +5,19 @@ using Cohesive.Model.Serialization;
 
 namespace Cohesive.Storage.Materialization;
 
+static class MaterializationIndependentPromotionIntentProtocol
+{
+    internal const string Version = "v2";
+    internal const string RequestSchema =
+        "cohesive-materialization-independent-promotion-request/" + Version;
+    internal const string CommandPrefix =
+        "materialization-independent-promotion/" + Version;
+    internal const string CommandDigestDomain =
+        "cohesive-materialization-independent-promotion-command/" + Version;
+    internal const string ConfigurationAuthorityPrefix =
+        "cohesive.storage/materialization-independent-promotion/configuration/" + Version + "/plan-set/";
+}
+
 /// <summary>Durable exact intent to expose one independently promoted rebuild leaf through its backend pool.</summary>
 /// <remarks>
 /// Persist this request before invoking the executor. Exact recovery resubmits the same command identities,
@@ -15,7 +28,7 @@ namespace Cohesive.Storage.Materialization;
 public sealed record MaterializationIndependentPromotionRequest
 {
     /// <summary>Current portable independent-promotion request schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive-materialization-independent-promotion-request/v1";
+    public const string CurrentSchemaVersion = MaterializationIndependentPromotionIntentProtocol.RequestSchema;
 
     /// <summary>Creates one exact, replayable independent-promotion intent.</summary>
     /// <param name="schemaVersion">Exact portable request schema.</param>
@@ -113,7 +126,7 @@ public sealed record MaterializationIndependentPromotionRequest
         MaterializationRebuildPlanSetReference planSet,
         MaterializationPlacementSliceReference placementSlice)
     {
-        var expectedAuthority = $"plan-set:{planSet.PlanSet.Value}";
+        var expectedAuthority = MaterializationIndependentPromotionExecutor.ConfigurationAuthority(planSet);
         if (configuration.ReadTarget != placementSlice.Target
             || configuration.WriteTarget != placementSlice.Target
             || configuration.Configuration.Any(decision =>
@@ -168,26 +181,87 @@ public static class MaterializationIndependentPromotionRequestJsonSerializer
     }
 }
 
-/// <summary>Per-slice outcome of one independent promotion realization.</summary>
+/// <summary>Durable per-slice receipt for one exact independent promotion realization.</summary>
 public sealed record MaterializationIndependentPromotionResult
 {
-    internal MaterializationIndependentPromotionResult(
-        MaterializationPlacementSliceReference placementSlice,
-        MaterializationBackendGenerationReference generation,
+    /// <summary>Current portable independent-promotion result schema.</summary>
+    public const string CurrentSchemaVersion = "cohesive-materialization-independent-promotion-result/v1";
+
+    /// <summary>Creates one exact, replayable independent-promotion result.</summary>
+    /// <param name="schemaVersion">Exact portable result schema.</param>
+    /// <param name="request">Exact persisted promotion intent that produced this result.</param>
+    /// <param name="admission">Placement-scoped candidate-admission outcome.</param>
+    /// <param name="routing">Placement-scoped paired-routing outcome, or null when admission was rejected.</param>
+    /// <exception cref="ArgumentNullException">A required value is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// The schema, placement, generation, command receipt, or admission/routing chronology is inexact.
+    /// </exception>
+    [JsonConstructor]
+    public MaterializationIndependentPromotionResult(
+        string schemaVersion,
+        MaterializationIndependentPromotionRequest request,
         MaterializationBackendRoutingResult admission,
         MaterializationBackendRoutingResult? routing)
     {
-        PlacementSlice = placementSlice;
-        Generation = generation;
-        Admission = admission;
+        SchemaVersion = Guard.RequireNotNullOrWhiteSpace(schemaVersion);
+        if (!string.Equals(schemaVersion, CurrentSchemaVersion, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"Independent-promotion result schema '{schemaVersion}' is unsupported.",
+                nameof(schemaVersion));
+        }
+
+        Request = request ?? throw new ArgumentNullException(nameof(request));
+        Admission = admission ?? throw new ArgumentNullException(nameof(admission));
         Routing = routing;
+        MaterializationBackendGenerationReference generation = new(
+            targetId: request.Authority.PlacementSlice.Target,
+            generationId: request.ActiveGeneration.Generation,
+            definitionFingerprint: request.Authority.PlacementSlice.Materialization.DefinitionFingerprint);
+        if (admission.Snapshot.PlacementSlice != request.Authority.PlacementSlice
+            || admission.Receipt is { } admissionReceipt
+            && (admissionReceipt.CommandId != request.AdmitCommandId
+                || admissionReceipt.Operation != MaterializationBackendRoutingOperation.AdmitCandidate
+                || admissionReceipt.Fence != request.Fence)
+            || routing is not null
+            && (admission.Disposition is not (MaterializationBackendRoutingDisposition.Applied
+                    or MaterializationBackendRoutingDisposition.Replayed)
+                || routing.Snapshot.PlacementSlice != request.Authority.PlacementSlice
+                || routing.Receipt is { } routingReceipt
+                && (routingReceipt.CommandId != request.SwapCommandId
+                    || routingReceipt.Operation != MaterializationBackendRoutingOperation.Swap
+                    || routingReceipt.Fence != request.Fence)))
+        {
+            throw new ArgumentException(
+                "Independent-promotion results must retain the exact placement, commands, and ordered routing outcomes.");
+        }
+        if (admission.Disposition == MaterializationBackendRoutingDisposition.Applied
+            && admission.Snapshot.Candidate != generation
+            || routing?.Disposition == MaterializationBackendRoutingDisposition.Applied
+            && (routing!.Snapshot.ActiveRead?.Generation != generation
+                || routing.Snapshot.ActiveWrite != generation))
+        {
+            throw new ArgumentException(
+                "Independent-promotion result generation evidence differs from its exact retained request.");
+        }
     }
 
+    /// <summary>Exact portable result schema.</summary>
+    public string SchemaVersion { get; }
+
+    /// <summary>Exact persisted independent-promotion intent.</summary>
+    public MaterializationIndependentPromotionRequest Request { get; }
+
     /// <summary>Exact independently promoted placement authority.</summary>
-    public MaterializationPlacementSliceReference PlacementSlice { get; }
+    [JsonIgnore]
+    public MaterializationPlacementSliceReference PlacementSlice => Request.Authority.PlacementSlice;
 
     /// <summary>Exact backend generation proposed for paired routing.</summary>
-    public MaterializationBackendGenerationReference Generation { get; }
+    [JsonIgnore]
+    public MaterializationBackendGenerationReference Generation => new(
+        targetId: PlacementSlice.Target,
+        generationId: Request.ActiveGeneration.Generation,
+        definitionFingerprint: PlacementSlice.Materialization.DefinitionFingerprint);
 
     /// <summary>Placement-scoped candidate-admission outcome.</summary>
     public MaterializationBackendRoutingResult Admission { get; }
@@ -201,12 +275,52 @@ public sealed record MaterializationIndependentPromotionResult
         && Routing.Snapshot.ActiveWrite == Generation;
 }
 
+/// <summary>Strict canonical JSON persistence for <see cref="MaterializationIndependentPromotionResult"/>.</summary>
+public static class MaterializationIndependentPromotionResultJsonSerializer
+{
+    static readonly JsonSerializerOptions Options = StrictDocumentJson.CreateOptions();
+
+    /// <summary>Serializes one exact independent-promotion result to canonical JSON.</summary>
+    /// <param name="result">Exact durable result.</param>
+    /// <returns>Canonical JSON retaining the intent and both routing outcomes.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="result"/> is <see langword="null"/>.</exception>
+    /// <exception cref="JsonException">The result cannot be serialized under its strict wire contract.</exception>
+    /// <exception cref="NotSupportedException">A contained value has no supported JSON representation.</exception>
+    /// <exception cref="InvalidOperationException">The result has no canonical JSON representation.</exception>
+    public static string Serialize(MaterializationIndependentPromotionResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        return Encoding.UTF8.GetString(StrictDocumentJson.GetCanonicalBytes(result, Options));
+    }
+
+    /// <summary>Deserializes and validates one exact independent-promotion result.</summary>
+    /// <param name="json">Strict canonical result JSON.</param>
+    /// <returns>The constructor-validated durable result.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="json"/> is <see langword="null"/>.</exception>
+    /// <exception cref="JsonException">The document is malformed, noncanonical, open, or inexact.</exception>
+    public static MaterializationIndependentPromotionResult Deserialize(string json)
+    {
+        ArgumentNullException.ThrowIfNull(json);
+        if (StrictDocumentJson.TryReadCanonicalObject(
+                json,
+                Options,
+                "independent-promotion result",
+                out MaterializationIndependentPromotionResult? result,
+                out var error)
+            && result is not null)
+        {
+            return result;
+        }
+
+        throw new JsonException(error.Message);
+    }
+}
+
 /// <summary>Storage-owned one-leaf interpretation of independent plan-set promotion semantics.</summary>
 public sealed class MaterializationIndependentPromotionExecutor
 {
-    const string CommandPrefix = "materialization-independent-promotion/v1";
+    const string CommandPrefix = MaterializationIndependentPromotionIntentProtocol.CommandPrefix;
     readonly MaterializationRebuildPlanSet planSet;
-    readonly MaterializationRebuildPlan leafPlan;
     readonly MaterializationRebuildLeafExecutionAuthority authority;
 
     MaterializationRebuildLeafPlanBinding Binding => authority.Binding;
@@ -219,24 +333,50 @@ public sealed class MaterializationIndependentPromotionExecutor
     public MaterializationIndependentPromotionExecutor(
         MaterializationRebuildPlanSet planSet,
         MaterializationRebuildPlan leafPlan)
+        : this(
+            planSet,
+            MaterializationRebuildLeafExecutionAuthority.FromPlanSet(planSet, leafPlan))
+    {
+    }
+
+    /// <summary>
+    /// Creates an executor from one exact linked-leaf authority without reloading target-independent leaf content.
+    /// </summary>
+    /// <param name="planSet">Canonical linked plan set.</param>
+    /// <param name="authority">Exact leaf binding claimed against <paramref name="planSet"/>.</param>
+    /// <exception cref="ArgumentNullException">An argument is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// The plan set is not independent, or <paramref name="authority"/> is detached, substituted, or inexact.
+    /// </exception>
+    public MaterializationIndependentPromotionExecutor(
+        MaterializationRebuildPlanSet planSet,
+        MaterializationRebuildLeafExecutionAuthority authority)
     {
         this.planSet = planSet ?? throw new ArgumentNullException(nameof(planSet));
-        this.leafPlan = leafPlan ?? throw new ArgumentNullException(nameof(leafPlan));
+        this.authority = authority ?? throw new ArgumentNullException(nameof(authority));
         if (planSet.Promotion.Mode != MaterializationRebuildPromotionMode.Independent)
             throw new ArgumentException("This executor realizes only explicitly independent promotion demand.", nameof(planSet));
 
-        var leafReference = MaterializationRebuildPlanReference.FromPlan(leafPlan);
-        var binding = planSet.LeafPlans.SingleOrDefault(candidate => candidate.LeafPlan == leafReference)
-            ?? throw new ArgumentException("The leaf plan is detached from the exact linked plan set.", nameof(leafPlan));
-        if (binding.Slice != leafPlan.PlacementSlice
-            || binding.Slice.Pool != planSet.Placement.Pool
-            || binding.Slice.Materialization != planSet.Placement.Materialization
-            || binding.Slice.Target != leafPlan.Target.Id)
+        MaterializationRebuildLeafExecutionAuthority expected;
+        try
         {
-            throw new ArgumentException("The linked leaf and placement slice are not exact.", nameof(leafPlan));
+            expected = MaterializationRebuildLeafExecutionAuthority.FromPlanSet(planSet, authority.Binding);
         }
-
-        authority = MaterializationRebuildLeafExecutionAuthority.FromPlanSet(planSet, leafPlan);
+        catch (ArgumentException exception)
+        {
+            throw new ArgumentException(
+                "The leaf execution authority is detached from the exact linked plan set.",
+                nameof(authority),
+                exception);
+        }
+        if (authority != expected
+            || authority.PlacementSlice.Pool != planSet.Placement.Pool
+            || authority.PlacementSlice.Materialization != planSet.Placement.Materialization)
+        {
+            throw new ArgumentException(
+                "The leaf execution authority is detached from the exact linked plan set.",
+                nameof(authority));
+        }
     }
 
     /// <summary>Creates a replay-stable promotion request from one pre-admission routing snapshot.</summary>
@@ -276,7 +416,10 @@ public sealed class MaterializationIndependentPromotionExecutor
                 "Independent promotion requires a later timestamp for its exact follow-up swap.");
         }
         var swapIssuedAtUtc = issuedAtUtc.AddTicks(1);
-        var digest = CommandDigest(
+        var commandIdentities = CreateCommandIdentities(
+            authority.PlanSet,
+            authority.LeafPlan,
+            Binding.Slice.Fingerprint,
             activeGeneration,
             snapshot.Revision,
             fence,
@@ -286,7 +429,7 @@ public sealed class MaterializationIndependentPromotionExecutor
             planSet.Placement.BackendPool.Definition,
             new MaterializationBackendRoutingConfigurationLayer(
                 origin: EffectiveConfigurationOrigin.Explicit,
-                authority: $"plan-set:{planSet.Fingerprint.Value}",
+                authority: ConfigurationAuthority(authority.PlanSet),
                 settings: new(readTarget: Binding.Slice.Target, writeTarget: Binding.Slice.Target)));
         return new(
             schemaVersion: MaterializationIndependentPromotionRequest.CurrentSchemaVersion,
@@ -294,8 +437,8 @@ public sealed class MaterializationIndependentPromotionExecutor
             configuration,
             expectedRoutingRevision: snapshot.Revision,
             fence,
-            admitCommandId: new($"{CommandPrefix}/admit/{digest}"),
-            swapCommandId: new($"{CommandPrefix}/swap/{digest}"),
+            admitCommandId: commandIdentities.Admit,
+            swapCommandId: commandIdentities.Swap,
             admitIssuedAtUtc: issuedAtUtc,
             swapIssuedAtUtc);
     }
@@ -340,7 +483,11 @@ public sealed class MaterializationIndependentPromotionExecutor
         if (admission.Disposition is not (MaterializationBackendRoutingDisposition.Applied
             or MaterializationBackendRoutingDisposition.Replayed))
         {
-            return new(Binding.Slice, generation, admission, routing: null);
+            return new(
+                MaterializationIndependentPromotionResult.CurrentSchemaVersion,
+                request,
+                admission,
+                routing: null);
         }
         if (admission.Receipt!.Revision != routingRequest.Header.ExpectedRevision)
         {
@@ -350,7 +497,11 @@ public sealed class MaterializationIndependentPromotionExecutor
 
         var routing = await router.SwapAsync(context, routingRequest)
             .ConfigureAwait(false);
-        return new(Binding.Slice, generation, admission, routing);
+        return new(
+            MaterializationIndependentPromotionResult.CurrentSchemaVersion,
+            request,
+            admission,
+            routing);
     }
 
     MaterializationSwapBackendRoutingRequest CreateRoutingRequest(
@@ -374,30 +525,56 @@ public sealed class MaterializationIndependentPromotionExecutor
             throw new ArgumentException("The promotion request belongs to another plan set, leaf, or placement.", nameof(request));
         }
         RequireActiveGeneration(request.ActiveGeneration);
-        var digest = CommandDigest(
+        var commandIdentities = CreateCommandIdentities(
+            authority.PlanSet,
+            authority.LeafPlan,
+            Binding.Slice.Fingerprint,
             request.ActiveGeneration,
             request.ExpectedRoutingRevision,
             request.Fence,
             request.AdmitIssuedAtUtc,
             request.SwapIssuedAtUtc);
-        if (request.AdmitCommandId != new MaterializationBackendRoutingCommandId($"{CommandPrefix}/admit/{digest}")
-            || request.SwapCommandId != new MaterializationBackendRoutingCommandId($"{CommandPrefix}/swap/{digest}"))
+        if (request.AdmitCommandId != commandIdentities.Admit
+            || request.SwapCommandId != commandIdentities.Swap)
         {
             throw new ArgumentException("The promotion request command identities are not canonically derived.", nameof(request));
         }
     }
 
-    string CommandDigest(
+    internal static string ConfigurationAuthority(MaterializationRebuildPlanSetReference planSet)
+    {
+        ArgumentNullException.ThrowIfNull(planSet);
+        return MaterializationIndependentPromotionIntentProtocol.ConfigurationAuthorityPrefix
+            + MaterializationRebuildIdentities.PlanSetIdentity(planSet);
+    }
+
+    internal static (
+        MaterializationBackendRoutingCommandId Admit,
+        MaterializationBackendRoutingCommandId Swap) CreateCommandIdentities(
+        MaterializationRebuildPlanSetReference planSet,
+        MaterializationRebuildPlanReference leafPlan,
+        MaterializationPlacementSliceFingerprint placementSlice,
         MaterializationActiveGenerationReference activeGeneration,
         MaterializationBackendRoutingRevision expectedRevision,
         MaterializationBackendRoutingFence fence,
         DateTimeOffset admitIssuedAtUtc,
         DateTimeOffset swapIssuedAtUtc)
     {
+        ArgumentNullException.ThrowIfNull(planSet);
+        ArgumentNullException.ThrowIfNull(leafPlan);
+        ArgumentNullException.ThrowIfNull(placementSlice);
+        ArgumentNullException.ThrowIfNull(activeGeneration);
         using MaterializationStableIdentity.DigestBuilder builder = new();
-        builder.Append(planSet.Fingerprint.Value);
-        builder.Append(leafPlan.Fingerprint.Value);
-        builder.Append(Binding.Slice.Fingerprint.Value);
+        builder.Append(MaterializationIndependentPromotionIntentProtocol.CommandDigestDomain);
+        builder.Append(MaterializationRebuildIdentities.PlanSetIdentity(planSet));
+        builder.Append(MaterializationStableIdentity.Digest(
+            leafPlan.Plan.Algorithm,
+            leafPlan.Plan.Canonicalization,
+            leafPlan.Plan.Value));
+        builder.Append(MaterializationStableIdentity.Digest(
+            placementSlice.Algorithm,
+            placementSlice.Canonicalization,
+            placementSlice.Value));
         builder.Append(activeGeneration.Generation.Value);
         builder.Append(activeGeneration.TargetRevision.Value);
         builder.Append(activeGeneration.Promotion.Value);
@@ -408,14 +585,17 @@ public sealed class MaterializationIndependentPromotionExecutor
         builder.Append(fence.Value);
         builder.Append(admitIssuedAtUtc.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture));
         builder.Append(swapIssuedAtUtc.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        return builder.Complete();
+        var digest = builder.Complete();
+        return (
+            new($"{CommandPrefix}/admit/{digest}"),
+            new($"{CommandPrefix}/swap/{digest}"));
     }
 
     void RequireActiveGeneration(MaterializationActiveGenerationReference activeGeneration)
     {
-        if (activeGeneration.Plan != leafPlan.Fingerprint
+        if (activeGeneration.Plan != authority.LeafPlan.Plan
             || activeGeneration.Authority != authority
-            || activeGeneration.Materialization != leafPlan.Materialization.Definition.Id
+            || activeGeneration.Materialization != authority.PlacementSlice.Materialization.Materialization
             || activeGeneration.Target != Binding.Slice.Target)
         {
             throw new ArgumentException(

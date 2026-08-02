@@ -274,10 +274,12 @@ public sealed record ProcessChildState
 
 /// <summary>One retained partition value and its exact child occurrence.</summary>
 /// <param name="ProgressIdentity">Authored stable progress identity for the partition.</param>
+/// <param name="CapacityIdentity">Evaluated capacity-domain identity, or null when no domain policy is authored.</param>
 /// <param name="Partition">Exact typed portable partition value evaluated once by the owner.</param>
 /// <param name="ChildRegistrationId">Replay-stable child occurrence identity for the partition.</param>
 public sealed record ProcessPartitionWorkState(
     string ProgressIdentity,
+    string? CapacityIdentity,
     PortableValue Partition,
     string ChildRegistrationId);
 

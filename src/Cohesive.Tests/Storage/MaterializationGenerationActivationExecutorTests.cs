@@ -34,6 +34,78 @@ public sealed partial class MaterializationRebuildExecutorTests
     }
 
     [Fact]
+    public async Task Activation_PreparesWithoutPromotionThenConsumesOnlyExactReadyEvidence()
+    {
+        var harness = await CreateSynchronizationHarnessAsync();
+        var workStore = new InMemoryMaterializationSynchronizationWorkStore();
+        var time = new MutableActivationTimeProvider(DateTimeOffset.UtcNow);
+        var target = new ObservedActivationTarget(harness.Rebuild.Target, time);
+        var executor = ActivationExecutor(harness, target, workStore);
+        var context = OperationContext.Create(time);
+
+        var prepared = await executor.PrepareAsync(
+            context,
+            harness.Attempt,
+            Invocation("activation/prepare"),
+            Worker("activation/prepare"));
+        var durableReady = Assert.IsType<MaterializationSynchronizationWorkSnapshot>(
+            await workStore.LoadAsync(context, executor.GetWorkKey(harness.Attempt)));
+        var readyCandidate = Assert.IsType<MaterializationGenerationSnapshot>(
+            await target.InspectGenerationAsync(context, harness.Generation));
+        var readyTarget = await target.InspectAsync(context);
+
+        Assert.Equal(MaterializationGenerationActivationDisposition.Ready, prepared.Disposition);
+        Assert.True(prepared.Activation!.IsReady);
+        Assert.True(durableReady.Activation!.IsReady);
+        Assert.Equal(MaterializationGenerationState.Validated, readyCandidate.State);
+        Assert.Null(readyTarget.ActiveGenerationId);
+        Assert.Equal(0, target.PromotionCalls);
+
+        var exactReady = new MaterializationReadyGenerationReference(
+            schemaVersion: MaterializationReadyGenerationReference.CurrentSchemaVersion,
+            authority: harness.Rebuild.Resolved.Authority,
+            attempt: harness.Attempt,
+            generation: harness.Generation,
+            preparation: prepared.Activation);
+        var retainedPromotion = prepared.Activation.PromotionRequest!;
+        var tamperedPromotion = new MaterializationPromoteGenerationRequest(
+            promotionId: new(retainedPromotion.PromotionId.Value + "/tampered"),
+            generationId: retainedPromotion.GenerationId,
+            expectedGenerationRevision: retainedPromotion.ExpectedGenerationRevision,
+            validationFingerprint: retainedPromotion.ValidationFingerprint,
+            expectedActiveGenerationId: retainedPromotion.ExpectedActiveGenerationId,
+            expectedTargetRevision: retainedPromotion.ExpectedTargetRevision,
+            generationWorkerFence: retainedPromotion.GenerationWorkerFence,
+            promotionFence: retainedPromotion.PromotionFence,
+            promotedAtUtc: retainedPromotion.PromotedAtUtc);
+        var tamperedReady = new MaterializationReadyGenerationReference(
+            schemaVersion: MaterializationReadyGenerationReference.CurrentSchemaVersion,
+            authority: exactReady.Authority,
+            attempt: exactReady.Attempt,
+            generation: exactReady.Generation,
+            preparation: new(
+                prepared.Activation.Convergence,
+                prepared.Activation.SealRequest,
+                prepared.Activation.SealReceipt,
+                prepared.Activation.ValidationRequest,
+                prepared.Activation.ValidationReceipt,
+                tamperedPromotion));
+
+        var rejected = await executor.ActivateReadyAsync(context, harness.Attempt, tamperedReady);
+        Assert.Equal(MaterializationGenerationActivationDisposition.RestartRequired, rejected.Disposition);
+        Assert.Equal(0, target.PromotionCalls);
+        Assert.Null((await target.InspectAsync(context)).ActiveGenerationId);
+
+        var activated = await executor.ActivateReadyAsync(context, harness.Attempt, exactReady);
+        var replayed = await executor.ActivateReadyAsync(context, harness.Attempt, exactReady);
+
+        Assert.Equal(MaterializationGenerationActivationDisposition.Active, activated.Disposition);
+        Assert.Equal(MaterializationGenerationActivationDisposition.Active, replayed.Disposition);
+        Assert.Equal(harness.Generation, replayed.Target!.ActiveGenerationId);
+        Assert.Equal(1, target.PromotionCalls);
+    }
+
+    [Fact]
     public async Task Activation_CallerCancellationPropagatesWithoutStartingDurableWork()
     {
         var harness = await CreateSynchronizationHarnessAsync();

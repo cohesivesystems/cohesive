@@ -477,6 +477,11 @@ public sealed partial class ProcessBuilder<TInput, TResult>
     /// <param name="outcomeMapping">Total child-terminal-status to Request-outcome mapping.</param>
     /// <param name="childInput">Typed child input evaluated with <paramref name="partition"/> visible.</param>
     /// <param name="limits">Explicit finite item, activation-start, and parallelism limits.</param>
+    /// <param name="failure">Explicit sibling-admission behavior after one child fails.</param>
+    /// <param name="capacityIdentity">Optional typed capacity-domain identity for the visible partition.</param>
+    /// <param name="capacityDomains">
+    /// Canonical capacity-domain limits; empty exactly when <paramref name="capacityIdentity"/> is null.
+    /// </param>
     /// <param name="cancellation">Explicit parent-to-child cancellation behavior.</param>
     /// <param name="completed">Edge selected after every partition child completes successfully.</param>
     /// <param name="failed">Edge selected when bounded child work reaches its failed outcome.</param>
@@ -502,6 +507,9 @@ public sealed partial class ProcessBuilder<TInput, TResult>
         ProcessChildOutcomeMapping outcomeMapping,
         ProcessValue<TChildInput> childInput,
         ProcessWorkLimits limits,
+        ProcessPartitionFailurePolicy failure,
+        ProcessValue<string>? capacityIdentity,
+        ImmutableArray<ProcessCapacityDomainLimit> capacityDomains,
         ProcessChildCancellationPolicy cancellation,
         ProcessEdge completed,
         ProcessEdge failed,
@@ -518,11 +526,18 @@ public sealed partial class ProcessBuilder<TInput, TResult>
         ArgumentNullException.ThrowIfNull(outcomeMapping);
         context.RequireValue(childInput);
         ArgumentNullException.ThrowIfNull(limits);
+        if (capacityIdentity is not null)
+            context.RequireValue(capacityIdentity);
         ArgumentNullException.ThrowIfNull(completed);
         ArgumentNullException.ThrowIfNull(failed);
         var source = context.Source(sourceFile, sourceLine, sourceMember, $"Bounded partition work '{id.Value}'");
         context.RegisterIfAbsent(outcomeMapping, source);
         context.RegisterIfAbsent(limits, source);
+        foreach (var domain in capacityDomains.IsDefault ? [] : capacityDomains)
+        {
+            if (domain is not null)
+                context.RegisterIfAbsent(domain, source);
+        }
         return Add(
             new ForEachPartitionProcessNode(
                 id,
@@ -534,6 +549,9 @@ public sealed partial class ProcessBuilder<TInput, TResult>
                 outcomeMapping,
                 childInput.Expression,
                 limits,
+                failure,
+                capacityIdentity?.Expression,
+                capacityDomains,
                 cancellation,
                 completed,
                 failed),

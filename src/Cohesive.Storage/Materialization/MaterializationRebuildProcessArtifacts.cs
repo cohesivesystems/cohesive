@@ -13,8 +13,8 @@ namespace Cohesive.Storage.Materialization;
 /// </summary>
 /// <remarks>
 /// The coordinator owns bounded partition-to-child coordination and bounded recurrence across synchronization
-/// activations. Storage-owned durable Requests remain responsible for pages, cursors, item progress, generation
-/// lifecycle state, convergence evidence, and target activation.
+/// preparations. Storage-owned durable Requests remain responsible for pages, cursors, item progress, generation
+/// lifecycle state, convergence evidence, and the retained promotion intent returned to the owning parent.
 /// </remarks>
 public sealed class MaterializationRebuildProcessArtifacts
 {
@@ -27,8 +27,8 @@ public sealed class MaterializationRebuildProcessArtifacts
         DurableRequestBinding workerInvocationBinding,
         RequestContractReference shardRebuildRequest,
         DurableRequestBinding shardRebuildBinding,
-        RequestContractReference synchronizationActivationRequest,
-        DurableRequestBinding synchronizationActivationBinding,
+        RequestContractReference synchronizationPreparationRequest,
+        DurableRequestBinding synchronizationPreparationBinding,
         ExecutionDefinitionDocument workerProcessDocument,
         CompiledProcessPlan workerPlan,
         ExecutionDefinitionDocument coordinatorProcessDocument,
@@ -42,8 +42,8 @@ public sealed class MaterializationRebuildProcessArtifacts
         WorkerInvocationBinding = workerInvocationBinding;
         ShardRebuildRequest = shardRebuildRequest;
         ShardRebuildBinding = shardRebuildBinding;
-        SynchronizationActivationRequest = synchronizationActivationRequest;
-        SynchronizationActivationBinding = synchronizationActivationBinding;
+        SynchronizationPreparationRequest = synchronizationPreparationRequest;
+        SynchronizationPreparationBinding = synchronizationPreparationBinding;
         WorkerProcessDocument = workerProcessDocument;
         WorkerPlan = workerPlan;
         CoordinatorProcessDocument = coordinatorProcessDocument;
@@ -54,7 +54,7 @@ public sealed class MaterializationRebuildProcessArtifacts
             initializationBinding,
             workerInvocationBinding,
             shardRebuildBinding,
-            synchronizationActivationBinding
+            synchronizationPreparationBinding
         ];
     }
 
@@ -83,12 +83,12 @@ public sealed class MaterializationRebuildProcessArtifacts
     public DurableRequestBinding ShardRebuildBinding { get; }
 
     /// <summary>
-    /// Request contract through which the coordinator drives one bounded synchronization-and-activation occurrence.
+    /// Request contract through which the coordinator drives one bounded synchronization-and-readiness occurrence.
     /// </summary>
-    public RequestContractReference SynchronizationActivationRequest { get; }
+    public RequestContractReference SynchronizationPreparationRequest { get; }
 
-    /// <summary>Durable execution refinement for the Storage-owned synchronization-and-activation Request.</summary>
-    public DurableRequestBinding SynchronizationActivationBinding { get; }
+    /// <summary>Durable execution refinement for the Storage-owned synchronization-and-readiness Request.</summary>
+    public DurableRequestBinding SynchronizationPreparationBinding { get; }
 
     /// <summary>Canonical worker Process document.</summary>
     public ExecutionDefinitionDocument WorkerProcessDocument { get; }
@@ -106,7 +106,7 @@ public sealed class MaterializationRebuildProcessArtifacts
     public ImmutableArray<ExecutionDefinitionDocument> ProcessDocuments { get; }
 
     /// <summary>
-    /// Initialization, coordinator-to-worker, worker-to-Storage, and synchronization-and-activation bindings.
+    /// Initialization, coordinator-to-worker, worker-to-Storage, and synchronization-and-readiness bindings.
     /// </summary>
     public ImmutableArray<DurableRequestBinding> DurableRequestBindings { get; }
 }
@@ -120,8 +120,8 @@ public static class MaterializationRebuildProcessFactory
         "interaction/request/cohesive-storage-materialization-rebuild-worker";
     const string ShardRebuildRequestDefinitionValue =
         "interaction/request/cohesive-storage-materialization-rebuild-shard";
-    const string SynchronizationActivationRequestDefinitionValue =
-        "interaction/request/cohesive-storage-materialization-synchronize-and-activate";
+    const string SynchronizationPreparationRequestDefinitionValue =
+        "interaction/request/cohesive-storage-materialization-synchronize-and-prepare";
 
     static readonly ValueContract StringContract = new(new ScalarTypeRef(ScalarTypeKind.String));
     static readonly ValueContract StringCollectionContract = new(
@@ -129,11 +129,15 @@ public static class MaterializationRebuildProcessFactory
         cardinality: FieldCardinality.Many);
 
     /// <summary>Exact semantic revision shared by the coordinated reference protocol.</summary>
-    public static ExecutionRevisionId RevisionId { get; } = new("revision/2");
+    public static ExecutionRevisionId RevisionId { get; } = new("revision/3");
 
     /// <summary>Stable identity of the coordinator Process definition.</summary>
     public static ExecutionDefinitionId CoordinatorDefinitionId { get; } =
         new("process/cohesive-storage-materialization-rebuild-coordinator");
+
+    /// <summary>Stable identity of the parent-owned leaf coordinator using ContinueAttempt recovery.</summary>
+    public static ExecutionDefinitionId ChildCoordinatorDefinitionId { get; } =
+        new("process/cohesive-storage-materialization-rebuild-leaf");
 
     /// <summary>Stable identity of the per-shard worker Process definition.</summary>
     public static ExecutionDefinitionId WorkerDefinitionId { get; } =
@@ -142,9 +146,9 @@ public static class MaterializationRebuildProcessFactory
     /// <summary>Stable coordinator partition node identity.</summary>
     public static ExecutionNodeId CoordinatorPartitionsNodeId { get; } = new("coordinator.partitions");
 
-    /// <summary>Stable Storage-owned synchronization-and-activation Request node identity.</summary>
-    public static ExecutionNodeId CoordinatorSynchronizationActivationNodeId { get; } =
-        new("coordinator.synchronize-and-activate");
+    /// <summary>Stable Storage-owned synchronization-and-readiness Request node identity.</summary>
+    public static ExecutionNodeId CoordinatorSynchronizationPreparationNodeId { get; } =
+        new("coordinator.synchronize-and-prepare");
 
     /// <summary>Stable durable recurrence node identity for bounded catch-up continuation.</summary>
     public static ExecutionNodeId CoordinatorSynchronizationRecurrenceNodeId { get; } =
@@ -179,6 +183,9 @@ public static class MaterializationRebuildProcessFactory
 
     /// <summary>Successful synchronization outcome proving durable progress while more work remains.</summary>
     public static RequestTerminalOutcomeId WorkRemainingOutcome { get; } = new("workRemaining");
+
+    /// <summary>Successful preparation outcome carrying an exact ready-generation reference.</summary>
+    public static RequestTerminalOutcomeId ReadyOutcome { get; } = new("ready");
 
     /// <summary>Successful activation outcome carrying an exact active-generation reference.</summary>
     public static RequestTerminalOutcomeId ActiveOutcome { get; } = new("active");
@@ -231,10 +238,10 @@ public static class MaterializationRebuildProcessFactory
             CoordinatorSynchronizationRecurrenceNodeId,
             new("coordinator.synchronization.progress")),
         new(
-            ActiveOutcome,
+            ReadyOutcome,
             Successful: true,
             CoordinatorReturnNodeId,
-            new("coordinator.active-generation")),
+            new("coordinator.ready-generation")),
         new(FailedOutcome, Successful: false, CoordinatorFailNodeId, new("coordinator.synchronization.failed")),
         new(CancelledOutcome, Successful: false, CoordinatorFailNodeId, new("coordinator.synchronization.cancelled")),
         new(TerminatedOutcome, Successful: false, CoordinatorFailNodeId, new("coordinator.synchronization.terminated"))
@@ -265,7 +272,29 @@ public static class MaterializationRebuildProcessFactory
     /// <exception cref="InvalidOperationException">
     /// The framework rejects an internally authored contract, Process link, or Process compilation.
     /// </exception>
-    public static MaterializationRebuildProcessArtifacts Create()
+    public static MaterializationRebuildProcessArtifacts Create() =>
+        CreateCore(
+            CoordinatorDefinitionId,
+            ProcessRecoveryPolicy.RestartAttempt,
+            source: "ari-194/materialization-rebuild-coordinator");
+
+    /// <summary>Creates the parent-owned leaf variant whose recovery continues its exact child attempt.</summary>
+    /// <returns>
+    /// Exact interaction documents and catalog, durable Request bindings, Process documents, and compiled plans.
+    /// </returns>
+    /// <exception cref="InvalidOperationException">
+    /// The framework rejects an internally authored contract, Process link, or Process compilation.
+    /// </exception>
+    public static MaterializationRebuildProcessArtifacts CreateChild() =>
+        CreateCore(
+            ChildCoordinatorDefinitionId,
+            ProcessRecoveryPolicy.ContinueAttempt,
+            source: "ari-194/materialization-rebuild-leaf");
+
+    static MaterializationRebuildProcessArtifacts CreateCore(
+        ExecutionDefinitionId coordinatorDefinitionId,
+        ProcessRecoveryPolicy recoveryPolicy,
+        string source)
     {
         var initialization = CreateRequestProtocol(
             definitionId: new(InitializationRequestDefinitionValue),
@@ -282,15 +311,15 @@ public static class MaterializationRebuildProcessFactory
             schemaAuthority: "materialization-rebuild-shard",
             completedContract: StringContract,
             outcomes: Outcomes);
-        var synchronizationActivation = CreateRequestProtocol(
-            definitionId: new(SynchronizationActivationRequestDefinitionValue),
-            schemaAuthority: "materialization-synchronize-and-activate",
+        var synchronizationPreparation = CreateRequestProtocol(
+            definitionId: new(SynchronizationPreparationRequestDefinitionValue),
+            schemaAuthority: "materialization-synchronize-and-prepare",
             completedContract: StringContract,
             outcomes: SynchronizationOutcomes);
         var interactionDocuments = initialization.Documents
             .AddRange(workerInvocation.Documents)
             .AddRange(shardRebuild.Documents)
-            .AddRange(synchronizationActivation.Documents);
+            .AddRange(synchronizationPreparation.Documents);
         var catalogValidation = InteractionContractCatalog.TryCreate(
             interactionDocuments,
             out var interactionCatalog);
@@ -323,12 +352,13 @@ public static class MaterializationRebuildProcessFactory
             workerPlan.DefinitionReference,
             initialization.Request,
             workerInvocation.Request,
-            synchronizationActivation.Request);
+            synchronizationPreparation.Request,
+            recoveryPolicy);
         var coordinatorDocument = ProcessDefinitionDocuments.Create(
-            CoordinatorDefinitionId,
+            coordinatorDefinitionId,
             RevisionId,
             coordinatorDefinition,
-            Provenance(source: "ari-177/materialization-rebuild-coordinator"));
+            Provenance(source));
         var coordinatorContext = new ProcessDefinitionValidationContext(
             definitions: [exactWorkerLink],
             interactionContracts: exactCatalog);
@@ -346,9 +376,9 @@ public static class MaterializationRebuildProcessFactory
         var shardRebuildBinding = CreateDurableBinding(
             shardRebuild,
             new(workerPlan.DefinitionReference, WorkerRequestNodeId));
-        var synchronizationActivationBinding = CreateDurableBinding(
-            synchronizationActivation,
-            new(coordinatorPlan.DefinitionReference, CoordinatorSynchronizationActivationNodeId));
+        var synchronizationPreparationBinding = CreateDurableBinding(
+            synchronizationPreparation,
+            new(coordinatorPlan.DefinitionReference, CoordinatorSynchronizationPreparationNodeId));
 
         return new(
             interactionDocuments,
@@ -359,8 +389,8 @@ public static class MaterializationRebuildProcessFactory
             workerInvocationBinding,
             shardRebuild.Request,
             shardRebuildBinding,
-            synchronizationActivation.Request,
-            synchronizationActivationBinding,
+            synchronizationPreparation.Request,
+            synchronizationPreparationBinding,
             workerDocument,
             workerPlan,
             coordinatorDocument,
@@ -371,7 +401,8 @@ public static class MaterializationRebuildProcessFactory
         ExecutionDefinitionReference worker,
         RequestContractReference initializationRequest,
         RequestContractReference workerInvocationRequest,
-        RequestContractReference synchronizationActivationRequest)
+        RequestContractReference synchronizationPreparationRequest,
+        ProcessRecoveryPolicy recoveryPolicy)
     {
         ProcessOutputBinding shards = new(
             new("coordinator.initialization.completed"),
@@ -382,8 +413,8 @@ public static class MaterializationRebuildProcessFactory
         ProcessOutputBinding progress = new(
             new("coordinator.synchronization.progress"),
             StringContract);
-        ProcessOutputBinding activeGeneration = new(
-            new("coordinator.active-generation"),
+        ProcessOutputBinding readyGeneration = new(
+            new("coordinator.ready-generation"),
             StringContract);
         return new(
             StringContract,
@@ -420,14 +451,17 @@ public static class MaterializationRebuildProcessFactory
                         maximumItems: MaximumPartitions,
                         maximumStartsPerActivation: MaximumStartsPerActivation,
                         maximumParallelism: MaximumParallelism),
+                    ProcessPartitionFailurePolicy.FailFast,
+                    capacityIdentity: null,
+                    capacityDomains: [],
                     ProcessChildCancellationPolicy.Propagate,
                     Edge(
                         id: "coordinator.partitions.completed.synchronize",
-                        target: CoordinatorSynchronizationActivationNodeId),
+                        target: CoordinatorSynchronizationPreparationNodeId),
                     Edge(id: "coordinator.partitions.failed", target: CoordinatorFailNodeId)),
                 new RequestProcessNode(
-                    CoordinatorSynchronizationActivationNodeId,
-                    synchronizationActivationRequest,
+                    CoordinatorSynchronizationPreparationNodeId,
+                    synchronizationPreparationRequest,
                     Expr.BoundValue(ProcessBindingIds.Input),
                     [
                         new(
@@ -439,13 +473,13 @@ public static class MaterializationRebuildProcessFactory
                                     target: CoordinatorSynchronizationRecurrenceNodeId),
                                 progress)),
                         new(
-                            new("coordinator.synchronize.active"),
-                            ActiveOutcome,
+                            new("coordinator.synchronize.ready"),
+                            ReadyOutcome,
                             new(
                                 Edge(
-                                    id: "coordinator.synchronize.active.return",
+                                    id: "coordinator.synchronize.ready.return",
                                     target: CoordinatorReturnNodeId),
-                                activeGeneration)),
+                                readyGeneration)),
                         SynchronizationFailureBranch("failed", FailedOutcome),
                         SynchronizationFailureBranch("cancelled", CancelledOutcome),
                         SynchronizationFailureBranch("terminated", TerminatedOutcome)
@@ -460,7 +494,7 @@ public static class MaterializationRebuildProcessFactory
                         maximumUnchangedProgressOccurrences: MaximumUnchangedSynchronizationOccurrences),
                     repeat: Edge(
                         id: "coordinator.synchronization-recurrence.repeat",
-                        target: CoordinatorSynchronizationActivationNodeId),
+                        target: CoordinatorSynchronizationPreparationNodeId),
                     completed: Edge(
                         id: "coordinator.synchronization-recurrence.completed.invalid",
                         target: CoordinatorFailNodeId),
@@ -472,12 +506,12 @@ public static class MaterializationRebuildProcessFactory
                         target: CoordinatorFailNodeId)),
                 new ReturnProcessNode(
                     CoordinatorReturnNodeId,
-                    Expr.BoundValue(activeGeneration.Binding)),
+                    Expr.BoundValue(readyGeneration.Binding)),
                 new FailProcessNode(
                     CoordinatorFailNodeId,
                     Expr.Const("materialization-rebuild-failed"))
             ],
-            ProcessRecoveryPolicy.RestartAttempt);
+            recoveryPolicy);
 
         ProcessRequestOutcomeBranch FailureBranch(string name, RequestTerminalOutcomeId outcome) => new(
             new($"coordinator.initialize.{name}"),

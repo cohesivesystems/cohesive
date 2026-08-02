@@ -262,7 +262,9 @@ internal sealed class DurableOperationTestFixture
                     new("result"),
                     new("failure"),
                     new("child-cancelled"),
-                    new("child-terminated"))));
+                    new("child-terminated")),
+                ownerToken: new("token/child-parent"),
+                occurrence: 0));
         var validation = Executor.TryCreate(
             request,
             Binding,

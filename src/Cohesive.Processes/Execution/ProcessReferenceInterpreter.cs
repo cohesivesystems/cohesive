@@ -22,6 +22,9 @@ public static class ProcessExecutionDiagnosticCodes
     /// <summary>An explicit host operation returned structured failure evidence.</summary>
     public const string OperationFailed = "processes.execution.operation.failed";
 
+    /// <summary>Canonical control flow reached an authored failed terminal.</summary>
+    public const string AuthoredFailure = "processes.execution.authored.failed";
+
     /// <summary>A host operation produced an interaction that violates the canonical contract catalog.</summary>
     public const string OperationEmissionInvalid = "processes.execution.operation.emissionInvalid";
 
@@ -1300,7 +1303,10 @@ public static class ProcessReferenceInterpreter
                     childProcess,
                     childContinuation,
                     semantics.ChildOutcomeMapping
-                    ?? throw new InvalidOperationException("Child Request semantics require an exact outcome mapping."));
+                    ?? throw new InvalidOperationException("Child Request semantics require an exact outcome mapping."),
+                    ownerToken: token.Id,
+                    occurrence,
+                    progressIdentity: null);
                 children.Add(new(
                     registration,
                     token.Id,
@@ -1374,7 +1380,13 @@ public static class ProcessReferenceInterpreter
                 token.Id,
                 node.Id,
                 occurrence);
-            List<(string ProgressIdentity, PortableValue Partition)> evaluatedWork =
+            var capacityDomains = node.CapacityIdentity is null
+                ? null
+                : node.CapacityDomains.ToDictionary(
+                    static domain => domain.Identity,
+                    static domain => domain.MaximumParallelism,
+                    StringComparer.Ordinal);
+            List<(string ProgressIdentity, string? CapacityIdentity, PortableValue Partition)> evaluatedWork =
                 new(evaluated.Array.Length);
             foreach (var item in evaluated.Array)
             {
@@ -1391,7 +1403,25 @@ public static class ProcessReferenceInterpreter
                     throw new InvalidOperationException(
                         $"ForEachPartition node '{node.Id.Value}' requires every progress identity to be a non-empty String.");
                 }
-                evaluatedWork.Add((progress.String, partition));
+                string? capacityIdentity = null;
+                if (node.CapacityIdentity is not null)
+                {
+                    var capacity = Evaluate(node.CapacityIdentity, itemToken)
+                        .RequireConcrete("ForEachPartition capacity identity");
+                    if (capacity.Kind != ObservationValueKind.String
+                        || string.IsNullOrWhiteSpace(capacity.String))
+                    {
+                        throw new InvalidOperationException(
+                            $"ForEachPartition node '{node.Id.Value}' requires every capacity identity to be a non-empty String.");
+                    }
+                    if (capacityDomains is null || !capacityDomains.ContainsKey(capacity.String))
+                    {
+                        throw new InvalidOperationException(
+                            $"ForEachPartition node '{node.Id.Value}' produced undeclared capacity identity '{capacity.String}'.");
+                    }
+                    capacityIdentity = capacity.String;
+                }
+                evaluatedWork.Add((progress.String, capacityIdentity, partition));
             }
 
             evaluatedWork.Sort(static (left, right) =>
@@ -1408,7 +1438,7 @@ public static class ProcessReferenceInterpreter
             }
 
             var work = ImmutableArray.CreateBuilder<ProcessPartitionWorkState>(evaluatedWork.Count);
-            foreach (var (progressIdentity, partition) in evaluatedWork)
+            foreach (var (progressIdentity, capacityIdentity, partition) in evaluatedWork)
             {
                 var childRegistration = ProcessReferenceIdentities.ChildRegistration(
                     original.Continuation,
@@ -1440,7 +1470,7 @@ public static class ProcessReferenceInterpreter
                     ProcessChildPurpose.Work,
                     node.Cancellation,
                     ProcessChildDisposition.Pending));
-                work.Add(new(progressIdentity, partition, childRegistration));
+                work.Add(new(progressIdentity, capacityIdentity, partition, childRegistration));
                 AddTrace(
                     ProcessTraceEventKind.ChildRegistered,
                     token,
@@ -1505,11 +1535,12 @@ public static class ProcessReferenceInterpreter
             var members = partition.Work
                 .Select(work => GetChild(work.ChildRegistrationId))
                 .ToArray();
-            if (members.Any(static child => child.Disposition is
+            var failed = members.Any(static child => child.Disposition is
                 ProcessChildDisposition.Failed
                 or ProcessChildDisposition.CancellationRequested
                 or ProcessChildDisposition.Detached
-                or ProcessChildDisposition.CancelledBeforeStart))
+                or ProcessChildDisposition.CancelledBeforeStart);
+            if (failed && node.Failure == ProcessPartitionFailurePolicy.FailFast)
             {
                 foreach (var member in members.Where(static child => child.Disposition is
                              ProcessChildDisposition.Pending or ProcessChildDisposition.Active))
@@ -1573,17 +1604,58 @@ public static class ProcessReferenceInterpreter
 
             var owner = GetToken(partition.Owner);
             var contract = ResolveContract<RequestContractDefinition>(node.Contract, node.Id);
-            var pending = partition.Work
-                .Select(work => (Work: work, Child: GetChild(work.ChildRegistrationId)))
-                .Where(static candidate => candidate.Child.Disposition == ProcessChildDisposition.Pending)
-                .Take(startCount)
-                .ToArray();
+            var admitted = new List<(ProcessPartitionWorkState Work, ProcessChildState Child)>(startCount);
+            Dictionary<string, int>? activeByDomain = null;
+            Dictionary<string, int>? capacityLimits = null;
+            if (node.CapacityIdentity is not null)
+            {
+                capacityLimits = node.CapacityDomains.ToDictionary(
+                    static domain => domain.Identity,
+                    static domain => domain.MaximumParallelism,
+                    StringComparer.Ordinal);
+                activeByDomain = new(StringComparer.Ordinal);
+                foreach (var work in partition.Work)
+                {
+                    if (GetChild(work.ChildRegistrationId).Disposition != ProcessChildDisposition.Active)
+                        continue;
+                    var capacityIdentity = work.CapacityIdentity
+                        ?? throw new InvalidOperationException(
+                            $"Capacity-bound partition work '{work.ProgressIdentity}' has no retained capacity identity.");
+                    activeByDomain.TryGetValue(capacityIdentity, out var count);
+                    activeByDomain[capacityIdentity] = checked(count + 1);
+                }
+            }
+
+            foreach (var work in partition.Work)
+            {
+                if (admitted.Count == startCount)
+                    break;
+                var child = GetChild(work.ChildRegistrationId);
+                if (child.Disposition != ProcessChildDisposition.Pending)
+                    continue;
+                if (capacityLimits is not null && activeByDomain is not null)
+                {
+                    var capacityIdentity = work.CapacityIdentity
+                        ?? throw new InvalidOperationException(
+                            $"Capacity-bound partition work '{work.ProgressIdentity}' has no retained capacity identity.");
+                    if (!capacityLimits.TryGetValue(capacityIdentity, out var limit))
+                    {
+                        throw new InvalidOperationException(
+                            $"Partition work '{work.ProgressIdentity}' names undeclared capacity domain '{capacityIdentity}'.");
+                    }
+                    activeByDomain.TryGetValue(capacityIdentity, out var count);
+                    if (count >= limit)
+                        continue;
+                    activeByDomain[capacityIdentity] = checked(count + 1);
+                }
+                admitted.Add((work, child));
+            }
             var prepared = new List<(
                 ProcessChildState Child,
                 ProcessTokenState Token,
                 PortableValue Payload,
-                EmissionId Emission)>(pending.Length);
-            foreach (var (work, child) in pending)
+                EmissionId Emission)>(admitted.Count);
+            foreach (var (work, child) in admitted)
             {
                 var bound = Bind(owner, node.Partition, work.Partition);
                 var childToken = new ProcessTokenState(
@@ -1619,7 +1691,13 @@ public static class ProcessReferenceInterpreter
                     node.Contract,
                     start.Payload,
                     start.Emission,
-                    new(start.Child.Process, start.Child.Continuation, node.OutcomeMapping));
+                    new(
+                        start.Child.Process,
+                        start.Child.Continuation,
+                        node.OutcomeMapping,
+                        start.Child.Owner,
+                        start.Child.Occurrence,
+                        start.Child.ProgressIdentity));
             }
 
             if (prepared.Count > 0)
@@ -2017,12 +2095,19 @@ public static class ProcessReferenceInterpreter
             ExecutionTerminalOutcomeKind kind)
         {
             var value = EvaluateTyped(expression, plan.Definition.Result, token);
+            var failure = kind == ExecutionTerminalOutcomeKind.Failed
+                ? new DocumentValidationDiagnostic(
+                    ProcessExecutionDiagnosticCodes.AuthoredFailure,
+                    DiagnosticSeverity.Error,
+                    $"Process control flow reached authored failure node '{node.Value}'.")
+                : null;
             ReplaceToken(token with
             {
                 Disposition = kind == ExecutionTerminalOutcomeKind.Completed
                     ? ExecutionTokenDisposition.Completed
                     : ExecutionTokenDisposition.Failed,
-                Step = token.Step + 1
+                Step = token.Step + 1,
+                Failure = failure
             });
             CancelLiveTokens(token.Id);
             CloseAllTokenWork();
@@ -2483,24 +2568,8 @@ public static class ProcessReferenceInterpreter
         PortableValue EvaluateUntyped(Expr expression, ProcessTokenState token) =>
             Evaluate(expression, token).ToPortable(UntypedValueContract);
 
-        PortableExpressionValue Evaluate(Expr expression, ProcessTokenState token)
-        {
-            var bindings = token.Bindings.ToDictionary(static binding => binding.Binding, static binding => binding.Value);
-            return evaluator.Evaluate(expression, new()
-            {
-                ResolveBinding = binding => bindings.TryGetValue(binding, out var value)
-                    ? PortableExpressionValue.FromPortable(value)
-                    : PortableExpressionValue.Absent,
-                ResolveField = (binding, path) =>
-                {
-                    var selected = binding ?? ProcessBindingIds.Input;
-                    return bindings.TryGetValue(selected, out var value)
-                        ? PortableExpressionValue.FromPortable(value).Project(path)
-                        : PortableExpressionValue.Absent;
-                },
-                ResolveParameter = _ => PortableExpressionValue.Absent
-            });
-        }
+        PortableExpressionValue Evaluate(Expr expression, ProcessTokenState token) =>
+            ProcessExpressionReferenceEvaluation.Evaluate(evaluator, expression, token.Bindings);
 
         bool EvaluateBoolean(Expr expression, ProcessTokenState token, string operation) =>
             PortableExpressionReferenceEvaluator.RequireBoolean(Evaluate(expression, token), operation);

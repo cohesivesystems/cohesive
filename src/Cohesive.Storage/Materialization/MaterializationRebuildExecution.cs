@@ -1,9 +1,7 @@
 using System.Collections.Immutable;
-using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cohesive.Control;
 using Cohesive.Execution;
-using Cohesive.Model;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Compilation;
@@ -73,8 +71,24 @@ public sealed record MaterializationRebuildAttempt
 public static class MaterializationRebuildIdentities
 {
     const string Prefix = "materialization-rebuild/v1";
+    const string GenerationPrefix = "materialization-rebuild/v2/generation";
 
     internal static MaterializationItemVersion BaselineItemVersion { get; } = new("1");
+
+    /// <summary>Derives a path-safe identity from every coordinate of an exact plan-set fingerprint.</summary>
+    /// <param name="planSet">Exact plan-set authority to identify.</param>
+    /// <returns>
+    /// A stable digest that differs when the fingerprint algorithm, canonicalization, or value differs.
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="planSet"/> is <see langword="null"/>.</exception>
+    public static string PlanSetIdentity(MaterializationRebuildPlanSetReference planSet)
+    {
+        ArgumentNullException.ThrowIfNull(planSet);
+        return MaterializationStableIdentity.Digest(
+            planSet.PlanSet.Algorithm,
+            planSet.PlanSet.Canonicalization,
+            planSet.PlanSet.Value);
+    }
 
     /// <summary>Derives the one candidate generation owned by a Process attempt.</summary>
     /// <param name="plan">Exact pinned rebuild plan.</param>
@@ -87,13 +101,50 @@ public static class MaterializationRebuildIdentities
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(attempt);
-        return new($"{Prefix}/generation/{MaterializationStableIdentity.Digest(
-            plan.Materialization.Definition.Id.Value,
-            plan.Materialization.DefinitionFingerprint.Value,
-            plan.Fingerprint.Value,
+        return Generation(
+            plan.Materialization.Definition.Id,
+            plan.Materialization.DefinitionFingerprint,
+            plan.Fingerprint,
+            attempt);
+    }
+
+    /// <summary>Derives the candidate generation from an exact linked-leaf authority and Process attempt.</summary>
+    /// <param name="authority">Exact linked plan-set, leaf-plan, and placement-slice authority.</param>
+    /// <param name="attempt">Exact Process attempt.</param>
+    /// <returns>
+    /// The same generation identity produced from the fully resolved leaf plan for this authority and attempt.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">An argument is <see langword="null"/>.</exception>
+    public static MaterializationGenerationId Generation(
+        MaterializationRebuildLeafExecutionAuthority authority,
+        MaterializationRebuildAttempt attempt)
+    {
+        ArgumentNullException.ThrowIfNull(authority);
+        ArgumentNullException.ThrowIfNull(attempt);
+        return Generation(
+            authority.PlacementSlice.Materialization.Materialization,
+            authority.PlacementSlice.Materialization.DefinitionFingerprint,
+            authority.LeafPlan.Plan,
+            attempt);
+    }
+
+    static MaterializationGenerationId Generation(
+        MaterializationId materialization,
+        ExecutionDefinitionFingerprint definition,
+        MaterializationRebuildPlanFingerprint plan,
+        MaterializationRebuildAttempt attempt) =>
+        new($"{GenerationPrefix}/{MaterializationStableIdentity.Digest(
+            materialization.Value,
+            MaterializationStableIdentity.Digest(
+                definition.Algorithm,
+                definition.Canonicalization,
+                definition.Value),
+            MaterializationStableIdentity.Digest(
+                plan.Algorithm,
+                plan.Canonicalization,
+                plan.Value),
             attempt.Continuation.ProcessInstanceId.Value,
             attempt.Continuation.ProcessAttemptId.Value)}");
-    }
 
     /// <summary>Creates the generic Process attempt-affinity value for the candidate generation.</summary>
     /// <param name="slot">Stable Process node declaring the generation-affinity slot.</param>

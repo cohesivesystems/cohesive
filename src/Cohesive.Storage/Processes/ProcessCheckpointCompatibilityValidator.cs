@@ -691,12 +691,30 @@ public static class ProcessCheckpointCompatibilityValidator
                 && child.RequestEmission == request.Context.EmissionId
                 && child.Token == origin.Token
                 && child.Node == origin.Node).ToArray();
+            string? childRegistration = null;
+            var canonicalChildRequest = childBearing
+                && ProcessReferenceIdentities.TryGetCanonicalChildRegistration(
+                    plan.DefinitionReference,
+                    node,
+                    request,
+                    out childRegistration);
             var childTargetValid = childBearing
-                ? matchingChildren is [var child]
-                    && request.ChildTarget == new ProcessChildRequestTarget(
-                        child.Process,
-                        child.Continuation,
-                        childOutcomeMapping)
+                ? canonicalChildRequest
+                  && ((matchingChildren is [var child]
+                       && request.ChildTarget == new ProcessChildRequestTarget(
+                           child.Process,
+                           child.Continuation,
+                           childOutcomeMapping,
+                           child.Owner,
+                           child.Occurrence,
+                           child.ProgressIdentity))
+                      || (matchingChildren.Length == 0
+                          && IsRetainedClosedAttemptChildRequest(
+                              checkpoint,
+                              request,
+                              origin,
+                              childRegistration!,
+                              durableOperations)))
                 : request.ChildTarget is null;
             if (!childTargetValid)
             {
@@ -728,7 +746,13 @@ public static class ProcessCheckpointCompatibilityValidator
                     out _,
                     out var childOutcomeMapping))
             {
-                expectedChildTarget = new(child.Process, child.Continuation, childOutcomeMapping);
+                expectedChildTarget = new(
+                    child.Process,
+                    child.Continuation,
+                    childOutcomeMapping,
+                    child.Owner,
+                    child.Occurrence,
+                    child.ProgressIdentity);
             }
             var requestEvidenceValid = expectedChildTarget is not null
                 && outbox.TryGetValue(requestEmission, out var outboxRecord)
@@ -878,6 +902,45 @@ public static class ProcessCheckpointCompatibilityValidator
                 "Partition child Request evidence must come from one reachable occurrence per node and activation and stay within the authored maximum starts.",
                 $"/continuation/partitions/{partitionIndex}/work"));
         }
+    }
+
+    static bool IsRetainedClosedAttemptChildRequest(
+        ProcessDurableCheckpoint checkpoint,
+        RequestEnvelope request,
+        ProcessInteractionOrigin origin,
+        string childRegistration,
+        IReadOnlyDictionary<EmissionId, DurableOperationState> durableOperations)
+    {
+        if (origin.Continuation.ProcessInstanceId != checkpoint.ContinuationIdentity.ProcessInstanceId
+            || origin.Continuation == checkpoint.ContinuationIdentity
+            || request.ChildTarget is not { } childTarget
+            || childTarget.Continuation.ProcessInstanceId == origin.Continuation.ProcessInstanceId
+            || request.ResponseTarget is not ProcessTokenInteractionTarget responseTarget
+            || responseTarget.Continuation != origin.Continuation
+            || responseTarget.Token != origin.Token
+            || !durableOperations.TryGetValue(request.Context.EmissionId, out var operation)
+            || operation.Request != request)
+        {
+            return false;
+        }
+
+        var registrations = checkpoint.Activations.Sum(activation => activation.Evidence.Trace.Count(trace =>
+            trace.Kind == ProcessTraceEventKind.ChildRegistered
+            && trace.Continuation == origin.Continuation
+            && trace.Node == origin.Node
+            && trace.Token == childTarget.OwnerToken
+            && string.Equals(trace.Detail, childRegistration, StringComparison.Ordinal)));
+        if (registrations != 1)
+            return false;
+
+        var attempt = checkpoint.Control.Attempts.SingleOrDefault(candidate =>
+            candidate.AttemptId == origin.Continuation.ProcessAttemptId);
+        return attempt is
+        {
+            Disposition: ProcessControlAttemptDisposition.Abandoned,
+            Phase: ProcessControlExecutionPhase.Stopped,
+            Closure: not null
+        };
     }
 
     static bool TraceMatchesEnvelope(

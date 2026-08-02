@@ -1,8 +1,6 @@
 using System.Collections.Immutable;
 using System.Text.Json.Serialization;
 using Cohesive.Execution;
-using Cohesive.Model;
-using Cohesive.Model.Serialization;
 
 namespace Cohesive.Storage.Materialization;
 
@@ -331,7 +329,8 @@ public sealed record MaterializationRebuildPlanSetReference
 /// <remarks>
 /// The constructor proves internal affinity among the request, leaf reference, and placement slice, but a plan-set
 /// reference cannot by itself prove that the binding is a member of the referenced document. Producers should use
-/// <see cref="FromPlanSet"/>. Every execution or promotion resolver must reproduce the full fingerprinted plan set and
+/// <see cref="FromPlanSet(MaterializationRebuildPlanSet, MaterializationRebuildLeafPlanBinding)"/>. Every execution or
+/// promotion resolver must reproduce the full fingerprinted plan set and
 /// verify the claim before target I/O.
 /// </remarks>
 public sealed record MaterializationRebuildLeafExecutionAuthority
@@ -426,5 +425,27 @@ public sealed record MaterializationRebuildLeafExecutionAuthority
             CurrentSchemaVersion,
             MaterializationRebuildPlanSetReference.FromPlanSet(planSet),
             binding);
+    }
+
+    /// <summary>Creates an authority from one exact binding already retained by a verified plan set.</summary>
+    /// <param name="planSet">Canonical constructor-verified linked plan set.</param>
+    /// <param name="binding">Exact leaf-plan and placement-slice binding retained by <paramref name="planSet"/>.</param>
+    /// <returns>The exact linked leaf execution authority.</returns>
+    /// <exception cref="ArgumentNullException">An argument is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="binding"/> is missing, stale, or substituted.</exception>
+    public static MaterializationRebuildLeafExecutionAuthority FromPlanSet(
+        MaterializationRebuildPlanSet planSet,
+        MaterializationRebuildLeafPlanBinding binding)
+    {
+        ArgumentNullException.ThrowIfNull(planSet);
+        ArgumentNullException.ThrowIfNull(binding);
+        var exact = planSet.LeafPlans.SingleOrDefault(candidate => candidate == binding)
+            ?? throw new ArgumentException(
+                "The leaf binding is not retained by the supplied verified plan set.",
+                nameof(binding));
+        return new(
+            CurrentSchemaVersion,
+            MaterializationRebuildPlanSetReference.FromPlanSet(planSet),
+            exact);
     }
 }

@@ -555,6 +555,13 @@ public sealed record MaterializationGenerationActivationState
     /// <summary>Successful promotion evidence completing activation.</summary>
     public MaterializationPromotionReceipt? PromotionReceipt { get; }
 
+    /// <summary>Whether successful validation and its exact promotion intent are retained without visibility.</summary>
+    [JsonIgnore]
+    public bool IsReady => Convergence.IsValid
+        && ValidationReceipt is { Validation.IsValid: true }
+        && PromotionRequest is not null
+        && PromotionReceipt is null;
+
     /// <summary>Whether the exact candidate was successfully promoted.</summary>
     [JsonIgnore]
     public bool IsComplete => PromotionReceipt is not null;

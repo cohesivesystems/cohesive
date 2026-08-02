@@ -112,6 +112,17 @@ public sealed partial class ProcessDurableRuntime
                             ownedOperation,
                             lastCommit));
                 }
+                if (!HasOpenOriginAttempt(ownedSnapshot.Checkpoint, ownedOperation))
+                {
+                    return (
+                        null,
+                        default,
+                        default,
+                        ClosedOriginOperationResult(
+                            ownedSnapshot,
+                            ownedOperation,
+                            lastCommit));
+                }
                 var sourceAttempt = ownedOperation.CurrentAttempt
                     ?? throw new InvalidOperationException(
                         "A reconciled durable operation has no source attempt.");
@@ -273,16 +284,23 @@ public sealed partial class ProcessDurableRuntime
                     [OperationBlocked(
                         "The Process is paused; no new durable Request dispatch, redispatch, or reconciliation was started.")]);
             }
-            if (RequiresNewOperationAttempt(operation.Status)
+            if (RequiresOpenOriginAttempt(operation.Status)
                 && !HasOpenOriginAttempt(snapshot.Checkpoint, operation))
             {
-                return new(
-                    ProcessDurableRuntimeDisposition.Terminal,
-                    snapshot,
-                    operation,
-                    lastCommit,
-                    diagnostics: [OperationBlocked(
-                        "The Request's originating Process attempt is closed or no longer current; new physical work is forbidden.")]);
+                if (operation.Status is DurableOperationStatus.Claimed or DurableOperationStatus.Dispatched
+                    && operation.CurrentAttempt is { } closedAttempt
+                    && !closedAttempt.Claim.IsLiveAt(context.UtcNow))
+                {
+                    return await ExpireClosedOriginClaimAsync(
+                            context,
+                            plan,
+                            instanceId,
+                            operationId,
+                            executor,
+                            lastCommit)
+                        .ConfigureAwait(false);
+                }
+                return ClosedOriginOperationResult(snapshot, operation, lastCommit);
             }
             if (operation.Status == DurableOperationStatus.ReconciliationRequired)
             {
@@ -374,6 +392,23 @@ public sealed partial class ProcessDurableRuntime
                 ?? throw new InvalidOperationException("A successful Process worker acquisition returned no snapshot.");
             operation = FindOperation(snapshot.Checkpoint, operationId)
                 ?? throw new InvalidOperationException("A successful post-acquisition operation lookup returned no durable state.");
+
+            if (RequiresOpenOriginAttempt(operation.Status)
+                && !HasOpenOriginAttempt(snapshot.Checkpoint, operation))
+            {
+                return operation.Status is DurableOperationStatus.Claimed or DurableOperationStatus.Dispatched
+                       && operation.CurrentAttempt is { } closedAttempt
+                       && !closedAttempt.Claim.IsLiveAt(context.UtcNow)
+                    ? await ExpireClosedOriginClaimAfterAcquisitionAsync(
+                            context,
+                            plan,
+                            snapshot,
+                            operation,
+                            executor,
+                            lastCommit)
+                        .ConfigureAwait(false)
+                    : ClosedOriginOperationResult(snapshot, operation, lastCommit);
+            }
 
             if (HasElapsedDeadline(operation, context.UtcNow))
             {
@@ -1451,6 +1486,86 @@ public sealed partial class ProcessDurableRuntime
         return (snapshot, null);
     }
 
+    async Task<ProcessDurableOperationResult> ExpireClosedOriginClaimAsync(
+        OperationContext context,
+        CompiledProcessPlan plan,
+        ProcessInstanceId instanceId,
+        EmissionId operationId,
+        DurableOperationReferenceExecutor executor,
+        ProcessDurableCommit? lastCommit)
+    {
+        var acquired = await AcquireOperationWorkerAsync(context, plan, instanceId, operationId)
+            .ConfigureAwait(false);
+        if (acquired.Failure is not null)
+            return acquired.Failure;
+
+        var snapshot = acquired.Snapshot
+            ?? throw new InvalidOperationException(
+                "A successful closed-origin claim-expiry acquisition returned no snapshot.");
+        var operation = FindOperation(snapshot.Checkpoint, operationId)
+            ?? throw new InvalidOperationException(
+                "A closed-origin claim-expiry lookup returned no durable operation.");
+        if (HasOpenOriginAttempt(snapshot.Checkpoint, operation)
+            || operation.Status is not (DurableOperationStatus.Claimed or DurableOperationStatus.Dispatched)
+            || operation.CurrentAttempt is not { } attempt
+            || attempt.Claim.IsLiveAt(context.UtcNow))
+        {
+            return ClosedOriginOperationResult(snapshot, operation, lastCommit);
+        }
+
+        return await ExpireClosedOriginClaimAfterAcquisitionAsync(
+                context,
+                plan,
+                snapshot,
+                operation,
+                executor,
+                lastCommit)
+            .ConfigureAwait(false);
+    }
+
+    async Task<ProcessDurableOperationResult> ExpireClosedOriginClaimAfterAcquisitionAsync(
+        OperationContext context,
+        CompiledProcessPlan plan,
+        ProcessDurableStoreSnapshot snapshot,
+        DurableOperationState operation,
+        DurableOperationReferenceExecutor executor,
+        ProcessDurableCommit? lastCommit)
+    {
+        var attempt = operation.CurrentAttempt
+            ?? throw new InvalidOperationException(
+                "A closed-origin claim-expiry operation has no current attempt.");
+
+        var expired = executor.RenewClaim(
+            operation,
+            attempt.Claim.AttemptId,
+            attempt.Claim.Fence,
+            attempt.Claim.Claimant,
+            context.UtcNow);
+        if (expired.Disposition != DurableOperationRenewalDisposition.LeaseExpired
+            || ReferenceEquals(expired.State, operation))
+        {
+            return ClosedOriginOperationResult(snapshot, operation, lastCommit);
+        }
+
+        var persisted = await CommitOperationCutAsync(
+                context,
+                plan,
+                snapshot,
+                expired.State)
+            .ConfigureAwait(false);
+        if (!IsSuccessful(persisted.Disposition))
+            return persisted;
+
+        return ClosedOriginOperationResult(
+            persisted.Snapshot
+                ?? throw new InvalidOperationException(
+                    "A committed closed-origin claim expiry returned no snapshot."),
+            persisted.Operation
+                ?? throw new InvalidOperationException(
+                    "A committed closed-origin claim expiry returned no operation."),
+            persisted.Commit);
+    }
+
     async Task<ProcessDurableOperationResult> CommitOperationCutAsync(
         OperationContext context,
         CompiledProcessPlan plan,
@@ -1742,6 +1857,13 @@ public sealed partial class ProcessDurableRuntime
         status is DurableOperationStatus.Pending
             or DurableOperationStatus.RetryEligible;
 
+    static bool RequiresOpenOriginAttempt(DurableOperationStatus status) =>
+        status is DurableOperationStatus.Pending
+            or DurableOperationStatus.Claimed
+            or DurableOperationStatus.Dispatched
+            or DurableOperationStatus.RetryEligible
+            or DurableOperationStatus.ReconciliationRequired;
+
     static bool HasOpenOriginAttempt(
         ProcessDurableCheckpoint checkpoint,
         DurableOperationState operation) =>
@@ -1751,6 +1873,18 @@ public sealed partial class ProcessDurableRuntime
         && checkpoint.Continuation.Terminal.Kind == ExecutionTerminalOutcomeKind.None
         && checkpoint.Control.Mode == ProcessControlMode.Running
         && checkpoint.Control.CurrentAttempt.Disposition == ProcessControlAttemptDisposition.Current;
+
+    static ProcessDurableOperationResult ClosedOriginOperationResult(
+        ProcessDurableStoreSnapshot snapshot,
+        DurableOperationState operation,
+        ProcessDurableCommit? commit) =>
+        new(
+            ProcessDurableRuntimeDisposition.Terminal,
+            snapshot,
+            operation,
+            commit,
+            diagnostics: [OperationBlocked(
+                "The Request's originating Process attempt is closed or no longer current; new physical work or reconciliation is forbidden.")]);
 
     static ProcessDurableOperationResult DeadlineBlockedResult(
         ProcessDurableStoreSnapshot snapshot,

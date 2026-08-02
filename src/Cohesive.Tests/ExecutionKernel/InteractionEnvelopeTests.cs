@@ -121,7 +121,9 @@ public sealed class InteractionEnvelopeTests
         var childTarget = new ProcessChildRequestTarget(
             DefinitionReference("process/index-worker", 'd'),
             new(new("process/index-worker/instance-1"), new("process-attempt/1")),
-            ChildOutcomeMapping());
+            ChildOutcomeMapping(),
+            ownerToken: new("token/review"),
+            occurrence: 0);
         var childRequest = new RequestEnvelope(
             InteractionEnvelope.CurrentSchemaVersion,
             Context("emission/request/child", ProcessOrigin()),
@@ -141,7 +143,7 @@ public sealed class InteractionEnvelopeTests
             InteractionEnvelopeJsonSerializer.Deserialize(childJson, catalog));
         var ordinaryJson = JsonNode.Parse(InteractionEnvelopeJsonSerializer.Serialize(ordinaryRequest))!.AsObject();
 
-        Assert.Equal(new ExecutionIrSchemaVersion("cohesive-interaction-envelope/v2"), childRequest.SchemaVersion);
+        Assert.Equal(new ExecutionIrSchemaVersion("cohesive-interaction-envelope/v3"), childRequest.SchemaVersion);
         Assert.Equal(childTarget, restored.ChildTarget);
         Assert.Equal(childRequest, restored);
         Assert.Equal(
@@ -158,7 +160,9 @@ public sealed class InteractionEnvelopeTests
         var childTarget = new ProcessChildRequestTarget(
             DefinitionReference("process/index-worker", 'e'),
             new(new("process/index-worker/instance-2"), new("process-attempt/1")),
-            ChildOutcomeMapping());
+            ChildOutcomeMapping(),
+            ownerToken: new("token/review"),
+            occurrence: 0);
 
         Assert.Throws<ArgumentException>(() => new RequestEnvelope(
             InteractionEnvelope.CurrentSchemaVersion,
@@ -232,17 +236,17 @@ public sealed class InteractionEnvelopeTests
         var fixture = ContractFixture.Create();
         var catalog = Catalog(fixture);
         var envelope = new DomainEventEnvelope(
-            new("cohesive-interaction-envelope/v3"),
+            new("cohesive-interaction-envelope/v4"),
             Context("emission/event/future-schema", TransitionOrigin()),
             new(Reference(fixture.DomainEvent)),
             StringValue("reviewed"));
         var futureWire = JsonNode.Parse(InteractionEnvelopeJsonSerializer.Serialize(envelope))?.AsObject()
             ?? throw new InvalidOperationException("Failed to parse the future interaction-envelope test JSON.");
-        futureWire["futureSemantics"] = new JsonObject { ["mode"] = "v3-only" };
+        futureWire["futureSemantics"] = new JsonObject { ["mode"] = "v4-only" };
 
         var validation = InteractionEnvelopeJsonSerializer.TryDeserialize(
             futureWire.ToJsonString(InteractionEnvelopeJsonSerializer.CreateOptions()),
-            new([new("cohesive-interaction-envelope/v3")]),
+            new([new("cohesive-interaction-envelope/v4")]),
             catalog,
             graph: null,
             out var restored);
@@ -324,7 +328,7 @@ public sealed class InteractionEnvelopeTests
                 requestId,
                 new RequestResultOutcome(new("result"), Int64Value(42))),
             new DomainEventEnvelope(
-                new("cohesive-interaction-envelope/v3"),
+                new("cohesive-interaction-envelope/v4"),
                 Context("emission/event/future-schema", TransitionOrigin()),
                 new(Reference(fixture.DomainEvent)),
                 StringValue("payload"))

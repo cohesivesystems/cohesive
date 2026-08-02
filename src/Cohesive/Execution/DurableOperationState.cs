@@ -946,7 +946,7 @@ public sealed record DurableOperationAdmission
 public sealed record DurableOperationState
 {
     /// <summary>Current portable durable-operation state schema.</summary>
-    public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } = new("cohesive-durable-operation/v2");
+    public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } = new("cohesive-durable-operation/v3");
 
     /// <summary>Creates one validated durable-operation state snapshot.</summary>
     /// <param name="schemaVersion">Exact durable-operation state schema.</param>

@@ -1,4 +1,3 @@
-using System.Collections.Immutable;
 using System.Reflection;
 using System.Text;
 using System.Text.Json.Serialization;
@@ -666,6 +665,9 @@ public sealed class CanonicalProcessAuthoringTests
                         maximumItems: 10,
                         maximumStartsPerActivation: 2,
                         maximumParallelism: 2),
+                    ProcessPartitionFailurePolicy.FailFast,
+                    capacityIdentity: null,
+                    capacityDomains: [],
                     ProcessChildCancellationPolicy.Propagate,
                     partitionCompleted,
                     partitionFailed);
