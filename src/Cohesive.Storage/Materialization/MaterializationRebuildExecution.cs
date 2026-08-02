@@ -461,12 +461,12 @@ public sealed class ResolvedMaterializationRebuildPlan
         {
             throw new ArgumentException("Runtime bindings must cover every exact persisted shard once.", nameof(shardBindings));
         }
-        if (!SameCanonical(target.Descriptor, plan.Target))
+        if (!MaterializationContract.CanonicalEquals(target.Descriptor, plan.Target))
             throw new ArgumentException("The runtime target differs from the exact persisted target descriptor.", nameof(target));
         foreach (var binding in normalized)
         {
             var persisted = plan.Shards.Single(candidate => candidate.Id == binding.Shard.Id);
-            if (!SameCanonical(persisted, binding.Shard)
+            if (!MaterializationContract.CanonicalEquals(persisted, binding.Shard)
                 || RelationQueryCompiledPlanReferenceFingerprinter.Compute(binding.Hydrator.Plan)
                     != RelationQueryCompiledPlanReferenceFingerprinter.Compute(
                         plan.Materialization.Definition.Relation.CompiledPlan)
@@ -476,7 +476,7 @@ public sealed class ResolvedMaterializationRebuildPlan
             }
             var source = plan.Sources.Single(candidate => candidate.Input == persisted.Scope.Input);
             if (binding.Source.Descriptor.Source != source.Source
-                || !SameCanonical(binding.Source.Descriptor.CapabilityProfile, source.Profile))
+                || !MaterializationContract.CanonicalEquals(binding.Source.Descriptor.CapabilityProfile, source.Profile))
             {
                 throw new ArgumentException("A runtime source differs from its pinned capability evidence.", nameof(shardBindings));
             }
@@ -499,14 +499,14 @@ public sealed class ResolvedMaterializationRebuildPlan
         foreach (var binding in normalizedFeeds)
         {
             var persisted = plan.ChangeFeeds.Single(candidate => candidate.Id == binding.Feed.Id);
-            if (!SameCanonical(persisted, binding.Feed)
+            if (!MaterializationContract.CanonicalEquals(persisted, binding.Feed)
                 || binding.Interpreter.Plan != plan.ImpactPlan.Fingerprint)
             {
                 throw new ArgumentException("A runtime change-feed binding differs from its persisted semantics.", nameof(changeFeedBindings));
             }
             var source = plan.Sources.Single(candidate => candidate.Input == persisted.Scope.Input);
             if (binding.Source.Descriptor.Source != source.Source
-                || !SameCanonical(binding.Source.Descriptor.CapabilityProfile, source.Profile))
+                || !MaterializationContract.CanonicalEquals(binding.Source.Descriptor.CapabilityProfile, source.Profile))
             {
                 throw new ArgumentException("A runtime change source differs from its pinned capability evidence.", nameof(changeFeedBindings));
             }
@@ -559,10 +559,6 @@ public sealed class ResolvedMaterializationRebuildPlan
     /// <exception cref="KeyNotFoundException"><paramref name="feed"/> is absent.</exception>
     public MaterializationChangeFeedBinding GetChangeFeed(MaterializationChangeFeedId feed) => changeFeeds[feed];
 
-    static bool SameCanonical<T>(T left, T right) where T : class =>
-        StrictDocumentJson.GetCanonicalBytes(left, MaterializationJsonSerializer.CreateOptions())
-            .AsSpan()
-            .SequenceEqual(StrictDocumentJson.GetCanonicalBytes(right, MaterializationJsonSerializer.CreateOptions()));
 }
 
 /// <summary>Crash-injection boundary exposed by the deterministic reference rebuild executor.</summary>

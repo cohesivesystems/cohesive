@@ -11,6 +11,17 @@ namespace Cohesive.Storage.Materialization;
 public static class MaterializationContract
 {
     internal const long MaximumPortableInteger = 9_007_199_254_740_991;
+    static readonly System.Text.Json.JsonSerializerOptions CanonicalJsonOptions =
+        MaterializationJsonSerializer.CreateOptions();
+
+    internal static bool CanonicalEquals<T>(T left, T right) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(left);
+        ArgumentNullException.ThrowIfNull(right);
+        return StrictDocumentJson.GetCanonicalBytes(left, CanonicalJsonOptions)
+            .AsSpan()
+            .SequenceEqual(StrictDocumentJson.GetCanonicalBytes(right, CanonicalJsonOptions));
+    }
 
     /// <summary>Creates one complete, attributable materialization diagnostic.</summary>
     /// <param name="code">Stable machine-readable diagnostic code.</param>

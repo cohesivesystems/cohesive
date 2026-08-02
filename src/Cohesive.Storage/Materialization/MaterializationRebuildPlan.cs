@@ -685,7 +685,7 @@ public sealed record MaterializationRebuildPlan
                 requirements,
                 source.Profile,
                 MaterializationSynchronizationMode.Rebuild);
-            if (!SameMatch(expected, source.CapabilityMatch))
+            if (!MaterializationContract.CanonicalEquals(expected, source.CapabilityMatch))
                 throw new ArgumentException("A rebuild source capability match is stale or forged.", nameof(sources));
             var incremental = MaterializationCapabilityMatcher.MatchForMode(
                 requirements,
@@ -709,7 +709,7 @@ public sealed record MaterializationRebuildPlan
             definition.TargetCapabilities,
             target.Capabilities,
             MaterializationSynchronizationMode.Rebuild);
-        if (!SameMatch(expected, targetCapabilityMatch))
+        if (!MaterializationContract.CanonicalEquals(expected, targetCapabilityMatch))
             throw new ArgumentException("The rebuild target capability match is stale or forged.", nameof(targetCapabilityMatch));
         var incremental = MaterializationCapabilityMatcher.MatchForMode(
             definition.TargetCapabilities,
@@ -943,10 +943,6 @@ public sealed record MaterializationRebuildPlan
         }
     }
 
-    static bool SameMatch(MaterializationCapabilityMatch left, MaterializationCapabilityMatch right) =>
-        StrictDocumentJson.GetCanonicalBytes(left, MaterializationJsonSerializer.CreateOptions())
-            .AsSpan()
-            .SequenceEqual(StrictDocumentJson.GetCanonicalBytes(right, MaterializationJsonSerializer.CreateOptions()));
 }
 
 /// <summary>Canonical fingerprinting for persisted materialization rebuild realization plans.</summary>

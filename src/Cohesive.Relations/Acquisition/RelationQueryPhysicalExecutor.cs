@@ -470,7 +470,7 @@ public sealed class RelationQueryPhysicalExecutor
                 .OfType<RelationQueryFieldInput>()
                 .ToDictionary(static input => input.Id);
             identityFieldInputs = fieldInputs.Values
-                .Where(input => IsStringIdentityField(request.Plan, input))
+                .Where(input => RelationQueryFieldSemantics.IsSingleStringIdentityField(request.Plan, input.Field))
                 .Select(static input => input.Id)
                 .ToHashSet();
         }
@@ -1356,27 +1356,6 @@ public sealed class RelationQueryPhysicalExecutor
                 return "A source reader returned a semantic identity field that differs from its observation identity.";
             }
             return null;
-        }
-
-        static bool IsStringIdentityField(
-            CompiledRelationQueryPlan plan,
-            RelationQueryFieldInput input)
-        {
-            if (input.Field.Path.Segments.Length != 1
-                || !input.Field.Path.Segments[0].TryGetFieldIdentity(out var fieldName))
-            {
-                return false;
-            }
-
-            var graph = plan.Provenance.ShapeDocuments
-                .SingleOrDefault(document => document.Graph.Id == input.Field.Shape.GraphId)
-                ?.Graph;
-            var shape = graph?.TryGetShape(input.Field.Shape);
-            return shape is not null
-                && shape.TryGetField(fieldName, out var field)
-                && field.Role == FieldRole.Identity
-                && field.Cardinality == FieldCardinality.Single
-                && field.Type is ScalarTypeRef { Kind: ScalarTypeKind.String };
         }
 
         RelationQueryPhysicalExecutionDiagnostic Invalid(
