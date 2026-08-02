@@ -45,6 +45,14 @@ public static class MaterializationRebuildPlanSetDurableOperationDiagnosticCodes
 
     /// <summary>An independent promotion completed without selecting the rebuilt generation for both routes.</summary>
     public const string PromotionNotSelected = "storage.materialization.rebuild.planSet.adapter.promotion.notSelected";
+
+    /// <summary>Exact prior-route equivalence evidence required for compensation is unavailable or inexact.</summary>
+    public const string CompensationUnavailable =
+        "storage.materialization.rebuild.planSet.adapter.compensation.unavailable";
+
+    /// <summary>An explicit compensation child returned malformed or inexact routing evidence.</summary>
+    public const string CompensationResultInexact =
+        "storage.materialization.rebuild.planSet.adapter.compensation.resultInexact";
 }
 
 /// <summary>Resolves one exact persisted rebuild plan set.</summary>
@@ -545,6 +553,336 @@ public sealed class MaterializationIndependentPromotionDurableOperationAdapter :
     }
 }
 
+/// <summary>Projects committed progressive forward steps into exact reverse-order compensation work.</summary>
+public sealed class MaterializationProgressiveCompensationWorkDurableOperationAdapter : IDurableOperationAdapter
+{
+    readonly IMaterializationRebuildPlanSetExecutionResolver resolver;
+    readonly IProcessDurableStore store;
+    readonly CompiledProcessPlan parentPlan;
+
+    /// <summary>Creates an adapter for the parent compensation-work projection Request.</summary>
+    /// <param name="request">Exact compensation-work Request contract.</param>
+    /// <param name="resolver">Resolver for the exact plan-set execution.</param>
+    /// <param name="store">Durable parent Process store.</param>
+    /// <param name="parentPlan">Exact compiled parent Process.</param>
+    /// <exception cref="ArgumentNullException">A required argument is <see langword="null"/>.</exception>
+    public MaterializationProgressiveCompensationWorkDurableOperationAdapter(
+        RequestContractReference request,
+        IMaterializationRebuildPlanSetExecutionResolver resolver,
+        IProcessDurableStore store,
+        CompiledProcessPlan parentPlan)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        this.resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
+        this.store = store ?? throw new ArgumentNullException(nameof(store));
+        this.parentPlan = parentPlan ?? throw new ArgumentNullException(nameof(parentPlan));
+        Capabilities = new(
+            idempotencyEvidence: DurableOperationIdempotencyEvidence.NaturallyIdempotent,
+            reconciliation: DurableOperationReconciliationCapability.Supported,
+            supportedRequests: [request]);
+    }
+
+    /// <inheritdoc />
+    public DurableOperationAdapterCapabilities Capabilities { get; }
+
+    /// <inheritdoc />
+    public async ValueTask<DurableOperationAttemptObservation> ExecuteAsync(
+        OperationContext context,
+        DurableOperationInvocation invocation)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(invocation);
+        var outcome = await RunAsync(context, invocation.Request, remainUnresolved: false).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("Execute must project terminal compensation work.");
+        return new DurableOperationOutcomeObservation(outcome);
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<DurableOperationReconciliationObservation> ReconcileAsync(
+        OperationContext context,
+        DurableOperationReconciliationRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(request);
+        var outcome = await RunAsync(context, request.Request, remainUnresolved: true).ConfigureAwait(false);
+        return outcome is null
+            ? new DurableOperationUnresolved()
+            : new DurableOperationReconciledOutcome(outcome);
+    }
+
+    async Task<RequestTerminalOutcome?> RunAsync(
+        OperationContext context,
+        RequestEnvelope request,
+        bool remainUnresolved)
+    {
+        context.ThrowIfCancellationRequested();
+        if (!Capabilities.Supports(request.Contract))
+            return PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.RequestUnsupported);
+        if (!PlanSetProjection.TryReadString(request.Payload, out var payload)
+            || !PlanSetProjection.TryDeserialize(
+                payload,
+                MaterializationRebuildReadyBarrierJsonSerializer.DeserializeStructural,
+                out MaterializationRebuildReadyBarrier? barrier)
+            || barrier is null)
+        {
+            return PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.RequestPayloadInvalid);
+        }
+        if (!resolver.TryResolve(barrier.PlanSet, out var planSet) || planSet is null)
+        {
+            return remainUnresolved
+                ? null
+                : PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.ExecutionUnavailable);
+        }
+        if (MaterializationRebuildPlanSetReference.FromPlanSet(planSet) != barrier.PlanSet
+            || planSet.Promotion.ProgressiveFailurePolicy
+                != MaterializationProgressivePromotionFailurePolicy.CompensatePromoted)
+        {
+            return PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.ExecutionInexact);
+        }
+        var loaded = await PlanSetProjection.LoadCheckpointAsync(
+            context,
+            request,
+            store,
+            parentPlan,
+            MaterializationRebuildPlanSetProcessFactory.PrepareCompensationWorkNodeId).ConfigureAwait(false);
+        if (loaded.Checkpoint is null)
+        {
+            return remainUnresolved
+                ? null
+                : PlanSetProjection.Failure(loaded.FailureCode!);
+        }
+        try
+        {
+            barrier.ValidateAgainst(planSet, parentPlan, loaded.Checkpoint);
+            return new RequestResultOutcome(
+                MaterializationRebuildPlanSetProcessFactory.CompletedOutcome,
+                PlanSetProjection.CompensationWorkItems(planSet, barrier, loaded.Checkpoint));
+        }
+        catch (ArgumentException)
+        {
+            return PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.ChildLedgerInexact);
+        }
+    }
+}
+
+/// <summary>Captures one exact progressive-compensation routing intent from current equivalence evidence.</summary>
+public sealed class MaterializationProgressiveCompensationPreparationDurableOperationAdapter : IDurableOperationAdapter
+{
+    readonly IMaterializationRebuildPlanSetExecutionResolver resolver;
+    readonly IMaterializationBackendRouter router;
+    readonly IMaterializationProgressiveCompensationProofProvider proofProvider;
+    readonly IProcessDurableStore store;
+    readonly CompiledProcessPlan compensationPlan;
+
+    /// <summary>Creates an adapter for compensation-intent preparation.</summary>
+    /// <param name="request">Exact preparation Request contract.</param>
+    /// <param name="resolver">Resolver for exact plan-set execution.</param>
+    /// <param name="router">Placement routing authority.</param>
+    /// <param name="proofProvider">Provider of exact current-revision equivalence evidence.</param>
+    /// <param name="store">Durable compensation-child Process store.</param>
+    /// <param name="compensationPlan">Exact compiled compensation worker.</param>
+    /// <exception cref="ArgumentNullException">A required argument is <see langword="null"/>.</exception>
+    public MaterializationProgressiveCompensationPreparationDurableOperationAdapter(
+        RequestContractReference request,
+        IMaterializationRebuildPlanSetExecutionResolver resolver,
+        IMaterializationBackendRouter router,
+        IMaterializationProgressiveCompensationProofProvider proofProvider,
+        IProcessDurableStore store,
+        CompiledProcessPlan compensationPlan)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        this.resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
+        this.router = router ?? throw new ArgumentNullException(nameof(router));
+        this.proofProvider = proofProvider ?? throw new ArgumentNullException(nameof(proofProvider));
+        this.store = store ?? throw new ArgumentNullException(nameof(store));
+        this.compensationPlan = compensationPlan ?? throw new ArgumentNullException(nameof(compensationPlan));
+        Capabilities = new(
+            idempotencyEvidence: DurableOperationIdempotencyEvidence.NaturallyIdempotent,
+            reconciliation: DurableOperationReconciliationCapability.Supported,
+            supportedRequests: [request]);
+    }
+
+    /// <inheritdoc />
+    public DurableOperationAdapterCapabilities Capabilities { get; }
+
+    /// <inheritdoc />
+    public async ValueTask<DurableOperationAttemptObservation> ExecuteAsync(
+        OperationContext context,
+        DurableOperationInvocation invocation)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(invocation);
+        return new DurableOperationOutcomeObservation(await RunAsync(context, invocation.Request).ConfigureAwait(false));
+    }
+
+    /// <inheritdoc />
+    public ValueTask<DurableOperationReconciliationObservation> ReconcileAsync(
+        OperationContext context,
+        DurableOperationReconciliationRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(request);
+        context.ThrowIfCancellationRequested();
+        DurableOperationReconciliationObservation observation = Capabilities.Supports(request.Request.Contract)
+            ? new DurableOperationConfirmedNotExecuted()
+            : new DurableOperationUnresolved();
+        return ValueTask.FromResult(observation);
+    }
+
+    async Task<RequestTerminalOutcome> RunAsync(OperationContext context, RequestEnvelope request)
+    {
+        context.ThrowIfCancellationRequested();
+        if (!Capabilities.Supports(request.Contract))
+            return PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.RequestUnsupported);
+        if (!PlanSetProjection.TryReadString(request.Payload, out var payload)
+            || !PlanSetProjection.TryDeserialize(
+                payload,
+                MaterializationIndependentPromotionResultJsonSerializer.Deserialize,
+                out MaterializationIndependentPromotionResult? promotion)
+            || promotion is null)
+        {
+            return PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.RequestPayloadInvalid);
+        }
+        if (!resolver.TryResolve(promotion.Request.Authority.PlanSet, out var planSet) || planSet is null
+            || MaterializationRebuildPlanSetReference.FromPlanSet(planSet) != promotion.Request.Authority.PlanSet
+            || !PlanSetProjection.Contains(planSet, promotion.Request.Authority))
+        {
+            return PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.ExecutionInexact);
+        }
+        var loaded = await PlanSetProjection.LoadCheckpointAsync(
+            context,
+            request,
+            store,
+            compensationPlan,
+            MaterializationRebuildPlanSetProcessFactory.CompensationPrepareNodeId).ConfigureAwait(false);
+        if (loaded.Checkpoint is null)
+            return PlanSetProjection.Failure(loaded.FailureCode!);
+        var current = await router.InspectAsync(context, promotion.PlacementSlice).ConfigureAwait(false);
+        var proof = await proofProvider.ResolveAsync(context, promotion, current).ConfigureAwait(false);
+        if (proof is null)
+            return PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.CompensationUnavailable);
+        try
+        {
+            var fence = current.LatestFence is null
+                ? MaterializationBackendRoutingFence.Initial
+                : new(checked(current.LatestFence.Value.Ordinal + 1).ToString(CultureInfo.InvariantCulture));
+            var intent = new MaterializationProgressivePromotionCompensationExecutor(
+                planSet,
+                promotion.Request.Authority).CreateRequest(
+                    promotion: promotion,
+                    proof: proof,
+                    fence: fence,
+                    issuedAtUtc: loaded.RequestBoundary!.Value);
+            return new RequestResultOutcome(
+                MaterializationRebuildPlanSetProcessFactory.CompletedOutcome,
+                PlanSetProjection.StringValue(
+                    MaterializationProgressivePromotionCompensationJsonSerializer.SerializeRequest(intent)));
+        }
+        catch (Exception exception) when (exception is ArgumentException or OverflowException)
+        {
+            return PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.CompensationUnavailable);
+        }
+    }
+}
+
+/// <summary>Applies or reconciles one already-persisted explicit compensation routing intent.</summary>
+public sealed class MaterializationProgressiveCompensationDurableOperationAdapter : IDurableOperationAdapter
+{
+    readonly IMaterializationRebuildPlanSetExecutionResolver resolver;
+    readonly IMaterializationBackendRouter router;
+    readonly CompiledProcessPlan compensationPlan;
+
+    /// <summary>Creates an adapter for exact compensation routing.</summary>
+    /// <param name="request">Exact compensation application Request contract.</param>
+    /// <param name="resolver">Resolver for exact plan-set execution.</param>
+    /// <param name="router">Placement routing authority.</param>
+    /// <param name="compensationPlan">Exact compiled compensation worker.</param>
+    /// <exception cref="ArgumentNullException">A required argument is <see langword="null"/>.</exception>
+    public MaterializationProgressiveCompensationDurableOperationAdapter(
+        RequestContractReference request,
+        IMaterializationRebuildPlanSetExecutionResolver resolver,
+        IMaterializationBackendRouter router,
+        CompiledProcessPlan compensationPlan)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        this.resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
+        this.router = router ?? throw new ArgumentNullException(nameof(router));
+        this.compensationPlan = compensationPlan ?? throw new ArgumentNullException(nameof(compensationPlan));
+        Capabilities = new(
+            idempotencyEvidence: DurableOperationIdempotencyEvidence.TargetDeduplication,
+            reconciliation: DurableOperationReconciliationCapability.Supported,
+            supportedRequests: [request]);
+    }
+
+    /// <inheritdoc />
+    public DurableOperationAdapterCapabilities Capabilities { get; }
+
+    /// <inheritdoc />
+    public async ValueTask<DurableOperationAttemptObservation> ExecuteAsync(
+        OperationContext context,
+        DurableOperationInvocation invocation)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(invocation);
+        var outcome = await RunAsync(context, invocation.Request, remainUnresolved: false).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("Execute must project a terminal compensation outcome.");
+        return new DurableOperationOutcomeObservation(outcome);
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<DurableOperationReconciliationObservation> ReconcileAsync(
+        OperationContext context,
+        DurableOperationReconciliationRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(request);
+        var outcome = await RunAsync(context, request.Request, remainUnresolved: true).ConfigureAwait(false);
+        return outcome is null ? new DurableOperationUnresolved() : new DurableOperationReconciledOutcome(outcome);
+    }
+
+    async Task<RequestTerminalOutcome?> RunAsync(
+        OperationContext context,
+        RequestEnvelope request,
+        bool remainUnresolved)
+    {
+        context.ThrowIfCancellationRequested();
+        if (!Capabilities.Supports(request.Contract))
+            return PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.RequestUnsupported);
+        if (request.Context.Origin is not ProcessInteractionOrigin origin
+            || origin.Definition != compensationPlan.DefinitionReference
+            || origin.Node != MaterializationRebuildPlanSetProcessFactory.CompensationApplyNodeId
+            || !PlanSetProjection.TryReadString(request.Payload, out var payload)
+            || !PlanSetProjection.TryDeserialize(
+                payload,
+                MaterializationProgressivePromotionCompensationJsonSerializer.DeserializeRequest,
+                out MaterializationProgressivePromotionCompensationRequest? intent)
+            || intent is null)
+        {
+            return PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.RequestPayloadInvalid);
+        }
+        if (!resolver.TryResolve(intent.Promotion.Request.Authority.PlanSet, out var planSet) || planSet is null)
+        {
+            return remainUnresolved
+                ? null
+                : PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.ExecutionUnavailable);
+        }
+        try
+        {
+            var result = await new MaterializationProgressivePromotionCompensationExecutor(
+                planSet,
+                intent.Promotion.Request.Authority).ExecuteAsync(context, intent, router).ConfigureAwait(false);
+            return new RequestResultOutcome(
+                MaterializationRebuildPlanSetProcessFactory.CompletedOutcome,
+                PlanSetProjection.StringValue(
+                    MaterializationProgressivePromotionCompensationJsonSerializer.SerializeResult(result)));
+        }
+        catch (ArgumentException)
+        {
+            return PlanSetProjection.Failure(MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.ExecutionInexact);
+        }
+    }
+}
+
 /// <summary>Projects exact settled promotion children into one honest aggregate plan-set receipt.</summary>
 public sealed class MaterializationRebuildPlanSetFinalizationDurableOperationAdapter : IDurableOperationAdapter
 {
@@ -666,7 +1004,9 @@ public sealed class MaterializationRebuildPlanSetFinalizationDurableOperationAda
                 MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.ChildLedgerInexact);
         }
 
-        var promoted = leaves.Count(static leaf => leaf.Outcome == MaterializationRebuildPlanSetLeafOutcome.Promoted);
+        var promoted = leaves.Count(static leaf => leaf.Outcome is
+            MaterializationRebuildPlanSetLeafOutcome.Promoted
+            or MaterializationRebuildPlanSetLeafOutcome.CompensationFailed);
         var outcome = promoted == leaves.Length
             ? MaterializationRebuildPlanSetOutcome.Completed
             : promoted > 0
@@ -807,9 +1147,11 @@ static class PlanSetProjection
             static binding => binding.CapacityDomain);
         var authorities = Authorities(planSet);
         var work = ImmutableArray.CreateBuilder<ObservationValue>(authorities.Length);
-        foreach (var authority in authorities)
+        for (var index = 0; index < authorities.Length; index++)
         {
+            var authority = authorities[index];
             work.Add(WorkItem(
+                ProgressIdentity(index, authority),
                 authority.PlacementSlice.Id.Value,
                 capacityBySlice[authority.PlacementSlice.Id].Value,
                 MaterializationRebuildWorkReferenceJsonSerializer.SerializeAuthority(authority)));
@@ -825,9 +1167,11 @@ static class PlanSetProjection
             static binding => binding.Slice,
             static binding => binding.CapacityDomain);
         var work = ImmutableArray.CreateBuilder<ObservationValue>(barrier.ReadyGenerations.Length);
-        foreach (var ready in barrier.ReadyGenerations)
+        for (var index = 0; index < barrier.ReadyGenerations.Length; index++)
         {
+            var ready = barrier.ReadyGenerations[index];
             work.Add(WorkItem(
+                ProgressIdentity(index, ready.Authority),
                 ready.PlacementSlice.Id.Value,
                 capacityBySlice[ready.PlacementSlice.Id].Value,
                 MaterializationReadyGenerationReferenceJsonSerializer.Serialize(ready)));
@@ -840,6 +1184,34 @@ static class PlanSetProjection
                 ["barrier"] = ObservationValue.FromString(MaterializationRebuildReadyBarrierJsonSerializer.Serialize(barrier)),
                 ["work"] = ObservationValue.FromImmutableArray(work.MoveToImmutable())
             }));
+    }
+
+    internal static PortableValue CompensationWorkItems(
+        MaterializationRebuildPlanSet planSet,
+        MaterializationRebuildReadyBarrier barrier,
+        ProcessDurableCheckpoint checkpoint)
+    {
+        var leaves = ProjectPromotionLeaves(planSet, barrier, checkpoint);
+        var capacityBySlice = planSet.Placement.CapacityBindings.ToDictionary(
+            static binding => binding.Slice,
+            static binding => binding.CapacityDomain);
+        var promoted = leaves
+            .Where(static leaf => leaf.Outcome == MaterializationRebuildPlanSetLeafOutcome.Promoted)
+            .Reverse()
+            .ToArray();
+        var work = ImmutableArray.CreateBuilder<ObservationValue>(promoted.Length);
+        for (var index = 0; index < promoted.Length; index++)
+        {
+            var leaf = promoted[index];
+            var promotion = leaf.Promotion
+                ?? throw new ArgumentException("A promoted leaf has no exact forward routing result.", nameof(checkpoint));
+            work.Add(WorkItem(
+                ProgressIdentity(index, leaf.Authority),
+                leaf.Authority.PlacementSlice.Id.Value,
+                capacityBySlice[leaf.Authority.PlacementSlice.Id].Value,
+                MaterializationIndependentPromotionResultJsonSerializer.Serialize(promotion)));
+        }
+        return PortableValue.Concrete(WorkItemsContract, ObservationValue.FromImmutableArray(work.MoveToImmutable()));
     }
 
     internal static async Task<CheckpointLoad> LoadCheckpointAsync(
@@ -903,10 +1275,11 @@ static class PlanSetProjection
         var authorities = Authorities(planSet);
         var receipts = ImmutableArray.CreateBuilder<MaterializationRebuildPlanSetLeafReceipt>(authorities.Length);
         allReady = true;
-        foreach (var authority in authorities)
+        for (var index = 0; index < authorities.Length; index++)
         {
+            var authority = authorities[index];
             var sliceId = authority.PlacementSlice.Id.Value;
-            if (!workByProgress.TryGetValue(sliceId, out var work)
+            if (!workByProgress.TryGetValue(ProgressIdentity(index, authority), out var work)
                 || !children.TryGetValue(work.ChildRegistrationId, out var child)
                 || !ValidWorkItem(planSet, authority, work,
                     MaterializationRebuildWorkReferenceJsonSerializer.SerializeAuthority(authority)))
@@ -968,11 +1341,12 @@ static class PlanSetProjection
         var readyBySlice = barrier.ReadyGenerations.ToDictionary(static ready => ready.PlacementSlice.Id);
         var authorities = Authorities(planSet);
         var receipts = ImmutableArray.CreateBuilder<MaterializationRebuildPlanSetLeafReceipt>(authorities.Length);
-        foreach (var authority in authorities)
+        for (var index = 0; index < authorities.Length; index++)
         {
+            var authority = authorities[index];
             var sliceId = authority.PlacementSlice.Id.Value;
             var ready = readyBySlice[authority.PlacementSlice.Id];
-            if (!workByProgress.TryGetValue(sliceId, out var work)
+            if (!workByProgress.TryGetValue(ProgressIdentity(index, authority), out var work)
                 || !children.TryGetValue(work.ChildRegistrationId, out var child)
                 || !ValidWorkItem(planSet, authority, work,
                     MaterializationReadyGenerationReferenceJsonSerializer.Serialize(ready)))
@@ -1017,6 +1391,17 @@ static class PlanSetProjection
                 continue;
             }
 
+            if (child.Disposition == ProcessChildDisposition.CancelledBeforeStart)
+            {
+                receipts.Add(new(
+                    authority: authority,
+                    buildChild: ready.Attempt.Continuation,
+                    outcome: MaterializationRebuildPlanSetLeafOutcome.Skipped,
+                    ready: ready,
+                    promotionChild: child.Continuation));
+                continue;
+            }
+
             var outcome = LeafOutcome(child.TerminalOutcome);
             receipts.Add(new(
                 authority: authority,
@@ -1035,7 +1420,107 @@ static class PlanSetProjection
                         sliceId)
                     : null));
         }
-        return receipts.MoveToImmutable();
+        var forward = receipts.MoveToImmutable();
+        return planSet.Promotion.ProgressiveFailurePolicy
+                == MaterializationProgressivePromotionFailurePolicy.CompensatePromoted
+            && checkpoint.Continuation.Partitions.Any(static partition =>
+                partition.Node == MaterializationRebuildPlanSetProcessFactory.CompensateLeavesNodeId)
+                ? ApplyCompensationLeaves(planSet, checkpoint, forward)
+                : forward;
+    }
+
+    static ImmutableArray<MaterializationRebuildPlanSetLeafReceipt> ApplyCompensationLeaves(
+        MaterializationRebuildPlanSet planSet,
+        ProcessDurableCheckpoint checkpoint,
+        ImmutableArray<MaterializationRebuildPlanSetLeafReceipt> forward)
+    {
+        var promoted = forward
+            .Where(static leaf => leaf.Outcome == MaterializationRebuildPlanSetLeafOutcome.Promoted)
+            .Reverse()
+            .ToArray();
+        var partition = ExactPartition(
+            checkpoint,
+            MaterializationRebuildPlanSetProcessFactory.CompensateLeavesNodeId,
+            promoted.Length)
+            ?? throw new ArgumentException("The exact resolved compensation partition ledger is unavailable.", nameof(checkpoint));
+        var children = checkpoint.Continuation.Children.ToDictionary(static child => child.RegistrationId, StringComparer.Ordinal);
+        var workByProgress = partition.Work.ToDictionary(static work => work.ProgressIdentity, StringComparer.Ordinal);
+        var replacements = new Dictionary<MaterializationPlacementSliceId, MaterializationRebuildPlanSetLeafReceipt>();
+        for (var index = 0; index < promoted.Length; index++)
+        {
+            var leaf = promoted[index];
+            var progress = ProgressIdentity(index, leaf.Authority);
+            if (!workByProgress.TryGetValue(progress, out var work)
+                || !children.TryGetValue(work.ChildRegistrationId, out var child)
+                || !ValidWorkItem(
+                    planSet,
+                    leaf.Authority,
+                    work,
+                    MaterializationIndependentPromotionResultJsonSerializer.Serialize(leaf.Promotion!)))
+            {
+                throw new ArgumentException(
+                    "The parent compensation ledger is missing or substitutes a committed forward step.",
+                    nameof(checkpoint));
+            }
+
+            if (child.Disposition == ProcessChildDisposition.Completed
+                && child.TerminalOutcome == MaterializationRebuildPlanSetProcessFactory.CompletedOutcome
+                && child.Result is not null
+                && TryReadString(child.Result, out var resultJson)
+                && TryDeserialize(
+                    resultJson,
+                    MaterializationProgressivePromotionCompensationJsonSerializer.DeserializeResult,
+                    out MaterializationProgressivePromotionCompensationResult? compensation)
+                && compensation is not null
+                && compensation.Request.Promotion == leaf.Promotion)
+            {
+                replacements.Add(
+                    leaf.Authority.PlacementSlice.Id,
+                    new(
+                        authority: leaf.Authority,
+                        buildChild: leaf.BuildChild,
+                        outcome: compensation.IsRestored
+                            ? MaterializationRebuildPlanSetLeafOutcome.Compensated
+                            : MaterializationRebuildPlanSetLeafOutcome.CompensationFailed,
+                        ready: leaf.Ready,
+                        promotionChild: leaf.PromotionChild,
+                        promotion: leaf.Promotion,
+                        compensationChild: child.Continuation,
+                        compensation: compensation,
+                        failure: compensation.IsRestored
+                            ? null
+                            : Error(
+                                MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.CompensationResultInexact,
+                                "Explicit compensation completed without restoring the exact prior paired route.",
+                                leaf.Authority.PlacementSlice.Id.Value)));
+                continue;
+            }
+
+            replacements.Add(
+                leaf.Authority.PlacementSlice.Id,
+                new(
+                    authority: leaf.Authority,
+                    buildChild: leaf.BuildChild,
+                    outcome: MaterializationRebuildPlanSetLeafOutcome.CompensationFailed,
+                    ready: leaf.Ready,
+                    promotionChild: leaf.PromotionChild,
+                    promotion: leaf.Promotion,
+                    compensationChild: child.Continuation,
+                    terminalEvidence: ChildTerminalEvidence(
+                        child,
+                        MaterializationRebuildPlanSetLeafPhase.Compensation,
+                        nameof(checkpoint)),
+                    failure: Error(
+                        MaterializationRebuildPlanSetDurableOperationDiagnosticCodes.CompensationResultInexact,
+                        "The explicit compensation child did not return exact restoration evidence.",
+                        leaf.Authority.PlacementSlice.Id.Value)));
+        }
+        return
+        [
+            .. forward.Select(leaf => replacements.GetValueOrDefault(
+                leaf.Authority.PlacementSlice.Id,
+                leaf))
+        ];
     }
 
     internal static DateTimeOffset CompletionBoundary(
@@ -1048,6 +1533,7 @@ static class PlanSetProjection
             AdvanceBoundary(ref boundary, leaf.Ready?.ReadyAtUtc);
             AdvanceBoundary(ref boundary, leaf.Promotion?.Admission.Receipt?.CommittedAtUtc);
             AdvanceBoundary(ref boundary, leaf.Promotion?.Routing?.Receipt?.CommittedAtUtc);
+            AdvanceBoundary(ref boundary, leaf.Compensation?.Routing.Receipt?.CommittedAtUtc);
         }
         return boundary;
     }
@@ -1085,6 +1571,9 @@ static class PlanSetProjection
         if (!string.Equals(work.CapacityIdentity, expectedCapacity, StringComparison.Ordinal)
             || work.Partition.State != PortableValueState.Concrete
             || work.Partition.Value is not { Kind: ObservationValueKind.Object } value
+            || !value.TryGetProperty("progressId", out var progress)
+            || progress.Kind != ObservationValueKind.String
+            || !string.Equals(progress.String, work.ProgressIdentity, StringComparison.Ordinal)
             || !value.TryGetProperty("sliceId", out var slice)
             || slice.Kind != ObservationValueKind.String
             || !string.Equals(slice.String, authority.PlacementSlice.Id.Value, StringComparison.Ordinal)
@@ -1100,9 +1589,19 @@ static class PlanSetProjection
         return true;
     }
 
-    static ObservationValue WorkItem(string sliceId, string capacityDomain, string payload) =>
+    internal static string ProgressIdentity(
+        int ordinal,
+        MaterializationRebuildLeafExecutionAuthority authority) =>
+        $"{ordinal.ToString("D10", CultureInfo.InvariantCulture)}/{authority.PlacementSlice.Id.Value}";
+
+    internal static ObservationValue WorkItem(
+        string progressId,
+        string sliceId,
+        string capacityDomain,
+        string payload) =>
         ObservationValue.FromObject(new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
         {
+            ["progressId"] = ObservationValue.FromString(progressId),
             ["sliceId"] = ObservationValue.FromString(sliceId),
             ["capacityDomain"] = ObservationValue.FromString(capacityDomain),
             ["payload"] = ObservationValue.FromString(payload)
