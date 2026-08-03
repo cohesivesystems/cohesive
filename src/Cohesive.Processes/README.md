@@ -150,6 +150,7 @@ it must not revive registry-by-name definitions, delegate replay, or single-curs
 
 ## Related packages
 
+- [Execution Kernel adoption and migration guide](../../docs/EXECUTION_KERNEL_GUIDE.md) for the end-to-end canonical lifecycle, executable examples, and retired-surface replacements.
 - `Cohesive.Transitions` for canonical aggregate transition semantics.
 - `Cohesive.Relations` for canonical relation and query semantics.
 - `Cohesive.Storage` for canonical durable checkpoints, the Process-store contract, and its reference runtime.

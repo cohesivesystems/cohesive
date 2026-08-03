@@ -2,11 +2,14 @@
 
 Cohesive is a library suite for semantic system definition and orchestration of existing infrastructure. It favors defining the meaning of a system first, then attaching interpretations for storage, APIs, presentation, workflows, AI, training, and provider-specific infrastructure.
 
+System-wide architectural documentation starts at the [Cohesive documentation index](docs/index.md).
 Detailed package docs live beside each package under `src/*/README.md` and are included in the corresponding NuGet package.
 
 For a concise account of the adoption cost, incremental entry points, and compounding benefits across blocks, see [Why Use Cohesive Blocks?](docs/WHY_COHESIVE.md).
 
 The [Execution Kernel compatibility inventory](docs/EXECUTION_KERNEL_COMPATIBILITY.md) records the current Transitions and Processes behavior against the normative EK-01 through EK-09 scenarios.
+
+The [Execution Kernel adoption and migration guide](docs/EXECUTION_KERNEL_GUIDE.md) maps package ownership, the canonical execution lifecycle, executable examples, and replacements for retired execution surfaces.
 
 ## Core Packages
 
@@ -16,8 +19,8 @@ The [Execution Kernel compatibility inventory](docs/EXECUTION_KERNEL_COMPATIBILI
 | `Cohesive.Configuration` | Configuration profiles, projection, and dependency selection. |
 | `Cohesive.Relations` | Canonical relationship, relation/query authoring, realization, execution, mapping, and diagnostics. |
 | `Cohesive.Relations.Contracts` | Contract assembly for relation-oriented generated surfaces. |
-| `Cohesive.Transitions` | Entity fields, invariants, transitions, effects, and domain models. |
-| `Cohesive.Processes` | Declarative process definitions and runtime execution contracts. |
+| `Cohesive.Transitions` | Canonical entity-transition IR, typed authoring, validation, compilation, decisions, and reference interpretation. |
+| `Cohesive.Processes` | Canonical multistep Process IR, typed authoring, validation, compilation, continuations, and reference interpretation. |
 | `Cohesive.Presentation` | Backend-declared presentation IR for navigation, views, actions, forms, and flows. |
 | `Cohesive.Api` | Semantic API declarations and endpoint metadata. |
 | `Cohesive.Storage` | Entity repository, durable Process state, materialization, Control, and storage adapter contracts. |
@@ -35,9 +38,9 @@ The [Execution Kernel compatibility inventory](docs/EXECUTION_KERNEL_COMPATIBILI
 | `Cohesive.Adapters.AzureAppConfiguration` | Azure App Configuration integration for Cohesive configuration. |
 | `Cohesive.Adapters.AzureML` | Azure Machine Learning model training and dataset registry integration. |
 | `Cohesive.Adapters.AzureStorage` | Azure Blob Storage training artifacts, dataset streams, and target resolution. |
-| `Cohesive.Adapters.Cosmos` | Cosmos DB storage, query, aggregation, outbox, and vector adapters. |
-| `Cohesive.Adapters.DurableTask` | Azure Durable Task execution for Cohesive processes. |
-| `Cohesive.Adapters.Elastic` | Elasticsearch query and aggregation compilers. |
+| `Cohesive.Adapters.Cosmos` | Cosmos DB storage, Relations acquisition, materialization change-feed sources, outbox, and vector adapters. |
+| `Cohesive.Adapters.DurableTask` | Authority-neutral Durable Task monitoring and execution-status projections. |
+| `Cohesive.Adapters.Elastic` | Elasticsearch query and aggregation compilers plus generation-isolated materialization and promotion targets. |
 | `Cohesive.Adapters.GitHub` | GitHub App authentication and repository access for code workflows. |
 | `Cohesive.Adapters.GraphQL` | GraphQL schema emission from Cohesive API declarations. |
 | `Cohesive.Adapters.Json` | JSON Schema helpers and validators for Cohesive shape graph documents. |

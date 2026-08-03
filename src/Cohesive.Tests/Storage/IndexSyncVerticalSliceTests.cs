@@ -48,6 +48,7 @@ public sealed class IndexSyncVerticalSliceTests
         "6A68A7530D77D4EC92FC40B9DA97BEA07E19BB7269C8A2B2E8B8FD640F1689F7");
 
     [Theory]
+    [Trait("Category", "ExecutionKernelExample")]
     [InlineData(SourceProvider.Cosmos)]
     [InlineData(SourceProvider.Postgres)]
     public async Task SharedRelation_RebuildsResumesConvergesAndPromotesThroughRealAdapters(

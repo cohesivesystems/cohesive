@@ -57,6 +57,7 @@ operation handle, and presentation remains outside the execution semantic author
 
 ## Related Packages
 
+- [Execution Kernel adoption and migration guide](../../docs/EXECUTION_KERNEL_GUIDE.md) for the common status, trace, explain, and telemetry projection contract.
 - `Cohesive.Adapters.AspNet` for ASP.NET endpoint projection.
 - `Cohesive.Adapters.OpenApi` for OpenAPI emission.
 - `Cohesive.Adapters.GraphQL` for GraphQL schema emission.

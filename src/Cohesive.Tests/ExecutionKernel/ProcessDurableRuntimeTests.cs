@@ -11,6 +11,7 @@ public sealed partial class ProcessDurableRuntimeTests
     static readonly TimeSpan WorkerLease = TimeSpan.FromMinutes(5);
 
     [Fact]
+    [Trait("Category", "ExecutionKernelExample")]
     public async Task InitializeThenActivate_CommitsOneCoherentAggregate()
     {
         var fixture = ProcessDurabilityTestFixture.Create(

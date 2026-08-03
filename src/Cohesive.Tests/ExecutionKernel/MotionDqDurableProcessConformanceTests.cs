@@ -21,6 +21,7 @@ public sealed class MotionDqDurableProcessConformanceTests
         InteractionVisibilityDemand.AfterOriginCommit);
 
     [Fact]
+    [Trait("Category", "ExecutionKernelExample")]
     public async Task HappyPath_RestoresInsidePostTermsFork_AndRemainsReferenceEquivalent()
     {
         var fixture = MotionDqProcess.Version1;
