@@ -1,5 +1,7 @@
 using System.Reflection;
 using Cohesive.Adapters.Postgres;
+using Cohesive.Execution;
+using Cohesive.Model.Serialization;
 using Cohesive.Relations.Physical;
 using Cohesive.Storage.Materialization;
 using Npgsql;
@@ -233,6 +235,33 @@ public sealed class PostgresLogicalReplicationContractsTests
         Assert.Equal(PostgresLogicalReplicationFailureKind.SettlementUnconfirmed, exception.FailureKind);
         Assert.Same(failed, exception.Observation);
         Assert.Same(health, exception.Health);
+    }
+
+    [Fact]
+    public void HealthProjection_PreservesAdapterEvidenceAndCommonReadinessSemantics()
+    {
+        var observation = new PostgresLogicalReplicationHealthObservation(
+            state: PostgresLogicalReplicationHealthState.RetentionDanger,
+            scope: Scope,
+            observedAtUtc: ObservedAtUtc,
+            estimatedPendingWalBytes: 1_024,
+            retainedWalBytes: 2_048,
+            remainingSafeWalBytes: 4_096,
+            estimatedLag: TimeSpan.FromSeconds(3),
+            inactivity: TimeSpan.FromSeconds(2),
+            evidenceReference: "postgres/slot-health/v1");
+        var provenance = new ExecutionProvenance(
+            new("cohesive.adapters.postgres", "1"),
+            new("postgres/logical-replication/health"),
+            DocumentOrigin.Generated);
+
+        var health = PostgresLogicalReplicationHealthProjector.Project(observation, provenance);
+
+        Assert.Equal(ExecutionHealthStatus.Degraded, health.Health);
+        Assert.Equal(ExecutionReadinessStatus.Ready, health.Readiness);
+        Assert.Equal(ObservedAtUtc, health.ObservedAtUtc);
+        Assert.True(health.EvidenceReferences.SequenceEqual(["postgres/slot-health/v1"]));
+        Assert.Equal(provenance, health.Provenance);
     }
 
     [Fact]

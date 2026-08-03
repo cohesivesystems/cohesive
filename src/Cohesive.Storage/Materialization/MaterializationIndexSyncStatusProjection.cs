@@ -1,7 +1,6 @@
 using System.Collections.Immutable;
 using Cohesive.Control;
 using Cohesive.Execution;
-using Cohesive.Model;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Physical;
@@ -631,6 +630,7 @@ public static class MaterializationIndexSyncStatusProjector
                 + string.Join(" ", validation.Diagnostics.Select(static diagnostic =>
                     $"{diagnostic.Code}: {diagnostic.Message}")));
         }
+        StorageExecutionTelemetry.RecordMaterialization(generations, progress, control, observation);
         return new ExecutionRuntimeStatusExtension(
             MaterializationIndexSyncStatusWireNames.ExtensionId,
             MaterializationIndexSyncStatusWireNames.SchemaVersion,

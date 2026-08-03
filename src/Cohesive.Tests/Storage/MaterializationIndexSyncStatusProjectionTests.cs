@@ -1,10 +1,10 @@
 using System.Collections.Immutable;
 using Cohesive.Control;
 using Cohesive.Execution;
-using Cohesive.Model;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Physical;
+using Cohesive.Storage;
 using Cohesive.Storage.Materialization;
 using Cohesive.Tests.Storage.Control;
 
@@ -16,6 +16,39 @@ public sealed class MaterializationIndexSyncStatusProjectionTests
     static readonly QualifiedShapeId Shape = new(new("tests"), new("IndexFact"));
     static readonly RelationQueryPhysicalPlanFingerprint PhysicalPlan =
         new("sha256", "tests/index-sync-status-plan/v1", "0123456789abcdef");
+
+    [Fact]
+    public void HealthProjection_UsesRoutingGenerationAndProviderEvidenceWithProvenance()
+    {
+        var fixture = CreateFixture();
+        var observedAtUtc = Epoch.AddMinutes(8);
+        var degraded = StorageExecutionTelemetry.ProjectMaterializationHealth(
+            fixture.Routing,
+            fixture.Generations,
+            new(
+                lagMilliseconds: fixture.Observation.LagMilliseconds,
+                changeLag: fixture.Observation.ChangeLag),
+            observedAtUtc,
+            fixture.Provenance);
+        var failed = StorageExecutionTelemetry.ProjectMaterializationHealth(
+            fixture.Routing,
+            fixture.Generations,
+            fixture.Observation,
+            observedAtUtc,
+            fixture.Provenance);
+
+        Assert.Equal(ExecutionHealthStatus.Degraded, degraded.Health);
+        Assert.Equal(ExecutionReadinessStatus.Ready, degraded.Readiness);
+        Assert.Equal(ExecutionHealthStatus.Unhealthy, failed.Health);
+        Assert.Equal(ExecutionReadinessStatus.NotReady, failed.Readiness);
+        Assert.Equal(observedAtUtc, failed.ObservedAtUtc);
+        Assert.Contains("provider/a", failed.EvidenceReferences);
+        Assert.Contains(fixture.Provenance.Source.Reference, failed.EvidenceReferences);
+        Assert.All(
+            fixture.Generations,
+            generation => Assert.Contains(generation.Generation.ToString(), failed.EvidenceReferences));
+        Assert.Equal(fixture.Observation.Failures, failed.Diagnostics);
+    }
 
     [Fact]
     public void CreateExtension_ProjectsExactAuthoritiesAndNormalizesCollectionOrder()

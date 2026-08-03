@@ -1,10 +1,41 @@
 using Cohesive.Control;
+using Cohesive.Execution;
 using Cohesive.Storage;
 
 namespace Cohesive.Tests.Storage.Control;
 
 public sealed class ControlContractTests
 {
+    [Fact]
+    public void HealthProjection_UsesDurablePressureEvidenceWithoutParallelState()
+    {
+        var definition = ControlRegulatorFixture.Definition();
+        var initial = ControlRegulatorFixture.InitialState(definition);
+        var unknown = StorageExecutionTelemetry.ProjectControlHealth(
+            initial,
+            ControlTestFixture.Provenance());
+        var observation = ControlRegulatorFixture.Observation(
+            initial,
+            "health-projection",
+            value: 5_000);
+        var decision = AimdControlReferenceRegulator.Evaluate(
+            definition,
+            initial,
+            observation,
+            observation.ObservedAtUtc);
+        var healthy = StorageExecutionTelemetry.ProjectControlHealth(
+            decision.State,
+            ControlTestFixture.Provenance());
+
+        Assert.Equal(ExecutionHealthStatus.Unknown, unknown.Health);
+        Assert.Equal(ExecutionReadinessStatus.Unknown, unknown.Readiness);
+        Assert.Equal(ExecutionHealthStatus.Healthy, healthy.Health);
+        Assert.Equal(ExecutionReadinessStatus.Ready, healthy.Readiness);
+        Assert.Equal(decision.State.UpdatedAtUtc, healthy.ObservedAtUtc);
+        Assert.True(healthy.EvidenceReferences.SequenceEqual(
+            ["runtime/sampler-v1", "test:control-definition"]));
+    }
+
     [Fact]
     public void PublicControlSurface_LivesInControlNamespaceInsideStorageAssembly()
     {
