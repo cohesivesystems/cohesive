@@ -62,8 +62,9 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
             runtime: workerRuntime,
             planResolver: new ExactChildPlanResolver(artifacts.WorkerPlan),
             supportedRequests: [artifacts.WorkerInvocationRequest]);
+        var coordinatorStore = new InMemoryProcessDurableStore();
         var coordinatorRuntime = new ProcessDurableRuntime(
-            store: new InMemoryProcessDurableStore(),
+            store: coordinatorStore,
             host: RejectingHost.Instance,
             options: new(
                 workerId: "worker/materialization-rebuild-coordinator",
@@ -85,8 +86,10 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
             start);
         Assert.Equal(ProcessDurableRuntimeDisposition.Applied, initialized.Disposition);
 
-        var emittedInitialization = await coordinatorRuntime.ActivateAsync(
+        var emittedInitialization = await ActivateAndCompareAsync(
             context,
+            coordinatorStore,
+            coordinatorRuntime,
             artifacts.CoordinatorPlan,
             coordinatorContinuation,
             Activation(
@@ -106,8 +109,10 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
             initializationOperation.OperationId);
         Assert.Equal(DurableOperationStatus.Dispositioned, initializationAdvanced.Operation?.Status);
 
-        var admitted = await coordinatorRuntime.ActivateAsync(
+        var admitted = await ActivateAndCompareAsync(
             context,
+            coordinatorStore,
+            coordinatorRuntime,
             artifacts.CoordinatorPlan,
             coordinatorContinuation,
             NextActivation(
@@ -140,8 +145,10 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
                 Assert.IsType<DurableOperationState>(advanced.Operation)));
         }
 
-        var admittedFinal = await coordinatorRuntime.ActivateAsync(
+        var admittedFinal = await ActivateAndCompareAsync(
             context,
+            coordinatorStore,
+            coordinatorRuntime,
             artifacts.CoordinatorPlan,
             coordinatorContinuation,
             NextActivation(
@@ -177,8 +184,10 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
             Assert.Equal(MaterializationCheckpointKind.ChangeProgress, progress.LatestChangeCheckpoint?.Kind);
         });
 
-        var preparationRequested = await coordinatorRuntime.ActivateAsync(
+        var preparationRequested = await ActivateAndCompareAsync(
             context,
+            coordinatorStore,
+            coordinatorRuntime,
             artifacts.CoordinatorPlan,
             coordinatorContinuation,
             NextActivation(
@@ -202,17 +211,33 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
             MaterializationRebuildProcessFactory.ReadyOutcome,
             preparationAdvanced.Operation?.Acknowledgement?.Outcome.Id);
 
-        var completed = await coordinatorRuntime.ActivateAsync(
+        var completionActivation = NextActivation(
+            artifacts,
+            Assert.IsType<ProcessDurableStoreSnapshot>(preparationAdvanced.Snapshot).Checkpoint,
+            id: "activation/coordinator/complete");
+        var completed = await ActivateAndCompareAsync(
+            context,
+            coordinatorStore,
+            coordinatorRuntime,
+            artifacts.CoordinatorPlan,
+            coordinatorContinuation,
+            completionActivation);
+        var completedCheckpoint = Assert.IsType<ProcessDurableStoreSnapshot>(completed.Snapshot).Checkpoint;
+
+        var replayedCompletion = await coordinatorRuntime.ActivateAsync(
             context,
             artifacts.CoordinatorPlan,
             coordinatorContinuation,
-            NextActivation(
-                artifacts,
-                Assert.IsType<ProcessDurableStoreSnapshot>(preparationAdvanced.Snapshot).Checkpoint,
-                id: "activation/coordinator/complete"));
-        var completedCheckpoint = Assert.IsType<ProcessDurableStoreSnapshot>(completed.Snapshot).Checkpoint;
+            completionActivation);
+        var replayedCheckpoint = Assert.IsType<ProcessDurableStoreSnapshot>(replayedCompletion.Snapshot).Checkpoint;
 
         Assert.Equal(ExecutionTerminalOutcomeKind.Completed, completedCheckpoint.Continuation.Terminal.Kind);
+        Assert.Equal(ProcessDurableRuntimeDisposition.Replayed, replayedCompletion.Disposition);
+        Assert.Null(replayedCompletion.Decision);
+        Assert.Equivalent(completedCheckpoint.Continuation, replayedCheckpoint.Continuation, strict: true);
+        Assert.Equal(
+            completedCheckpoint.DurableOperations.Select(static operation => operation.OperationId),
+            replayedCheckpoint.DurableOperations.Select(static operation => operation.OperationId));
         var readyGenerationReference = MaterializationReadyGenerationReferenceJsonSerializer.Deserialize(
             Assert.IsType<ObservationValue>(
                     Assert.IsType<PortableValue>(completedCheckpoint.Continuation.Terminal.Detail?.Value).Value)
@@ -268,6 +293,37 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
         Assert.Equal(terminalTrace.Node, origin.Node);
         Assert.Equal(terminalTrace.Token, origin.Token);
         return origin;
+    }
+
+    static async Task<ProcessDurableActivationResult> ActivateAndCompareAsync(
+        OperationContext context,
+        InMemoryProcessDurableStore store,
+        ProcessDurableRuntime runtime,
+        Cohesive.Processes.Compilation.CompiledProcessPlan plan,
+        ProcessContinuationIdentity continuation,
+        ProcessActivation activation)
+    {
+        var before = Assert.IsType<ProcessDurableStoreSnapshot>(await store.LoadAsync(
+            context,
+            continuation.ProcessInstanceId));
+        var expected = ProcessReferenceInterpreter.Activate(
+            plan,
+            before.Checkpoint.Continuation,
+            activation,
+            RejectingHost.Instance);
+
+        var result = await runtime.ActivateAsync(
+            context,
+            plan,
+            continuation,
+            activation);
+        var actual = Assert.IsType<ProcessActivationDecision>(result.Decision);
+        var checkpoint = Assert.IsType<ProcessDurableStoreSnapshot>(result.Snapshot).Checkpoint;
+
+        Assert.Equal(ProcessDurableRuntimeDisposition.Applied, result.Disposition);
+        Assert.Equivalent(expected, actual, strict: true);
+        Assert.Equivalent(expected.State, checkpoint.Continuation, strict: true);
+        return result;
     }
 
     static ImmutableArray<DurableOperationState> PendingChildOperations(

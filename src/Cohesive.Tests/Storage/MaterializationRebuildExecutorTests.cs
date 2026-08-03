@@ -479,6 +479,20 @@ public sealed partial class MaterializationRebuildExecutorTests
         Assert.Equal(
             MaterializationGenerationState.Retired,
             (await fixture.Target.InspectGenerationAsync(OperationContext.Create(), first.Generation))!.State);
+        var abandonedItems = await Items(fixture.Target, first.Generation);
+        var lateWork = await fixture.Executor.RunShardAsync(
+            OperationContext.Create(),
+            firstAttempt,
+            new("shard-b"));
+        var retainedAbandonedItems = await Items(fixture.Target, first.Generation);
+
+        Assert.Equal(MaterializationRebuildShardDisposition.RestartRequired, lateWork.Disposition);
+        Assert.Contains(
+            lateWork.Diagnostics,
+            static diagnostic => diagnostic.Code == MaterializationRebuildDiagnosticCodes.CandidateNotWritable);
+        Assert.Equal(
+            abandonedItems.Select(static item => (item.ItemId, item.Version, item.MutationId)),
+            retainedAbandonedItems.Select(static item => (item.ItemId, item.Version, item.MutationId)));
 
         var replacementAttempt = Attempt("attempt-2");
         var replacement = await fixture.Executor.BeginAttemptAsync(OperationContext.Create(), replacementAttempt);
