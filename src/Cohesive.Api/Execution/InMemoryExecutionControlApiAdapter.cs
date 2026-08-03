@@ -163,6 +163,7 @@ public sealed class InMemoryExecutionControlApiAdapter
     readonly ProcessControlReferenceExecutor processExecutor;
     readonly Func<ProcessControlState, ExecutionRuntimeStatusDetails?>? runtimeStatus;
     readonly Func<ProcessControlState, ExecutionTerminalOutcome?>? terminalOutcome;
+    readonly Func<InspectProcessCommand, ExecutionExplainArtifact?>? explain;
     readonly ExecutionControlLimitUpdateDispatcher? limitUpdateDispatcher;
     readonly Dictionary<ProcessKey, ProcessEntry> processes = [];
     readonly Dictionary<StartCommandKey, ProcessStartReceipt> startsByCommand = [];
@@ -174,6 +175,9 @@ public sealed class InMemoryExecutionControlApiAdapter
     /// <param name="catalog">Optional canonical API catalog; a fresh canonical catalog is used when omitted.</param>
     /// <param name="runtimeStatus">Optional safe runtime-status projection for token, wait, demand, and extension facets.</param>
     /// <param name="terminalOutcome">Optional safe terminal-outcome projection.</param>
+    /// <param name="explain">
+    /// Optional canonical explanation projection over a trusted read-only Process inspection request.
+    /// </param>
     /// <param name="limitUpdateDispatcher">
     /// Optional authoritative asynchronous dispatcher. When supplied, callers MUST use <see cref="DispatchAsync"/>
     /// for <c>updateLimits</c>; the local Control registry is not consulted.
@@ -184,6 +188,7 @@ public sealed class InMemoryExecutionControlApiAdapter
         ExecutionControlApiCatalog? catalog = null,
         Func<ProcessControlState, ExecutionRuntimeStatusDetails?>? runtimeStatus = null,
         Func<ProcessControlState, ExecutionTerminalOutcome?>? terminalOutcome = null,
+        Func<InspectProcessCommand, ExecutionExplainArtifact?>? explain = null,
         ExecutionControlLimitUpdateDispatcher? limitUpdateDispatcher = null)
     {
         ArgumentNullException.ThrowIfNull(contracts);
@@ -191,6 +196,7 @@ public sealed class InMemoryExecutionControlApiAdapter
         processExecutor = new(contracts);
         this.runtimeStatus = runtimeStatus;
         this.terminalOutcome = terminalOutcome;
+        this.explain = explain;
         this.limitUpdateDispatcher = limitUpdateDispatcher;
     }
 
@@ -209,7 +215,8 @@ public sealed class InMemoryExecutionControlApiAdapter
     /// <exception cref="InvalidOperationException">
     /// <paramref name="endpoint"/> is not owned by this adapter, or a first-time Signal invocation lacks a trusted
     /// <see cref="ExecutionApiInvocationContext.SignalContext"/>, or synchronous <c>updateLimits</c> dispatch is
-    /// attempted while an authoritative asynchronous dispatcher is configured.
+    /// attempted while an authoritative asynchronous dispatcher is configured, or an explanation projection
+    /// returns evidence for another Process instance or attempt.
     /// </exception>
     /// <exception cref="ArgumentException">
     /// Trusted observation time precedes durable state or first-time command issuance.
@@ -233,6 +240,24 @@ public sealed class InMemoryExecutionControlApiAdapter
             return request is ProcessStartRequest start
                 ? DispatchStart(start, invocation)
                 : TypeMismatch(endpoint);
+        }
+
+        if (ReferenceEquals(endpoint, catalog.Explain))
+        {
+            if (request is not InspectProcessCommand inspect)
+                return TypeMismatch(endpoint);
+            var canonical = (InspectProcessCommand)Rebind(inspect, invocation, prior: null);
+            var artifact = explain?.Invoke(canonical);
+            if (artifact is null)
+                return Problem(endpoint, ApiResultKind.NotFound, ExecutionApiProblemCodes.NotFound);
+            if (artifact.RuntimeStatus?.ProcessInstanceId != canonical.Context.ProcessInstanceId
+                || canonical.Expectation is { } expectation
+                    && artifact.RuntimeStatus.CurrentAttemptId != expectation.Continuation.ProcessAttemptId)
+            {
+                throw new InvalidOperationException(
+                    "The explanation projection returned evidence for another Process instance or attempt.");
+            }
+            return Result(endpoint, ApiResultKind.Success, artifact);
         }
 
         if (ReferenceEquals(endpoint, catalog.UpdateLimits))
@@ -703,6 +728,7 @@ public sealed class InMemoryExecutionControlApiAdapter
     {
         if (!ReferenceEquals(endpoint, catalog.Start)
             && !ReferenceEquals(endpoint, catalog.Inspect)
+            && !ReferenceEquals(endpoint, catalog.Explain)
             && !ReferenceEquals(endpoint, catalog.Signal)
             && !ReferenceEquals(endpoint, catalog.Pause)
             && !ReferenceEquals(endpoint, catalog.Continue)

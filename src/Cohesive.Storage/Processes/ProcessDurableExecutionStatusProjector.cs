@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Cohesive.Execution;
 
 namespace Cohesive.Storage.Processes;
@@ -14,15 +15,33 @@ public static class ProcessDurableExecutionStatusProjector
     /// <exception cref="ArgumentNullException"><paramref name="checkpoint"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">The checkpoint cannot be represented by the common status contract.</exception>
     public static ExecutionStatus Project(ProcessDurableCheckpoint checkpoint)
+        => Project(checkpoint, extensions: []);
+
+    /// <summary>Projects canonical durable Process state with typed runtime-owned status extensions.</summary>
+    /// <param name="checkpoint">Complete durable Process checkpoint to project.</param>
+    /// <param name="extensions">Typed block-specific runtime status extensions to attach.</param>
+    /// <returns>
+    /// Common execution status whose Process facets come from the checkpoint and whose extension facets retain
+    /// their original block authorities.
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="checkpoint"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// The checkpoint or supplied extensions cannot be represented by the common status contract.
+    /// </exception>
+    public static ExecutionStatus Project(
+        ProcessDurableCheckpoint checkpoint,
+        ImmutableArray<ExecutionRuntimeStatusExtension> extensions)
     {
         ArgumentNullException.ThrowIfNull(checkpoint);
         return ExecutionStatusProjector.Project(
             state: checkpoint.Control,
-            runtime: ProjectRuntime(checkpoint),
+            runtime: ProjectRuntime(checkpoint, extensions),
             terminalOutcome: checkpoint.Continuation.Terminal);
     }
 
-    static ExecutionRuntimeStatusDetails ProjectRuntime(ProcessDurableCheckpoint checkpoint)
+    static ExecutionRuntimeStatusDetails ProjectRuntime(
+        ProcessDurableCheckpoint checkpoint,
+        ImmutableArray<ExecutionRuntimeStatusExtension> extensions)
     {
         var state = checkpoint.Continuation;
         var health = GetHealth(checkpoint);
@@ -62,7 +81,8 @@ public static class ProcessDurableExecutionStatusProjector
             demand: new(
                 ready: state.Tokens.Count(static token => token.Disposition == ExecutionTokenDisposition.Ready),
                 delayed: 0),
-            health: health);
+            health: health,
+            extensions: extensions);
     }
 
     static ExecutionHealthStatus GetHealth(ProcessDurableCheckpoint checkpoint)

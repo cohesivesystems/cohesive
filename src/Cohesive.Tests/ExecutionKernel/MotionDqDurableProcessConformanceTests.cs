@@ -171,6 +171,69 @@ public sealed class MotionDqDurableProcessConformanceTests
     }
 
     [Fact]
+    public async Task OperationalExplain_IdentifiesExactReviewWaitAndResolvingEvidenceWithoutBusinessPayloads()
+    {
+        var fixture = MotionDqProcess.Version1;
+        var clock = new ScenarioClock(new(2026, 8, 1, 16, 0, 0, TimeSpan.Zero));
+        var input = Input(clock.Peek.AddDays(1));
+        var durableHost = new StatefulTransitionHost(fixture, input);
+        var adapter = new MotionDqScenarioAdapter(fixture);
+        var store = new InMemoryProcessDurableStore();
+        var runtime = Runtime(store, fixture, durableHost, adapter);
+        var initialized = await runtime.InitializeAsync(
+            Context(clock.Next()),
+            fixture.Plan,
+            Start(fixture, input, clock.Next(), clock.Next()));
+        var checkpoint = Assert.IsType<ProcessDurableStoreSnapshot>(initialized.Snapshot).Checkpoint;
+        checkpoint = await ReachReviewWaitAsync(
+            store,
+            runtime,
+            fixture,
+            durableHost,
+            checkpoint,
+            clock,
+            scenario: "operational-explain");
+        var wait = Assert.Single(
+            checkpoint.Continuation.Waits,
+            static value => value.Active && value.Node.Value == "motion-dq/review/await-match");
+
+        var projection = ProcessDurableExecutionExplainProjector.Project(fixture.Compilation, checkpoint);
+
+        var artifact = Assert.IsType<ExecutionExplainArtifact>(projection.Artifact);
+        Assert.Contains(
+            artifact.Evidence,
+            item => item.Kind == ProcessDurableExecutionExplainProjector.WaitRegistrationEvidenceKind
+                && item.Subject == wait.RegistrationId.Value
+                && item.RelatedSubjects.Contains($"attempt:{checkpoint.ContinuationIdentity.ProcessAttemptId.Value}"));
+        Assert.Contains(
+            artifact.Evidence,
+            item => item.Kind == ProcessDurableExecutionExplainProjector.ExpectedInputEvidenceKind
+                && item.RelatedSubjects.Any(value => value.StartsWith(
+                    $"definition:{fixture.Interactions.ReviewDecisionSignal.Definition.DefinitionId.Value}@",
+                    StringComparison.Ordinal)));
+        Assert.Contains(
+            artifact.Evidence,
+            item => item.Kind == ProcessDurableExecutionExplainProjector.ExpectedInputEvidenceKind
+                && item.RelatedSubjects.Any(value => value.StartsWith(
+                    $"definition:{fixture.Interactions.CaseCancellationSignal.Definition.DefinitionId.Value}@",
+                    StringComparison.Ordinal)));
+        var diagnostic = Assert.Single(
+            artifact.Diagnostics,
+            static value => value.Code == ProcessDurableExecutionExplainProjector.InputRequiredDiagnosticCode);
+        Assert.Equal(wait.RegistrationId.Value, diagnostic.Evidence?.Subject);
+        Assert.Contains(
+            diagnostic.Evidence!.ResolutionOptions,
+            static value => value.Contains("compatible authored input", StringComparison.Ordinal));
+        Assert.Contains(
+            artifact.RuntimeStatus!.Runtime.Waits,
+            value => value.Node == wait.Node && value.TokenId == wait.Token);
+
+        var json = ExecutionExplainJsonSerializer.Serialize(artifact);
+        Assert.DoesNotContain("case/motion-dq/1", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("application/motion-dq/1", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task HoldCycle_RestoresFreshWait_ThenHigherPriorityHireBeatsDueTimer()
     {
         var fixture = MotionDqProcess.Version1;

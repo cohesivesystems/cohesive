@@ -8,13 +8,14 @@ namespace Cohesive.Tests.Api;
 public sealed class ExecutionControlApiCatalogTests
 {
     [Fact]
-    public void CanonicalCatalog_DeclaresExactlyNineTransportNeutralOperationsInStableOrder()
+    public void CanonicalCatalog_DeclaresControlAndDiagnosticsOperationsInStableOrder()
     {
         var catalog = ExecutionControlApiCatalog.Create();
         ApiEndpoint[] endpoints =
         [
             catalog.Start,
             catalog.Inspect,
+            catalog.Explain,
             catalog.Signal,
             catalog.Pause,
             catalog.Continue,
@@ -24,13 +25,14 @@ public sealed class ExecutionControlApiCatalogTests
             catalog.UpdateLimits
         ];
 
-        Assert.Equal(9, catalog.Definition.Operations.Count);
-        Assert.Equal("cohesive-execution-control-api/v2", ExecutionControlApiCatalog.CurrentSchemaVersion.Value);
+        Assert.Equal(10, catalog.Definition.Operations.Count);
+        Assert.Equal("cohesive-execution-control-api/v3", ExecutionControlApiCatalog.CurrentSchemaVersion.Value);
         Assert.Equal(endpoints, catalog.Definition.Endpoints);
         Assert.Equal(
             [
                 ProcessStartWireNames.Start,
                 ExecutionControlWireNames.Inspect,
+                ExecutionExplainWireNames.Explain,
                 ExecutionControlWireNames.Signal,
                 ExecutionControlWireNames.Pause,
                 ExecutionControlWireNames.Continue,
@@ -43,6 +45,7 @@ public sealed class ExecutionControlApiCatalogTests
         Assert.Equal(
             [
                 typeof(ProcessStartRequest),
+                typeof(InspectProcessCommand),
                 typeof(InspectProcessCommand),
                 typeof(SignalProcessCommand),
                 typeof(PauseProcessCommand),
@@ -105,10 +108,13 @@ public sealed class ExecutionControlApiCatalogTests
                 kernel =>
                 {
                     var isStart = operation.Name == ProcessStartWireNames.Start;
+                    var isExplain = operation.Name == ExecutionExplainWireNames.Explain;
                     var isLimitUpdate = operation.Name == ControlLimitUpdateWireNames.UpdateLimits;
                     Assert.Equal(
                         isStart
                             ? ProcessStartWireNames.SemanticAuthority
+                            : isExplain
+                                ? ExecutionExplainWireNames.SemanticAuthority
                             : isLimitUpdate
                                 ? ControlLimitUpdateWireNames.SemanticAuthority
                                 : ExecutionControlWireNames.SemanticAuthority,
@@ -116,12 +122,16 @@ public sealed class ExecutionControlApiCatalogTests
                     Assert.Equal(
                         isStart
                             ? ProcessStartRequest.CurrentSchemaVersion
+                            : isExplain
+                                ? ExecutionExplainArtifact.CurrentSchemaVersion
                             : isLimitUpdate
                                 ? ControlLoopDefinition.CurrentSchemaVersion
                                 : ProcessControlCommand.CurrentSchemaVersion,
                         kernel.SchemaVersion);
                     var expectedPath = isStart
                         ? ProcessStartWireNames.RequestPath
+                        : isExplain
+                            ? ExecutionExplainWireNames.QueryPath
                         : isLimitUpdate
                             ? ControlLimitUpdateWireNames.CommandPath
                             : ExecutionControlWireNames.CommandPath(operation.Name);

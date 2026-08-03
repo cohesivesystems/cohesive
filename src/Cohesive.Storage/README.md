@@ -106,6 +106,24 @@ of inputs admitted only after terminal commit is likewise a subsequent runtime s
 dispositioned before Reply admission, and every input pending at cooperative cancellation is classified in that
 terminal cut.
 
+### Operational explanations
+
+`ProcessDurableExecutionExplainProjector` composes an existing Process compilation with a canonical durable
+checkpoint. It reuses the common status and normalized-trace projectors, then adds payload-free active-wait
+registrations, exact authored interaction contracts and timers, attempt/token/node lineage, and a structured
+`process.wait.inputRequired` diagnostic. The Motion DQ durable conformance fixture is the reference case: a blocked
+caseworker review identifies the exact registration and the evidence that can resolve it without disclosing the
+onboarding case or application payload.
+
+`MaterializationIndexSyncExecutionExplainProjector` adds the existing typed index-sync status extension and
+Storage-owned explain evidence to that same artifact. Routing, source-feed progress, backlog, lag, generation
+health, measured Control pressure, retained recommendation, and effective operating point continue to come from
+their canonical Storage and Control values. Congestion emits the structured
+`materialization.indexSync.throttled` diagnostic with safe next actions. Both projectors return
+`ExecutionExplainArtifact`, so API, CLI, tests, and documentation can serialize one common contract through
+`ExecutionExplainJsonSerializer`; runtime observations remain marked as measured and cannot silently change the
+authored definition.
+
 ## Canonical relation/query sources
 
 Storage contributes physical acquisition to `Cohesive.Relations`; it does not define another predicate, join,

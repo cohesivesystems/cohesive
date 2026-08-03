@@ -135,6 +135,80 @@ public sealed class InMemoryExecutionControlApiAdapterTests
     }
 
     [Fact]
+    public void Explain_ReturnsCanonicalArtifactThroughSameTypedCatalogAndTrustedQueryBoundary()
+    {
+        var fixture = ProcessControlTestFixture.Create();
+        var catalog = ExecutionControlApiCatalog.Create();
+        var initial = fixture.State();
+        var status = ExecutionStatusProjector.Project(initial, ExecutionRuntimeStatusDetails.Unknown);
+        var kind = new ExecutionDefinitionKind("tests.process");
+        var schema = new ExecutionIrSchemaVersion("tests/process/v1");
+        var provenance = TrustedProvenance("tests/explain/definition");
+        var interpreter = new ExecutionInterpreterProfileReference(
+            "tests.process.interpreter",
+            "v1",
+            new([schema]),
+            [kind],
+            provenance);
+        var artifact = new ExecutionExplainArtifact(
+            ExecutionExplainArtifact.CurrentSchemaVersion,
+            new(kind, schema, initial.Definition, provenance, ExecutionSourceMap.Empty),
+            interpreter,
+            evidence:
+            [
+                new(
+                    ExecutionExplainStageNames.Definition,
+                    kind.Value,
+                    initial.Definition.DefinitionId.Value,
+                    ExecutionExplainEvidenceAuthority.Declared,
+                    "Available",
+                    sourceReferences: [provenance.Source.Reference]),
+                new(
+                    ExecutionExplainStageNames.InterpreterProfile,
+                    "execution.interpreterProfile",
+                    interpreter.Id,
+                    ExecutionExplainEvidenceAuthority.Declared,
+                    "Supported",
+                    sourceReferences: [provenance.Source.Reference])
+            ],
+            runtimeStatus: status);
+        InspectProcessCommand? received = null;
+        var adapter = new InMemoryExecutionControlApiAdapter(
+            fixture.Catalog,
+            catalog,
+            explain: command =>
+            {
+                received = command;
+                return artifact;
+            });
+        var request = new InspectProcessCommand(
+            ProcessControlCommand.CurrentSchemaVersion,
+            ClientContext(initial.ProcessInstanceId, "explain/1"),
+            Expectation(initial, initial.Revision));
+
+        var response = Dispatch<ExecutionExplainArtifact>(
+            adapter,
+            catalog.Explain,
+            request,
+            Invocation(catalog, BaselineUtc.AddSeconds(1), BaselineUtc.AddSeconds(2)));
+
+        Assert.Same(artifact, response);
+        Assert.Equal(TrustedAuthorization().AuthorityScope, received!.Context.Authorization.AuthorityScope);
+        Assert.Equal(TrustedProvenance(), received.Context.Provenance);
+
+        var denied = adapter.Dispatch(
+            catalog.Explain,
+            request,
+            Invocation(
+                catalog,
+                BaselineUtc.AddSeconds(3),
+                BaselineUtc.AddSeconds(4),
+                grantedRequirements: []));
+        Assert.Equal(ApiResultKind.Forbidden, denied.Result.Kind);
+        Assert.IsType<ExecutionApiProblem>(denied.Body);
+    }
+
+    [Fact]
     public async Task ConcurrentLifecycleCommandsWithTheSameFence_LinearizeToOneSuccessAndOnePreciseStaleResult()
     {
         var fixture = ProcessControlTestFixture.Create();

@@ -4,8 +4,10 @@ using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Physical;
+using Cohesive.Processes.Execution;
 using Cohesive.Storage;
 using Cohesive.Storage.Materialization;
+using Cohesive.Storage.Processes;
 using Cohesive.Tests.Storage.Control;
 
 namespace Cohesive.Tests.Storage;
@@ -48,6 +50,148 @@ public sealed class MaterializationIndexSyncStatusProjectionTests
             fixture.Generations,
             generation => Assert.Contains(generation.Generation.ToString(), failed.EvidenceReferences));
         Assert.Equal(fixture.Observation.Failures, failed.Diagnostics);
+    }
+
+    [Fact]
+    public void ExplainEvidence_IdentifiesThrottlingOperatingPointBacklogLagShardsAndGenerationHealth()
+    {
+        var fixture = CreateFixture();
+
+        var evidence = StorageExecutionExplainEvidenceProjector.ProjectMaterializationStatus(
+            fixture.Routing,
+            fixture.Progress,
+            fixture.Generations,
+            fixture.Control,
+            fixture.Observation,
+            fixture.Provenance);
+
+        Assert.Contains(
+            evidence,
+            static item => item.Kind == StorageExecutionExplainEvidenceKinds.MaterializationBacklog
+                && item.Status == "19"
+                && item.Authority == ExecutionExplainEvidenceAuthority.Measured);
+        Assert.Contains(
+            evidence,
+            static item => item.Kind == StorageExecutionExplainEvidenceKinds.MaterializationLag
+                && item.Status == "125"
+                && item.RelatedSubjects.Contains("unit:milliseconds"));
+        Assert.Equal(
+            ["input/a", "input/z"],
+            evidence.Where(static item =>
+                    item.Kind == StorageExecutionExplainEvidenceKinds.MaterializationSourceProgress)
+                .Select(static item => item.Subject.Split(':')[1]));
+        Assert.Contains(
+            evidence,
+            static item => item.Kind == StorageExecutionExplainEvidenceKinds.MaterializationGenerationHealth
+                && item.Subject.StartsWith("target/a", StringComparison.Ordinal)
+                && item.Status == MaterializationIndexSyncGenerationHealth.Degraded.ToString());
+        Assert.Contains(
+            evidence,
+            static item => item.Kind == StorageExecutionExplainEvidenceKinds.ControlObservation
+                && item.Status == ControlPressureClassification.Congested.ToString()
+                && item.Authority == ExecutionExplainEvidenceAuthority.Measured);
+        Assert.Contains(
+            evidence,
+            static item => item.Kind == StorageExecutionExplainEvidenceKinds.ControlRecommendation
+                && item.Status == ControlRecommendationDirection.Decrease.ToString()
+                && item.Authority == ExecutionExplainEvidenceAuthority.Recommended);
+        Assert.Contains(
+            evidence,
+            static item => item.Kind == StorageExecutionExplainEvidenceKinds.ControlOperatingPoint
+                && item.Status.Contains("Concurrency=4", StringComparison.Ordinal)
+                && item.Status.Contains("BatchItems=20", StringComparison.Ordinal)
+                && item.Authority == ExecutionExplainEvidenceAuthority.Applied);
+
+        var reordered = StorageExecutionExplainEvidenceProjector.ProjectMaterializationStatus(
+                fixture.Routing,
+                [.. fixture.Progress.Reverse()],
+                [.. fixture.Generations.Reverse()],
+                fixture.Control,
+                fixture.Observation,
+                fixture.Provenance);
+        Assert.Equal(
+            EvidenceIdentities(evidence),
+            EvidenceIdentities(reordered));
+    }
+
+    [Fact]
+    public void OperationalExplain_ComposesRebuildProcessStorageAndControlIntoCanonicalArtifact()
+    {
+        var fixture = CreateFixture();
+        var artifacts = MaterializationRebuildProcessFactory.Create();
+        ProcessContinuationIdentity continuation = new(
+            new("process/materialization-rebuild/explain"),
+            new("attempt/1"));
+        var request = new ProcessStartRequest(
+            ProcessStartRequest.CurrentSchemaVersion,
+            artifacts.CoordinatorPlan.DefinitionReference,
+            new(
+                new("start/materialization-rebuild/explain"),
+                new("start-idempotency/materialization-rebuild/explain"),
+                continuation.ProcessInstanceId,
+                new("operator/tests", new("authority/tests", "tenant/tests"), "policy/tests/allow"),
+                Epoch,
+                artifacts.CoordinatorProcessDocument.Metadata.Provenance),
+            continuation,
+            PortableValue.Concrete(
+                artifacts.CoordinatorPlan.Definition.Input,
+                ObservationValue.FromString("materialization-rebuild-plan/explain")));
+        var start = new ProcessStartReceipt(request, Epoch);
+        var process = ProcessReferenceInterpreter.Create(artifacts.CoordinatorPlan, start);
+        var checkpoint = new ProcessDurableCheckpoint(
+            ProcessDurableCheckpoint.CurrentSchemaVersion,
+            start,
+            process,
+            start.CreateInitialState(),
+            createdAtUtc: Epoch,
+            updatedAtUtc: Epoch);
+
+        var first = MaterializationIndexSyncExecutionExplainProjector.Project(
+            artifacts.CoordinatorCompilation,
+            checkpoint,
+            fixture.Routing,
+            fixture.Progress,
+            fixture.Generations,
+            fixture.Control,
+            fixture.Observation,
+            fixture.Provenance);
+        var second = MaterializationIndexSyncExecutionExplainProjector.Project(
+            artifacts.CoordinatorCompilation,
+            checkpoint,
+            fixture.Routing,
+            [.. fixture.Progress.Reverse()],
+            [.. fixture.Generations.Reverse()],
+            fixture.Control,
+            fixture.Observation,
+            fixture.Provenance);
+
+        var artifact = Assert.IsType<ExecutionExplainArtifact>(first.Artifact);
+        Assert.Equal(
+            ExecutionExplainJsonSerializer.Serialize(artifact),
+            ExecutionExplainJsonSerializer.Serialize(Assert.IsType<ExecutionExplainArtifact>(second.Artifact)));
+        Assert.Contains(
+            artifact.Diagnostics,
+            static item => item.Code == MaterializationIndexSyncExecutionExplainProjector.ThrottledDiagnosticCode
+                && item.Evidence!.Observed == ControlPressureClassification.Congested.ToString());
+        Assert.Contains(
+            artifact.Evidence,
+            static item => item.Kind == StorageExecutionExplainEvidenceKinds.ControlRecommendation
+                && item.Authority == ExecutionExplainEvidenceAuthority.Recommended);
+        Assert.Contains(
+            artifact.Evidence,
+            static item => item.Kind == StorageExecutionExplainEvidenceKinds.ControlOperatingPoint
+                && item.Authority == ExecutionExplainEvidenceAuthority.Applied);
+        Assert.Contains(
+            artifact.Evidence,
+            static item => item.Kind == StorageExecutionExplainEvidenceKinds.MaterializationBacklog
+                && item.Status == "19");
+        Assert.Contains(
+            artifact.Evidence,
+            static item => item.Kind == StorageExecutionExplainEvidenceKinds.MaterializationGenerationHealth
+                && item.Status == MaterializationIndexSyncGenerationHealth.Degraded.ToString());
+        Assert.Contains(
+            artifact.RuntimeStatus!.Runtime.Extensions,
+            static item => item.Id == MaterializationIndexSyncStatusWireNames.ExtensionId);
     }
 
     [Fact]
@@ -1183,6 +1327,17 @@ public sealed class MaterializationIndexSyncStatusProjectionTests
 
     static ObservationValue Root(ExecutionRuntimeStatusExtension extension) =>
         Assert.IsType<ObservationValue>(extension.Value.Value!.Value);
+
+    static IEnumerable<string> EvidenceIdentities(ImmutableArray<ExecutionExplainEvidence> evidence) =>
+        evidence.Select(static item => string.Join(
+            "|",
+            item.Stage,
+            item.Kind,
+            item.Subject,
+            item.Authority,
+            item.Status,
+            string.Join(",", item.RelatedSubjects),
+            string.Join(",", item.SourceReferences)));
 
     static ObjectTypeRef ObjectField(ObjectTypeRef owner, string fieldName) =>
         Assert.IsType<ObjectTypeRef>(Field(owner, fieldName).Type);

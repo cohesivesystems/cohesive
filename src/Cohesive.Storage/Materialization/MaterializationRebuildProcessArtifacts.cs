@@ -29,10 +29,8 @@ public sealed class MaterializationRebuildProcessArtifacts
         DurableRequestBinding shardRebuildBinding,
         RequestContractReference synchronizationPreparationRequest,
         DurableRequestBinding synchronizationPreparationBinding,
-        ExecutionDefinitionDocument workerProcessDocument,
-        CompiledProcessPlan workerPlan,
-        ExecutionDefinitionDocument coordinatorProcessDocument,
-        CompiledProcessPlan coordinatorPlan)
+        ProcessCompilationResult workerCompilation,
+        ProcessCompilationResult coordinatorCompilation)
     {
         InteractionDocuments = interactionDocuments;
         InteractionCatalog = interactionCatalog;
@@ -44,11 +42,18 @@ public sealed class MaterializationRebuildProcessArtifacts
         ShardRebuildBinding = shardRebuildBinding;
         SynchronizationPreparationRequest = synchronizationPreparationRequest;
         SynchronizationPreparationBinding = synchronizationPreparationBinding;
-        WorkerProcessDocument = workerProcessDocument;
-        WorkerPlan = workerPlan;
-        CoordinatorProcessDocument = coordinatorProcessDocument;
-        CoordinatorPlan = coordinatorPlan;
-        ProcessDocuments = [workerProcessDocument, coordinatorProcessDocument];
+        WorkerCompilation = workerCompilation ?? throw new ArgumentNullException(nameof(workerCompilation));
+        WorkerPlan = workerCompilation.Plan
+            ?? throw new ArgumentException("Worker compilation must contain a valid plan.", nameof(workerCompilation));
+        WorkerProcessDocument = workerCompilation.Document;
+        CoordinatorCompilation = coordinatorCompilation
+            ?? throw new ArgumentNullException(nameof(coordinatorCompilation));
+        CoordinatorPlan = coordinatorCompilation.Plan
+            ?? throw new ArgumentException(
+                "Coordinator compilation must contain a valid plan.",
+                nameof(coordinatorCompilation));
+        CoordinatorProcessDocument = coordinatorCompilation.Document;
+        ProcessDocuments = [WorkerProcessDocument, CoordinatorProcessDocument];
         DurableRequestBindings =
         [
             initializationBinding,
@@ -93,11 +98,17 @@ public sealed class MaterializationRebuildProcessArtifacts
     /// <summary>Canonical worker Process document.</summary>
     public ExecutionDefinitionDocument WorkerProcessDocument { get; }
 
+    /// <summary>Complete target-independent worker Process compilation.</summary>
+    public ProcessCompilationResult WorkerCompilation { get; }
+
     /// <summary>Validated target-independent plan for <see cref="WorkerProcessDocument"/>.</summary>
     public CompiledProcessPlan WorkerPlan { get; }
 
     /// <summary>Canonical coordinator Process document.</summary>
     public ExecutionDefinitionDocument CoordinatorProcessDocument { get; }
+
+    /// <summary>Complete target-independent coordinator Process compilation.</summary>
+    public ProcessCompilationResult CoordinatorCompilation { get; }
 
     /// <summary>Validated target-independent plan for <see cref="CoordinatorProcessDocument"/>.</summary>
     public CompiledProcessPlan CoordinatorPlan { get; }
@@ -395,10 +406,8 @@ public static class MaterializationRebuildProcessFactory
             shardRebuildBinding,
             synchronizationPreparation.Request,
             synchronizationPreparationBinding,
-            workerDocument,
-            workerPlan,
-            coordinatorDocument,
-            coordinatorPlan);
+            workerCompilation,
+            coordinatorCompilation);
     }
 
     static CanonicalProcessDefinition CoordinatorDefinition(
