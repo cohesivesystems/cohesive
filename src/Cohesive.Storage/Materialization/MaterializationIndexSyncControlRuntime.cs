@@ -213,6 +213,7 @@ public sealed class MaterializationIndexSyncControlRuntime
             snapshot.State,
             observation,
             context.UtcNow);
+        StorageExecutionTelemetry.RecordControlDecision(decision);
         if (decision.Disposition == ControlDecisionDisposition.Rejected)
             throw Failure("Control observation was rejected", decision.Diagnostics);
         if (decision.Disposition == ControlDecisionDisposition.Replayed)
@@ -538,6 +539,7 @@ public sealed class MaterializationIndexSyncControlRuntime
                 snapshot.State,
                 observation,
                 context.UtcNow);
+            StorageExecutionTelemetry.RecordControlDecision(decision);
             if (decision.Disposition == ControlDecisionDisposition.Rejected)
                 throw Failure("Control observation was rejected", decision.Diagnostics);
             if (decision.Disposition == ControlDecisionDisposition.Replayed)
@@ -609,20 +611,30 @@ public sealed class MaterializationIndexSyncControlRuntime
                 definition.ApplicationAuthority,
                 sourceReference);
 
+            ControlActuationResult? adaptiveResult = null;
+            ControlLimitUpdateActuationResult? operatorResult = null;
             ControlLoopState next;
             if (operatorEligible)
             {
-                var result = ControlLimitUpdateReferenceReducer.Apply(definition, state, point, context.UtcNow);
-                if (result.Disposition != ControlActuationDisposition.Applied)
-                    throw Failure("Operator Control update was not applied at its exact safe point", result.Diagnostics);
-                next = result.State;
+                operatorResult = ControlLimitUpdateReferenceReducer.Apply(definition, state, point, context.UtcNow);
+                if (operatorResult.Disposition != ControlActuationDisposition.Applied)
+                    throw Failure("Operator Control update was not applied at its exact safe point", operatorResult.Diagnostics);
+                next = operatorResult.State;
             }
             else
             {
-                var result = AimdControlReferenceRegulator.Apply(definition, state, point, context.UtcNow);
-                if (result.Disposition != ControlActuationDisposition.Applied)
-                    throw Failure("Adaptive Control recommendation was not applied at its exact safe point", result.Diagnostics);
-                next = result.State;
+                adaptiveResult = AimdControlReferenceRegulator.Apply(definition, state, point, context.UtcNow);
+                if (adaptiveResult.Disposition != ControlActuationDisposition.Applied)
+                    throw Failure("Adaptive Control recommendation was not applied at its exact safe point", adaptiveResult.Diagnostics);
+                next = adaptiveResult.State;
+            }
+
+            void RecordActuation()
+            {
+                if (adaptiveResult is not null)
+                    StorageExecutionTelemetry.RecordControlActuation(adaptiveResult);
+                else
+                    StorageExecutionTelemetry.RecordControlActuation(operatorResult!);
             }
 
             var write = await store.CompareExchangeAsync(
@@ -636,6 +648,7 @@ public sealed class MaterializationIndexSyncControlRuntime
             if (write.Disposition is MaterializationIndexSyncControlWriteDisposition.Applied
                 or MaterializationIndexSyncControlWriteDisposition.Replayed)
             {
+                RecordActuation();
                 return Snapshot(snapshot.Realization, write.State!);
             }
             if (write.Disposition == MaterializationIndexSyncControlWriteDisposition.RevisionConflict)
@@ -647,6 +660,7 @@ public sealed class MaterializationIndexSyncControlRuntime
                 && write.State is { } committed
                 && HasApplicationPoint(committed, point.Id))
             {
+                RecordActuation();
                 return Snapshot(snapshot.Realization, committed);
             }
             throw new InvalidOperationException(

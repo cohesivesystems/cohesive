@@ -435,7 +435,7 @@ public sealed partial class ProcessDurableRuntime
             preventedAtUtc,
             activationContext,
             cancellation: cancellation);
-        var activationDecision = ProcessReferenceInterpreter.Activate(
+        var activationDecision = ProcessDurableRuntime.Activate(
             plan,
             checkpoint.Continuation,
             activation,

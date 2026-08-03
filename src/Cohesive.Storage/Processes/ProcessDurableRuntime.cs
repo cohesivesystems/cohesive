@@ -291,7 +291,7 @@ public sealed partial class ProcessDurableRuntime
             }
 
             var replayHost = new ProcessOperationReplayHost(host, checkpoint.Operations);
-            var decision = ProcessReferenceInterpreter.Activate(
+            var decision = Activate(
                 plan,
                 checkpoint.Continuation,
                 activation,
@@ -775,7 +775,7 @@ public sealed partial class ProcessDurableRuntime
                     .Where(static entry => entry.Receipt is null)
                     .Select(static entry => entry.Input)],
                 cancellation: cancellation);
-            var activationDecision = ProcessReferenceInterpreter.Activate(
+            var activationDecision = Activate(
                 plan,
                 checkpoint.Continuation,
                 activation,
@@ -1100,11 +1100,22 @@ public sealed partial class ProcessDurableRuntime
 
     async Task<ProcessStoreMutationResult?> CommitExactAsync(
         OperationContext context,
-        ProcessDurableCommit commit) =>
-        await RetryAmbiguousStoreMutationAsync(
+        ProcessDurableCommit commit)
+    {
+        var committed = await RetryAmbiguousStoreMutationAsync(
                 context,
                 () => store.CommitAsync(context, commit))
             .ConfigureAwait(false);
+        if (committed is
+            {
+                Disposition: ProcessStoreMutationDisposition.Applied or ProcessStoreMutationDisposition.Replayed,
+                Snapshot: { } snapshot
+            })
+        {
+            StorageExecutionTelemetry.RecordCheckpoint(snapshot.Checkpoint);
+        }
+        return committed;
+    }
 
     async Task<ProcessStoreMutationResult?> RetryAmbiguousStoreMutationAsync(
         OperationContext context,
@@ -1156,6 +1167,56 @@ public sealed partial class ProcessDurableRuntime
     static ProcessControlReferenceExecutor ControlExecutor(CompiledProcessPlan plan) =>
         new(plan.ValidationContext.InteractionContracts
             ?? throw new InvalidOperationException("Durable Process control requires the compiled interaction catalog."));
+
+    internal static ProcessActivationDecision Activate(
+        CompiledProcessPlan plan,
+        ProcessContinuationState state,
+        ProcessActivation activation,
+        IProcessReferenceHost host)
+    {
+        var activity = ExecutionTelemetry.StartActivity(ExecutionTelemetryActivityKind.Activation);
+        try
+        {
+            var decision = ProcessReferenceInterpreter.Activate(plan, state, activation, host);
+            var outcome = decision.Disposition switch
+            {
+                ProcessActivationDisposition.Quiescent or ProcessActivationDisposition.DurableCut
+                    or ProcessActivationDisposition.Completed => ExecutionTelemetryOutcome.Succeeded,
+                ProcessActivationDisposition.Failed => ExecutionTelemetryOutcome.Failed,
+                ProcessActivationDisposition.Cancelled => ExecutionTelemetryOutcome.Cancelled,
+                ProcessActivationDisposition.Rejected => ExecutionTelemetryOutcome.Rejected,
+                _ => throw new ArgumentOutOfRangeException(
+                    nameof(decision),
+                    decision.Disposition,
+                    "Unsupported Process activation disposition.")
+            };
+            if (activity?.IsAllDataRequested == true)
+            {
+                try
+                {
+                    var trace = ProcessExecutionTraceProjector.Project(decision);
+                    ExecutionTelemetry.CorrelateActivity(activity, trace: trace.Trace);
+                }
+                catch (Exception exception) when (exception is not (
+                    OutOfMemoryException or StackOverflowException or AccessViolationException))
+                {
+                    // Supplemental trace projection cannot alter the finite activation decision.
+                }
+            }
+            ExecutionTelemetry.CompleteActivity(activity, outcome);
+            return decision;
+        }
+        catch (OperationCanceledException exception)
+        {
+            ExecutionTelemetry.CompleteActivity(activity, ExecutionTelemetryOutcome.Cancelled, exception);
+            throw;
+        }
+        catch (Exception exception)
+        {
+            ExecutionTelemetry.CompleteActivity(activity, ExecutionTelemetryOutcome.Failed, exception);
+            throw;
+        }
+    }
 
     static ProcessControlExpectation Expectation(ProcessControlState state) =>
         new(
