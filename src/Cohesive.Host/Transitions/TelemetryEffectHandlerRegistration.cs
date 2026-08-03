@@ -8,6 +8,7 @@ namespace Cohesive.Host.Transitions;
 /// <summary>
 /// Service registration helpers for telemetry-wrapped effect handlers.
 /// </summary>
+/// <remarks>Compatibility registration retained for the flat Transition effect surface through ARI-218.</remarks>
 public static class TelemetryEffectHandlerRegistration
 {
     /// <summary>

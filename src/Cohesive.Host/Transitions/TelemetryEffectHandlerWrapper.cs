@@ -8,6 +8,7 @@ namespace Cohesive.Host.Transitions;
 /// <summary>
 /// Configuration for <see cref="TelemetryEffectHandlerWrapper{TRequest,TResult}"/>.
 /// </summary>
+/// <remarks>Compatibility configuration retained for the flat Transition effect surface through ARI-218.</remarks>
 /// <typeparam name="TRequest"></typeparam>
 /// <typeparam name="TResult"></typeparam>
 public sealed class TelemetryEffectHandlerWrapperOptions<TRequest, TResult>
@@ -79,6 +80,7 @@ public sealed class TelemetryEffectHandlerWrapperOptions<TRequest, TResult>
 /// <summary>
 /// An effect handler wrapper that emits telemetry.
 /// </summary>
+/// <remarks>Compatibility wrapper retained for the flat Transition effect surface through ARI-218.</remarks>
 /// <typeparam name="TRequest"></typeparam>
 /// <typeparam name="TResult"></typeparam>
 public class TelemetryEffectHandlerWrapper<TRequest, TResult>(

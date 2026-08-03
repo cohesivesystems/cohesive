@@ -1,4 +1,5 @@
 using Cohesive.Model;
+using Cohesive.Execution;
 using Cohesive.Transitions.Model;
 
 namespace Cohesive.Api;
@@ -177,7 +178,7 @@ public abstract class OperationBuilder<TParent>
     string? route;
     Type? requestType;
     ApiResultDefinition? primaryResult;
-    TransitionDefinition? transition;
+    ExecutionDefinitionReference? transitionReference;
     HttpBodyBinding? body;
     HttpQueryBinding? query;
     string? summary;
@@ -297,11 +298,14 @@ public abstract class OperationBuilder<TParent>
     }
 
     /// <summary>
-    /// Associates a transition definition with the operation.
+    /// Associates an exact canonical Transition definition with the operation.
     /// </summary>
-    public OperationBuilder<TParent> Transition(TransitionDefinition transition)
+    /// <param name="transitionReference">Fingerprint-pinned canonical Transition definition.</param>
+    /// <returns>The current operation builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="transitionReference"/> is <see langword="null"/>.</exception>
+    public OperationBuilder<TParent> Transition(ExecutionDefinitionReference transitionReference)
     {
-        this.transition = transition ?? throw new ArgumentNullException(nameof(transition));
+        this.transitionReference = transitionReference ?? throw new ArgumentNullException(nameof(transitionReference));
         return this;
     }
 
@@ -434,7 +438,7 @@ public abstract class OperationBuilder<TParent>
             http: http,
             id: root.CreateEndpointId(name, entity),
             entity: entity,
-            transition: transition,
+            transitionReference: transitionReference,
             summary: summary,
             description: description,
             tags: finalizedTags,

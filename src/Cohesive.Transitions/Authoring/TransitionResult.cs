@@ -5,6 +5,10 @@ namespace Cohesive.Transitions.Authoring;
 /// <summary>
 /// Entity state transition result including state delta and emitted effects.
 /// </summary>
+/// <remarks>
+/// Compatibility result retained through ARI-218. Canonical execution returns <c>TransitionDecision</c> and projects
+/// state only in an explicit commit interpretation.
+/// </remarks>
 public sealed record TransitionResult
 {
     /// <summary>

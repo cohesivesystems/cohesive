@@ -38,6 +38,10 @@ public sealed record Stop(
 /// <summary>
 /// Example load entity.
 /// </summary>
+/// <remarks>
+/// This example remains an ARI-218 compatibility fixture for the superseded continuation/effect authoring surface.
+/// It is not an execution-kernel authority or a template for new integrations.
+/// </remarks>
 public sealed class Load : Entity<Load>
 {
     public const string CalculateDistanceRequestName = "CalculateDistance";

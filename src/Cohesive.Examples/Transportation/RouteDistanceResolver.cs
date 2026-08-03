@@ -5,6 +5,7 @@ namespace Cohesive.Examples.Transportation;
 /// <summary>
 /// Effect handler that calculates route mileage for a load.
 /// </summary>
+/// <remarks>Compatibility fixture retained for the flat Transition effect surface through ARI-218.</remarks>
 public sealed class RouteDistanceResolver
     : IEffectHandler<Load.CalculateDistanceRequest, Load.DistanceCalculatedResult>
 {

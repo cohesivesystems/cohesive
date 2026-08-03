@@ -5,6 +5,10 @@ namespace Cohesive.Transitions.Authoring;
 /// <summary>
 /// Definition-only transition that applies to an explicit entity state.
 /// </summary>
+/// <remarks>
+/// Compatibility handle retained through ARI-218. New consumers should compile and interpret the canonical
+/// three-parameter <c>Transition&lt;TEntity, TInput, TOutcome&gt;</c> authoring result.
+/// </remarks>
 public sealed class Transition<TEntity, TInput>
     where TEntity : Entity
 {

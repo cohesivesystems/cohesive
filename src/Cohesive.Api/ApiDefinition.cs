@@ -413,7 +413,7 @@ public sealed class ApiOperation
     /// <param name="http">Optional HTTP projection metadata.</param>
     /// <param name="id">Optional stable endpoint identity; defaults to <paramref name="name"/>.</param>
     /// <param name="entity">Optional owning entity.</param>
-    /// <param name="transition">Optional transition projected by this operation.</param>
+    /// <param name="transitionReference">Optional exact canonical Transition definition projected by this operation.</param>
     /// <param name="summary">Optional human-readable summary.</param>
     /// <param name="description">Optional human-readable description.</param>
     /// <param name="tags">Optional logical grouping tags.</param>
@@ -439,7 +439,7 @@ public sealed class ApiOperation
         HttpBinding? http = null,
         ApiEndpointId? id = null,
         EntityTypeName? entity = null,
-        TransitionDefinition? transition = null,
+        ExecutionDefinitionReference? transitionReference = null,
         string? summary = null,
         string? description = null,
         IReadOnlyList<string>? tags = null,
@@ -454,7 +454,7 @@ public sealed class ApiOperation
         RequestType = requestType ?? throw new ArgumentNullException(nameof(requestType));
         Http = http;
         Entity = entity;
-        Transition = transition;
+        TransitionReference = transitionReference;
         Summary = string.IsNullOrWhiteSpace(summary) ? null : summary;
         Description = string.IsNullOrWhiteSpace(description) ? null : description;
         Tags = tags is null || tags.Count == 0 ? [] : [.. tags];
@@ -512,9 +512,9 @@ public sealed class ApiOperation
     public EntityTypeName? Entity { get; }
 
     /// <summary>
-    /// Related transition, when the operation represents a transition command.
+    /// Exact canonical Transition definition, when the operation represents a transition command.
     /// </summary>
-    public TransitionDefinition? Transition { get; }
+    public ExecutionDefinitionReference? TransitionReference { get; }
 
     /// <summary>
     /// Optional HTTP projection metadata.
@@ -580,7 +580,7 @@ public sealed class ApiOperation
             http: http,
             id: Id,
             entity: Entity,
-            transition: Transition,
+            transitionReference: TransitionReference,
             summary: Summary,
             description: Description,
             tags: Tags,

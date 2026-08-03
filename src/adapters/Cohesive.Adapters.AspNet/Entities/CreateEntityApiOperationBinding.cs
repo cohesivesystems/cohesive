@@ -65,7 +65,7 @@ sealed class CreateEntityApiOperationBinding : EntityApiOperationBinding
                 request,
                 OldSnapshot: null,
                 NewState: state,
-                Transition: null
+                Decision: null
                 );
             var expectedToken = getExpectedConcurrencyToken?.Invoke(requestContext, request);
             var snapshot = await EntityApiRequestSupport.CommitAsync(

@@ -19,6 +19,7 @@ dotnet add package Cohesive.Api
 ```csharp
 using Cohesive.Api;
 
+var dispatch = compiledDispatchPlan.DefinitionReference;
 var api = Api.Define("Shipping")
     .Entity<Shipment>()
     .Query("GetById")
@@ -28,7 +29,7 @@ var api = Api.Define("Shipping")
     .Command("Dispatch")
         .Route("POST", "/api/shipments/{id}/dispatch")
         .Accepts<DispatchShipmentRequest>()
-        .Transition(new(name: "Dispatch"))
+        .Transition(dispatch)
         .Done()
     .Build();
 ```

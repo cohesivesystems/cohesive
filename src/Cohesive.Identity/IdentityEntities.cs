@@ -1,6 +1,7 @@
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
 using Cohesive.Transitions.Authoring;
+using Cohesive.Transitions.IR;
 
 namespace Cohesive.Identity;
 
@@ -43,6 +44,29 @@ public static class IdentityDomainModel
     public static readonly QualifiedShapeId ScopeMembershipShape = new(
         ShapeGraphId,
         ScopeMembership.Definition.Shape.Id);
+
+    internal static Transition<TEntity, TInput, bool> CreateTransition<TEntity, TInput>(
+        Shape shape,
+        string name,
+        Action<TransitionBuilder<TEntity, TInput, bool>> configure)
+        where TEntity : Entity
+    {
+        ArgumentNullException.ThrowIfNull(shape);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(configure);
+        return TransitionAuthoring.Create(
+            shape,
+            new(
+                definitionId: new($"cohesive.identity/{shape.Id.Value}/{name}"),
+                revisionId: new("revision/1"),
+                bodyId: new($"{name}/body"),
+                provenance: new(
+                    new(TransitionAuthoring.Producer),
+                    new($"cohesive.identity/{shape.Id.Value}/{name}"),
+                    DocumentOrigin.Generated),
+                displayName: name),
+            configure);
+    }
 }
 
 /// <summary>
@@ -78,18 +102,30 @@ public sealed class IdentityScope : Entity<IdentityScope>
             scope.Name != ""
         );
 
-        Rename = Transition<RenameScopeInput>(nameof(Rename), t => t
-            .Requires("ScopeMustBeActive", (scope, _) => scope.Status == IdentityScopeStatus.Active)
-            .Set(scope => scope.Name, (_, input) => input.Name)
-            .Set(scope => scope.UpdatedAtUtc, (_, input) => input.UpdatedAtUtc)
-        );
+        Rename = IdentityDomainModel.CreateTransition<IdentityScope, RenameScopeInput>(
+            Definition.Shape,
+            nameof(Rename),
+            transition => transition
+                .Requires(
+                    new("rename/requires-active"),
+                    (scope, _) => scope.Status == IdentityScopeStatus.Active,
+                    (_, _) => false)
+                .Set(new("rename/set-name"), scope => scope.Name, (_, input) => input.Name)
+                .Set(new("rename/set-updated-at"), scope => scope.UpdatedAtUtc, (_, input) => input.UpdatedAtUtc)
+                .Return(new("rename/renamed"), TransitionOutcomeDisposition.Applied, true));
 
-        Archive = Transition<ArchiveScopeInput>(nameof(Archive), t => t
-            .Requires("ScopeMustNotAlreadyBeArchived", (scope, _) => scope.Status != IdentityScopeStatus.Archived)
-            .Set(scope => scope.Status, (_, _) => IdentityScopeStatus.Archived)
-            .Set(scope => scope.ArchivedAtUtc, (_, input) => input.ArchivedAtUtc)
-            .Set(scope => scope.UpdatedAtUtc, (_, input) => input.ArchivedAtUtc)
-        );
+        Archive = IdentityDomainModel.CreateTransition<IdentityScope, ArchiveScopeInput>(
+            Definition.Shape,
+            nameof(Archive),
+            transition => transition
+                .Requires(
+                    new("archive/requires-not-archived"),
+                    (scope, _) => scope.Status != IdentityScopeStatus.Archived,
+                    (_, _) => false)
+                .Set(new("archive/set-status"), scope => scope.Status, IdentityScopeStatus.Archived)
+                .Set(new("archive/set-archived-at"), scope => scope.ArchivedAtUtc, (_, input) => input.ArchivedAtUtc)
+                .Set(new("archive/set-updated-at"), scope => scope.UpdatedAtUtc, (_, input) => input.ArchivedAtUtc)
+                .Return(new("archive/archived"), TransitionOutcomeDisposition.Applied, true));
     }
 
     /// <summary>Stable scope identifier.</summary>
@@ -120,10 +156,10 @@ public sealed class IdentityScope : Entity<IdentityScope>
     public Field<DateTimeOffset?> ArchivedAtUtc { get; }
 
     /// <summary>Renames the scope.</summary>
-    public Transition<IdentityScope, RenameScopeInput> Rename { get; }
+    public Transition<IdentityScope, RenameScopeInput, bool> Rename { get; }
 
     /// <summary>Archives the scope.</summary>
-    public Transition<IdentityScope, ArchiveScopeInput> Archive { get; }
+    public Transition<IdentityScope, ArchiveScopeInput, bool> Archive { get; }
 }
 
 /// <summary>
@@ -163,11 +199,24 @@ public sealed class PrincipalAccount : Entity<PrincipalAccount>
 
         Invariant("PrincipalAccountIdentityIsRequired", principal => principal.Id != "");
 
-        Deactivate = Transition<DeactivatePrincipalInput>(nameof(Deactivate), t => t
-            .Requires("PrincipalMustBeActive", (principal, _) => principal.Status == PrincipalAccountStatus.Active)
-            .Set(principal => principal.Status, (_, _) => PrincipalAccountStatus.Deactivated)
-            .Set(principal => principal.DeactivatedAtUtc, (_, input) => input.DeactivatedAtUtc)
-            .Set(principal => principal.UpdatedAtUtc, (_, input) => input.DeactivatedAtUtc));
+        Deactivate = IdentityDomainModel.CreateTransition<PrincipalAccount, DeactivatePrincipalInput>(
+            Definition.Shape,
+            nameof(Deactivate),
+            transition => transition
+                .Requires(
+                    new("deactivate/requires-active"),
+                    (principal, _) => principal.Status == PrincipalAccountStatus.Active,
+                    (_, _) => false)
+                .Set(new("deactivate/set-status"), principal => principal.Status, PrincipalAccountStatus.Deactivated)
+                .Set(
+                    new("deactivate/set-deactivated-at"),
+                    principal => principal.DeactivatedAtUtc,
+                    (_, input) => input.DeactivatedAtUtc)
+                .Set(
+                    new("deactivate/set-updated-at"),
+                    principal => principal.UpdatedAtUtc,
+                    (_, input) => input.DeactivatedAtUtc)
+                .Return(new("deactivate/deactivated"), TransitionOutcomeDisposition.Applied, true));
     }
 
     /// <summary>Stable principal identifier.</summary>
@@ -201,7 +250,7 @@ public sealed class PrincipalAccount : Entity<PrincipalAccount>
     public Field<DateTimeOffset?> DeactivatedAtUtc { get; }
 
     /// <summary>Deactivates the principal.</summary>
-    public Transition<PrincipalAccount, DeactivatePrincipalInput> Deactivate { get; }
+    public Transition<PrincipalAccount, DeactivatePrincipalInput, bool> Deactivate { get; }
 }
 
 /// <summary>
@@ -250,16 +299,45 @@ public sealed class ScopeMembership : Entity<ScopeMembership>
             membership.ScopeId != "" &&
             membership.ScopeKind != "");
 
-        ReplaceCapabilities = Transition<ReplaceCapabilitiesInput>(nameof(ReplaceCapabilities), t => t
-            .Requires("MembershipMustBeActive", (membership, _) => membership.Status == ScopeMembershipStatus.Active)
-            .Set(membership => membership.Capabilities, (_, input) => input.Capabilities)
-            .Set(membership => membership.UpdatedAtUtc, (_, input) => input.UpdatedAtUtc));
+        ReplaceCapabilities = IdentityDomainModel.CreateTransition<ScopeMembership, ReplaceCapabilitiesInput>(
+            Definition.Shape,
+            nameof(ReplaceCapabilities),
+            transition => transition
+                .Requires(
+                    new("replace-capabilities/requires-active"),
+                    (membership, _) => membership.Status == ScopeMembershipStatus.Active,
+                    (_, _) => false)
+                .Set(
+                    new("replace-capabilities/set-capabilities"),
+                    membership => membership.Capabilities,
+                    (_, input) => input.Capabilities)
+                .Set(
+                    new("replace-capabilities/set-updated-at"),
+                    membership => membership.UpdatedAtUtc,
+                    (_, input) => input.UpdatedAtUtc)
+                .Return(
+                    new("replace-capabilities/replaced"),
+                    TransitionOutcomeDisposition.Applied,
+                    true));
 
-        Revoke = Transition<RevokeMembershipInput>(nameof(Revoke), t => t
-            .Requires("MembershipMustBeActive", (membership, _) => membership.Status == ScopeMembershipStatus.Active)
-            .Set(membership => membership.Status, (_, _) => ScopeMembershipStatus.Revoked)
-            .Set(membership => membership.RevokedAtUtc, (_, input) => input.RevokedAtUtc)
-            .Set(membership => membership.UpdatedAtUtc, (_, input) => input.RevokedAtUtc));
+        Revoke = IdentityDomainModel.CreateTransition<ScopeMembership, RevokeMembershipInput>(
+            Definition.Shape,
+            nameof(Revoke),
+            transition => transition
+                .Requires(
+                    new("revoke/requires-active"),
+                    (membership, _) => membership.Status == ScopeMembershipStatus.Active,
+                    (_, _) => false)
+                .Set(new("revoke/set-status"), membership => membership.Status, ScopeMembershipStatus.Revoked)
+                .Set(
+                    new("revoke/set-revoked-at"),
+                    membership => membership.RevokedAtUtc,
+                    (_, input) => input.RevokedAtUtc)
+                .Set(
+                    new("revoke/set-updated-at"),
+                    membership => membership.UpdatedAtUtc,
+                    (_, input) => input.RevokedAtUtc)
+                .Return(new("revoke/revoked"), TransitionOutcomeDisposition.Applied, true));
     }
 
     /// <summary>Stable membership identifier.</summary>
@@ -293,10 +371,10 @@ public sealed class ScopeMembership : Entity<ScopeMembership>
     public Field<DateTimeOffset?> RevokedAtUtc { get; }
 
     /// <summary>Replaces membership capabilities.</summary>
-    public Transition<ScopeMembership, ReplaceCapabilitiesInput> ReplaceCapabilities { get; }
+    public Transition<ScopeMembership, ReplaceCapabilitiesInput, bool> ReplaceCapabilities { get; }
 
     /// <summary>Revokes the membership.</summary>
-    public Transition<ScopeMembership, RevokeMembershipInput> Revoke { get; }
+    public Transition<ScopeMembership, RevokeMembershipInput, bool> Revoke { get; }
 }
 
 /// <summary>

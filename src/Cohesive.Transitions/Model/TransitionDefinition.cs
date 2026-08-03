@@ -9,7 +9,8 @@ namespace Cohesive.Transitions.Model;
 /// <remarks>
 /// This flat definition is a temporary compatibility surface for existing builders and
 /// <c>DeclarativeEntityRuntime</c>. Canonical persisted execution-kernel semantics are represented by
-/// <c>Cohesive.Transitions.IR.TransitionDefinition</c>; this type is not persisted kernel authority.
+/// <c>Cohesive.Transitions.IR.TransitionDefinition</c>; this type is not persisted kernel authority. The remaining
+/// compatibility surface is owned by ARI-218 and must not acquire new production consumers.
 /// </remarks>
 public sealed record TransitionDefinition
 {

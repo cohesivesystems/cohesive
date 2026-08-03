@@ -249,8 +249,8 @@ public static class ApiEndpointRouteBuilderExtensions
         for (var i = 0; i < operation.SemanticReferences.Count; i++)
             builder.WithMetadata(operation.SemanticReferences[i]);
 
-        if (operation.Transition is { } transition)
-            builder.WithMetadata(transition);
+        if (operation.TransitionReference is { } transitionReference)
+            builder.WithMetadata(transitionReference);
     }
     
     static string BuildDefaultSummary(ApiOperation operation, HttpBinding http)
@@ -260,7 +260,8 @@ public static class ApiEndpointRouteBuilderExtensions
             return operation.Kind switch
             {
                 ApiOperationKind.Query => $"Query {entity.Value} via {http.Method} {http.Route}",
-                ApiOperationKind.Command when operation.Transition is not null => $"Execute {operation.Transition.Name} for {entity.Value}",
+                ApiOperationKind.Command when operation.TransitionReference is not null =>
+                    $"Execute {operation.TransitionReference.DefinitionId.Value} for {entity.Value}",
                 ApiOperationKind.Command => $"Command {entity.Value} via {http.Method} {http.Route}",
                 _ => $"Operate on {entity.Value} via {http.Method} {http.Route}"
             };
