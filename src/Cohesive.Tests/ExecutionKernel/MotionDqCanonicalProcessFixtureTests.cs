@@ -379,9 +379,14 @@ public sealed class MotionDqCanonicalProcessFixtureTests
             fixture.Document,
             fixture.LinkingContext,
             new(ProcessAtomicScopeDemand.WholeDefinition));
+        var replay = ProcessStaticCompiler.Compile(
+            fixture.Document,
+            fixture.LinkingContext,
+            new(ProcessAtomicScopeDemand.WholeDefinition));
 
         Assert.False(compilation.IsSuccessful);
         Assert.Null(compilation.Plan);
+        Assert.Equivalent(compilation.Validation, replay.Validation, strict: true);
         Assert.Contains(
             compilation.Validation.Diagnostics,
             static diagnostic => diagnostic.Code

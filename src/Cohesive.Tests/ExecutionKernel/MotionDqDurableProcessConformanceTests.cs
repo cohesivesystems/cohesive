@@ -137,6 +137,33 @@ public sealed class MotionDqDurableProcessConformanceTests
     }
 
     [Fact]
+    public async Task PostTermsCompletionOrder_IsSemanticallyUnobservableAndReplayStable()
+    {
+        var ascending = await CompletePostTermsInOrderAsync(descending: false);
+        var descending = await CompletePostTermsInOrderAsync(descending: true);
+
+        Assert.Equivalent(
+            ascending.Checkpoint.Continuation,
+            descending.Checkpoint.Continuation,
+            strict: true);
+        Assert.Equal(
+            ascending.Checkpoint.Operations.Select(static receipt => OperationKey(receipt.Key)),
+            descending.Checkpoint.Operations.Select(static receipt => OperationKey(receipt.Key)));
+        Assert.Equivalent(
+            ascending.Checkpoint.Operations.Select(static receipt => receipt.Result).ToArray(),
+            descending.Checkpoint.Operations.Select(static receipt => receipt.Result).ToArray(),
+            strict: true);
+        Assert.Equivalent(
+            ascending.Checkpoint.Emissions.Select(static emission => emission.Envelope).ToArray(),
+            descending.Checkpoint.Emissions.Select(static emission => emission.Envelope).ToArray(),
+            strict: true);
+        Assert.Equal(
+            ascending.Checkpoint.DurableOperations.Select(static operation => operation.OperationId),
+            descending.Checkpoint.DurableOperations.Select(static operation => operation.OperationId));
+        ascending.Host.AssertAuthoritativeStateEquals(descending.Host);
+    }
+
+    [Fact]
     public async Task HoldCycle_RestoresFreshWait_ThenHigherPriorityHireBeatsDueTimer()
     {
         var fixture = MotionDqProcess.Version1;
@@ -424,24 +451,68 @@ public sealed class MotionDqDurableProcessConformanceTests
             checkpoint.DurableOperations,
             static operation => operation.Status == DurableOperationStatus.Pending
                 && operation.Request.Context.Origin.Node.Value.EndsWith("/drug-test/manual", StringComparison.Ordinal));
+        Assert.Equal(failedVendor.Request.Contract, manual.Request.Contract);
+        Assert.Equivalent(failedVendor.Request.Payload, manual.Request.Payload, strict: true);
+        Assert.Equal(failedVendor.Request.Context.AuthorityScope, manual.Request.Context.AuthorityScope);
+        Assert.Equal(failedVendor.Request.Context.CorrelationId, manual.Request.Context.CorrelationId);
+        Assert.NotEqual(failedVendor.OperationId, manual.OperationId);
         checkpoint = await AdvanceOperationAsync(
             runtime,
             fixture,
             checkpoint,
             manual.OperationId,
             clock.Next());
+        var manualAdapterCalls = adapter.Invocations.Count;
+        var manualReplay = await runtime.AdvanceOperationAsync(
+            Context(clock.Next()),
+            fixture.Plan,
+            checkpoint.ContinuationIdentity.ProcessInstanceId,
+            manual.OperationId);
+        Assert.Equal(ProcessDurableRuntimeDisposition.Replayed, manualReplay.Disposition);
+        Assert.Equal(manualAdapterCalls, adapter.Invocations.Count);
+        Assert.Equal(manual.OperationId, manualReplay.Operation?.OperationId);
+        checkpoint = Assert.IsType<ProcessDurableStoreSnapshot>(manualReplay.Snapshot).Checkpoint;
+        var manualInputs = PendingInputs(checkpoint);
+        var manualActivationId = new ActivationId("activation/motion-dq/manual-fallback/manual-fulfilled");
+        var manualActivationAtUtc = clock.Next();
         checkpoint = await ActivateAndCompareAsync(
             store,
             runtime,
             fixture,
             durableHost,
-            new("activation/motion-dq/manual-fallback/manual-fulfilled"),
+            manualActivationId,
             ProcessActivationCause.Interaction,
-            clock.Next(),
-            PendingInputs(checkpoint));
+            manualActivationAtUtc,
+            manualInputs);
 
         Assert.Equal(MotionDqRequirementStatus.Satisfied, durableHost.RequirementStatus(failedRequirement));
         Assert.Equal(1, durableHost.RequirementEvaluationCount(failedRequirement));
+        var hostCallsAfterManual = durableHost.InvocationKeys.Count;
+        var exactActivationReplay = await runtime.ActivateAsync(
+            Context(clock.Next()),
+            fixture.Plan,
+            checkpoint.ContinuationIdentity,
+            new(
+                manualActivationId,
+                ProcessActivationCause.Interaction,
+                manualActivationAtUtc,
+                ActivationContext(fixture),
+                manualInputs));
+        Assert.Equal(ProcessDurableRuntimeDisposition.Replayed, exactActivationReplay.Disposition);
+        Assert.Equal(hostCallsAfterManual, durableHost.InvocationKeys.Count);
+        Assert.Equal(manualAdapterCalls, adapter.Invocations.Count);
+
+        var lateVendorReplay = await runtime.AdvanceOperationAsync(
+            Context(clock.Next()),
+            fixture.Plan,
+            checkpoint.ContinuationIdentity.ProcessInstanceId,
+            failedVendor.OperationId);
+        Assert.Equal(ProcessDurableRuntimeDisposition.Replayed, lateVendorReplay.Disposition);
+        Assert.Equal(failedVendor.OperationId, lateVendorReplay.Operation?.OperationId);
+        Assert.Equal(manualAdapterCalls, adapter.Invocations.Count);
+        Assert.Equal(MotionDqRequirementStatus.Satisfied, durableHost.RequirementStatus(failedRequirement));
+        Assert.Equal(1, durableHost.RequirementEvaluationCount(failedRequirement));
+        checkpoint = Assert.IsType<ProcessDurableStoreSnapshot>(lateVendorReplay.Snapshot).Checkpoint;
         checkpoint = await DriveToTerminalAsync(
             store,
             runtime,
@@ -500,6 +571,70 @@ public sealed class MotionDqDurableProcessConformanceTests
             durableHost.CaseMilestone(input.Prequalification.CaseId));
         Assert.Equal(MotionDqRequirementStatus.Pending, durableHost.RequirementStatus(input.PostTerms.DrugTest.Requirement));
         Assert.Equal(0, durableHost.RequirementEvaluationCount(input.PostTerms.DrugTest.Requirement));
+    }
+
+    [Fact]
+    public async Task ConcurrentSubjectActivation_PreservesIndependentAuthorityAndFailsDifferentially()
+    {
+        var fixture = MotionDqProcess.Version1;
+        var clock = new ScenarioClock(new(2026, 8, 5, 12, 0, 0, TimeSpan.Zero));
+        var input = Input(clock.Peek.AddDays(1));
+        var durableHost = new StatefulTransitionHost(fixture, input);
+        durableHost.ActivateSubjectExternally(input.Activations.Truck);
+        var adapter = new MotionDqScenarioAdapter(fixture);
+        var store = new InMemoryProcessDurableStore();
+        var runtime = Runtime(store, fixture, durableHost, adapter);
+        var initialized = await runtime.InitializeAsync(
+            Context(clock.Next()),
+            fixture.Plan,
+            Start(fixture, input, clock.Next(), clock.Next()));
+        var checkpoint = Assert.IsType<ProcessDurableStoreSnapshot>(initialized.Snapshot).Checkpoint;
+        checkpoint = await ReachPostTermsVendorFanOutAsync(
+            store,
+            runtime,
+            fixture,
+            durableHost,
+            checkpoint,
+            clock,
+            scenario: "activation-rejected");
+        checkpoint = await DriveToTerminalAsync(
+            store,
+            runtime,
+            fixture,
+            durableHost,
+            checkpoint,
+            clock,
+            scenario: "activation-rejected");
+
+        Assert.Equal(ExecutionTerminalOutcomeKind.Failed, checkpoint.Continuation.Terminal.Kind);
+        Assert.Equal(
+            MotionDqCaseMilestone.Activation,
+            durableHost.CaseMilestone(input.Prequalification.CaseId));
+        Assert.Equal(
+            MotionDqActivationStatus.Active,
+            durableHost.SubjectStatus(input.Activations.CarrierOwnerOperator.Subject));
+        Assert.Equal(
+            MotionDqActivationStatus.Active,
+            durableHost.SubjectStatus(input.Activations.Truck.Subject));
+        MotionDqSubjectReference[] independentlyCompleted =
+        [
+            input.Activations.Applicant.Subject,
+            input.Activations.Driver.Subject,
+            input.Activations.Trailer.Subject
+        ];
+        Assert.All(
+            independentlyCompleted,
+            subject => Assert.Equal(
+                MotionDqActivationStatus.Active,
+                durableHost.SubjectStatus(subject)));
+        Assert.DoesNotContain(
+            durableHost.Invocations,
+            invocation => invocation.Node.Value == "motion-dq/case/advance-activation");
+        var rejectedOperation = Assert.Single(
+            checkpoint.Operations,
+            static receipt => receipt.Key.Node.Value == "motion-dq/activation/truck");
+        Assert.NotNull(rejectedOperation.Result.Failure);
+        Assert.Empty(rejectedOperation.Result.Emissions);
     }
 
     static async Task<ProcessDurableCheckpoint> ReachPostTermsVendorFanOutAsync(
@@ -579,6 +714,54 @@ public sealed class MotionDqDurableProcessConformanceTests
 
         Assert.Equal(7, PendingVendorOperations(checkpoint).Length);
         return checkpoint;
+    }
+
+    static async Task<(ProcessDurableCheckpoint Checkpoint, StatefulTransitionHost Host)>
+        CompletePostTermsInOrderAsync(bool descending)
+    {
+        var fixture = MotionDqProcess.Version1;
+        var clock = new ScenarioClock(new(2026, 8, 4, 12, 0, 0, TimeSpan.Zero));
+        var input = Input(clock.Peek.AddDays(1));
+        var host = new StatefulTransitionHost(fixture, input);
+        var adapter = new MotionDqScenarioAdapter(fixture);
+        var store = new InMemoryProcessDurableStore();
+        var runtime = Runtime(store, fixture, host, adapter);
+        var initialized = await runtime.InitializeAsync(
+            Context(clock.Next()),
+            fixture.Plan,
+            Start(fixture, input, clock.Next(), clock.Next()));
+        var checkpoint = Assert.IsType<ProcessDurableStoreSnapshot>(initialized.Snapshot).Checkpoint;
+        checkpoint = await ReachPostTermsVendorFanOutAsync(
+            store,
+            runtime,
+            fixture,
+            host,
+            checkpoint,
+            clock,
+            scenario: "completion-order");
+        var operations = PendingVendorOperations(checkpoint);
+        for (var index = 0; index < operations.Length; index++)
+        {
+            var operation = operations[descending ? ^(index + 1) : index];
+            checkpoint = await AdvanceOperationAsync(
+                runtime,
+                fixture,
+                checkpoint,
+                operation.OperationId,
+                clock.Next());
+        }
+
+        checkpoint = await DriveToTerminalAsync(
+            store,
+            runtime,
+            fixture,
+            host,
+            checkpoint,
+            clock,
+            scenario: "completion-order");
+        Assert.Equal(ExecutionTerminalOutcomeKind.Completed, checkpoint.Continuation.Terminal.Kind);
+        AssertAuthoritativeCompletedState(host, input);
+        return (checkpoint, host);
     }
 
     static async Task<ProcessDurableCheckpoint> ReachReviewWaitAsync(
@@ -1208,8 +1391,10 @@ public sealed class MotionDqDurableProcessConformanceTests
 
     sealed class StatefulTransitionHost : IProcessReferenceHost
     {
+        static readonly IReadOnlyDictionary<ExecutionDefinitionReference, CompiledTransitionPlan> Plans =
+            Compile(MotionDqProcess.Version1.Transitions.Documents);
+
         readonly MotionDqTransitionDefinitions transitions;
-        readonly Dictionary<ExecutionDefinitionReference, CompiledTransitionPlan> plans;
         readonly Dictionary<ObservationValue, ObservationValue> caseStates;
         readonly Dictionary<ObservationValue, ObservationValue> requirementStates;
         readonly Dictionary<ObservationValue, ObservationValue> subjectStates;
@@ -1219,7 +1404,6 @@ public sealed class MotionDqDurableProcessConformanceTests
         internal StatefulTransitionHost(MotionDqProcess fixture, MotionDqOnboardingInput input)
         {
             transitions = fixture.Transitions;
-            plans = Compile(transitions.Documents);
             caseStates = [];
             requirementStates = [];
             subjectStates = [];
@@ -1228,7 +1412,7 @@ public sealed class MotionDqDurableProcessConformanceTests
             var caseKey = ObservationValue.FromString(caseId);
             caseStates.Add(caseKey, InitialCaseState());
             DecideAndCommit(
-                plans[transitions.ResolveCaseProfile.Reference],
+                Plans[transitions.ResolveCaseProfile.Reference],
                 MotionDqProfileCatalog.CreateCaseProfileResolution(caseId: caseId),
                 caseStates,
                 caseKey,
@@ -1258,7 +1442,6 @@ public sealed class MotionDqDurableProcessConformanceTests
         StatefulTransitionHost(StatefulTransitionHost source)
         {
             transitions = source.transitions;
-            plans = source.plans;
             caseStates = new(source.caseStates);
             requirementStates = new(source.requirementStates);
             subjectStates = new(source.subjectStates);
@@ -1303,6 +1486,17 @@ public sealed class MotionDqDurableProcessConformanceTests
                     nameof(MotionDqSubjectActivationEntity.Status))
                 .GetRequiredString());
 
+        internal void ActivateSubjectExternally(MotionDqSubjectActivationInvocation activation)
+        {
+            var subject = ObservationValue.FromObject(activation.Subject);
+            DecideAndCommit(
+                Plans[transitions.ActivateSubject.Reference],
+                activation.Admission,
+                subjectStates,
+                subject,
+                new($"transition-activation/motion-dq/external/{activation.Subject.SubjectId}"));
+        }
+
         public ProcessOperationResult InvokeTransition(ProcessTransitionInvocation invocation)
         {
             invocations.Add(invocation);
@@ -1314,7 +1508,7 @@ public sealed class MotionDqDurableProcessConformanceTests
                 invocation.Token.Value,
                 invocation.Node.Value,
                 invocation.Occurrence));
-            if (!plans.TryGetValue(invocation.Definition, out var plan))
+            if (!Plans.TryGetValue(invocation.Definition, out var plan))
             {
                 throw new InvalidOperationException(
                     $"Unexpected Motion DQ Transition '{invocation.Definition.DefinitionId.Value}'.");
