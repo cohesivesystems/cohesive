@@ -15,6 +15,48 @@ public sealed class TransitionReferenceInterpreterTests
     static readonly ValueContract StringContract = new(new ScalarTypeRef(ScalarTypeKind.String));
     static readonly ValueContract Int64Contract = new(new ScalarTypeRef(ScalarTypeKind.Int64));
 
+    [Fact]
+    public void TraceProjection_IsDeterministicProvenancePinnedAndPayloadSafe()
+    {
+        var fixture = Ek01Fixture();
+        var decision = TransitionReferenceInterpreter.DecideFullState(
+            fixture.Plan,
+            new("trace-projection"),
+            Object(
+                fixture.Definition.Input,
+                ("approved", ObservationValue.FromBool(true)),
+                ("decision", ObservationValue.FromString("approve"))),
+            Object(
+                fixture.Definition.Observation,
+                ("status", ObservationValue.FromString("pending")),
+                ("eligible", ObservationValue.FromBool(true)),
+                ("caseId", ObservationValue.FromString("private-case-payload")),
+                ("unused", ObservationValue.FromString("private-unused-payload"))));
+
+        var first = TransitionExecutionTraceProjector.Project(fixture.Plan, decision);
+        var second = TransitionExecutionTraceProjector.Project(fixture.Plan, decision);
+
+        Assert.True(first.IsSuccessful);
+        Assert.True(second.IsSuccessful);
+        var trace = Assert.IsType<NormalizedExecutionTrace>(first.Trace);
+        Assert.Equal(decision.Evidence.Definition, trace.Definition);
+        Assert.Equal(decision.Evidence.Activation, trace.Activation);
+        Assert.Null(trace.Continuation);
+        Assert.Null(trace.DurableCommitSequence);
+        Assert.Equal(decision.Evidence.Trace.Length, trace.Events.Length);
+        Assert.All(trace.Events, static item => Assert.Null(item.Token));
+        Assert.Equal(
+            ExecutionTraceFingerprinter.ComputeSemantic(trace),
+            ExecutionTraceFingerprinter.ComputeSemantic(second.Trace!));
+
+        var json = ExecutionTraceJsonSerializer.Serialize(trace);
+        Assert.Equal(json, ExecutionTraceJsonSerializer.Serialize(ExecutionTraceJsonSerializer.Deserialize(json)));
+        Assert.DoesNotContain("private-case-payload", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("private-unused-payload", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("before", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("after", json, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Theory]
     [InlineData(true, "approve", TransitionDecisionKind.Applied, "approved", true)]
     [InlineData(true, "hold", TransitionDecisionKind.Applied, "held", false)]
