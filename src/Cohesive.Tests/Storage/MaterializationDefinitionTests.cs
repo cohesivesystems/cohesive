@@ -1,9 +1,11 @@
 using System.Collections.Immutable;
 using System.Text;
+using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.TestFixtures;
+using Cohesive.Storage;
 using Cohesive.Storage.Materialization;
 
 namespace Cohesive.Tests.Storage;
@@ -193,6 +195,17 @@ public sealed class MaterializationDefinitionTests
 
         Assert.True(accepted.IsSatisfied);
         Assert.Equal(CapabilityRealizationKind.Constrained, accepted.Decisions[0].Realization);
+        var explainEvidence = StorageExecutionExplainEvidenceProjector.ProjectMaterializationCapabilities(accepted);
+        Assert.Contains(
+            explainEvidence,
+            static item => item.Kind == "materialization.capabilityRequirement"
+                && item.Authority == ExecutionExplainEvidenceAuthority.Declared);
+        Assert.Contains(
+            explainEvidence,
+            static item => item.Kind == "materialization.capabilityDecision"
+                && item.Authority == ExecutionExplainEvidenceAuthority.AdapterSupplied
+                && item.Realization == CapabilityRealizationKind.Constrained
+                && item.SourceReferences.Contains("adapter/postgres/v1"));
         Assert.False(rejected.IsSatisfied);
         Assert.Contains(
             rejected.Validation.Diagnostics,

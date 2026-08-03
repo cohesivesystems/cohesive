@@ -1,5 +1,8 @@
 using System.Text.Json;
 using Cohesive.Control;
+using Cohesive.Execution;
+using Cohesive.Model.Serialization;
+using Cohesive.Storage;
 
 namespace Cohesive.Tests.Storage.Control;
 
@@ -22,6 +25,35 @@ public sealed class AimdControlReferenceRegulatorTests
             ControlJsonSerializer.GetCanonicalBytes(second));
         Assert.Equal(ControlRevision.Initial, state.Revision);
         Assert.Null(state.LastObservation);
+    }
+
+    [Fact]
+    public void ExplainProjection_DistinguishesRecommendationFromAppliedAuthorityWithoutPayloads()
+    {
+        var definition = ControlRegulatorFixture.Definition(healthyObservationCount: 1);
+        var state = ControlRegulatorFixture.InitialState(definition);
+        var observation = ControlRegulatorFixture.Observation(state, "explain-control", value: 5_000);
+        var decision = AimdControlReferenceRegulator.Evaluate(
+            definition,
+            state,
+            observation,
+            observation.ObservedAtUtc);
+        ExecutionProvenance provenance = new(
+            new("control-reference-tests", "1"),
+            new("tests/control/reference"),
+            DocumentOrigin.Generated);
+
+        var evidence = StorageExecutionExplainEvidenceProjector.ProjectControlDecision(decision, provenance);
+
+        Assert.Contains(
+            evidence,
+            static item => item.Kind == "control.decision"
+                && item.Authority == ExecutionExplainEvidenceAuthority.Interpreted);
+        Assert.Contains(
+            evidence,
+            static item => item.Kind == "control.recommendation"
+                && item.Authority == ExecutionExplainEvidenceAuthority.Recommended);
+        Assert.All(evidence, item => Assert.DoesNotContain(state.Target, item.RelatedSubjects));
     }
 
     [Fact]
