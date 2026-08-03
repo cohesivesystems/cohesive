@@ -11,17 +11,26 @@ public static class InvariantExpressionDsl
 {
     sealed record EmptyTransitionParameters;
 
-    static readonly ITransitionExpressionCompiler DefaultCompiler = new TransitionExpressionCompiler();
-
     /// <summary>
     /// Compiles an invariant definition from a typed expression.
     /// </summary>
+    /// <typeparam name="TEntity">The authored entity type.</typeparam>
+    /// <param name="entityDefinition">The canonical entity definition used to resolve field identities.</param>
+    /// <param name="name">The stable invariant name.</param>
+    /// <param name="predicate">The portable predicate that must hold for valid entity state.</param>
+    /// <param name="message">An optional violation message.</param>
+    /// <returns>The canonical invariant definition produced from <paramref name="predicate"/>.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="entityDefinition"/> or <paramref name="predicate"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="TransitionExpressionTranslationException">
+    /// <paramref name="predicate"/> uses an expression outside the portable Transition expression subset.
+    /// </exception>
     public static InvariantDefinition Compile<TEntity>(
         EntityDefinition entityDefinition,
         string name,
         Expression<Func<TEntity, bool>> predicate,
-        string? message = null,
-        ITransitionExpressionCompiler? compiler = null
+        string? message = null
         ) where TEntity : Entity
     {
         ArgumentNullException.ThrowIfNull(predicate);
@@ -31,15 +40,10 @@ public static class InvariantExpressionDsl
                    ?? throw new TransitionExpressionTranslationException("Invariant expression body could not be translated.");
         var adapted = Expression.Lambda<Func<TEntity, EmptyTransitionParameters, bool>>(body, entityParameter, transitionParameters);
 
-        var resolvedCompiler = compiler ?? DefaultCompiler;
-        var transition = resolvedCompiler.Compile<TEntity, EmptyTransitionParameters>(
+        var translator = new TransitionExpressionTranslator<TEntity, EmptyTransitionParameters>(
             entityDefinition,
-            "__invariant__",
-            t => t.Requires(name: name, predicate: adapted, message)
-            );
-
-        var precondition = transition.Preconditions.Single();
-        return new InvariantDefinition(name, precondition.Expression, message);
+            parameterNames: new HashSet<string>(StringComparer.Ordinal));
+        return new InvariantDefinition(name, translator.Translate(adapted), message);
     }
 
     sealed class ParameterReplacementVisitor(ParameterExpression from, ParameterExpression to) : ExpressionVisitor

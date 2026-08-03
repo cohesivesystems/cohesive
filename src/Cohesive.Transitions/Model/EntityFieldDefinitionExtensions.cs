@@ -4,17 +4,30 @@ using System.Text.Json;
 namespace Cohesive.Transitions.Model;
 
 /// <summary>
-/// Transition-specific helpers for canonical shape field definitions.
+/// Entity-state helpers for canonical shape field definitions.
 /// </summary>
-public static class TransitionFieldDefinition
+public static class EntityFieldDefinitionExtensions
 {
-    static readonly AnnotationKey TransitionInvariantsAnnotation = new("transition.invariants");
+    static readonly AnnotationKey EntityInvariantsAnnotation = new("entity.invariants");
 
     extension(FieldDefinition)
     {
         /// <summary>
-        /// Creates a canonical field definition with transition metadata.
+        /// Creates a canonical field definition with entity-state metadata.
         /// </summary>
+        /// <param name="name">The canonical field name.</param>
+        /// <param name="type">The semantic field type.</param>
+        /// <param name="cardinality">Whether the field contains one value or a collection.</param>
+        /// <param name="presence">Whether the field is required in an entity state.</param>
+        /// <param name="mutability">How the field may change after creation.</param>
+        /// <param name="constraints">Entity-state constraints evaluated for the field.</param>
+        /// <param name="compute">The expression used to derive a computed field.</param>
+        /// <param name="annotations">Additional shape annotations for the field.</param>
+        /// <returns>A canonical shape field carrying the supplied entity-state metadata.</returns>
+        /// <exception cref="ArgumentException">
+        /// <paramref name="mutability"/> is computed without a <paramref name="compute"/> expression,
+        /// or <paramref name="compute"/> is supplied for a field that is not computed.
+        /// </exception>
         public static FieldDefinition Create(
             FieldName name,
             TypeRef type,
@@ -32,7 +45,7 @@ public static class TransitionFieldDefinition
             if (compute is not null && mutability != FieldMutability.Computed)
                 throw new ArgumentException(message: "Compute definition requires computed mutability.", paramName: nameof(compute));
 
-            var transitionConstraints = constraints.IsDefault ? [] : constraints;
+            var entityConstraints = constraints.IsDefault ? [] : constraints;
 
             var role = mutability == FieldMutability.Computed
                 ? FieldRole.Computed
@@ -49,11 +62,11 @@ public static class TransitionFieldDefinition
                 shapeConstraints = shapeConstraints.Insert(0, new RequiredConstraint());
 
             var normalizedAnnotations = AnnotationMap.Normalize(annotations);
-            if (!transitionConstraints.IsDefaultOrEmpty)
+            if (!entityConstraints.IsDefaultOrEmpty)
             {
                 normalizedAnnotations = normalizedAnnotations.SetItem(
-                    TransitionInvariantsAnnotation,
-                    AnnotationValue.FromObject(transitionConstraints)
+                    EntityInvariantsAnnotation,
+                    AnnotationValue.FromObject(entityConstraints)
                     );
             }
 
@@ -76,12 +89,15 @@ public static class TransitionFieldDefinition
     extension(FieldDefinition field)
     {
         /// <summary>
-        /// Returns transition constraint metadata for a field.
+        /// Returns entity-state constraint metadata for a field.
         /// </summary>
-        public ImmutableArray<InvariantDefinition> GetTransitionConstraints()
+        /// <returns>The constraints encoded on the receiver, or an empty array when none are present.</returns>
+        /// <exception cref="ArgumentNullException">The receiver is <see langword="null"/>.</exception>
+        /// <exception cref="InvalidOperationException">The stored constraint annotation is not a valid constraint payload.</exception>
+        public ImmutableArray<InvariantDefinition> GetEntityConstraints()
         {
             ArgumentNullException.ThrowIfNull(field);
-            if (!field.Annotations.TryGetValue(TransitionInvariantsAnnotation, out var encoded) || encoded.Value is null)
+            if (!field.Annotations.TryGetValue(EntityInvariantsAnnotation, out var encoded) || encoded.Value is null)
             {
                 return [];
             }
@@ -97,7 +113,7 @@ public static class TransitionFieldDefinition
             catch (JsonException ex)
             {
                 throw new InvalidOperationException(
-                    $"Field '{field.Name.Value}' has invalid '{TransitionInvariantsAnnotation.Value}' annotation payload.",
+                    $"Field '{field.Name.Value}' has invalid '{EntityInvariantsAnnotation.Value}' annotation payload.",
                     ex);
             }
         }

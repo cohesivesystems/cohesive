@@ -13,10 +13,6 @@ public sealed class IdentityCanonicalTransitionTests
         AssertCanonical(IdentityDomainModel.PrincipalAccount.Deactivate.Compile());
         AssertCanonical(IdentityDomainModel.ScopeMembership.ReplaceCapabilities.Compile());
         AssertCanonical(IdentityDomainModel.ScopeMembership.Revoke.Compile());
-
-        Assert.Empty(IdentityDomainModel.Scope.Definition.Transitions);
-        Assert.Empty(IdentityDomainModel.PrincipalAccount.Definition.Transitions);
-        Assert.Empty(IdentityDomainModel.ScopeMembership.Definition.Transitions);
     }
 
     static void AssertCanonical(TransitionCompilationResult compilation)

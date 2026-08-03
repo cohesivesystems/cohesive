@@ -8,21 +8,14 @@ namespace Cohesive.Tests.Model;
 public sealed class FieldDefinitionBridgeTests
 {
     [Fact]
-    public void DefineField_AttachesFieldDefinitionToRuntimeField()
+    public void DefineField_AttachesFieldDefinitionToAuthoredField()
     {
         var entity = new BridgedCarrierEntity();
         var state = entity.CreateState("carrier-1");
         
         Assert.Equal(nameof(BridgedCarrierEntity.Capacity), entity.Capacity.Definition.Name.Value);
         Assert.Equal(nameof(BridgedCarrierEntity.Capacity), entity.Capacity.Name);
-
-        var result = entity.UpdateCapacity.Apply(state, new BridgedCarrierEntity.CapacityValue(42));
-        Assert.Equal(42, entity.Capacity.Get(result.NewState));
-        var effect = Assert.Single(result.Effects);
-        Assert.Equal("CapacityUpdated", effect.Name);
-        Assert.Equal(ObservationValueKind.Object, effect.Payload.Kind);
-        Assert.Equal("Capacity", effect.Payload.GetProperty("field").GetString());
-        Assert.Equal(42L, effect.Payload.GetProperty("value").GetInt64());
+        Assert.Equal(10, entity.Capacity.Get(state));
     }
 
     [Fact]
@@ -34,9 +27,6 @@ public sealed class FieldDefinitionBridgeTests
         Assert.Equal(new EntityTypeName(nameof(BridgedCarrierEntity)), definition.Name);
         Assert.Equal(3, definition.Fields.Length);
         Assert.Single(definition.Invariants);
-        Assert.Equal(2, definition.Transitions.Length);
-        Assert.Contains(definition.Transitions, x => x.Name == nameof(BridgedCarrierEntity.UpdateCapacity));
-        Assert.Contains(definition.Transitions, x => x.Name == nameof(BridgedCarrierEntity.UpdateMaxCapacity));
     }
 
     [Fact]
@@ -47,7 +37,6 @@ public sealed class FieldDefinitionBridgeTests
 
         Assert.Same(first.Definition, second.Definition);
         Assert.Same(first.Capacity.Definition, second.Capacity.Definition);
-        Assert.Same(first.UpdateCapacity.Definition, second.UpdateCapacity.Definition);
     }
 
     [Fact]
@@ -59,11 +48,6 @@ public sealed class FieldDefinitionBridgeTests
         Assert.Equal("carrier-context-1", state.EntityId.Value);
         Assert.Equal(0, state.Version);
         Assert.Equal(10, state.Fields[nameof(BridgedCarrierEntity.Capacity)].GetInt32());
-
-        var result = entity.UpdateCapacity.Apply(state, new BridgedCarrierEntity.CapacityValue(42));
-
-        Assert.Equal(1, result.NewState.Version);
-        Assert.Equal(42, result.NewState.Fields[nameof(BridgedCarrierEntity.Capacity)].GetInt32());
     }
 
     [Fact]
@@ -79,15 +63,6 @@ public sealed class FieldDefinitionBridgeTests
     }
 
     [Fact]
-    public void WriteOnceField_CannotBeOverwrittenInsideTransition()
-    {
-        var entity = new BridgedCarrierEntity();
-        var state = entity.CreateState("carrier-2");
-
-        Assert.Throws<SemanticRuleViolationException>(() => entity.UpdateMaxCapacity.Apply(state, new BridgedCarrierEntity.CapacityValue(12)));
-    }
-
-    [Fact]
     public void RequiredField_NullInitialValue_Throws()
     {
         Assert.Throws<SemanticRuleViolationException>(() => new RequiredFieldNullEntity());
@@ -98,10 +73,8 @@ public sealed class FieldDefinitionBridgeTests
     {
         var entity = new QuantityRouteEntity();
         var state = entity.CreateState("route-1");
-        var result = entity.UpdateDistance.Apply(state, new QuantityRouteEntity.DistanceInput(Distance.FromMiles(218m)));
 
-        Assert.Equal(218m, entity.PlannedDistance.Get(result.NewState).Miles);
-        Assert.Equal(1, result.NewVersion);
+        Assert.Equal(0m, entity.PlannedDistance.Get(state).Miles);
     }
 
     [Fact]
@@ -198,16 +171,6 @@ public sealed class FieldDefinitionBridgeTests
             MaxCapacity = Field(MaxCapacityDef, 20);
             Tags = Field<IReadOnlyList<string>>(TagsDef, []);
 
-            UpdateMaxCapacity = Transition<BridgedCarrierEntity, CapacityValue>(
-                nameof(UpdateMaxCapacity),
-                t => t.Set(e => e.MaxCapacity, (_, p) => p.Value));
-
-            UpdateCapacity = Transition<BridgedCarrierEntity, CapacityValue>(
-                nameof(UpdateCapacity),
-                t => t
-                    .Set(e => e.Capacity, (_, p) => p.Value)
-                    .Emit("CapacityUpdated", (e, p) => new { field = "Capacity", value = p.Value }));
-
             Invariant<BridgedCarrierEntity>(
                 "CapacityNonNegative",
                 e => e.Capacity >= 0 && e.MaxCapacity >= 0);
@@ -220,11 +183,6 @@ public sealed class FieldDefinitionBridgeTests
         
         public Field<IReadOnlyList<string>> Tags { get; }
 
-        public Transition<BridgedCarrierEntity, CapacityValue> UpdateMaxCapacity { get; }
-
-        public Transition<BridgedCarrierEntity, CapacityValue> UpdateCapacity { get; }
-
-        public sealed record CapacityValue(int Value);
     }
 
     sealed class TypeMismatchEntity : Entity
@@ -312,16 +270,9 @@ public sealed class FieldDefinitionBridgeTests
         public QuantityRouteEntity()
         {
             PlannedDistance = Field(PlannedDistanceDef, Distance.AdditiveIdentity);
-            UpdateDistance = Transition<QuantityRouteEntity, DistanceInput>(
-                name: nameof(UpdateDistance),
-                configure: t => t.Set(e => e.PlannedDistance, (_, p) => p.Value));
         }
 
         public Field<Distance> PlannedDistance { get; }
-
-        public Transition<QuantityRouteEntity, DistanceInput> UpdateDistance { get; }
-
-        public sealed record DistanceInput(Distance Value);
     }
 
     sealed class InferredTelemetryEntity : Entity

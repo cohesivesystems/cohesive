@@ -18,19 +18,16 @@ public sealed record EntityDefinition
     /// <param name="name">Stable logical entity type name.</param>
     /// <param name="fields">Fields used when <paramref name="shape"/> is not supplied.</param>
     /// <param name="invariants">Entity-level invariants.</param>
-    /// <param name="transitions">Transitions declared for the entity.</param>
     /// <param name="shape">Optional explicit entity shape whose identifier and metadata are preserved.</param>
     /// <exception cref="ArgumentException">
     /// <paramref name="name"/> is default, the resolved shape is not an entity shape, has no fields,
-    /// carries an entity-type annotation that contradicts <paramref name="name"/>, or contains invalid
-    /// transition definitions.
+    /// carries an entity-type annotation that contradicts <paramref name="name"/>.
     /// </exception>
     [JsonConstructor]
     public EntityDefinition(
         EntityTypeName name,
         ImmutableArray<FieldDefinition> fields,
         ImmutableArray<InvariantDefinition> invariants = default,
-        ImmutableArray<TransitionDefinition> transitions = default,
         Shape? shape = null
         )
     {
@@ -54,8 +51,6 @@ public sealed record EntityDefinition
             throw new ArgumentException(exception.Message, nameof(shape), exception);
         }
         Invariants = invariants.IsDefault ? [] : invariants;
-        Transitions = transitions.IsDefault ? [] : [..transitions.Select(x => x.WithOwningEntity(name))];
-        EnsureTransitionInvariants(Transitions, name);
     }
 
     /// <summary>
@@ -64,24 +59,20 @@ public sealed record EntityDefinition
     /// <param name="name">Stable logical entity type name.</param>
     /// <param name="shape">Explicit entity shape whose identifier and metadata are preserved.</param>
     /// <param name="invariants">Entity-level invariants.</param>
-    /// <param name="transitions">Transitions declared for the entity.</param>
     /// <exception cref="ArgumentNullException"><paramref name="shape"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
     /// <paramref name="name"/> is default, or <paramref name="shape"/> is not an entity shape, has no
-    /// fields, carries an entity-type annotation that contradicts <paramref name="name"/>, or contains
-    /// invalid transition definitions.
+    /// fields, or carries an entity-type annotation that contradicts <paramref name="name"/>.
     /// </exception>
     public EntityDefinition(
         EntityTypeName name,
         Shape shape,
-        ImmutableArray<InvariantDefinition> invariants = default,
-        ImmutableArray<TransitionDefinition> transitions = default
+        ImmutableArray<InvariantDefinition> invariants = default
         )
         : this(
             name: name,
             fields: Guard.RequireNotNull(shape).Fields,
             invariants: invariants,
-            transitions: transitions,
             shape: shape)
     {
     }
@@ -112,13 +103,14 @@ public sealed record EntityDefinition
     public ImmutableArray<InvariantDefinition> Invariants { get; init; }
     
     /// <summary>
-    /// Declared transitions for this entity.
-    /// </summary>
-    public ImmutableArray<TransitionDefinition> Transitions { get; init; }
-
-    /// <summary>
     /// Creates an immutable state snapshot for this entity definition after validating field names and types.
     /// </summary>
+    /// <param name="entityId">The stable identity of the entity instance.</param>
+    /// <param name="values">The field values keyed by canonical field name.</param>
+    /// <param name="version">The entity-state version.</param>
+    /// <returns>A validated immutable entity-state snapshot.</returns>
+    /// <exception cref="ArgumentException"><paramref name="entityId"/> is empty or consists only of white-space characters.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="values"/> is <see langword="null"/>.</exception>
     /// <exception cref="SemanticRuleViolationException">Thrown when the supplied values do not satisfy this entity schema.</exception>
     public EntityState CreateState(string entityId, IReadOnlyDictionary<string, ObservationValue> values, long version = 0)
     {
@@ -146,12 +138,23 @@ public sealed record EntityDefinition
     /// <summary>
     /// Creates a state snapshot with an ephemeral generated entity id.
     /// </summary>
+    /// <param name="values">The field values keyed by canonical field name.</param>
+    /// <param name="version">The entity-state version.</param>
+    /// <returns>A validated immutable entity-state snapshot with a generated identity.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="values"/> is <see langword="null"/>.</exception>
+    /// <exception cref="SemanticRuleViolationException">The supplied values do not satisfy this entity schema.</exception>
     public EntityState CreateState(IReadOnlyDictionary<string, ObservationValue> values, long version = 0) =>
         CreateState(entityId: Guid.NewGuid().ToString("N"), values, version);
     
     /// <summary>
     /// Creates an immutable state snapshot from an object expression after validating it against this entity schema.
     /// </summary>
+    /// <param name="entityId">The stable identity of the entity instance.</param>
+    /// <param name="stateObject">The object whose properties supply field values.</param>
+    /// <param name="version">The entity-state version.</param>
+    /// <returns>A validated immutable entity-state snapshot.</returns>
+    /// <exception cref="ArgumentException"><paramref name="entityId"/> is empty or consists only of white-space characters.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="stateObject"/> is <see langword="null"/>.</exception>
     /// <exception cref="SemanticRuleViolationException">Thrown when the supplied values do not satisfy this entity schema.</exception>
     public EntityState CreateState(string entityId, object stateObject, long version = 0)
     {
@@ -168,12 +171,23 @@ public sealed record EntityDefinition
     /// <summary>
     /// Creates a state snapshot with an ephemeral generated entity id.
     /// </summary>
+    /// <param name="stateObject">The object whose properties supply field values.</param>
+    /// <param name="version">The entity-state version.</param>
+    /// <returns>A validated immutable entity-state snapshot with a generated identity.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="stateObject"/> is <see langword="null"/>.</exception>
+    /// <exception cref="SemanticRuleViolationException">The supplied values do not satisfy this entity schema.</exception>
     public EntityState CreateState(object stateObject, long version = 0) =>
         CreateState(entityId: Guid.NewGuid().ToString("N"), stateObject: stateObject, version: version);
 
     /// <summary>
     /// Creates an entity state from an observation after validating its shape and field values.
     /// </summary>
+    /// <param name="observation">The canonical observation to validate and wrap.</param>
+    /// <returns>An immutable entity state backed by <paramref name="observation"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="observation"/> is <see langword="null"/>.</exception>
+    /// <exception cref="SemanticRuleViolationException">
+    /// The observation shape, fields, or values do not satisfy this entity definition.
+    /// </exception>
     public EntityState CreateState(Observation observation)
     {
         ArgumentNullException.ThrowIfNull(observation);
@@ -184,17 +198,6 @@ public sealed record EntityDefinition
         var validationPlan = StateValidationPlanByEntityDefinition.GetValue(key: this, createValueCallback: static definition => StateValidationPlan.Build(definition));
         ValidateObservationStateValues(observation, validationPlan);
         return new(observation);
-    }
-
-    /// <summary>
-    /// Validates transition-name uniqueness for an entity.
-    /// </summary>
-    /// <exception cref="ArgumentException"></exception>
-    static void EnsureTransitionInvariants(ImmutableArray<TransitionDefinition> transitions, EntityTypeName entityName)
-    {
-        var duplicate = transitions.TryGetDuplicateByKey(x => x.Name, StringComparer.Ordinal);
-        if (duplicate is not null)
-            throw new ArgumentException(message: $"Entity '{entityName}' contains duplicate transition '{duplicate.Name}'.", paramName: nameof(transitions) );
     }
 
     void ValidateStateValues(IReadOnlyDictionary<string, ObservationValue> values)
