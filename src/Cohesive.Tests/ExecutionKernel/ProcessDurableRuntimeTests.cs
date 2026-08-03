@@ -6,7 +6,7 @@ using Cohesive.Storage.Processes;
 
 namespace Cohesive.Tests.ExecutionKernel;
 
-public sealed class ProcessDurableRuntimeTests
+public sealed partial class ProcessDurableRuntimeTests
 {
     static readonly TimeSpan WorkerLease = TimeSpan.FromMinutes(5);
 
@@ -1694,7 +1694,8 @@ public sealed class ProcessDurableRuntimeTests
         ProcessControlTestFixture controls,
         ProcessTokenInteractionTarget target,
         ProcessActivationContext activationContext,
-        string identity) =>
+        string identity,
+        SignalContractReference? contract = null) =>
         new(
             InteractionEnvelope.CurrentSchemaVersion,
             new(
@@ -1712,7 +1713,7 @@ public sealed class ProcessDurableRuntimeTests
                 ordering: null,
                 activationContext.Delivery,
                 activationContext.Provenance),
-            controls.SignalContract,
+            contract ?? controls.SignalContract,
             ProcessDurabilityTestFixture.StringValue("ready"),
             target);
 

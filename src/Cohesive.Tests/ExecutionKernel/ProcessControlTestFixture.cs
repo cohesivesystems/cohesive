@@ -16,16 +16,20 @@ internal sealed class ProcessControlTestFixture
 
     ProcessControlTestFixture(
         InteractionContractCatalog catalog,
-        SignalContractReference signalContract)
+        SignalContractReference signalContract,
+        SignalContractReference alternateSignalContract)
     {
         Catalog = catalog;
         SignalContract = signalContract;
+        AlternateSignalContract = alternateSignalContract;
         Executor = new(catalog);
     }
 
     internal InteractionContractCatalog Catalog { get; }
 
     internal SignalContractReference SignalContract { get; }
+
+    internal SignalContractReference AlternateSignalContract { get; }
 
     internal ProcessControlReferenceExecutor Executor { get; }
 
@@ -36,12 +40,20 @@ internal sealed class ProcessControlTestFixture
             new("revision/1"),
             new SignalContractDefinition(new(StringContract, new("signal-payload/v1"))),
             Provenance());
-        var validation = InteractionContractCatalog.TryCreate([signalDocument], out var catalog);
+        var alternateSignalDocument = InteractionContractDocuments.Create(
+            new("interaction/signal/control-test/alternate"),
+            new("revision/1"),
+            new SignalContractDefinition(new(StringContract, new("signal-payload/v1"))),
+            Provenance());
+        var validation = InteractionContractCatalog.TryCreate(
+            [signalDocument, alternateSignalDocument],
+            out var catalog);
         Assert.True(validation.IsValid, FormatDiagnostics(validation));
 
         return new(
             Assert.IsType<InteractionContractCatalog>(catalog),
-            new(Reference(signalDocument)));
+            new(Reference(signalDocument)),
+            new(Reference(alternateSignalDocument)));
     }
 
     internal ProcessControlState State(string attemptId = "process-attempt/1") =>

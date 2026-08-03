@@ -284,6 +284,9 @@ static class ProcessDurableCheckpointReducer
         ICollection<DocumentValidationDiagnostic> diagnostics)
     {
         var entries = checkpoint.Inbox.ToBuilder();
+        // A replay admission may report Reason.Duplicate while the continuation deliberately retains the
+        // original semantic receipt. The durable inbox projects that canonical state, not the latest presentation.
+        var retainedReceipts = decision.State.InputReceipts.ToDictionary(static receipt => receipt.Emission);
         foreach (var input in activation.Inputs)
         {
             var index = FindInbox(checkpoint.Inbox, input.Envelope.Context.EmissionId);
@@ -323,10 +326,15 @@ static class ProcessDurableCheckpointReducer
                 continue;
             }
 
+            if (!retainedReceipts.TryGetValue(receipt.Emission, out var retainedReceipt))
+            {
+                continue;
+            }
+
             entries[index] = new(
                 prior.Input,
                 prior.AdmittedAtUtc,
-                receipt,
+                retainedReceipt,
                 decision.State.Continuation);
         }
         return entries.ToImmutable();
