@@ -445,6 +445,23 @@ public sealed class CanonicalProcessAuthoringTests
     public void DerivedIdentities_AreDeterministicAndRejectAmbiguousRolePaths()
     {
         ExecutionNodeId owner = new("owner/path");
+        var structuralPath = new ExecutionSemanticPath(["body", "steps", "0", "request"]);
+        var escapedStructuralPath = new ExecutionSemanticPath(["body/steps", "~request"]);
+
+        Assert.Equal(
+            "cohesive.processes.authoring.identities/v1/body/steps/0/request/node",
+            ProcessAuthoringIdentities.NodeFor(structuralPath).Value);
+        Assert.Equal(
+            ProcessAuthoringIdentities.NodeFor(structuralPath),
+            ProcessAuthoringIdentities.NodeFor(new(["body", "steps", "0", "request"])));
+        Assert.Equal(
+            "cohesive.processes.authoring.identities/v1/body~1steps/~0request/node",
+            ProcessAuthoringIdentities.NodeFor(escapedStructuralPath).Value);
+        Assert.NotEqual(
+            ProcessAuthoringIdentities.NodeFor(new(["body/steps"])),
+            ProcessAuthoringIdentities.NodeFor(new(["body", "steps"])));
+        Assert.Equal("owner/path/branch/node", ProcessAuthoringIdentities.NodeFor(owner, "branch").Value);
+        Assert.Equal("owner/path/branch/2/node", ProcessAuthoringIdentities.NodeFor(owner, "branch", 2).Value);
 
         Assert.Equal("owner/path/next/edge", ProcessAuthoringIdentities.EdgeFor(owner, "next").Value);
         Assert.Equal("owner/path/result/binding", ProcessAuthoringIdentities.BindingFor(owner, "result").Value);
@@ -454,9 +471,13 @@ public sealed class CanonicalProcessAuthoringTests
         Assert.Throws<ArgumentException>(() => ProcessAuthoringIdentities.EdgeFor(new("owner"), "path/next"));
         Assert.Throws<ArgumentException>(() => ProcessAuthoringIdentities.BindingFor(new("owner"), "path/result"));
         Assert.Throws<ArgumentException>(() => ProcessAuthoringIdentities.RequestObligationFor(new("owner"), "path/inbound"));
+        Assert.Throws<ArgumentException>(() => ProcessAuthoringIdentities.NodeFor(default(ExecutionSemanticPath)));
+        Assert.Throws<ArgumentException>(() => ProcessAuthoringIdentities.NodeFor(new("owner"), "path/node"));
+        Assert.Throws<ArgumentOutOfRangeException>(() => ProcessAuthoringIdentities.NodeFor(owner, "branch", -1));
 
         var sameRoleIdentities = new[]
         {
+            ProcessAuthoringIdentities.NodeFor(owner, "result").Value,
             ProcessAuthoringIdentities.EdgeFor(owner, "result").Value,
             ProcessAuthoringIdentities.BindingFor(owner, "result").Value,
             ProcessAuthoringIdentities.RequestObligationFor(owner, "result").Value
@@ -478,6 +499,62 @@ public sealed class CanonicalProcessAuthoringTests
         ];
         Assert.Equal(conventionalEdges.Length, conventionalEdges.Distinct(StringComparer.Ordinal).Count());
         Assert.DoesNotContain(conventionalEdges, explicitNodes.Contains);
+    }
+
+    [Fact]
+    public void ConventionIdentity_IsExplicitInCanonicalIrAndCarriesPortableSourceEvidence()
+    {
+        var structuralPath = new ExecutionSemanticPath(["body", "steps", "0"]);
+        var semanticPath = new ExecutionSemanticPath(["definition", "nodes", "0"]);
+        var entry = ProcessAuthoringIdentities.NodeFor(structuralPath);
+        var evidence = ProcessAuthoringIdentities.ConventionSourceFor(structuralPath, semanticPath);
+
+        Assert.Equal(
+            $"{ProcessAuthoringIdentities.ConventionAuthority}#/body/steps/0",
+            evidence.Reference);
+        Assert.Equal(semanticPath, evidence.SemanticPath);
+        Assert.Equal("Identity supplied by the deterministic Process authoring convention.", evidence.Description);
+        Assert.Throws<ArgumentException>(() =>
+            ProcessAuthoringIdentities.ConventionSourceFor(default, semanticPath));
+        Assert.Throws<ArgumentException>(() =>
+            ProcessAuthoringIdentities.ConventionSourceFor(structuralPath, default));
+
+        var authored = ProcessAuthoring.Create<string, string>(
+            new(
+                Identities.Definition,
+                Identities.Revision,
+                entry,
+                ProcessRecoveryPolicy.ContinueAttempt,
+                Provenance()),
+            process => process.Return(entry, process.Input.Value));
+        var canonical = ExecutionDefinitionJsonSerializer.GetCanonicalBytes(authored.Document);
+        var validation = ProcessDefinitionDocuments.TryDeserialize(
+            Encoding.UTF8.GetString(canonical),
+            out var restoredDocument,
+            out var restoredDefinition);
+
+        Assert.True(validation.IsValid, Format(validation));
+        Assert.NotNull(restoredDocument);
+        Assert.NotNull(restoredDefinition);
+        Assert.Equal(entry, authored.Definition.Entry);
+        Assert.Equal(entry, Assert.Single(authored.Definition.Nodes).Id);
+        Assert.Equal(authored.Document.Metadata.Fingerprint, restoredDocument.Metadata.Fingerprint);
+        Assert.Equal(canonical, ExecutionDefinitionJsonSerializer.GetCanonicalBytes(restoredDocument));
+
+        var duplicate = Assert.Throws<InvalidOperationException>(() =>
+            ProcessAuthoring.Create<string, string>(
+                new(
+                    Identities.Definition,
+                    Identities.Revision,
+                    entry,
+                    ProcessRecoveryPolicy.ContinueAttempt,
+                    Provenance()),
+                process =>
+                {
+                    process.Return(entry, process.Input.Value);
+                    process.Return(entry, process.Input.Value);
+                }));
+        Assert.Contains(entry.Value, duplicate.Message, StringComparison.Ordinal);
     }
 
     [Fact]
