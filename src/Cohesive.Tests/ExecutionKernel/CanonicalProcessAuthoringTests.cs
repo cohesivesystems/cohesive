@@ -60,6 +60,73 @@ public sealed class CanonicalProcessAuthoringTests
     }
 
     [Fact]
+    public void NonSemanticSourceAttribution_DoesNotChangeCompilationOrReferenceMeaning()
+    {
+        var first = CreateDecisionProcess("tests/ari-205/producer-a");
+        var second = CreateDecisionProcess("tests/ari-205/producer-b");
+
+        Assert.NotEqual(first.Document.Metadata.Provenance, second.Document.Metadata.Provenance);
+        Assert.NotEqual(first.Document.Metadata.SourceMap, second.Document.Metadata.SourceMap);
+        Assert.Equal(first.Document.Metadata.Fingerprint, second.Document.Metadata.Fingerprint);
+        Assert.Equal(
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(first.Document),
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(second.Document));
+
+        var firstCompilation = first.Compile(new ProcessDefinitionValidationContext());
+        var secondCompilation = second.Compile(new ProcessDefinitionValidationContext());
+        Assert.True(firstCompilation.IsSuccessful, Format(firstCompilation.Validation));
+        Assert.True(secondCompilation.IsSuccessful, Format(secondCompilation.Validation));
+        Assert.Equivalent(firstCompilation.Validation, secondCompilation.Validation, strict: true);
+        var firstPlan = Assert.IsType<CompiledProcessPlan>(firstCompilation.Plan);
+        var secondPlan = Assert.IsType<CompiledProcessPlan>(secondCompilation.Plan);
+        Assert.Equal(firstPlan.DefinitionReference, secondPlan.DefinitionReference);
+        Assert.Equal(firstPlan.Definition, secondPlan.Definition);
+        Assert.Equivalent(firstPlan.Options, secondPlan.Options, strict: true);
+        Assert.Equivalent(firstPlan.EffectSummary, secondPlan.EffectSummary, strict: true);
+
+        var firstDecision = ProcessReferenceInterpreter.Activate(
+            firstPlan,
+            ProcessReferenceInterpreter.Create(
+                firstPlan,
+                ContinuationIdentity(),
+                DecisionInputValue(approved: true, outcome: "accepted")),
+            Activation(
+                "activation/ari-205/source-attribution",
+                ProcessActivationCause.Start,
+                first.Document.Metadata.Provenance),
+            RejectingHost.Instance);
+        var secondDecision = ProcessReferenceInterpreter.Activate(
+            secondPlan,
+            ProcessReferenceInterpreter.Create(
+                secondPlan,
+                ContinuationIdentity(),
+                DecisionInputValue(approved: true, outcome: "accepted")),
+            Activation(
+                "activation/ari-205/source-attribution",
+                ProcessActivationCause.Start,
+                second.Document.Metadata.Provenance),
+            RejectingHost.Instance);
+
+        Assert.Equal(firstDecision.Disposition, secondDecision.Disposition);
+        Assert.Equivalent(firstDecision.State, secondDecision.State, strict: true);
+        Assert.NotEqual(
+            firstDecision.Evidence.Trace.SelectMany(static item => item.SourceReferences),
+            secondDecision.Evidence.Trace.SelectMany(static item => item.SourceReferences));
+        Assert.Equivalent(
+            firstDecision.Evidence with
+            {
+                Trace = [.. firstDecision.Evidence.Trace.Select(static item => item with { SourceReferences = [] })]
+            },
+            secondDecision.Evidence with
+            {
+                Trace = [.. secondDecision.Evidence.Trace.Select(static item => item with { SourceReferences = [] })]
+            },
+            strict: true);
+        Assert.Empty(firstDecision.Diagnostics);
+        Assert.Empty(secondDecision.Diagnostics);
+    }
+
+    [Fact]
     public void AuthoredDocument_StrictRoundTripCompilesAndReferenceInterpretsWithoutProducerAssemblyState()
     {
         var authored = CreateDecisionProcess();
@@ -387,6 +454,30 @@ public sealed class CanonicalProcessAuthoringTests
         Assert.Throws<ArgumentException>(() => ProcessAuthoringIdentities.EdgeFor(new("owner"), "path/next"));
         Assert.Throws<ArgumentException>(() => ProcessAuthoringIdentities.BindingFor(new("owner"), "path/result"));
         Assert.Throws<ArgumentException>(() => ProcessAuthoringIdentities.RequestObligationFor(new("owner"), "path/inbound"));
+
+        var sameRoleIdentities = new[]
+        {
+            ProcessAuthoringIdentities.EdgeFor(owner, "result").Value,
+            ProcessAuthoringIdentities.BindingFor(owner, "result").Value,
+            ProcessAuthoringIdentities.RequestObligationFor(owner, "result").Value
+        };
+        Assert.Equal(sameRoleIdentities.Length, sameRoleIdentities.Distinct(StringComparer.Ordinal).Count());
+        Assert.DoesNotContain(owner.Value, sameRoleIdentities);
+
+        var authored = CreateDecisionProcess();
+        var explicitNodes = authored.Definition.Nodes
+            .Select(static node => node.Id.Value)
+            .ToHashSet(StringComparer.Ordinal);
+        var choice = Assert.Single(authored.Definition.Nodes.OfType<ChoiceProcessNode>());
+        var cut = Assert.Single(authored.Definition.Nodes.OfType<DurableCutProcessNode>());
+        string[] conventionalEdges =
+        [
+            Assert.Single(choice.Cases).Next.Id.Value,
+            Assert.IsType<ProcessFallback>(choice.Fallback).Next.Id.Value,
+            cut.Resume.Id.Value
+        ];
+        Assert.Equal(conventionalEdges.Length, conventionalEdges.Distinct(StringComparer.Ordinal).Count());
+        Assert.DoesNotContain(conventionalEdges, explicitNodes.Contains);
     }
 
     [Fact]
@@ -433,14 +524,14 @@ public sealed class CanonicalProcessAuthoringTests
             Metadata(),
             process => process.Return(Identities.Return, process.Input.Value));
 
-    static Process<DecisionInput, string> CreateDecisionProcess() =>
+    static Process<DecisionInput, string> CreateDecisionProcess(string sourceReference = SourceReference) =>
         ProcessAuthoring.Create<DecisionInput, string>(
             new(
                 DecisionIds.Definition,
                 Identities.Revision,
                 DecisionIds.Choice,
                 ProcessRecoveryPolicy.ContinueAttempt,
-                Provenance(),
+                Provenance(sourceReference),
                 displayName: "Review Decision"),
             process =>
             {
@@ -717,16 +808,19 @@ public sealed class CanonicalProcessAuthoringTests
             ExecutionDefinitionFingerprinter.Canonicalization,
             new string('1', 64)));
 
-    static ExecutionProvenance Provenance() => new(
+    static ExecutionProvenance Provenance(string sourceReference = SourceReference) => new(
         new(ProcessAuthoring.Producer, "1"),
-        new(SourceReference),
+        new(sourceReference),
         DocumentOrigin.User);
 
     static ProcessContinuationIdentity ContinuationIdentity() => new(
         new("process-instance/canonical-authoring"),
         new("process-attempt/1"));
 
-    static ProcessActivation Activation(string id, ProcessActivationCause cause) => new(
+    static ProcessActivation Activation(
+        string id,
+        ProcessActivationCause cause,
+        ExecutionProvenance? provenance = null) => new(
         new(id),
         cause,
         new DateTimeOffset(2026, 7, 29, 12, 0, 0, TimeSpan.Zero),
@@ -736,7 +830,7 @@ public sealed class CanonicalProcessAuthoringTests
             new(
                 InteractionDurabilityDemand.Durable,
                 InteractionVisibilityDemand.AfterOriginCommit),
-            Provenance()));
+            provenance ?? Provenance()));
 
     static PortableValue DecisionInputValue(bool approved, string outcome) => PortableValue.Concrete(
         DecisionInputContract,

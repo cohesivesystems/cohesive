@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using Cohesive.Execution;
 using Cohesive.ExecutionKernel.TestFixtures.MotionDq;
 using Cohesive.Model.Serialization;
+using Cohesive.Processes.Compilation;
 using Cohesive.Processes.Execution;
 using Cohesive.Storage.Processes;
 using Cohesive.Transitions.Compilation;
@@ -23,6 +24,7 @@ public sealed class MotionDqDurableProcessConformanceTests
     public async Task HappyPath_RestoresInsidePostTermsFork_AndRemainsReferenceEquivalent()
     {
         var fixture = MotionDqProcess.Version1;
+        var restoredPlan = CanonicalExecutionDocumentRestoration.RestoreProcessPlan(fixture.Documents);
         var clock = new ScenarioClock(new(2026, 8, 1, 12, 0, 0, TimeSpan.Zero));
         var input = Input(clock.Peek.AddDays(1));
         var start = Start(fixture, input, clock.Next(), clock.Next());
@@ -30,7 +32,7 @@ public sealed class MotionDqDurableProcessConformanceTests
         var adapter = new MotionDqScenarioAdapter(fixture);
         var store = new InMemoryProcessDurableStore();
         var runtime = Runtime(store, fixture, durableHost, adapter);
-        var initialized = await runtime.InitializeAsync(Context(clock.Next()), fixture.Plan, start);
+        var initialized = await runtime.InitializeAsync(Context(clock.Next()), restoredPlan, start);
         var checkpoint = Assert.IsType<ProcessDurableStoreSnapshot>(initialized.Snapshot).Checkpoint;
         checkpoint = await ReachPostTermsVendorFanOutAsync(
             store,
@@ -39,7 +41,8 @@ public sealed class MotionDqDurableProcessConformanceTests
             durableHost,
             checkpoint,
             clock,
-            scenario: "happy");
+            scenario: "happy",
+            plan: restoredPlan);
         var vendorOperations = PendingVendorOperations(checkpoint);
         foreach (var operation in vendorOperations[..3])
         {
@@ -48,7 +51,8 @@ public sealed class MotionDqDurableProcessConformanceTests
                 fixture,
                 checkpoint,
                 operation.OperationId,
-                clock.Next());
+                clock.Next(),
+                restoredPlan);
         }
 
         checkpoint = await ActivateAndCompareAsync(
@@ -59,7 +63,8 @@ public sealed class MotionDqDurableProcessConformanceTests
             new ActivationId("activation/motion-dq/post-terms-partial"),
             ProcessActivationCause.Interaction,
             clock.Next(),
-            PendingInputs(checkpoint));
+            PendingInputs(checkpoint),
+            restoredPlan);
         Assert.Equal(4, PendingVendorOperations(checkpoint).Length);
         Assert.Equal(3, checkpoint.Continuation.Forks
             .Single(static fork => fork.Fork.Value == "motion-dq/post-terms/fork")
@@ -74,7 +79,7 @@ public sealed class MotionDqDurableProcessConformanceTests
         var checkpointJson = ProcessDurableCheckpointJsonSerializer.Serialize(checkpoint);
         var restoreValidation = ProcessDurableCheckpointJsonSerializer.TryDeserialize(
             checkpointJson,
-            fixture.Plan,
+            restoredPlan,
             out var restored);
         Assert.True(restoreValidation.IsValid, Format(restoreValidation));
         var restoredCheckpoint = Assert.IsType<ProcessDurableCheckpoint>(restored);
@@ -95,7 +100,8 @@ public sealed class MotionDqDurableProcessConformanceTests
                 fixture,
                 checkpoint,
                 operation.OperationId,
-                clock.Next());
+                clock.Next(),
+                restoredPlan);
         }
 
         checkpoint = await ActivateAndCompareAsync(
@@ -106,7 +112,8 @@ public sealed class MotionDqDurableProcessConformanceTests
             new ActivationId("activation/motion-dq/post-terms-complete"),
             ProcessActivationCause.Interaction,
             clock.Next(),
-            PendingInputs(checkpoint));
+            PendingInputs(checkpoint),
+            restoredPlan);
 
         Assert.Equal(ExecutionTerminalOutcomeKind.Completed, checkpoint.Continuation.Terminal.Kind);
         Assert.Equal(
@@ -644,8 +651,10 @@ public sealed class MotionDqDurableProcessConformanceTests
         StatefulTransitionHost durableHost,
         ProcessDurableCheckpoint checkpoint,
         ScenarioClock clock,
-        string scenario)
+        string scenario,
+        CompiledProcessPlan? plan = null)
     {
+        plan ??= fixture.Plan;
         checkpoint = await ReachReviewWaitAsync(
             store,
             runtime,
@@ -653,7 +662,8 @@ public sealed class MotionDqDurableProcessConformanceTests
             durableHost,
             checkpoint,
             clock,
-            scenario);
+            scenario,
+            plan);
 
         var reviewWait = Assert.Single(
             checkpoint.Continuation.Waits,
@@ -682,14 +692,16 @@ public sealed class MotionDqDurableProcessConformanceTests
             new($"activation/motion-dq/{scenario}/hire"),
             ProcessActivationCause.Interaction,
             clock.Next(),
-            [hireInput]);
+            [hireInput],
+            plan);
 
         checkpoint = await AdvanceAtNodeAsync(
             runtime,
             fixture,
             checkpoint,
             "motion-dq/insurance-terms/request",
-            clock.Next());
+            clock.Next(),
+            plan);
         checkpoint = await ActivateAndCompareAsync(
             store,
             runtime,
@@ -698,7 +710,8 @@ public sealed class MotionDqDurableProcessConformanceTests
             new($"activation/motion-dq/{scenario}/insurance-accepted"),
             ProcessActivationCause.Interaction,
             clock.Next(),
-            PendingInputs(checkpoint));
+            PendingInputs(checkpoint),
+            plan);
 
         for (var index = PendingVendorOperations(checkpoint).Length; index < 7; index++)
         {
@@ -709,7 +722,8 @@ public sealed class MotionDqDurableProcessConformanceTests
                 durableHost,
                 new($"activation/motion-dq/{scenario}/post-terms-admit-{index + 1}"),
                 ProcessActivationCause.Continue,
-                clock.Next());
+                clock.Next(),
+                plan: plan);
         }
 
         Assert.Equal(7, PendingVendorOperations(checkpoint).Length);
@@ -771,8 +785,10 @@ public sealed class MotionDqDurableProcessConformanceTests
         StatefulTransitionHost durableHost,
         ProcessDurableCheckpoint checkpoint,
         ScenarioClock clock,
-        string scenario)
+        string scenario,
+        CompiledProcessPlan? plan = null)
     {
+        plan ??= fixture.Plan;
         checkpoint = await ActivateAndCompareAsync(
             store,
             runtime,
@@ -780,13 +796,15 @@ public sealed class MotionDqDurableProcessConformanceTests
             durableHost,
             new($"activation/motion-dq/{scenario}/start"),
             ProcessActivationCause.Start,
-            clock.Next());
+            clock.Next(),
+            plan: plan);
         checkpoint = await AdvanceAtNodeAsync(
             runtime,
             fixture,
             checkpoint,
             "motion-dq/review/create-task",
-            clock.Next());
+            clock.Next(),
+            plan);
         checkpoint = await ActivateAndCompareAsync(
             store,
             runtime,
@@ -795,7 +813,8 @@ public sealed class MotionDqDurableProcessConformanceTests
             new($"activation/motion-dq/{scenario}/review-task-created"),
             ProcessActivationCause.Interaction,
             clock.Next(),
-            PendingInputs(checkpoint));
+            PendingInputs(checkpoint),
+            plan);
 
         _ = Assert.Single(
             checkpoint.Continuation.Waits,
@@ -810,8 +829,10 @@ public sealed class MotionDqDurableProcessConformanceTests
         StatefulTransitionHost durableHost,
         ProcessDurableCheckpoint checkpoint,
         ScenarioClock clock,
-        string scenario)
+        string scenario,
+        CompiledProcessPlan? plan = null)
     {
+        plan ??= fixture.Plan;
         for (var index = 0;
              index < 32 && checkpoint.Continuation.Terminal.Kind == ExecutionTerminalOutcomeKind.None;
              index++)
@@ -824,7 +845,8 @@ public sealed class MotionDqDurableProcessConformanceTests
                     fixture,
                     checkpoint,
                     operation.OperationId,
-                    clock.Next());
+                    clock.Next(),
+                    plan);
             }
 
             var inputs = PendingInputs(checkpoint);
@@ -836,7 +858,8 @@ public sealed class MotionDqDurableProcessConformanceTests
                 new($"activation/motion-dq/{scenario}/drain-{index + 1}"),
                 inputs.IsDefaultOrEmpty ? ProcessActivationCause.Continue : ProcessActivationCause.Interaction,
                 clock.Next(),
-                inputs);
+                inputs,
+                plan);
         }
 
         Assert.NotEqual(ExecutionTerminalOutcomeKind.None, checkpoint.Continuation.Terminal.Kind);
@@ -851,8 +874,10 @@ public sealed class MotionDqDurableProcessConformanceTests
         ActivationId id,
         ProcessActivationCause cause,
         DateTimeOffset observedAtUtc,
-        ImmutableArray<ProcessActivationInput> inputs = default)
+        ImmutableArray<ProcessActivationInput> inputs = default,
+        CompiledProcessPlan? plan = null)
     {
+        plan ??= fixture.Plan;
         var before = Assert.IsType<ProcessDurableStoreSnapshot>(await store.LoadAsync(
             Context(observedAtUtc),
             instanceId: InstanceId())).Checkpoint;
@@ -865,14 +890,14 @@ public sealed class MotionDqDurableProcessConformanceTests
         var oracleState = durableHost.Clone();
         var oracleHost = new ProcessOperationReplayHost(oracleState, before.Operations);
         var expected = ProcessReferenceInterpreter.Activate(
-            fixture.Plan,
+            plan,
             before.Continuation,
             activation,
             oracleHost);
 
         var result = await runtime.ActivateAsync(
             Context(observedAtUtc),
-            fixture.Plan,
+            plan,
             before.ContinuationIdentity,
             activation);
         var actual = Assert.IsType<ProcessActivationDecision>(result.Decision);
@@ -890,7 +915,8 @@ public sealed class MotionDqDurableProcessConformanceTests
         MotionDqProcess fixture,
         ProcessDurableCheckpoint checkpoint,
         string node,
-        DateTimeOffset observedAtUtc)
+        DateTimeOffset observedAtUtc,
+        CompiledProcessPlan? plan = null)
     {
         var operation = Assert.Single(
             checkpoint.DurableOperations,
@@ -901,7 +927,8 @@ public sealed class MotionDqDurableProcessConformanceTests
             fixture,
             checkpoint,
             operation.OperationId,
-            observedAtUtc);
+            observedAtUtc,
+            plan);
     }
 
     static async Task<ProcessDurableCheckpoint> AdvanceOperationAsync(
@@ -909,11 +936,13 @@ public sealed class MotionDqDurableProcessConformanceTests
         MotionDqProcess fixture,
         ProcessDurableCheckpoint checkpoint,
         EmissionId operationId,
-        DateTimeOffset observedAtUtc)
+        DateTimeOffset observedAtUtc,
+        CompiledProcessPlan? plan = null)
     {
+        plan ??= fixture.Plan;
         var result = await runtime.AdvanceOperationAsync(
             Context(observedAtUtc),
-            fixture.Plan,
+            plan,
             checkpoint.ContinuationIdentity.ProcessInstanceId,
             operationId);
 
