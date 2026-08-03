@@ -21,6 +21,7 @@ public sealed class DurableTaskSystemTextJsonDataConverter : JsonDataConverter
     /// <summary>
     /// Creates a new converter backed by <see cref="System.Text.Json"/>.
     /// </summary>
+    /// <param name="options">Optional serializer options to clone before adding the Cohesive Durable Task converters.</param>
     public DurableTaskSystemTextJsonDataConverter(JsonSerializerOptions? options = null)
     {
         compactOptions = CreateJsonOptions(options);
@@ -33,6 +34,8 @@ public sealed class DurableTaskSystemTextJsonDataConverter : JsonDataConverter
     /// <summary>
     /// Creates serializer options configured for Durable Task payloads.
     /// </summary>
+    /// <param name="options">Optional serializer options to clone; the supplied instance is never mutated.</param>
+    /// <returns>A mutable options instance containing the required Cohesive Durable Task converters.</returns>
     public static JsonSerializerOptions CreateJsonOptions(JsonSerializerOptions? options = null)
     {
         var resolved = options is null ? new JsonSerializerOptions() : new JsonSerializerOptions(options);

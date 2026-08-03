@@ -19,6 +19,10 @@ public sealed class DurableTaskProcessExecutionRepository : IProcessExecutionRep
     /// <summary>
     /// Creates a repository over a Durable Task query client.
     /// </summary>
+    /// <param name="queryClient">Durable Task client that owns task-hub query execution.</param>
+    /// <param name="taskHubName">Optional task hub restriction; <see langword="null"/> queries the client's configured scope.</param>
+    /// <param name="dataConverter">Optional converter for retained inputs, outputs, and custom status; the Cohesive Durable Task converter is used by default.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="queryClient"/> is <see langword="null"/>.</exception>
     public DurableTaskProcessExecutionRepository(
         IOrchestrationServiceQueryClient queryClient,
         string? taskHubName = null,
