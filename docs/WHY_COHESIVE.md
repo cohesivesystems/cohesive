@@ -1,10 +1,28 @@
+---
+kind: explanatory
+status: accepted
+authority: cohesive.adoption-case
+owners: [cohesive-core]
+applies_to: [cohesive]
+last_verified: 2026-08-03
+supersedes: []
+---
+
 # Why Use Cohesive Blocks?
 
-Cohesive adds a modeling, compilation, and runtime layer. Developers must learn its authoring
-languages, understand compiler diagnostics, and occasionally extend an adapter. That cost is real.
-The case for Cohesive is therefore not that an extra abstraction is free, or that every application
-needs one. It is that a semantic definition can earn back its cost through every interpretation that
-would otherwise require another implementation of the same meaning.
+This document is the economic and incremental-adoption case for Cohesive. The
+[Cohesive vision](vision/cohesive-vision.md) defines the intended direction, the
+[semantic model](concepts/semantic-model.md) defines the common conceptual contract, and the
+[language family](architecture/language-family.md) assigns ownership across semantic domains. This
+document asks the practical question: when does adding that semantic layer repay its cost?
+
+Cohesive adds a semantic language, compilation, and interpretation layer. Teams must learn its
+concepts, establish useful producers and review surfaces, understand diagnostics, and occasionally
+extend an adapter. People should not normally hand-author canonical IR, but they must be able to
+calibrate its intent and judge its evidence. That cost is real. The case for Cohesive is therefore
+not that an extra abstraction is free, or that every application needs one. It is that a semantic
+definition can earn back its cost through validation, verification, comprehension, change, and each
+interpretation that would otherwise require another reconstruction of the same meaning.
 
 The wrong comparison is usually a Cohesive relation against one hand-written SQL query, or a
 Cohesive process against one application-service method. The relevant comparison includes the SQL,
@@ -13,15 +31,53 @@ documentation, and future backend migration that repeat or depend on the same se
 
 In shorthand:
 
-> **Return = avoided semantic duplication + cheaper change + derived tooling + target optionality −
-> modeling and integration cost.**
+> **Return = avoided semantic duplication + validation and verification leverage + comprehension +
+> cheaper change + derived tooling + target optionality − modeling, calibration, and integration
+> cost.**
 
 The return starts small and compounds. A team should be able to adopt one block for one immediate
 benefit, then connect other interpretations without replacing the original definition.
 
-This is an architectural decision guide, not a release matrix. The package READMEs describe the
-currently implemented surfaces. Benefits that require an additional interpreter or adapter are
-option value until that implementation exists; the
+## The bitter lesson and the agentic test
+
+The comparison is changing. A sufficiently capable coding agent can write application-specific code
+directly, exploit infrastructure without waiting for a framework abstraction, and remove an external
+dependency. It may eventually translate human specifications into systems—and continue evolving
+those systems—more effectively than a fixed pipeline of intermediate representations and compiler
+passes.
+
+This weakens the traditional argument for libraries and frameworks. Reuse, encapsulation, and code
+generation are not durable advantages when code itself becomes inexpensive to synthesize. Cohesive
+must therefore be evaluated against agent-produced bespoke systems, not only against manually
+written implementations.
+
+Cohesive is justified only when its human-oriented languages provide leverage that direct synthesis
+does not:
+
+- people can validate whether the expressed system is what they intend;
+- agents and tools can verify that a realization preserves the accepted meaning;
+- people and agents can comprehend behavior, decisions, and consequences at useful abstractions;
+- semantic change can drive impact analysis, migration, regeneration, rollout, and runtime
+  evaluation across the full lifecycle; or
+- durable requirements and capability evidence improve target use without hiding target strengths.
+
+If direct agent synthesis provides these properties more reliably and economically for a particular
+system, Cohesive should not be inserted. This is a continuing test, not an objection that can be
+settled once.
+
+Cohesive's current compilers and reference interpreters make the language claims executable and
+falsifiable. They are concrete reference implementations, not the long-term moat. Future
+realizations may use agent synthesis, learned compilation, search, direct execution, or a radically
+different sequence of intermediate mechanisms. The durable value, if Cohesive has one, lies in the
+human-oriented semantic language and the evidence connecting intent, change, implementation, and
+operation.
+
+This is an adoption decision guide, not a normative specification or release matrix. The package
+READMEs describe the currently implemented surfaces. The
+[golden verticals](use-cases/golden-verticals.md) show how the blocks are intended to compose, while
+the [conformance strategy](quality/conformance.md) defines how interpreter and adapter claims should
+be verified. Benefits that require an additional interpreter or adapter are option value until that
+implementation exists; the
 [Execution Kernel compatibility inventory](EXECUTION_KERNEL_COMPATIBILITY.md) calls out important
 current gaps in Transitions and Processes explicitly.
 
@@ -80,10 +136,11 @@ A Cohesive transition is instead a semantic object observed by validators, plann
 adapters, APIs, user interfaces, process runtimes, test systems, operational tooling, and development
 agents. Authoritative execution is only one interpretation in its lifecycle:
 
-1. **Authoring and lowering.** The developer expresses inputs, preconditions, branches, state
-   changes, outcomes, and effects in C#. The authoring surface lowers immediately to canonical,
-   portable Transition IR; the CLR expression or delegate does not become the durable semantic
-   authority.
+1. **Production and lowering.** An agent, developer, inference system, or other producer expresses
+   inputs, preconditions, branches, state changes, outcomes, and effects through a C# surface or
+   another language frontend. The surface lowers to canonical, portable Transition IR; the producer,
+   CLR expression, prompt, or delegate does not become the durable semantic authority. People can
+   inspect the IR or a faithful projection without being expected to author its normalized form.
 2. **Identity and provenance.** The transition receives stable definition, revision, node, input,
    outcome, and interaction identities, together with its origin and fingerprint. Other blocks can
    refer to the behavior without pointing to a CLR method or copying its name.
@@ -193,9 +250,10 @@ than create another model that happens to resemble it.
 
 ## The agentic-development dividend
 
-Persisted IR changes what an agent has to infer. Instead of reconstructing intent from controllers,
-SQL, serializers, workflow code, and frontend strings, an agent can inspect explicit shapes,
-relationships, invariants, field requirements, capabilities, stable identities, and provenance.
+Agentic development is a primary design target, not an incidental benefit. Persisted IR changes what
+an agent has to infer. Instead of reconstructing intent from controllers, SQL, serializers, workflow
+code, and frontend strings, an agent can produce and inspect explicit shapes, relationships,
+invariants, field requirements, capabilities, stable identities, revisions, changes, and provenance.
 That enables narrower and more verifiable work:
 
 - locate every consumer of a semantic field or operation;
@@ -207,12 +265,18 @@ That enables narrower and more verifiable work:
 
 This does not make agents automatically correct. It replaces ambiguous code archaeology with a
 smaller, structured evidence set and gives both agents and humans stronger ways to check the result.
+Agents remain producers, interpreters, reviewers, or operators around the semantic authority; their
+prompts, plans, and confidence do not replace canonical IR or deterministic acceptance boundaries.
+The IR must remain readable enough for people to orient themselves and calibrate agent output, but
+human hand-authoring is not the expected throughput path. Human-oriented review projections,
+semantic diffs, examples, and explanations may be more important interfaces than a general-purpose
+IR editor.
 
 ## An incremental adoption path
 
-1. **Take a local win.** Use one block for a concrete pain: a relation as a mapper/query, a
-   transition for one domain invariant, a process for one brittle workflow, or API declarations for
-   client generation.
+1. **Take a local win.** Have an agent, host-language frontend, or other producer use one block for a
+   concrete pain: a relation as a mapper/query, a transition for one domain invariant, a process for
+   one brittle workflow, or API declarations for client generation.
 2. **Add a cheap interpretation.** Run it in memory, generate a contract, emit documentation, or add
    static validation before changing production infrastructure.
 3. **Connect adjacent blocks.** Bind the relation to a process, the transition to an API action, or
@@ -232,10 +296,13 @@ are duplicated across application layers, workflows require replay or recovery, 
 need consistent contracts, or the system is expected to evolve for years.
 
 It is a weaker trade for short-lived applications, straightforward CRUD over one stable database,
-teams whose dominant work is intrinsically backend-specific, or cases where only one implementation
-of a rule will ever exist. Direct access remains a legitimate escape hatch for such work. It should
-be explicit and attributable so it does not silently become a second semantic authority.
+teams whose dominant work is intrinsically backend-specific, cases where only one implementation of
+a rule will ever exist, or systems where an agent can directly synthesize, verify, explain, and
+evolve the implementation with less semantic machinery. Direct access remains a legitimate escape
+hatch for such work. It should be explicit and attributable so it does not silently become a second
+semantic authority.
 
 The practical standard is simple: do not justify a block by the abstraction it introduces. Justify
 it by the independent implementations, tests, integrations, and future changes that its semantic
-model makes unnecessary or materially safer.
+model makes unnecessary or materially safer. Then require the resulting interpretation to publish
+the capability, provenance, and conformance evidence that makes that return credible.

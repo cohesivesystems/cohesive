@@ -2,6 +2,7 @@
 
 Cohesive is a library suite for semantic system definition and orchestration of existing infrastructure. It favors defining the meaning of a system first, then attaching interpretations for storage, APIs, presentation, workflows, AI, training, and provider-specific infrastructure.
 
+System-wide architectural documentation starts at the [Cohesive documentation index](docs/index.md).
 Detailed package docs live beside each package under `src/*/README.md` and are included in the corresponding NuGet package.
 
 For a concise account of the adoption cost, incremental entry points, and compounding benefits across blocks, see [Why Use Cohesive Blocks?](docs/WHY_COHESIVE.md).
