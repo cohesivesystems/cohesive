@@ -11,6 +11,40 @@ public sealed class InMemoryProcessDurableStoreCrashTests
     static OperationContext Context { get; } = OperationContext.Create();
 
     [Fact]
+    public void CrashScript_TriggersOrderedExactOccurrencesAndRetainsEvidence()
+    {
+        var instanceId = new ProcessInstanceId("process-instance/crash-script");
+        var before = new ProcessStoreCrashContext(
+            instanceId,
+            ProcessStoreMutationKind.AggregateCommit,
+            ProcessStoreCrashPhase.BeforeAtomicCommit);
+        var after = new ProcessStoreCrashContext(
+            instanceId,
+            ProcessStoreMutationKind.AggregateCommit,
+            ProcessStoreCrashPhase.AfterAtomicCommitBeforeReturn);
+        var crash = new ProcessStoreCrashScript(
+            new(ProcessStoreMutationKind.AggregateCommit, ProcessStoreCrashPhase.BeforeAtomicCommit, 2),
+            new(ProcessStoreMutationKind.AggregateCommit, ProcessStoreCrashPhase.AfterAtomicCommitBeforeReturn));
+
+        Assert.False(crash.ShouldCrash(before));
+        Assert.True(crash.ShouldCrash(before));
+        Assert.False(crash.ShouldCrash(before));
+        Assert.True(crash.ShouldCrash(after));
+
+        Assert.True(crash.IsComplete);
+        Assert.Collection(
+            crash.Observations,
+            item => Assert.Equal(before, item),
+            item => Assert.Equal(before, item),
+            item => Assert.Equal(before, item),
+            item => Assert.Equal(after, item));
+        Assert.Collection(
+            crash.Crashes,
+            item => Assert.Equal(before, item),
+            item => Assert.Equal(after, item));
+    }
+
+    [Fact]
     public async Task TerminalCheckpoint_StillDurablyAdmitsLateInputForPolicyClassification()
     {
         var fixture = ProcessDurabilityTestFixture.Create(
@@ -57,6 +91,8 @@ public sealed class InMemoryProcessDurableStoreCrashTests
 
         Assert.Equal(mutationKind, exception.Context.MutationKind);
         Assert.Equal(ProcessStoreCrashPhase.BeforeAtomicCommit, exception.Context.Phase);
+        Assert.True(scenario.Crash.IsComplete);
+        Assert.Equal(exception.Context, Assert.Single(scenario.Crash.Crashes));
         scenario.AssertBefore(afterCrash);
 
         var retry = await scenario.Mutate();
@@ -93,6 +129,8 @@ public sealed class InMemoryProcessDurableStoreCrashTests
 
         Assert.Equal(mutationKind, exception.Context.MutationKind);
         Assert.Equal(ProcessStoreCrashPhase.AfterAtomicCommitBeforeReturn, exception.Context.Phase);
+        Assert.True(scenario.Crash.IsComplete);
+        Assert.Equal(exception.Context, Assert.Single(scenario.Crash.Crashes));
         scenario.AssertAfter(committed);
 
         var retry = await scenario.Mutate();
@@ -105,7 +143,7 @@ public sealed class InMemoryProcessDurableStoreCrashTests
     [Fact]
     public async Task AcquisitionExactRetry_ReplaysAcrossInterveningInboxRevision()
     {
-        var crash = new CrashOnce(
+        var crash = ProcessStoreCrashScript.Once(
             ProcessStoreMutationKind.WorkerAcquisition,
             ProcessStoreCrashPhase.AfterAtomicCommitBeforeReturn);
         var store = new InMemoryProcessDurableStore(crash.ShouldCrash);
@@ -170,7 +208,7 @@ public sealed class InMemoryProcessDurableStoreCrashTests
     [Fact]
     public async Task RenewalExactRetry_ReplaysAcrossLaterInterveningInboxChronology()
     {
-        var crash = new CrashOnce(
+        var crash = ProcessStoreCrashScript.Once(
             ProcessStoreMutationKind.WorkerRenewal,
             ProcessStoreCrashPhase.AfterAtomicCommitBeforeReturn);
         var store = new InMemoryProcessDurableStore(crash.ShouldCrash);
@@ -246,7 +284,7 @@ public sealed class InMemoryProcessDurableStoreCrashTests
         ProcessStoreMutationKind mutationKind,
         ProcessStoreCrashPhase crashPhase)
     {
-        var crash = new CrashOnce(mutationKind, crashPhase);
+        var crash = ProcessStoreCrashScript.Once(mutationKind, crashPhase);
         var store = new InMemoryProcessDurableStore(crash.ShouldCrash);
         var fixture = ProcessDurabilityTestFixture.Create(
             definitionId: $"process/durable-store-crash/{mutationKind}",
@@ -259,6 +297,7 @@ public sealed class InMemoryProcessDurableStoreCrashTests
             case ProcessStoreMutationKind.Initialize:
                 return new(
                     store,
+                    crash,
                     instanceId,
                     () => store.InitializeAsync(Context, new("commit/crash/initialize"), checkpoint),
                     Assert.Null,
@@ -277,6 +316,7 @@ public sealed class InMemoryProcessDurableStoreCrashTests
                     var admittedAtUtc = CheckpointedAtUtc.AddMinutes(1);
                     return new(
                         store,
+                        crash,
                         instanceId,
                         () => store.AdmitInputAsync(Context, instanceId, input, admittedAtUtc),
                         snapshot =>
@@ -306,6 +346,7 @@ public sealed class InMemoryProcessDurableStoreCrashTests
                     var acquiredAtUtc = CheckpointedAtUtc.AddMinutes(1);
                     return new(
                         store,
+                        crash,
                         instanceId,
                         () => store.AcquireWorkerAsync(
                             Context,
@@ -347,6 +388,7 @@ public sealed class InMemoryProcessDurableStoreCrashTests
                     var renewedAtUtc = acquiredAtUtc.AddMinutes(2);
                     return new(
                         store,
+                        crash,
                         instanceId,
                         () => store.RenewWorkerAsync(
                             Context,
@@ -406,6 +448,7 @@ public sealed class InMemoryProcessDurableStoreCrashTests
                     var priorOperation = Assert.Single(checkpoint.DurableOperations);
                     return new(
                         store,
+                        crash,
                         instanceId,
                         () => ProcessDurabilityTestFixture.CommitAtEvidenceTimeAsync(store, commit),
                         snapshot =>
@@ -599,28 +642,9 @@ public sealed class InMemoryProcessDurableStoreCrashTests
 
     sealed record CrashScenario(
         InMemoryProcessDurableStore Store,
+        ProcessStoreCrashScript Crash,
         ProcessInstanceId InstanceId,
         Func<Task<ProcessStoreMutationResult>> Mutate,
         Action<ProcessDurableStoreSnapshot?> AssertBefore,
         Action<ProcessDurableStoreSnapshot?> AssertAfter);
-
-    sealed class CrashOnce(
-        ProcessStoreMutationKind mutationKind,
-        ProcessStoreCrashPhase crashPhase)
-    {
-        bool triggered;
-
-        internal bool ShouldCrash(ProcessStoreCrashContext context)
-        {
-            if (triggered
-                || context.MutationKind != mutationKind
-                || context.Phase != crashPhase)
-            {
-                return false;
-            }
-
-            triggered = true;
-            return true;
-        }
-    }
 }
