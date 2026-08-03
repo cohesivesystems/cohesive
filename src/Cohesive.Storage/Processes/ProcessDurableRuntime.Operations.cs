@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
@@ -9,8 +8,11 @@ namespace Cohesive.Storage.Processes;
 
 public sealed partial class ProcessDurableRuntime
 {
-    readonly ConcurrentDictionary<(ProcessInstanceId InstanceId, EmissionId OperationId), SemaphoreSlim>
-        operationGates = [];
+    readonly KeyedAsyncLock<(ProcessInstanceId InstanceId, EmissionId OperationId)> operationGates = new();
+
+    internal int RetainedOperationGateCount => operationGates.RetainedKeyCount;
+
+    internal int RegisteredOperationGateLeaseCount => operationGates.RegisteredLeaseCount;
 
     /// <summary>Advances one retained durable Request through all currently safe physical stages.</summary>
     /// <param name="context">Explicit cancellation, clock, identity, and tracing context.</param>
@@ -52,14 +54,15 @@ public sealed partial class ProcessDurableRuntime
             return new(ProcessDurableRuntimeDisposition.Incompatible, diagnostics: capabilityDiagnostics);
         }
 
-        var operationGate = operationGates.GetOrAdd((instanceId, operationId), static _ => new(1, 1));
-        await operationGate.WaitAsync(context.CancellationToken).ConfigureAwait(false);
-        var gate = instanceGates.GetOrAdd(instanceId, static _ => new(1, 1));
-        var gateHeld = false;
+        var operationGate = await operationGates.AcquireAsync(
+                (instanceId, operationId),
+                context.CancellationToken)
+            .ConfigureAwait(false);
+        KeyedAsyncLock<ProcessInstanceId>.Lease? gate = null;
         try
         {
-            await gate.WaitAsync(context.CancellationToken).ConfigureAwait(false);
-            gateHeld = true;
+            gate = await instanceGates.AcquireAsync(instanceId, context.CancellationToken)
+                .ConfigureAwait(false);
             var loaded = await LoadOperationSnapshotAsync(context, plan, instanceId, operationId)
                 .ConfigureAwait(false);
             if (loaded.Failure is not null)
@@ -134,8 +137,8 @@ public sealed partial class ProcessDurableRuntime
                     context.CancellationToken);
                 var reconciliationContext = context.WithCancellationToken(
                     reconciliationCancellation.Token);
-                gate.Release();
-                gateHeld = false;
+                gate.Dispose();
+                gate = null;
                 var maintenanceTask = MaintainProcessWorkerOwnershipAsync(
                     reconciliationContext,
                     plan,
@@ -143,8 +146,7 @@ public sealed partial class ProcessDurableRuntime
                     operationId,
                     sourceAttempt.Claim.AttemptId,
                     sourceAttempt.Claim.Fence,
-                    workerFence,
-                    gate);
+                    workerFence);
                 var reconciliationTask = DurableOperationReferenceExecutor.ReconcileAsync(
                         reconciliationContext,
                         ownedOperation,
@@ -207,8 +209,8 @@ public sealed partial class ProcessDurableRuntime
                     reconciliationException = null;
                 }
 
-                await gate.WaitAsync(context.CancellationToken).ConfigureAwait(false);
-                gateHeld = true;
+                gate = await instanceGates.AcquireAsync(instanceId, context.CancellationToken)
+                    .ConfigureAwait(false);
                 await reconciliationCancellation.CancelAsync().ConfigureAwait(false);
                 var maintenanceFailure = await maintenanceTask.ConfigureAwait(false);
                 if (maintenanceFailure is not null)
@@ -679,8 +681,8 @@ public sealed partial class ProcessDurableRuntime
 
             // Physical adapter I/O is not a local aggregate critical section. Lease maintenance briefly enters the
             // gate for each durable renewal, allowing Pause/Cancel/control work to interleave between heartbeats.
-            gate.Release();
-            gateHeld = false;
+            gate.Dispose();
+            gate = null;
             var maintenanceTask = MaintainOperationOwnershipAsync(
                 inFlightContext,
                 plan,
@@ -690,8 +692,7 @@ public sealed partial class ProcessDurableRuntime
                 invocation.Fence,
                 workerFence,
                 operation.Binding.ClaimLease,
-                executor,
-                gate);
+                executor);
             var adapterTask = InvokeAdapterAsync(inFlightContext, invocation, adapter!);
 
             var firstCompleted = await Task.WhenAny(adapterTask, maintenanceTask).ConfigureAwait(false);
@@ -739,8 +740,8 @@ public sealed partial class ProcessDurableRuntime
                 throw adapterException;
             }
 
-            await gate.WaitAsync(context.CancellationToken).ConfigureAwait(false);
-            gateHeld = true;
+            gate = await instanceGates.AcquireAsync(instanceId, context.CancellationToken)
+                .ConfigureAwait(false);
             await inFlightCancellation.CancelAsync().ConfigureAwait(false);
             var maintenanceFailure = await maintenanceTask.ConfigureAwait(false);
             if (maintenanceFailure is not null)
@@ -858,11 +859,8 @@ public sealed partial class ProcessDurableRuntime
         }
         finally
         {
-            if (gateHeld)
-            {
-                gate.Release();
-            }
-            operationGate.Release();
+            gate?.Dispose();
+            operationGate.Dispose();
         }
     }
 
@@ -943,8 +941,7 @@ public sealed partial class ProcessDurableRuntime
         EmissionId operationId,
         OperationAttemptId sourceAttemptId,
         OperationFence sourceFence,
-        ProcessWorkerFence workerFence,
-        SemaphoreSlim gate)
+        ProcessWorkerFence workerFence)
     {
         var interval = OperationRenewalInterval(options.WorkerLease, options.WorkerLease);
         try
@@ -953,7 +950,8 @@ public sealed partial class ProcessDurableRuntime
             {
                 await Task.Delay(interval, context.TimeProvider, context.CancellationToken)
                     .ConfigureAwait(false);
-                await gate.WaitAsync(context.CancellationToken).ConfigureAwait(false);
+                var gate = await instanceGates.AcquireAsync(instanceId, context.CancellationToken)
+                    .ConfigureAwait(false);
                 try
                 {
                     var loadedResult = await LoadOperationSnapshotAsync(context, plan, instanceId, operationId)
@@ -1039,7 +1037,7 @@ public sealed partial class ProcessDurableRuntime
                 }
                 finally
                 {
-                    gate.Release();
+                    gate.Dispose();
                 }
             }
         }
@@ -1058,8 +1056,7 @@ public sealed partial class ProcessDurableRuntime
         OperationFence operationFence,
         ProcessWorkerFence workerFence,
         TimeSpan operationLease,
-        DurableOperationReferenceExecutor executor,
-        SemaphoreSlim gate)
+        DurableOperationReferenceExecutor executor)
     {
         var interval = OperationRenewalInterval(options.WorkerLease, operationLease);
         try
@@ -1068,7 +1065,8 @@ public sealed partial class ProcessDurableRuntime
             {
                 await Task.Delay(interval, context.TimeProvider, context.CancellationToken)
                     .ConfigureAwait(false);
-                await gate.WaitAsync(context.CancellationToken).ConfigureAwait(false);
+                var gate = await instanceGates.AcquireAsync(instanceId, context.CancellationToken)
+                    .ConfigureAwait(false);
                 try
                 {
                     var loadedResult = await LoadOperationSnapshotAsync(context, plan, instanceId, operationId)
@@ -1220,7 +1218,7 @@ public sealed partial class ProcessDurableRuntime
                 }
                 finally
                 {
-                    gate.Release();
+                    gate.Dispose();
                 }
             }
         }

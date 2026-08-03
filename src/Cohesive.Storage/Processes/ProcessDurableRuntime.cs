@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
@@ -33,7 +32,11 @@ public sealed partial class ProcessDurableRuntime
     readonly IProcessOperationExceptionClassifier operationExceptionClassifier;
     readonly IProcessTransitionOperationAdapter? transitionOperationAdapter;
     readonly ProcessDurableRuntimeOptions options;
-    readonly ConcurrentDictionary<ProcessInstanceId, SemaphoreSlim> instanceGates = [];
+    readonly KeyedAsyncLock<ProcessInstanceId> instanceGates = new();
+
+    internal int RetainedInstanceGateCount => instanceGates.RetainedKeyCount;
+
+    internal int RegisteredInstanceGateLeaseCount => instanceGates.RegisteredLeaseCount;
 
     /// <summary>Creates a durable Process driver over explicit physical and interpretation ports.</summary>
     /// <param name="store">Atomic Process aggregate durability provider.</param>
@@ -115,8 +118,10 @@ public sealed partial class ProcessDurableRuntime
                 diagnostics: compatibility.Diagnostics);
         }
 
-        var gate = instanceGates.GetOrAdd(checkpoint.ContinuationIdentity.ProcessInstanceId, static _ => new(1, 1));
-        await gate.WaitAsync(context.CancellationToken).ConfigureAwait(false);
+        var gate = await instanceGates.AcquireAsync(
+                checkpoint.ContinuationIdentity.ProcessInstanceId,
+                context.CancellationToken)
+            .ConfigureAwait(false);
         try
         {
             var result = await InitializeExactAsync(
@@ -149,7 +154,7 @@ public sealed partial class ProcessDurableRuntime
         }
         finally
         {
-            gate.Release();
+            gate.Dispose();
         }
     }
 
@@ -190,8 +195,8 @@ public sealed partial class ProcessDurableRuntime
             return new(ProcessDurableRuntimeDisposition.Incompatible, diagnostics: capabilityDiagnostics);
         }
 
-        var gate = instanceGates.GetOrAdd(instanceId, static _ => new(1, 1));
-        await gate.WaitAsync(context.CancellationToken).ConfigureAwait(false);
+        var gate = await instanceGates.AcquireAsync(instanceId, context.CancellationToken)
+            .ConfigureAwait(false);
         try
         {
             var loaded = await store.LoadAsync(context, instanceId).ConfigureAwait(false);
@@ -422,7 +427,7 @@ public sealed partial class ProcessDurableRuntime
         }
         finally
         {
-            gate.Release();
+            gate.Dispose();
         }
     }
 
@@ -460,8 +465,8 @@ public sealed partial class ProcessDurableRuntime
             return new(ProcessDurableRuntimeDisposition.Incompatible, diagnostics: capabilityDiagnostics);
         }
 
-        var gate = instanceGates.GetOrAdd(instanceId, static _ => new(1, 1));
-        await gate.WaitAsync(context.CancellationToken).ConfigureAwait(false);
+        var gate = await instanceGates.AcquireAsync(instanceId, context.CancellationToken)
+            .ConfigureAwait(false);
         try
         {
             var loaded = await store.LoadAsync(context, instanceId).ConfigureAwait(false);
@@ -616,7 +621,7 @@ public sealed partial class ProcessDurableRuntime
         }
         finally
         {
-            gate.Release();
+            gate.Dispose();
         }
     }
 
@@ -654,8 +659,8 @@ public sealed partial class ProcessDurableRuntime
             return new(ProcessDurableRuntimeDisposition.Incompatible, diagnostics: capabilityDiagnostics);
         }
 
-        var gate = instanceGates.GetOrAdd(instanceId, static _ => new(1, 1));
-        await gate.WaitAsync(context.CancellationToken).ConfigureAwait(false);
+        var gate = await instanceGates.AcquireAsync(instanceId, context.CancellationToken)
+            .ConfigureAwait(false);
         try
         {
             var loaded = await store.LoadAsync(context, instanceId).ConfigureAwait(false);
@@ -883,7 +888,7 @@ public sealed partial class ProcessDurableRuntime
         }
         finally
         {
-            gate.Release();
+            gate.Dispose();
         }
     }
 
@@ -911,8 +916,8 @@ public sealed partial class ProcessDurableRuntime
             return new(ProcessDurableRuntimeDisposition.Incompatible, diagnostics: capabilityDiagnostics);
         }
 
-        var gate = instanceGates.GetOrAdd(instanceId, static _ => new(1, 1));
-        await gate.WaitAsync(context.CancellationToken).ConfigureAwait(false);
+        var gate = await instanceGates.AcquireAsync(instanceId, context.CancellationToken)
+            .ConfigureAwait(false);
         try
         {
             var loaded = await store.LoadAsync(context, instanceId).ConfigureAwait(false);
@@ -1038,7 +1043,7 @@ public sealed partial class ProcessDurableRuntime
         }
         finally
         {
-            gate.Release();
+            gate.Dispose();
         }
     }
 

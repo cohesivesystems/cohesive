@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Text.Json;
 using Cohesive.Execution;
@@ -268,7 +267,7 @@ public sealed class MaterializationRebuildPlanSetProcessLifecycle
     readonly IMaterializationRebuildExecutionResolver executionResolver;
     readonly IMaterializationBackendRouter router;
     readonly ImmutableArray<MaterializationRebuildLeafExecutionAuthority> authorities;
-    readonly ConcurrentDictionary<ProcessInstanceId, SemaphoreSlim> instanceGates = [];
+    readonly KeyedAsyncLock<ProcessInstanceId> instanceGates = new();
 
     /// <summary>Creates a lifecycle facade for one exact persisted plan set and its parent/leaf Process graph.</summary>
     /// <param name="parentRuntime">Durable runtime owning the exact parent Process aggregate.</param>
@@ -1296,15 +1295,15 @@ public sealed class MaterializationRebuildPlanSetProcessLifecycle
         ProcessInstanceId instanceId,
         Func<Task<MaterializationRebuildPlanSetProcessLifecycleResult>> action)
     {
-        var gate = instanceGates.GetOrAdd(instanceId, static _ => new(1, 1));
-        await gate.WaitAsync(context.CancellationToken).ConfigureAwait(false);
+        var gate = await instanceGates.AcquireAsync(instanceId, context.CancellationToken)
+            .ConfigureAwait(false);
         try
         {
             return await action().ConfigureAwait(false);
         }
         finally
         {
-            gate.Release();
+            gate.Dispose();
         }
     }
 
