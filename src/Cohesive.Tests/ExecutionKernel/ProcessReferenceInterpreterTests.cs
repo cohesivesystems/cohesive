@@ -18,6 +18,39 @@ public sealed class ProcessReferenceInterpreterTests
         new(new ScalarTypeRef(ScalarTypeKind.String));
 
     [Fact]
+    public void TraceProjection_RetainsCompleteLineageWithoutProcessPayloads()
+    {
+        var plan = Compile(Definition(
+            "return",
+            [new ReturnProcessNode(new("return"), Expr.BoundValue(ProcessBindingIds.Input))]));
+        var state = ProcessReferenceInterpreter.Create(
+            plan,
+            Continuation(),
+            StringValue("private-process-payload"));
+        var decision = ProcessReferenceInterpreter.Activate(
+            plan,
+            state,
+            Activation("activation/trace", ProcessActivationCause.Start),
+            RejectingHost.Instance);
+
+        var result = ProcessExecutionTraceProjector.Project(decision);
+
+        Assert.True(result.IsSuccessful);
+        var trace = Assert.IsType<NormalizedExecutionTrace>(result.Trace);
+        Assert.Equal(plan.DefinitionReference, trace.Definition);
+        Assert.Equal(state.Continuation, trace.Continuation);
+        Assert.Equal(decision.Evidence.Activation, trace.Activation);
+        Assert.Null(trace.DurableCommitSequence);
+        Assert.Equal(decision.Evidence.Trace.Length, trace.Events.Length);
+        Assert.All(trace.Events, static item => Assert.True(item.Token.HasValue));
+        Assert.Contains(trace.Events, static item => item.Kind == "terminalReached" && item.Node.Value == "return");
+
+        var json = ExecutionTraceJsonSerializer.Serialize(trace);
+        Assert.Equal(json, ExecutionTraceJsonSerializer.Serialize(ExecutionTraceJsonSerializer.Deserialize(json)));
+        Assert.DoesNotContain("private-process-payload", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CompileAndActivate_ReturnProcess_CompletesWithPinnedDefinitionEvidence()
     {
         var plan = Compile(Definition(

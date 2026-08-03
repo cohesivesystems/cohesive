@@ -14,6 +14,78 @@ namespace Cohesive.Tests.ExecutionKernel;
 public sealed class ProcessDurableCheckpointContractTests
 {
     [Fact]
+    public void DurableTraceProjection_MatchesReferenceSemanticsAndRetainsCommitEvidence()
+    {
+        var fixture = ProcessDurabilityTestFixture.Create();
+
+        var reference = ProcessExecutionTraceProjector.Project(fixture.Decision);
+        var durable = Assert.Single(ProcessDurableExecutionTraceProjector.Project(fixture.Checkpoint));
+
+        Assert.True(reference.IsSuccessful);
+        Assert.True(durable.IsSuccessful);
+        Assert.Null(reference.Trace!.DurableCommitSequence);
+        Assert.Equal(Assert.Single(fixture.Checkpoint.Activations).Sequence, durable.Trace!.DurableCommitSequence);
+        Assert.Equal(
+            ExecutionTraceFingerprinter.ComputeSemantic(reference.Trace),
+            ExecutionTraceFingerprinter.ComputeSemantic(durable.Trace));
+        var emitted = Assert.Single(
+            durable.Trace.Events,
+            static item => item.Kind == "interactionEmitted");
+        Assert.NotNull(emitted.Correlation);
+        Assert.NotNull(emitted.IdempotencyKey);
+        Assert.NotNull(emitted.EmissionFingerprint);
+        Assert.Equal(
+            reference.Trace.Events.Select(static item => (
+                item.Sequence,
+                item.Kind,
+                item.Node,
+                item.Token,
+                item.BranchOrClause,
+                item.Emission,
+                item.Detail,
+                Sources: string.Join('|', item.SourceReferences))),
+            durable.Trace.Events.Select(static item => (
+                item.Sequence,
+                item.Kind,
+                item.Node,
+                item.Token,
+                item.BranchOrClause,
+                item.Emission,
+                item.Detail,
+                Sources: string.Join('|', item.SourceReferences))));
+        Assert.NotEqual(
+            ExecutionTraceJsonSerializer.Serialize(reference.Trace),
+            ExecutionTraceJsonSerializer.Serialize(durable.Trace));
+    }
+
+    [Fact]
+    public void DurableTraceProjection_InvalidEventSequenceFailsWithStructuredDiagnostic()
+    {
+        var fixture = ProcessDurabilityTestFixture.Create();
+        var receipt = Assert.Single(fixture.Checkpoint.Activations);
+        var malformedTrace = receipt.Evidence.Trace.SetItem(
+            0,
+            receipt.Evidence.Trace[0] with { Sequence = 7 });
+        var malformedEvidence = receipt.Evidence with { Trace = malformedTrace };
+        var envelopes = fixture.Checkpoint.Emissions.Select(static item => item.Envelope)
+            .Concat(fixture.Checkpoint.Inbox.Select(static item => item.Input.Envelope));
+
+        var result = ProcessExecutionTraceProjector.ProjectCommitted(
+            malformedEvidence,
+            receipt.Disposition,
+            receipt.Sequence,
+            fixture.Checkpoint.Definition,
+            receipt.Continuation,
+            envelopes);
+
+        Assert.False(result.IsSuccessful);
+        var diagnostic = Assert.Single(result.Validation.Diagnostics);
+        Assert.Equal(ExecutionTraceDiagnosticCodes.EventInvalid, diagnostic.Code);
+        Assert.Equal("processTraceProjection", diagnostic.Evidence?.Stage);
+        Assert.NotEmpty(diagnostic.Evidence?.SourceReferences ?? []);
+    }
+
+    [Fact]
     public void Checkpoint_ComposesEveryLiveDurabilityAuthorityAndRoundTripsExactly()
     {
         var fixture = ProcessDurabilityTestFixture.Create();
