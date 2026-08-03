@@ -1,8 +1,6 @@
 using System.Reflection;
-using System.Text;
 using Cohesive.Execution;
 using Cohesive.ExecutionKernel.TestFixtures.MotionDq;
-using Cohesive.Model;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Compilation;
 using Cohesive.Processes.IR;
@@ -12,7 +10,7 @@ namespace Cohesive.Tests.ExecutionKernel;
 public sealed class MotionDqCanonicalProcessFixtureTests
 {
     [Fact]
-    public void IndependentAuthoring_IsDeterministicAndStrictlyRoundTripsWithoutAuthoringState()
+    public void IndependentAuthoring_IsDeterministicAndCanonicalArtifactsRelinkWithoutAuthoringState()
     {
         var first = MotionDqProcess.AuthorVersion1();
         var second = MotionDqProcess.AuthorVersion1();
@@ -22,27 +20,23 @@ public sealed class MotionDqCanonicalProcessFixtureTests
         Assert.Equal(first.Definition, second.Definition);
         Assert.Equal(first.Reference, second.Reference);
         Assert.Equal(first.Document.Metadata.SourceMap, second.Document.Metadata.SourceMap);
-        Assert.Equal(
-            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(first.Document),
-            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(second.Document));
+        Assert.Equal(first.Documents.Length, second.Documents.Length);
+        for (var index = 0; index < first.Documents.Length; index++)
+        {
+            var authored = first.Documents[index];
+            var independentlyAuthored = second.Documents[index];
+            Assert.Equal(authored.Metadata.Fingerprint, independentlyAuthored.Metadata.Fingerprint);
+            Assert.Equal(
+                ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(authored),
+                ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(independentlyAuthored));
+        }
 
-        var canonical = ExecutionDefinitionJsonSerializer.GetCanonicalBytes(first.Document);
-        var validation = ProcessDefinitionDocuments.TryDeserialize(
-            Encoding.UTF8.GetString(canonical),
-            out var restoredDocument,
-            out var restoredDefinition);
+        var restoredPlan = CanonicalExecutionDocumentRestoration.RestoreProcessPlan(first.Documents);
 
-        Assert.True(validation.IsValid, Format(validation));
-        Assert.NotNull(restoredDocument);
-        Assert.NotNull(restoredDefinition);
-        Assert.Equal(first.Document, restoredDocument);
-        Assert.Equal(first.Definition, restoredDefinition);
-        Assert.Equal(canonical, ExecutionDefinitionJsonSerializer.GetCanonicalBytes(restoredDocument));
-
-        var compilation = ProcessStaticCompiler.Compile(restoredDocument, first.LinkingContext);
-
-        Assert.True(compilation.IsSuccessful, Format(compilation.Validation));
-        Assert.Equal(first.Definition, Assert.IsType<CompiledProcessPlan>(compilation.Plan).Definition);
+        Assert.Equal(first.Reference, restoredPlan.DefinitionReference);
+        Assert.Equal(first.Definition, restoredPlan.Definition);
+        Assert.Equivalent(first.Plan.Options, restoredPlan.Options, strict: true);
+        Assert.Equivalent(first.Plan.EffectSummary, restoredPlan.EffectSummary, strict: true);
     }
 
     [Fact]

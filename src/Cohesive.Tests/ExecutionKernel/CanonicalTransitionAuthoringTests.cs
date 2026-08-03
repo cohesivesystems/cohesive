@@ -56,6 +56,92 @@ public sealed class CanonicalTransitionAuthoringTests
     }
 
     [Fact]
+    public void NonSemanticSourceAttribution_DoesNotChangeCompilationOrReferenceMeaning()
+    {
+        var first = CreateAuthoredTransition("tests/ari-205/producer-a");
+        var second = CreateAuthoredTransition("tests/ari-205/producer-b");
+
+        Assert.NotEqual(first.Document.Metadata.Provenance, second.Document.Metadata.Provenance);
+        Assert.NotEqual(first.Document.Metadata.SourceMap, second.Document.Metadata.SourceMap);
+        Assert.Equal(first.Document.Metadata.Fingerprint, second.Document.Metadata.Fingerprint);
+        Assert.Equal(
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(first.Document),
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(second.Document));
+
+        var firstCompilation = first.Compile();
+        var secondCompilation = second.Compile();
+        Assert.True(firstCompilation.IsSuccessful, Format(firstCompilation.Validation));
+        Assert.True(secondCompilation.IsSuccessful, Format(secondCompilation.Validation));
+        Assert.Equivalent(firstCompilation.Validation, secondCompilation.Validation, strict: true);
+        var firstPlan = Assert.IsType<CompiledTransitionPlan>(firstCompilation.Plan);
+        var secondPlan = Assert.IsType<CompiledTransitionPlan>(secondCompilation.Plan);
+        Assert.Equal(firstPlan.Definition, secondPlan.Definition);
+        Assert.Equivalent(firstPlan.DerivedFields, secondPlan.DerivedFields, strict: true);
+        Assert.Equivalent(firstPlan.MachineEdges, secondPlan.MachineEdges, strict: true);
+
+        var input = Object(
+            firstPlan.Definition.Input,
+            (nameof(ReviewInput.Approved), ObservationValue.FromBool(true)),
+            (nameof(ReviewInput.Decision), ObservationValue.FromString("approve")));
+        var observation = new[]
+        {
+            Entry(firstPlan, nameof(ReviewEntity.Status), ObservationValue.FromString("pending")),
+            Entry(firstPlan, nameof(ReviewEntity.Eligible), ObservationValue.FromBool(true))
+        };
+        var firstDecision = TransitionReferenceInterpreter.DecideSparse(
+            firstPlan,
+            new("ari-205/source-attribution"),
+            input,
+            observation);
+        var secondDecision = TransitionReferenceInterpreter.DecideSparse(
+            secondPlan,
+            new("ari-205/source-attribution"),
+            input,
+            observation);
+
+        Assert.Equivalent(firstDecision, secondDecision, strict: true);
+    }
+
+    [Fact]
+    public void ConventionDerivedBodies_AreDeterministicInspectableAndCollisionSafe()
+    {
+        var authored = CreateAuthoredTransition();
+        var choice = Assert.IsType<ChoiceTransitionNode>(authored.Definition.Body.Steps[1]);
+        var approve = Assert.Single(choice.Cases);
+        var choiceFallback = Assert.IsType<TransitionFallback>(choice.Fallback);
+        var match = Assert.IsType<MatchTransitionNode>(Assert.Single(choiceFallback.Body.Steps));
+        var hold = Assert.Single(match.Cases);
+        var matchFallback = Assert.IsType<TransitionFallback>(match.Fallback);
+        string[] conventionalBodies =
+        [
+            approve.Body.Id.Value,
+            choiceFallback.Body.Id.Value,
+            hold.Body.Id.Value,
+            matchFallback.Body.Id.Value
+        ];
+
+        Assert.Equal(
+            [
+                TransitionAuthoringIdentities.BodyFor(Identities.ApproveCase).Value,
+                TransitionAuthoringIdentities.BodyFor(Identities.ChoiceFallback).Value,
+                TransitionAuthoringIdentities.BodyFor(Identities.HoldCase).Value,
+                TransitionAuthoringIdentities.BodyFor(Identities.MatchFallback).Value
+            ],
+            conventionalBodies);
+        Assert.Equal(conventionalBodies.Length, conventionalBodies.Distinct(StringComparer.Ordinal).Count());
+        string[] explicitConstructs =
+        [
+            Identities.ApproveCase.Value,
+            Identities.ChoiceFallback.Value,
+            Identities.HoldCase.Value,
+            Identities.MatchFallback.Value,
+            Identities.DecisionChoice.Value,
+            Identities.DecisionMatch.Value
+        ];
+        Assert.DoesNotContain(conventionalBodies, explicitConstructs.Contains);
+    }
+
+    [Fact]
     public void AuthoredDocument_StrictRoundTripCompilesAndReferenceInterprets()
     {
         var authored = CreateAuthoredTransition();
@@ -473,10 +559,11 @@ public sealed class CanonicalTransitionAuthoringTests
             static field => field.Name == "child_id");
     }
 
-    static Transition<ReviewEntity, ReviewInput, string> CreateAuthoredTransition() =>
+    static Transition<ReviewEntity, ReviewInput, string> CreateAuthoredTransition(
+        string sourceReference = SourceReference) =>
         TransitionAuthoring.Create<ReviewEntity, ReviewInput, string>(
             ReviewEntity.Instance.Definition.Shape,
-            Metadata(),
+            Metadata(sourceReference),
             transition =>
             {
                 transition.Requires(
@@ -632,11 +719,11 @@ public sealed class CanonicalTransitionAuthoringTests
             ]);
     }
 
-    static TransitionAuthoringMetadata Metadata() => new(
+    static TransitionAuthoringMetadata Metadata(string sourceReference = SourceReference) => new(
         Identities.Definition,
         Identities.Revision,
         Identities.Body,
-        Provenance(),
+        Provenance(sourceReference),
         displayName: "Review decision",
         description: "Representative ARI-159 C# authoring fixture.");
 
@@ -648,9 +735,9 @@ public sealed class CanonicalTransitionAuthoringTests
         body,
         Provenance());
 
-    static ExecutionProvenance Provenance() => new(
+    static ExecutionProvenance Provenance(string sourceReference = SourceReference) => new(
         new(TransitionAuthoring.Producer),
-        new(SourceReference),
+        new(sourceReference),
         DocumentOrigin.Generated);
 
     static ExecutionDefinitionReference EmissionContract() => new(
