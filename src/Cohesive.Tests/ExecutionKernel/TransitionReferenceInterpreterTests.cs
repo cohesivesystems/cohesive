@@ -57,6 +57,50 @@ public sealed class TransitionReferenceInterpreterTests
         Assert.DoesNotContain("after", json, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void ExplainProjection_RetainsCanonicalRequirementsTraceAndSourceAttribution()
+    {
+        var fixture = Ek01Fixture();
+        var decision = TransitionReferenceInterpreter.DecideFullState(
+            fixture.Plan,
+            new("explain-projection"),
+            Object(
+                fixture.Definition.Input,
+                ("approved", ObservationValue.FromBool(true)),
+                ("decision", ObservationValue.FromString("approve"))),
+            Object(
+                fixture.Definition.Observation,
+                ("status", ObservationValue.FromString("pending")),
+                ("eligible", ObservationValue.FromBool(true)),
+                ("caseId", ObservationValue.FromString("private-explain-payload")),
+                ("unused", ObservationValue.FromString("private-unused-payload"))));
+
+        var first = TransitionExecutionExplainProjector.Project(fixture.Compilation, decision);
+        var second = TransitionExecutionExplainProjector.Project(fixture.Compilation, decision);
+
+        Assert.True(first.IsSuccessful);
+        var artifact = Assert.IsType<ExecutionExplainArtifact>(first.Artifact);
+        Assert.Equal(fixture.Plan.Document.Metadata.Fingerprint, artifact.Definition.Definition.Fingerprint);
+        Assert.Equal(decision.Evidence.Activation, Assert.IsType<ExecutionExplainTraceReference>(artifact.Trace).Activation);
+        Assert.Contains(
+            artifact.Evidence,
+            static item => item.Kind == "transition.requirement.observation"
+                && item.Subject == "status"
+                && item.Authority == ExecutionExplainEvidenceAuthority.Derived);
+        Assert.Contains(
+            artifact.Evidence,
+            static item => item.Kind == "execution.normalizedTrace"
+                && item.Authority == ExecutionExplainEvidenceAuthority.Interpreted);
+        Assert.Equal(artifact.Fingerprint, second.Artifact?.Fingerprint);
+
+        var json = ExecutionExplainJsonSerializer.Serialize(artifact);
+        var restored = ExecutionExplainJsonSerializer.Deserialize(json);
+        Assert.Equal(json, ExecutionExplainJsonSerializer.Serialize(restored));
+        Assert.Equal(artifact.Fingerprint, restored.Fingerprint);
+        Assert.DoesNotContain("private-explain-payload", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("private-unused-payload", json, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData(true, "approve", TransitionDecisionKind.Applied, "approved", true)]
     [InlineData(true, "hold", TransitionDecisionKind.Applied, "held", false)]
@@ -1011,7 +1055,10 @@ public sealed class TransitionReferenceInterpreterTests
         }
     }
 
-    static (CanonicalTransitionDefinition Definition, CompiledTransitionPlan Plan) Ek01Fixture()
+    static (
+        CanonicalTransitionDefinition Definition,
+        CompiledTransitionPlan Plan,
+        TransitionCompilationResult Compilation) Ek01Fixture()
     {
         var decisionContract = new ValueContract(new EnumTypeRef("Decision", ["approve", "hold"]));
         var input = ObjectContract(
@@ -1066,7 +1113,8 @@ public sealed class TransitionReferenceInterpreterTests
                         "not-eligible-body",
                         Outcome("not-eligible-outcome", TransitionOutcomeDisposition.NoChange, "notEligible"))))),
             [new(new("status-valid"), Expr.Ne(Expr.Field("status"), Expr.Const("invalid")))]);
-        return (definition, Compile(definition));
+        var compilation = CompileResult(definition);
+        return (definition, Assert.IsType<CompiledTransitionPlan>(compilation.Plan), compilation);
     }
 
     static ShapeGraph DerivedGraph()
@@ -1132,9 +1180,18 @@ public sealed class TransitionReferenceInterpreterTests
         ShapeGraph? graph = null,
         TransitionMachineLinkCatalog? machineLinks = null)
     {
+        var result = CompileResult(definition, graph, machineLinks);
+        return Assert.IsType<CompiledTransitionPlan>(result.Plan);
+    }
+
+    static TransitionCompilationResult CompileResult(
+        CanonicalTransitionDefinition definition,
+        ShapeGraph? graph = null,
+        TransitionMachineLinkCatalog? machineLinks = null)
+    {
         var result = TransitionStaticCompiler.Compile(Document(definition), graph, machineLinks);
         Assert.True(result.IsSuccessful, Format(result.Validation));
-        return Assert.IsType<CompiledTransitionPlan>(result.Plan);
+        return result;
     }
 
     static ExecutionDefinitionDocument Document(CanonicalTransitionDefinition definition) =>

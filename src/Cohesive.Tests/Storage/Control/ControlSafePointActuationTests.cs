@@ -1,5 +1,8 @@
 using System.Collections.Immutable;
 using Cohesive.Control;
+using Cohesive.Execution;
+using Cohesive.Model.Serialization;
+using Cohesive.Storage;
 
 namespace Cohesive.Tests.Storage.Control;
 
@@ -31,6 +34,17 @@ public sealed class ControlSafePointActuationTests
         Assert.Null(result.State.PendingRecommendation);
         Assert.Equal(point.Fence, result.State.LastApplicationFence);
         Assert.Same(result.Actuation, result.State.LastActuation);
+
+        ExecutionProvenance provenance = new(
+            new("control-actuation-tests", "1"),
+            new(point.SourceReference),
+            DocumentOrigin.Generated);
+        var evidence = StorageExecutionExplainEvidenceProjector.ProjectControlActuation(result, provenance);
+        Assert.Contains(
+            evidence,
+            static item => item.Kind == "control.actuation"
+                && item.Authority == ExecutionExplainEvidenceAuthority.Applied);
+        Assert.All(evidence, item => Assert.DoesNotContain(result.State.Target, item.RelatedSubjects));
     }
 
     [Fact]

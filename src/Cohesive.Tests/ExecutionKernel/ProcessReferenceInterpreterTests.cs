@@ -51,6 +51,156 @@ public sealed class ProcessReferenceInterpreterTests
     }
 
     [Fact]
+    public void ExplainProjection_SeparatesDeterministicEffectsAndTraceFromRuntimeObservation()
+    {
+        var definition = Definition(
+            "cut",
+            [
+                new DurableCutProcessNode(new("cut"), Edge("edge/resume", "return")),
+                new ReturnProcessNode(new("return"), Expr.Const("done"))
+            ]);
+        var compilation = CompileResult(definition);
+        var plan = Assert.IsType<CompiledProcessPlan>(compilation.Plan);
+        var continuation = Continuation();
+        var state = ProcessReferenceInterpreter.Create(
+            plan,
+            continuation,
+            StringValue("private-process-explain-payload"));
+        var decision = ProcessReferenceInterpreter.Activate(
+            plan,
+            state,
+            Activation("activation/explain", ProcessActivationCause.Start),
+            RejectingHost.Instance);
+        var firstDiagnostic = new DocumentValidationDiagnostic(
+            "test.realization.warning",
+            DiagnosticSeverity.Warning,
+            "First human explanation.",
+            Evidence: new(stage: ExecutionExplainStageNames.Realization, subject: "runtime/reference"));
+        var secondDiagnostic = firstDiagnostic with { Message = "Different human explanation." };
+
+        var first = ProcessExecutionExplainProjector.Project(
+            compilation,
+            decision,
+            RuntimeStatus(plan, continuation, StartedAtUtc),
+            additionalDiagnostics: [firstDiagnostic]);
+        var second = ProcessExecutionExplainProjector.Project(
+            compilation,
+            decision,
+            RuntimeStatus(plan, continuation, StartedAtUtc.AddMinutes(5)),
+            additionalDiagnostics: [secondDiagnostic]);
+
+        Assert.True(first.IsSuccessful);
+        Assert.True(second.IsSuccessful);
+        var artifact = Assert.IsType<ExecutionExplainArtifact>(first.Artifact);
+        Assert.Contains(
+            artifact.Evidence,
+            static item => item.Kind == "process.effect"
+                && item.Subject == "cut"
+                && item.Status == nameof(ProcessEffectKind.DurableWait));
+        Assert.Contains(
+            artifact.Evidence,
+            static item => item.Kind == "execution.runtimeStatus"
+                && item.Authority == ExecutionExplainEvidenceAuthority.Measured);
+        Assert.Equal(artifact.Fingerprint, second.Artifact?.Fingerprint);
+        Assert.NotEqual(
+            ExecutionExplainJsonSerializer.Serialize(artifact),
+            ExecutionExplainJsonSerializer.Serialize(second.Artifact!));
+
+        var json = ExecutionExplainJsonSerializer.Serialize(artifact);
+        var restored = ExecutionExplainJsonSerializer.Deserialize(json);
+        Assert.Equal(json, ExecutionExplainJsonSerializer.Serialize(restored));
+        Assert.Equal(artifact.Fingerprint, restored.Fingerprint);
+        Assert.DoesNotContain("private-process-explain-payload", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExplainProjection_PreservesFailedCompilationAsAPartialLifecycleArtifact()
+    {
+        var definition = Definition(
+            "missing-entry",
+            [new ReturnProcessNode(new("return"), Expr.Const("done"))]);
+        var document = ProcessDefinitionDocuments.Create(
+            new("process/reference-interpreter-tests"),
+            new("revision/1"),
+            definition,
+            Provenance());
+        var compilation = ProcessStaticCompiler.Compile(document, new ProcessDefinitionValidationContext());
+
+        var projection = ProcessExecutionExplainProjector.Project(compilation);
+
+        Assert.False(compilation.IsSuccessful);
+        Assert.True(projection.IsSuccessful);
+        var artifact = Assert.IsType<ExecutionExplainArtifact>(projection.Artifact);
+        Assert.Null(artifact.Trace);
+        Assert.Null(artifact.RuntimeStatus);
+        Assert.Contains(
+            artifact.Evidence,
+            static item => item.Kind == "process.compilation" && item.Status == "Invalid");
+        Assert.DoesNotContain(artifact.Evidence, static item => item.Kind == "process.effect");
+        Assert.Contains(artifact.Diagnostics, static item => item.Severity == DiagnosticSeverity.Error);
+    }
+
+    [Fact]
+    public void ExplainProjection_FailsClosedWhenRuntimeStatusHasDifferentDefinitionAffinity()
+    {
+        var compilation = CompileResult(Definition(
+            "return",
+            [new ReturnProcessNode(new("return"), Expr.Const("first"))]));
+        var plan = Assert.IsType<CompiledProcessPlan>(compilation.Plan);
+        var otherPlan = Compile(Definition(
+            "return",
+            [new ReturnProcessNode(new("return"), Expr.Const("second"))]));
+        var continuation = Continuation();
+        var state = ProcessReferenceInterpreter.Create(plan, continuation, StringValue("input"));
+        var decision = ProcessReferenceInterpreter.Activate(
+            plan,
+            state,
+            Activation("activation/affinity", ProcessActivationCause.Start),
+            RejectingHost.Instance);
+
+        var projection = ProcessExecutionExplainProjector.Project(
+            compilation,
+            decision,
+            RuntimeStatus(otherPlan, continuation, StartedAtUtc));
+
+        Assert.False(projection.IsSuccessful);
+        Assert.Null(projection.Artifact);
+        Assert.Contains(
+            projection.Validation.Diagnostics,
+            static item => item.Code == ExecutionExplainDiagnosticCodes.RuntimeStatusMismatch);
+    }
+
+    [Fact]
+    public void ExplainProjection_ReportsUnsupportedInterpreterProfileWithoutInventingARealization()
+    {
+        var compilation = CompileResult(Definition(
+            "return",
+            [new ReturnProcessNode(new("return"), Expr.Const("done"))]));
+        ExecutionInterpreterProfileReference unsupported = new(
+            "test.unsupported",
+            "v1",
+            new([ExecutionDefinitionDocument.CurrentSchemaVersion]),
+            [new("test.other-definition-kind")],
+            Provenance());
+
+        var projection = ProcessExecutionExplainProjector.Project(
+            compilation,
+            interpreter: unsupported);
+
+        Assert.True(projection.IsSuccessful);
+        var artifact = Assert.IsType<ExecutionExplainArtifact>(projection.Artifact);
+        Assert.Contains(
+            artifact.Evidence,
+            static item => item.Kind == "execution.interpreterProfile" && item.Status == "Unavailable");
+        Assert.Contains(
+            artifact.Diagnostics,
+            static item => item.Code == ExecutionExplainDiagnosticCodes.ProfileUnsupported);
+        Assert.DoesNotContain(
+            artifact.Evidence,
+            static item => item.Stage == ExecutionExplainStageNames.Realization);
+    }
+
+    [Fact]
     public void CompileAndActivate_ReturnProcess_CompletesWithPinnedDefinitionEvidence()
     {
         var plan = Compile(Definition(
@@ -1035,6 +1185,15 @@ public sealed class ProcessReferenceInterpreterTests
         InteractionContractCatalog? contracts = null,
         ImmutableArray<ProcessDefinitionLink> definitions = default)
     {
+        var result = CompileResult(definition, contracts, definitions);
+        return Assert.IsType<CompiledProcessPlan>(result.Plan);
+    }
+
+    static ProcessCompilationResult CompileResult(
+        CanonicalProcessDefinition definition,
+        InteractionContractCatalog? contracts = null,
+        ImmutableArray<ProcessDefinitionLink> definitions = default)
+    {
         var document = ProcessDefinitionDocuments.Create(
             new("process/reference-interpreter-tests"),
             new("revision/1"),
@@ -1046,8 +1205,33 @@ public sealed class ProcessReferenceInterpreterTests
                 definitions: definitions.IsDefault ? null : definitions,
                 interactionContracts: contracts));
         Assert.True(result.IsSuccessful, FormatDiagnostics(result.Validation));
-        return Assert.IsType<CompiledProcessPlan>(result.Plan);
+        return result;
     }
+
+    static ExecutionStatus RuntimeStatus(
+        CompiledProcessPlan plan,
+        ProcessContinuationIdentity continuation,
+        DateTimeOffset observedAtUtc) => new(
+        schemaVersion: ExecutionStatus.CurrentSchemaVersion,
+        definition: plan.DefinitionReference,
+        processInstanceId: continuation.ProcessInstanceId,
+        controlRevision: ProcessControlRevision.Initial,
+        controlMode: ProcessControlMode.Running,
+        attempts:
+        [
+            new(
+                attemptId: continuation.ProcessAttemptId,
+                startedAtUtc: observedAtUtc,
+                endedAtUtc: null,
+                disposition: ExecutionAttemptDisposition.Current,
+                phase: ProcessControlExecutionPhase.Ready,
+                completedActivationCount: 0)
+        ],
+        activeActivation: null,
+        runtime: ExecutionRuntimeStatusDetails.Unknown,
+        terminalOutcome: ExecutionTerminalOutcome.None,
+        createdAtUtc: observedAtUtc,
+        updatedAtUtc: observedAtUtc);
 
     static CanonicalProcessDefinition Definition(
         string entry,
