@@ -70,10 +70,6 @@ public abstract class Entity<TEntity>(string? entityName = null)
     protected Field<T> ComputedField<T>(string name, Expression<Func<TEntity, T>> compute, Action<FieldBuilder>? configure = null) =>
         base.ComputedField(name, compute, configure);
 
-    /// <summary>Defines a transition for the entity.</summary>
-    protected Transition<TEntity, TInput> Transition<TInput>(string name, Action<TransitionExpressionBuilder<TEntity, TInput>> configure) =>
-        base.Transition(name, configure);
-
     /// <summary>Produces one canonical Transition execution-definition document for this entity shape.</summary>
     /// <typeparam name="TInput">Typed invocation input.</typeparam>
     /// <typeparam name="TOutcome">Typed Transition outcome.</typeparam>
@@ -117,55 +113,35 @@ public abstract class Entity<TEntity>(string? entityName = null)
 /// </summary>
 public abstract class Entity
 {
-    sealed record ContinuationBinding(Type InputType, Func<EntityState, object?, TransitionResult> Run);
-
-    sealed record SharedTransitionBinding(TransitionDefinition Definition, Type InputType);
-
     // ReSharper disable once ClassNeverInstantiated.Local
     sealed record EmptyComputedFieldParameters;
 
     sealed class SharedEntityModel(
         EntityDefinition definition,
-        DeclarativeEntityRuntime runtime,
+        EntityStateInterpreter runtime,
         IReadOnlyDictionary<string, FieldDefinition> fieldByName,
-        IReadOnlyDictionary<string, SharedTransitionBinding> transitionByName,
         IReadOnlySet<string> invariantNames
         )
     {
         public EntityDefinition Definition { get; } = definition;
 
-        public DeclarativeEntityRuntime Runtime { get; } = runtime;
+        public EntityStateInterpreter Runtime { get; } = runtime;
 
         public IReadOnlyDictionary<string, FieldDefinition> FieldByName { get; } = fieldByName;
 
-        public IReadOnlyDictionary<string, SharedTransitionBinding> TransitionByName { get; } = transitionByName;
-
         public IReadOnlySet<string> InvariantNames { get; } = invariantNames;
 
-        public static SharedEntityModel Create(EntityDefinition definition, IReadOnlyDictionary<string, Type> transitionInputTypeByName)
+        public static SharedEntityModel Create(EntityDefinition definition)
         {
             ArgumentNullException.ThrowIfNull(definition);
-            ArgumentNullException.ThrowIfNull(transitionInputTypeByName);
 
-            var runtime = new DeclarativeEntityRuntime(definition);
+            var runtime = new EntityStateInterpreter(definition);
             var fieldByName = definition.Fields.ToDictionary(x => x.Name.Value, StringComparer.Ordinal);
-            Dictionary<string, SharedTransitionBinding> transitionByName = new(StringComparer.Ordinal);
-            foreach (var transition in definition.Transitions)
-            {
-                if (!transitionInputTypeByName.TryGetValue(transition.Name, out var inputType))
-                {
-                    throw new SemanticRuleViolationException(
-                        $"Entity type '{definition.Name.Value}' is missing input type metadata for transition '{transition.Name}'.");
-                }
-
-                transitionByName[transition.Name] = new(transition, inputType);
-            }
 
             return new(
                 definition,
                 runtime,
                 fieldByName,
-                transitionByName,
                 definition.Invariants.Select(x => x.Name).ToHashSet(StringComparer.Ordinal)
                 );
         }
@@ -175,15 +151,10 @@ public abstract class Entity
     static readonly IClrTypeRefMapper ClrTypeRefMapper = new DefaultClrTypeRefMapper();
 
     readonly Dictionary<string, IAuthoredField> fields = new(StringComparer.Ordinal);
-    readonly Dictionary<string, ContinuationBinding> continuationByTransitionName = new(StringComparer.Ordinal);
     readonly HashSet<string> fieldIdentities = new(StringComparer.Ordinal);
     readonly HashSet<string> invariantNames = new(StringComparer.Ordinal);
-    readonly HashSet<string> transitionNames = new(StringComparer.Ordinal);
     readonly List<FieldDefinition> fieldDefinitions = [];
     readonly List<InvariantDefinition> invariantDefinitions = [];
-    readonly List<TransitionDefinition> transitionDefinitions = [];
-    readonly Dictionary<string, Type> transitionInputTypeByName = new(StringComparer.Ordinal);
-    readonly TransitionExpressionCompiler transitionCompiler = new();
     readonly JsonSerializerOptions jsonOptions = new(JsonSerializerDefaults.Web);
     ImmutableDictionary<AnnotationKey, AnnotationValue>.Builder? annotations;
     readonly EntityTypeName entityName;
@@ -432,7 +403,7 @@ public abstract class Entity
         var provisionalFieldDefinition = builder.Build();
         var translationDefinition = sharedModel?.Definition
             ?? BuildDefinitionSnapshot([.. fieldDefinitions, provisionalFieldDefinition]);
-        var translator = new TransitionExpressionBuilder<TEntity, EmptyComputedFieldParameters>.ExpressionTranslator(
+        var translator = new TransitionExpressionTranslator<TEntity, EmptyComputedFieldParameters>(
             entityDefinition: translationDefinition,
             parameterNames: new HashSet<string>(StringComparer.Ordinal));
 
@@ -523,73 +494,13 @@ public abstract class Entity
                     provisional,
                     name,
                     predicate,
-                    message,
-                    transitionCompiler)
+                    message)
                 );
             return;
         }
 
         if (!sharedModel.InvariantNames.Contains(name))
             throw new SemanticRuleViolationException($"Entity type '{entityName.Value}' does not declare invariant '{name}' in the cached definition.");
-    }
-
-    /// <summary>
-    /// Declares a transition authored as restricted C# expressions.
-    /// </summary>
-    protected Transition<TEntity, TInput> Transition<TEntity, TInput>(string name, Action<TransitionExpressionBuilder<TEntity, TInput>> configure) where TEntity : Entity
-    {
-        ArgumentNullException.ThrowIfNull(configure);
-        EnsureDefinitionIsMutable("transitions");
-
-        if (this is not TEntity typedEntity)
-            throw new SemanticRuleViolationException($"Transition '{name}' is authored for entity type '{typeof(TEntity).Name}' but actual type is '{GetType().Name}'.");
-
-        if (!transitionNames.Add(name))
-            throw new SemanticRuleViolationException($"Entity type '{entityName.Value}' already defines transition '{name}'.");
-
-        var inputType = typeof(TInput);
-        TransitionDefinition transitionDefinition;
-        if (sharedModel is null)
-        {
-            var provisional = BuildProvisionalDefinition();
-            transitionDefinition = transitionCompiler.Compile(provisional, name, configure);
-            transitionDefinitions.Add(transitionDefinition);
-        }
-        else
-        {
-            if (!sharedModel.TransitionByName.TryGetValue(name, out var binding))
-                throw new SemanticRuleViolationException($"Entity type '{entityName.Value}' does not declare transition '{name}' in the cached definition.");
-
-            if (binding.InputType != inputType)
-                throw new SemanticRuleViolationException($"Transition '{name}' on entity type '{entityName.Value}' expects input type '{binding.InputType.FullName}' but was bound as '{inputType.FullName}'.");
-
-            transitionDefinition = binding.Definition;
-        }
-
-        transitionInputTypeByName[transitionDefinition.Name] = inputType;
-        continuationByTransitionName[transitionDefinition.Name] = new(
-            inputType,
-            (state, rawInput) =>
-            {
-                if (rawInput is null)
-                {
-                    if (inputType.IsValueType && Nullable.GetUnderlyingType(inputType) is null)
-                        throw new SemanticRuleViolationException($"Transition '{transitionDefinition.Name}' requires a non-null input value of type '{inputType.FullName}'.");
-
-                    return ApplyTransition<TInput>(transitionDefinition.Name, state, default!);
-                }
-
-                if (rawInput is not TInput typedInput)
-                    throw new SemanticRuleViolationException($"Transition '{transitionDefinition.Name}' expects input type '{inputType.FullName}' but received '{rawInput.GetType().FullName}'.");
-
-                return ApplyTransition(transitionDefinition.Name, state, typedInput);
-            });
-
-        return new(
-            typedEntity,
-            transitionDefinition,
-            (state, input) => ApplyTransition(transitionDefinition.Name, state, input)
-            );
     }
 
     /// <summary>Produces one canonical Transition document against this entity's declared observation shape.</summary>
@@ -704,26 +615,6 @@ public abstract class Entity
         ValidateAuthoredFieldRules(state);
     }
 
-    internal TransitionResult ApplyTransition<TInput>(string name, EntityState state, TInput input)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(name);
-        ArgumentNullException.ThrowIfNull(state);
-
-        EnsureDefinitionInitialized();
-        ValidateState(state);
-
-        var transitionInput = ToTransitionInput(input);
-        var result = sharedModel.Runtime.Apply(
-            entityId: state.EntityId.Value,
-            state: state,
-            version: state.Version,
-            transitionName: name,
-            input: transitionInput
-            );
-        ValidateAuthoredFieldRules(result.NewState);
-        return BindEffectContinuations(result);
-    }
-
     void ApplyDefaultValues(Dictionary<string, ObservationValue> values)
     {
         foreach (var field in fields.Values)
@@ -742,7 +633,7 @@ public abstract class Entity
     EntityDefinition BuildProvisionalDefinition()
     {
         if (fieldDefinitions.Count == 0)
-            throw new SemanticRuleViolationException($"Entity type '{entityName.Value}' must declare at least one field before defining invariants or transitions.");
+            throw new SemanticRuleViolationException($"Entity type '{entityName.Value}' must declare at least one field before defining invariants or canonical transitions.");
 
         return BuildDefinitionSnapshot(fieldDefinitions);
     }
@@ -754,8 +645,7 @@ public abstract class Entity
             return new(
                 name: entityName,
                 [.. fields],
-                invariants: [.. invariantDefinitions],
-                transitions: [.. transitionDefinitions]
+                invariants: [.. invariantDefinitions]
                 );
         }
 
@@ -766,8 +656,7 @@ public abstract class Entity
                 role: ShapeRoles.Entity,
                 fields: [.. fields],
                 annotations: annotations.ToImmutable()),
-            invariants: [.. invariantDefinitions],
-            transitions: [.. transitionDefinitions]
+            invariants: [.. invariantDefinitions]
         );
     }
 
@@ -783,15 +672,10 @@ public abstract class Entity
         if (sharedModel is null)
         {
             var provisionalDefinition = BuildProvisionalDefinition();
-            var compiledModel = SharedEntityModel.Create(provisionalDefinition, transitionInputTypeByName);
+            var compiledModel = SharedEntityModel.Create(provisionalDefinition);
             sharedModel = SharedModelByEntityType.GetOrAdd(entityClrType, compiledModel);
             if (!ReferenceEquals(sharedModel, compiledModel))
-            {
-                EnsureSharedDefinitionIsCompatible(
-                    provisionalDefinition,
-                    transitionInputTypeByName,
-                    sharedModel);
-            }
+                EnsureSharedDefinitionIsCompatible(provisionalDefinition, sharedModel);
         }
 
         EnsureCurrentAuthoringMatchesSharedModel();
@@ -851,27 +735,10 @@ public abstract class Entity
                 $"Entity type '{entityName.Value}' does not match the cached invariant set.");
         }
 
-        var cachedTransitionNames = model.TransitionByName.Keys.ToHashSet(StringComparer.Ordinal);
-        if (!transitionNames.SetEquals(cachedTransitionNames))
-        {
-            throw new SemanticRuleViolationException(
-                $"Entity type '{entityName.Value}' does not match the cached transition set.");
-        }
-
-        foreach (var (transitionName, inputType) in transitionInputTypeByName)
-        {
-            if (!model.TransitionByName.TryGetValue(transitionName, out var binding)
-                || binding.InputType != inputType)
-            {
-                throw new SemanticRuleViolationException(
-                    $"Transition '{transitionName}' on entity type '{entityName.Value}' does not match the cached input type.");
-            }
-        }
     }
 
     static void EnsureSharedDefinitionIsCompatible(
         EntityDefinition provisionalDefinition,
-        IReadOnlyDictionary<string, Type> provisionalTransitionInputTypes,
         SharedEntityModel sharedModel
         )
     {
@@ -879,71 +746,6 @@ public abstract class Entity
         {
             throw new SemanticRuleViolationException($"Entity type '{provisionalDefinition.Name.Value}' produced a definition that does not match the cached CLR-type definition.");
         }
-
-        if (provisionalTransitionInputTypes.Count != sharedModel.TransitionByName.Count)
-        {
-            throw new SemanticRuleViolationException($"Entity type '{provisionalDefinition.Name.Value}' produced transition input metadata that does not match the cached CLR-type definition.");
-        }
-
-        foreach (var (transitionName, inputType) in provisionalTransitionInputTypes)
-        {
-            if (!sharedModel.TransitionByName.TryGetValue(transitionName, out var binding)
-                || binding.InputType != inputType)
-            {
-                throw new SemanticRuleViolationException(
-                    $"Transition '{transitionName}' on entity type '{provisionalDefinition.Name.Value}' produced input metadata that does not match the cached CLR-type definition.");
-            }
-        }
-    }
-
-    ObservationValue ToTransitionInput<TInput>(TInput input) =>
-        ObservationValue.FromClrPropertyBag(input, jsonOptions);
-
-    TransitionResult BindEffectContinuations(TransitionResult result)
-    {
-        if (result.Effects.Count == 0)
-            return result;
-
-        List<EffectRequest>? boundEffects = null;
-        for (var i = 0; i < result.Effects.Count; i++)
-        {
-            var effectRequest = result.Effects[i];
-            var continuation = effectRequest.Continuation;
-            if (continuation is null || continuation.HasDirectReference)
-                continue;
-
-            if (!continuationByTransitionName.TryGetValue(continuation.TransitionName, out var binding))
-                continue;
-
-            var baseState = result.NewState;
-            boundEffects ??= [.. result.Effects];
-            boundEffects[i] = effectRequest with
-            {
-                Continuation = continuation.Bind(
-                    inputType: binding.InputType,
-                    run: rawInput => binding.Run(baseState.Lineage.Current, rawInput),
-                    snapshotTokenProjector: fieldNames =>
-                        SnapshotTokenProjector.Compute(
-                            ProjectSnapshot(baseState.Lineage.Current, fieldNames),
-                            fieldNames))
-            };
-        }
-
-        return boundEffects is null
-            ? result
-            : result with { Effects = boundEffects };
-    }
-
-    static IReadOnlyDictionary<string, ObservationValue> ProjectSnapshot(EntityState state, IReadOnlyList<string> fieldNames)
-    {
-        Dictionary<string, ObservationValue> snapshot = new(StringComparer.Ordinal);
-        foreach (var fieldName in fieldNames)
-        {
-            if (state.Fields.TryGetValue(fieldName, out var value))
-                snapshot[fieldName] = value;
-        }
-
-        return snapshot;
     }
 
     // TODO: abstract AreSemanticallyEquivalent JSON comparer

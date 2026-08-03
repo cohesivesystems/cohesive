@@ -972,7 +972,7 @@ internal sealed class TransitionAuthoringScope(TransitionAuthoringScope? parent)
 internal sealed class TransitionAuthoringContext<TEntity, TInput, TOutcome>
     where TEntity : Entity
 {
-    readonly TransitionExpressionBuilder<TEntity, TInput>.ExpressionTranslator translator;
+    readonly TransitionExpressionTranslator<TEntity, TInput> translator;
     readonly IClrTypeRefMapper typeRefMapper;
     readonly Shape entityShape;
     readonly TransitionAuthoringMetadata metadata;

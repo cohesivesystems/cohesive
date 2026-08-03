@@ -1,6 +1,6 @@
 # Cohesive.Transitions
 
-Entity transition, invariant, effect, and domain model authoring primitives.
+Canonical entity-transition IR, authoring, compilation, interpretation, and entity-shape primitives.
 
 ## Install
 
@@ -10,8 +10,8 @@ dotnet add package Cohesive.Transitions
 
 ## Use When
 
-- You want entities to declare semantic fields, invariants, transitions, effects, and continuations.
-- You need transition execution to produce explicit state changes and effect snapshots.
+- You want entities to declare semantic fields and invariants while authoring transitions as durable canonical IR.
+- You need transition interpretation to produce explicit sparse patches, interaction emissions, and execution evidence.
 - You want domain behavior represented as a model that can later be interpreted by storage, process, API, or UI adapters.
 
 ## Semantic Authority
@@ -26,11 +26,9 @@ model. The returned `Transition<TEntity, TInput, TOutcome>` contains only a cano
 expression trees, an `Apply` delegate, entity state, or a runtime service. Persist the document; a
 consumer can deserialize, validate, compile, and interpret it without loading the authoring assembly.
 
-`Cohesive.Transitions.Model.TransitionDefinition`, `Transition<TEntity, TInput>`,
-`TransitionExpressionBuilder`, and `DeclarativeEntityRuntime` remain temporary compatibility
-surfaces for the earlier flat, delegate-backed transition model pending ARI-185. They are not
-persisted kernel authority. Existing consumers may continue to use them during migration, but new
-durable semantics should use the canonical authoring or direct-IR surfaces described below.
+The earlier flat `Cohesive.Transitions.Model.TransitionDefinition`, delegate-backed two-parameter
+`Transition` handle, CLR effect-handler surface, and local apply runtime have been removed. Entity
+definitions now own shape and invariant semantics only; transitions are exact canonical documents.
 
 ## Canonical C# Authoring
 
@@ -267,71 +265,27 @@ the compiled plan. The reference interpreter validates the source configuration,
 candidate state, and verifies the target configuration. It does not copy an independently authored lifecycle
 graph into Transition IR or resolve Machine state through an ambient runtime service.
 
-## Legacy Compatibility Example
+## Retired Compatibility Surface
 
-The following example uses the flat compatibility authoring and runtime surface pending ARI-185. It
-does not lower to the canonical document today and must not be used as the durable authority for new
-execution-kernel semantics.
-
-```csharp
-using Cohesive.Transitions.Authoring;
-
-public enum LoadStatus
-{
-    Draft,
-    Assigned
-}
-
-public sealed class Load : Entity<Load>
-{
-    public sealed record AssignCarrierInput(string CarrierId);
-
-    public Load()
-    {
-        Id = WriteOnceField<string>(nameof(Id));
-        Status = Field(nameof(Status), LoadStatus.Draft);
-        CarrierId = Field<string?>(
-            nameof(CarrierId),
-            initialValue: null,
-            configure: field => field.Optional());
-
-        AssignCarrier = Transition<AssignCarrierInput>(
-            nameof(AssignCarrier),
-            transition => transition
-                .Requires("CanAssignCarrier", (load, input) =>
-                    load.Status == LoadStatus.Draft && input.CarrierId != "")
-                .Set(load => load.CarrierId, (_, input) => input.CarrierId)
-                .Set(load => load.Status, (_, _) => LoadStatus.Assigned)
-                .EmitSnapshot("CarrierAssigned", (snapshot, input) => new
-                {
-                    loadId = snapshot.EntityId.Value,
-                    carrierId = input.CarrierId
-                }));
-    }
-
-    public Field<string> Id { get; }
-
-    public Field<LoadStatus> Status { get; }
-
-    public Field<string?> CarrierId { get; }
-
-    public Transition<Load, AssignCarrierInput> AssignCarrier { get; }
-}
-```
+The flat definition, two-parameter typed handle, local apply runtime, name-dispatched effects, CLR
+effect handlers, continuation snapshots, and their host wrappers are not shipped. There is no
+automatic compatibility reader because no retained persisted or external boundary requires one.
+Git history is the recovery path for an explicitly versioned offline importer if such a boundary is
+identified later.
 
 ## Related Packages
 
 - `Cohesive.Processes` for workflows that invoke entity transitions.
 - `Cohesive.Storage` for persistence adapters.
-- `Cohesive.Analyzers` for source-generation support around authoring patterns.
+- `Cohesive.Analyzers` for source-generation support around semantic authoring patterns.
 
 ## Expression Sites
 
 Transition expressions use the shared, non-generic `Cohesive.Model.Expr` IR and expression
 requirements analyzer. The transition model supplies a different scope for each semantic site:
 
-- Preconditions see entity state and declared transition inputs and must produce a Boolean.
-- Field updates see entity state and transition inputs and must satisfy the target field contract.
+- Admission predicates see entity state and declared transition inputs and must produce a Boolean.
+- Sparse patch expressions see entity state and transition inputs and must satisfy the target field contract.
 - Computed fields see entity state without transition inputs and must satisfy their field contract.
 - Entity invariants see resulting entity state without transition inputs and must produce a
   Boolean.

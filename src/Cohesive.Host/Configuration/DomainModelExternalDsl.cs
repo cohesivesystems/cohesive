@@ -49,7 +49,6 @@ public static class DomainModelExternalDsl
     {
         var source = Guard.RequireNotNullOrWhiteSpace(value: json);
         var root = JsonNode.Parse(source) ?? throw new InvalidOperationException("Failed to parse domain model JSON.");
-        NormalizeLegacyTransitionFieldIdentities(root);
         var model = root.Deserialize<DomainModelDefinition>(options: JsonOptions);
         return model ?? throw new InvalidOperationException("Failed to deserialize domain model from JSON.");
     }
@@ -200,61 +199,4 @@ public static class DomainModelExternalDsl
         return options;
     }
 
-    static void NormalizeLegacyTransitionFieldIdentities(JsonNode root)
-    {
-        if (root is not JsonObject obj || obj["entities"] is not JsonArray entities)
-            return;
-
-        foreach (var entityNode in entities)
-        {
-            if (entityNode is not JsonObject entity || entity["transitions"] is not JsonArray transitions)
-                continue;
-
-            foreach (var transitionNode in transitions)
-            {
-                if (transitionNode is not JsonObject transition)
-                    continue;
-
-                NormalizeFieldIdentityArray(transition, propertyName: "readSet");
-                NormalizeFieldIdentityArray(transition, propertyName: "writeSet");
-
-                if (transition["updates"] is not JsonArray updates)
-                    continue;
-
-                foreach (var updateNode in updates)
-                {
-                    if (updateNode is JsonObject update)
-                        NormalizeFieldIdentityProperty(update, propertyName: "field");
-                }
-            }
-        }
-    }
-
-    static void NormalizeFieldIdentityArray(JsonObject obj, string propertyName)
-    {
-        if (obj[propertyName] is not JsonArray array)
-            return;
-
-        for (var i = 0; i < array.Count; i++)
-        {
-            if (array[i] is JsonObject identityObject && TryReadLegacyFieldIdentity(identityObject, out var value))
-                array[i] = value;
-        }
-    }
-
-    static void NormalizeFieldIdentityProperty(JsonObject obj, string propertyName)
-    {
-        if (obj[propertyName] is JsonObject identityObject && TryReadLegacyFieldIdentity(identityObject, out var value))
-            obj[propertyName] = value;
-    }
-
-    static bool TryReadLegacyFieldIdentity(JsonObject obj, out string value)
-    {
-        value = string.Empty;
-        if (obj["value"] is not JsonValue raw || !raw.TryGetValue<string>(out var stringValue) || string.IsNullOrWhiteSpace(stringValue))
-            return false;
-
-        value = stringValue;
-        return true;
-    }
 }

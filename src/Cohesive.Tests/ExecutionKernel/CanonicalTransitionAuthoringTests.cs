@@ -7,7 +7,6 @@ using Cohesive.Transitions.Compilation;
 using Cohesive.Transitions.Execution;
 using Cohesive.Transitions.IR;
 using CanonicalTransitionDefinition = Cohesive.Transitions.IR.TransitionDefinition;
-using LegacyTransitionDefinition = Cohesive.Transitions.Model.TransitionDefinition;
 
 namespace Cohesive.Tests.ExecutionKernel;
 
@@ -252,8 +251,7 @@ public sealed class CanonicalTransitionAuthoringTests
 
         Assert.DoesNotContain(fields, static field => typeof(Delegate).IsAssignableFrom(field.FieldType));
         Assert.DoesNotContain(properties, static property => typeof(Delegate).IsAssignableFrom(property.PropertyType));
-        Assert.DoesNotContain(fields, static field => field.FieldType == typeof(LegacyTransitionDefinition));
-        Assert.DoesNotContain(properties, static property => property.PropertyType == typeof(LegacyTransitionDefinition));
+        Assert.Null(handleType.Assembly.GetType("Cohesive.Transitions.Model.TransitionDefinition"));
         Assert.Contains(properties, static property => property.Name == nameof(authored.Document)
             && property.PropertyType == typeof(ExecutionDefinitionDocument));
         Assert.Contains(properties, static property => property.Name == nameof(authored.Definition)
