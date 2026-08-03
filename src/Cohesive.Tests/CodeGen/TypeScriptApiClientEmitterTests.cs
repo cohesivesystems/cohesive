@@ -64,13 +64,14 @@ public sealed class TypeScriptApiClientEmitterTests
     }
 
     [Fact]
-    public void Emit_ExecutionControlCatalog_RetainsAllNineTransportNeutralOperationContracts()
+    public void Emit_ExecutionControlCatalog_RetainsControlAndDiagnosticsOperationContracts()
     {
         var catalog = ExecutionControlApiCatalog.Create();
         ApiEndpoint[] expectedEndpoints =
         [
             catalog.Start,
             catalog.Inspect,
+            catalog.Explain,
             catalog.Signal,
             catalog.Pause,
             catalog.Continue,
@@ -92,6 +93,7 @@ public sealed class TypeScriptApiClientEmitterTests
         Assert.Equal(first, second);
         Assert.Contains("export type ExecutionControlApiOperationKey =", first, StringComparison.Ordinal);
         Assert.Contains("'start'", first, StringComparison.Ordinal);
+        Assert.Contains("'explain'", first, StringComparison.Ordinal);
         Assert.Contains("'updateLimits'", first, StringComparison.Ordinal);
         Assert.Contains("export const executionControlApiOperationIds = {", first, StringComparison.Ordinal);
         Assert.Contains("} as const satisfies Record<ExecutionControlApiOperationKey, string>;", first, StringComparison.Ordinal);
@@ -99,7 +101,7 @@ public sealed class TypeScriptApiClientEmitterTests
         Assert.Contains("export const executionControlApiEndpointIds = {} as const satisfies Record<ExecutionControlApiEndpointKey, string>;", first, StringComparison.Ordinal);
         Assert.Contains("export const executionControlApiOperationMetadata = {", first, StringComparison.Ordinal);
         Assert.Contains("} as const satisfies Record<ExecutionControlApiOperationKey, unknown>;", first, StringComparison.Ordinal);
-        Assert.Equal(9, CountOccurrences(first, "    http: null,"));
+        Assert.Equal(10, CountOccurrences(first, "    http: null,"));
         Assert.DoesNotContain("export function ", first, StringComparison.Ordinal);
 
         var metadataOffset = first.IndexOf(

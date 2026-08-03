@@ -218,19 +218,7 @@ public static class StorageExecutionTelemetry
             return;
         }
 
-        long backlog = 0;
-        foreach (var generation in generations)
-        {
-            backlog = SaturatingAdd(backlog, generation.Snapshot.PendingRetryableMutationCount);
-        }
-
-        foreach (var lag in observation.ChangeLag)
-        {
-            if (lag.Observation.EstimatedPendingProviderWork is { } pending)
-            {
-                backlog = SaturatingAdd(backlog, pending);
-            }
-        }
+        var backlog = MaterializationIndexSyncStatusProjector.GetBacklogCount(generations, observation);
 
         var health = GetMaterializationHealth(generations, observation);
         var activity = ExecutionTelemetry.StartActivity(ExecutionTelemetryActivityKind.Materialization);
@@ -299,12 +287,14 @@ public static class StorageExecutionTelemetry
     {
         if (!observation.Failures.IsEmpty
             || generations.Any(static generation =>
-                generation.Snapshot.HasPermanentFailures
-                || generation.Snapshot.ValidationReceipt is { Validation.IsValid: false }))
+                MaterializationIndexSyncStatusProjector.GetGenerationHealth(generation.Snapshot)
+                    == MaterializationIndexSyncGenerationHealth.Failed))
         {
             return ExecutionHealthStatus.Unhealthy;
         }
-        if (generations.Any(static generation => generation.Snapshot.PendingRetryableMutationCount > 0))
+        if (generations.Any(static generation =>
+                MaterializationIndexSyncStatusProjector.GetGenerationHealth(generation.Snapshot)
+                    == MaterializationIndexSyncGenerationHealth.Degraded))
         {
             return ExecutionHealthStatus.Degraded;
         }

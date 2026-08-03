@@ -10,13 +10,14 @@ public static class ExecutionControlApiWireNames
     public const string SemanticAuthority = "cohesive.api.execution-control";
 
     /// <summary>Gets the canonical API semantic path for one declared operation.</summary>
-    /// <param name="action">Canonical action name from the nine-operation execution-control surface.</param>
+    /// <param name="action">Canonical action name from the execution-control and diagnostics surface.</param>
     /// <returns>The semantic operation path owned by this API catalog.</returns>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="action"/> is not a declared action.</exception>
     public static ExecutionSemanticPath OperationPath(string action) => action switch
     {
         ProcessStartWireNames.Start
             or ExecutionControlWireNames.Inspect
+            or ExecutionExplainWireNames.Explain
             or ExecutionControlWireNames.Signal
             or ExecutionControlWireNames.Pause
             or ExecutionControlWireNames.Continue
@@ -28,7 +29,7 @@ public static class ExecutionControlApiWireNames
     };
 
     /// <summary>Gets the stable authorization requirement identity for one declared operation.</summary>
-    /// <param name="action">Canonical action name from the nine-operation execution-control surface.</param>
+    /// <param name="action">Canonical action name from the execution-control and diagnostics surface.</param>
     /// <returns>The operation's transport-neutral authorization requirement identity.</returns>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="action"/> is not a declared action.</exception>
     public static string AuthorizationRequirement(string action) =>
@@ -46,12 +47,13 @@ public sealed class ExecutionControlApiCatalog
 {
     /// <summary>Current semantic schema version of the execution-control API declaration.</summary>
     public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } =
-        new("cohesive-execution-control-api/v2");
+        new("cohesive-execution-control-api/v3");
 
     ExecutionControlApiCatalog(
         ApiDefinition definition,
         ApiEndpoint start,
         ApiEndpoint inspect,
+        ApiEndpoint explain,
         ApiEndpoint signal,
         ApiEndpoint pause,
         ApiEndpoint continueProcess,
@@ -63,6 +65,7 @@ public sealed class ExecutionControlApiCatalog
         Definition = definition;
         Start = start;
         Inspect = inspect;
+        Explain = explain;
         Signal = signal;
         Pause = pause;
         Continue = continueProcess;
@@ -80,6 +83,9 @@ public sealed class ExecutionControlApiCatalog
 
     /// <summary>Read-only Process status inspection endpoint.</summary>
     public ApiEndpoint Inspect { get; }
+
+    /// <summary>Read-only canonical execution explanation endpoint.</summary>
+    public ApiEndpoint Explain { get; }
 
     /// <summary>Canonical Signal-admission endpoint.</summary>
     public ApiEndpoint Signal { get; }
@@ -102,7 +108,7 @@ public sealed class ExecutionControlApiCatalog
     /// <summary>Bounded Control operating-limit update endpoint.</summary>
     public ApiEndpoint UpdateLimits { get; }
 
-    /// <summary>Creates the canonical nine-operation transport-neutral API declaration.</summary>
+    /// <summary>Creates the canonical transport-neutral execution-control and diagnostics API declaration.</summary>
     /// <returns>
     /// A catalog whose endpoint identities, request contracts, result variants, authorization requirements, and
     /// semantic provenance all derive from their owning Cohesive authorities.
@@ -130,6 +136,19 @@ public sealed class ExecutionControlApiCatalog
             .Accepts<InspectProcessCommand>()
             .Returns<ExecutionControlResult>()
             .AddLifecycleResults()
+            .Build();
+
+        var explain = Describe(
+                builder.Query(ExecutionExplainWireNames.Explain),
+                ExecutionExplainWireNames.Explain,
+                ExecutionExplainWireNames.SemanticAuthority,
+                ExecutionExplainArtifact.CurrentSchemaVersion,
+                ExecutionExplainWireNames.QueryPath)
+            .Accepts<InspectProcessCommand>()
+            .Returns<ExecutionExplainArtifact>()
+            .Result<ExecutionApiProblem>(ApiResultKind.Forbidden)
+            .Result<ExecutionApiProblem>(ApiResultKind.NotFound)
+            .Result<ExecutionApiProblem>(ApiResultKind.ValidationFailed)
             .Build();
 
         var signal = DescribeLifecycle(
@@ -200,6 +219,7 @@ public sealed class ExecutionControlApiCatalog
             builder.Build(),
             start,
             inspect,
+            explain,
             signal,
             pause,
             continueProcess,

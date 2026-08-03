@@ -33,6 +33,27 @@ var api = Api.Define("Shipping")
     .Build();
 ```
 
+## Execution control and diagnostics
+
+`ExecutionControlApiCatalog.Create()` declares the shared route-neutral Process surface used by HTTP, CLI,
+generated-client, and in-memory bindings. Its `explain` query accepts the same trusted, read-only
+`InspectProcessCommand` address as status inspection and returns the canonical `ExecutionExplainArtifact`; an
+adapter must not translate that artifact into a second diagnostics model.
+
+CLI and documentation projections can render the exact response as human-readable JSON while APIs and tests use
+the same value directly:
+
+```csharp
+var catalog = ExecutionControlApiCatalog.Create();
+var operation = catalog.Definition.GetOperation(catalog.Explain);
+var output = ExecutionExplainJsonSerializer.Serialize(
+    artifact,
+    PortableDocumentJsonFormatting.Indented);
+```
+
+The catalog deliberately supplies no HTTP route or console formatting. A transport adapter binds the typed
+operation handle, and presentation remains outside the execution semantic authorities.
+
 ## Related Packages
 
 - `Cohesive.Adapters.AspNet` for ASP.NET endpoint projection.

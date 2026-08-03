@@ -51,6 +51,50 @@ public static class ProcessExecutionExplainProjector
         ImmutableArray<DocumentValidationDiagnostic> additionalDiagnostics = default)
     {
         ArgumentNullException.ThrowIfNull(compilation);
+        NormalizedExecutionTrace? trace = null;
+        if (decision is not null)
+        {
+            var traceProjection = ProcessExecutionTraceProjector.Project(decision);
+            if (!traceProjection.IsSuccessful)
+                return ExecutionExplainProjectionResult.Failure(traceProjection.Validation.Diagnostics);
+            trace = traceProjection.Trace;
+        }
+
+        return ProjectArtifacts(
+            compilation,
+            trace,
+            runtimeStatus,
+            interpreter,
+            additionalEvidence,
+            additionalDiagnostics);
+    }
+
+    /// <summary>Projects retained Process artifacts when a normalized trace already exists.</summary>
+    /// <param name="compilation">Target-independent Process compilation result.</param>
+    /// <param name="trace">Optional normalized trace projected from the authoritative runtime or durable store.</param>
+    /// <param name="runtimeStatus">Optional safe Process runtime-status observation.</param>
+    /// <param name="interpreter">
+    /// Explicit interpreter profile, or null to use <see cref="ReferenceInterpreterProfile"/> by convention.
+    /// </param>
+    /// <param name="additionalEvidence">
+    /// Optional effect realization, Control, materialization, or adapter evidence from later lifecycle stages.
+    /// </param>
+    /// <param name="additionalDiagnostics">Optional diagnostics from later lifecycle stages.</param>
+    /// <returns>An execution explain artifact, or structured artifact-affinity diagnostics.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="compilation"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">Supplied evidence or diagnostics are malformed.</exception>
+    /// <exception cref="InvalidOperationException">Explain content cannot be materialized.</exception>
+    /// <exception cref="System.Text.Json.JsonException">Explain content cannot be serialized.</exception>
+    /// <exception cref="NotSupportedException">Explain content contains an unsupported serialization type.</exception>
+    public static ExecutionExplainProjectionResult ProjectArtifacts(
+        ProcessCompilationResult compilation,
+        NormalizedExecutionTrace? trace = null,
+        ExecutionStatus? runtimeStatus = null,
+        ExecutionInterpreterProfileReference? interpreter = null,
+        ImmutableArray<ExecutionExplainEvidence> additionalEvidence = default,
+        ImmutableArray<DocumentValidationDiagnostic> additionalDiagnostics = default)
+    {
+        ArgumentNullException.ThrowIfNull(compilation);
         List<ExecutionExplainEvidence> evidence =
         [
             new(
@@ -80,15 +124,19 @@ public static class ProcessExecutionExplainProjector
                     effect.Kind.ToString(),
                     sourceReferences: [compilation.Document.Metadata.Provenance.Source.Reference]));
             }
+            HashSet<(ExecutionNodeId Node, string Definition, ProcessResourceAccessKind Access)> resourceClaims = [];
             foreach (var resource in plan.EffectSummary.Resources)
             {
+                var definition = DefinitionIdentity(resource.Resource);
+                if (!resourceClaims.Add((resource.Node, definition, resource.Access)))
+                    continue;
                 evidence.Add(new(
                     ExecutionExplainStageNames.StaticCompilation,
                     ResourceRequirementKind,
-                    $"{resource.Node.Value}:{DefinitionIdentity(resource.Resource)}",
+                    $"{resource.Node.Value}:{definition}",
                     ExecutionExplainEvidenceAuthority.Derived,
                     resource.Access.ToString(),
-                    relatedSubjects: [resource.Node.Value, DefinitionIdentity(resource.Resource)],
+                    relatedSubjects: [resource.Node.Value, definition],
                     sourceReferences: [compilation.Document.Metadata.Provenance.Source.Reference]));
             }
         }
@@ -98,15 +146,6 @@ public static class ProcessExecutionExplainProjector
         List<DocumentValidationDiagnostic> diagnostics = [.. compilation.Validation.Diagnostics];
         if (!additionalDiagnostics.IsDefaultOrEmpty)
             diagnostics.AddRange(additionalDiagnostics);
-
-        NormalizedExecutionTrace? trace = null;
-        if (decision is not null)
-        {
-            var traceProjection = ProcessExecutionTraceProjector.Project(decision);
-            if (!traceProjection.IsSuccessful)
-                return ExecutionExplainProjectionResult.Failure(traceProjection.Validation.Diagnostics);
-            trace = traceProjection.Trace;
-        }
 
         return ExecutionExplainArtifactProjector.Project(
             compilation.Document,

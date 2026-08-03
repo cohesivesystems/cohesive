@@ -6,6 +6,19 @@ using Cohesive.Model.Serialization;
 
 namespace Cohesive.Execution;
 
+/// <summary>Stable names for target-neutral execution explanation queries.</summary>
+public static class ExecutionExplainWireNames
+{
+    /// <summary>Semantic authority that owns execution explanation.</summary>
+    public const string SemanticAuthority = "cohesive.execution.explain";
+
+    /// <summary>Canonical explanation query action.</summary>
+    public const string Explain = "explain";
+
+    /// <summary>Canonical semantic path of the explanation query.</summary>
+    public static ExecutionSemanticPath QueryPath { get; } = new(["queries", Explain]);
+}
+
 /// <summary>Stable diagnostics produced while projecting execution explain artifacts.</summary>
 public static class ExecutionExplainDiagnosticCodes
 {

@@ -566,6 +566,48 @@ public static class MaterializationIndexSyncStatusProjector
         where TEnum : struct, Enum =>
         new(typeof(TEnum).Name, [.. Enum.GetNames<TEnum>()]);
 
+    /// <summary>Derives generation health from the canonical target snapshot.</summary>
+    /// <param name="generation">Current bounded target-owned generation snapshot.</param>
+    /// <returns>Failed, degraded, healthy, or unknown health under the common index-sync rules.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="generation"/> is <see langword="null"/>.</exception>
+    public static MaterializationIndexSyncGenerationHealth GetGenerationHealth(
+        MaterializationGenerationSnapshot generation)
+    {
+        ArgumentNullException.ThrowIfNull(generation);
+        if (generation.HasPermanentFailures || generation.ValidationReceipt is { Validation.IsValid: false })
+            return MaterializationIndexSyncGenerationHealth.Failed;
+        if (generation.PendingRetryableMutationCount != 0)
+            return MaterializationIndexSyncGenerationHealth.Degraded;
+        return generation.State is MaterializationGenerationState.Active or MaterializationGenerationState.Validated
+            ? MaterializationIndexSyncGenerationHealth.Healthy
+            : MaterializationIndexSyncGenerationHealth.Unknown;
+    }
+
+    /// <summary>Aggregates bounded target retries and available provider-owned pending-work estimates.</summary>
+    /// <param name="generations">Current exact backend coordinates and target generation snapshots.</param>
+    /// <param name="observation">Supplemental provider-owned lag observations.</param>
+    /// <returns>A nonnegative backlog count saturated at <see cref="long.MaxValue"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="observation"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="generations"/> is default or contains null.</exception>
+    public static long GetBacklogCount(
+        ImmutableArray<MaterializationIndexSyncGenerationStatus> generations,
+        MaterializationIndexSyncRuntimeObservation observation)
+    {
+        ArgumentNullException.ThrowIfNull(observation);
+        if (generations.IsDefault || generations.Any(static value => value is null))
+            throw new ArgumentException("Generation snapshots must be initialized and non-null.", nameof(generations));
+
+        long backlog = 0;
+        foreach (var generation in generations)
+            backlog = SaturatingAdd(backlog, generation.Snapshot.PendingRetryableMutationCount);
+        foreach (var lag in observation.ChangeLag)
+        {
+            if (lag.Observation.EstimatedPendingProviderWork is { } pending)
+                backlog = SaturatingAdd(backlog, pending);
+        }
+        return backlog;
+    }
+
     /// <summary>Creates a disclosed typed status extension by projecting existing durable state and observations.</summary>
     /// <param name="routing">Current exact placement-scoped routing snapshot.</param>
     /// <param name="progress">Current bounded per-source progress snapshots.</param>
@@ -638,7 +680,7 @@ public static class MaterializationIndexSyncStatusProjector
             provenance);
     }
 
-    static void ValidateInputs(
+    internal static void ValidateInputs(
         MaterializationBackendRoutingSnapshot routing,
         ImmutableArray<MaterializationIndexSyncProgressStatus> progress,
         ImmutableArray<MaterializationIndexSyncGenerationStatus> generations,
@@ -883,7 +925,7 @@ public static class MaterializationIndexSyncStatusProjector
             var generation = status.Snapshot;
             var fields = CoordinateFields(status.Generation);
             fields.Add("state", ObservationValue.FromString(generation.State.ToString()));
-            fields.Add("health", ObservationValue.FromString(Health(generation).ToString()));
+            fields.Add("health", ObservationValue.FromString(GetGenerationHealth(generation).ToString()));
             fields.Add("visibleItemCount", ObservationValue.FromInt64(generation.VisibleItemCount));
             fields.Add("tombstoneCount", ObservationValue.FromInt64(generation.TombstoneCount));
             fields.Add("pendingRetryableMutationCount", ObservationValue.FromInt64(generation.PendingRetryableMutationCount));
@@ -1301,14 +1343,7 @@ public static class MaterializationIndexSyncStatusProjector
     static ObservationValue InstantOrNull(DateTimeOffset? value) =>
         value is null ? ObservationValue.Null : ObservationValue.FromDateTimeOffset(value.Value);
 
-    static MaterializationIndexSyncGenerationHealth Health(MaterializationGenerationSnapshot generation)
-    {
-        if (generation.HasPermanentFailures || generation.ValidationReceipt is { Validation.IsValid: false })
-            return MaterializationIndexSyncGenerationHealth.Failed;
-        if (generation.PendingRetryableMutationCount != 0)
-            return MaterializationIndexSyncGenerationHealth.Degraded;
-        return generation.State is MaterializationGenerationState.Active or MaterializationGenerationState.Validated
-            ? MaterializationIndexSyncGenerationHealth.Healthy
-            : MaterializationIndexSyncGenerationHealth.Unknown;
-    }
+    static long SaturatingAdd(long left, long right) => long.MaxValue - left < right
+        ? long.MaxValue
+        : left + right;
 }
