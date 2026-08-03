@@ -337,29 +337,68 @@ public sealed class ProcessDurableRuntimeOperationTests
     }
 
     [Fact]
+    public async Task Ek06_CrashAfterDispatchCommitBeforeExternalCallRecoversExactRequest()
+    {
+        var fixture = ProcessDurabilityTestFixture.Create(
+            definitionId: "process/durable-runtime-operation/pre-call-crash",
+            semanticVariant: "pre-call-crash");
+        var checkpoint = ProcessDurabilityTestFixture.CopyCheckpoint(fixture.Checkpoint, inbox: []);
+        var crash = ProcessStoreCrashScript.Once(
+            ProcessStoreMutationKind.AggregateCommit,
+            ProcessStoreCrashPhase.AfterAtomicCommitBeforeReturn,
+            occurrence: 2);
+        var store = new InMemoryProcessDurableStore(crash.ShouldCrash);
+        await InitializeStoreAsync(store, checkpoint, "pre-call-crash");
+        var adapter = new DurableOperationFakeAdapter(fixture.Request.Contract)
+            .Script(fixture.Request.Context.EmissionId, Success("recovered-exact-request"));
+        var runtime = Runtime(store, adapter, maxAmbiguousStoreMutationAttempts: 1);
+        var context = Context(ProcessDurabilityTestFixture.CheckpointedAtUtc.AddMinutes(1));
+
+        var interrupted = await runtime.AdvanceOperationAsync(
+            context,
+            fixture.Plan,
+            checkpoint.ContinuationIdentity.ProcessInstanceId,
+            fixture.Request.Context.EmissionId);
+        var afterCrash = Assert.IsType<ProcessDurableStoreSnapshot>(await store.LoadAsync(
+            context,
+            checkpoint.ContinuationIdentity.ProcessInstanceId));
+
+        Assert.Equal(ProcessDurableRuntimeDisposition.CommitOutcomeUnknown, interrupted.Disposition);
+        var dispatched = Assert.Single(afterCrash.Checkpoint.DurableOperations);
+        Assert.Equal(DurableOperationStatus.Dispatched, dispatched.Status);
+        Assert.Empty(adapter.Invocations);
+        Assert.True(crash.IsComplete);
+        Assert.Single(crash.Crashes);
+
+        var recovered = await runtime.AdvanceOperationAsync(
+            context,
+            fixture.Plan,
+            checkpoint.ContinuationIdentity.ProcessInstanceId,
+            fixture.Request.Context.EmissionId);
+
+        Assert.Equal(DurableOperationStatus.Dispositioned, recovered.Operation?.Status);
+        var invocation = Assert.Single(adapter.Invocations);
+        var attempt = Assert.IsType<DurableOperationAttempt>(dispatched.CurrentAttempt);
+        Assert.Equal(fixture.Request, invocation.Request);
+        Assert.Equal(attempt.Claim.AttemptId, invocation.AttemptId);
+        Assert.Equal(attempt.Claim.Fence, invocation.Fence);
+        Assert.Equal(dispatched.DeduplicationKey, invocation.DeduplicationKey);
+        Assert.Equal(1, adapter.LogicalConsequenceCount);
+    }
+
+    [Fact]
     public async Task Ek06_CrashBeforeAcknowledgementCommitRedispatchesStableAttemptAndDeduplicationKey()
     {
         var fixture = ProcessDurabilityTestFixture.Create(
             definitionId: "process/durable-runtime-operation/acknowledgement-crash",
             semanticVariant: "acknowledgement-crash");
-        var aggregateCuts = 0;
-        var crashed = false;
-        var store = new InMemoryProcessDurableStore(crash =>
-        {
-            if (crash.MutationKind != ProcessStoreMutationKind.AggregateCommit
-                || crash.Phase != ProcessStoreCrashPhase.BeforeAtomicCommit)
-            {
-                return false;
-            }
-            aggregateCuts++;
-            if (crashed || aggregateCuts != 3)
-            {
-                return false;
-            }
-            crashed = true;
-            return true;
-        });
-        await InitializeStoreAsync(store, fixture.Checkpoint, "acknowledgement-crash");
+        var checkpoint = ProcessDurabilityTestFixture.CopyCheckpoint(fixture.Checkpoint, inbox: []);
+        var crash = ProcessStoreCrashScript.Once(
+            ProcessStoreMutationKind.AggregateCommit,
+            ProcessStoreCrashPhase.BeforeAtomicCommit,
+            occurrence: 3);
+        var store = new InMemoryProcessDurableStore(crash.ShouldCrash);
+        await InitializeStoreAsync(store, checkpoint, "acknowledgement-crash");
         var adapter = new DurableOperationFakeAdapter(fixture.Request.Contract)
             .Script(
                 fixture.Request.Context.EmissionId,
@@ -381,6 +420,8 @@ public sealed class ProcessDurableRuntimeOperationTests
         Assert.Equal(
             DurableOperationStatus.Dispatched,
             Assert.Single(afterCrash.Checkpoint.DurableOperations).Status);
+        Assert.True(crash.IsComplete);
+        Assert.Single(crash.Crashes);
 
         var recovered = await runtime.AdvanceOperationAsync(
             context,
@@ -402,24 +443,13 @@ public sealed class ProcessDurableRuntimeOperationTests
         var fixture = ProcessDurabilityTestFixture.Create(
             definitionId: "process/durable-runtime-operation/admission-crash",
             semanticVariant: "admission-crash");
-        var aggregateCuts = 0;
-        var crashed = false;
-        var store = new InMemoryProcessDurableStore(crash =>
-        {
-            if (crash.MutationKind != ProcessStoreMutationKind.AggregateCommit
-                || crash.Phase != ProcessStoreCrashPhase.BeforeAtomicCommit)
-            {
-                return false;
-            }
-            aggregateCuts++;
-            if (crashed || aggregateCuts != 4)
-            {
-                return false;
-            }
-            crashed = true;
-            return true;
-        });
-        await InitializeStoreAsync(store, fixture.Checkpoint, "admission-crash");
+        var checkpoint = ProcessDurabilityTestFixture.CopyCheckpoint(fixture.Checkpoint, inbox: []);
+        var crash = ProcessStoreCrashScript.Once(
+            ProcessStoreMutationKind.AggregateCommit,
+            ProcessStoreCrashPhase.BeforeAtomicCommit,
+            occurrence: 4);
+        var store = new InMemoryProcessDurableStore(crash.ShouldCrash);
+        await InitializeStoreAsync(store, checkpoint, "admission-crash");
         var adapter = new DurableOperationFakeAdapter(fixture.Request.Contract)
             .Script(fixture.Request.Context.EmissionId, Success("acknowledged-before-crash"));
         var runtime = Runtime(store, adapter, maxAmbiguousStoreMutationAttempts: 1);
@@ -438,6 +468,8 @@ public sealed class ProcessDurableRuntimeOperationTests
         Assert.Equal(
             DurableOperationStatus.Acknowledged,
             Assert.Single(afterCrash.Checkpoint.DurableOperations).Status);
+        Assert.True(crash.IsComplete);
+        Assert.Single(crash.Crashes);
         var replyId = ProcessDurableRuntimeIdentities.OperationReply(fixture.Request.Context.EmissionId);
         Assert.DoesNotContain(afterCrash.Checkpoint.Inbox, entry => entry.EmissionId == replyId);
 
@@ -455,8 +487,34 @@ public sealed class ProcessDurableRuntimeOperationTests
         Assert.Equal(DurableOperationStatus.Dispositioned, recovered.Operation?.Status);
         Assert.Equal(ProcessDurableRuntimeDisposition.Replayed, replay.Disposition);
         var final = Assert.IsType<ProcessDurableStoreSnapshot>(replay.Snapshot);
-        Assert.Single(final.Checkpoint.Inbox, entry => entry.EmissionId == replyId);
+        var reply = Assert.Single(final.Checkpoint.Inbox, entry => entry.EmissionId == replyId);
         Assert.Single(adapter.Invocations);
+        Assert.Equivalent(afterCrash.Checkpoint.Operations, final.Checkpoint.Operations, strict: true);
+        Assert.Equivalent(afterCrash.Checkpoint.Emissions, final.Checkpoint.Emissions, strict: true);
+
+        var activation = new ProcessActivation(
+            new("activation/admission-crash-recovery"),
+            ProcessActivationCause.Interaction,
+            ProcessDurabilityTestFixture.CheckpointedAtUtc.AddMinutes(2),
+            fixture.Activation.Context,
+            [reply.Input]);
+        var expected = ProcessReferenceInterpreter.Activate(
+            fixture.Plan,
+            final.Checkpoint.Continuation,
+            activation,
+            new ProcessOperationReplayHost(RejectingHost.Instance, final.Checkpoint.Operations));
+        var activated = await runtime.ActivateAsync(
+            Context(activation.ObservedAtUtc),
+            fixture.Plan,
+            final.Checkpoint.ContinuationIdentity,
+            activation);
+
+        Assert.Equal(ProcessDurableRuntimeDisposition.Applied, activated.Disposition);
+        Assert.Equivalent(expected, activated.Decision, strict: true);
+        Assert.Equivalent(
+            expected.State,
+            Assert.IsType<ProcessDurableStoreSnapshot>(activated.Snapshot).Checkpoint.Continuation,
+            strict: true);
     }
 
     [Fact]

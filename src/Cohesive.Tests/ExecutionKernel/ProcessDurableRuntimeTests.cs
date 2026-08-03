@@ -193,19 +193,8 @@ public sealed class ProcessDurableRuntimeTests
         var fixture = ProcessDurabilityTestFixture.Create(
             definitionId: $"process/durable-runtime/ambiguous-{crashPhase}",
             semanticVariant: $"ambiguous-{crashPhase}");
-        var crashed = false;
-        var store = new InMemoryProcessDurableStore(context =>
-        {
-            if (crashed
-                || context.MutationKind != ProcessStoreMutationKind.AggregateCommit
-                || context.Phase != crashPhase)
-            {
-                return false;
-            }
-
-            crashed = true;
-            return true;
-        });
+        var crash = ProcessStoreCrashScript.Once(ProcessStoreMutationKind.AggregateCommit, crashPhase);
+        var store = new InMemoryProcessDurableStore(crash.ShouldCrash);
         var host = new RecordingHost(fixture.OperationResult);
         var runtime = Runtime(store, fixture, host);
         var initialized = await runtime.InitializeAsync(
@@ -223,7 +212,7 @@ public sealed class ProcessDurableRuntimeTests
             fixture.Activation);
         var snapshot = Assert.IsType<ProcessDurableStoreSnapshot>(result.Snapshot);
 
-        Assert.True(crashed);
+        Assert.True(crash.IsComplete);
         Assert.Equal(expectedDisposition, result.Disposition);
         Assert.Equal(1, host.RelationCalls);
         Assert.Single(snapshot.Checkpoint.Activations);
@@ -333,19 +322,8 @@ public sealed class ProcessDurableRuntimeTests
         var fixture = ProcessDurabilityTestFixture.Create(
             definitionId: $"process/durable-runtime/acquisition-{crashPhase}",
             semanticVariant: $"acquisition-{crashPhase}");
-        var crashed = false;
-        var innerStore = new InMemoryProcessDurableStore(context =>
-        {
-            if (crashed
-                || context.MutationKind != ProcessStoreMutationKind.WorkerAcquisition
-                || context.Phase != crashPhase)
-            {
-                return false;
-            }
-
-            crashed = true;
-            return true;
-        });
+        var crash = ProcessStoreCrashScript.Once(ProcessStoreMutationKind.WorkerAcquisition, crashPhase);
+        var innerStore = new InMemoryProcessDurableStore(crash.ShouldCrash);
         var store = new AcquisitionRecordingStore(innerStore);
         var host = new RecordingHost(fixture.OperationResult);
         var runtime = Runtime(store, fixture, host);
@@ -363,7 +341,7 @@ public sealed class ProcessDurableRuntimeTests
         var snapshot = Assert.IsType<ProcessDurableStoreSnapshot>(result.Snapshot);
         var lease = Assert.IsType<ProcessWorkerLease>(snapshot.WorkerLease);
 
-        Assert.True(crashed);
+        Assert.True(crash.IsComplete);
         Assert.Equal(ProcessDurableRuntimeDisposition.Applied, result.Disposition);
         Assert.Equal(2, store.Acquisitions.Count);
         Assert.Equal(store.Acquisitions[0], store.Acquisitions[1]);
