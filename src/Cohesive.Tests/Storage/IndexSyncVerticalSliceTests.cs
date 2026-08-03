@@ -103,24 +103,50 @@ public sealed class IndexSyncVerticalSliceTests
         Assert.Equal(1, controlled.State.OperatingPoint.Get(ControlActuatorKind.BatchItems).Quantity.Value);
 
         source.PublishUpdateAndDelete();
+        var activationWork = new InMemoryMaterializationSynchronizationWorkStore();
         var activation = new MaterializationGenerationActivationExecutor(
             fixture.Resolved,
-            new InMemoryMaterializationSynchronizationWorkStore());
-        MaterializationGenerationActivationResult result;
+            activationWork);
+        MaterializationGenerationActivationResult prepared;
         var activationOrdinal = 0;
         do
         {
-            result = await activation.ActivateAsync(
+            prepared = await activation.PrepareAsync(
                 context,
                 attempt,
                 new($"invocation/{provider}/{activationOrdinal}"),
                 new($"worker/{provider}/{activationOrdinal}"));
             activationOrdinal++;
         }
-        while (result.Disposition == MaterializationGenerationActivationDisposition.WorkRemaining
+        while (prepared.Disposition == MaterializationGenerationActivationDisposition.WorkRemaining
                && activationOrdinal < 8);
 
+        Assert.Equal(MaterializationGenerationActivationDisposition.Ready, prepared.Disposition);
+        var ready = new MaterializationReadyGenerationReference(
+            MaterializationReadyGenerationReference.CurrentSchemaVersion,
+            fixture.Resolved.Authority,
+            attempt,
+            generation,
+            prepared.Activation!);
+        var promotionAliasRequestsBefore = target.Transport.AliasRequests.Count(request =>
+            request.ReadAlias == ReadAlias);
+        target.Transport.ApplyNextAliasExchangeThenFailAmbiguously();
+
+        await Assert.ThrowsAsync<ElasticMaterializationTransportException>(async () =>
+            await activation.ActivateReadyAsync(context, attempt, ready));
+        var result = await activation.ActivateReadyAsync(context, attempt, ready);
+        var replayedActivation = await activation.ActivateReadyAsync(context, attempt, ready);
+
         Assert.Equal(MaterializationGenerationActivationDisposition.Active, result.Disposition);
+        Assert.Equal(MaterializationGenerationActivationDisposition.Active, replayedActivation.Disposition);
+        Assert.Equal(result.Generation, replayedActivation.Generation);
+        Assert.Equal(result.Activation, replayedActivation.Activation);
+        Assert.Equal(
+            promotionAliasRequestsBefore + 1,
+            target.Transport.AliasRequests.Count(request => request.ReadAlias == ReadAlias));
+        Assert.Contains(
+            target.Transport.Calls,
+            call => call.Operation == FakeElasticMaterializationTransport.InspectAliasesOperation);
         var active = await target.Target.InspectAsync(context);
         var activated = await target.Target.InspectGenerationAsync(context, generation);
         Assert.Equal(generation, active.ActiveGenerationId);
@@ -135,6 +161,43 @@ public sealed class IndexSyncVerticalSliceTests
             generation);
     }
 
+    [Fact]
+    public async Task Ek08_CosmosAndPostgresCapabilitiesDoNotChangeCanonicalProcessMeaning()
+    {
+        var semantic = CreateSemanticFixture();
+        await using var cosmosSource = await CreateSourceAsync(SourceProvider.Cosmos, semantic);
+        await using var postgresSource = await CreateSourceAsync(SourceProvider.Postgres, semantic);
+        var cosmos = CreateExecutionFixture(
+            semantic,
+            cosmosSource,
+            CreateTarget(semantic.Definition, semantic.Readback.StorageBinding));
+        var postgres = CreateExecutionFixture(
+            semantic,
+            postgresSource,
+            CreateTarget(semantic.Definition, semantic.Readback.StorageBinding));
+        var cosmosProcess = MaterializationRebuildProcessFactory.Create();
+        var postgresProcess = MaterializationRebuildProcessFactory.Create();
+
+        Assert.Equal(
+            cosmos.Plan.Materialization.DefinitionFingerprint,
+            postgres.Plan.Materialization.DefinitionFingerprint);
+        Assert.Equal(
+            cosmos.Plan.Sources.Select(static source => source.Input),
+            postgres.Plan.Sources.Select(static source => source.Input));
+        Assert.NotEqual(
+            cosmos.Plan.Sources.Select(static source => source.Profile.Id),
+            postgres.Plan.Sources.Select(static source => source.Profile.Id));
+        Assert.NotEqual(cosmos.Plan.Fingerprint, postgres.Plan.Fingerprint);
+        Assert.Equal(cosmosProcess.CoordinatorProcessDocument, postgresProcess.CoordinatorProcessDocument);
+        Assert.Equal(cosmosProcess.WorkerProcessDocument, postgresProcess.WorkerProcessDocument);
+        Assert.Equal(
+            cosmosProcess.CoordinatorPlan.DefinitionReference,
+            postgresProcess.CoordinatorPlan.DefinitionReference);
+        Assert.Equal(cosmosProcess.WorkerPlan.DefinitionReference, postgresProcess.WorkerPlan.DefinitionReference);
+        Assert.Equal(cosmosProcess.DurableRequestBindings, postgresProcess.DurableRequestBindings);
+        Assert.Equal(cosmosProcess.InteractionCatalog.Count, postgresProcess.InteractionCatalog.Count);
+    }
+
     static async Task AssertPauseAndContinuePreserveGenerationAsync(
         ExecutionFixture fixture,
         TargetFixture target,
@@ -147,12 +210,21 @@ public sealed class IndexSyncVerticalSliceTests
             attempt,
             new InMemoryMaterializationSynchronizationWorkStore());
         Assert.Equal(generation, execution.Generation);
+        var admissionCrash = ProcessStoreCrashScript.Once(
+            ProcessStoreMutationKind.AggregateCommit,
+            ProcessStoreCrashPhase.AfterAtomicCommitBeforeReturn);
+        var store = new InMemoryProcessDurableStore(admissionCrash.ShouldCrash);
         var lifecycle = RebuildProcessLifecycle(
             fixture.Resolved.Authority,
             artifacts,
-            new ExactRebuildExecutionResolver(execution));
-        var initialized = await lifecycle.InitializeAsync(
+            new ExactRebuildExecutionResolver(execution),
+            store,
+            maximumStoreAttempts: 1);
+        var interruptedAdmission = await lifecycle.InitializeAsync(
             OperationContext.Create(timeProvider: new FixedTimeProvider(attempt.StartedAtUtc)),
+            RebuildProcessStart(artifacts, fixture.Resolved.Authority, attempt));
+        var initialized = await lifecycle.InitializeAsync(
+            OperationContext.Create(timeProvider: new FixedTimeProvider(attempt.StartedAtUtc.AddMilliseconds(1))),
             RebuildProcessStart(artifacts, fixture.Resolved.Authority, attempt));
         var initialSnapshot = Assert.IsType<ProcessDurableStoreSnapshot>(initialized.Snapshot);
         var initialAffinity = Assert.Single(initialSnapshot.Checkpoint.Control.CurrentAttempt.AffinityBindings);
@@ -180,7 +252,11 @@ public sealed class IndexSyncVerticalSliceTests
                 issuedAtUtc: continuedAtUtc));
         var continuedSnapshot = Assert.IsType<ProcessDurableStoreSnapshot>(continued.Snapshot);
 
-        Assert.Equal(ProcessDurableRuntimeDisposition.Applied, initialized.ProcessDisposition);
+        Assert.Equal(ProcessDurableRuntimeDisposition.Applied, interruptedAdmission.ProcessDisposition);
+        Assert.Equal(MaterializationRebuildProcessRealization.Unresolved, interruptedAdmission.Realization);
+        Assert.Null(interruptedAdmission.Generation);
+        Assert.True(admissionCrash.IsComplete);
+        Assert.Equal(ProcessDurableRuntimeDisposition.Replayed, initialized.ProcessDisposition);
         Assert.Equal(ProcessDurableRuntimeDisposition.Applied, paused.ProcessDisposition);
         Assert.Equal(ProcessDurableRuntimeDisposition.Applied, continued.ProcessDisposition);
         Assert.Equal(MaterializationRebuildProcessRealization.Ready, initialized.Realization);
@@ -289,6 +365,16 @@ public sealed class IndexSyncVerticalSliceTests
             [ReadAlias],
             maximumResponseBytes: checked((int)WriteBytes),
             CancellationToken.None)).Bindings);
+        var abandonedIndex = target.Binding.GetGenerationIndexName(candidateExecution.Generation);
+        var abandonedWritesBeforeLateWork = target.Transport.BulkRequests
+            .SelectMany(static batch => batch)
+            .Count(operation => operation.Index == abandonedIndex);
+        var lateWork = await candidateExecution.RunShardAsync(
+            OperationContext.Create(timeProvider: new FixedTimeProvider(replacementAttempt.StartedAtUtc)),
+            fixture.Shard.Id);
+        var abandonedWritesAfterLateWork = target.Transport.BulkRequests
+            .SelectMany(static batch => batch)
+            .Count(operation => operation.Index == abandonedIndex);
 
         Assert.Equal(ProcessDurableRuntimeDisposition.Applied, restarted.ProcessDisposition);
         Assert.Equal(MaterializationRebuildProcessRealization.Ready, restarted.Realization);
@@ -308,6 +394,8 @@ public sealed class IndexSyncVerticalSliceTests
         Assert.Equal(MaterializationGenerationState.Retired, abandoned?.State);
         Assert.Equal(MaterializationTargetOperationDisposition.Replayed, abandonmentEvidence.Disposition);
         Assert.Equal(MaterializationGenerationState.Retired, abandonmentEvidence.Generation?.State);
+        Assert.Equal(MaterializationRebuildShardDisposition.RestartRequired, lateWork.Disposition);
+        Assert.Equal(abandonedWritesBeforeLateWork, abandonedWritesAfterLateWork);
         Assert.Equal(
             MaterializationRebuildIdentities.Abandonment(fixture.Plan, candidateAttempt),
             abandonmentEvidence.Receipt?.AbandonmentId);
@@ -332,15 +420,17 @@ public sealed class IndexSyncVerticalSliceTests
     static MaterializationRebuildProcessLifecycle RebuildProcessLifecycle(
         MaterializationRebuildLeafExecutionAuthority authority,
         MaterializationRebuildProcessArtifacts artifacts,
-        IMaterializationRebuildExecutionResolver resolver) =>
+        IMaterializationRebuildExecutionResolver resolver,
+        InMemoryProcessDurableStore? store = null,
+        int maximumStoreAttempts = 3) =>
         new(
             new ProcessDurableRuntime(
-                new InMemoryProcessDurableStore(),
+                store ?? new InMemoryProcessDurableStore(),
                 RejectingProcessReferenceHost.Instance,
                 new(
                     workerId: "worker/index-sync-vertical-slice",
                     workerLease: TimeSpan.FromMinutes(5),
-                    maxAmbiguousStoreMutationAttempts: 3)),
+                    maxAmbiguousStoreMutationAttempts: maximumStoreAttempts)),
             artifacts,
             authority,
             resolver);

@@ -27,6 +27,9 @@ public static class MaterializationRebuildDiagnosticCodes
     /// <summary>One bounded target mutation remained unsuccessful after the declared retry budget.</summary>
     public const string TargetMutationFailed = "materialization.rebuild.target.mutationFailed";
 
+    /// <summary>The attempt-owned generation is absent or no longer accepts baseline writes.</summary>
+    public const string CandidateNotWritable = "materialization.rebuild.candidate.notWritable";
+
     /// <summary>
     /// Re-reading an uncheckpointed baseline page produced different canonical target intent after an earlier write.
     /// </summary>
@@ -1177,6 +1180,20 @@ public sealed class MaterializationRebuildExecutor
                     progress,
                     MaterializationRebuildDiagnosticCodes.ProgressFenced,
                     "Retained baseline completion does not match the exact shard read or operating boundary.");
+        }
+
+        var candidate = await resolved.Target.InspectGenerationAsync(context, generation).ConfigureAwait(false);
+        if (candidate?.State != MaterializationGenerationState.Loading)
+        {
+            return Failure(
+                MaterializationRebuildShardDisposition.RestartRequired,
+                shard,
+                generation,
+                pages: 0,
+                outputs: 0,
+                progress,
+                MaterializationRebuildDiagnosticCodes.CandidateNotWritable,
+                $"Candidate generation '{generation.Value}' is absent or no longer Loading; the Process attempt must restart before baseline work resumes.");
         }
 
         if (await FindIncompleteChangeCutAsync(context, plan, attempt, generation).ConfigureAwait(false)

@@ -22,7 +22,7 @@ public sealed class ExecutionKernelCharacterizationTests
         new("EK-05", KernelScenarioStatus.Partial, "Canonical Process invocation can coordinate independent exact Transition subjects without copying aggregate state. Static compilation derives exact resource and effect evidence, structurally preflights and retains a whole-definition atomicity demand, and represents compensation and reconciliation as explicit child-Process purposes; arbitrary nested scope regions and target capability realization evidence remain absent."),
         new("EK-06", KernelScenarioStatus.Pass, "The canonical durable runtime now realizes stable logical operation identity, fenced and renewable claims, attempt history, adapter execution outside the instance gate, acknowledgement, exact Reply admission, authored ambiguous-outcome recovery, and replay-safe atomic checkpoint, inbox, outbox, and operation-ledger commits across before/after-commit crash cuts; the in-memory store and scripted adapter provide the executable reference interpretation required by EK-06."),
         new("EK-07", KernelScenarioStatus.Pass, "Canonical Process state and the durable runtime now admit Signals through Control as atomic inbox evidence, preserve exact wait-occurrence targets, buffer early delivery, consume one deterministic winner, persist typed duplicate and late-loser dispositions without reopening the wait, and replay both commands and activations inertly; the in-memory store provides the executable reference interpretation required by EK-07."),
-        new("EK-08", KernelScenarioStatus.Partial, "The reference rebuild profile persists one exact validated realization plan, including scan and hydration physical-plan evidence, and canonical bounded coordinator/worker Processes; reconciled durable Requests allocate an isolated candidate, retain independent baseline and change-cut progress, enforce a crash-stable cumulative page bound, reject inconclusive terminal reads before writes, and apply replay-stable target bulks. Post-bulk source drift requires an explicit restart. The materialization lifecycle binds generation affinity before physical begin, pause/continue retain it, and RestartAttempt durably abandons the prior generation before beginning exactly one replacement. Partial candidates remain unreadable and successful baseline work terminates as catch-up required; incremental catch-up, convergence, seal/validation/promotion, backend swap, and a production Process-store adapter remain absent."),
+        new("EK-08", KernelScenarioStatus.Pass, "The canonical materialization Process and deterministic in-memory durability interpretation agree on every coordinator activation, stable operation identity, replay, and terminal ready-generation outcome. The Cosmos and PostgreSQL source realizations share that Process meaning while retaining distinct capability evidence. EK-06 store cuts recover generation admission, bounded baseline pages resume through exact checkpoints, incremental work durably settles before progress, ambiguous applied Elasticsearch promotion reconciles the retained intent, and explicit fenced routing resumes between candidate admission and atomic swap. Pause and Continue retain one candidate; RestartAttempt tombstones the abandoned generation before admitting a distinct replacement, and late work cannot write to the abandoned index."),
         new("EK-09", KernelScenarioStatus.Pass, "Representative Transitions and Processes lower from typed C# to fingerprint-equivalent canonical IR, round-trip independently of their producer assemblies, and compile only from persisted execution-definition documents; the former callback and single-cursor Process authorities are no longer shipped.")
     ];
 
@@ -34,12 +34,12 @@ public sealed class ExecutionKernelCharacterizationTests
             ScenarioClassifications.Select(static scenario => scenario.Id));
         Assert.All(ScenarioClassifications, static scenario => Assert.NotEmpty(scenario.Evidence));
         Assert.Equal(
-            ["EK-01", "EK-02", "EK-03", "EK-04", "EK-06", "EK-07", "EK-09"],
+            ["EK-01", "EK-02", "EK-03", "EK-04", "EK-06", "EK-07", "EK-08", "EK-09"],
             ScenarioClassifications
                 .Where(static scenario => scenario.Status == KernelScenarioStatus.Pass)
                 .Select(static scenario => scenario.Id));
         Assert.Equal(
-            KernelScenarioStatus.Partial,
+            KernelScenarioStatus.Pass,
             Assert.Single(ScenarioClassifications, static scenario => scenario.Id == "EK-08").Status);
     }
 
