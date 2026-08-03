@@ -17,6 +17,7 @@ public static class ProcessExecutionRecordExtensions
         /// </summary>
         /// <typeparam name="T">Expected parameter type.</typeparam>
         /// <returns>The typed parameter value when present; otherwise <see langword="null"/>.</returns>
+        /// <exception cref="ArgumentNullException"><paramref name="record"/> is <see langword="null"/>.</exception>
         public T? TryGetParameter<T>()
             where T : class
         {
@@ -38,6 +39,7 @@ public static class ProcessExecutionRecordExtensions
         /// </summary>
         /// <typeparam name="T">Expected output type.</typeparam>
         /// <returns>The typed output value when present; otherwise <see langword="null"/>.</returns>
+        /// <exception cref="ArgumentNullException"><paramref name="record"/> is <see langword="null"/>.</exception>
         public T? TryGetOutput<T>() where T : class
         {
             ArgumentNullException.ThrowIfNull(record);
@@ -48,6 +50,7 @@ public static class ProcessExecutionRecordExtensions
         /// Resolves the best available failure message from the retained process execution record.
         /// </summary>
         /// <returns>A trimmed failure message when present; otherwise <see langword="null"/>.</returns>
+        /// <exception cref="ArgumentNullException"><paramref name="record"/> is <see langword="null"/>.</exception>
         public string? ResolveFailureMessage()
         {
             ArgumentNullException.ThrowIfNull(record);

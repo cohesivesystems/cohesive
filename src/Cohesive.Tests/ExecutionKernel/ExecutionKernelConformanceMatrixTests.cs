@@ -4,7 +4,7 @@ using Cohesive.Tests.Storage;
 namespace Cohesive.Tests.ExecutionKernel;
 
 /// <summary>
-/// Enforces the EK-01 through EK-09 closeout gate by indexing the existing executable conformance tests. The
+/// Enforces the EK-01 through EK-11 closeout gate by indexing the existing executable conformance tests. The
 /// normative scenarios remain owned by the Execution Kernel specification; this matrix contains only test
 /// references and realization-profile evidence.
 /// </summary>
@@ -20,7 +20,9 @@ public sealed class ExecutionKernelConformanceMatrixTests
         "EK-06",
         "EK-07",
         "EK-08",
-        "EK-09"
+        "EK-09",
+        "EK-10",
+        "EK-11"
     ];
 
     static readonly ConformanceEntry[] Matrix =
@@ -128,11 +130,73 @@ public sealed class ExecutionKernelConformanceMatrixTests
         Semantic(
             "EK-09",
             typeof(CanonicalTransitionAuthoringTests),
-            nameof(CanonicalTransitionAuthoringTests.TypedCSharpAuthoring_LowersToEquivalentDirectCanonicalIrDeterministically))
+            nameof(CanonicalTransitionAuthoringTests.TypedCSharpAuthoring_LowersToEquivalentDirectCanonicalIrDeterministically)),
+
+        Semantic(
+            "EK-10",
+            typeof(InMemoryProcessDurableStoreCrashTests),
+            nameof(InMemoryProcessDurableStoreCrashTests.AcquisitionExactRetry_ReplaysAcrossInterveningInboxRevision)),
+        Semantic(
+            "EK-10",
+            typeof(InMemoryProcessDurableStoreCrashTests),
+            nameof(InMemoryProcessDurableStoreCrashTests.AfterAtomicCommitBeforeReturn_ExposesAllAndExactRetryReplays)),
+        Semantic(
+            "EK-10",
+            typeof(InMemoryProcessDurableStoreCrashTests),
+            nameof(InMemoryProcessDurableStoreCrashTests.BeforeAtomicCommit_ExposesNoneAndExactRetryApplies)),
+        Semantic(
+            "EK-10",
+            typeof(InMemoryProcessDurableStoreCrashTests),
+            nameof(InMemoryProcessDurableStoreCrashTests.RenewalExactRetry_ReplaysAcrossLaterInterveningInboxChronology)),
+        Semantic(
+            "EK-10",
+            typeof(InMemoryProcessDurableStoreCrashTests),
+            nameof(InMemoryProcessDurableStoreCrashTests.TerminalCheckpoint_StillDurablyAdmitsLateInputForPolicyClassification)),
+        Semantic(
+            "EK-10",
+            typeof(InMemoryProcessDurableStoreTests),
+            nameof(InMemoryProcessDurableStoreTests.Commit_ExactReplayPrecedesRevisionAndFenceChecksWhileChangedIdentityConflicts)),
+        Semantic(
+            "EK-10",
+            typeof(InMemoryProcessDurableStoreTests),
+            nameof(InMemoryProcessDurableStoreTests.ConcurrentCommits_PublishOneCompleteWinnerWithoutMixingState)),
+        Semantic(
+            "EK-10",
+            typeof(InMemoryProcessDurableStoreTests),
+            nameof(InMemoryProcessDurableStoreTests.InputAdmissionAfterWorkerLoad_InvalidatesCommitWithoutLosingWakeup)),
+        Semantic(
+            "EK-10",
+            typeof(InMemoryProcessDurableStoreTests),
+            nameof(InMemoryProcessDurableStoreTests.WorkerLease_AcquireReplayHeldRenewAndReclaimAdvanceMonotonicFence)),
+
+        Semantic(
+            "EK-11",
+            typeof(MotionDqMonitoringDurableConformanceTests),
+            nameof(MotionDqMonitoringDurableConformanceTests.FullMonitoringTimeline_RestoresRecursAndCreatesEachHumanWorkItemOnce)),
+        Semantic(
+            "EK-11",
+            typeof(ProcessHigherOrderReferenceInterpreterTests),
+            nameof(ProcessHigherOrderReferenceInterpreterTests.RepeatAcrossActivation_BodyDurableCutRoundTripsWhileRecurrenceWaitIsATombstone)),
+        Semantic(
+            "EK-11",
+            typeof(ProcessHigherOrderReferenceInterpreterTests),
+            nameof(ProcessHigherOrderReferenceInterpreterTests.RepeatAcrossActivation_CheckpointRoundTripPreservesProgressAndRecoveredRuntimeResumesNextOccurrence)),
+        Semantic(
+            "EK-11",
+            typeof(ProcessHigherOrderReferenceInterpreterTests),
+            nameof(ProcessHigherOrderReferenceInterpreterTests.RepeatAcrossActivation_CompletesAfterOneDeterministicPollingOccurrencePerActivation)),
+        Semantic(
+            "EK-11",
+            typeof(ProcessHigherOrderReferenceInterpreterTests),
+            nameof(ProcessHigherOrderReferenceInterpreterTests.RepeatAcrossActivation_RoutesToExhaustedAfterTheFiniteOccurrenceBudget)),
+        Semantic(
+            "EK-11",
+            typeof(ProcessHigherOrderReferenceInterpreterTests),
+            nameof(ProcessHigherOrderReferenceInterpreterTests.RepeatAcrossActivation_RoutesToStalledWhenAuthoredProgressStopsChanging))
     ];
 
     [Fact]
-    public void EK01ThroughEK09_HaveExecutableNonSkippedSemanticConformance()
+    public void RequiredScenarios_HaveExecutableNonSkippedSemanticConformance()
     {
         Assert.Equal(
             RequiredScenarios,
