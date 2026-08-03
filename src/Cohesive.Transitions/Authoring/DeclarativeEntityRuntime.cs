@@ -9,6 +9,10 @@ namespace Cohesive.Transitions.Authoring;
 /// <summary>
 /// Executes declarative transition definitions against immutable entity snapshots.
 /// </summary>
+/// <remarks>
+/// Compatibility interpreter retained for legacy characterization and the Transportation example through ARI-218.
+/// New runtime integrations must compile and interpret canonical Transition IR.
+/// </remarks>
 public sealed class DeclarativeEntityRuntime
 {
     static readonly ConditionalWeakTable<EntityDefinition, CompiledEntityPlan> PlanByEntityDefinition = [];

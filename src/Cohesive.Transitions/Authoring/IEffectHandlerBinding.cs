@@ -10,6 +10,10 @@ namespace Cohesive.Transitions.Authoring;
 /// <summary>
 /// Untyped bridge for effect-handler registrations.
 /// </summary>
+/// <remarks>
+/// Compatibility bridge retained through ARI-218; request names and CLR types are not canonical interaction
+/// authority.
+/// </remarks>
 public interface IEffectHandlerBinding
 {
     /// <summary>
@@ -36,6 +40,7 @@ public interface IEffectHandlerBinding
 /// <summary>
 /// Strongly typed effect-handler registration.
 /// </summary>
+/// <remarks>Compatibility registration retained through ARI-218 for the flat Transition effect surface.</remarks>
 public sealed class EffectHandlerBinding<TRequest, TResult> : IEffectHandlerBinding
     where TRequest : IEffectRequest<TResult>
 {

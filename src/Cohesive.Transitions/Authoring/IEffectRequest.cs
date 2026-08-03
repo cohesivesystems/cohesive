@@ -3,6 +3,10 @@ namespace Cohesive.Transitions.Authoring;
 /// <summary>
 ///  Marker for typed effect requests.
 /// </summary>
+/// <remarks>
+/// Compatibility contract retained for the flat Transition effect surface through ARI-218. Canonical interactions
+/// are exact execution-definition references carried by Transition emission intents.
+/// </remarks>
 public interface IEffectRequest
 {
     /// <summary>

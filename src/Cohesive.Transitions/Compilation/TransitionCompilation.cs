@@ -793,6 +793,12 @@ public sealed class CompiledTransitionPlan
     /// <summary>Exact fingerprinted Transition definition document.</summary>
     public ExecutionDefinitionDocument Document { get; }
 
+    /// <summary>Exact fingerprint-pinned identity of <see cref="Document"/>.</summary>
+    public ExecutionDefinitionReference DefinitionReference => new(
+        Document.Metadata.DefinitionId,
+        Document.Metadata.RevisionId,
+        Document.Metadata.Fingerprint);
+
     /// <summary>Canonical typed Transition definition.</summary>
     public TransitionDefinition Definition { get; }
 

@@ -93,6 +93,7 @@ public sealed class ApiDefinitionTests
     [Fact]
     public void Build_EntityDsl_InfersRouteParametersAndBodies()
     {
+        var transitionReference = DefinitionReference("Dispatch");
         var definition = Cohesive.Api.Api.Define()
             .Entity<Shipment>()
             .Query("GetById")
@@ -102,7 +103,7 @@ public sealed class ApiDefinitionTests
             .Command("Dispatch")
                 .Route("POST", "/api/shipments/{id}/dispatch")
                 .Accepts<DispatchShipmentRequest>()
-                .Transition(new(name: "Dispatch"))
+                .Transition(transitionReference)
                 .Done()
             .Build();
 
@@ -128,7 +129,7 @@ public sealed class ApiDefinitionTests
         Assert.Same(command.PrimaryResult, Assert.Single(command.Results));
         Assert.Equal(ApiResultKind.NoContent, command.PrimaryResult.Kind);
         Assert.Equal(StatusCodes.Status204NoContent, command.PrimaryResult.Http?.StatusCode);
-        Assert.Equal("Dispatch", command.Transition?.Name);
+        Assert.Same(transitionReference, command.TransitionReference);
         var commandHttp = Assert.IsType<HttpBinding>(command.Http);
         Assert.NotNull(commandHttp.Body);
         Assert.Equal(typeof(DispatchShipmentRequest), commandHttp.Body!.BodyType);
@@ -390,6 +391,14 @@ public sealed class ApiDefinitionTests
 
         Assert.Contains(endpoint.Metadata, static metadata => metadata is ApiOperation apiOperation && apiOperation.Name == "GetById");
     }
+
+    static ExecutionDefinitionReference DefinitionReference(string name) => new(
+        new(name),
+        new("revision/1"),
+        new(
+            ExecutionDefinitionFingerprinter.Algorithm,
+            ExecutionDefinitionFingerprinter.Canonicalization,
+            new string('a', 64)));
 
     sealed record Shipment(string Id);
 

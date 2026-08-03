@@ -3,7 +3,9 @@ using System.Text.Json;
 using Cohesive.Adapters.AspNet.Entities;
 using Cohesive.Adapters.AspNet.Relations;
 using Cohesive.Api;
+using Cohesive.Execution;
 using Cohesive.Model;
+using Cohesive.Model.Serialization;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
@@ -11,6 +13,9 @@ using Cohesive.Relations.Execution;
 using Cohesive.Relations.IR;
 using Cohesive.Storage;
 using Cohesive.Transitions.Authoring;
+using Cohesive.Transitions.Compilation;
+using Cohesive.Transitions.Execution;
+using Cohesive.Transitions.IR;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -181,6 +186,78 @@ public sealed class EntityApiEndpointTests
     }
 
     [Fact]
+    public void TransitionStateProjector_VerifiesDecisionEvidenceBeforeProjection()
+    {
+        var entity = NoteEntity.Instance;
+        var plan = CompileReviseTransition(entity);
+        var state = ObservationValue.FromObject(new NoteState(
+            Id: "note-1",
+            Tenant: "tenant-a",
+            Text: "before",
+            UpdatedAtUtc: new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+        var input = ObservationValue.FromObject(new NoteEntity.ReviseInput(
+            Text: "after",
+            UpdatedAtUtc: new(2026, 1, 2, 0, 0, 0, TimeSpan.Zero)));
+        var decision = TransitionReferenceInterpreter.DecideFullState(
+            plan,
+            new("tests/aspnet/entities/note/revise/projection"),
+            PortableValue.Concrete(plan.Definition.Input, input),
+            PortableValue.Concrete(plan.Definition.Observation, state));
+
+        var projected = TransitionStateProjector.Apply(state, decision);
+
+        Assert.Equal("after", projected.GetProperty(nameof(NoteState.Text)).GetString());
+        var mismatched = state.WithField(
+            FieldPath.FromField(nameof(NoteState.Text)),
+            ObservationValue.FromString("changed-concurrently"));
+        Assert.Throws<InvalidOperationException>(() => TransitionStateProjector.Apply(mismatched, decision));
+    }
+
+    [Fact]
+    public void EntityApiEndpointOptions_ConventionalActivationIdPinsRequestAndOperation()
+    {
+        var plan = CompileReviseTransition(NoteEntity.Instance);
+        var operation = Assert.Single(
+            CreateApi(plan.DefinitionReference).Operations,
+            static candidate => candidate.Name == "Revise");
+        var httpContext = new DefaultHttpContext { TraceIdentifier = "request/42" };
+
+        var activation = EntityApiEndpointOptions.CreateConventionalActivationId(httpContext, operation);
+
+        Assert.Equal(
+            "aspnet/request/request%2F42/operation/NoteResource.Revise",
+            activation.Value);
+    }
+
+    [Fact]
+    public void MapEntityApiDefinition_RejectsTransitionPlanThatDoesNotMatchExactApiReference()
+    {
+        var entity = NoteEntity.Instance;
+        var plan = CompileReviseTransition(entity);
+        var wrongReference = new ExecutionDefinitionReference(
+            plan.DefinitionReference.DefinitionId,
+            plan.DefinitionReference.RevisionId,
+            new(
+                ExecutionDefinitionFingerprinter.Algorithm,
+                ExecutionDefinitionFingerprinter.Canonicalization,
+                new string('b', 64)));
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Services.AddSingleton(OperationContext.Create());
+        var app = builder.Build();
+
+        var exception = Assert.Throws<InvalidOperationException>(() => app.MapEntityApiDefinition(
+            CreateApi(wrongReference),
+            new EntityApiEndpointOptions { Entity = entity.Definition }
+                .Bind(EntityApiOperationBinding.Transition(
+                    "Revise",
+                    plan,
+                    createTransitionInput: null,
+                    createResult: static (_, _) => Results.Ok()))));
+
+        Assert.Contains(plan.DefinitionReference.DefinitionId.Value, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task MapEntityApiDefinition_UsesPartitionKeyPolicyForPartitionedPointReads()
     {
         var entity = NoteEntity.Instance;
@@ -281,7 +358,8 @@ public sealed class EntityApiEndpointTests
         configureServices?.Invoke(builder.Services);
 
         var app = builder.Build();
-        var api = CreateApi();
+        var revisePlan = CompileReviseTransition(entity);
+        var api = CreateApi(revisePlan.DefinitionReference);
         var queryEndpoint = Assert.Single(api.Endpoints, static endpoint => endpoint.Name == "Query");
         List<NoteResource> queryDocuments = [];
         app.MapEntityApiDefinition(api, new EntityApiEndpointOptions
@@ -312,7 +390,7 @@ public sealed class EntityApiEndpointTests
                 }))
             .Bind(EntityApiOperationBinding.Transition(
                 "Revise",
-                nameof(NoteEntity.Revise),
+                revisePlan,
                 static (context, request) =>
                 {
                     var revise = (ReviseNoteRequest)request!;
@@ -397,7 +475,34 @@ public sealed class EntityApiEndpointTests
             .Build();
     }
 
-    static ApiDefinition CreateApi() => Cohesive.Api.Api.Define()
+    static CompiledTransitionPlan CompileReviseTransition(NoteEntity entity)
+    {
+        var authored = TransitionAuthoring.Create<NoteEntity, NoteEntity.ReviseInput, bool>(
+            entity.Definition.Shape,
+            new(
+                definitionId: new("tests/aspnet/entities/note/revise"),
+                revisionId: new("revision/1"),
+                bodyId: new("revise/body"),
+                provenance: new(
+                    new(TransitionAuthoring.Producer),
+                    new("tests/api/entity-api-endpoint/revise"),
+                    DocumentOrigin.Generated),
+                displayName: "Revise note"),
+            transition => transition
+                .Set(new("revise/set-text"), note => note.Text, (_, input) => input.Text)
+                .Set(new("revise/set-updated-at"), note => note.UpdatedAtUtc, (_, input) => input.UpdatedAtUtc)
+                .Return(new("revise/applied"), TransitionOutcomeDisposition.Applied, true));
+        var compilation = authored.Compile();
+        Assert.True(
+            compilation.IsSuccessful,
+            string.Join(
+                Environment.NewLine,
+                compilation.Validation.Diagnostics.Select(static diagnostic =>
+                    $"{diagnostic.Code}: {diagnostic.Message}")));
+        return Assert.IsType<CompiledTransitionPlan>(compilation.Plan);
+    }
+
+    static ApiDefinition CreateApi(ExecutionDefinitionReference reviseTransition) => Cohesive.Api.Api.Define()
         .Entity<NoteResource>()
             .Query("Query")
                 .Route("GET", "/notes")
@@ -419,7 +524,7 @@ public sealed class EntityApiEndpointTests
                 .RouteParameter<string>("id")
                 .Body<ReviseNoteRequest>()
                 .Returns<NoteResource>()
-                .Transition(new(nameof(NoteEntity.Revise)))
+                .Transition(reviseTransition)
                 .Done()
             .Command("Inspect")
                 .Route("POST", "/notes/{id}/inspect")
@@ -494,9 +599,6 @@ public sealed class EntityApiEndpointTests
             Text = MutableField<string>(nameof(Text));
             UpdatedAtUtc = MutableField<DateTimeOffset>(nameof(UpdatedAtUtc));
 
-            Revise = Transition<ReviseInput>(nameof(Revise), t => t
-                .Set(x => x.Text, (_, input) => input.Text)
-                .Set(x => x.UpdatedAtUtc, (_, input) => input.UpdatedAtUtc));
         }
 
         public Field<string> Id { get; }
@@ -507,9 +609,8 @@ public sealed class EntityApiEndpointTests
 
         public Field<DateTimeOffset> UpdatedAtUtc { get; }
 
-        public Transition<NoteEntity, ReviseInput> Revise { get; }
     }
-    
+
     static async Task<InvocationResult> InvokeAsync(
         WebApplication app,
         string route,
@@ -538,14 +639,18 @@ public sealed class EntityApiEndpointTests
                 Path = route.Replace("{id}", routeValues?["id"]?.ToString() ?? "")
             }
         };
-        
+
         if (!string.IsNullOrWhiteSpace(queryString))
+        {
             context.Request.QueryString = new(queryString);
+        }
 
         if (routeValues is not null)
         {
             foreach (var (key, value) in routeValues)
+            {
                 context.Request.RouteValues[key] = value;
+            }
         }
 
         if (body is not null)

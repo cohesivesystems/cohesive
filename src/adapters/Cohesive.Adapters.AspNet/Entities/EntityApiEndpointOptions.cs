@@ -1,6 +1,8 @@
 using Cohesive.Api;
+using Cohesive.Execution;
 using Cohesive.Storage;
-using Cohesive.Transitions.Authoring;
+using Cohesive.Transitions.Compilation;
+using Cohesive.Transitions.Execution;
 using Cohesive.Transitions.Model;
 using Microsoft.AspNetCore.Http;
 
@@ -11,6 +13,8 @@ namespace Cohesive.Adapters.AspNet.Entities;
 /// </summary>
 public sealed class EntityApiEndpointOptions
 {
+    const string ConventionalActivationPrefix = "aspnet/request";
+
     readonly Dictionary<ApiEndpointId, EntityApiOperationBinding> bindingsByEndpointId = new();
     readonly Dictionary<string, EntityApiOperationBinding> bindingsByOperationName = new(StringComparer.Ordinal);
 
@@ -35,6 +39,13 @@ public sealed class EntityApiEndpointOptions
     /// Use this when multiple mapped operations intentionally reuse the same logical operation name.
     /// </summary>
     public Func<ApiOperation, string>? EndpointNameSelector { get; init; }
+
+    /// <summary>
+    /// Creates the canonical Transition activation identity for a request. The default combines the ASP.NET request
+    /// trace identity with the stable declared endpoint identity.
+    /// </summary>
+    public Func<HttpContext, ApiOperation, ActivationId> ActivationIdSelector { get; init; } =
+        CreateConventionalActivationId;
 
     /// <summary>
     /// Resolves the base entity repository. Defaults to the standard shape-keyed repository registration.
@@ -89,6 +100,29 @@ public sealed class EntityApiEndpointOptions
 
     static string? NormalizePartitionKey(string? partitionKey) =>
         string.IsNullOrWhiteSpace(partitionKey) ? null : partitionKey.Trim();
+
+    /// <summary>Creates the conventional canonical Transition activation identity for one HTTP request.</summary>
+    /// <param name="httpContext">Current HTTP request, whose trace identity scopes the activation.</param>
+    /// <param name="operation">Declared operation, whose endpoint identity distinguishes activations in one request.</param>
+    /// <returns>A deterministic identity that is stable for the operation within the current request.</returns>
+    /// <exception cref="ArgumentNullException">A required argument is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">The request trace identity is empty or white space.</exception>
+    public static ActivationId CreateConventionalActivationId(HttpContext httpContext, ApiOperation operation)
+    {
+        ArgumentNullException.ThrowIfNull(httpContext);
+        ArgumentNullException.ThrowIfNull(operation);
+        var traceIdentifier = Guard.RequireNotNullOrWhiteSpace(httpContext.TraceIdentifier);
+        return new(
+            $"{ConventionalActivationPrefix}/{Uri.EscapeDataString(traceIdentifier)}/operation/{Uri.EscapeDataString(operation.Id.Value)}");
+    }
+
+    internal ActivationId CreateActivationId(HttpContext httpContext, ApiOperation operation)
+    {
+        var activation = ActivationIdSelector(httpContext, operation);
+        return string.IsNullOrWhiteSpace(activation.Value)
+            ? throw new InvalidOperationException("Entity API endpoint options produced an empty Transition activation identity.")
+            : activation;
+    }
 
     /// <summary>
     /// Adds an operation binding. Only bound operations are mapped.
@@ -218,9 +252,22 @@ public abstract class EntityApiOperationBinding
     /// <summary>
     /// Creates an entity transition operation binding.
     /// </summary>
+    /// <param name="operationName">Declared API operation name.</param>
+    /// <param name="plan">Compiled exact canonical Transition plan referenced by the API operation.</param>
+    /// <param name="createTransitionInput">Optional projection from HTTP request data to canonical Transition input.</param>
+    /// <param name="createResult">Required projection from commit context and effective snapshot to an HTTP result.</param>
+    /// <param name="getExpectedConcurrencyToken">Optional expected-concurrency override.</param>
+    /// <param name="createOutboxMessages">
+    /// Optional explicit projection of canonical emission intents and application messages into the entity outbox.
+    /// </param>
+    /// <returns>A binding that interprets <paramref name="plan"/> and commits its decision.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="plan"/> or <paramref name="createResult"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="operationName"/> is empty or white space.</exception>
     public static EntityApiOperationBinding Transition(
         string operationName,
-        string transitionName,
+        CompiledTransitionPlan plan,
         Func<EntityApiRequestContext, object?, object?>? createTransitionInput,
         Func<EntityApiCommitContext, EntitySnapshot, IResult> createResult,
         Func<EntityApiRequestContext, object?, EntityConcurrencyToken?>? getExpectedConcurrencyToken = null,
@@ -228,7 +275,7 @@ public abstract class EntityApiOperationBinding
         ) =>
         new TransitionEntityApiOperationBinding(
             operationName,
-            transitionName,
+            plan,
             createTransitionInput,
             createResult,
             getExpectedConcurrencyToken,
@@ -238,9 +285,22 @@ public abstract class EntityApiOperationBinding
     /// <summary>
     /// Creates an entity transition operation binding.
     /// </summary>
+    /// <param name="endpoint">Declared endpoint to bind.</param>
+    /// <param name="plan">Compiled exact canonical Transition plan referenced by the API operation.</param>
+    /// <param name="createTransitionInput">Optional projection from HTTP request data to canonical Transition input.</param>
+    /// <param name="createResult">Required projection from commit context and effective snapshot to an HTTP result.</param>
+    /// <param name="getExpectedConcurrencyToken">Optional expected-concurrency override.</param>
+    /// <param name="createOutboxMessages">
+    /// Optional explicit projection of canonical emission intents and application messages into the entity outbox.
+    /// </param>
+    /// <returns>A binding that interprets <paramref name="plan"/> and commits its decision.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="endpoint"/>, <paramref name="plan"/>, or <paramref name="createResult"/> is
+    /// <see langword="null"/>.
+    /// </exception>
     public static EntityApiOperationBinding Transition(
         ApiEndpoint endpoint,
-        string transitionName,
+        CompiledTransitionPlan plan,
         Func<EntityApiRequestContext, object?, object?>? createTransitionInput,
         Func<EntityApiCommitContext, EntitySnapshot, IResult> createResult,
         Func<EntityApiRequestContext, object?, EntityConcurrencyToken?>? getExpectedConcurrencyToken = null,
@@ -248,7 +308,7 @@ public abstract class EntityApiOperationBinding
         ) =>
         new TransitionEntityApiOperationBinding(
             endpoint,
-            transitionName,
+            plan,
             createTransitionInput,
             createResult,
             getExpectedConcurrencyToken,
@@ -302,6 +362,16 @@ public sealed record EntityApiLoadedRequestContext(
 /// <summary>
 /// Commit context passed to create and transition response/outbox mappers.
 /// </summary>
+/// <param name="OperationContext">Current Cohesive operation context.</param>
+/// <param name="HttpContext">Current ASP.NET request context.</param>
+/// <param name="Operation">Declared API operation.</param>
+/// <param name="Entity">Semantic entity definition.</param>
+/// <param name="Repository">Resolved entity repository.</param>
+/// <param name="EntityId">Stable entity identity.</param>
+/// <param name="Request">Bound request payload, when present.</param>
+/// <param name="OldSnapshot">Snapshot loaded before the operation, or <see langword="null"/> for creates.</param>
+/// <param name="NewState">Candidate state committed or exposed to the result mapper.</param>
+/// <param name="Decision">Canonical Transition decision, or <see langword="null"/> for creates.</param>
 public sealed record EntityApiCommitContext(
     OperationContext OperationContext,
     HttpContext HttpContext,
@@ -312,5 +382,5 @@ public sealed record EntityApiCommitContext(
     object? Request,
     EntitySnapshot? OldSnapshot,
     EntityState NewState,
-    TransitionResult? Transition
+    TransitionDecision? Decision
     );

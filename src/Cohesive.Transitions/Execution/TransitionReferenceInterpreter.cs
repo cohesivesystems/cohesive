@@ -1130,7 +1130,7 @@ public static class TransitionReferenceInterpreter
             Evidence());
 
         TransitionExecutionEvidence Evidence() => new(
-            DefinitionReference(),
+            plan.DefinitionReference,
             activation.Id,
             [.. trace]);
 
@@ -1402,11 +1402,6 @@ public static class TransitionReferenceInterpreter
             contract,
             edge,
             detail));
-
-        ExecutionDefinitionReference DefinitionReference() => new(
-            plan.Document.Metadata.DefinitionId,
-            plan.Document.Metadata.RevisionId,
-            plan.Document.Metadata.Fingerprint);
 
         static TransitionRuntimeDecisionException Invalid(
             string code,

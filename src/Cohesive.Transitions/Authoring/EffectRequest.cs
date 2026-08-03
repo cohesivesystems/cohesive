@@ -3,6 +3,10 @@ namespace Cohesive.Transitions.Authoring;
 /// <summary>
 /// Effect request emitted by transitions and workflows.
 /// </summary>
+/// <remarks>
+/// Compatibility envelope retained through ARI-218. Canonical Transition emissions use exact interaction references
+/// and portable typed payloads.
+/// </remarks>
 /// <param name="Name">Effect request name.</param>
 /// <param name="Payload">Optional effect request payload.</param>
 /// <param name="Continuation">Optional continuation transition metadata.</param>

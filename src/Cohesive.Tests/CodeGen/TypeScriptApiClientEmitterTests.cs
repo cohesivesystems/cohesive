@@ -155,7 +155,7 @@ public sealed class TypeScriptApiClientEmitterTests
                 .Route("POST", "/api/shipments/{id}/dispatch")
                 .Body<DispatchShipmentRequest>()
                 .Returns<ShipmentDto>()
-                .Transition(new TransitionDefinition("Dispatch"))
+                .Transition(TransitionReference())
                 .Done()
             .Action("Health")
                 .Route("GET", "/api/health")
@@ -497,6 +497,14 @@ public sealed class TypeScriptApiClientEmitterTests
         strategy: ApiResourceScopeDerivationStrategies.StructuredResourceId,
         format: ApiResourceIdFormats.ScopedProcessInstanceId,
         scopeField: ApiResourceScopeFields.ScopeId);
+
+    static ExecutionDefinitionReference TransitionReference() => new(
+        new("Dispatch"),
+        new("revision/1"),
+        new(
+            ExecutionDefinitionFingerprinter.Algorithm,
+            ExecutionDefinitionFingerprinter.Canonicalization,
+            new string('a', 64)));
 
     static int CountOccurrences(string value, string pattern)
     {

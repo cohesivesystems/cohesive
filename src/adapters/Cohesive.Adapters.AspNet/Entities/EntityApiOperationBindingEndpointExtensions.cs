@@ -1,5 +1,6 @@
 using Cohesive.Api;
 using Cohesive.Storage;
+using Cohesive.Transitions.Compilation;
 using Cohesive.Transitions.Model;
 using Microsoft.AspNetCore.Http;
 
@@ -63,8 +64,19 @@ public static class EntityApiOperationBindingEndpointExtensions
         /// <summary>
         /// Creates an entity transition operation binding for this endpoint.
         /// </summary>
+        /// <param name="plan">Compiled exact canonical Transition plan referenced by the endpoint operation.</param>
+        /// <param name="createTransitionInput">Optional projection from HTTP request data to canonical Transition input.</param>
+        /// <param name="createResult">Required projection from commit context and effective snapshot to an HTTP result.</param>
+        /// <param name="getExpectedConcurrencyToken">Optional expected-concurrency override.</param>
+        /// <param name="createOutboxMessages">
+        /// Optional explicit projection of canonical emission intents and application messages into the entity outbox.
+        /// </param>
+        /// <returns>A binding anchored to this endpoint and exact plan.</returns>
+        /// <exception cref="ArgumentNullException">
+        /// <paramref name="plan"/> or <paramref name="createResult"/> is <see langword="null"/>.
+        /// </exception>
         public EntityApiOperationBinding Transition(
-            string transitionName,
+            CompiledTransitionPlan plan,
             Func<EntityApiRequestContext, object?, object?>? createTransitionInput,
             Func<EntityApiCommitContext, EntitySnapshot, IResult> createResult,
             Func<EntityApiRequestContext, object?, EntityConcurrencyToken?>? getExpectedConcurrencyToken = null,
@@ -72,7 +84,7 @@ public static class EntityApiOperationBindingEndpointExtensions
             ) =>
             EntityApiOperationBinding.Transition(
                 endpoint,
-                transitionName,
+                plan,
                 createTransitionInput,
                 createResult,
                 getExpectedConcurrencyToken,

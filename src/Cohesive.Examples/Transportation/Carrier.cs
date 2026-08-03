@@ -3,6 +3,10 @@ namespace Cohesive.Examples.Transportation;
 /// <summary>
 /// Example carrier entity.
 /// </summary>
+/// <remarks>
+/// This example remains an ARI-218 compatibility fixture for the superseded continuation/effect authoring surface.
+/// It is not an execution-kernel authority or a template for new integrations.
+/// </remarks>
 public sealed class Carrier : Entity
 {
     public sealed record ReserveLoadInput(string LoadId, IReadOnlyList<string> NextReservedLoads);
