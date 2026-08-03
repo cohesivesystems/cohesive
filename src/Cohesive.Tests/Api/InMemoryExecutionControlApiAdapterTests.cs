@@ -3,6 +3,8 @@ using Cohesive.Api;
 using Cohesive.Api.Execution;
 using Cohesive.Control;
 using Cohesive.Execution;
+using Cohesive.Host.Cli;
+using Cohesive.Host.Cli.Testing;
 using Cohesive.Model.Serialization;
 using Cohesive.Storage.Materialization;
 using Cohesive.Tests.ExecutionKernel;
@@ -135,7 +137,8 @@ public sealed class InMemoryExecutionControlApiAdapterTests
     }
 
     [Fact]
-    public void Explain_ReturnsCanonicalArtifactThroughSameTypedCatalogAndTrustedQueryBoundary()
+    [Trait("Category", "ExecutionKernelExample")]
+    public async Task Explain_ReturnsCanonicalArtifactThroughApiAndCliWithoutAnotherProjection()
     {
         var fixture = ProcessControlTestFixture.Create();
         var catalog = ExecutionControlApiCatalog.Create();
@@ -195,6 +198,22 @@ public sealed class InMemoryExecutionControlApiAdapterTests
         Assert.Same(artifact, response);
         Assert.Equal(TrustedAuthorization().AuthorityScope, received!.Context.Authorization.AuthorityScope);
         Assert.Equal(TrustedProvenance(), received.Context.Provenance);
+
+        var expectedJson = ExecutionExplainJsonSerializer.Serialize(
+            response,
+            PortableDocumentJsonFormatting.Indented);
+        var cli = new CliApplication("Execution operations");
+        cli.Command<ExplainCommandConfiguration>("explain", "Explain one execution")
+            .OnExecute((CliOutput output) =>
+            {
+                output.WriteLine(expectedJson);
+                return 0;
+            });
+        var cliResult = await CliApplicationTestHarness.InvokeAsync(cli, ["explain"]);
+
+        Assert.Equal(0, cliResult.ExitCode);
+        Assert.Equal(expectedJson + Environment.NewLine, cliResult.StandardOutput);
+        Assert.Equal(string.Empty, cliResult.ErrorOutput);
 
         var denied = adapter.Dispatch(
             catalog.Explain,
@@ -1302,6 +1321,8 @@ public sealed class InMemoryExecutionControlApiAdapterTests
 
     static long BatchItems(MaterializationIndexSyncControlSnapshot snapshot) =>
         snapshot.State.OperatingPoint.Get(ControlActuatorKind.BatchItems).Quantity.Value;
+
+    sealed class ExplainCommandConfiguration;
 
     sealed class MutableTimeProvider(DateTimeOffset utcNow) : TimeProvider
     {

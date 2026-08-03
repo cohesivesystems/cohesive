@@ -141,6 +141,7 @@ public sealed class CanonicalTransitionAuthoringTests
     }
 
     [Fact]
+    [Trait("Category", "ExecutionKernelExample")]
     public void AuthoredDocument_StrictRoundTripCompilesAndReferenceInterprets()
     {
         var authored = CreateAuthoredTransition();

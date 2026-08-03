@@ -33,6 +33,7 @@ expectations.
 | What does the architecture look like in complete application scenarios? | [Golden verticals](use-cases/golden-verticals.md) | End-to-end examples and intended evidence |
 | How are semantic and target claims tested? | [Conformance](quality/conformance.md) | Verification strategy |
 | Which Execution Kernel behavior exists today? | [Execution Kernel compatibility](EXECUTION_KERNEL_COMPATIBILITY.md) | Implementation compatibility inventory |
+| How do I adopt, execute, observe, and migrate to the canonical kernel? | [Execution Kernel adoption guide](EXECUTION_KERNEL_GUIDE.md) | Source-backed implementation guide and executable examples |
 | How is index synchronization operated? | [Index synchronization runbook](INDEX_SYNC_RUNBOOK.md) | Operational procedure |
 
 ## Sources of authority

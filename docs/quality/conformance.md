@@ -159,6 +159,19 @@ into a semantic definition.
 End-to-end suites should remain small and durable. Fine-grained behavior belongs lower in the test
 pyramid.
 
+The [Execution Kernel adoption guide](../EXECUTION_KERNEL_GUIDE.md) identifies a curated executable
+suite over the existing canonical Transition, durable Process, Motion DQ, index-sync, and API/CLI
+contracts. Run it without a separate tutorial runtime or example semantic model:
+
+```bash
+dotnet test src/Cohesive.Tests/Cohesive.Tests.csproj \
+  --filter 'Category=ExecutionKernelExample'
+```
+
+This category is a documentation and adoption projection of the source-backed tests. It does not
+replace the validators, compatibility scenarios, reference interpreters, or adapter conformance
+evidence that remain authoritative for their respective claims.
+
 ### 7. Runtime conformance and drift
 
 Runtime evidence can validate that a deployed realization continues to operate within its declared

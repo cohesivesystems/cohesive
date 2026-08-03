@@ -275,6 +275,7 @@ identified later.
 
 ## Related Packages
 
+- [Execution Kernel adoption and migration guide](../../docs/EXECUTION_KERNEL_GUIDE.md) for the end-to-end canonical lifecycle, executable examples, and retired-surface replacements.
 - `Cohesive.Processes` for workflows that invoke entity transitions.
 - `Cohesive.Storage` for persistence adapters.
 - `Cohesive.Analyzers` for source-generation support around semantic authoring patterns.

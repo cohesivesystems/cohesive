@@ -460,6 +460,7 @@ not provide an automatic bridge from that deleted model to canonical relation/qu
 
 ## Related Packages
 
+- [Execution Kernel adoption and migration guide](../../docs/EXECUTION_KERNEL_GUIDE.md) for durable execution and materialization examples, ownership, and migration guidance.
 - `Cohesive.Transitions` for entity state and transition models.
 - `Cohesive.Relations` for canonical relation/query semantics, evaluation, placement, and source-reader contracts.
 - `Cohesive.Processes` for canonical Process IR, continuation state, validation, and reference interpretation.

@@ -352,6 +352,11 @@ workflows remain Ari-owned work rather than new Cohesive semantics.
 
 ## Using the verticals during design
 
+The implemented Transition, durable Process, Motion DQ, and relation-derived index-sync paths are
+linked and runnable from the [Execution Kernel adoption guide](../EXECUTION_KERNEL_GUIDE.md). Those
+examples deliberately reuse production-contract tests so the verticals do not acquire a second,
+tutorial-only semantic model.
+
 For any meaningful architectural change:
 
 1. Identify the affected verticals.
@@ -365,4 +370,3 @@ For any meaningful architectural change:
 Verticals should evolve as the architecture is learned, but they should not be rewritten merely to
 avoid exposing an implementation gap. Their value is that they keep the system oriented toward
 coherent end-to-end semantics.
-
