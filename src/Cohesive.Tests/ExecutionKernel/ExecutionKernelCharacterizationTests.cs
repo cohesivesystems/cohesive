@@ -7,42 +7,12 @@ using Cohesive.Transitions.IR;
 namespace Cohesive.Tests.ExecutionKernel;
 
 /// <summary>
-/// Characterizes current canonical reference semantics against the EK-01 through EK-09 scenarios. The durable
-/// Process runtime and in-memory physical durability interpretation are executable reference oracles; they do not
-/// imply a production storage adapter or hosted runtime realization.
+/// Retains a representative canonical Transition activation that originated in the execution-kernel compatibility
+/// inventory. The complete EK-01 through EK-09 executable index is owned by
+/// <see cref="ExecutionKernelConformanceMatrixTests"/>.
 /// </summary>
 public sealed class ExecutionKernelCharacterizationTests
 {
-    static readonly IReadOnlyList<KernelScenarioClassification> ScenarioClassifications =
-    [
-        new("EK-01", KernelScenarioStatus.Pass, "Canonical structured Transition IR, path-sensitive static compilation, full-state and sparse non-I/O reference interpretation, actual execution evidence, conflict detection, and fingerprint-bound Machine-edge linking satisfy the EK-01 reference path."),
-        new("EK-02", KernelScenarioStatus.Pass, "The Motion DQ Process exercises typed task creation and a five-clause AwaitMatch over Hire, Hold, Not Eligible, cancellation, and an absolute timer. The canonical reference and durable interpretations preserve exact wait occurrences, deterministic arbitration, early, duplicate, late, stale, superseded, and missing-target reasons independently from policy dispositions, including a durable Hold cycle."),
-        new("EK-03", KernelScenarioStatus.Pass, "Seven Motion DQ branches reuse one exact provider-neutral Request contract across vendor and manual occurrences. Provider-attempt failure or timeout evidence routes to manual fulfillment without settling requirement authority, while fulfilled endogenous evaluation receipts enter one generic case-scoped requirement Transition under replay-stable durable operation identity."),
-        new("EK-04", KernelScenarioStatus.Pass, "The Motion DQ Process exercises an All/unobservable seven-way Fork/Join. Its durable conformance scenario restores after three completed branches, preserves reciprocal membership and branch-local progress, and converges without re-executing committed Request or Transition occurrences."),
-        new("EK-05", KernelScenarioStatus.Partial, "Canonical Process invocation can coordinate independent exact Transition subjects without copying aggregate state. Static compilation derives exact resource and effect evidence, structurally preflights and retains a whole-definition atomicity demand, and represents compensation and reconciliation as explicit child-Process purposes; arbitrary nested scope regions and target capability realization evidence remain absent."),
-        new("EK-06", KernelScenarioStatus.Pass, "The canonical durable runtime now realizes stable logical operation identity, fenced and renewable claims, attempt history, adapter execution outside the instance gate, acknowledgement, exact Reply admission, authored ambiguous-outcome recovery, and replay-safe atomic checkpoint, inbox, outbox, and operation-ledger commits across before/after-commit crash cuts; the in-memory store and scripted adapter provide the executable reference interpretation required by EK-06."),
-        new("EK-07", KernelScenarioStatus.Pass, "Canonical Process state and the durable runtime now admit Signals through Control as atomic inbox evidence, preserve exact wait-occurrence targets, buffer early delivery, consume one deterministic winner, persist typed duplicate and late-loser dispositions without reopening the wait, and replay both commands and activations inertly; the in-memory store provides the executable reference interpretation required by EK-07."),
-        new("EK-08", KernelScenarioStatus.Pass, "The canonical materialization Process and deterministic in-memory durability interpretation agree on every coordinator activation, stable operation identity, replay, and terminal ready-generation outcome. The Cosmos and PostgreSQL source realizations share that Process meaning while retaining distinct capability evidence. EK-06 store cuts recover generation admission, bounded baseline pages resume through exact checkpoints, incremental work durably settles before progress, ambiguous applied Elasticsearch promotion reconciles the retained intent, and explicit fenced routing resumes between candidate admission and atomic swap. Pause and Continue retain one candidate; RestartAttempt tombstones the abandoned generation before admitting a distinct replacement, and late work cannot write to the abandoned index."),
-        new("EK-09", KernelScenarioStatus.Pass, "Representative Transitions and Processes lower from typed C# to fingerprint-equivalent canonical IR, round-trip independently of their producer assemblies, and compile only from persisted execution-definition documents; the former callback and single-cursor Process authorities are no longer shipped.")
-    ];
-
-    [Fact]
-    public void EK01ThroughEK09_HaveExplicitCompatibilityClassifications()
-    {
-        Assert.Equal(
-            ["EK-01", "EK-02", "EK-03", "EK-04", "EK-05", "EK-06", "EK-07", "EK-08", "EK-09"],
-            ScenarioClassifications.Select(static scenario => scenario.Id));
-        Assert.All(ScenarioClassifications, static scenario => Assert.NotEmpty(scenario.Evidence));
-        Assert.Equal(
-            ["EK-01", "EK-02", "EK-03", "EK-04", "EK-06", "EK-07", "EK-08", "EK-09"],
-            ScenarioClassifications
-                .Where(static scenario => scenario.Status == KernelScenarioStatus.Pass)
-                .Select(static scenario => scenario.Id));
-        Assert.Equal(
-            KernelScenarioStatus.Pass,
-            Assert.Single(ScenarioClassifications, static scenario => scenario.Id == "EK-08").Status);
-    }
-
     [Fact]
     public void EK09_RepresentativeEntityTransition_UsesOnlyCanonicalDocumentActivation()
     {
@@ -93,18 +63,6 @@ public sealed class ExecutionKernelCharacterizationTests
         Assert.True(payload.TryGetProperty(nameof(ReviewEntity.ReviewDecided.IsApproved), out var approved));
         Assert.True(approved.Bool);
     }
-
-    enum KernelScenarioStatus
-    {
-        Pass,
-        Partial,
-        Absent
-    }
-
-    sealed record KernelScenarioClassification(
-        string Id,
-        KernelScenarioStatus Status,
-        string Evidence);
 
     sealed class ReviewEntity : Entity
     {
