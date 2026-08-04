@@ -486,7 +486,12 @@ public static partial class ApproveCustomerProcess
 
         if (customer.Status == "Suspended")
         {
-            return new(customer.Id, "rejected", DeliveryId: null);
+            return new(
+                customer.Id,
+                "rejected",
+                DeliveryId: null,
+                AuditReceiptId: null,
+                NotificationReceiptId: null);
         }
 
         var approval = await process.Transition<Approval>(
@@ -498,29 +503,41 @@ public static partial class ApproveCustomerProcess
             Completed,
             new WelcomeMessage(customer.Email, "Welcome " + approval.DisplayName));
 
-        async ProcessTask Audit()
+        async ProcessTask<OperationReceipt> Audit()
         {
             var receipt = await process.Effect<OperationReceipt>(
                 RecordAudit,
                 Completed,
                 new AuditMessage(customer.Id, approval.DisplayName));
+            return receipt;
         }
 
-        async ProcessTask Notify()
+        async ProcessTask<OperationReceipt> Notify()
         {
             var receipt = await process.Effect<OperationReceipt>(
                 NotifyOwner,
                 Completed,
                 new OwnerNotification(customer.Id, delivery.Id));
+            return receipt;
         }
 
-        await process.ForkJoin(Audit(), Notify());
+        var (auditReceipt, notificationReceipt) = await process.ForkJoin(Audit(), Notify());
         switch (delivery.Status)
         {
             case "sent":
-                return new(customer.Id, "approved", delivery.Id);
+                return new(
+                    customer.Id,
+                    "approved",
+                    delivery.Id,
+                    auditReceipt.Id,
+                    notificationReceipt.Id);
             default:
-                return new(customer.Id, "pending", delivery.Id);
+                return new(
+                    customer.Id,
+                    "pending",
+                    delivery.Id,
+                    auditReceipt.Id,
+                    notificationReceipt.Id);
         }
     }
 
@@ -588,4 +605,11 @@ public sealed record OperationReceipt(string Id);
 /// <param name="CustomerId">Customer identity.</param>
 /// <param name="Disposition">Approval disposition.</param>
 /// <param name="DeliveryId">Optional welcome delivery identity.</param>
-public sealed record ApproveCustomerResult(string CustomerId, string Disposition, string? DeliveryId);
+/// <param name="AuditReceiptId">Optional audit operation receipt identity.</param>
+/// <param name="NotificationReceiptId">Optional owner-notification operation receipt identity.</param>
+public sealed record ApproveCustomerResult(
+    string CustomerId,
+    string Disposition,
+    string? DeliveryId,
+    string? AuditReceiptId,
+    string? NotificationReceiptId);
