@@ -136,6 +136,44 @@ public sealed record ProcessAuthoringMetadata
 
     /// <summary>Optional human-facing description excluded from semantic fingerprinting.</summary>
     public string? Description { get; }
+
+    /// <summary>Returns metadata with the supplied derived entry identity.</summary>
+    /// <param name="entryId">Entry identity derived by a higher-level Process frontend.</param>
+    /// <returns>
+    /// This instance when it already declares the same entry; otherwise equivalent metadata carrying
+    /// <paramref name="entryId"/>.
+    /// </returns>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="entryId"/> is default, or this metadata already declares a different entry identity.
+    /// </exception>
+    public ProcessAuthoringMetadata WithEntry(ExecutionNodeId entryId)
+    {
+        if (string.IsNullOrWhiteSpace(entryId.Value))
+        {
+            throw new ArgumentException("A derived Process entry requires a stable identity.", nameof(entryId));
+        }
+
+        if (EntryId is { } existing)
+        {
+            if (existing != entryId)
+            {
+                throw new ArgumentException(
+                    $"Derived Process entry '{entryId.Value}' conflicts with metadata entry '{existing.Value}'.",
+                    nameof(entryId));
+            }
+
+            return this;
+        }
+
+        return new(
+            DefinitionId,
+            RevisionId,
+            entryId,
+            RecoveryPolicy,
+            Provenance,
+            DisplayName,
+            Description);
+    }
 }
 
 /// <summary>Versioned deterministic identities for structural constructs produced by Process authoring frontends.</summary>

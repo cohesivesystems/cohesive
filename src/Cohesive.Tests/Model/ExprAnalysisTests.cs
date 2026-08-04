@@ -892,6 +892,29 @@ public sealed class ExprAnalysisTests
     }
 
     [Fact]
+    public void Analyze_ObjectConstructionIsPresentNonNullAndRetainsItsDeclaredStructuralType()
+    {
+        var objectType = new ObjectTypeRef(
+        [
+            new("Name", StringType)
+        ]);
+        var expected = new ValueContract(objectType);
+        var result = Analyze(
+            new CallExpr(
+                ExprFunctionNames.Object,
+                [Expr.Const("Name"), Expr.Const("Ada")],
+                objectType),
+            ExprScope.Empty,
+            "object-construction",
+            new(value: expected));
+
+        Assert.True(result.IsValid);
+        Assert.Equal(objectType, result.KnownResult?.Type);
+        Assert.Equal(FieldPresence.Required, result.KnownResult?.Presence);
+        Assert.Equal(FieldNullability.NonNullable, result.KnownResult?.Nullability);
+    }
+
+    [Fact]
     public void ValueContract_RejectsMalformedShapeFieldMetadataAtConstructionBoundary()
     {
         var malformedField = new FieldDefinition(

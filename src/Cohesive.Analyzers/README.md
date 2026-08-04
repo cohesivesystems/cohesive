@@ -10,7 +10,7 @@ dotnet add package Cohesive.Analyzers
 
 ## Use When
 
-- You want source generation for Cohesive discriminated unions, code sets, quantity wrappers, or process flow authoring.
+- You want source generation for Cohesive discriminated unions, code sets, quantity wrappers, or canonical Process computation-expression authoring.
 - You want analyzer feedback for Cohesive domain authoring conventions.
 - You are building libraries that use Cohesive semantic authoring patterns and want compile-time assistance.
 

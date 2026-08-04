@@ -749,18 +749,16 @@ public static class ExprAnalyzer
             }
             if (semanticType is null && declaredResult.Value is { } declaredValueWithType)
             {
+                // Declared metadata supplies the missing type; the semantic rule remains authoritative for
+                // occurrence guarantees such as object construction being present and non-null.
                 return new(
                     reconciledCategory,
                     new ValueContract(
                         declaredValueWithType.Type,
                         declaredValueWithType.Shape,
                         declaredValueWithType.Cardinality,
-                        semanticResult.Value.Presence == FieldPresence.Optional
-                            ? FieldPresence.Optional
-                            : declaredValueWithType.Presence,
-                        semanticResult.Value.Nullability == FieldNullability.Nullable
-                            ? FieldNullability.Nullable
-                            : declaredValueWithType.Nullability),
+                        semanticResult.Value.Presence,
+                        semanticResult.Value.Nullability),
                     semanticResult.ConstantValue);
             }
 
