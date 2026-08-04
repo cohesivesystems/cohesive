@@ -8,6 +8,8 @@ workflow engine, storage system, or host-language callback.
 
 ```bash
 dotnet add package Cohesive.Processes
+# Required only for GenerateProcessDefinition computation-expression authoring:
+dotnet add package Cohesive.Analyzers
 ```
 
 ## Canonical Process IR
@@ -123,6 +125,47 @@ callbacks, services, tasks, loops, and suspended host frames cannot enter the pe
 portable values, member selectors, expressions, links, contracts, or graph shapes fail during authoring, validation,
 or static compilation with source-mapped diagnostics.
 
+### Computation-expression authoring
+
+Human-facing definitions may use ordinary C# locals, `await`, `if`/`else`, exact-value `switch`, and `return` by
+annotating a syntax-only method with `GenerateProcessDefinition`. `await` is reserved for semantic Process
+operations. Ordinary locals remain pure: the generator translates them into the fixed portable `Expr` closure and
+fuses them into the nearest query input, Transition input, Request payload, predicate, or terminal result. It emits
+hidden output bindings and canonical builder calls in `Define`; it does not emit Compute nodes, CLR delegates, or an
+executable workflow state machine.
+
+```csharp
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class ApproveCustomerProcess
+{
+    static async ProcessTask<ApproveCustomerResult> Run(
+        ProcessContext process,
+        ApproveCustomerInput input)
+    {
+        var lookup = new CustomerLookup(input.Email);
+        var customerId = await process.Query<CustomerId>(CustomerByEmail, lookup);
+        var customer = await process.Read<Customer>(CustomerById, customerId);
+
+        if (customer.Status == CustomerStatus.Suspended)
+            return new(customer.Id, ApprovalDisposition.Rejected, deliveryId: null);
+
+        var approval = await process.Transition<Approval>(
+            ApproveCustomer,
+            customer.Id,
+            new ApproveTransitionInput(input.Reason));
+        var message = new WelcomeMessage(customer.Email, "Welcome " + approval.DisplayName);
+        var delivery = await process.Effect<Delivery>(SendWelcome, WelcomeSent, message);
+        return new(customer.Id, ApprovalDisposition.Approved, delivery.Id);
+    }
+}
+```
+
+`Read` is deliberately an authoring alias for exact Relation/Query evaluation; it does not restore a separate
+Process-native entity model. `Effect` lowers to an exact Request contract and selected terminal outcome. Generated
+factories accept `ProcessAuthoringMetadata`, honor an explicit entry when it agrees with the derived entry, and
+otherwise materialize deterministic identities from semantic structure. Inserting or refactoring a pure local does
+not renumber effectful nodes.
+
 Use the explicit input/result contract overload—and explicit output contracts where needed—when top-level CLR
 generic types erase semantic optionality or nullable-reference occurrence. `CanonicalValue` is the deliberate escape
 hatch for an already-portable expression with an explicitly attested contract; canonical validation remains the
@@ -138,11 +181,15 @@ an explicit linker attestation boundary rather than a document-derived proof.
 
 ## Retired execution authority
 
-The callback-bearing `Cohesive.Processes.Model` graph, its source generator, and the single-cursor
+The callback-bearing `Cohesive.Processes.Model` graph, its runtime-delegate source generator, and the single-cursor
 `Cohesive.Processes.Runtime.ProcessCheckpoint` execution path are no longer part of the shipped assemblies. They
 cannot be selected as a compatibility fallback or interpreted by an adapter. Canonical documents compile through
 `ProcessStaticCompiler`, execute through `ProcessReferenceInterpreter`, and become durable through
 `Cohesive.Storage.Processes.ProcessDurableRuntime` and `IProcessDurableStore`.
+
+The active computation-expression generator is only a C# syntax producer for canonical IR. Its generated factory
+uses `ProcessBuilder<TInput,TResult>` and discards all construction state before returning; it is not a restoration
+of the retired callback-bearing model or runtime.
 
 The DurableTask package retains authority-neutral task-hub query projections only. A future DurableTask execution
 adapter must consume compiled canonical definitions and implement or compose the canonical durable-store boundary;

@@ -1,0 +1,1820 @@
+using System.Collections.Immutable;
+using System.Globalization;
+using System.Text;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
+using Microsoft.CodeAnalysis.Text;
+
+namespace Cohesive.Analyzers;
+
+/// <summary>Lowers syntax-only C# Process computations into canonical Process builder calls.</summary>
+[Generator]
+public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
+{
+    const string AttributeName = "Cohesive.Processes.Authoring.GenerateProcessDefinitionAttribute";
+    const string ContextName = "Cohesive.Processes.Authoring.ProcessContext";
+    const string TaskName = "Cohesive.Processes.Authoring.ProcessTask<TResult>";
+
+    static readonly SymbolDisplayFormat FullyQualifiedNullableFormat =
+        SymbolDisplayFormat.FullyQualifiedFormat.WithMiscellaneousOptions(
+            SymbolDisplayFormat.FullyQualifiedFormat.MiscellaneousOptions
+            | SymbolDisplayMiscellaneousOptions.IncludeNullableReferenceTypeModifier);
+
+    static readonly DiagnosticDescriptor ContainingTypeMustBePartial = new(
+        id: "COHPC001",
+        title: "Process computation container must be partial",
+        messageFormat: "Type '{0}' is marked with [GenerateProcessDefinition] and must be declared partial.",
+        category: "Cohesive.Processes",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    static readonly DiagnosticDescriptor UnsupportedMethodShape = new(
+        id: "COHPC002",
+        title: "Unsupported Process computation method shape",
+        messageFormat: "Process computation method '{0}' has an unsupported shape: {1}.",
+        category: "Cohesive.Processes",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    static readonly DiagnosticDescriptor UnsupportedStatement = new(
+        id: "COHPC003",
+        title: "Unsupported Process computation statement",
+        messageFormat: "Process computation method '{0}' contains an unsupported statement: {1}.",
+        category: "Cohesive.Processes",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    static readonly DiagnosticDescriptor UnsupportedPureExpression = new(
+        id: "COHPC004",
+        title: "Expression is outside the portable Process subset",
+        messageFormat: "Process computation method '{0}' contains a pure expression that cannot be fused into canonical IR: {1}.",
+        category: "Cohesive.Processes",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    static readonly DiagnosticDescriptor AuthoringMethodNotFound = new(
+        id: "COHPC005",
+        title: "Process computation method was not found",
+        messageFormat: "Type '{0}' references Process computation method '{1}', but no unique source-declared method with that name exists.",
+        category: "Cohesive.Processes",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    static readonly DiagnosticDescriptor GeneratedMemberConflict = new(
+        id: "COHPC006",
+        title: "Generated Process definition member conflicts",
+        messageFormat: "Type '{0}' already declares a member named 'Define'; the Process computation generator cannot emit its factory.",
+        category: "Cohesive.Processes",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    /// <inheritdoc />
+    public void Initialize(IncrementalGeneratorInitializationContext context)
+    {
+        var candidates = context.SyntaxProvider.ForAttributeWithMetadataName(
+                fullyQualifiedMetadataName: AttributeName,
+                predicate: static (node, _) => node is ClassDeclarationSyntax,
+                transform: static (attributeContext, _) => new Candidate(
+                    (ClassDeclarationSyntax)attributeContext.TargetNode,
+                    (INamedTypeSymbol)attributeContext.TargetSymbol))
+            .Collect();
+
+        context.RegisterSourceOutput(
+            context.CompilationProvider.Combine(candidates),
+            static (productionContext, pair) => Generate(pair.Left, pair.Right, productionContext));
+    }
+
+    static void Generate(
+        Compilation compilation,
+        ImmutableArray<Candidate> candidates,
+        SourceProductionContext productionContext)
+    {
+        HashSet<INamedTypeSymbol> seen = new(SymbolEqualityComparer.Default);
+        foreach (var candidate in candidates)
+        {
+            if (!seen.Add(candidate.Symbol))
+            {
+                continue;
+            }
+
+            GenerateCandidate(compilation, candidate, productionContext);
+        }
+    }
+
+    static void GenerateCandidate(
+        Compilation compilation,
+        Candidate candidate,
+        SourceProductionContext productionContext)
+    {
+        if (!candidate.Syntax.Modifiers.Any(static modifier => modifier.IsKind(SyntaxKind.PartialKeyword)))
+        {
+            Report(
+                productionContext,
+                ContainingTypeMustBePartial,
+                candidate.Syntax.Identifier.GetLocation(),
+                candidate.Symbol.ToDisplayString());
+            return;
+        }
+
+        if (candidate.Symbol.ContainingType is not null || candidate.Symbol.TypeParameters.Length != 0)
+        {
+            Report(
+                productionContext,
+                UnsupportedMethodShape,
+                candidate.Syntax.Identifier.GetLocation(),
+                candidate.Symbol.Name,
+                "the annotated type must be top-level and non-generic");
+            return;
+        }
+
+        if (candidate.Symbol.GetMembers("Define").Length != 0)
+        {
+            Report(
+                productionContext,
+                GeneratedMemberConflict,
+                candidate.Syntax.Identifier.GetLocation(),
+                candidate.Symbol.ToDisplayString());
+            return;
+        }
+
+        var attribute = candidate.Symbol.GetAttributes()
+            .Single(static item => item.AttributeClass?.ToDisplayString() == AttributeName);
+        var methodName = attribute.ConstructorArguments.Length == 1
+            ? attribute.ConstructorArguments[0].Value as string
+            : null;
+        var methods = string.IsNullOrWhiteSpace(methodName)
+            ? []
+            : candidate.Symbol.GetMembers(methodName!).OfType<IMethodSymbol>()
+                .Where(static method => method.DeclaringSyntaxReferences.Length == 1)
+                .ToArray();
+        if (methods.Length != 1
+            || methods[0].DeclaringSyntaxReferences[0].GetSyntax() is not MethodDeclarationSyntax methodSyntax)
+        {
+            Report(
+                productionContext,
+                AuthoringMethodNotFound,
+                candidate.Syntax.Identifier.GetLocation(),
+                candidate.Symbol.ToDisplayString(),
+                methodName ?? "<unknown>");
+            return;
+        }
+
+        var method = methods[0];
+        if (!TryValidateMethod(method, methodSyntax, productionContext, out var inputParameter, out var resultType))
+        {
+            return;
+        }
+
+        var semanticModel = compilation.GetSemanticModel(methodSyntax.SyntaxTree);
+        var parser = new FlowParser(
+            productionContext,
+            semanticModel,
+            method,
+            method.Parameters[0],
+            inputParameter);
+        if (!parser.TryParse(methodSyntax.Body!.Statements, out var body))
+        {
+            return;
+        }
+
+        var emitter = new DefinitionEmitter(
+            productionContext,
+            method,
+            inputParameter,
+            resultType,
+            parser.PureLocals,
+            parser.Awaits);
+        if (!emitter.TryEmit(body, out var generatedBody))
+        {
+            return;
+        }
+
+        var source = EmitSource(candidate, methodSyntax, inputParameter.Type, resultType, generatedBody);
+        productionContext.AddSource(
+            hintName: $"{candidate.Symbol.Name}.Define.ProcessComputation.g.cs",
+            sourceText: SourceText.From(source, Encoding.UTF8));
+    }
+
+    static bool TryValidateMethod(
+        IMethodSymbol method,
+        MethodDeclarationSyntax syntax,
+        SourceProductionContext productionContext,
+        out IParameterSymbol inputParameter,
+        out ITypeSymbol resultType)
+    {
+        inputParameter = null!;
+        resultType = null!;
+        string? failure = null;
+        if (!method.IsStatic)
+        {
+            failure = "the method must be static";
+        }
+        else if (!syntax.Modifiers.Any(static modifier => modifier.IsKind(SyntaxKind.AsyncKeyword)))
+        {
+            failure = "the method must be async";
+        }
+        else if (syntax.Body is null || syntax.ExpressionBody is not null)
+        {
+            failure = "the method must have a block body";
+        }
+        else if (method.Parameters.Length != 2
+                 || method.Parameters[0].Type.ToDisplayString() != ContextName)
+        {
+            failure = "the parameters must be '(ProcessContext process, TInput input)'";
+        }
+        else if (method.ReturnType is not INamedTypeSymbol { IsGenericType: true } task
+                 || task.ConstructedFrom.ToDisplayString() != TaskName)
+        {
+            failure = "the return type must be ProcessTask<TResult>";
+        }
+        else
+        {
+            inputParameter = method.Parameters[1];
+            resultType = ((INamedTypeSymbol)method.ReturnType).TypeArguments[0];
+        }
+
+        if (failure is null)
+        {
+            return true;
+        }
+
+        Report(
+            productionContext,
+            UnsupportedMethodShape,
+            syntax.Identifier.GetLocation(),
+            method.Name,
+            failure);
+        return false;
+    }
+
+    static string EmitSource(
+        Candidate candidate,
+        MethodDeclarationSyntax method,
+        ITypeSymbol inputType,
+        ITypeSymbol resultType,
+        GeneratedDefinition body)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("// <auto-generated />");
+        builder.AppendLine("#nullable enable");
+        foreach (var usingDirective in method.SyntaxTree.GetCompilationUnitRoot().Usings)
+        {
+            builder.AppendLine(usingDirective.NormalizeWhitespace().ToFullString());
+        }
+
+        if (!candidate.Symbol.ContainingNamespace.IsGlobalNamespace)
+        {
+            builder.Append("namespace ")
+                .Append(candidate.Symbol.ContainingNamespace.ToDisplayString())
+                .AppendLine(";")
+                .AppendLine();
+        }
+
+        if (candidate.Symbol.IsStatic)
+        {
+            builder.Append("static ");
+        }
+
+        builder.Append("partial class ").Append(candidate.Symbol.Name).AppendLine()
+            .AppendLine("{")
+            .Append("    public static global::Cohesive.Processes.Authoring.Process<")
+            .Append(FormatType(inputType)).Append(", ").Append(FormatType(resultType))
+            .AppendLine("> Define(global::Cohesive.Processes.Authoring.ProcessAuthoringMetadata metadata)")
+            .AppendLine("    {")
+            .AppendLine("        global::System.ArgumentNullException.ThrowIfNull(metadata);");
+
+        foreach (var identity in body.IdentityDeclarations)
+        {
+            builder.Append("        ").AppendLine(identity);
+        }
+
+        builder.Append("        var __metadata = metadata.WithEntry(")
+            .Append(body.EntryIdentity).AppendLine(");")
+            .Append("        return global::Cohesive.Processes.Authoring.ProcessAuthoring.Create<")
+            .Append(FormatType(inputType)).Append(", ").Append(FormatType(resultType)).AppendLine(">(")
+            .AppendLine("            metadata: __metadata,")
+            .AppendLine("            configure: __builder =>")
+            .AppendLine("            {");
+
+        foreach (var output in body.OutputDeclarations)
+        {
+            builder.Append("                ").AppendLine(output);
+        }
+
+        if (body.OutputDeclarations.Length != 0)
+        {
+            builder.AppendLine();
+        }
+
+        builder.AppendLine("                var __typeMapper = new global::Cohesive.Model.Authoring.DefaultClrTypeRefMapper();");
+        builder.AppendLine();
+        foreach (var line in body.BuilderStatements)
+        {
+            builder.Append("                ").AppendLine(line);
+        }
+
+        var location = SourceLocation(method);
+        builder.AppendLine("            },")
+            .Append("            sourceFile: ").Append(Literal(location.File)).AppendLine(",")
+            .Append("            sourceLine: ").Append(location.Line.ToString(CultureInfo.InvariantCulture)).AppendLine(",")
+            .Append("            sourceMember: ").Append(Literal(method.Identifier.ValueText)).AppendLine(");")
+            .AppendLine("    }")
+            .AppendLine("}");
+        return builder.ToString();
+    }
+
+    static string FormatType(ITypeSymbol type) => type.ToDisplayString(FullyQualifiedNullableFormat);
+
+    static string Literal(string value) => SymbolDisplay.FormatLiteral(value, quote: true);
+
+    static SourceReference SourceLocation(SyntaxNode syntax)
+    {
+        var span = syntax.GetLocation().GetLineSpan();
+        return new(
+            span.Path ?? string.Empty,
+            span.StartLinePosition.Line + 1);
+    }
+
+    static void Report(
+        SourceProductionContext context,
+        DiagnosticDescriptor descriptor,
+        Location location,
+        params object[] arguments) =>
+        context.ReportDiagnostic(Diagnostic.Create(descriptor, location, arguments));
+
+    readonly record struct Candidate(ClassDeclarationSyntax Syntax, INamedTypeSymbol Symbol);
+
+    readonly record struct SourceReference(string File, int Line);
+
+    sealed class FlowParser
+    {
+        readonly SourceProductionContext productionContext;
+        readonly SemanticModel semanticModel;
+        readonly IMethodSymbol method;
+        readonly IParameterSymbol contextParameter;
+        readonly IParameterSymbol inputParameter;
+        readonly Dictionary<ILocalSymbol, IOperation> pureLocals = new(SymbolEqualityComparer.Default);
+        readonly List<AwaitFlow> awaits = [];
+        int semanticOrdinal;
+
+        public FlowParser(
+            SourceProductionContext productionContext,
+            SemanticModel semanticModel,
+            IMethodSymbol method,
+            IParameterSymbol contextParameter,
+            IParameterSymbol inputParameter)
+        {
+            this.productionContext = productionContext;
+            this.semanticModel = semanticModel;
+            this.method = method;
+            this.contextParameter = contextParameter;
+            this.inputParameter = inputParameter;
+        }
+
+        public IReadOnlyDictionary<ILocalSymbol, IOperation> PureLocals => pureLocals;
+
+        public IReadOnlyList<AwaitFlow> Awaits => awaits;
+
+        public bool TryParse(SyntaxList<StatementSyntax> statements, out FlowBlock block) =>
+            TryParse(statements, ImmutableArray<string>.Empty, out block);
+
+        bool TryParse(
+            SyntaxList<StatementSyntax> statements,
+            ImmutableArray<string> structuralPath,
+            out FlowBlock block)
+        {
+            List<FlowStatement> flows = [];
+            var terminalObserved = false;
+            foreach (var statement in statements)
+            {
+                if (terminalObserved)
+                {
+                    return Failure(
+                        statement,
+                        "statements after an unconditional return are not supported",
+                        out block);
+                }
+
+                switch (statement)
+                {
+                    case LocalDeclarationStatementSyntax localDeclaration:
+                        if (!TryParseLocal(localDeclaration, structuralPath, out var flow))
+                        {
+                            block = null!;
+                            return false;
+                        }
+                        if (flow is not null)
+                        {
+                            flows.Add(flow);
+                        }
+
+                        break;
+
+                    case ReturnStatementSyntax returned when returned.Expression is not null:
+                        var returnedOperation = semanticModel.GetOperation(returned.Expression);
+                        if (returnedOperation is null)
+                        {
+                            return Failure(returned, "return expression could not be analyzed", out block);
+                        }
+
+                        flows.Add(new ReturnFlow(
+                            NextIdentity("return", structuralPath),
+                            returnedOperation,
+                            SourceLocation(returned),
+                            returned));
+                        terminalObserved = true;
+                        break;
+
+                    case IfStatementSyntax conditional:
+                        if (!TryParseIf(conditional, structuralPath, out var branch))
+                        {
+                            block = null!;
+                            return false;
+                        }
+                        flows.Add(branch);
+                        break;
+
+                    case SwitchStatementSyntax match:
+                        if (!TryParseSwitch(match, structuralPath, out var switchFlow))
+                        {
+                            block = null!;
+                            return false;
+                        }
+                        flows.Add(switchFlow);
+                        break;
+
+                    case BlockSyntax nested:
+                        if (!TryParse(nested.Statements, structuralPath.Add("block"), out var nestedBlock))
+                        {
+                            block = null!;
+                            return false;
+                        }
+                        flows.AddRange(nestedBlock.Statements);
+                        break;
+
+                    case EmptyStatementSyntax:
+                        break;
+
+                    default:
+                        return Failure(
+                            statement,
+                            "only pure local declarations, awaited Process operations, if/else, nested blocks, and return are supported",
+                            out block);
+                }
+            }
+
+            block = new([.. flows]);
+            return true;
+        }
+
+        bool TryParseLocal(
+            LocalDeclarationStatementSyntax declaration,
+            ImmutableArray<string> structuralPath,
+            out FlowStatement? flow)
+        {
+            flow = null;
+            if (declaration.Declaration.Variables.Count != 1)
+            {
+                return StatementFailure(declaration, "a local declaration must declare exactly one value");
+            }
+
+            var declarator = declaration.Declaration.Variables[0];
+            if (declarator.Initializer is null
+                || semanticModel.GetDeclaredSymbol(declarator) is not ILocalSymbol local
+                || semanticModel.GetOperation(declarator.Initializer.Value) is not { } operation)
+            {
+                return StatementFailure(declaration, "a local declaration requires an analyzable initializer");
+            }
+
+            operation = Strip(operation);
+            if (operation is not IAwaitOperation awaited)
+            {
+                pureLocals.Add(local, operation);
+                return true;
+            }
+
+            var awaitedOperation = Strip(awaited.Operation);
+            if (awaitedOperation is not IInvocationOperation invocation
+                || !SymbolEqualityComparer.Default.Equals(invocation.TargetMethod.ContainingType, contextParameter.Type)
+                || invocation.Instance is null
+                || Strip(invocation.Instance) is not IParameterReferenceOperation contextReference
+                || !SymbolEqualityComparer.Default.Equals(contextReference.Parameter, contextParameter))
+            {
+                return StatementFailure(
+                    declaration,
+                    "await is reserved for Query, Read, Transition, and Effect operations on the ProcessContext parameter");
+            }
+
+            var kind = invocation.TargetMethod.Name switch
+            {
+                "Query" => AwaitKind.Query,
+                "Read" => AwaitKind.Read,
+                "Transition" => AwaitKind.Transition,
+                "Effect" => AwaitKind.Effect,
+                _ => AwaitKind.Unsupported
+            };
+            if (kind == AwaitKind.Unsupported)
+            {
+                return StatementFailure(declaration, $"awaited Process operation '{invocation.TargetMethod.Name}' is not supported");
+            }
+
+            var authored = new AwaitFlow(
+                NextIdentity(kind == AwaitKind.Read ? "read" : invocation.TargetMethod.Name.ToLowerInvariant(), structuralPath, local.Name),
+                local,
+                kind,
+                invocation,
+                SourceLocation(declaration),
+                declaration,
+                $"__output_{awaits.Count.ToString(CultureInfo.InvariantCulture)}");
+            awaits.Add(authored);
+            flow = authored;
+            return true;
+        }
+
+        bool TryParseIf(
+            IfStatementSyntax conditional,
+            ImmutableArray<string> structuralPath,
+            out IfFlow flow)
+        {
+            flow = null!;
+            var condition = semanticModel.GetOperation(conditional.Condition);
+            if (condition is null)
+            {
+                return StatementFailure(conditional, "if condition could not be analyzed");
+            }
+
+            var identity = NextIdentity("choice", structuralPath);
+            if (!TryParseStatementBody(
+                    conditional.Statement,
+                    structuralPath.Add(identity.PathSegment).Add("true"),
+                    out var whenTrue))
+            {
+                return false;
+            }
+            FlowBlock? whenFalse = null;
+            if (conditional.Else is not null
+                && !TryParseStatementBody(
+                    conditional.Else.Statement,
+                    structuralPath.Add(identity.PathSegment).Add("false"),
+                    out whenFalse))
+            {
+                return false;
+            }
+
+            flow = new(identity, condition, whenTrue, whenFalse, SourceLocation(conditional), conditional);
+            return true;
+        }
+
+        bool TryParseStatementBody(
+            StatementSyntax statement,
+            ImmutableArray<string> structuralPath,
+            out FlowBlock block)
+        {
+            if (statement is BlockSyntax blockSyntax)
+            {
+                return TryParse(blockSyntax.Statements, structuralPath, out block);
+            }
+
+            return TryParse(new SyntaxList<StatementSyntax>(statement), structuralPath, out block);
+        }
+
+        bool TryParseSwitch(
+            SwitchStatementSyntax match,
+            ImmutableArray<string> structuralPath,
+            out MatchFlow flow)
+        {
+            flow = null!;
+            var value = semanticModel.GetOperation(match.Expression);
+            if (value is null)
+            {
+                return StatementFailure(match, "switch value could not be analyzed");
+            }
+
+            var identity = NextIdentity("match", structuralPath);
+            List<MatchArm> arms = [];
+            FlowBlock? fallback = null;
+            for (var sectionIndex = 0; sectionIndex < match.Sections.Count; sectionIndex++)
+            {
+                var section = match.Sections[sectionIndex];
+                var statements = section.Statements;
+                if (statements.Count != 0 && statements[statements.Count - 1] is BreakStatementSyntax)
+                {
+                    statements = SyntaxFactory.List(statements.Take(statements.Count - 1));
+                }
+
+                if (statements.Any(static statement => statement is BreakStatementSyntax))
+                {
+                    return StatementFailure(section, "switch break is supported only as the final statement of a case");
+                }
+
+                if (!TryParse(
+                        statements,
+                        structuralPath.Add(identity.PathSegment).Add($"case-{sectionIndex.ToString(CultureInfo.InvariantCulture)}"),
+                        out var sectionBody))
+                {
+                    return false;
+                }
+
+                foreach (var label in section.Labels)
+                {
+                    switch (label)
+                    {
+                        case CaseSwitchLabelSyntax @case:
+                            if (@case.Value is null || semanticModel.GetConstantValue(@case.Value) is not { HasValue: true })
+                            {
+                                return StatementFailure(
+                                    @case,
+                                    "switch cases require exact compile-time constant patterns");
+                            }
+                            arms.Add(new(@case.Value.ToString(), sectionBody, SourceLocation(@case)));
+                            break;
+                        case DefaultSwitchLabelSyntax:
+                            if (fallback is not null)
+                            {
+                                return StatementFailure(label, "a Process switch may declare only one default section");
+                            }
+
+                            fallback = sectionBody;
+                            break;
+                        default:
+                            return StatementFailure(label, "pattern and guarded switch labels are not yet supported");
+                    }
+                }
+            }
+            if (arms.Count == 0)
+            {
+                return StatementFailure(match, "switch requires at least one exact case");
+            }
+
+            flow = new(identity, value, [.. arms], fallback, SourceLocation(match), match);
+            return true;
+        }
+
+        FlowIdentity NextIdentity(
+            string role,
+            ImmutableArray<string> structuralPath,
+            string? semanticName = null)
+        {
+            var ordinal = semanticOrdinal++;
+            var segment = semanticName is null
+                ? $"{role}-{ordinal.ToString(CultureInfo.InvariantCulture)}"
+                : $"{role}-{semanticName}";
+            return new(
+                $"__node_{ordinal.ToString(CultureInfo.InvariantCulture)}",
+                ["body", .. structuralPath, segment],
+                segment);
+        }
+
+        bool StatementFailure(SyntaxNode syntax, string reason)
+        {
+            Report(
+                productionContext,
+                UnsupportedStatement,
+                syntax.GetLocation(),
+                method.Name,
+                reason);
+            return false;
+        }
+
+        bool Failure(SyntaxNode syntax, string reason, out FlowBlock block)
+        {
+            block = null!;
+            return StatementFailure(syntax, reason);
+        }
+    }
+
+    sealed class DefinitionEmitter
+    {
+        readonly SourceProductionContext productionContext;
+        readonly IMethodSymbol method;
+        readonly IParameterSymbol inputParameter;
+        readonly ITypeSymbol resultType;
+        readonly IReadOnlyDictionary<ILocalSymbol, IOperation> pureLocals;
+        readonly IReadOnlyList<AwaitFlow> awaits;
+        readonly Dictionary<ILocalSymbol, AwaitFlow> awaitByLocal;
+        readonly List<string> builderStatements = [];
+        readonly HashSet<ILocalSymbol> resolvingPureLocals = new(SymbolEqualityComparer.Default);
+        int valueOrdinal;
+
+        public DefinitionEmitter(
+            SourceProductionContext productionContext,
+            IMethodSymbol method,
+            IParameterSymbol inputParameter,
+            ITypeSymbol resultType,
+            IReadOnlyDictionary<ILocalSymbol, IOperation> pureLocals,
+            IReadOnlyList<AwaitFlow> awaits)
+        {
+            this.productionContext = productionContext;
+            this.method = method;
+            this.inputParameter = inputParameter;
+            this.resultType = resultType;
+            this.pureLocals = pureLocals;
+            this.awaits = awaits;
+            awaitByLocal = new(SymbolEqualityComparer.Default);
+            foreach (var awaited in awaits)
+            {
+                awaitByLocal.Add(awaited.Local, awaited);
+            }
+        }
+
+        public bool TryEmit(FlowBlock body, out GeneratedDefinition generated)
+        {
+            generated = null!;
+            var identities = new List<string>();
+            foreach (var statement in body.Descendants())
+            {
+                var explicitId = statement is AwaitFlow awaited
+                    ? Argument(awaited.Invocation, "id")
+                    : null;
+                var conventional =
+                    "global::Cohesive.Processes.Authoring.ProcessAuthoringIdentities.NodeFor(" +
+                    Path(statement.Identity.Path) + ")";
+                string value;
+                if (explicitId is null || explicitId.IsImplicit)
+                {
+                    value = conventional;
+                }
+                else
+                {
+                    if (!TryEmitExactArgument(explicitId, statement.Syntax, out var authoredId))
+                    {
+                        return false;
+                    }
+
+                    value = "((global::Cohesive.Execution.ExecutionNodeId?)(" + authoredId + ")) ?? " + conventional;
+                }
+                identities.Add($"var {statement.Identity.Variable} = {value};");
+            }
+
+            var outputs = awaits.Select(awaited =>
+                $"var {awaited.OutputVariable} = __builder.Output<{FormatType(awaited.Local.Type)}>(owner: {awaited.Identity.Variable}, role: \"result\", {SourceArguments(awaited.Source, method.Name)});")
+                .ToImmutableArray();
+
+            if (!TryLowerBlock(body, successor: null, out var entry) || entry is null)
+            {
+                if (entry is null)
+                {
+                    Report(
+                        productionContext,
+                        UnsupportedStatement,
+                        method.Locations[0],
+                        method.Name,
+                        "every reachable path must end in a return statement");
+                }
+                return false;
+            }
+
+            generated = new(
+                [.. identities],
+                outputs,
+                [.. builderStatements],
+                entry);
+            return true;
+        }
+
+        bool TryLowerBlock(FlowBlock block, string? successor, out string? entry)
+        {
+            entry = successor;
+            for (var index = block.Statements.Length - 1; index >= 0; index--)
+            {
+                var statement = block.Statements[index];
+                switch (statement)
+                {
+                    case ReturnFlow returned:
+                        if (!TryEmitValue(returned.Result, resultType, returned.Source, out var returnedValue))
+                        {
+                            return false;
+                        }
+
+                        builderStatements.Add(
+                            $"__builder.Return(id: {returned.Identity.Variable}, result: {returnedValue}, {SourceArguments(returned.Source, method.Name)});");
+                        entry = returned.Identity.Variable;
+                        break;
+
+                    case AwaitFlow awaited:
+                        if (entry is null)
+                        {
+                            return StatementFailure(awaited.Syntax, "an awaited operation requires a following operation or return");
+                        }
+
+                        if (!TryEmitAwait(awaited, entry))
+                        {
+                            return false;
+                        }
+
+                        entry = awaited.Identity.Variable;
+                        break;
+
+                    case IfFlow conditional:
+                        if (!TryLowerBlock(conditional.WhenTrue, entry, out var trueEntry))
+                        {
+                            return false;
+                        }
+
+                        string? falseEntry = entry;
+                        if (conditional.WhenFalse is not null
+                            && !TryLowerBlock(conditional.WhenFalse, entry, out falseEntry))
+                        {
+                            return false;
+                        }
+                        if (trueEntry is null || falseEntry is null)
+                        {
+                            return StatementFailure(conditional.Syntax, "both branches must return when no following continuation exists");
+                        }
+
+                        if (!TryEmitValue(
+                                conditional.Condition,
+                                conditional.Condition.Type!,
+                                conditional.Source,
+                                out var predicate))
+                        {
+                            return false;
+                        }
+                        var trueCase = $"__case_{conditional.Identity.Variable.Substring("__node_".Length)}";
+                        var fallback = $"__fallback_{conditional.Identity.Variable.Substring("__node_".Length)}";
+                        builderStatements.Add(
+                            $"var {trueCase} = global::Cohesive.Processes.Authoring.ProcessAuthoringIdentities.NodeFor(owner: {conditional.Identity.Variable}, role: \"when-true\");");
+                        builderStatements.Add(
+                            $"var {fallback} = global::Cohesive.Processes.Authoring.ProcessAuthoringIdentities.NodeFor(owner: {conditional.Identity.Variable}, role: \"otherwise\");");
+                        builderStatements.Add(
+                            $"__builder.Choice(id: {conditional.Identity.Variable}, selection: global::Cohesive.Execution.CaseSelection.OrderedFirstMatch, completeness: global::Cohesive.Execution.BranchCompleteness.Fallback, cases: [__builder.ChoiceCase(id: {trueCase}, predicate: {predicate}, next: __builder.Edge(owner: {trueCase}, role: \"next\", target: {trueEntry}, {SourceArguments(conditional.Source, method.Name)}), {SourceArguments(conditional.Source, method.Name)})], fallback: __builder.Fallback(id: {fallback}, next: __builder.Edge(owner: {fallback}, role: \"next\", target: {falseEntry}, {SourceArguments(conditional.Source, method.Name)}), {SourceArguments(conditional.Source, method.Name)}), {SourceArguments(conditional.Source, method.Name)});");
+                        entry = conditional.Identity.Variable;
+                        break;
+
+                    case MatchFlow match:
+                        if (!TryEmitMatch(match, entry, out var matchEntry))
+                        {
+                            return false;
+                        }
+
+                        entry = matchEntry;
+                        break;
+                }
+            }
+            return true;
+        }
+
+        bool TryEmitMatch(MatchFlow match, string? successor, out string? entry)
+        {
+            entry = null;
+            List<(MatchArm Arm, string Entry)> loweredArms = [];
+            foreach (var arm in match.Arms)
+            {
+                if (!TryLowerBlock(arm.Body, successor, out var armEntry) || armEntry is null)
+                {
+                    return StatementFailure(match.Syntax, "every switch case requires a reachable continuation");
+                }
+
+                loweredArms.Add((arm, armEntry));
+            }
+
+            string? fallbackEntry = successor;
+            if (match.Fallback is not null
+                && (!TryLowerBlock(match.Fallback, successor, out fallbackEntry) || fallbackEntry is null))
+            {
+                return StatementFailure(match.Syntax, "the switch default requires a reachable continuation");
+            }
+            if (fallbackEntry is null)
+            {
+                return StatementFailure(match.Syntax, "switch without a following continuation requires a default case");
+            }
+
+            if (!TryEmitValue(match.Value, match.Value.Type!, match.Source, out var value))
+            {
+                return false;
+            }
+
+            var suffix = match.Identity.Variable.Substring("__node_".Length);
+            List<string> cases = [];
+            for (var index = 0; index < loweredArms.Count; index++)
+            {
+                var (arm, target) = loweredArms[index];
+                var caseVariable = $"__match_case_{suffix}_{index.ToString(CultureInfo.InvariantCulture)}";
+                builderStatements.Add(
+                    $"var {caseVariable} = global::Cohesive.Processes.Authoring.ProcessAuthoringIdentities.NodeFor(owner: {match.Identity.Variable}, role: \"case-{index.ToString(CultureInfo.InvariantCulture)}\");");
+                cases.Add(
+                    $"__builder.MatchCase(id: {caseVariable}, pattern: {arm.Pattern}, next: __builder.Edge(owner: {caseVariable}, role: \"next\", target: {target}, {SourceArguments(arm.Source, method.Name)}), {SourceArguments(arm.Source, method.Name)})");
+            }
+            var fallbackVariable = $"__match_fallback_{suffix}";
+            builderStatements.Add(
+                $"var {fallbackVariable} = global::Cohesive.Processes.Authoring.ProcessAuthoringIdentities.NodeFor(owner: {match.Identity.Variable}, role: \"otherwise\");");
+            builderStatements.Add(
+                $"__builder.Match(id: {match.Identity.Variable}, selection: global::Cohesive.Execution.CaseSelection.OrderedFirstMatch, completeness: global::Cohesive.Execution.BranchCompleteness.Fallback, value: {value}, cases: [{string.Join(", ", cases)}], fallback: __builder.Fallback(id: {fallbackVariable}, next: __builder.Edge(owner: {fallbackVariable}, role: \"next\", target: {fallbackEntry}, {SourceArguments(match.Source, method.Name)}), {SourceArguments(match.Source, method.Name)}), {SourceArguments(match.Source, method.Name)});");
+            entry = match.Identity.Variable;
+            return true;
+        }
+
+        bool TryEmitAwait(AwaitFlow awaited, string successor)
+        {
+            switch (awaited.Kind)
+            {
+                case AwaitKind.Query:
+                case AwaitKind.Read:
+                    return TryEmitRelation(awaited, successor);
+                case AwaitKind.Transition:
+                    return TryEmitTransition(awaited, successor);
+                case AwaitKind.Effect:
+                    return TryEmitEffect(awaited, successor);
+                default:
+                    return StatementFailure(awaited.Syntax, "unsupported awaited Process operation");
+            }
+        }
+
+        bool TryEmitRelation(AwaitFlow awaited, string successor)
+        {
+            var relation = Argument(awaited.Invocation, "relation");
+            var input = Argument(awaited.Invocation, "input");
+            if (relation is null || input is null || !TryEmitValue(input.Value, input.Value.Type!, awaited.Source, out var inputValue))
+            {
+                return StatementFailure(awaited.Syntax, "Query and Read require an exact relation and a portable input");
+            }
+
+            if (!TryEmitExactArgument(relation, awaited.Syntax, out var relationReference))
+            {
+                return false;
+            }
+
+            builderStatements.Add(
+                $"__builder.EvaluateRelation(id: {awaited.Identity.Variable}, relation: {relationReference}, input: {inputValue}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {awaited.Identity.Variable}, role: \"next\", target: {successor}, {SourceArguments(awaited.Source, method.Name)}), output: {awaited.OutputVariable}, {SourceArguments(awaited.Source, method.Name)}), {SourceArguments(awaited.Source, method.Name)});");
+            return true;
+        }
+
+        bool TryEmitTransition(AwaitFlow awaited, string successor)
+        {
+            var transition = Argument(awaited.Invocation, "transition");
+            var subject = Argument(awaited.Invocation, "subject");
+            var input = Argument(awaited.Invocation, "input");
+            if (transition is null || subject is null || input is null
+                || !TryEmitValue(subject.Value, subject.Value.Type!, awaited.Source, out var subjectValue)
+                || !TryEmitValue(input.Value, input.Value.Type!, awaited.Source, out var inputValue))
+            {
+                return StatementFailure(awaited.Syntax, "Transition requires an exact definition, portable subject, and portable input");
+            }
+            if (!TryEmitExactArgument(transition, awaited.Syntax, out var transitionReference))
+            {
+                return false;
+            }
+
+            builderStatements.Add(
+                $"__builder.InvokeTransition(id: {awaited.Identity.Variable}, transition: {transitionReference}, subject: {subjectValue}, input: {inputValue}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {awaited.Identity.Variable}, role: \"next\", target: {successor}, {SourceArguments(awaited.Source, method.Name)}), output: {awaited.OutputVariable}, {SourceArguments(awaited.Source, method.Name)}), {SourceArguments(awaited.Source, method.Name)});");
+            return true;
+        }
+
+        bool TryEmitEffect(AwaitFlow awaited, string successor)
+        {
+            var contract = Argument(awaited.Invocation, "contract");
+            var outcome = Argument(awaited.Invocation, "outcome");
+            var input = Argument(awaited.Invocation, "input");
+            if (contract is null || outcome is null || input is null
+                || !TryEmitValue(input.Value, input.Value.Type!, awaited.Source, out var payload))
+            {
+                return StatementFailure(awaited.Syntax, "Effect requires an exact Request contract, outcome, and portable payload");
+            }
+            if (!TryEmitExactArgument(contract, awaited.Syntax, out var requestContract)
+                || !TryEmitExactArgument(outcome, awaited.Syntax, out var terminalOutcome))
+            {
+                return false;
+            }
+            var suffix = awaited.Identity.Variable.Substring("__node_".Length);
+            var outcomeVariable = $"__outcome_{suffix}";
+            builderStatements.Add(
+                $"var {outcomeVariable} = global::Cohesive.Processes.Authoring.ProcessAuthoringIdentities.NodeFor(owner: {awaited.Identity.Variable}, role: \"outcome\");");
+            builderStatements.Add(
+                $"__builder.Request(id: {awaited.Identity.Variable}, contract: {requestContract}, payload: {payload}, outcomes: [__builder.RequestOutcome(id: {outcomeVariable}, outcome: {terminalOutcome}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {outcomeVariable}, role: \"next\", target: {successor}, {SourceArguments(awaited.Source, method.Name)}), output: {awaited.OutputVariable}, {SourceArguments(awaited.Source, method.Name)}), {SourceArguments(awaited.Source, method.Name)})], {SourceArguments(awaited.Source, method.Name)});");
+            return true;
+        }
+
+        bool TryEmitExactArgument(
+            IArgumentOperation argument,
+            SyntaxNode syntax,
+            out string expression)
+        {
+            var operation = Strip(argument.Value);
+            HashSet<ILocalSymbol> observed = new(SymbolEqualityComparer.Default);
+            while (operation is ILocalReferenceOperation local
+                   && pureLocals.TryGetValue(local.Local, out var initializer))
+            {
+                if (!observed.Add(local.Local))
+                {
+                    expression = string.Empty;
+                    return StatementFailure(syntax, "exact semantic-reference locals form a cycle");
+                }
+                operation = Strip(initializer);
+            }
+            foreach (var candidate in SelfAndDescendants(operation))
+            {
+                if (candidate is IParameterReferenceOperation or ILocalReferenceOperation)
+                {
+                    expression = string.Empty;
+                    return StatementFailure(
+                        syntax,
+                        "exact definition, contract, outcome, and node identities cannot depend on runtime bindings");
+                }
+            }
+            expression = $"({operation.Syntax})";
+            return true;
+        }
+
+        bool TryEmitValue(
+            IOperation operation,
+            ITypeSymbol type,
+            SourceReference source,
+            out string valueVariable)
+        {
+            valueVariable = string.Empty;
+            var authoredOperation = Strip(operation);
+            if (authoredOperation is ILocalReferenceOperation local
+                && pureLocals.TryGetValue(local.Local, out var initializer))
+            {
+                source = SourceLocation(initializer.Syntax);
+            }
+            var translator = new PureExpressionEmitter(
+                method,
+                inputParameter,
+                pureLocals,
+                awaitByLocal,
+                resolvingPureLocals);
+            if (!translator.TryEmit(operation, out var expression, out var failure))
+            {
+                Report(
+                    productionContext,
+                    UnsupportedPureExpression,
+                    operation.Syntax.GetLocation(),
+                    method.Name,
+                    failure);
+                return false;
+            }
+
+            valueVariable = $"__value_{valueOrdinal++.ToString(CultureInfo.InvariantCulture)}";
+            var nullability = type is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T }
+                ? "global::Cohesive.Model.FieldNullability.Nullable"
+                : "global::Cohesive.Model.FieldNullability.NonNullable";
+            builderStatements.Add(
+                $"var {valueVariable} = __builder.CanonicalValue<{FormatType(type)}>(expression: {expression}, contract: new global::Cohesive.Model.ValueContract(type: __typeMapper.Map(clrType: typeof({FormatType(type)}), nullability: null), nullability: {nullability}), {SourceArguments(source, method.Name)});");
+            return true;
+        }
+
+        bool StatementFailure(SyntaxNode syntax, string reason)
+        {
+            Report(
+                productionContext,
+                UnsupportedStatement,
+                syntax.GetLocation(),
+                method.Name,
+                reason);
+            return false;
+        }
+
+        static IEnumerable<IOperation> SelfAndDescendants(IOperation operation)
+        {
+            yield return operation;
+            foreach (var child in operation.ChildOperations)
+            {
+                foreach (var descendant in SelfAndDescendants(child))
+                {
+                    yield return descendant;
+                }
+            }
+        }
+    }
+
+    sealed class PureExpressionEmitter
+    {
+        readonly IMethodSymbol method;
+        readonly IParameterSymbol inputParameter;
+        readonly IReadOnlyDictionary<ILocalSymbol, IOperation> pureLocals;
+        readonly IReadOnlyDictionary<ILocalSymbol, AwaitFlow> awaits;
+        readonly HashSet<ILocalSymbol> resolving;
+
+        public PureExpressionEmitter(
+            IMethodSymbol method,
+            IParameterSymbol inputParameter,
+            IReadOnlyDictionary<ILocalSymbol, IOperation> pureLocals,
+            IReadOnlyDictionary<ILocalSymbol, AwaitFlow> awaits,
+            HashSet<ILocalSymbol> resolving)
+        {
+            this.method = method;
+            this.inputParameter = inputParameter;
+            this.pureLocals = pureLocals;
+            this.awaits = awaits;
+            this.resolving = resolving;
+        }
+
+        public bool TryEmit(IOperation operation, out string expression, out string failure)
+        {
+            operation = Strip(operation);
+            if (operation is IPropertyReferenceOperation pureMember
+                && TryResolvePureMember(pureMember, out var projected))
+            {
+                return TryEmit(projected, out expression, out failure);
+            }
+            if (TryEmitCount(operation, out expression, out failure))
+            {
+                return true;
+            }
+
+            if (TryEmitBindingPath(operation, out expression))
+            {
+                failure = string.Empty;
+                return true;
+            }
+
+            switch (operation)
+            {
+                case IParameterReferenceOperation parameter
+                    when SymbolEqualityComparer.Default.Equals(parameter.Parameter, inputParameter):
+                    expression = "__builder.Input.Expression";
+                    failure = string.Empty;
+                    return true;
+
+                case ILocalReferenceOperation local when awaits.TryGetValue(local.Local, out var awaited):
+                    expression = awaited.OutputVariable + ".Expression";
+                    failure = string.Empty;
+                    return true;
+
+                case ILocalReferenceOperation local when pureLocals.TryGetValue(local.Local, out var initializer):
+                    if (!resolving.Add(local.Local))
+                    {
+                        return Failure("pure local definitions form a cycle", out expression, out failure);
+                    }
+
+                    try
+                    {
+                        return TryEmit(initializer, out expression, out failure);
+                    }
+                    finally
+                    {
+                        resolving.Remove(local.Local);
+                    }
+
+                case ILiteralOperation literal:
+                    return TryEmitConstant(literal.ConstantValue, literal.Type, out expression, out failure);
+
+                case IFieldReferenceOperation field when field.ConstantValue.HasValue:
+                    return TryEmitConstant(field.ConstantValue, field.Type, out expression, out failure);
+
+                case IUnaryOperation unary when unary.OperatorKind == UnaryOperatorKind.Not:
+                    if (!TryEmit(unary.Operand, out var operand, out failure))
+                    {
+                        expression = string.Empty;
+                        return false;
+                    }
+                    expression = $"global::Cohesive.Model.Expr.Not({operand})";
+                    return true;
+
+                case IBinaryOperation binary:
+                    return TryEmitBinary(binary, out expression, out failure);
+
+                case IConditionalOperation conditional:
+                    if (conditional.WhenFalse is null)
+                    {
+                        return Failure("conditional expression requires both alternatives", out expression, out failure);
+                    }
+
+                    if (!TryEmit(conditional.Condition, out var condition, out failure)
+                        || !TryEmit(conditional.WhenTrue, out var whenTrue, out failure)
+                        || !TryEmit(conditional.WhenFalse, out var whenFalse, out failure))
+                    {
+                        expression = string.Empty;
+                        return false;
+                    }
+                    expression =
+                        $"new global::Cohesive.Model.ConditionalExpr(test: {condition}, ifTrue: {whenTrue}, ifFalse: {whenFalse}, returnType: {ReturnType(conditional.Type)})";
+                    return true;
+
+                case IObjectCreationOperation creation:
+                    return TryEmitObject(creation, out expression, out failure);
+
+                case IInterpolatedStringOperation interpolation:
+                    return TryEmitInterpolation(interpolation, out expression, out failure);
+
+                case IInvocationOperation invocation:
+                    return TryEmitInvocation(invocation, out expression, out failure);
+            }
+
+            return Failure(
+                $"'{operation.Kind}' ({operation.Syntax}) is outside the fixed portable expression closure",
+                out expression,
+                out failure);
+        }
+
+        bool TryEmitBinary(IBinaryOperation binary, out string expression, out string failure)
+        {
+            if (binary.OperatorKind == BinaryOperatorKind.Add
+                && binary.Type?.SpecialType == SpecialType.System_String)
+            {
+                List<IOperation> parts = [];
+                CollectConcat(binary, parts);
+                List<string> emitted = [];
+                foreach (var part in parts)
+                {
+                    if (!TryEmit(part, out var value, out failure))
+                    {
+                        expression = string.Empty;
+                        return false;
+                    }
+                    emitted.Add(value);
+                }
+                expression =
+                    $"new global::Cohesive.Model.CallExpr(function: global::Cohesive.Model.ExprFunctionNames.Concat, arguments: [{string.Join(", ", emitted)}], returnType: {ReturnType(binary.Type)})";
+                failure = string.Empty;
+                return true;
+            }
+            if (!TryEmit(binary.LeftOperand, out var left, out failure)
+                || !TryEmit(binary.RightOperand, out var right, out failure))
+            {
+                expression = string.Empty;
+                return false;
+            }
+
+            var operation = binary.OperatorKind switch
+            {
+                BinaryOperatorKind.Equals => "Eq",
+                BinaryOperatorKind.NotEquals => "Ne",
+                BinaryOperatorKind.GreaterThan => "Gt",
+                BinaryOperatorKind.GreaterThanOrEqual => "Ge",
+                BinaryOperatorKind.LessThan => "Lt",
+                BinaryOperatorKind.LessThanOrEqual => "Le",
+                BinaryOperatorKind.ConditionalAnd => "And",
+                BinaryOperatorKind.ConditionalOr => "Or",
+                BinaryOperatorKind.Add when binary.Type?.SpecialType != SpecialType.System_String => "Add",
+                BinaryOperatorKind.Subtract => "Sub",
+                BinaryOperatorKind.Multiply => "Mul",
+                BinaryOperatorKind.Divide => "Div",
+                _ => null
+            };
+            if (operation is null)
+            {
+                return Failure($"binary operator '{binary.OperatorKind}' is not portable", out expression, out failure);
+            }
+
+            expression = $"global::Cohesive.Model.Expr.{operation}({left}, {right})";
+            failure = string.Empty;
+            return true;
+        }
+
+        bool TryEmitObject(IObjectCreationOperation creation, out string expression, out string failure)
+        {
+            if (creation.Constructor is null)
+            {
+                return Failure("object creation requires a named constructor", out expression, out failure);
+            }
+
+            List<(string Name, IOperation Value)> members = [];
+            foreach (var argument in creation.Arguments)
+            {
+                if (argument.Parameter is null)
+                {
+                    return Failure("object constructor arguments must map to named parameters", out expression, out failure);
+                }
+
+                var property = creation.Type?.GetMembers().OfType<IPropertySymbol>()
+                    .SingleOrDefault(candidate =>
+                        !candidate.IsStatic
+                        && candidate.GetMethod is not null
+                        && SymbolEqualityComparer.Default.Equals(candidate.Type, argument.Parameter.Type)
+                        && string.Equals(candidate.Name, argument.Parameter.Name, StringComparison.OrdinalIgnoreCase));
+                members.Add((SerializedName(property) ?? argument.Parameter.Name, argument.Value));
+            }
+            if (creation.Initializer is not null)
+            {
+                foreach (var initializer in creation.Initializer.Initializers)
+                {
+                    if (initializer is not ISimpleAssignmentOperation assignment
+                        || Strip(assignment.Target) is not IPropertyReferenceOperation property)
+                    {
+                        return Failure(
+                            "object initializers support only named property assignments",
+                            out expression,
+                            out failure);
+                    }
+                    members.Add((SerializedName(property.Property) ?? property.Property.Name, assignment.Value));
+                }
+            }
+            members.Sort(static (left, right) => StringComparer.Ordinal.Compare(left.Name, right.Name));
+            for (var index = 1; index < members.Count; index++)
+            {
+                if (string.Equals(members[index - 1].Name, members[index].Name, StringComparison.Ordinal))
+                {
+                    return Failure(
+                        $"object creation assigns semantic field '{members[index].Name}' more than once",
+                        out expression,
+                        out failure);
+                }
+            }
+            List<string> arguments = [];
+            foreach (var member in members)
+            {
+                if (!TryEmit(member.Value, out var value, out failure))
+                {
+                    expression = string.Empty;
+                    return false;
+                }
+                arguments.Add($"global::Cohesive.Model.Expr.Const({Literal(member.Name)})");
+                arguments.Add(value);
+            }
+            expression =
+                $"new global::Cohesive.Model.CallExpr(function: global::Cohesive.Model.ExprFunctionNames.Object, arguments: [{string.Join(", ", arguments)}], returnType: {ReturnType(creation.Type)})";
+            failure = string.Empty;
+            return true;
+        }
+
+        bool TryEmitInterpolation(
+            IInterpolatedStringOperation interpolation,
+            out string expression,
+            out string failure)
+        {
+            List<string> arguments = [];
+            foreach (var part in interpolation.Parts)
+            {
+                switch (part)
+                {
+                    case IInterpolatedStringTextOperation text:
+                        if (!TryEmitConstant(text.Text.ConstantValue, text.Text.Type, out var literal, out failure))
+                        {
+                            expression = string.Empty;
+                            return false;
+                        }
+                        arguments.Add(literal);
+                        break;
+                    case IInterpolationOperation item:
+                        if (item.FormatString is not null || item.Alignment is not null)
+                        {
+                            return Failure("formatted interpolation is not in the portable text subset", out expression, out failure);
+                        }
+
+                        if (item.Expression.Type?.SpecialType != SpecialType.System_String)
+                        {
+                            return Failure("interpolation currently requires string operands", out expression, out failure);
+                        }
+
+                        if (!TryEmit(item.Expression, out var value, out failure))
+                        {
+                            expression = string.Empty;
+                            return false;
+                        }
+                        arguments.Add(value);
+                        break;
+                }
+            }
+            expression =
+                $"new global::Cohesive.Model.CallExpr(function: global::Cohesive.Model.ExprFunctionNames.Concat, arguments: [{string.Join(", ", arguments)}], returnType: {ReturnType(interpolation.Type)})";
+            failure = string.Empty;
+            return true;
+        }
+
+        bool TryEmitInvocation(IInvocationOperation invocation, out string expression, out string failure)
+        {
+            string? function = null;
+            var arguments = new List<IOperation>();
+            if (invocation.TargetMethod.ContainingType.SpecialType == SpecialType.System_String
+                && invocation.Instance is not null
+                && invocation.Arguments.Length == 1)
+            {
+                function = invocation.TargetMethod.Name switch
+                {
+                    "StartsWith" => "StartsWith",
+                    "EndsWith" => "EndsWith",
+                    "Contains" => "TextContains",
+                    _ => null
+                };
+                if (function is not null)
+                {
+                    arguments.Add(invocation.Instance);
+                    arguments.Add(invocation.Arguments[0].Value);
+                }
+            }
+            else if (invocation.TargetMethod.Name == "Contains"
+                     && invocation.TargetMethod.ContainingNamespace.ToDisplayString() == "System.Linq"
+                     && invocation.Arguments.Length == 2)
+            {
+                function = "Contains";
+                arguments.Add(invocation.Arguments[0].Value);
+                arguments.Add(invocation.Arguments[1].Value);
+            }
+            else if (invocation.TargetMethod.Name == "Contains"
+                     && invocation.Instance is not null
+                     && invocation.Arguments.Length == 1
+                     && IsCollection(invocation.Instance.Type))
+            {
+                function = "Contains";
+                arguments.Add(invocation.Instance);
+                arguments.Add(invocation.Arguments[0].Value);
+            }
+            else if (invocation.TargetMethod.IsStatic
+                     && invocation.TargetMethod.ContainingType.SpecialType == SpecialType.System_String
+                     && invocation.TargetMethod.Name == "Concat"
+                     && invocation.Arguments.Length != 0)
+            {
+                function = "Concat";
+                arguments.AddRange(invocation.Arguments.Select(static argument => argument.Value));
+            }
+            if (function is null)
+            {
+                return Failure($"method '{invocation.TargetMethod.ToDisplayString()}' is not portable", out expression, out failure);
+            }
+
+            List<string> emitted = [];
+            foreach (var argument in arguments)
+            {
+                if (!TryEmit(argument, out var value, out failure))
+                {
+                    expression = string.Empty;
+                    return false;
+                }
+                emitted.Add(value);
+            }
+            expression =
+                $"new global::Cohesive.Model.CallExpr(function: global::Cohesive.Model.ExprFunctionNames.{function}, arguments: [{string.Join(", ", emitted)}], returnType: {ReturnType(invocation.Type)})";
+            failure = string.Empty;
+            return true;
+        }
+
+        bool TryEmitCount(IOperation operation, out string expression, out string failure)
+        {
+            IOperation? source = operation switch
+            {
+                IPropertyReferenceOperation property
+                    when property.Property.Name == "Count"
+                         && property.Instance is not null
+                         && IsCollection(property.Instance.Type) => property.Instance,
+                IInvocationOperation invocation
+                    when invocation.TargetMethod.Name == "Count"
+                         && invocation.TargetMethod.ContainingNamespace.ToDisplayString() == "System.Linq"
+                         && invocation.Arguments.Length == 1 => invocation.Arguments[0].Value,
+                _ => null
+            };
+            if (source is null)
+            {
+                expression = string.Empty;
+                failure = string.Empty;
+                return false;
+            }
+            if (!TryEmit(source, out var collection, out failure))
+            {
+                expression = string.Empty;
+                return false;
+            }
+            expression =
+                $"new global::Cohesive.Model.CallExpr(function: global::Cohesive.Model.ExprFunctionNames.Count, arguments: [{collection}], returnType: __typeMapper.Map(clrType: typeof(long), nullability: null))";
+            return true;
+        }
+
+        bool TryResolvePureMember(IPropertyReferenceOperation property, out IOperation value)
+        {
+            value = null!;
+            if (property.Instance is null)
+            {
+                return false;
+            }
+
+            var instance = Strip(property.Instance);
+            if (instance is ILocalReferenceOperation local
+                && pureLocals.TryGetValue(local.Local, out var initializer))
+            {
+                instance = Strip(initializer);
+            }
+            else if (instance is IPropertyReferenceOperation parent
+                     && TryResolvePureMember(parent, out var parentValue))
+            {
+                instance = Strip(parentValue);
+            }
+
+            if (instance is not IObjectCreationOperation creation)
+            {
+                return false;
+            }
+
+            foreach (var argument in creation.Arguments)
+            {
+                if (argument.Parameter is null)
+                {
+                    continue;
+                }
+
+                var candidate = creation.Type?.GetMembers().OfType<IPropertySymbol>()
+                    .SingleOrDefault(member =>
+                        !member.IsStatic
+                        && member.GetMethod is not null
+                        && SymbolEqualityComparer.Default.Equals(member.Type, argument.Parameter.Type)
+                        && string.Equals(member.Name, argument.Parameter.Name, StringComparison.OrdinalIgnoreCase));
+                if (!SymbolEqualityComparer.Default.Equals(candidate, property.Property))
+                {
+                    continue;
+                }
+
+                value = argument.Value;
+                return true;
+            }
+            if (creation.Initializer is null)
+            {
+                return false;
+            }
+
+            foreach (var memberInitializer in creation.Initializer.Initializers)
+            {
+                if (memberInitializer is not ISimpleAssignmentOperation assignment
+                    || Strip(assignment.Target) is not IPropertyReferenceOperation target
+                    || !SymbolEqualityComparer.Default.Equals(target.Property, property.Property))
+                {
+                    continue;
+                }
+                value = assignment.Value;
+                return true;
+            }
+            return false;
+        }
+
+        static void CollectConcat(IOperation operation, List<IOperation> parts)
+        {
+            operation = Strip(operation);
+            if (operation is IBinaryOperation binary
+                && binary.OperatorKind == BinaryOperatorKind.Add
+                && binary.Type?.SpecialType == SpecialType.System_String)
+            {
+                CollectConcat(binary.LeftOperand, parts);
+                CollectConcat(binary.RightOperand, parts);
+                return;
+            }
+            if (operation is IInvocationOperation invocation
+                && invocation.TargetMethod.IsStatic
+                && invocation.TargetMethod.ContainingType.SpecialType == SpecialType.System_String
+                && invocation.TargetMethod.Name == "Concat")
+            {
+                foreach (var argument in invocation.Arguments)
+                {
+                    CollectConcat(argument.Value, parts);
+                }
+
+                return;
+            }
+            parts.Add(operation);
+        }
+
+        static bool IsCollection(ITypeSymbol? type) =>
+            type is not null
+            && type.SpecialType != SpecialType.System_String
+            && (type.AllInterfaces.Any(static candidate =>
+                    candidate.SpecialType == SpecialType.System_Collections_IEnumerable
+                    || candidate.OriginalDefinition.SpecialType == SpecialType.System_Collections_Generic_IEnumerable_T)
+                || type.SpecialType == SpecialType.System_Collections_IEnumerable);
+
+        bool TryEmitBindingPath(IOperation operation, out string expression)
+        {
+            List<string> segments = [];
+            var current = operation;
+            while (true)
+            {
+                current = Strip(current);
+                switch (current)
+                {
+                    case IPropertyReferenceOperation property when property.Instance is not null:
+                        segments.Add(SerializedName(property.Property) ?? property.Property.Name);
+                        current = property.Instance;
+                        continue;
+                    case IParameterReferenceOperation parameter
+                        when SymbolEqualityComparer.Default.Equals(parameter.Parameter, inputParameter):
+                        segments.Reverse();
+                        expression = BindingField("__builder.Input.Binding", segments);
+                        return segments.Count != 0;
+                    case ILocalReferenceOperation local when awaits.TryGetValue(local.Local, out var awaited):
+                        segments.Reverse();
+                        expression = BindingField(awaited.OutputVariable + ".Binding", segments);
+                        return segments.Count != 0;
+                    default:
+                        expression = string.Empty;
+                        return false;
+                }
+            }
+        }
+
+        static string BindingField(string binding, IReadOnlyList<string> segments) =>
+            $"global::Cohesive.Model.Expr.Field(binding: {binding}, path: new global::Cohesive.Model.FieldPath([{string.Join(", ", segments.Select(segment => $"global::Cohesive.Model.FieldPathSegment.ForField({Literal(segment)})"))}]))";
+
+        static bool TryEmitConstant(
+            Optional<object?> constant,
+            ITypeSymbol? type,
+            out string expression,
+            out string failure)
+        {
+            if (!constant.HasValue)
+            {
+                return Failure("value is not a compile-time portable constant", out expression, out failure);
+            }
+
+            var value = constant.Value;
+            if (value is null)
+            {
+                expression = "global::Cohesive.Model.Expr.Null()";
+                failure = string.Empty;
+                return true;
+            }
+            if (type?.TypeKind == TypeKind.Enum)
+            {
+                var enumMember = type.GetMembers().OfType<IFieldSymbol>()
+                    .FirstOrDefault(field => field.HasConstantValue && Equals(field.ConstantValue, value));
+                if (enumMember is null)
+                {
+                    return Failure("enum constant has no stable declared name", out expression, out failure);
+                }
+
+                expression = $"global::Cohesive.Model.Expr.Const({Literal(enumMember.Name)})";
+                failure = string.Empty;
+                return true;
+            }
+            expression = value switch
+            {
+                string text => $"global::Cohesive.Model.Expr.Const({Literal(text)})",
+                char character => $"global::Cohesive.Model.Expr.Const({Literal(character.ToString())})",
+                bool boolean => $"global::Cohesive.Model.Expr.Const({(boolean ? "true" : "false")})",
+                sbyte or byte or short or ushort or int =>
+                    $"global::Cohesive.Model.Expr.Const({Convert.ToInt32(value, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture)})",
+                uint or long =>
+                    $"global::Cohesive.Model.Expr.Const({Convert.ToInt64(value, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture)}L)",
+                float single =>
+                    $"global::Cohesive.Model.Expr.Const({single.ToString("R", CultureInfo.InvariantCulture)}F)",
+                double @double =>
+                    $"global::Cohesive.Model.Expr.Const({@double.ToString("R", CultureInfo.InvariantCulture)})",
+                decimal @decimal =>
+                    $"global::Cohesive.Model.Expr.Const({@decimal.ToString(CultureInfo.InvariantCulture)}M)",
+                _ => string.Empty
+            };
+            if (expression.Length == 0)
+            {
+                return Failure($"constant type '{value.GetType().Name}' is not portable", out expression, out failure);
+            }
+
+            failure = string.Empty;
+            return true;
+        }
+
+        static string? SerializedName(ISymbol? member)
+        {
+            if (member is null)
+            {
+                return null;
+            }
+
+            var attribute = member.GetAttributes().FirstOrDefault(static item =>
+                item.AttributeClass?.ToDisplayString() == "System.Text.Json.Serialization.JsonPropertyNameAttribute");
+            return attribute?.ConstructorArguments.Length == 1
+                ? attribute.ConstructorArguments[0].Value as string
+                : member.Name;
+        }
+
+        static string ReturnType(ITypeSymbol? type) =>
+            $"__typeMapper.Map(clrType: typeof({FormatType(type ?? throw new InvalidOperationException("A portable expression requires a CLR result type."))}), nullability: null)";
+
+        static bool Failure(string reason, out string expression, out string failure)
+        {
+            expression = string.Empty;
+            failure = reason;
+            return false;
+        }
+    }
+
+    static IOperation Strip(IOperation operation)
+    {
+        while (true)
+        {
+            switch (operation)
+            {
+                case IConversionOperation conversion:
+                    operation = conversion.Operand;
+                    continue;
+                case IParenthesizedOperation parenthesized:
+                    operation = parenthesized.Operand;
+                    continue;
+                default:
+                    return operation;
+            }
+        }
+    }
+
+    static IArgumentOperation? Argument(IInvocationOperation invocation, string name) =>
+        invocation.Arguments.FirstOrDefault(argument =>
+            string.Equals(argument.Parameter?.Name, name, StringComparison.Ordinal));
+
+    static string SourceArguments(SourceReference source, string member) =>
+        $"sourceFile: {Literal(source.File)}, sourceLine: {source.Line.ToString(CultureInfo.InvariantCulture)}, sourceMember: {Literal(member)}";
+
+    static string Path(ImmutableArray<string> segments) =>
+        $"new global::Cohesive.Execution.ExecutionSemanticPath([{string.Join(", ", segments.Select(Literal))}])";
+
+    readonly record struct FlowIdentity(
+        string Variable,
+        ImmutableArray<string> Path,
+        string PathSegment);
+
+    abstract record FlowStatement(
+        FlowIdentity Identity,
+        SourceReference Source,
+        SyntaxNode Syntax);
+
+    sealed record AwaitFlow(
+        FlowIdentity Identity,
+        ILocalSymbol Local,
+        AwaitKind Kind,
+        IInvocationOperation Invocation,
+        SourceReference Source,
+        SyntaxNode Syntax,
+        string OutputVariable)
+        : FlowStatement(Identity, Source, Syntax);
+
+    sealed record ReturnFlow(
+        FlowIdentity Identity,
+        IOperation Result,
+        SourceReference Source,
+        SyntaxNode Syntax)
+        : FlowStatement(Identity, Source, Syntax);
+
+    sealed record IfFlow(
+        FlowIdentity Identity,
+        IOperation Condition,
+        FlowBlock WhenTrue,
+        FlowBlock? WhenFalse,
+        SourceReference Source,
+        SyntaxNode Syntax)
+        : FlowStatement(Identity, Source, Syntax);
+
+    sealed record FlowBlock(ImmutableArray<FlowStatement> Statements)
+    {
+        public IEnumerable<FlowStatement> Descendants()
+        {
+            foreach (var statement in Statements)
+            {
+                yield return statement;
+                if (statement is not IfFlow conditional)
+                {
+                    if (statement is not MatchFlow match)
+                    {
+                        continue;
+                    }
+
+                    foreach (var arm in match.Arms)
+                    {
+                        foreach (var nested in arm.Body.Descendants())
+                        {
+                            yield return nested;
+                        }
+                    }
+
+                    if (match.Fallback is null)
+                    {
+                        continue;
+                    }
+
+                    foreach (var nested in match.Fallback.Descendants())
+                    {
+                        yield return nested;
+                    }
+                }
+                else
+                {
+                    foreach (var nested in conditional.WhenTrue.Descendants())
+                    {
+                        yield return nested;
+                    }
+
+                    if (conditional.WhenFalse is null)
+                    {
+                        continue;
+                    }
+
+                    foreach (var nested in conditional.WhenFalse.Descendants())
+                    {
+                        yield return nested;
+                    }
+                }
+            }
+        }
+    }
+
+    sealed record MatchArm(string Pattern, FlowBlock Body, SourceReference Source);
+
+    sealed record MatchFlow(
+        FlowIdentity Identity,
+        IOperation Value,
+        ImmutableArray<MatchArm> Arms,
+        FlowBlock? Fallback,
+        SourceReference Source,
+        SyntaxNode Syntax)
+        : FlowStatement(Identity, Source, Syntax);
+
+    sealed record GeneratedDefinition(
+        ImmutableArray<string> IdentityDeclarations,
+        ImmutableArray<string> OutputDeclarations,
+        ImmutableArray<string> BuilderStatements,
+        string EntryIdentity);
+
+    enum AwaitKind
+    {
+        Unsupported = 0,
+        Query = 1,
+        Read = 2,
+        Transition = 3,
+        Effect = 4
+    }
+}
