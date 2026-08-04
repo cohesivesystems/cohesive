@@ -730,6 +730,285 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
         Assert.Equal(11, diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1);
     }
 
+    [Fact]
+    public void Generator_LowersChildAndBoundedPartitionWithoutCallbacksOrEnumerationState()
+    {
+        var source = """
+                     using System;
+                     using System.Collections.Immutable;
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+                     using Cohesive.Processes.IR;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class ChildWorkProcess
+                     {
+                         private static ExecutionDefinitionReference Child => null!;
+                         private static ExecutionDefinitionReference Observe => null!;
+                         private static RequestContractReference Request => null!;
+                         private static ProcessChildOutcomeMapping Mapping => new(
+                             new("completed"), new("failed"), new("cancelled"), new("terminated"));
+
+                         private static async ProcessTask<string> Run(ProcessContext process, Input input)
+                         {
+                             async ProcessTask Completed(string value)
+                             {
+                                 var observed = await process.Query<string>(Observe, value);
+                             }
+                             async ProcessTask Failed(string value) { }
+                             async ProcessTask Cancelled(string value) { }
+                             async ProcessTask Terminated(string value) { }
+                             await process.InvokeProcess(
+                                 process: Child,
+                                 contract: Request,
+                                 outcomeMapping: Mapping,
+                                 input: input.Value,
+                                 purpose: ProcessChildPurpose.Work,
+                                 cancellation: ProcessChildCancellationPolicy.Propagate,
+                                 outcomes:
+                                 [
+                                     process.Outcome<string>(Mapping.Completed, Completed),
+                                     process.Outcome<string>(Mapping.Failed, Failed),
+                                     process.Outcome<string>(Mapping.Cancelled, Cancelled),
+                                     process.Outcome<string>(Mapping.Terminated, Terminated)
+                                 ]);
+
+                             async ProcessTask PartitionFailed() { }
+                             await process.ForEachPartition<string, string>(
+                                 partitions: input.Partitions,
+                                 progressIdentity: partition => partition,
+                                 process: Child,
+                                 contract: Request,
+                                 outcomeMapping: Mapping,
+                                 childInput: partition => partition + ":" + input.Value,
+                                 limits: new ProcessWorkLimits(
+                                     maximumItems: 10,
+                                     maximumStartsPerActivation: 2,
+                                     maximumParallelism: 2),
+                                 failure: ProcessPartitionFailurePolicy.FailFast,
+                                 capacityIdentity: partition => "target/a",
+                                 capacityDomains: [new("target/a", maximumParallelism: 1)],
+                                 cancellation: ProcessChildCancellationPolicy.Propagate,
+                                 failed: PartitionFailed);
+                             return input.Value;
+                         }
+                     }
+
+                     public sealed record Input(string[] Partitions, string Value);
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out var outputCompilation);
+        var generated = Assert.Single(runResult.Results.SelectMany(static result => result.GeneratedSources))
+            .SourceText
+            .ToString();
+
+        Assert.Empty(runResult.Results.SelectMany(static result => result.Diagnostics));
+        Assert.DoesNotContain(
+            outputCompilation.GetDiagnostics(),
+            static diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+        Assert.Contains("__builder.InvokeProcess", generated);
+        Assert.Contains("__builder.ForEachPartition", generated);
+        Assert.Contains("maximumStartsPerActivation: 2", generated);
+        Assert.Contains("role: \"partition\"", generated);
+        Assert.DoesNotContain("Completed(", generated);
+        Assert.DoesNotContain("PartitionFailed(", generated);
+        Assert.DoesNotContain("System.Func", generated);
+        Assert.DoesNotContain("IEnumerable", generated);
+    }
+
+    [Fact]
+    public void Generator_RejectsPartitionProjectionMethodGroupAtItsSource()
+    {
+        var source = """
+                     using System;
+                     using System.Collections.Immutable;
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+                     using Cohesive.Processes.IR;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class ChildWorkProcess
+                     {
+                         private static ExecutionDefinitionReference Child => null!;
+                         private static RequestContractReference Request => null!;
+                         private static ProcessChildOutcomeMapping Mapping => new(
+                             new("completed"), new("failed"), new("cancelled"), new("terminated"));
+                         private static string Progress(string partition) => partition;
+
+                         private static async ProcessTask<string> Run(ProcessContext process, string[] input)
+                         {
+                             async ProcessTask Failed() { }
+                             await process.ForEachPartition<string, string>(
+                                 partitions: input,
+                                 progressIdentity: Progress,
+                                 process: Child,
+                                 contract: Request,
+                                 outcomeMapping: Mapping,
+                                 childInput: partition => partition,
+                                 limits: new ProcessWorkLimits(10, 2, 2),
+                                 failure: ProcessPartitionFailurePolicy.FailFast,
+                                 capacityIdentity: null,
+                                 capacityDomains: [],
+                                 cancellation: ProcessChildCancellationPolicy.Propagate,
+                                 failed: Failed);
+                             return "done";
+                         }
+                     }
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.Contains("inline pure lambda", diagnostic.GetMessage());
+        Assert.Equal(23, diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1);
+    }
+
+    [Fact]
+    public void Generator_RejectsIncompleteChildTerminalMappingAtItsSource()
+    {
+        var source = """
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+                     using Cohesive.Processes.IR;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class ChildProcess
+                     {
+                         private static ExecutionDefinitionReference Child => null!;
+                         private static RequestContractReference Request => null!;
+                         private static ProcessChildOutcomeMapping Mapping => new(
+                             new("completed"), new("failed"), new("cancelled"), new("terminated"));
+
+                         private static async ProcessTask<string> Run(ProcessContext process, string input)
+                         {
+                             async ProcessTask Completed(string value) { }
+                             async ProcessTask Failed(string value) { }
+                             async ProcessTask Cancelled(string value) { }
+                             await process.InvokeProcess(
+                                 Child,
+                                 Request,
+                                 Mapping,
+                                 input,
+                                 ProcessChildPurpose.Work,
+                                 ProcessChildCancellationPolicy.Propagate,
+                                 [
+                                     process.Outcome<string>(Mapping.Completed, Completed),
+                                     process.Outcome<string>(Mapping.Failed, Failed),
+                                     process.Outcome<string>(Mapping.Cancelled, Cancelled)
+                                 ]);
+                             return input;
+                         }
+                     }
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.Contains("exactly one branch", diagnostic.GetMessage());
+        Assert.Equal(20, diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1);
+    }
+
+    [Fact]
+    public void Generator_RejectsRuntimeDerivedPartitionCapacityPolicyAtItsSource()
+    {
+        var source = """
+                     using System.Collections.Immutable;
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+                     using Cohesive.Processes.IR;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class PartitionProcess
+                     {
+                         private static ExecutionDefinitionReference Child => null!;
+                         private static RequestContractReference Request => null!;
+                         private static ProcessChildOutcomeMapping Mapping => new(
+                             new("completed"), new("failed"), new("cancelled"), new("terminated"));
+
+                         private static async ProcessTask<string> Run(ProcessContext process, Input input)
+                         {
+                             async ProcessTask Failed() { }
+                             await process.ForEachPartition<string, string>(
+                                 partitions: input.Partitions,
+                                 progressIdentity: partition => partition,
+                                 process: Child,
+                                 contract: Request,
+                                 outcomeMapping: Mapping,
+                                 childInput: partition => partition,
+                                 limits: new ProcessWorkLimits(10, 2, 2),
+                                 failure: ProcessPartitionFailurePolicy.FailFast,
+                                 capacityIdentity: partition => "target/a",
+                                 capacityDomains: input.CapacityDomains,
+                                 cancellation: ProcessChildCancellationPolicy.Propagate,
+                                 failed: Failed);
+                             return input.Value;
+                         }
+                     }
+
+                     public sealed record Input(
+                         string[] Partitions,
+                         ImmutableArray<ProcessCapacityDomainLimit> CapacityDomains,
+                         string Value);
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.Contains("cannot depend on runtime bindings", diagnostic.GetMessage());
+        Assert.Equal(29, diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1);
+    }
+
+    [Fact]
+    public void Generator_RejectsHostForeachEnumerationAtItsSource()
+    {
+        var source = """
+                     using System;
+                     using Cohesive.Processes.Authoring;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class HostEnumerationProcess
+                     {
+                         private static async ProcessTask<string> Run(ProcessContext process, string[] input)
+                         {
+                             foreach (var partition in input)
+                             {
+                                 await process.Timer(DateTimeOffset.UnixEpoch);
+                             }
+                             return "done";
+                         }
+                     }
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.Contains("only pure local declarations", diagnostic.GetMessage());
+        Assert.Equal(11, diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1);
+    }
+
     static GeneratorDriverRunResult RunGenerator(
         CSharpCompilation compilation,
         out Compilation outputCompilation)

@@ -136,6 +136,32 @@ public sealed class ProcessContext
         ExecutionNodeId? id = null) =>
         throw SyntaxOnly();
 
+    /// <summary>Declares one exact child Process invocation through the canonical Request/Reply protocol.</summary>
+    /// <remarks>
+    /// Every outcome branch must be a named local <c>async ProcessTask</c> function. The generator lowers the
+    /// invocation directly to <see cref="InvokeProcessProcessNode"/> and erases the CLR branch functions.
+    /// </remarks>
+    /// <param name="process">Exact child Process definition revision and fingerprint.</param>
+    /// <param name="contract">Exact Request contract used to durably start and join the child.</param>
+    /// <param name="outcomeMapping">Total mapping from child terminal status to Request outcome identity.</param>
+    /// <param name="input">Pure child input and Request payload fused into the canonical invocation.</param>
+    /// <param name="purpose">Explicit work, compensation, or reconciliation purpose.</param>
+    /// <param name="cancellation">Explicit parent-to-child cancellation behavior.</param>
+    /// <param name="outcomes">Closed terminal-outcome branch set.</param>
+    /// <param name="id">Optional explicit canonical node identity.</param>
+    /// <returns>A syntax-only task representing completion of the selected child terminal-outcome branch.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessTask InvokeProcess(
+        ExecutionDefinitionReference process,
+        RequestContractReference contract,
+        ProcessChildOutcomeMapping outcomeMapping,
+        object? input,
+        ProcessChildPurpose purpose,
+        ProcessChildCancellationPolicy cancellation,
+        ProcessRequestOutcomeCase[] outcomes,
+        ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
     /// <summary>Declares a durable absolute-time wait.</summary>
     /// <param name="dueAt">Pure expression yielding the absolute due instant.</param>
     /// <param name="id">Optional explicit canonical timer identity.</param>
@@ -204,7 +230,7 @@ public sealed class ProcessContext
     /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
     public ProcessAwaitCase Deadline(
         DateTimeOffset dueAt,
-        ProcessTimerBranch branch,
+        ProcessBranch branch,
         int priority = 0,
         ExecutionNodeId? id = null) =>
         throw SyntaxOnly();
@@ -242,6 +268,45 @@ public sealed class ProcessContext
         ReplyContractReference contract,
         ProcessRequestObligation request,
         object? payload,
+        ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
+    /// <summary>Declares finite, explicitly bounded child Process work over a portable partition collection.</summary>
+    /// <remarks>
+    /// Projection lambdas are inline pure source syntax. They are fused into the canonical partition node and are
+    /// never retained as delegates or host enumeration state. Successful completion continues after this await;
+    /// the named failure branch lowers to the canonical failed edge and then rejoins the following computation.
+    /// </remarks>
+    /// <typeparam name="TPartition">Portable type of one partition element.</typeparam>
+    /// <typeparam name="TChildInput">Portable input type of each exact child Process.</typeparam>
+    /// <param name="partitions">Pure expression producing one finite portable Array value.</param>
+    /// <param name="progressIdentity">Inline pure projection producing a stable non-empty identity per partition.</param>
+    /// <param name="process">Exact child Process definition used for every partition.</param>
+    /// <param name="contract">Exact Request contract used to durably start and join each child.</param>
+    /// <param name="outcomeMapping">Total mapping from child terminal status to Request outcome identity.</param>
+    /// <param name="childInput">Inline pure projection producing each child Process input.</param>
+    /// <param name="limits">Explicit total-item, per-activation start, and parallelism limits.</param>
+    /// <param name="failure">Explicit sibling-admission behavior after a child failure.</param>
+    /// <param name="capacityIdentity">Optional inline pure projection assigning each partition to a capacity domain.</param>
+    /// <param name="capacityDomains">Canonical capacity-domain limits.</param>
+    /// <param name="cancellation">Explicit parent-to-child cancellation behavior.</param>
+    /// <param name="failed">Named source-only branch selected when bounded work reaches its failed outcome.</param>
+    /// <param name="id">Optional explicit canonical node identity.</param>
+    /// <returns>A syntax-only task representing settlement of the bounded partition occurrence.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessTask ForEachPartition<TPartition, TChildInput>(
+        IReadOnlyList<TPartition> partitions,
+        ProcessProjection<TPartition, string> progressIdentity,
+        ExecutionDefinitionReference process,
+        RequestContractReference contract,
+        ProcessChildOutcomeMapping outcomeMapping,
+        ProcessProjection<TPartition, TChildInput> childInput,
+        ProcessWorkLimits limits,
+        ProcessPartitionFailurePolicy failure,
+        ProcessProjection<TPartition, string>? capacityIdentity,
+        ImmutableArray<ProcessCapacityDomainLimit> capacityDomains,
+        ProcessChildCancellationPolicy cancellation,
+        ProcessBranch failed,
         ExecutionNodeId? id = null) =>
         throw SyntaxOnly();
 
@@ -514,9 +579,16 @@ public delegate ProcessTask ProcessInteractionBranch<in TInput>(TInput input);
 /// <returns>The syntax-only Process branch.</returns>
 public delegate ProcessTask ProcessRequestBranch<in TInput>(TInput input, ProcessRequestObligation request);
 
-/// <summary>Source-only branch selected by an absolute-time AwaitMatch clause.</summary>
+/// <summary>Source-only parameterless branch selected by one canonical Process edge.</summary>
 /// <returns>The syntax-only Process branch.</returns>
-public delegate ProcessTask ProcessTimerBranch();
+public delegate ProcessTask ProcessBranch();
+
+/// <summary>Inline syntax-only portable projection over one lexical Process value.</summary>
+/// <typeparam name="TInput">Portable lexical input type.</typeparam>
+/// <typeparam name="TResult">Portable projected result type.</typeparam>
+/// <param name="input">Lexically visible portable input.</param>
+/// <returns>The pure value fused into the nearest canonical Process consumer.</returns>
+public delegate TResult ProcessProjection<in TInput, out TResult>(TInput input);
 
 /// <summary>Inline syntax-only portable guard for one admitted interaction payload.</summary>
 /// <typeparam name="TInput">Portable admitted interaction payload type.</typeparam>

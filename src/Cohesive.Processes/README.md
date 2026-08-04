@@ -218,6 +218,45 @@ Multi-outcome `Effect` uses `process.Outcome<T>(outcome, LocalBranch)` and binds
 that outcome branch. `ForkAny` returns one `ProcessJoinWinner<T>`; `ForkRequired` returns an immutable selection in
 canonical winner order. Neither can be deconstructed as an all-branch tuple.
 
+Exact child invocation reuses the same outcome syntax and lowers through the canonical child Request/Reply protocol:
+
+```csharp
+await process.InvokeProcess(
+    process: TrainModel,
+    contract: StartTraining,
+    outcomeMapping: TrainingOutcomes,
+    input: trainingInput,
+    purpose: ProcessChildPurpose.Work,
+    cancellation: ProcessChildCancellationPolicy.Propagate,
+    outcomes:
+    [
+        process.Outcome<TrainingReceipt>(TrainingOutcomes.Completed, OnCompleted),
+        process.Outcome<TrainingFailure>(TrainingOutcomes.Failed, OnFailed),
+        process.Outcome<TrainingFailure>(TrainingOutcomes.Cancelled, OnCancelled),
+        process.Outcome<TrainingFailure>(TrainingOutcomes.Terminated, OnTerminated)
+    ]);
+```
+
+Finite partition work keeps collection traversal, identities, child inputs, and resource limits in one canonical
+node. Projection lambdas are pure source syntax, not runtime callbacks or enumerators; successful settlement resumes
+the normal C# flow while the named failure branch represents the canonical failed edge:
+
+```csharp
+await process.ForEachPartition<TenantPlacement, RebuildInput>(
+    partitions: request.Placements,
+    progressIdentity: placement => placement.Tenant,
+    process: RebuildTenant,
+    contract: StartTenantRebuild,
+    outcomeMapping: RebuildOutcomes,
+    childInput: placement => new RebuildInput(placement.Tenant, placement.Index),
+    limits: new ProcessWorkLimits(100, 10, 8),
+    failure: ProcessPartitionFailurePolicy.FailFast,
+    capacityIdentity: placement => placement.Backend,
+    capacityDomains: [new("elastic-primary", maximumParallelism: 4)],
+    cancellation: ProcessChildCancellationPolicy.Propagate,
+    failed: OnPartitionFailure);
+```
+
 Use the explicit input/result contract overload—and explicit output contracts where needed—when top-level CLR
 generic types erase semantic optionality or nullable-reference occurrence. `CanonicalValue` is the deliberate escape
 hatch for an already-portable expression with an explicitly attested contract; canonical validation remains the
