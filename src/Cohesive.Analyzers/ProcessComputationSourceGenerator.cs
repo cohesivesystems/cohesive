@@ -187,7 +187,9 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             resultType,
             parser.PureLocals,
             parser.ForkResultTuples,
-            parser.Awaits);
+            parser.Awaits,
+            parser.AuthoredOutputs,
+            parser.RequestObligations);
         if (!emitter.TryEmit(body, out var generatedBody))
         {
             return;
@@ -361,6 +363,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         readonly Dictionary<ILocalSymbol, ImmutableArray<IOperation>> forkResultTuples = new(SymbolEqualityComparer.Default);
         readonly Dictionary<IMethodSymbol, LocalFunctionStatementSyntax> localFunctions = new(SymbolEqualityComparer.Default);
         readonly List<AwaitFlow> awaits = [];
+        readonly List<AuthoredOutput> authoredOutputs = [];
+        readonly List<BranchObligation> requestObligations = [];
         int semanticOrdinal;
 
         public FlowParser(
@@ -382,6 +386,10 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         public IReadOnlyDictionary<ILocalSymbol, ImmutableArray<IOperation>> ForkResultTuples => forkResultTuples;
 
         public IReadOnlyList<AwaitFlow> Awaits => awaits;
+
+        public IReadOnlyList<AuthoredOutput> AuthoredOutputs => authoredOutputs;
+
+        public IReadOnlyList<BranchObligation> RequestObligations => requestObligations;
 
         public bool TryParse(SyntaxList<StatementSyntax> statements, out FlowBlock block)
         {
@@ -479,12 +487,12 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         break;
 
                     case ExpressionStatementSyntax expressionStatement:
-                        if (!TryParseForkJoin(expressionStatement, structuralPath, out var forkJoin))
+                        if (!TryParseExpression(expressionStatement, structuralPath, out var expressionFlow))
                         {
                             block = null!;
                             return false;
                         }
-                        flows.Add(forkJoin);
+                        flows.Add(expressionFlow);
                         break;
 
                     case BlockSyntax nested:
@@ -575,6 +583,318 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             return true;
         }
 
+        bool TryParseExpression(
+            ExpressionStatementSyntax statement,
+            ImmutableArray<string> structuralPath,
+            out FlowStatement flow)
+        {
+            flow = null!;
+            if (TryGetForkJoinInvocation(statement, out _))
+            {
+                if (!TryParseForkJoin(statement, structuralPath, out var forkJoin))
+                {
+                    return false;
+                }
+
+                flow = forkJoin;
+                return true;
+            }
+            if (!TryGetAwaitedContextInvocation(statement, out var invocation))
+            {
+                return StatementFailure(
+                    statement,
+                    "an expression statement must await a supported operation on the ProcessContext parameter");
+            }
+
+            switch (invocation.TargetMethod.Name)
+            {
+                case "Effect" when Argument(invocation, "outcomes") is not null:
+                    if (!TryParseRequest(statement, structuralPath, invocation, out var request))
+                    {
+                        return false;
+                    }
+
+                    flow = request;
+                    return true;
+
+                case "AwaitMatch":
+                    if (!TryParseAwaitMatch(statement, structuralPath, invocation, out var awaitMatch))
+                    {
+                        return false;
+                    }
+
+                    flow = awaitMatch;
+                    return true;
+
+                case "Timer":
+                case "Reply":
+                    var kind = invocation.TargetMethod.Name == "Timer" ? ActionKind.Timer : ActionKind.Reply;
+                    flow = new ActionFlow(
+                        NextIdentity(invocation.TargetMethod.Name.ToLowerInvariant(), structuralPath),
+                        kind,
+                        invocation,
+                        SourceLocation(statement),
+                        statement);
+                    return true;
+
+                default:
+                    return StatementFailure(
+                        statement,
+                        $"awaited Process operation '{invocation.TargetMethod.Name}' is not supported as a statement");
+            }
+        }
+
+        bool TryParseRequest(
+            StatementSyntax statement,
+            ImmutableArray<string> structuralPath,
+            IInvocationOperation invocation,
+            out RequestFlow flow)
+        {
+            flow = null!;
+            var requestIdentity = NextIdentity("request", structuralPath);
+            var declarations = CollectionArguments(invocation, "outcomes");
+            if (declarations.IsEmpty)
+            {
+                return StatementFailure(statement, "a multi-outcome Request requires at least one terminal outcome");
+            }
+
+            List<RequestOutcomeFlow> outcomes = [];
+            HashSet<IMethodSymbol> observed = new(SymbolEqualityComparer.Default);
+            for (var index = 0; index < declarations.Length; index++)
+            {
+                var declaration = Strip(declarations[index]);
+                if (declaration is not IInvocationOperation outcomeDeclaration
+                    || outcomeDeclaration.TargetMethod.Name != "Outcome"
+                    || !SymbolEqualityComparer.Default.Equals(outcomeDeclaration.TargetMethod.ContainingType, contextParameter.Type))
+                {
+                    return StatementFailure(
+                        declarations[index].Syntax,
+                        "every Request outcome must be declared with process.Outcome");
+                }
+
+                var branch = Argument(outcomeDeclaration, "branch");
+                if (branch is null
+                    || !TryGetNamedLocalBranch(branch.Value, observed, parameterCount: 1, out var branchMethod, out var localFunction))
+                {
+                    return StatementFailure(
+                        branch?.Syntax ?? outcomeDeclaration.Syntax,
+                        "a Request outcome branch must name a unique local async ProcessTask function with one typed outcome parameter");
+                }
+
+                var outcomeIdentity = NextIdentity(
+                    "outcome",
+                    structuralPath.Add(requestIdentity.PathSegment),
+                    branchMethod.Name);
+                if (!TryParse(
+                        localFunction.Body!.Statements,
+                        structuralPath.Add(requestIdentity.PathSegment).Add(outcomeIdentity.PathSegment),
+                        out var body))
+                {
+                    return false;
+                }
+
+                var parameter = branchMethod.Parameters[0];
+                var output = new AuthoredOutput(
+                    parameter,
+                    parameter.Type,
+                    outcomeIdentity,
+                    "result",
+                    $"__authored_output_{authoredOutputs.Count.ToString(CultureInfo.InvariantCulture)}",
+                    SourceLocation(localFunction));
+                authoredOutputs.Add(output);
+                outcomes.Add(new(
+                    outcomeIdentity,
+                    branchMethod.Name,
+                    body,
+                    parameter,
+                    outcomeDeclaration,
+                    SourceLocation(outcomeDeclaration.Syntax),
+                    outcomeDeclaration.Syntax));
+            }
+
+            flow = new(
+                requestIdentity,
+                [.. outcomes],
+                invocation,
+                SourceLocation(statement),
+                statement);
+            return true;
+        }
+
+        bool TryParseAwaitMatch(
+            StatementSyntax statement,
+            ImmutableArray<string> structuralPath,
+            IInvocationOperation invocation,
+            out AwaitMatchFlow flow)
+        {
+            flow = null!;
+            var awaitIdentity = NextIdentity("await-match", structuralPath);
+            var declarations = CollectionArguments(invocation, "clauses");
+            if (declarations.IsEmpty)
+            {
+                return StatementFailure(statement, "AwaitMatch requires at least one interaction or timer clause");
+            }
+
+            List<AwaitClauseFlow> clauses = [];
+            HashSet<IMethodSymbol> observed = new(SymbolEqualityComparer.Default);
+            for (var index = 0; index < declarations.Length; index++)
+            {
+                var declaration = Strip(declarations[index]);
+                if (declaration is not IInvocationOperation clauseDeclaration
+                    || !SymbolEqualityComparer.Default.Equals(clauseDeclaration.TargetMethod.ContainingType, contextParameter.Type))
+                {
+                    return StatementFailure(
+                        declarations[index].Syntax,
+                        "every AwaitMatch clause must be declared on the ProcessContext parameter");
+                }
+
+                var kind = clauseDeclaration.TargetMethod.Name switch
+                {
+                    "Event" => AwaitClauseKind.Event,
+                    "Signal" => AwaitClauseKind.Signal,
+                    "Request" => AwaitClauseKind.Request,
+                    "Deadline" => AwaitClauseKind.Timer,
+                    _ => AwaitClauseKind.Unsupported
+                };
+                if (kind == AwaitClauseKind.Unsupported)
+                {
+                    return StatementFailure(
+                        clauseDeclaration.Syntax,
+                        $"AwaitMatch clause '{clauseDeclaration.TargetMethod.Name}' is not supported");
+                }
+
+                var branch = Argument(clauseDeclaration, "branch");
+                var parameterCount = kind == AwaitClauseKind.Request ? 2 : kind == AwaitClauseKind.Timer ? 0 : 1;
+                if (branch is null
+                    || !TryGetNamedLocalBranch(branch.Value, observed, parameterCount, out var branchMethod, out var localFunction))
+                {
+                    return StatementFailure(
+                        branch?.Syntax ?? clauseDeclaration.Syntax,
+                        $"an AwaitMatch {kind} branch must name a unique local async ProcessTask function with {parameterCount.ToString(CultureInfo.InvariantCulture)} parameter(s)");
+                }
+
+                var clauseIdentity = NextIdentity(
+                    kind == AwaitClauseKind.Timer ? "timer-clause" : "interaction-clause",
+                    structuralPath.Add(awaitIdentity.PathSegment),
+                    branchMethod.Name);
+                if (!TryParse(
+                        localFunction.Body!.Statements,
+                        structuralPath.Add(awaitIdentity.PathSegment).Add(clauseIdentity.PathSegment),
+                        out var body))
+                {
+                    return false;
+                }
+
+                IParameterSymbol? input = null;
+                IParameterSymbol? obligation = null;
+                if (kind != AwaitClauseKind.Timer)
+                {
+                    input = branchMethod.Parameters[0];
+                    authoredOutputs.Add(new(
+                        input,
+                        input.Type,
+                        clauseIdentity,
+                        "input",
+                        $"__authored_output_{authoredOutputs.Count.ToString(CultureInfo.InvariantCulture)}",
+                        SourceLocation(localFunction)));
+                }
+                if (kind == AwaitClauseKind.Request)
+                {
+                    obligation = branchMethod.Parameters[1];
+                    requestObligations.Add(new(
+                        obligation,
+                        clauseIdentity,
+                        $"__request_obligation_{requestObligations.Count.ToString(CultureInfo.InvariantCulture)}",
+                        SourceLocation(localFunction)));
+                }
+
+                clauses.Add(new(
+                    clauseIdentity,
+                    branchMethod.Name,
+                    kind,
+                    body,
+                    input,
+                    obligation,
+                    clauseDeclaration,
+                    SourceLocation(clauseDeclaration.Syntax),
+                    clauseDeclaration.Syntax));
+            }
+
+            flow = new(
+                awaitIdentity,
+                [.. clauses],
+                invocation,
+                SourceLocation(statement),
+                statement);
+            return true;
+        }
+
+        bool TryGetNamedLocalBranch(
+            IOperation branch,
+            ISet<IMethodSymbol> observed,
+            int parameterCount,
+            out IMethodSymbol methodSymbol,
+            out LocalFunctionStatementSyntax localFunction)
+        {
+            methodSymbol = null!;
+            localFunction = null!;
+            branch = Strip(branch);
+            if (branch is IDelegateCreationOperation delegateCreation)
+            {
+                branch = Strip(delegateCreation.Target);
+            }
+
+            if (branch is not IMethodReferenceOperation methodReference
+                || !localFunctions.TryGetValue(methodReference.Method, out localFunction)
+                || !observed.Add(methodReference.Method)
+                || methodReference.Method.Parameters.Length != parameterCount
+                || methodReference.Method.ReturnType.ToDisplayString() != BranchTaskName
+                || !localFunction.Modifiers.Any(static modifier => modifier.IsKind(SyntaxKind.AsyncKeyword))
+                || localFunction.Body is null
+                || localFunction.ExpressionBody is not null)
+            {
+                return false;
+            }
+
+            methodSymbol = methodReference.Method;
+            return true;
+        }
+
+        bool TryGetAwaitedContextInvocation(StatementSyntax statement, out IInvocationOperation invocation)
+        {
+            invocation = null!;
+            if (statement is not ExpressionStatementSyntax { Expression: AwaitExpressionSyntax awaitedSyntax }
+                || semanticModel.GetOperation(awaitedSyntax) is not IAwaitOperation awaited
+                || Strip(awaited.Operation) is not IInvocationOperation candidate
+                || !SymbolEqualityComparer.Default.Equals(candidate.TargetMethod.ContainingType, contextParameter.Type)
+                || candidate.Instance is null
+                || Strip(candidate.Instance) is not IParameterReferenceOperation contextReference
+                || !SymbolEqualityComparer.Default.Equals(contextReference.Parameter, contextParameter))
+            {
+                return false;
+            }
+
+            invocation = candidate;
+            return true;
+        }
+
+        static ImmutableArray<IOperation> CollectionArguments(IInvocationOperation invocation, string parameterName)
+        {
+            var argument = Argument(invocation, parameterName);
+            if (argument is null)
+            {
+                return [];
+            }
+
+            var value = Strip(argument.Value);
+            return value switch
+            {
+                IArrayCreationOperation { Initializer: { } initializer } => initializer.ElementValues,
+                ICollectionExpressionOperation collection => collection.Elements,
+                _ => [value]
+            };
+        }
+
         bool TryParseForkJoin(
             StatementSyntax statement,
             ImmutableArray<string> structuralPath,
@@ -586,6 +906,18 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 return StatementFailure(
                     statement,
                     "a ForkJoin statement must await ForkJoin on the ProcessContext parameter");
+            }
+
+            var mode = invocation.TargetMethod.Name switch
+            {
+                "ForkJoin" => ForkAuthoringMode.All,
+                "ForkAny" => ForkAuthoringMode.Any,
+                "ForkRequired" => ForkAuthoringMode.RequiredCount,
+                _ => ForkAuthoringMode.Unsupported
+            };
+            if (mode == ForkAuthoringMode.Unsupported)
+            {
+                return StatementFailure(statement, $"unsupported Fork operation '{invocation.TargetMethod.Name}'");
             }
 
             var branchOperations = BranchArguments(invocation);
@@ -660,6 +992,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 {
                     return false;
                 }
+
                 IOperation? branchResult = null;
                 if (branchResultType is not null)
                 {
@@ -707,15 +1040,32 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             {
                 return StatementFailure(statement, "a typed ForkJoin cannot mix result-producing and result-less branches");
             }
-            if (typedBranches != 0 && !TryBindForkResults(statement, branches))
+
+            AuthoredOutput? partialResult = null;
+            if (typedBranches != 0 && mode == ForkAuthoringMode.All && !TryBindForkResults(statement, branches))
             {
                 return false;
+            }
+
+            if (mode != ForkAuthoringMode.All)
+            {
+                if (typedBranches != branches.Count)
+                {
+                    return StatementFailure(statement, "a partial Fork requires a portable result from every branch");
+                }
+
+                if (!TryBindPartialForkResult(statement, joinIdentity, out partialResult))
+                {
+                    return false;
+                }
             }
 
             flow = new(
                 forkIdentity,
                 joinIdentity,
                 [.. branches],
+                mode,
+                partialResult,
                 invocation,
                 SourceLocation(statement),
                 statement);
@@ -733,7 +1083,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 .OfType<IAwaitOperation>()
                 .Select(static awaited => Strip(awaited.Operation))
                 .OfType<IInvocationOperation>()
-                .Where(candidate => candidate.TargetMethod.Name == "ForkJoin"
+                .Where(candidate => candidate.TargetMethod.Name is "ForkJoin" or "ForkAny" or "ForkRequired"
                     && SymbolEqualityComparer.Default.Equals(candidate.TargetMethod.ContainingType, contextParameter.Type)
                     && candidate.Instance is not null
                     && Strip(candidate.Instance) is IParameterReferenceOperation contextReference
@@ -745,6 +1095,38 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             }
 
             invocation = matches[0];
+            return true;
+        }
+
+        bool TryBindPartialForkResult(
+            StatementSyntax statement,
+            FlowIdentity joinIdentity,
+            out AuthoredOutput? output)
+        {
+            output = null;
+            if (statement.DescendantNodesAndSelf().OfType<SingleVariableDesignationSyntax>().Any())
+            {
+                return StatementFailure(
+                    statement,
+                    "Any and RequiredCount Fork results cannot be deconstructed because only selected branches are guaranteed");
+            }
+            if (statement is not LocalDeclarationStatementSyntax declaration
+                || declaration.Declaration.Variables.Count != 1
+                || semanticModel.GetDeclaredSymbol(declaration.Declaration.Variables[0]) is not ILocalSymbol local)
+            {
+                return StatementFailure(
+                    statement,
+                    "Any and RequiredCount Fork results must be bound to one winner or winner-collection local");
+            }
+
+            output = new(
+                local,
+                local.Type,
+                joinIdentity,
+                "result",
+                $"__authored_output_{authoredOutputs.Count.ToString(CultureInfo.InvariantCulture)}",
+                SourceLocation(statement));
+            authoredOutputs.Add(output);
             return true;
         }
 
@@ -799,6 +1181,10 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 {
                     arguments.AddRange(initializer.ElementValues);
                 }
+                else if (value is ICollectionExpressionOperation collection)
+                {
+                    arguments.AddRange(collection.Elements);
+                }
                 else
                 {
                     arguments.Add(value);
@@ -827,6 +1213,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             {
                 return false;
             }
+
             FlowBlock? whenFalse = null;
             if (conditional.Else is not null
                 && !TryParseStatementBody(
@@ -968,7 +1355,10 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         readonly IReadOnlyDictionary<ILocalSymbol, IOperation> pureLocals;
         readonly IReadOnlyDictionary<ILocalSymbol, ImmutableArray<IOperation>> forkResultTuples;
         readonly IReadOnlyList<AwaitFlow> awaits;
-        readonly Dictionary<ILocalSymbol, AwaitFlow> awaitByLocal;
+        readonly IReadOnlyList<AuthoredOutput> authoredOutputs;
+        readonly IReadOnlyList<BranchObligation> requestObligations;
+        readonly Dictionary<ISymbol, string> outputBySymbol;
+        readonly Dictionary<IParameterSymbol, string> obligationByParameter;
         readonly List<string> builderStatements = [];
         readonly HashSet<ILocalSymbol> resolvingPureLocals = new(SymbolEqualityComparer.Default);
         int valueOrdinal;
@@ -980,7 +1370,9 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             ITypeSymbol resultType,
             IReadOnlyDictionary<ILocalSymbol, IOperation> pureLocals,
             IReadOnlyDictionary<ILocalSymbol, ImmutableArray<IOperation>> forkResultTuples,
-            IReadOnlyList<AwaitFlow> awaits)
+            IReadOnlyList<AwaitFlow> awaits,
+            IReadOnlyList<AuthoredOutput> authoredOutputs,
+            IReadOnlyList<BranchObligation> requestObligations)
         {
             this.productionContext = productionContext;
             this.method = method;
@@ -989,10 +1381,21 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             this.pureLocals = pureLocals;
             this.forkResultTuples = forkResultTuples;
             this.awaits = awaits;
-            awaitByLocal = new(SymbolEqualityComparer.Default);
+            this.authoredOutputs = authoredOutputs;
+            this.requestObligations = requestObligations;
+            outputBySymbol = new(SymbolEqualityComparer.Default);
+            obligationByParameter = new(SymbolEqualityComparer.Default);
             foreach (var awaited in awaits)
             {
-                awaitByLocal.Add(awaited.Local, awaited);
+                outputBySymbol.Add(awaited.Local, awaited.OutputVariable);
+            }
+
+            foreach (var output in authoredOutputs)
+                outputBySymbol.Add(output.Symbol, output.Variable);
+
+            foreach (var obligation in requestObligations)
+            {
+                obligationByParameter.Add(obligation.Parameter, obligation.Variable);
             }
         }
 
@@ -1008,6 +1411,9 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         {
                             AwaitFlow awaited => Argument(awaited.Invocation, "id"),
                             ForkJoinFlow forkJoin => Argument(forkJoin.Invocation, "id"),
+                            ActionFlow action => Argument(action.Invocation, "id"),
+                            RequestFlow request => Argument(request.Invocation, "id"),
+                            AwaitMatchFlow awaitMatch => Argument(awaitMatch.Invocation, "id"),
                             _ => null
                         },
                         statement.Syntax,
@@ -1039,10 +1445,42 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         }
                     }
                 }
+                else if (statement is RequestFlow request)
+                {
+                    foreach (var outcome in request.Outcomes)
+                    {
+                        if (!TryDeclareIdentity(
+                                outcome.Identity,
+                                Argument(outcome.Declaration, "id"),
+                                outcome.Syntax,
+                                identities))
+                        {
+                            return false;
+                        }
+                    }
+                }
+                else if (statement is AwaitMatchFlow awaitMatch)
+                {
+                    foreach (var clause in awaitMatch.Clauses)
+                    {
+                        if (!TryDeclareIdentity(
+                                clause.Identity,
+                                Argument(clause.Declaration, "id"),
+                                clause.Syntax,
+                                identities))
+                        {
+                            return false;
+                        }
+                    }
+                }
             }
 
             var outputs = awaits.Select(awaited =>
-                $"var {awaited.OutputVariable} = __builder.Output<{FormatType(awaited.Local.Type)}>(owner: {awaited.Identity.Variable}, role: \"result\", {SourceArguments(awaited.Source, method.Name)});")
+                    $"var {awaited.OutputVariable} = __builder.Output<{FormatType(awaited.Local.Type)}>(owner: {awaited.Identity.Variable}, role: \"result\", {SourceArguments(awaited.Source, method.Name)});")
+                .Concat(authoredOutputs.Select(output =>
+                    $"var {output.Variable} = __builder.Output<{FormatType(output.Type)}>(owner: {output.Owner.Variable}, role: {Literal(output.Role)}, {SourceArguments(output.Source, method.Name)});"))
+                .Concat(requestObligations.Select(obligation =>
+                    $"var {obligation.Variable} = __builder.RequestObligation(owner: {obligation.Owner.Variable}, role: \"request\", {SourceArguments(obligation.Source, method.Name)});"))
                 .ToImmutableArray();
 
             if (!TryValidateForkResults(body))
@@ -1079,7 +1517,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 inputParameter,
                 pureLocals,
                 forkResultTuples,
-                awaitByLocal,
+                outputBySymbol,
                 resolvingPureLocals);
             foreach (var branch in body.Descendants()
                          .OfType<ForkJoinFlow>()
@@ -1163,6 +1601,20 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         entry = awaited.Identity.Variable;
                         break;
 
+                    case ActionFlow action:
+                        if (entry is null)
+                        {
+                            return StatementFailure(action.Syntax, "an awaited Process action requires a following operation or return");
+                        }
+
+                        if (!TryEmitAction(action, entry))
+                        {
+                            return false;
+                        }
+
+                        entry = action.Identity.Variable;
+                        break;
+
                     case IfFlow conditional:
                         if (!TryLowerBlock(conditional.WhenTrue, entry, out var trueEntry))
                         {
@@ -1175,6 +1627,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         {
                             return false;
                         }
+
                         if (trueEntry is null || falseEntry is null)
                         {
                             return StatementFailure(conditional.Syntax, "both branches must return when no following continuation exists");
@@ -1188,6 +1641,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         {
                             return false;
                         }
+
                         var trueCase = $"__case_{conditional.Identity.Variable.Substring("__node_".Length)}";
                         var fallback = $"__fallback_{conditional.Identity.Variable.Substring("__node_".Length)}";
                         builderStatements.Add(
@@ -1222,6 +1676,34 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
 
                         entry = forkJoin.Identity.Variable;
                         break;
+
+                    case RequestFlow request:
+                        if (entry is null)
+                        {
+                            return StatementFailure(request.Syntax, "a multi-outcome Request requires a following operation or return");
+                        }
+
+                        if (!TryEmitRequest(request, entry))
+                        {
+                            return false;
+                        }
+
+                        entry = request.Identity.Variable;
+                        break;
+
+                    case AwaitMatchFlow awaitMatch:
+                        if (entry is null)
+                        {
+                            return StatementFailure(awaitMatch.Syntax, "AwaitMatch requires a following operation or return");
+                        }
+
+                        if (!TryEmitAwaitMatch(awaitMatch, entry))
+                        {
+                            return false;
+                        }
+
+                        entry = awaitMatch.Identity.Variable;
+                        break;
                 }
             }
             return true;
@@ -1230,6 +1712,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         bool TryEmitForkJoin(ForkJoinFlow forkJoin, string successor)
         {
             List<string> branches = [];
+            List<string> branchResults = [];
+            string? resultContract = null;
             foreach (var branch in forkJoin.Branches)
             {
                 if (!TryLowerBlock(branch.Body, forkJoin.JoinIdentity.Variable, out var branchEntry)
@@ -1250,9 +1734,26 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 {
                     return false;
                 }
+
                 builderStatements.Add(
                     $"var {branchVariable} = __builder.ForkBranch(id: {branch.Identity.Variable}, start: __builder.Edge(owner: {branch.Identity.Variable}, role: \"start\", target: {branchEntry}, {SourceArguments(branch.Source, method.Name)}), capacityDomain: {capacityDomain}, {SourceArguments(branch.Source, method.Name)});");
                 branches.Add(branchVariable);
+
+                if (forkJoin.Mode != ForkAuthoringMode.All)
+                {
+                    if (branch.Result?.Type is null
+                        || !TryEmitValue(branch.Result, branch.Result.Type, branch.Source, out var resultValue))
+                    {
+                        return StatementFailure(
+                            branch.Syntax,
+                            $"partial Fork branch '{branch.Name}' requires one portable typed result");
+                    }
+                    resultContract ??= resultValue + ".Contract";
+                    var resultVariable = $"__join_branch_result_{branchResults.Count.ToString(CultureInfo.InvariantCulture)}_{forkJoin.Identity.Variable.Substring("__node_".Length)}";
+                    builderStatements.Add(
+                        $"var {resultVariable} = __builder.JoinBranchResult(branch: {branch.Identity.Variable}, result: {resultValue}, {SourceArguments(branch.Source, method.Name)});");
+                    branchResults.Add(resultVariable);
+                }
             }
 
             var admission = Argument(forkJoin.Invocation, "admission");
@@ -1272,6 +1773,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 {
                     return false;
                 }
+
                 var suffix = forkJoin.Identity.Variable.Substring("__node_".Length);
                 var admissionVariable = $"__fork_admission_{suffix}";
                 builderStatements.Add(
@@ -1284,8 +1786,247 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 builderStatements.Add(
                     $"__builder.Fork(id: {forkJoin.Identity.Variable}, branches: [{string.Join(", ", branches)}], join: {forkJoin.JoinIdentity.Variable}, {SourceArguments(forkJoin.Source, method.Name)});");
             }
+            if (forkJoin.Mode == ForkAuthoringMode.All)
+            {
+                builderStatements.Add(
+                    $"__builder.Join(id: {forkJoin.JoinIdentity.Variable}, fork: {forkJoin.Identity.Variable}, policy: new global::Cohesive.Processes.IR.ProcessJoinPolicy(mode: global::Cohesive.Processes.IR.ProcessJoinMode.All, requiredCount: 0, failure: global::Cohesive.Processes.IR.ProcessJoinFailurePolicy.FailFast, cancellation: global::Cohesive.Processes.IR.ProcessJoinCancellationPolicy.AwaitRemaining, completionOrder: global::Cohesive.Processes.IR.ProcessJoinCompletionOrder.Unobservable, tieBreak: global::Cohesive.Processes.IR.ProcessJoinTieBreak.BranchIdentity), next: __builder.Edge(owner: {forkJoin.JoinIdentity.Variable}, role: \"next\", target: {successor}, {SourceArguments(forkJoin.Source, method.Name)}), {SourceArguments(forkJoin.Source, method.Name)});");
+                return true;
+            }
+
+            var policy = Argument(forkJoin.Invocation, "policy");
+            if (policy is null || forkJoin.Result is null || resultContract is null)
+            {
+                return StatementFailure(
+                    forkJoin.Syntax,
+                    "Any and RequiredCount Forks require an explicit policy and one materialized selection result");
+            }
+            if (!TryEmitExactArgument(policy, policy.Syntax, out var policyExpression))
+            {
+                return false;
+            }
+
+            var partialSuffix = forkJoin.Identity.Variable.Substring("__node_".Length);
+            var policyVariable = $"__join_policy_{partialSuffix}";
+            var projectionVariable = $"__join_result_{partialSuffix}";
             builderStatements.Add(
-                $"__builder.Join(id: {forkJoin.JoinIdentity.Variable}, fork: {forkJoin.Identity.Variable}, policy: new global::Cohesive.Processes.IR.ProcessJoinPolicy(mode: global::Cohesive.Processes.IR.ProcessJoinMode.All, requiredCount: 0, failure: global::Cohesive.Processes.IR.ProcessJoinFailurePolicy.FailFast, cancellation: global::Cohesive.Processes.IR.ProcessJoinCancellationPolicy.AwaitRemaining, completionOrder: global::Cohesive.Processes.IR.ProcessJoinCompletionOrder.Unobservable, tieBreak: global::Cohesive.Processes.IR.ProcessJoinTieBreak.BranchIdentity), next: __builder.Edge(owner: {forkJoin.JoinIdentity.Variable}, role: \"next\", target: {successor}, {SourceArguments(forkJoin.Source, method.Name)}), {SourceArguments(forkJoin.Source, method.Name)});");
+                $"var {policyVariable} = ({policyExpression}) ?? throw new global::System.ArgumentNullException(\"policy\");");
+            builderStatements.Add(
+                $"var {projectionVariable} = __builder.JoinResult(output: {forkJoin.Result.Variable}, resultContract: {resultContract}, branches: [{string.Join(", ", branchResults)}], {SourceArguments(forkJoin.Source, method.Name)});");
+            builderStatements.Add(
+                $"__builder.Join(id: {forkJoin.JoinIdentity.Variable}, fork: {forkJoin.Identity.Variable}, policy: {policyVariable}, next: __builder.Edge(owner: {forkJoin.JoinIdentity.Variable}, role: \"next\", target: {successor}, {SourceArguments(forkJoin.Source, method.Name)}), result: {projectionVariable}, {SourceArguments(forkJoin.Source, method.Name)});");
+            return true;
+        }
+
+        bool TryEmitAction(ActionFlow action, string successor)
+        {
+            switch (action.Kind)
+            {
+                case ActionKind.Timer:
+                    var dueAt = Argument(action.Invocation, "dueAt");
+                    if (dueAt is null
+                        || !TryEmitValue(dueAt.Value, dueAt.Value.Type!, action.Source, out var dueAtValue))
+                    {
+                        return StatementFailure(action.Syntax, "Timer requires a portable absolute due instant");
+                    }
+
+                    builderStatements.Add(
+                        $"__builder.Timer(id: {action.Identity.Variable}, dueAt: {dueAtValue}, next: __builder.Edge(owner: {action.Identity.Variable}, role: \"next\", target: {successor}, {SourceArguments(action.Source, method.Name)}), {SourceArguments(action.Source, method.Name)});");
+                    return true;
+
+                case ActionKind.Reply:
+                    var contract = Argument(action.Invocation, "contract");
+                    var request = Argument(action.Invocation, "request");
+                    var payload = Argument(action.Invocation, "payload");
+                    var requestOperation = request is null ? null : Strip(request.Value);
+                    if (contract is null
+                        || requestOperation is not IParameterReferenceOperation requestParameter
+                        || !obligationByParameter.TryGetValue(requestParameter.Parameter, out var obligation)
+                        || payload is null
+                        || !TryEmitValue(payload.Value, payload.Value.Type!, action.Source, out var replyPayload)
+                        || !TryEmitExactArgument(contract, action.Syntax, out var replyContract))
+                    {
+                        return StatementFailure(
+                            action.Syntax,
+                            "Reply requires an exact contract, a Request obligation from the selected AwaitMatch branch, and a portable payload");
+                    }
+                    builderStatements.Add(
+                        $"__builder.Reply(id: {action.Identity.Variable}, contract: {replyContract}, request: {obligation}, payload: {replyPayload}, next: __builder.Edge(owner: {action.Identity.Variable}, role: \"next\", target: {successor}, {SourceArguments(action.Source, method.Name)}), {SourceArguments(action.Source, method.Name)});");
+                    return true;
+
+                default:
+                    return StatementFailure(action.Syntax, "unsupported awaited Process action");
+            }
+        }
+
+        bool TryEmitRequest(RequestFlow request, string successor)
+        {
+            var contract = Argument(request.Invocation, "contract");
+            var input = Argument(request.Invocation, "input");
+            if (contract is null
+                || input is null
+                || !TryEmitExactArgument(contract, request.Syntax, out var requestContract)
+                || !TryEmitValue(input.Value, input.Value.Type!, request.Source, out var payload))
+            {
+                return StatementFailure(request.Syntax, "a multi-outcome Request requires an exact contract and portable payload");
+            }
+
+            List<string> outcomes = [];
+            foreach (var outcome in request.Outcomes)
+            {
+                if (!TryLowerBlock(outcome.Body, successor, out var branchEntry) || branchEntry is null)
+                {
+                    return StatementFailure(outcome.Syntax, $"Request outcome '{outcome.Name}' requires a reachable continuation");
+                }
+                var terminalOutcome = Argument(outcome.Declaration, "outcome");
+                if (terminalOutcome is null
+                    || !TryEmitExactArgument(terminalOutcome, outcome.Syntax, out var terminalOutcomeExpression))
+                {
+                    return false;
+                }
+
+                var output = outputBySymbol[outcome.Input];
+                outcomes.Add(
+                    $"__builder.RequestOutcome(id: {outcome.Identity.Variable}, outcome: {terminalOutcomeExpression}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {outcome.Identity.Variable}, role: \"next\", target: {branchEntry}, {SourceArguments(outcome.Source, method.Name)}), output: {output}, {SourceArguments(outcome.Source, method.Name)}), {SourceArguments(outcome.Source, method.Name)})");
+            }
+
+            builderStatements.Add(
+                $"__builder.Request(id: {request.Identity.Variable}, contract: {requestContract}, payload: {payload}, outcomes: [{string.Join(", ", outcomes)}], {SourceArguments(request.Source, method.Name)});");
+            return true;
+        }
+
+        bool TryEmitAwaitMatch(AwaitMatchFlow awaitMatch, string successor)
+        {
+            List<string> clauses = [];
+            foreach (var clause in awaitMatch.Clauses)
+            {
+                if (!TryLowerBlock(clause.Body, successor, out var branchEntry) || branchEntry is null)
+                {
+                    return StatementFailure(clause.Syntax, $"AwaitMatch clause '{clause.Name}' requires a reachable continuation");
+                }
+                var priority = Argument(clause.Declaration, "priority");
+                var priorityExpression = priority is { IsImplicit: true }
+                    ? "0"
+                    : null;
+                if (priority is null
+                    || priorityExpression is null
+                    && !TryEmitExactArgument(priority, clause.Syntax, out priorityExpression))
+                {
+                    return StatementFailure(clause.Syntax, "AwaitMatch clause priority must be exact");
+                }
+
+                if (clause.Kind == AwaitClauseKind.Timer)
+                {
+                    var dueAt = Argument(clause.Declaration, "dueAt");
+                    if (dueAt is null
+                        || !TryEmitValue(dueAt.Value, dueAt.Value.Type!, clause.Source, out var dueAtValue))
+                    {
+                        return StatementFailure(clause.Syntax, "an AwaitMatch timer clause requires a portable absolute due instant");
+                    }
+
+                    clauses.Add(
+                        $"__builder.AwaitTimerClause(id: {clause.Identity.Variable}, dueAt: {dueAtValue}, priority: {priorityExpression}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {clause.Identity.Variable}, role: \"next\", target: {branchEntry}, {SourceArguments(clause.Source, method.Name)}), {SourceArguments(clause.Source, method.Name)}), {SourceArguments(clause.Source, method.Name)})");
+                    continue;
+                }
+
+                var contract = Argument(clause.Declaration, "contract");
+                if (contract is null
+                    || clause.Input is null
+                    || !TryEmitExactArgument(contract, clause.Syntax, out var interactionContract))
+                {
+                    return StatementFailure(clause.Syntax, "an AwaitMatch interaction clause requires an exact contract and typed input");
+                }
+
+                var output = outputBySymbol[clause.Input];
+                if (!TryEmitGuard(clause, output, out var guard))
+                {
+                    return false;
+                }
+
+                var obligation = clause.RequestObligation is null
+                    ? "null"
+                    : obligationByParameter[clause.RequestObligation];
+                clauses.Add(
+                    $"__builder.AwaitInteractionClause(id: {clause.Identity.Variable}, contract: {interactionContract}, input: {output}, requestObligation: {obligation}, guard: {guard}, priority: {priorityExpression}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {clause.Identity.Variable}, role: \"next\", target: {branchEntry}, {SourceArguments(clause.Source, method.Name)}), {SourceArguments(clause.Source, method.Name)}), {SourceArguments(clause.Source, method.Name)})");
+            }
+
+            var arbitration = Argument(awaitMatch.Invocation, "arbitration");
+            var lateInput = Argument(awaitMatch.Invocation, "lateInput");
+            var staleInput = Argument(awaitMatch.Invocation, "staleInput");
+            var duplicateInput = Argument(awaitMatch.Invocation, "duplicateInput");
+            var missingTarget = Argument(awaitMatch.Invocation, "missingTarget");
+            var retentionHorizon = Argument(awaitMatch.Invocation, "retentionHorizon");
+            if (arbitration is null
+                || lateInput is null
+                || staleInput is null
+                || duplicateInput is null
+                || missingTarget is null
+                || retentionHorizon is null
+                || !TryEmitExactArgument(arbitration, awaitMatch.Syntax, out var arbitrationExpression)
+                || !TryEmitExactArgument(lateInput, awaitMatch.Syntax, out var lateInputExpression)
+                || !TryEmitExactArgument(staleInput, awaitMatch.Syntax, out var staleInputExpression)
+                || !TryEmitExactArgument(duplicateInput, awaitMatch.Syntax, out var duplicateInputExpression)
+                || !TryEmitExactArgument(missingTarget, awaitMatch.Syntax, out var missingTargetExpression)
+                || !TryEmitExactArgument(retentionHorizon, awaitMatch.Syntax, out var retentionExpression))
+            {
+                return StatementFailure(awaitMatch.Syntax, "AwaitMatch requires exact arbitration, input-disposition, missing-target, and retention policies");
+            }
+
+            builderStatements.Add(
+                $"__builder.AwaitMatch(id: {awaitMatch.Identity.Variable}, arbitration: {arbitrationExpression}, clauses: [{string.Join(", ", clauses)}], lateInput: {lateInputExpression}, staleInput: {staleInputExpression}, duplicateInput: {duplicateInputExpression}, missingTarget: {missingTargetExpression}, retentionHorizon: {retentionExpression}, {SourceArguments(awaitMatch.Source, method.Name)});");
+            return true;
+        }
+
+        bool TryEmitGuard(AwaitClauseFlow clause, string output, out string guard)
+        {
+            guard = "null";
+            var argument = Argument(clause.Declaration, "when");
+            if (argument is null
+                || argument.IsImplicit
+                || Strip(argument.Value).ConstantValue is { HasValue: true, Value: null })
+            {
+                return true;
+            }
+
+            var operation = Strip(argument.Value);
+            if (operation is IDelegateCreationOperation delegateCreation)
+            {
+                operation = Strip(delegateCreation.Target);
+            }
+
+            if (operation is not IAnonymousFunctionOperation anonymous
+                || anonymous.Symbol.Parameters.Length != 1)
+            {
+                return StatementFailure(
+                    argument.Syntax,
+                    "an AwaitMatch guard must be one inline portable lambda; runtime delegates and callbacks are not supported");
+            }
+
+            var returns = SelfAndDescendants(anonymous.Body)
+                .OfType<IReturnOperation>()
+                .Where(static returned => returned.ReturnedValue is not null)
+                .ToArray();
+            if (returns.Length != 1 || returns[0].ReturnedValue is not { } returnedValue)
+            {
+                return StatementFailure(argument.Syntax, "an AwaitMatch guard must contain one pure Boolean expression");
+            }
+
+            var parameter = anonymous.Symbol.Parameters[0];
+            outputBySymbol.Add(parameter, output);
+            try
+            {
+                if (!TryEmitValue(
+                        returnedValue,
+                        returnedValue.Type!,
+                        clause.Source,
+                        out guard))
+                {
+                    return false;
+                }
+            }
+            finally
+            {
+                outputBySymbol.Remove(parameter);
+            }
             return true;
         }
 
@@ -1309,6 +2050,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             {
                 return StatementFailure(match.Syntax, "the switch default requires a reachable continuation");
             }
+
             if (fallbackEntry is null)
             {
                 return StatementFailure(match.Syntax, "switch without a following continuation requires a default case");
@@ -1385,6 +2127,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             {
                 return StatementFailure(awaited.Syntax, "Transition requires an exact definition, portable subject, and portable input");
             }
+
             if (!TryEmitExactArgument(transition, awaited.Syntax, out var transitionReference))
             {
                 return false;
@@ -1405,11 +2148,13 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             {
                 return StatementFailure(awaited.Syntax, "Effect requires an exact Request contract, outcome, and portable payload");
             }
+
             if (!TryEmitExactArgument(contract, awaited.Syntax, out var requestContract)
                 || !TryEmitExactArgument(outcome, awaited.Syntax, out var terminalOutcome))
             {
                 return false;
             }
+
             var suffix = awaited.Identity.Variable.Substring("__node_".Length);
             var outcomeVariable = $"__outcome_{suffix}";
             builderStatements.Add(
@@ -1463,12 +2208,13 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             {
                 source = SourceLocation(initializer.Syntax);
             }
+
             var translator = new PureExpressionEmitter(
                 method,
                 inputParameter,
                 pureLocals,
                 forkResultTuples,
-                awaitByLocal,
+                outputBySymbol,
                 resolvingPureLocals);
             if (!translator.TryEmit(operation, out var expression, out var failure))
             {
@@ -1520,7 +2266,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         readonly IParameterSymbol inputParameter;
         readonly IReadOnlyDictionary<ILocalSymbol, IOperation> pureLocals;
         readonly IReadOnlyDictionary<ILocalSymbol, ImmutableArray<IOperation>> forkResultTuples;
-        readonly IReadOnlyDictionary<ILocalSymbol, AwaitFlow> awaits;
+        readonly IReadOnlyDictionary<ISymbol, string> outputs;
         readonly HashSet<ILocalSymbol> resolving;
 
         public PureExpressionEmitter(
@@ -1528,14 +2274,14 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             IParameterSymbol inputParameter,
             IReadOnlyDictionary<ILocalSymbol, IOperation> pureLocals,
             IReadOnlyDictionary<ILocalSymbol, ImmutableArray<IOperation>> forkResultTuples,
-            IReadOnlyDictionary<ILocalSymbol, AwaitFlow> awaits,
+            IReadOnlyDictionary<ISymbol, string> outputs,
             HashSet<ILocalSymbol> resolving)
         {
             this.method = method;
             this.inputParameter = inputParameter;
             this.pureLocals = pureLocals;
             this.forkResultTuples = forkResultTuples;
-            this.awaits = awaits;
+            this.outputs = outputs;
             this.resolving = resolving;
         }
 
@@ -1546,11 +2292,13 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             {
                 return TryEmit(tupleElement, out expression, out failure);
             }
+
             if (operation is IPropertyReferenceOperation pureMember
                 && TryResolvePureMember(pureMember, out var projected))
             {
                 return TryEmit(projected, out expression, out failure);
             }
+
             if (TryEmitCount(operation, out expression, out failure))
             {
                 return true;
@@ -1570,8 +2318,13 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     failure = string.Empty;
                     return true;
 
-                case ILocalReferenceOperation local when awaits.TryGetValue(local.Local, out var awaited):
-                    expression = awaited.OutputVariable + ".Expression";
+                case IParameterReferenceOperation parameter when outputs.TryGetValue(parameter.Parameter, out var output):
+                    expression = output + ".Expression";
+                    failure = string.Empty;
+                    return true;
+
+                case ILocalReferenceOperation local when outputs.TryGetValue(local.Local, out var output):
+                    expression = output + ".Expression";
                     failure = string.Empty;
                     return true;
 
@@ -1878,7 +2631,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             IOperation? source = operation switch
             {
                 IPropertyReferenceOperation property
-                    when property.Property.Name == "Count"
+                    when property.Property.Name is "Count" or "Length"
                          && property.Instance is not null
                          && IsCollection(property.Instance.Type) => property.Instance,
                 IInvocationOperation invocation
@@ -1961,6 +2714,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 {
                     continue;
                 }
+
                 value = assignment.Value;
                 return true;
             }
@@ -2053,9 +2807,13 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         segments.Reverse();
                         expression = BindingField("__builder.Input.Binding", segments);
                         return segments.Count != 0;
-                    case ILocalReferenceOperation local when awaits.TryGetValue(local.Local, out var awaited):
+                    case IParameterReferenceOperation parameter when outputs.TryGetValue(parameter.Parameter, out var parameterOutput):
                         segments.Reverse();
-                        expression = BindingField(awaited.OutputVariable + ".Binding", segments);
+                        expression = BindingField(parameterOutput + ".Binding", segments);
+                        return segments.Count != 0;
+                    case ILocalReferenceOperation local when outputs.TryGetValue(local.Local, out var output):
+                        segments.Reverse();
+                        expression = BindingField(output + ".Binding", segments);
                         return segments.Count != 0;
                     default:
                         expression = string.Empty;
@@ -2260,6 +3018,26 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         }
                     }
                 }
+                else if (statement is RequestFlow request)
+                {
+                    foreach (var outcome in request.Outcomes)
+                    {
+                        foreach (var nested in outcome.Body.Descendants())
+                        {
+                            yield return nested;
+                        }
+                    }
+                }
+                else if (statement is AwaitMatchFlow awaitMatch)
+                {
+                    foreach (var clause in awaitMatch.Clauses)
+                    {
+                        foreach (var nested in clause.Body.Descendants())
+                        {
+                            yield return nested;
+                        }
+                    }
+                }
                 else if (statement is not IfFlow conditional)
                 {
                     if (statement is not MatchFlow match)
@@ -2330,6 +3108,66 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         FlowIdentity Identity,
         FlowIdentity JoinIdentity,
         ImmutableArray<ForkBranchFlow> Branches,
+        ForkAuthoringMode Mode,
+        AuthoredOutput? Result,
+        IInvocationOperation Invocation,
+        SourceReference Source,
+        SyntaxNode Syntax)
+        : FlowStatement(Identity, Source, Syntax);
+
+    sealed record AuthoredOutput(
+        ISymbol Symbol,
+        ITypeSymbol Type,
+        FlowIdentity Owner,
+        string Role,
+        string Variable,
+        SourceReference Source);
+
+    sealed record BranchObligation(
+        IParameterSymbol Parameter,
+        FlowIdentity Owner,
+        string Variable,
+        SourceReference Source);
+
+    sealed record ActionFlow(
+        FlowIdentity Identity,
+        ActionKind Kind,
+        IInvocationOperation Invocation,
+        SourceReference Source,
+        SyntaxNode Syntax)
+        : FlowStatement(Identity, Source, Syntax);
+
+    sealed record RequestOutcomeFlow(
+        FlowIdentity Identity,
+        string Name,
+        FlowBlock Body,
+        IParameterSymbol Input,
+        IInvocationOperation Declaration,
+        SourceReference Source,
+        SyntaxNode Syntax);
+
+    sealed record RequestFlow(
+        FlowIdentity Identity,
+        ImmutableArray<RequestOutcomeFlow> Outcomes,
+        IInvocationOperation Invocation,
+        SourceReference Source,
+        SyntaxNode Syntax)
+        : FlowStatement(Identity, Source, Syntax);
+
+    sealed record AwaitClauseFlow(
+        FlowIdentity Identity,
+        string Name,
+        AwaitClauseKind Kind,
+        FlowBlock Body,
+        IParameterSymbol? Input,
+        IParameterSymbol? RequestObligation,
+        IInvocationOperation Declaration,
+        SourceReference Source,
+        SyntaxNode Syntax);
+
+    sealed record AwaitMatchFlow(
+        FlowIdentity Identity,
+        ImmutableArray<AwaitClauseFlow> Clauses,
         IInvocationOperation Invocation,
         SourceReference Source,
         SyntaxNode Syntax)
@@ -2348,5 +3186,29 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         Read = 2,
         Transition = 3,
         Effect = 4
+    }
+
+    enum ForkAuthoringMode
+    {
+        Unsupported = 0,
+        All = 1,
+        Any = 2,
+        RequiredCount = 3
+    }
+
+    enum ActionKind
+    {
+        Unsupported = 0,
+        Timer = 1,
+        Reply = 2
+    }
+
+    enum AwaitClauseKind
+    {
+        Unsupported = 0,
+        Event = 1,
+        Signal = 2,
+        Request = 3,
+        Timer = 4
     }
 }

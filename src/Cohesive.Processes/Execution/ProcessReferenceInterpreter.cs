@@ -2566,13 +2566,21 @@ public static class ProcessReferenceInterpreter
                 var requestObligations = join.Policy.Mode == ProcessJoinMode.All
                     ? MergeAllRequestObligations(fork, selected)
                     : fork.ParentRequestObligations;
-                ReplaceToken(owner with
+                var resolvedOwner = owner with
                 {
                     Node = join.Next.Target,
                     Disposition = ExecutionTokenDisposition.Ready,
                     Bindings = bindings,
                     RequestObligations = requestObligations
-                });
+                };
+                if (join.Result is not null)
+                {
+                    resolvedOwner = Bind(
+                        resolvedOwner,
+                        join.Result.Output,
+                        EvaluateJoinResult(join, join.Result, selected));
+                }
+                ReplaceToken(resolvedOwner);
                 ReplaceFork(fork with
                 {
                     Resolved = true,
@@ -2586,6 +2594,51 @@ public static class ProcessReferenceInterpreter
                 progressed = true;
             }
             return progressed;
+        }
+
+        PortableValue EvaluateJoinResult(
+            JoinProcessNode join,
+            ProcessJoinResultProjection projection,
+            IReadOnlyList<ProcessForkBranchState> selected)
+        {
+            var projectedByBranch = projection.Branches.ToDictionary(static branch => branch.Branch);
+            var winners = ImmutableArray.CreateBuilder<ObservationValue>(selected.Count);
+            foreach (var branch in selected)
+            {
+                if (!projectedByBranch.TryGetValue(branch.Branch, out var projected))
+                {
+                    throw new InvalidOperationException(
+                        $"Join '{join.Id.Value}' selected branch '{branch.Branch.Value}' without a result projection.");
+                }
+
+                var value = EvaluateTyped(projected.Result, projection.ResultContract, GetToken(branch.Token));
+                var fields = ImmutableDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
+                fields.Add("Branch", ObservationValue.FromString(branch.Branch.Value));
+                switch (value.State)
+                {
+                    case PortableValueState.Concrete:
+                        fields.Add("Result", value.Value!.Value);
+                        break;
+                    case PortableValueState.Null:
+                        fields.Add("Result", ObservationValue.Null);
+                        break;
+                    case PortableValueState.Absent when projection.ResultContract.Presence == FieldPresence.Optional:
+                        break;
+                    default:
+                        throw new InvalidOperationException(
+                            $"Join '{join.Id.Value}' branch '{branch.Branch.Value}' produced non-materializable result state '{value.State}'.");
+                }
+                winners.Add(ObservationValue.FromObject(fields.ToImmutable()));
+            }
+
+            var observed = join.Policy.Mode switch
+            {
+                ProcessJoinMode.Any when winners.Count == 1 => winners[0],
+                ProcessJoinMode.RequiredCount => ObservationValue.FromImmutableArray(winners.MoveToImmutable()),
+                _ => throw new InvalidOperationException(
+                    $"Join '{join.Id.Value}' has a result projection incompatible with mode '{join.Policy.Mode}'.")
+            };
+            return ValidateValue(PortableValue.Concrete(projection.Output.Contract, observed), projection.Output.Contract, join.Id);
         }
 
         static IEnumerable<ProcessForkBranchState> OrderEligible(

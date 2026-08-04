@@ -591,6 +591,106 @@ public sealed record ForkProcessNode : ProcessNode
     }
 }
 
+/// <summary>One portable result expression owned by a reciprocal Fork branch.</summary>
+public sealed record ProcessJoinBranchResult
+{
+    /// <summary>Creates a selected-branch result projection.</summary>
+    /// <param name="branch">Exact reciprocal Fork branch identity.</param>
+    /// <param name="result">Portable result expression evaluated in the completed branch token scope.</param>
+    [JsonConstructor]
+    public ProcessJoinBranchResult(ExecutionNodeId branch, Expr result)
+    {
+        Branch = branch;
+        Result = result;
+    }
+
+    /// <summary>Exact reciprocal Fork branch identity.</summary>
+    public ExecutionNodeId Branch { get; }
+
+    /// <summary>Portable result expression evaluated only for a branch selected by the Join policy.</summary>
+    public Expr Result { get; }
+}
+
+/// <summary>
+/// Typed projection of the branch results selected by an <c>Any</c> or <c>RequiredCount</c> Join.
+/// </summary>
+/// <remarks>
+/// The projection does not publish arbitrary branch-local bindings. Each branch supplies one explicit portable
+/// expression, and the interpreter evaluates only the deterministically selected branches before populating the
+/// single output binding.
+/// </remarks>
+public sealed record ProcessJoinResultProjection
+{
+    /// <summary>Creates a partial-Join result projection.</summary>
+    /// <param name="output">Typed binding populated when the Join resolves.</param>
+    /// <param name="resultContract">Common portable contract of every selected branch result.</param>
+    /// <param name="branches">Set-like result expressions keyed by reciprocal Fork branch identity.</param>
+    [JsonConstructor]
+    public ProcessJoinResultProjection(
+        ProcessOutputBinding output,
+        ValueContract resultContract,
+        ImmutableArray<ProcessJoinBranchResult> branches)
+    {
+        Output = output;
+        ResultContract = resultContract;
+        Branches = ProcessIrCollections.NormalizeSet(branches, CompareBranches);
+    }
+
+    /// <summary>Typed binding populated with the selected winner or winner collection.</summary>
+    public ProcessOutputBinding Output { get; }
+
+    /// <summary>Common portable contract of every selected branch result expression.</summary>
+    public ValueContract ResultContract { get; }
+
+    /// <summary>Branch result expressions in deterministic branch-identity order.</summary>
+    public ImmutableArray<ProcessJoinBranchResult> Branches { get; }
+
+    /// <summary>Compares projections by output, result contract, and normalized branch expressions.</summary>
+    /// <param name="other">Projection to compare with this value.</param>
+    /// <returns><see langword="true"/> when the complete normalized projections are equal.</returns>
+    public bool Equals(ProcessJoinResultProjection? other) =>
+        ReferenceEquals(this, other)
+        || other is not null
+        && Output == other.Output
+        && ResultContract == other.ResultContract
+        && Branches.SequenceEqual(other.Branches);
+
+    /// <summary>Returns a structural hash for the complete normalized projection.</summary>
+    /// <returns>A hash derived from the output, result contract, and branch projections.</returns>
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Output);
+        hash.Add(ResultContract);
+        foreach (var branch in Branches)
+        {
+            hash.Add(branch);
+        }
+
+        return hash.ToHashCode();
+    }
+
+    static int CompareBranches(ProcessJoinBranchResult? left, ProcessJoinBranchResult? right)
+    {
+        if (ReferenceEquals(left, right))
+        {
+            return 0;
+        }
+
+        if (left is null)
+        {
+            return -1;
+        }
+
+        if (right is null)
+        {
+            return 1;
+        }
+
+        return StringComparer.Ordinal.Compare(left.Branch.Value, right.Branch.Value);
+    }
+}
+
 /// <summary>Converges tokens from one reciprocal Fork under an explicit deterministic policy.</summary>
 public sealed record JoinProcessNode : ProcessNode
 {
@@ -599,17 +699,20 @@ public sealed record JoinProcessNode : ProcessNode
     /// <param name="fork">Stable identity of the reciprocal Fork.</param>
     /// <param name="policy">Explicit completion, failure, cancellation, ordering, and tie-break policy.</param>
     /// <param name="next">Stable edge selected after the Join is satisfied.</param>
+    /// <param name="result">Optional typed projection of selected partial-Join branch results.</param>
     [JsonConstructor]
     public JoinProcessNode(
         ExecutionNodeId id,
         ExecutionNodeId fork,
         ProcessJoinPolicy policy,
-        ProcessEdge next)
+        ProcessEdge next,
+        ProcessJoinResultProjection? result = null)
         : base(id)
     {
         Fork = fork;
         Policy = policy;
         Next = next;
+        Result = result;
     }
 
     /// <summary>Stable identity of the reciprocal Fork.</summary>
@@ -620,6 +723,11 @@ public sealed record JoinProcessNode : ProcessNode
 
     /// <summary>Stable edge selected after the Join is satisfied.</summary>
     public ProcessEdge Next { get; }
+
+    /// <summary>
+    /// Optional typed projection populated from exactly the branches selected by a partial Join.
+    /// </summary>
+    public ProcessJoinResultProjection? Result { get; }
 }
 
 /// <summary>Durably registers a closed set of clauses and selects exactly one deterministic winner.</summary>

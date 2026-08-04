@@ -1020,6 +1020,48 @@ public sealed class ProcessDefinitionValidatorTests
     }
 
     [Fact]
+    public void Validate_JoinResultProjectionRequiresPartialModeAndEveryReciprocalBranch()
+    {
+        var definition = Definition(
+            entry: "fork",
+            nodes:
+            [
+                new ForkProcessNode(
+                    new("fork"),
+                    [
+                        new(new("branch/a"), Edge("edge/fork-a", "a")),
+                        new(new("branch/b"), Edge("edge/fork-b", "b"))
+                    ],
+                    new("join")),
+                new DurableCutProcessNode(new("a"), Edge("edge/a-join", "join")),
+                new DurableCutProcessNode(new("b"), Edge("edge/b-join", "join")),
+                new JoinProcessNode(
+                    new("join"),
+                    new("fork"),
+                    new ProcessJoinPolicy(
+                        mode: ProcessJoinMode.All,
+                        requiredCount: 0,
+                        failure: ProcessJoinFailurePolicy.FailFast,
+                        cancellation: ProcessJoinCancellationPolicy.AwaitRemaining,
+                        completionOrder: ProcessJoinCompletionOrder.Unobservable,
+                        tieBreak: ProcessJoinTieBreak.BranchIdentity),
+                    Edge("edge/join-return", "return"),
+                    new(
+                        new(new("join.result"), StringContract),
+                        StringContract,
+                        [new(new("branch/a"), Expr.Const("a"))])),
+                new ReturnProcessNode(new("return"), Expr.Const("done"))
+            ]);
+
+        var validation = ProcessDefinitionValidator.Validate(definition);
+
+        AssertDiagnostic(
+            validation,
+            ProcessDefinitionDiagnosticCodes.JoinResultProjectionInvalid,
+            "/nodes/3/result");
+    }
+
+    [Fact]
     public void Validate_AwaitMatchRequiresClausesPoliciesAndPositiveRetention()
     {
         var definition = Definition(

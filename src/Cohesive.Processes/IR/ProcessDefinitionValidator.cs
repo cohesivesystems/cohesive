@@ -121,6 +121,12 @@ public static class ProcessDefinitionDiagnosticCodes
     /// <summary>A Join makes completion order semantic while declaring it unobservable.</summary>
     public const string JoinCompletionPolicyInvalid = "processes.ir.joinCompletionPolicyInvalid";
 
+    /// <summary>A partial-Join result projection is incomplete or incompatible with its Join policy.</summary>
+    public const string JoinResultProjectionInvalid = "processes.ir.joinResultProjectionInvalid";
+
+    /// <summary>A partial-Join result output contract does not match its canonical winner shape.</summary>
+    public const string JoinResultContractMismatch = "processes.ir.joinResultContractMismatch";
+
     /// <summary>An AwaitMatch declares no eligible clauses.</summary>
     public const string AwaitClausesEmpty = "processes.ir.awaitClausesEmpty";
 
@@ -271,6 +277,7 @@ public static class ProcessDefinitionValidator
         readonly Dictionary<ValueBindingId, BindingInfo> bindings = [];
         readonly Dictionary<ValueBindingId, string> localBindings = [];
         readonly List<ExpressionInfo> expressions = [];
+        readonly List<JoinResultExpressionInfo> joinResultExpressions = [];
         readonly Dictionary<RequestObligationBindingId, RequestObligationInfo> requestObligations = [];
         readonly List<ReplyRequestInfo> replyRequests = [];
         readonly Dictionary<ExecutionNodeId, ForkJoinInfo> forkJoinsByJoin = [];
@@ -1298,7 +1305,114 @@ public static class ProcessDefinitionValidator
                         observed: join.Policy.TieBreak.ToString());
                 }
             }
-            RegisterEdge(join.Next, Child(location, "next"), join.Id);
+            var next = RegisterEdge(join.Next, Child(location, "next"), join.Id);
+            if (join.Result is null)
+            {
+                return;
+            }
+
+            var resultLocation = Child(location, "result");
+            if (join.Policy is null || join.Policy.Mode is not (ProcessJoinMode.Any or ProcessJoinMode.RequiredCount))
+            {
+                Error(
+                    ProcessDefinitionDiagnosticCodes.JoinResultProjectionInvalid,
+                    "Only Any and RequiredCount Joins may project selected branch results.",
+                    resultLocation,
+                    subject: join.Id.Value);
+            }
+            if (join.Result.Output is null)
+            {
+                Missing(Child(resultLocation, "output"), "A partial-Join result projection requires one typed output binding.");
+            }
+            else
+            {
+                ValidateContract(join.Result.Output.Contract, Child(resultLocation, "output/contract"));
+                RegisterBinding(join.Result.Output, Child(resultLocation, "output"), join.Id, next);
+            }
+            if (join.Result.ResultContract is null)
+            {
+                Missing(Child(resultLocation, "resultContract"), "A partial-Join projection requires one common result contract.");
+            }
+            else
+            {
+                ValidateContract(join.Result.ResultContract, Child(resultLocation, "resultContract"));
+                if (join.Result.Output is not null
+                    && ExpectedJoinResultContract(join.Policy?.Mode ?? ProcessJoinMode.Unspecified, join.Result.ResultContract)
+                        is { } expected
+                    && join.Result.Output.Contract != expected)
+                {
+                    Error(
+                        ProcessDefinitionDiagnosticCodes.JoinResultContractMismatch,
+                        "The partial-Join output contract differs from its canonical winner shape.",
+                        Child(resultLocation, "output/contract"),
+                        subject: join.Result.Output.Binding.Value,
+                        expected: Describe(expected),
+                        observed: Describe(join.Result.Output.Contract));
+                }
+            }
+
+            if (join.Result.Branches.IsDefaultOrEmpty)
+            {
+                Error(
+                    ProcessDefinitionDiagnosticCodes.JoinResultProjectionInvalid,
+                    "A partial-Join result projection requires one result expression per reciprocal Fork branch.",
+                    Child(resultLocation, "branches"),
+                    subject: join.Id.Value);
+                return;
+            }
+
+            HashSet<ExecutionNodeId> observedBranches = [];
+            for (var index = 0; index < join.Result.Branches.Length; index++)
+            {
+                var branch = join.Result.Branches[index];
+                var branchLocation = $"{resultLocation}/branches/{index.ToString(CultureInfo.InvariantCulture)}";
+                if (branch is null || string.IsNullOrWhiteSpace(branch.Branch.Value) || !observedBranches.Add(branch.Branch))
+                {
+                    Error(
+                        ProcessDefinitionDiagnosticCodes.JoinResultProjectionInvalid,
+                        "A partial-Join branch result requires one unique stable branch identity.",
+                        Child(branchLocation, "branch"),
+                        subject: branch?.Branch.Value ?? join.Id.Value);
+                    continue;
+                }
+                if (branch.Result is null)
+                {
+                    Missing(Child(branchLocation, "result"), "A partial-Join branch requires one portable result expression.");
+                    continue;
+                }
+
+                joinResultExpressions.Add(new(
+                    join.Id,
+                    branch.Branch,
+                    branch.Result,
+                    Child(branchLocation, "result"),
+                    join.Result.ResultContract));
+            }
+        }
+
+        static ValueContract? ExpectedJoinResultContract(ProcessJoinMode mode, ValueContract result)
+        {
+            if (result.Type is null)
+            {
+                return null;
+            }
+
+            var winner = new ObjectTypeRef(
+            [
+                new("Branch", new ScalarTypeRef(ScalarTypeKind.String)),
+                new(
+                    "Result",
+                    result.Type,
+                    result.Cardinality,
+                    result.Presence,
+                    result.Nullability)
+            ]);
+            return mode switch
+            {
+                ProcessJoinMode.Any => new(winner),
+                ProcessJoinMode.RequiredCount => new(new ArrayTypeRef(winner)),
+                _ => null
+            };
         }
 
         void ValidateAwaitMatch(AwaitMatchProcessNode awaitMatch, string location)
@@ -2240,6 +2354,28 @@ public static class ProcessDefinitionValidator
                                 ? branchAnalyses.MoveToImmutable()
                                 : branchAnalyses.ToImmutable(),
                             isSound);
+
+                        if (join.Result is not null)
+                        {
+                            var projected = join.Result.Branches
+                                .Where(static branch => branch is not null && !string.IsNullOrWhiteSpace(branch.Branch.Value))
+                                .Select(static branch => branch.Branch)
+                                .ToHashSet();
+                            var declared = fork.Branches
+                                .Where(static branch => branch is not null)
+                                .Select(static branch => branch.Id)
+                                .ToHashSet();
+                            if (!projected.SetEquals(declared))
+                            {
+                                Error(
+                                    ProcessDefinitionDiagnosticCodes.JoinResultProjectionInvalid,
+                                    "A partial-Join projection must declare exactly one result for every reciprocal Fork branch.",
+                                    Child(joinInfo.Location, "result/branches"),
+                                    subject: join.Id.Value,
+                                    expected: string.Join(",", declared.OrderBy(static id => id.Value).Select(static id => id.Value)),
+                                    observed: string.Join(",", projected.OrderBy(static id => id.Value).Select(static id => id.Value)));
+                            }
+                        }
                     }
                 }
                 else if (pair.Value.Node is JoinProcessNode join)
@@ -2498,7 +2634,7 @@ public static class ProcessDefinitionValidator
 
         void ValidateBindingFlowAndExpressions()
         {
-            if (nodes.Count == 0 || expressions.Count == 0)
+            if (nodes.Count == 0 || (expressions.Count == 0 && joinResultExpressions.Count == 0))
                 return;
 
             var visible = ComputeDefiniteFlow(
@@ -2519,37 +2655,89 @@ public static class ProcessDefinitionValidator
                     available.Add(local.Binding);
                 }
 
-                var scopeBindings = ImmutableArray.CreateBuilder<ExprScopeBinding>(available.Count);
-                foreach (var binding in available.OrderBy(static id => id.Value, StringComparer.Ordinal))
+                AnalyzeExpression(
+                    expression.Owner,
+                    expression.Expression,
+                    expression.Location,
+                    expression.Expected,
+                    expression.ExpectedBoolean,
+                    expression.LocalBinding,
+                    available);
+            }
+
+            foreach (var expression in joinResultExpressions)
+            {
+                if (!forkJoinsByJoin.TryGetValue(expression.Join, out var forkJoin)
+                    || forkJoin.Branches.FirstOrDefault(candidate => candidate.Branch.Id == expression.Branch)
+                        is not { } branch
+                    || branch.JoinIngress.IsDefaultOrEmpty)
                 {
-                    if (expression.LocalBinding is { Contract: not null } localBinding
-                        && localBinding.Binding == binding)
+                    continue;
+                }
+
+                HashSet<ValueBindingId>? available = null;
+                foreach (var ingress in branch.JoinIngress)
+                {
+                    var ingressBindings = visible.TryGetValue(ingress.Source, out var sourceVisible)
+                        ? new HashSet<ValueBindingId>(sourceVisible)
+                        : [];
+                    ingressBindings.UnionWith(ingress.ProducedBindings);
+                    if (available is null)
                     {
-                        scopeBindings.Add(new(binding, localBinding.Contract));
+                        available = ingressBindings;
                     }
-                    else if (bindings.TryGetValue(binding, out var contract)
-                             && contract.Contract is not null)
+                    else
                     {
-                        scopeBindings.Add(new(binding, contract.Contract));
+                        available.IntersectWith(ingressBindings);
                     }
                 }
 
-                ExprExpectation expectation;
-                if (expression.ExpectedBoolean)
-                    expectation = ExprExpectation.Boolean;
-                else if (expression.Expected is { } expected)
-                    expectation = new(value: expected);
-                else
-                    expectation = ExprExpectation.Any;
-                var analysis = ExprAnalyzer.Analyze(new(
-                    new ExprSiteId($"process:{expression.Owner.Value}:{expression.Location}"),
+                AnalyzeExpression(
+                    expression.Join,
                     expression.Expression,
-                    new ExprScope(scopeBindings.ToImmutable()),
-                    expectation,
-                    ProcessExpressionLanguage.Capabilities,
-                    diagnosticLocation: expression.Location));
-                diagnostics.AddRange(analysis.Validation.Diagnostics);
+                    expression.Location,
+                    expression.Expected,
+                    expectedBoolean: false,
+                    localBinding: null,
+                    available ?? []);
             }
+        }
+
+        void AnalyzeExpression(
+            ExecutionNodeId owner,
+            Expr expression,
+            string location,
+            ValueContract? expected,
+            bool expectedBoolean,
+            ProcessOutputBinding? localBinding,
+            IReadOnlySet<ValueBindingId> available)
+        {
+            var scopeBindings = ImmutableArray.CreateBuilder<ExprScopeBinding>(available.Count);
+            foreach (var binding in available.OrderBy(static id => id.Value, StringComparer.Ordinal))
+            {
+                if (localBinding is { Contract: not null } local && local.Binding == binding)
+                {
+                    scopeBindings.Add(new(binding, local.Contract));
+                }
+                else if (bindings.TryGetValue(binding, out var contract) && contract.Contract is not null)
+                {
+                    scopeBindings.Add(new(binding, contract.Contract));
+                }
+            }
+
+            var expectation = expectedBoolean
+                ? ExprExpectation.Boolean
+                : expected is not null
+                    ? new ExprExpectation(value: expected)
+                    : ExprExpectation.Any;
+            var analysis = ExprAnalyzer.Analyze(new(
+                new ExprSiteId($"process:{owner.Value}:{location}"),
+                expression,
+                new ExprScope(scopeBindings.ToImmutable()),
+                expectation,
+                ProcessExpressionLanguage.Capabilities,
+                diagnosticLocation: location));
+            diagnostics.AddRange(analysis.Validation.Diagnostics);
         }
 
         void ValidateRequestObligationFlow()
@@ -2949,6 +3137,13 @@ public static class ProcessDefinitionValidator
             ValueContract? Expected,
             bool ExpectedBoolean,
             ProcessOutputBinding? LocalBinding);
+
+        sealed record JoinResultExpressionInfo(
+            ExecutionNodeId Join,
+            ExecutionNodeId Branch,
+            Expr Expression,
+            string Location,
+            ValueContract? Expected);
 
         enum VisitState
         {

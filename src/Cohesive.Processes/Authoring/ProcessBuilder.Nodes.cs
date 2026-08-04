@@ -294,6 +294,7 @@ public sealed partial class ProcessBuilder<TInput, TResult>
     /// <param name="fork">Stable identity of the reciprocal Fork.</param>
     /// <param name="policy">Explicit completion, failure, cancellation, ordering, and tie-break policy.</param>
     /// <param name="next">Edge selected after the Join is satisfied.</param>
+    /// <param name="result">Optional typed projection populated from the deterministically selected branches.</param>
     /// <param name="sourceFile">Compiler-supplied source file used only for source attribution.</param>
     /// <param name="sourceLine">Compiler-supplied source line used only for source attribution.</param>
     /// <param name="sourceMember">Compiler-supplied source member used only for source attribution.</param>
@@ -307,6 +308,7 @@ public sealed partial class ProcessBuilder<TInput, TResult>
         ExecutionNodeId fork,
         ProcessJoinPolicy policy,
         ProcessEdge next,
+        ProcessJoinResultProjection? result = null,
         [CallerFilePath] string sourceFile = "",
         [CallerLineNumber] int sourceLine = 0,
         [CallerMemberName] string sourceMember = "")
@@ -315,7 +317,7 @@ public sealed partial class ProcessBuilder<TInput, TResult>
         ArgumentNullException.ThrowIfNull(next);
         var source = context.Source(sourceFile, sourceLine, sourceMember, $"Join '{id.Value}'");
         context.RegisterIfAbsent(policy, source);
-        return Add(new JoinProcessNode(id, fork, policy, next), source);
+        return Add(new JoinProcessNode(id, fork, policy, next, result), source);
     }
 
     /// <summary>Adds a durable AwaitMatch over a closed set of typed interaction and timer clauses.</summary>

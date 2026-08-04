@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 using Cohesive.Execution;
 using Cohesive.Processes.IR;
@@ -566,6 +567,57 @@ public sealed partial class ProcessBuilder<TInput, TResult>
         var branch = new ProcessForkBranch(id, start, capacityDomain);
         context.Register(branch, source);
         return branch;
+    }
+
+    /// <summary>Creates one portable result expression associated with a reciprocal Fork branch.</summary>
+    /// <typeparam name="TResultValue">CLR type projected into the selected branch-result contract.</typeparam>
+    /// <param name="branch">Exact reciprocal Fork branch identity.</param>
+    /// <param name="result">Portable result expression evaluated in that completed branch's token scope.</param>
+    /// <param name="sourceFile">Compiler-supplied source file used only for source attribution.</param>
+    /// <param name="sourceLine">Compiler-supplied source line used only for source attribution.</param>
+    /// <param name="sourceMember">Compiler-supplied source member used only for source attribution.</param>
+    /// <returns>The canonical selected-branch result projection.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="result"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException"><paramref name="result"/> belongs to another authoring session.</exception>
+    public ProcessJoinBranchResult JoinBranchResult<TResultValue>(
+        ExecutionNodeId branch,
+        ProcessValue<TResultValue> result,
+        [CallerFilePath] string sourceFile = "",
+        [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "")
+    {
+        context.RequireValue(result);
+        var source = context.Source(sourceFile, sourceLine, sourceMember, $"Join branch result '{branch.Value}'");
+        var projection = new ProcessJoinBranchResult(branch, result.Expression);
+        context.Register(projection, source);
+        return projection;
+    }
+
+    /// <summary>Creates the typed output projection of one partial Join.</summary>
+    /// <typeparam name="TOutput">CLR winner or winner-collection type bound after the Join.</typeparam>
+    /// <param name="output">Typed binding populated when the Join resolves.</param>
+    /// <param name="resultContract">Common exact portable contract of every branch result expression.</param>
+    /// <param name="branches">Set-like result expressions keyed by reciprocal Fork branch identity.</param>
+    /// <param name="sourceFile">Compiler-supplied source file used only for source attribution.</param>
+    /// <param name="sourceLine">Compiler-supplied source line used only for source attribution.</param>
+    /// <param name="sourceMember">Compiler-supplied source member used only for source attribution.</param>
+    /// <returns>The canonical partial-Join result projection.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="resultContract"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException"><paramref name="output"/> belongs to another authoring session.</exception>
+    public ProcessJoinResultProjection JoinResult<TOutput>(
+        ProcessBinding<TOutput> output,
+        ValueContract resultContract,
+        ImmutableArray<ProcessJoinBranchResult> branches,
+        [CallerFilePath] string sourceFile = "",
+        [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "")
+    {
+        context.RequireBinding(output);
+        ArgumentNullException.ThrowIfNull(resultContract);
+        var source = context.Source(sourceFile, sourceLine, sourceMember, "Partial Join result projection");
+        var projection = new ProcessJoinResultProjection(output.RequireOutput(), resultContract, branches);
+        context.Register(projection, source);
+        return projection;
     }
 
     /// <summary>Creates one typed interaction clause for a durable AwaitMatch.</summary>

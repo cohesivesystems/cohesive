@@ -2446,6 +2446,9 @@ public static class ProcessContinuationValidator
                             }
                         }
                         break;
+                    case JoinProcessNode join:
+                        Add(contracts, join.Result?.Output);
+                        break;
                 }
             }
             return contracts;
