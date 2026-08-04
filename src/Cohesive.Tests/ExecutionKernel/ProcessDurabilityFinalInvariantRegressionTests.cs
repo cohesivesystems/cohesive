@@ -143,6 +143,7 @@ public sealed class ProcessDurabilityFinalInvariantRegressionTests
     [InlineData(ExecutionTokenDisposition.Ready)]
     [InlineData(ExecutionTokenDisposition.Active)]
     [InlineData(ExecutionTokenDisposition.Waiting)]
+    [InlineData(ExecutionTokenDisposition.Pending)]
     public void TerminalContinuation_RejectsEveryLiveTokenDisposition(
         ExecutionTokenDisposition disposition)
     {

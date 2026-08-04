@@ -349,7 +349,10 @@ public enum ExecutionTokenDisposition
     Failed = 5,
 
     /// <summary>The token ended through Process cancellation.</summary>
-    Cancelled = 6
+    Cancelled = 6,
+
+    /// <summary>The token is durably retained but has not yet been admitted to execute its semantic node.</summary>
+    Pending = 7
 }
 
 /// <summary>Safe identity and lifecycle status of one durable Process token.</summary>

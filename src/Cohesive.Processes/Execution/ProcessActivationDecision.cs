@@ -90,7 +90,10 @@ public enum ProcessTraceEventKind
     RecurrenceAdvanced = 18,
 
     /// <summary>Owner or partition closure closed bounded child work before its Request was emitted.</summary>
-    ChildCancelledBeforeStart = 19
+    ChildCancelledBeforeStart = 19,
+
+    /// <summary>A Fork admission point changed, admitted a branch, or retained a finite activation boundary.</summary>
+    ForkAdmissionChanged = 20
 }
 
 /// <summary>One ordered attributable observation from Process reference interpretation.</summary>

@@ -256,6 +256,39 @@ public sealed partial class ProcessBuilder<TInput, TResult>
         return Add(new ForkProcessNode(id, branches, join), source);
     }
 
+    /// <summary>Adds a finite normalized parallel Fork with explicit durable admission limits.</summary>
+    /// <param name="id">Stable Process-node identity.</param>
+    /// <param name="branches">Set-like stable branch declarations and optional capacity assignments.</param>
+    /// <param name="join">Stable identity of the reciprocal Join.</param>
+    /// <param name="limits">Hard finite branch, per-activation start, and parallelism limits.</param>
+    /// <param name="capacityDomains">Optional named capacity-domain limits.</param>
+    /// <param name="sourceFile">Compiler-supplied source file used only for source attribution.</param>
+    /// <param name="sourceLine">Compiler-supplied source line used only for source attribution.</param>
+    /// <param name="sourceMember">Compiler-supplied source member used only for source attribution.</param>
+    /// <returns>This Process builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="limits"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException"><paramref name="id"/> duplicates an authored node.</exception>
+    public ProcessBuilder<TInput, TResult> Fork(
+        ExecutionNodeId id,
+        ImmutableArray<ProcessForkBranch> branches,
+        ExecutionNodeId join,
+        ProcessWorkLimits limits,
+        ImmutableArray<ProcessCapacityDomainLimit> capacityDomains,
+        [CallerFilePath] string sourceFile = "",
+        [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "")
+    {
+        ArgumentNullException.ThrowIfNull(limits);
+        var source = context.Source(sourceFile, sourceLine, sourceMember, $"Fork '{id.Value}'");
+        context.RegisterIfAbsent(limits, source);
+        foreach (var domain in capacityDomains.IsDefault ? [] : capacityDomains)
+        {
+            if (domain is not null)
+                context.RegisterIfAbsent(domain, source);
+        }
+        return Add(new ForkProcessNode(id, branches, join, limits, capacityDomains), source);
+    }
+
     /// <summary>Adds a Join that converges tokens from one reciprocal Fork.</summary>
     /// <param name="id">Stable Process-node identity.</param>
     /// <param name="fork">Stable identity of the reciprocal Fork.</param>

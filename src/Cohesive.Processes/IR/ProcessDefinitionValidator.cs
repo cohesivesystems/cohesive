@@ -166,6 +166,9 @@ public static class ProcessDefinitionDiagnosticCodes
     /// <summary>A bounded partition capacity expression and its canonical domain limits are inconsistent.</summary>
     public const string PartitionCapacityInvalid = "processes.ir.partitionCapacityInvalid";
 
+    /// <summary>A Fork branch assignment and its canonical capacity-domain limits are inconsistent.</summary>
+    public const string ForkCapacityInvalid = "processes.ir.forkCapacityInvalid";
+
     /// <summary>A bounded partition lexical binding does not describe one collection element.</summary>
     public const string PartitionBindingCardinalityInvalid = "processes.ir.partitionBindingCardinalityInvalid";
 
@@ -504,28 +507,7 @@ public static class ProcessDefinitionValidator
                 localBinding: partition.Partition);
 
             ValidateEnum(partition.Cancellation, Child(location, "cancellation"));
-            if (partition.Limits is null)
-            {
-                Missing(Child(location, "limits"), "Bounded partition work requires explicit finite limits.");
-            }
-            else
-            {
-                ValidateWorkLimit(
-                    partition.Limits.MaximumItems,
-                    Child(location, "limits/maximumItems"),
-                    partition.Id,
-                    upperBound: null);
-                ValidateWorkLimit(
-                    partition.Limits.MaximumStartsPerActivation,
-                    Child(location, "limits/maximumStartsPerActivation"),
-                    partition.Id,
-                    partition.Limits.MaximumItems);
-                ValidateWorkLimit(
-                    partition.Limits.MaximumParallelism,
-                    Child(location, "limits/maximumParallelism"),
-                    partition.Id,
-                    partition.Limits.MaximumItems);
-            }
+            ValidateWorkLimits(partition.Limits, Child(location, "limits"), partition.Id, requiredItems: null);
 
             RegisterEdge(partition.Completed, Child(location, "completed"), partition.Id);
             RegisterEdge(partition.Failed, Child(location, "failed"), partition.Id);
@@ -567,46 +549,11 @@ public static class ProcessDefinitionValidator
                 return;
             }
 
-            Dictionary<string, string> identities = new(StringComparer.Ordinal);
-            for (var index = 0; index < partition.CapacityDomains.Length; index++)
-            {
-                var domain = partition.CapacityDomains[index];
-                var domainLocation = $"{capacityLocation}/{index.ToString(CultureInfo.InvariantCulture)}";
-                if (domain is null)
-                {
-                    Missing(domainLocation, "A capacity-domain limit cannot be null.");
-                    continue;
-                }
-
-                if (string.IsNullOrWhiteSpace(domain.Identity))
-                {
-                    Error(
-                        ProcessDefinitionDiagnosticCodes.PartitionCapacityInvalid,
-                        "A capacity-domain limit requires a stable non-empty identity.",
-                        Child(domainLocation, "identity"),
-                        subject: partition.Id.Value);
-                }
-                else if (!identities.TryAdd(domain.Identity, Child(domainLocation, "identity")))
-                {
-                    Error(
-                        ProcessDefinitionDiagnosticCodes.PartitionCapacityInvalid,
-                        $"Capacity-domain identity '{domain.Identity}' is declared more than once.",
-                        Child(domainLocation, "identity"),
-                        subject: domain.Identity,
-                        relatedLocations: [identities[domain.Identity]]);
-                }
-
-                if (domain.MaximumParallelism <= 0)
-                {
-                    Error(
-                        ProcessDefinitionDiagnosticCodes.PartitionCapacityInvalid,
-                        "A capacity-domain parallelism limit must be positive.",
-                        Child(domainLocation, "maximumParallelism"),
-                        subject: domain.Identity,
-                        expected: "> 0",
-                        observed: domain.MaximumParallelism.ToString(CultureInfo.InvariantCulture));
-                }
-            }
+            _ = ValidateCapacityDomains(
+                partition.CapacityDomains,
+                capacityLocation,
+                partition.Id,
+                ProcessDefinitionDiagnosticCodes.PartitionCapacityInvalid);
         }
 
         void ValidateRepeatAcrossActivation(
@@ -678,6 +625,100 @@ public static class ProcessDefinitionValidator
                 subject: node.Value,
                 expected: upperBound is null ? "> 0" : $"1..{upperBound.Value.ToString(CultureInfo.InvariantCulture)}",
                 observed: value.ToString(CultureInfo.InvariantCulture));
+        }
+
+        void ValidateWorkLimits(
+            ProcessWorkLimits? limits,
+            string location,
+            ExecutionNodeId node,
+            int? requiredItems)
+        {
+            if (limits is null)
+            {
+                Missing(location, "Bounded Process work requires explicit finite limits.");
+                return;
+            }
+
+            ValidateWorkLimit(
+                limits.MaximumItems,
+                Child(location, "maximumItems"),
+                node,
+                upperBound: null);
+            ValidateWorkLimit(
+                limits.MaximumStartsPerActivation,
+                Child(location, "maximumStartsPerActivation"),
+                node,
+                limits.MaximumItems);
+            ValidateWorkLimit(
+                limits.MaximumParallelism,
+                Child(location, "maximumParallelism"),
+                node,
+                limits.MaximumItems);
+            ValidateWorkLimit(
+                limits.MinimumParallelism,
+                Child(location, "minimumParallelism"),
+                node,
+                limits.MaximumParallelism);
+            if (requiredItems is { } itemCount && limits.MaximumItems < itemCount)
+            {
+                Error(
+                    ProcessDefinitionDiagnosticCodes.WorkLimitsInvalid,
+                    "A static bounded-work set exceeds its declared total item limit.",
+                    Child(location, "maximumItems"),
+                    subject: node.Value,
+                    expected: $">= {itemCount.ToString(CultureInfo.InvariantCulture)}",
+                    observed: limits.MaximumItems.ToString(CultureInfo.InvariantCulture));
+            }
+        }
+
+        HashSet<string> ValidateCapacityDomains(
+            ImmutableArray<ProcessCapacityDomainLimit> domains,
+            string location,
+            ExecutionNodeId node,
+            string diagnosticCode)
+        {
+            Dictionary<string, string> identities = new(StringComparer.Ordinal);
+            for (var index = 0; index < domains.Length; index++)
+            {
+                var domain = domains[index];
+                var domainLocation = $"{location}/{index.ToString(CultureInfo.InvariantCulture)}";
+                if (domain is null)
+                {
+                    Missing(domainLocation, "A capacity-domain limit cannot be null.");
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(domain.Identity))
+                {
+                    Error(
+                        diagnosticCode,
+                        "A capacity-domain limit requires a stable non-empty identity.",
+                        Child(domainLocation, "identity"),
+                        subject: node.Value);
+                }
+                else if (!identities.TryAdd(domain.Identity, Child(domainLocation, "identity")))
+                {
+                    Error(
+                        diagnosticCode,
+                        $"Capacity-domain identity '{domain.Identity}' is declared more than once.",
+                        Child(domainLocation, "identity"),
+                        subject: domain.Identity,
+                        relatedLocations: [identities[domain.Identity]]);
+                }
+
+                if (domain.MaximumParallelism <= 0)
+                {
+                    Error(
+                        diagnosticCode,
+                        "A capacity-domain parallelism limit must be positive.",
+                        Child(domainLocation, "maximumParallelism"),
+                        subject: domain.Identity,
+                        expected: "> 0",
+                        observed: domain.MaximumParallelism.ToString(CultureInfo.InvariantCulture));
+                }
+            }
+
+            return [.. identities.Keys];
         }
 
         void ValidateRequest(
@@ -1161,6 +1202,13 @@ public static class ProcessDefinitionValidator
                 RegisterEdge(branch.Start, Child(branchLocation, "start"), fork.Id, branch.Id);
             }
 
+            ValidateWorkLimits(
+                fork.Limits,
+                Child(location, "limits"),
+                fork.Id,
+                requiredItems: fork.Branches.Length);
+            ValidateForkCapacity(fork, location);
+
             if (string.IsNullOrWhiteSpace(fork.Join.Value))
             {
                 Error(
@@ -1168,6 +1216,51 @@ public static class ProcessDefinitionValidator
                     "A Process Fork requires a stable reciprocal Join identity.",
                     Child(location, "join"),
                     subject: fork.Id.Value);
+            }
+        }
+
+        void ValidateForkCapacity(ForkProcessNode fork, string location)
+        {
+            var capacityLocation = Child(location, "capacityDomains");
+            var declared = ValidateCapacityDomains(
+                fork.CapacityDomains,
+                capacityLocation,
+                fork.Id,
+                ProcessDefinitionDiagnosticCodes.ForkCapacityInvalid);
+            HashSet<string> assigned = new(StringComparer.Ordinal);
+            for (var index = 0; index < fork.Branches.Length; index++)
+            {
+                var branch = fork.Branches[index];
+                if (branch?.CapacityDomain is null)
+                    continue;
+
+                var assignmentLocation = Child(
+                    $"{location}/branches/{index.ToString(CultureInfo.InvariantCulture)}",
+                    "capacityDomain");
+                if (string.IsNullOrWhiteSpace(branch.CapacityDomain)
+                    || !declared.Contains(branch.CapacityDomain))
+                {
+                    Error(
+                        ProcessDefinitionDiagnosticCodes.ForkCapacityInvalid,
+                        $"Fork branch '{branch.Id.Value}' requires one declared non-empty capacity domain.",
+                        assignmentLocation,
+                        subject: branch.Id.Value,
+                        expected: "a declared capacity-domain identity",
+                        observed: branch.CapacityDomain);
+                    continue;
+                }
+
+                assigned.Add(branch.CapacityDomain);
+            }
+
+            foreach (var unused in declared.Except(assigned, StringComparer.Ordinal))
+            {
+                Error(
+                    ProcessDefinitionDiagnosticCodes.ForkCapacityInvalid,
+                    $"Capacity domain '{unused}' is not assigned to any Fork branch.",
+                    capacityLocation,
+                    subject: unused,
+                    expected: "at least one assigned branch");
             }
         }
 

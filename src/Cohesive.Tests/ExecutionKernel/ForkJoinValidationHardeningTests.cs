@@ -260,6 +260,83 @@ public sealed class ForkJoinValidationHardeningTests
         Assert.Contains("no structural exit", diagnostic.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Validate_ForkRejectsInconsistentHardAdmissionBounds()
+    {
+        var definition = Definition(
+            "fork",
+            [
+                new ForkProcessNode(
+                    new("fork"),
+                    [
+                        new(new("branch/alpha"), Edge("edge/fork-alpha", "join")),
+                        new(new("branch/beta"), Edge("edge/fork-beta", "join"))
+                    ],
+                    new("join"),
+                    new(
+                        maximumItems: 1,
+                        maximumStartsPerActivation: 2,
+                        maximumParallelism: 2,
+                        minimumParallelism: 3),
+                    capacityDomains: []),
+                new JoinProcessNode(
+                    new("join"),
+                    new("fork"),
+                    JoinPolicy(ProcessJoinMode.All),
+                    Edge("edge/join-return", "return")),
+                new ReturnProcessNode(new("return"), Expr.Const("done"))
+            ]);
+
+        var validation = ProcessDefinitionValidator.Validate(definition);
+        var limits = validation.Diagnostics
+            .Where(static item => item.Code == ProcessDefinitionDiagnosticCodes.WorkLimitsInvalid)
+            .ToArray();
+
+        Assert.Contains(limits, static item => item.Location == "/nodes/0/limits/maximumItems");
+        Assert.Contains(limits, static item => item.Location == "/nodes/0/limits/maximumStartsPerActivation");
+        Assert.Contains(limits, static item => item.Location == "/nodes/0/limits/maximumParallelism");
+        Assert.Contains(limits, static item => item.Location == "/nodes/0/limits/minimumParallelism");
+    }
+
+    [Fact]
+    public void Validate_ForkRejectsUnknownAndUnusedCapacityDomains()
+    {
+        var definition = Definition(
+            "fork",
+            [
+                new ForkProcessNode(
+                    new("fork"),
+                    [
+                        new(
+                            new("branch/alpha"),
+                            Edge("edge/fork-alpha", "join"),
+                            capacityDomain: "resource/missing"),
+                        new(new("branch/beta"), Edge("edge/fork-beta", "join"))
+                    ],
+                    new("join"),
+                    new(
+                        maximumItems: 2,
+                        maximumStartsPerActivation: 2,
+                        maximumParallelism: 2),
+                    [new("resource/unused", maximumParallelism: 1)]),
+                new JoinProcessNode(
+                    new("join"),
+                    new("fork"),
+                    JoinPolicy(ProcessJoinMode.All),
+                    Edge("edge/join-return", "return")),
+                new ReturnProcessNode(new("return"), Expr.Const("done"))
+            ]);
+
+        var validation = ProcessDefinitionValidator.Validate(definition);
+        var capacity = validation.Diagnostics
+            .Where(static item => item.Code == ProcessDefinitionDiagnosticCodes.ForkCapacityInvalid)
+            .ToArray();
+
+        Assert.Equal(2, capacity.Length);
+        Assert.Contains(capacity, static item => item.Evidence?.Subject == "branch/alpha");
+        Assert.Contains(capacity, static item => item.Evidence?.Subject == "resource/unused");
+    }
+
     static CanonicalProcessDefinition BindingJoinDefinition(
         ProcessJoinMode mode,
         ExecutionDefinitionReference transition)

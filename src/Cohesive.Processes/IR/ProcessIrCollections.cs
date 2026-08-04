@@ -4,6 +4,9 @@ namespace Cohesive.Processes.IR;
 
 static class ProcessIrCollections
 {
+    public static ImmutableArray<ProcessCapacityDomainLimit> NormalizeCapacityDomains(
+        ImmutableArray<ProcessCapacityDomainLimit> values) => NormalizeSet(values, CompareCapacityDomains);
+
     public static ImmutableArray<T> NormalizeSet<T>(
         ImmutableArray<T> values,
         Comparison<T> comparison)
@@ -23,5 +26,18 @@ static class ProcessIrCollections
         }
 
         return values;
+    }
+
+    static int CompareCapacityDomains(
+        ProcessCapacityDomainLimit? left,
+        ProcessCapacityDomainLimit? right)
+    {
+        if (ReferenceEquals(left, right))
+            return 0;
+        if (left is null)
+            return -1;
+        if (right is null)
+            return 1;
+        return StringComparer.Ordinal.Compare(left.Identity, right.Identity);
     }
 }

@@ -80,7 +80,7 @@ public static class ProcessDurableExecutionStatusProjector
             demandDisclosure: ExecutionStatusDisclosure.Disclosed,
             demand: new(
                 ready: state.Tokens.Count(static token => token.Disposition == ExecutionTokenDisposition.Ready),
-                delayed: 0),
+                delayed: state.Tokens.Count(static token => token.Disposition == ExecutionTokenDisposition.Pending)),
             health: health,
             extensions: extensions);
     }

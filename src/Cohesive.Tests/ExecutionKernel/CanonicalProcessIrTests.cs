@@ -253,6 +253,72 @@ public sealed class CanonicalProcessIrTests
     }
 
     [Fact]
+    public void ForkAdmissionAndCapacitySetsNormalizeIntoOneCanonicalWireShape()
+    {
+        var first = new ForkProcessNode(
+            new("fork"),
+            [
+                new(new("branch/beta"), Edge("edge/fork-beta", "join"), "resource/b"),
+                new(new("branch/alpha"), Edge("edge/fork-alpha", "join"), "resource/a")
+            ],
+            new("join"),
+            new(
+                maximumItems: 2,
+                maximumStartsPerActivation: 1,
+                maximumParallelism: 2,
+                minimumParallelism: 1),
+            [new("resource/b", 1), new("resource/a", 1)]);
+        var second = new ForkProcessNode(
+            new("fork"),
+            [
+                new(new("branch/alpha"), Edge("edge/fork-alpha", "join"), "resource/a"),
+                new(new("branch/beta"), Edge("edge/fork-beta", "join"), "resource/b")
+            ],
+            new("join"),
+            new(
+                maximumItems: 2,
+                maximumStartsPerActivation: 1,
+                maximumParallelism: 2,
+                minimumParallelism: 1),
+            [new("resource/a", 1), new("resource/b", 1)]);
+        var options = ExecutionDefinitionJsonSerializer.CreateOptions();
+
+        var firstJson = JsonSerializer.Serialize<CanonicalProcessNode>(first, options);
+        var secondJson = JsonSerializer.Serialize<CanonicalProcessNode>(second, options);
+        var restored = Assert.IsType<ForkProcessNode>(
+            JsonSerializer.Deserialize<CanonicalProcessNode>(firstJson, options));
+
+        Assert.Equal(first, second);
+        Assert.Equal(firstJson, secondJson);
+        Assert.Equal(first, restored);
+        Assert.Contains("\"maximumStartsPerActivation\":1", firstJson, StringComparison.Ordinal);
+        Assert.Contains("\"capacityDomain\":\"resource/a\"", firstJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DefaultForkAdmissionIsTheExplicitEagerFiniteSetConvention()
+    {
+        ImmutableArray<ProcessForkBranch> branches =
+        [
+            new(new("branch/alpha"), Edge("edge/fork-alpha", "join")),
+            new(new("branch/beta"), Edge("edge/fork-beta", "join"))
+        ];
+
+        var conventional = new ForkProcessNode(new("fork"), branches, new("join"));
+        var explicitPolicy = new ForkProcessNode(
+            new("fork"),
+            branches,
+            new("join"),
+            ProcessWorkLimits.EagerFiniteSet(branches.Length),
+            capacityDomains: []);
+
+        Assert.Equal(explicitPolicy, conventional);
+        Assert.Equal(
+            JsonSerializer.Serialize<CanonicalProcessNode>(explicitPolicy, ExecutionDefinitionJsonSerializer.CreateOptions()),
+            JsonSerializer.Serialize<CanonicalProcessNode>(conventional, ExecutionDefinitionJsonSerializer.CreateOptions()));
+    }
+
+    [Fact]
     public void SetLikeGraphMembersNormalizeButOrderedCasesRemainSemantic()
     {
         var terminal = new ReturnProcessNode(new("terminal"), Expr.Const("done"));

@@ -67,32 +67,51 @@ public sealed record ProcessCapacityDomainLimit
     public int MaximumParallelism { get; }
 }
 
-/// <summary>Finite limits for one bounded partition-work occurrence.</summary>
+/// <summary>Finite limits for one bounded Process-work occurrence.</summary>
+/// <remarks>
+/// The same limits govern dynamically discovered partition items and statically declared Fork branches. The
+/// canonical maximums are hard semantic bounds; a runtime-selected admission operating point may narrow effective
+/// parallelism without changing these limits.
+/// </remarks>
 public sealed record ProcessWorkLimits
 {
     /// <summary>Creates explicit bounded-work limits.</summary>
-    /// <param name="maximumItems">Maximum number of distinct partition items admitted by one occurrence.</param>
-    /// <param name="maximumStartsPerActivation">Maximum child starts produced by one finite activation.</param>
-    /// <param name="maximumParallelism">Maximum simultaneously active child Process invocations.</param>
+    /// <param name="maximumItems">Maximum number of distinct work items admitted by one occurrence.</param>
+    /// <param name="maximumStartsPerActivation">Maximum work starts produced by one finite activation.</param>
+    /// <param name="maximumParallelism">Hard maximum number of simultaneously active work items.</param>
+    /// <param name="minimumParallelism">Hard minimum permitted runtime admission operating point.</param>
     [JsonConstructor]
     public ProcessWorkLimits(
         int maximumItems,
         int maximumStartsPerActivation,
-        int maximumParallelism)
+        int maximumParallelism,
+        int minimumParallelism = 1)
     {
         MaximumItems = maximumItems;
         MaximumStartsPerActivation = maximumStartsPerActivation;
         MaximumParallelism = maximumParallelism;
+        MinimumParallelism = minimumParallelism;
     }
 
-    /// <summary>Maximum number of distinct partition items admitted by one occurrence.</summary>
+    /// <summary>Maximum number of distinct work items admitted by one occurrence.</summary>
     public int MaximumItems { get; }
 
-    /// <summary>Maximum child starts produced by one finite activation.</summary>
+    /// <summary>Maximum work starts produced by one finite activation.</summary>
     public int MaximumStartsPerActivation { get; }
 
-    /// <summary>Maximum simultaneously active child Process invocations.</summary>
+    /// <summary>Hard maximum number of simultaneously active work items.</summary>
     public int MaximumParallelism { get; }
+
+    /// <summary>Hard minimum permitted runtime admission operating point.</summary>
+    public int MinimumParallelism { get; }
+
+    /// <summary>Creates the compatibility admission limits for one statically finite work set.</summary>
+    /// <param name="itemCount">Number of statically declared work items.</param>
+    /// <returns>Limits that make every item immediately eligible in one activation.</returns>
+    public static ProcessWorkLimits EagerFiniteSet(int itemCount) => new(
+        maximumItems: itemCount,
+        maximumStartsPerActivation: itemCount,
+        maximumParallelism: itemCount);
 }
 
 /// <summary>Finite progress limits for recurrence across durable activations.</summary>

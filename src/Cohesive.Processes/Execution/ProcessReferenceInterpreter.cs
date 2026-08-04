@@ -258,6 +258,31 @@ public static class ProcessReferenceInterpreter
                 "This Process definition requires recovery under a new attempt identity; the current continuation cannot resume.");
         }
 
+        if (diagnostic is null)
+        {
+            foreach (var point in activation.AdmissionOperatingPoints)
+            {
+                var node = plan.Definition.Nodes.FirstOrDefault(candidate => candidate.Id == point.Node);
+                if (node is not ForkProcessNode fork)
+                {
+                    diagnostic = ActivationDiagnostic(
+                        plan,
+                        ProcessExecutionDiagnosticCodes.ActivationInvalid,
+                        $"Admission operating point targets non-Fork node '{point.Node.Value}'.");
+                    break;
+                }
+                if (point.MaximumParallelism < fork.Limits.MinimumParallelism
+                    || point.MaximumParallelism > fork.Limits.MaximumParallelism)
+                {
+                    diagnostic = ActivationDiagnostic(
+                        plan,
+                        ProcessExecutionDiagnosticCodes.ActivationInvalid,
+                        $"Admission operating point for Fork '{point.Node.Value}' lies outside its canonical parallelism bounds.");
+                    break;
+                }
+            }
+        }
+
         return diagnostic is null
             ? DocumentValidationResult.Valid
             : new([diagnostic]);
@@ -320,6 +345,7 @@ public static class ProcessReferenceInterpreter
         readonly List<DocumentValidationDiagnostic> diagnostics = [];
         readonly List<ProcessTraceEvent> trace = [];
         readonly Dictionary<string, int> partitionStarts = new(StringComparer.Ordinal);
+        readonly Dictionary<string, int> forkStarts = new(StringComparer.Ordinal);
         readonly Dictionary<ExecutionNodeId, int> nodeIndexes;
         ExecutionTerminalOutcome terminal;
         ExecutionNodeId? safePointNode;
@@ -378,6 +404,7 @@ public static class ProcessReferenceInterpreter
             }
 
             ResumeExistingWaits();
+            _ = AdmitForkBranches();
             while (!stopAtDurableCut && terminal.Kind == ExecutionTerminalOutcomeKind.None)
             {
                 var ready = tokens
@@ -388,9 +415,11 @@ public static class ProcessReferenceInterpreter
                 if (ready.Length == 0)
                 {
                     var progressed = ResolveJoins();
+                    progressed |= AdmitForkBranches();
                     progressed |= ResolvePartitions();
                     if (!progressed)
                     {
+                        _ = CutForDeferredForkAdmission();
                         break;
                     }
 
@@ -414,6 +443,7 @@ public static class ProcessReferenceInterpreter
                 if (!stopAtDurableCut && terminal.Kind == ExecutionTerminalOutcomeKind.None)
                 {
                     _ = ResolveJoins();
+                    _ = AdmitForkBranches();
                     _ = ResolvePartitions();
                 }
             }
@@ -436,7 +466,36 @@ public static class ProcessReferenceInterpreter
                     node: null);
             }
             var validation = ValidateActivationRequest(plan, original.Continuation, activation);
-            return validation.IsValid ? null : validation.Diagnostics[0];
+            if (!validation.IsValid)
+                return validation.Diagnostics[0];
+
+            foreach (var point in activation.AdmissionOperatingPoints)
+            {
+                foreach (var fork in forks.Where(candidate => candidate.Fork == point.Node))
+                {
+                    var retained = fork.AdmissionOperatingPoint;
+                    if (retained is null)
+                        continue;
+                    var authorityChanged = !string.Equals(
+                        retained.Authority,
+                        point.Authority,
+                        StringComparison.Ordinal);
+                    var canonicalMayYield = string.Equals(
+                        retained.Authority,
+                        ProcessAdmissionOperatingPoint.CanonicalAuthority,
+                        StringComparison.Ordinal);
+                    if (authorityChanged && !canonicalMayYield
+                        || !authorityChanged && point.Revision < retained.Revision
+                        || !authorityChanged && point.Revision == retained.Revision && point != retained)
+                    {
+                        return Diagnostic(
+                            ProcessExecutionDiagnosticCodes.ActivationInvalid,
+                            $"Admission operating point for Fork '{point.Node.Value}' conflicts with retained authority or revision evidence.",
+                            point.Node);
+                    }
+                }
+            }
+            return null;
         }
 
         ProcessActivationDecision ApplyCancellation()
@@ -1938,15 +1997,20 @@ public static class ProcessReferenceInterpreter
                 var child = new ProcessTokenState(
                     childId,
                     branch.Start.Target,
-                    ExecutionTokenDisposition.Ready,
+                    ExecutionTokenDisposition.Pending,
                     step: 0,
                     token.Bindings,
                     token.RequestObligations,
                     new(registrationId, branch.Id),
                     failure: null);
                 tokens.Add(child);
-                branchStates.Add(new(branch.Id, childId, ExecutionTokenDisposition.Ready));
+                branchStates.Add(new(branch.Id, childId, ExecutionTokenDisposition.Pending));
             }
+            var operatingPoint = activation.AdmissionOperatingPoints.FirstOrDefault(point => point.Node == node.Id)
+                ?? ProcessAdmissionOperatingPoint.Canonical(
+                    node.Id,
+                    node.Limits.MaximumParallelism,
+                    plan.Document.Metadata.Provenance.Source.Reference);
             forks.Add(new(
                 registrationId,
                 token.Id,
@@ -1957,7 +2021,8 @@ public static class ProcessReferenceInterpreter
                 token.RequestObligations,
                 branchStates.MoveToImmutable(),
                 selectedBranches: [],
-                resolved: false));
+                resolved: false,
+                operatingPoint));
             ReplaceToken(token with
             {
                 Node = node.Join,
@@ -1966,6 +2031,133 @@ public static class ProcessReferenceInterpreter
             });
             AddTrace(ProcessTraceEventKind.ForkCreated, token, node.Id, detail: registrationId);
         }
+
+        bool AdmitForkBranches()
+        {
+            var progressed = false;
+            foreach (var registrationId in forks
+                         .Where(ForkMayAdmit)
+                         .Where(static fork => fork.Branches.Any(branch =>
+                             branch.Disposition == ExecutionTokenDisposition.Pending))
+                         .OrderBy(static fork => fork.RegistrationId, StringComparer.Ordinal)
+                         .Select(static fork => fork.RegistrationId)
+                         .ToArray())
+            {
+                var fork = GetFork(registrationId);
+                var node = (ForkProcessNode)plan.GetNode(fork.Fork);
+                var selected = activation.AdmissionOperatingPoints.FirstOrDefault(point => point.Node == fork.Fork);
+                if (selected is not null && selected != fork.AdmissionOperatingPoint)
+                {
+                    fork = fork with { AdmissionOperatingPoint = selected };
+                    ReplaceFork(fork);
+                    AddTrace(
+                        ProcessTraceEventKind.ForkAdmissionChanged,
+                        GetToken(fork.Owner),
+                        node.Id,
+                        detail: $"operating-point:{selected.MaximumParallelism}:{selected.Revision}:{selected.Authority}");
+                    progressed = true;
+                }
+
+                var active = fork.Branches.Count(static branch => IsAdmittedAndNonterminal(branch.Disposition));
+                var parallelismCapacity = fork.AdmissionOperatingPoint.MaximumParallelism - active;
+                var alreadyStarted = forkStarts.GetValueOrDefault(fork.RegistrationId);
+                var activationCapacity = node.Limits.MaximumStartsPerActivation - alreadyStarted;
+                var startCount = Math.Min(parallelismCapacity, activationCapacity);
+                if (startCount <= 0)
+                    continue;
+
+                Dictionary<string, int>? capacityLimits = null;
+                Dictionary<string, int>? activeByDomain = null;
+                if (!node.CapacityDomains.IsEmpty)
+                {
+                    capacityLimits = node.CapacityDomains.ToDictionary(
+                        static domain => domain.Identity,
+                        static domain => domain.MaximumParallelism,
+                        StringComparer.Ordinal);
+                    activeByDomain = new(StringComparer.Ordinal);
+                    foreach (var branch in fork.Branches.Where(static branch =>
+                                 IsAdmittedAndNonterminal(branch.Disposition)))
+                    {
+                        var domain = node.Branches.Single(candidate => candidate.Id == branch.Branch).CapacityDomain;
+                        if (domain is null)
+                            continue;
+                        activeByDomain.TryGetValue(domain, out var count);
+                        activeByDomain[domain] = checked(count + 1);
+                    }
+                }
+
+                List<ProcessForkBranchState> admitted = new(startCount);
+                foreach (var branch in fork.Branches)
+                {
+                    if (admitted.Count == startCount)
+                        break;
+                    if (branch.Disposition != ExecutionTokenDisposition.Pending)
+                        continue;
+                    var domain = node.Branches.Single(candidate => candidate.Id == branch.Branch).CapacityDomain;
+                    if (domain is not null && capacityLimits is not null && activeByDomain is not null)
+                    {
+                        activeByDomain.TryGetValue(domain, out var count);
+                        if (count >= capacityLimits[domain])
+                            continue;
+                        activeByDomain[domain] = checked(count + 1);
+                    }
+                    admitted.Add(branch);
+                }
+
+                foreach (var branch in admitted)
+                {
+                    var child = GetToken(branch.Token) with { Disposition = ExecutionTokenDisposition.Ready };
+                    ReplaceToken(child);
+                    active++;
+                    AddTrace(
+                        ProcessTraceEventKind.ForkAdmissionChanged,
+                        child,
+                        node.Id,
+                        branch.Branch,
+                        detail: $"admitted:active={active};limit={fork.AdmissionOperatingPoint.MaximumParallelism}");
+                }
+                if (admitted.Count > 0)
+                {
+                    forkStarts[fork.RegistrationId] = alreadyStarted + admitted.Count;
+                    progressed = true;
+                }
+            }
+            return progressed;
+        }
+
+        bool CutForDeferredForkAdmission()
+        {
+            foreach (var fork in forks
+                         .Where(ForkMayAdmit)
+                         .Where(static candidate => candidate.Branches.Any(branch =>
+                             branch.Disposition == ExecutionTokenDisposition.Pending))
+                         .OrderBy(static candidate => candidate.RegistrationId, StringComparer.Ordinal))
+            {
+                if (fork.Branches.Any(static branch => IsAdmittedAndNonterminal(branch.Disposition)))
+                    continue;
+                var node = (ForkProcessNode)plan.GetNode(fork.Fork);
+                if (forkStarts.GetValueOrDefault(fork.RegistrationId) < node.Limits.MaximumStartsPerActivation)
+                    continue;
+
+                AddTrace(
+                    ProcessTraceEventKind.ForkAdmissionChanged,
+                    GetToken(fork.Owner),
+                    node.Id,
+                    detail: $"activation-boundary:pending={fork.Branches.Count(static branch => branch.Disposition == ExecutionTokenDisposition.Pending)}");
+                Cut(node.Id);
+                return true;
+            }
+            return false;
+        }
+
+        bool ForkMayAdmit(ProcessForkState fork) => !fork.Resolved
+            || ((JoinProcessNode)plan.GetNode(fork.Join)).Policy.Cancellation
+                == ProcessJoinCancellationPolicy.ContinueRemaining;
+
+        static bool IsAdmittedAndNonterminal(ExecutionTokenDisposition disposition) => disposition is
+            ExecutionTokenDisposition.Ready
+            or ExecutionTokenDisposition.Active
+            or ExecutionTokenDisposition.Waiting;
 
         void ExecuteJoinArrival(ProcessTokenState token, JoinProcessNode node)
         {
@@ -3020,7 +3212,8 @@ public static class ProcessReferenceInterpreter
                          .Where(token => token.Id != except
                                          && token.Disposition is ExecutionTokenDisposition.Ready
                                              or ExecutionTokenDisposition.Active
-                                             or ExecutionTokenDisposition.Waiting)
+                                             or ExecutionTokenDisposition.Waiting
+                                             or ExecutionTokenDisposition.Pending)
                          .Select(static token => token.Id)
                          .ToArray())
             {
@@ -3032,7 +3225,8 @@ public static class ProcessReferenceInterpreter
         {
             if (token.Disposition is not (ExecutionTokenDisposition.Ready
                 or ExecutionTokenDisposition.Active
-                or ExecutionTokenDisposition.Waiting))
+                or ExecutionTokenDisposition.Waiting
+                or ExecutionTokenDisposition.Pending))
             {
                 return;
             }

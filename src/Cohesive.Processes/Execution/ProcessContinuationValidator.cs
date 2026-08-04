@@ -994,6 +994,25 @@ public static class ProcessContinuationValidator
                     subject: fork.RegistrationId);
             }
 
+            var admission = fork.AdmissionOperatingPoint;
+            var admissionValid = admission is not null
+                && admission.Node == fork.Fork
+                && admission.MaximumParallelism >= forkNode.Limits.MinimumParallelism
+                && admission.MaximumParallelism <= forkNode.Limits.MaximumParallelism
+                && admission.Revision >= 0
+                && !string.IsNullOrWhiteSpace(admission.Authority)
+                && !string.IsNullOrWhiteSpace(admission.EvidenceReference);
+            if (!admissionValid)
+            {
+                Error(
+                    ProcessContinuationDiagnosticCodes.ForkStateMismatch,
+                    $"Fork registration '{fork.RegistrationId}' has no valid attributable admission operating point within canonical bounds.",
+                    Child(location, "admissionOperatingPoint"),
+                    subject: fork.RegistrationId,
+                    expected: $"{forkNode.Limits.MinimumParallelism}..{forkNode.Limits.MaximumParallelism}",
+                    observed: admission?.MaximumParallelism.ToString(CultureInfo.InvariantCulture) ?? "missing");
+            }
+
             var occurrenceValid = fork.Occurrence >= 0;
             if (!occurrenceValid)
             {
@@ -1072,8 +1091,11 @@ public static class ProcessContinuationValidator
                         fork.Occurrence,
                         branch.Branch)
                     : default;
-                var coherent = branchIndex < forkNode.Branches.Length
-                    && forkNode.Branches[branchIndex].Id == branch.Branch
+                var declaredBranch = branchIndex < forkNode.Branches.Length
+                    ? forkNode.Branches[branchIndex]
+                    : null;
+                var coherent = declaredBranch is not null
+                    && declaredBranch.Id == branch.Branch
                     && declaredBranches.Contains(branch.Branch)
                     && branchIdentityUnique
                     && branchTokens.Add(branch.Token)
@@ -1083,7 +1105,10 @@ public static class ProcessContinuationValidator
                     && child.Token.ForkMembership is { } membership
                     && string.Equals(membership.RegistrationId, fork.RegistrationId, StringComparison.Ordinal)
                     && membership.Branch == branch.Branch
-                    && child.Token.Disposition == branch.Disposition;
+                    && child.Token.Disposition == branch.Disposition
+                    && (branch.Disposition != ExecutionTokenDisposition.Pending
+                        || child.Token.Node == declaredBranch.Start.Target
+                        && child.Token.Step == 0);
                 if (!coherent)
                 {
                     Error(
@@ -1135,6 +1160,37 @@ public static class ProcessContinuationValidator
                     Child(location, "branches"),
                     subject: fork.RegistrationId,
                     expected: terminalBranchCount == 0 ? "empty" : $"1..{terminalBranchCount}");
+            }
+
+
+            var inFlight = fork.Branches.Count(static branch => branch is not null
+                && IsAdmittedAndNonterminal(branch.Disposition));
+            if (inFlight > forkNode.Limits.MaximumParallelism)
+            {
+                Error(
+                    ProcessContinuationDiagnosticCodes.ForkStateMismatch,
+                    $"Fork registration '{fork.RegistrationId}' exceeds its canonical hard parallelism limit.",
+                    Child(location, "branches"),
+                    subject: fork.RegistrationId,
+                    expected: $"<= {forkNode.Limits.MaximumParallelism.ToString(CultureInfo.InvariantCulture)}",
+                    observed: inFlight.ToString(CultureInfo.InvariantCulture));
+            }
+            foreach (var domain in forkNode.CapacityDomains)
+            {
+                var activeInDomain = fork.Branches.Count(branch => branch is not null
+                    && IsAdmittedAndNonterminal(branch.Disposition)
+                    && forkNode.Branches.FirstOrDefault(candidate => candidate.Id == branch.Branch)?.CapacityDomain
+                        == domain.Identity);
+                if (activeInDomain <= domain.MaximumParallelism)
+                    continue;
+
+                Error(
+                    ProcessContinuationDiagnosticCodes.ForkStateMismatch,
+                    $"Fork registration '{fork.RegistrationId}' exceeds capacity domain '{domain.Identity}'.",
+                    Child(location, "branches"),
+                    subject: domain.Identity,
+                    expected: $"<= {domain.MaximumParallelism.ToString(CultureInfo.InvariantCulture)}",
+                    observed: activeInDomain.ToString(CultureInfo.InvariantCulture));
             }
 
             ValidateForkSelection(
@@ -1333,6 +1389,12 @@ public static class ProcessContinuationValidator
             or ExecutionTokenDisposition.Cancelled;
 
         static bool IsLive(ExecutionTokenDisposition disposition) => disposition is
+            ExecutionTokenDisposition.Ready
+            or ExecutionTokenDisposition.Active
+            or ExecutionTokenDisposition.Waiting
+            or ExecutionTokenDisposition.Pending;
+
+        static bool IsAdmittedAndNonterminal(ExecutionTokenDisposition disposition) => disposition is
             ExecutionTokenDisposition.Ready
             or ExecutionTokenDisposition.Active
             or ExecutionTokenDisposition.Waiting;
@@ -2265,7 +2327,8 @@ public static class ProcessContinuationValidator
             var liveTokens = state.Tokens.Count(static token => token is not null
                 && token.Disposition is ExecutionTokenDisposition.Ready
                     or ExecutionTokenDisposition.Active
-                    or ExecutionTokenDisposition.Waiting);
+                    or ExecutionTokenDisposition.Waiting
+                    or ExecutionTokenDisposition.Pending);
             var activeWaits = state.Waits.Count(static wait => wait is { Active: true });
             var liveForks = state.Forks.Count(fork => fork is { Resolved: false }
                 && (tokens.TryGetValue(fork.Owner, out var owner)
@@ -2275,7 +2338,8 @@ public static class ProcessContinuationValidator
                     || fork.Branches.Any(branch => branch is not null
                         && branch.Disposition is ExecutionTokenDisposition.Ready
                             or ExecutionTokenDisposition.Active
-                            or ExecutionTokenDisposition.Waiting)));
+                            or ExecutionTokenDisposition.Waiting
+                            or ExecutionTokenDisposition.Pending)));
             var liveChildren = state.Children.Count(static child => child is not null
                 && child.Disposition is ProcessChildDisposition.Pending or ProcessChildDisposition.Active);
             var livePartitions = state.Partitions.Count(static partition => partition is { Resolved: false });

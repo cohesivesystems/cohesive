@@ -86,7 +86,6 @@ public sealed record ProcessForkBranchState(
 /// <summary>Durable membership and convergence state for one Fork occurrence.</summary>
 public sealed record ProcessForkState
 {
-    [JsonConstructor]
     internal ProcessForkState(
         string registrationId,
         TokenId owner,
@@ -98,6 +97,49 @@ public sealed record ProcessForkState
         ImmutableArray<ProcessForkBranchState> branches,
         ImmutableArray<ExecutionNodeId> selectedBranches,
         bool resolved)
+        : this(
+            registrationId,
+            owner,
+            fork,
+            join,
+            occurrence,
+            parentBindings,
+            parentRequestObligations,
+            branches,
+            selectedBranches,
+            resolved,
+            ProcessAdmissionOperatingPoint.Canonical(
+                fork,
+                Math.Max(1, branches.IsDefault ? 0 : branches.Length),
+                evidenceReference: fork.Value))
+    {
+    }
+
+    /// <summary>Creates complete durable Fork membership, admission, and convergence state.</summary>
+    /// <param name="registrationId">Opaque replay-stable Fork occurrence identity.</param>
+    /// <param name="owner">Parked coordinator token that executed the Fork.</param>
+    /// <param name="fork">Canonical Fork node identity.</param>
+    /// <param name="join">Canonical reciprocal Join node identity.</param>
+    /// <param name="occurrence">Zero-based occurrence of this Fork in the owner-token history.</param>
+    /// <param name="parentBindings">Bindings visible before the Fork.</param>
+    /// <param name="parentRequestObligations">Request obligations visible before the Fork.</param>
+    /// <param name="branches">Complete branch membership and durable dispositions.</param>
+    /// <param name="selectedBranches">Branches frozen when the Join threshold first became satisfied.</param>
+    /// <param name="resolved">Whether the reciprocal Join advanced its coordinator token.</param>
+    /// <param name="admissionOperatingPoint">Latest effective attributable admission point.</param>
+    [JsonConstructor]
+    internal ProcessForkState(
+        string registrationId,
+        TokenId owner,
+        ExecutionNodeId fork,
+        ExecutionNodeId join,
+        long occurrence,
+        ImmutableArray<ProcessBindingValue> parentBindings,
+        ImmutableArray<ProcessRequestObligation> parentRequestObligations,
+        ImmutableArray<ProcessForkBranchState> branches,
+        ImmutableArray<ExecutionNodeId> selectedBranches,
+        bool resolved,
+        ProcessAdmissionOperatingPoint admissionOperatingPoint)
     {
         RegistrationId = registrationId;
         Owner = owner;
@@ -109,6 +151,7 @@ public sealed record ProcessForkState
         Branches = branches.IsDefault ? [] : branches;
         SelectedBranches = selectedBranches.IsDefault ? [] : selectedBranches;
         Resolved = resolved;
+        AdmissionOperatingPoint = admissionOperatingPoint;
     }
 
     /// <summary>Opaque replay-stable Fork occurrence identity.</summary>
@@ -140,6 +183,9 @@ public sealed record ProcessForkState
 
     /// <summary>Whether the reciprocal Join has advanced the coordinator token.</summary>
     public bool Resolved { get; internal init; }
+
+    /// <summary>Latest effective attributable admission point retained for deterministic recovery.</summary>
+    public ProcessAdmissionOperatingPoint AdmissionOperatingPoint { get; internal init; }
 }
 
 /// <summary>Durable lifecycle of one exact child Process invocation.</summary>
