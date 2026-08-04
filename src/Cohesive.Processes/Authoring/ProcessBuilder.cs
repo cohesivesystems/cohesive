@@ -547,6 +547,7 @@ public sealed partial class ProcessBuilder<TInput, TResult>
     /// <summary>Creates one stable token branch for a reciprocal Fork and Join.</summary>
     /// <param name="id">Stable branch identity.</param>
     /// <param name="start">Edge that starts the branch token.</param>
+    /// <param name="capacityDomain">Optional canonical capacity domain consumed while the branch is active.</param>
     /// <param name="sourceFile">Compiler-supplied source file used only for source attribution.</param>
     /// <param name="sourceLine">Compiler-supplied source line used only for source attribution.</param>
     /// <param name="sourceMember">Compiler-supplied source member used only for source attribution.</param>
@@ -555,13 +556,14 @@ public sealed partial class ProcessBuilder<TInput, TResult>
     public ProcessForkBranch ForkBranch(
         ExecutionNodeId id,
         ProcessEdge start,
+        string? capacityDomain = null,
         [CallerFilePath] string sourceFile = "",
         [CallerLineNumber] int sourceLine = 0,
         [CallerMemberName] string sourceMember = "")
     {
         ArgumentNullException.ThrowIfNull(start);
         var source = context.Source(sourceFile, sourceLine, sourceMember, $"Fork branch '{id.Value}'");
-        var branch = new ProcessForkBranch(id, start);
+        var branch = new ProcessForkBranch(id, start, capacityDomain);
         context.Register(branch, source);
         return branch;
     }

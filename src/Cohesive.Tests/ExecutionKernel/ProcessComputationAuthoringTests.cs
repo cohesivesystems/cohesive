@@ -1,8 +1,11 @@
 using System.Text;
+using System.Text.Json;
 using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Authoring;
+using Cohesive.Processes.Compilation;
+using Cohesive.Processes.Execution;
 using Cohesive.Processes.IR;
 
 namespace Cohesive.Tests.ExecutionKernel;
@@ -38,6 +41,113 @@ public sealed class ProcessComputationAuthoringTests
         Assert.Equal(
             ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(lowLevel.Document),
             ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(generated.Document));
+
+    }
+
+    [Fact]
+    public void TypedForkComputation_IsByteEquivalentToCanonicalBuilderAuthoring()
+    {
+        var fork = Node("fork-0");
+        var join = Node("fork-0", "join-1");
+        var auditBranch = Node("fork-0", "branch-Audit");
+        var auditQuery = Node("fork-0", "branch-Audit", "query-value");
+        var notifyBranch = Node("fork-0", "branch-Notify");
+        var notifyQuery = Node("fork-0", "branch-Notify", "query-value");
+        var returned = Node("return-8");
+        var generated = GeneratedTypedForkProcess.Define(TypedForkMetadata().WithEntry(fork));
+        var lowLevel = ProcessAuthoring.Create<string, string>(
+            TypedForkMetadata().WithEntry(fork),
+            process =>
+            {
+                var auditOutput = process.Output<string>(auditQuery, "result");
+                var notifyOutput = process.Output<string>(notifyQuery, "result");
+                var audit = process.ForkBranch(
+                    auditBranch,
+                    process.Edge(auditBranch, "start", auditQuery),
+                    capacityDomain: "external-services");
+                var notify = process.ForkBranch(
+                    notifyBranch,
+                    process.Edge(notifyBranch, "start", notifyQuery),
+                    capacityDomain: "external-services");
+
+                process.EvaluateRelation(
+                    auditQuery,
+                    GeneratedTypedForkProcess.RecordAudit,
+                    process.Input.Value,
+                    process.Continuation(
+                        process.Edge(auditQuery, "next", join),
+                        auditOutput));
+                process.EvaluateRelation(
+                    notifyQuery,
+                    GeneratedTypedForkProcess.NotifyOwner,
+                    process.Input.Value,
+                    process.Continuation(
+                        process.Edge(notifyQuery, "next", join),
+                        notifyOutput));
+                process.Fork(
+                    id: fork,
+                    branches: [audit, notify],
+                    join: join,
+                    limits: new ProcessWorkLimits(
+                        maximumItems: 2,
+                        maximumStartsPerActivation: 1,
+                        maximumParallelism: 1,
+                        minimumParallelism: 1),
+                    capacityDomains: [new ProcessCapacityDomainLimit("external-services", maximumParallelism: 1)]);
+                process.Join(
+                    id: join,
+                    fork: fork,
+                    policy: new ProcessJoinPolicy(
+                        mode: ProcessJoinMode.All,
+                        requiredCount: 0,
+                        failure: ProcessJoinFailurePolicy.FailFast,
+                        cancellation: ProcessJoinCancellationPolicy.AwaitRemaining,
+                        completionOrder: ProcessJoinCompletionOrder.Unobservable,
+                        tieBreak: ProcessJoinTieBreak.BranchIdentity),
+                    next: process.Edge(join, "next", returned));
+
+                var result = process.CanonicalValue<string>(
+                    new CallExpr(
+                        ExprFunctionNames.Concat,
+                        [notifyOutput.Expression, auditOutput.Expression],
+                        auditOutput.Contract.Type),
+                    auditOutput.Contract);
+                process.Return(returned, result);
+            });
+
+        Assert.True(generated.IsValid, Format(generated.Validation));
+        Assert.True(lowLevel.IsValid, Format(lowLevel.Validation));
+        Assert.Equal(lowLevel.Definition, generated.Definition);
+        Assert.Equal(
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(lowLevel.Document),
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(generated.Document));
+
+        var links = new[]
+        {
+            new ProcessDefinitionLink(
+                GeneratedTypedForkProcess.RecordAudit,
+                ProcessDefinitionLinkKind.RelationQuery,
+                generated.Definition.Input,
+                generated.Definition.Result),
+            new ProcessDefinitionLink(
+                GeneratedTypedForkProcess.NotifyOwner,
+                ProcessDefinitionLinkKind.RelationQuery,
+                generated.Definition.Input,
+                generated.Definition.Result)
+        };
+        var linking = new ProcessDefinitionValidationContext(definitions: links);
+        var generatedCompilation = generated.Compile(linking);
+        var lowLevelCompilation = lowLevel.Compile(linking);
+        Assert.True(generatedCompilation.IsSuccessful, Format(generatedCompilation.Validation));
+        Assert.True(lowLevelCompilation.IsSuccessful, Format(lowLevelCompilation.Validation));
+        var generatedPlan = Assert.IsType<CompiledProcessPlan>(generatedCompilation.Plan);
+        var lowLevelPlan = Assert.IsType<CompiledProcessPlan>(lowLevelCompilation.Plan);
+        Assert.Equal(lowLevelPlan.DefinitionReference, generatedPlan.DefinitionReference);
+        Assert.Equal(lowLevelPlan.Definition, generatedPlan.Definition);
+        Assert.Equivalent(lowLevelPlan.Options, generatedPlan.Options, strict: true);
+        Assert.Equivalent(lowLevelPlan.EffectSummary, generatedPlan.EffectSummary, strict: true);
+
+        AssertEquivalentReferenceRecovery(generatedPlan, lowLevelPlan);
     }
 
     [Fact]
@@ -87,6 +197,26 @@ public sealed class ProcessComputationAuthoringTests
     }
 
     [Fact]
+    public void TypedForkDocument_StrictlyRestoresWithoutTupleOrAuthoringPolicyState()
+    {
+        var generated = GeneratedTypedForkProcess.Define(TypedForkMetadata());
+        var canonical = ExecutionDefinitionJsonSerializer.GetCanonicalBytes(generated.Document);
+        var json = Encoding.UTF8.GetString(canonical);
+
+        var validation = ProcessDefinitionDocuments.TryDeserialize(
+            json,
+            out var restoredDocument,
+            out var restoredDefinition);
+
+        Assert.True(validation.IsValid, Format(validation));
+        Assert.Equal(generated.Definition, restoredDefinition);
+        Assert.Equal(canonical, ExecutionDefinitionJsonSerializer.GetCanonicalBytes(restoredDocument!));
+        Assert.DoesNotContain("ValueTuple", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("ProcessAdmission", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("ProcessTask", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ApproveCustomerProcess_CoversSequentialBranchingAndParallelAuthoringConstructs()
     {
         var generated = ApproveCustomerProcess.Define(ApproveCustomerMetadata());
@@ -119,6 +249,8 @@ public sealed class ProcessComputationAuthoringTests
         Assert.Equal(ProcessJoinCompletionOrder.Unobservable, join.Policy.CompletionOrder);
         Assert.Equal(ProcessJoinTieBreak.BranchIdentity, join.Policy.TieBreak);
         Assert.Equal(2, fork.Branches.Length);
+        Assert.Equal(ProcessWorkLimits.EagerFiniteSet(itemCount: 2), fork.Limits);
+        Assert.Empty(fork.CapacityDomains);
 
         foreach (var branch in fork.Branches)
         {
@@ -146,6 +278,104 @@ public sealed class ProcessComputationAuthoringTests
             new("tests.process-computation", "1"),
             new("tests/ari-66/approve-customer"),
             DocumentOrigin.User));
+
+    static ProcessAuthoringMetadata TypedForkMetadata() => new(
+        new("process/generated-typed-fork"),
+        new("1"),
+        ProcessRecoveryPolicy.ContinueAttempt,
+        new(
+            new("tests.process-computation", "1"),
+            new("tests/ari-227/typed-fork"),
+            DocumentOrigin.User));
+
+    static ExecutionNodeId Node(params string[] path) =>
+        ProcessAuthoringIdentities.NodeFor(new(["body", .. path]));
+
+    static void AssertEquivalentReferenceRecovery(
+        CompiledProcessPlan generated,
+        CompiledProcessPlan lowLevel)
+    {
+        var continuation = new ProcessContinuationIdentity(
+            processInstanceId: new("process-instance/typed-fork"),
+            processAttemptId: new("process-attempt/1"));
+        var input = PortableValue.Concrete(
+            generated.Definition.Input,
+            ObservationValue.FromString("work"));
+        var generatedState = ProcessReferenceInterpreter.Create(generated, continuation, input);
+        var lowLevelState = ProcessReferenceInterpreter.Create(lowLevel, continuation, input);
+        var options = InteractionEnvelopeJsonSerializer.CreateOptions();
+        ProcessActivationDecision? generatedDecision = null;
+        List<string> history = [];
+
+        for (var activation = 0; activation < 4; activation++)
+        {
+            var context = new ProcessActivation(
+                id: new($"activation/typed-fork/{activation}"),
+                cause: activation == 0 ? ProcessActivationCause.Start : ProcessActivationCause.Continue,
+                observedAtUtc: new DateTimeOffset(2026, 8, 4, 12, activation, 0, TimeSpan.Zero),
+                context: new(
+                    authorityScope: new("authority/tests", "tenant/cohesive"),
+                    correlationId: new("correlation/typed-fork"),
+                    delivery: new(
+                        InteractionDurabilityDemand.Durable,
+                        InteractionVisibilityDemand.AfterOriginCommit),
+                    provenance: generated.Document.Metadata.Provenance));
+            generatedDecision = ProcessReferenceInterpreter.Activate(
+                generated,
+                generatedState,
+                context,
+                EchoRelationHost.Instance);
+            var lowLevelDecision = ProcessReferenceInterpreter.Activate(
+                lowLevel,
+                lowLevelState,
+                context,
+                EchoRelationHost.Instance);
+
+            Assert.Equal(lowLevelDecision.Disposition, generatedDecision.Disposition);
+            Assert.Equal(lowLevelDecision.Emissions, generatedDecision.Emissions);
+            Assert.Equal(
+                lowLevelDecision.Diagnostics.Select(static item => (item.Code, item.Message)),
+                generatedDecision.Diagnostics.Select(static item => (item.Code, item.Message)));
+            history.Add(
+                $"{activation}: {generatedDecision.Disposition}; "
+                + string.Join(" | ", generatedDecision.Diagnostics.Select(static item => item.Message)));
+            var generatedJson = JsonSerializer.Serialize(generatedDecision.State, options);
+            var lowLevelJson = JsonSerializer.Serialize(lowLevelDecision.State, options);
+            Assert.Equal(lowLevelJson, generatedJson);
+            generatedState = Assert.IsType<ProcessContinuationState>(
+                JsonSerializer.Deserialize<ProcessContinuationState>(generatedJson, options));
+            lowLevelState = Assert.IsType<ProcessContinuationState>(
+                JsonSerializer.Deserialize<ProcessContinuationState>(lowLevelJson, options));
+            Assert.True(ProcessContinuationValidator.Validate(generated, generatedState).IsValid);
+            Assert.True(ProcessContinuationValidator.Validate(lowLevel, lowLevelState).IsValid);
+            if (generatedDecision.Disposition == ProcessActivationDisposition.Completed)
+                break;
+        }
+
+        Assert.NotNull(generatedDecision);
+        Assert.True(
+            generatedDecision.Disposition == ProcessActivationDisposition.Completed,
+            string.Join(Environment.NewLine, history));
+        Assert.Equal(
+            PortableValue.Concrete(
+                generated.Definition.Result,
+                ObservationValue.FromString("workwork")),
+            generatedDecision.State.Terminal.Detail?.Value);
+    }
+
+    sealed class EchoRelationHost : IProcessReferenceHost
+    {
+        public static EchoRelationHost Instance { get; } = new();
+
+        public ProcessOperationResult InvokeTransition(ProcessTransitionInvocation invocation) =>
+            throw new InvalidOperationException($"Unexpected Transition invocation at '{invocation.Node.Value}'.");
+
+        public ProcessOperationResult EvaluateRelation(ProcessRelationEvaluation evaluation) =>
+            ProcessOperationResult.Completed(evaluation.Input);
+
+        public ProcessSignalTargetResult ResolveSignalTarget(ProcessSignalTargetResolution resolution) =>
+            throw new InvalidOperationException($"Unexpected Signal resolution at '{resolution.Node.Value}'.");
+    }
 
     static string Format(DocumentValidationResult validation) => string.Join(
         Environment.NewLine,
@@ -191,6 +421,49 @@ public static partial class GeneratedCustomerQueryProcessWithPureLocal
     }
 }
 
+/// <summary>Representative generated typed Fork with bounded canonical admission.</summary>
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class GeneratedTypedForkProcess
+{
+    /// <summary>Exact audit Relation used by the first branch.</summary>
+    public static ExecutionDefinitionReference RecordAudit { get; } = Definition("relation/record-audit", '7');
+
+    /// <summary>Exact notification Relation used by the second branch.</summary>
+    public static ExecutionDefinitionReference NotifyOwner { get; } = Definition("relation/notify-owner", '8');
+
+    static async ProcessTask<string> Run(ProcessContext process, string input)
+    {
+        async ProcessTask<string> Audit()
+        {
+            var value = await process.Query<string>(RecordAudit, input);
+            return value;
+        }
+
+        async ProcessTask<string> Notify()
+        {
+            var value = await process.Query<string>(NotifyOwner, input);
+            return value;
+        }
+
+        var receipts = await process.ForkJoin(
+            process.Branch(Notify(), capacityDomain: "external-services"),
+            process.Branch(Audit(), capacityDomain: "external-services"),
+            admission: ProcessAdmission.Bounded(
+                maximumParallelism: 1,
+                maximumStartsPerActivation: 1,
+                capacityDomains: [ProcessCapacity.Domain("external-services", maximumParallelism: 1)]));
+        return receipts.Item1 + receipts.Item2;
+    }
+
+    static ExecutionDefinitionReference Definition(string id, char fingerprint) => new(
+        new(id),
+        new("1"),
+        new(
+            ExecutionDefinitionFingerprinter.Algorithm,
+            ExecutionDefinitionFingerprinter.Canonicalization,
+            new string(fingerprint, 64)));
+}
+
 /// <summary>Representative human-facing Process covering sequential, branching, and parallel authoring.</summary>
 [GenerateProcessDefinition(nameof(Run))]
 public static partial class ApproveCustomerProcess
@@ -213,7 +486,12 @@ public static partial class ApproveCustomerProcess
 
         if (customer.Status == "Suspended")
         {
-            return new(customer.Id, "rejected", DeliveryId: null);
+            return new(
+                customer.Id,
+                "rejected",
+                DeliveryId: null,
+                AuditReceiptId: null,
+                NotificationReceiptId: null);
         }
 
         var approval = await process.Transition<Approval>(
@@ -225,29 +503,41 @@ public static partial class ApproveCustomerProcess
             Completed,
             new WelcomeMessage(customer.Email, "Welcome " + approval.DisplayName));
 
-        async ProcessTask Audit()
+        async ProcessTask<OperationReceipt> Audit()
         {
             var receipt = await process.Effect<OperationReceipt>(
                 RecordAudit,
                 Completed,
                 new AuditMessage(customer.Id, approval.DisplayName));
+            return receipt;
         }
 
-        async ProcessTask Notify()
+        async ProcessTask<OperationReceipt> Notify()
         {
             var receipt = await process.Effect<OperationReceipt>(
                 NotifyOwner,
                 Completed,
                 new OwnerNotification(customer.Id, delivery.Id));
+            return receipt;
         }
 
-        await process.ForkJoin(Audit(), Notify());
+        var (auditReceipt, notificationReceipt) = await process.ForkJoin(Audit(), Notify());
         switch (delivery.Status)
         {
             case "sent":
-                return new(customer.Id, "approved", delivery.Id);
+                return new(
+                    customer.Id,
+                    "approved",
+                    delivery.Id,
+                    auditReceipt.Id,
+                    notificationReceipt.Id);
             default:
-                return new(customer.Id, "pending", delivery.Id);
+                return new(
+                    customer.Id,
+                    "pending",
+                    delivery.Id,
+                    auditReceipt.Id,
+                    notificationReceipt.Id);
         }
     }
 
@@ -315,4 +605,11 @@ public sealed record OperationReceipt(string Id);
 /// <param name="CustomerId">Customer identity.</param>
 /// <param name="Disposition">Approval disposition.</param>
 /// <param name="DeliveryId">Optional welcome delivery identity.</param>
-public sealed record ApproveCustomerResult(string CustomerId, string Disposition, string? DeliveryId);
+/// <param name="AuditReceiptId">Optional audit operation receipt identity.</param>
+/// <param name="NotificationReceiptId">Optional owner-notification operation receipt identity.</param>
+public sealed record ApproveCustomerResult(
+    string CustomerId,
+    string Disposition,
+    string? DeliveryId,
+    string? AuditReceiptId,
+    string? NotificationReceiptId);
