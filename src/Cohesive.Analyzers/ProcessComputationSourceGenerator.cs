@@ -186,6 +186,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             inputParameter,
             resultType,
             parser.PureLocals,
+            parser.ForkResultTuples,
             parser.Awaits);
         if (!emitter.TryEmit(body, out var generatedBody))
         {
@@ -357,6 +358,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         readonly IParameterSymbol contextParameter;
         readonly IParameterSymbol inputParameter;
         readonly Dictionary<ILocalSymbol, IOperation> pureLocals = new(SymbolEqualityComparer.Default);
+        readonly Dictionary<ILocalSymbol, ImmutableArray<IOperation>> forkResultTuples = new(SymbolEqualityComparer.Default);
         readonly Dictionary<IMethodSymbol, LocalFunctionStatementSyntax> localFunctions = new(SymbolEqualityComparer.Default);
         readonly List<AwaitFlow> awaits = [];
         int semanticOrdinal;
@@ -376,6 +378,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         }
 
         public IReadOnlyDictionary<ILocalSymbol, IOperation> PureLocals => pureLocals;
+
+        public IReadOnlyDictionary<ILocalSymbol, ImmutableArray<IOperation>> ForkResultTuples => forkResultTuples;
 
         public IReadOnlyList<AwaitFlow> Awaits => awaits;
 
@@ -418,6 +422,17 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 switch (statement)
                 {
                     case LocalDeclarationStatementSyntax localDeclaration:
+                        if (TryGetForkJoinInvocation(localDeclaration, out _))
+                        {
+                            if (!TryParseForkJoin(localDeclaration, structuralPath, out var localForkJoin))
+                            {
+                                block = null!;
+                                return false;
+                            }
+                            flows.Add(localForkJoin);
+                            break;
+                        }
+
                         if (!TryParseLocal(localDeclaration, structuralPath, out var flow))
                         {
                             block = null!;
@@ -561,27 +576,19 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         }
 
         bool TryParseForkJoin(
-            ExpressionStatementSyntax statement,
+            StatementSyntax statement,
             ImmutableArray<string> structuralPath,
             out ForkJoinFlow flow)
         {
             flow = null!;
-            var operation = semanticModel.GetOperation(statement.Expression);
-            if (operation is null
-                || Strip(operation) is not IAwaitOperation awaited
-                || Strip(awaited.Operation) is not IInvocationOperation invocation
-                || invocation.TargetMethod.Name != "ForkJoin"
-                || !SymbolEqualityComparer.Default.Equals(invocation.TargetMethod.ContainingType, contextParameter.Type)
-                || invocation.Instance is null
-                || Strip(invocation.Instance) is not IParameterReferenceOperation contextReference
-                || !SymbolEqualityComparer.Default.Equals(contextReference.Parameter, contextParameter))
+            if (!TryGetForkJoinInvocation(statement, out var invocation))
             {
                 return StatementFailure(
                     statement,
-                    "an expression statement must await ForkJoin on the ProcessContext parameter");
+                    "a ForkJoin statement must await ForkJoin on the ProcessContext parameter");
             }
 
-            var branchOperations = ParamsArguments(invocation, "branches");
+            var branchOperations = BranchArguments(invocation);
             if (branchOperations.Length < 2)
             {
                 return StatementFailure(statement, "ForkJoin requires at least two local-function branches");
@@ -594,6 +601,24 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             for (var index = 0; index < branchOperations.Length; index++)
             {
                 var branchOperation = Strip(branchOperations[index]);
+                IArgumentOperation? capacityDomain = null;
+                if (branchOperation is IInvocationOperation annotation
+                    && annotation.TargetMethod.Name == "Branch"
+                    && SymbolEqualityComparer.Default.Equals(annotation.TargetMethod.ContainingType, contextParameter.Type)
+                    && annotation.Instance is not null
+                    && Strip(annotation.Instance) is IParameterReferenceOperation annotationContext
+                    && SymbolEqualityComparer.Default.Equals(annotationContext.Parameter, contextParameter))
+                {
+                    var annotatedBranch = Argument(annotation, "branch");
+                    capacityDomain = Argument(annotation, "capacityDomain");
+                    if (annotatedBranch is null || capacityDomain is null)
+                    {
+                        return StatementFailure(
+                            branchOperations[index].Syntax,
+                            "a ForkJoin branch annotation requires a branch and capacity domain");
+                    }
+                    branchOperation = Strip(annotatedBranch.Value);
+                }
                 if (branchOperation is not IInvocationOperation branchInvocation
                     || branchInvocation.Instance is not null
                     || branchInvocation.Arguments.Length != 0
@@ -609,14 +634,19 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         branchOperations[index].Syntax,
                         $"ForkJoin branch function '{branchInvocation.TargetMethod.Name}' is invoked more than once");
                 }
+                var branchReturn = branchInvocation.TargetMethod.ReturnType;
+                var branchResultType = branchReturn is INamedTypeSymbol { IsGenericType: true } typedTask
+                                       && typedTask.ConstructedFrom.ToDisplayString() == TaskName
+                    ? typedTask.TypeArguments[0]
+                    : null;
                 if (!localFunction.Modifiers.Any(static modifier => modifier.IsKind(SyntaxKind.AsyncKeyword))
-                    || branchInvocation.TargetMethod.ReturnType.ToDisplayString() != BranchTaskName
+                    || branchResultType is null && branchReturn.ToDisplayString() != BranchTaskName
                     || localFunction.Body is null
                     || localFunction.ExpressionBody is not null)
                 {
                     return StatementFailure(
                         localFunction,
-                        $"ForkJoin branch '{branchInvocation.TargetMethod.Name}' must be an async, block-bodied, parameterless ProcessTask local function");
+                        $"ForkJoin branch '{branchInvocation.TargetMethod.Name}' must be an async, block-bodied, parameterless ProcessTask or ProcessTask<T> local function");
                 }
 
                 var branchIdentity = NextIdentity(
@@ -630,6 +660,33 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 {
                     return false;
                 }
+                IOperation? branchResult = null;
+                if (branchResultType is not null)
+                {
+                    var returns = branchBody.Descendants().OfType<ReturnFlow>().ToArray();
+                    if (returns.Length == 0)
+                    {
+                        return StatementFailure(
+                            localFunction,
+                            $"typed ForkJoin branch '{branchInvocation.TargetMethod.Name}' has no portable result expression");
+                    }
+                    if (returns.Length > 1)
+                    {
+                        return StatementFailure(
+                            localFunction,
+                            $"typed ForkJoin branch '{branchInvocation.TargetMethod.Name}' has ambiguous result paths; bind branch flow to one pure value and use one final return expression");
+                    }
+                    if (branchBody.Statements.IsEmpty
+                        || !ReferenceEquals(branchBody.Statements[branchBody.Statements.Length - 1], returns[0]))
+                    {
+                        return StatementFailure(
+                            returns[0].Syntax,
+                            $"typed ForkJoin branch '{branchInvocation.TargetMethod.Name}' has a path-partial result; every successful path must reach one final return expression");
+                    }
+
+                    branchResult = returns[0].Result;
+                    branchBody = new(branchBody.Statements.RemoveAt(branchBody.Statements.Length - 1));
+                }
                 if (branchBody.Statements.IsEmpty)
                 {
                     return StatementFailure(localFunction, "ForkJoin branches must contain at least one Process operation");
@@ -639,8 +696,20 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     branchIdentity,
                     branchInvocation.TargetMethod.Name,
                     branchBody,
+                    branchResult,
+                    capacityDomain,
                     SourceLocation(localFunction),
                     localFunction));
+            }
+
+            var typedBranches = branches.Count(static branch => branch.Result is not null);
+            if (typedBranches != 0 && typedBranches != branches.Count)
+            {
+                return StatementFailure(statement, "a typed ForkJoin cannot mix result-producing and result-less branches");
+            }
+            if (typedBranches != 0 && !TryBindForkResults(statement, branches))
+            {
+                return false;
             }
 
             flow = new(
@@ -653,12 +722,74 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             return true;
         }
 
-        static ImmutableArray<IOperation> ParamsArguments(IInvocationOperation invocation, string parameterName)
+        bool TryGetForkJoinInvocation(StatementSyntax statement, out IInvocationOperation invocation)
+        {
+            invocation = null!;
+            var matches = statement.DescendantNodesAndSelf()
+                .OfType<AwaitExpressionSyntax>()
+                .Select(awaited => semanticModel.GetOperation(awaited))
+                .Where(static operation => operation is not null)
+                .Select(static operation => Strip(operation!))
+                .OfType<IAwaitOperation>()
+                .Select(static awaited => Strip(awaited.Operation))
+                .OfType<IInvocationOperation>()
+                .Where(candidate => candidate.TargetMethod.Name == "ForkJoin"
+                    && SymbolEqualityComparer.Default.Equals(candidate.TargetMethod.ContainingType, contextParameter.Type)
+                    && candidate.Instance is not null
+                    && Strip(candidate.Instance) is IParameterReferenceOperation contextReference
+                    && SymbolEqualityComparer.Default.Equals(contextReference.Parameter, contextParameter))
+                .ToArray();
+            if (matches.Length != 1)
+            {
+                return false;
+            }
+
+            invocation = matches[0];
+            return true;
+        }
+
+        bool TryBindForkResults(StatementSyntax statement, IReadOnlyList<ForkBranchFlow> branches)
+        {
+            var designations = statement.DescendantNodesAndSelf()
+                .OfType<SingleVariableDesignationSyntax>()
+                .Select(designation => semanticModel.GetDeclaredSymbol(designation))
+                .OfType<ILocalSymbol>()
+                .ToArray();
+            if (designations.Length != 0)
+            {
+                if (designations.Length != branches.Count)
+                {
+                    return StatementFailure(
+                        statement,
+                        $"ForkJoin deconstruction requires exactly {branches.Count.ToString(CultureInfo.InvariantCulture)} result variables");
+                }
+
+                for (var index = 0; index < designations.Length; index++)
+                {
+                    pureLocals.Add(designations[index], branches[index].Result!);
+                }
+                return true;
+            }
+
+            if (statement is not LocalDeclarationStatementSyntax declaration
+                || declaration.Declaration.Variables.Count != 1
+                || semanticModel.GetDeclaredSymbol(declaration.Declaration.Variables[0]) is not ILocalSymbol tuple)
+            {
+                return true;
+            }
+
+            forkResultTuples.Add(tuple, [.. branches.Select(static branch => branch.Result!)]);
+            return true;
+        }
+
+        static ImmutableArray<IOperation> BranchArguments(IInvocationOperation invocation)
         {
             var arguments = ImmutableArray.CreateBuilder<IOperation>();
             foreach (var argument in invocation.Arguments)
             {
-                if (!string.Equals(argument.Parameter?.Name, parameterName, StringComparison.Ordinal))
+                var name = argument.Parameter?.Name;
+                if (!string.Equals(name, "branches", StringComparison.Ordinal)
+                    && !(name?.StartsWith("branch", StringComparison.Ordinal) ?? false))
                 {
                     continue;
                 }
@@ -835,6 +966,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         readonly IParameterSymbol inputParameter;
         readonly ITypeSymbol resultType;
         readonly IReadOnlyDictionary<ILocalSymbol, IOperation> pureLocals;
+        readonly IReadOnlyDictionary<ILocalSymbol, ImmutableArray<IOperation>> forkResultTuples;
         readonly IReadOnlyList<AwaitFlow> awaits;
         readonly Dictionary<ILocalSymbol, AwaitFlow> awaitByLocal;
         readonly List<string> builderStatements = [];
@@ -847,6 +979,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             IParameterSymbol inputParameter,
             ITypeSymbol resultType,
             IReadOnlyDictionary<ILocalSymbol, IOperation> pureLocals,
+            IReadOnlyDictionary<ILocalSymbol, ImmutableArray<IOperation>> forkResultTuples,
             IReadOnlyList<AwaitFlow> awaits)
         {
             this.productionContext = productionContext;
@@ -854,6 +987,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             this.inputParameter = inputParameter;
             this.resultType = resultType;
             this.pureLocals = pureLocals;
+            this.forkResultTuples = forkResultTuples;
             this.awaits = awaits;
             awaitByLocal = new(SymbolEqualityComparer.Default);
             foreach (var awaited in awaits)
@@ -911,6 +1045,11 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 $"var {awaited.OutputVariable} = __builder.Output<{FormatType(awaited.Local.Type)}>(owner: {awaited.Identity.Variable}, role: \"result\", {SourceArguments(awaited.Source, method.Name)});")
                 .ToImmutableArray();
 
+            if (!TryValidateForkResults(body))
+            {
+                return false;
+            }
+
             if (!TryLowerBlock(body, successor: null, out var entry) || entry is null)
             {
                 if (entry is null)
@@ -930,6 +1069,37 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 outputs,
                 [.. builderStatements],
                 entry);
+            return true;
+        }
+
+        bool TryValidateForkResults(FlowBlock body)
+        {
+            var translator = new PureExpressionEmitter(
+                method,
+                inputParameter,
+                pureLocals,
+                forkResultTuples,
+                awaitByLocal,
+                resolvingPureLocals);
+            foreach (var branch in body.Descendants()
+                         .OfType<ForkJoinFlow>()
+                         .SelectMany(static fork => fork.Branches))
+            {
+                if (branch.Result is null
+                    || translator.TryEmit(branch.Result, out _, out var failure))
+                {
+                    continue;
+                }
+
+                Report(
+                    productionContext,
+                    UnsupportedPureExpression,
+                    branch.Result.Syntax.GetLocation(),
+                    method.Name,
+                    $"typed ForkJoin branch '{branch.Name}' result is not portable: {failure}");
+                return false;
+            }
+
             return true;
         }
 
@@ -1071,13 +1241,49 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 }
 
                 var branchVariable = $"__fork_branch_{branches.Count.ToString(CultureInfo.InvariantCulture)}_{forkJoin.Identity.Variable.Substring("__node_".Length)}";
+                var capacityDomain = "null";
+                if (branch.CapacityDomain is not null
+                    && !TryEmitExactArgument(
+                        branch.CapacityDomain,
+                        branch.CapacityDomain.Syntax,
+                        out capacityDomain))
+                {
+                    return false;
+                }
                 builderStatements.Add(
-                    $"var {branchVariable} = __builder.ForkBranch(id: {branch.Identity.Variable}, start: __builder.Edge(owner: {branch.Identity.Variable}, role: \"start\", target: {branchEntry}, {SourceArguments(branch.Source, method.Name)}), {SourceArguments(branch.Source, method.Name)});");
+                    $"var {branchVariable} = __builder.ForkBranch(id: {branch.Identity.Variable}, start: __builder.Edge(owner: {branch.Identity.Variable}, role: \"start\", target: {branchEntry}, {SourceArguments(branch.Source, method.Name)}), capacityDomain: {capacityDomain}, {SourceArguments(branch.Source, method.Name)});");
                 branches.Add(branchVariable);
             }
 
-            builderStatements.Add(
-                $"__builder.Fork(id: {forkJoin.Identity.Variable}, branches: [{string.Join(", ", branches)}], join: {forkJoin.JoinIdentity.Variable}, {SourceArguments(forkJoin.Source, method.Name)});");
+            var admission = Argument(forkJoin.Invocation, "admission");
+            var authoredAdmission = admission is not null
+                && !admission.IsImplicit
+                && !(Strip(admission.Value).ConstantValue is { HasValue: true, Value: null });
+            var unboundCapacity = forkJoin.Branches.FirstOrDefault(static branch => branch.CapacityDomain is not null);
+            if (!authoredAdmission && unboundCapacity?.CapacityDomain is { } capacity)
+            {
+                return StatementFailure(
+                    capacity.Syntax,
+                    "a ForkJoin branch capacity domain requires an explicit admission policy declaring its canonical limit");
+            }
+            if (authoredAdmission)
+            {
+                if (!TryEmitExactArgument(admission!, admission!.Value.Syntax, out var admissionExpression))
+                {
+                    return false;
+                }
+                var suffix = forkJoin.Identity.Variable.Substring("__node_".Length);
+                var admissionVariable = $"__fork_admission_{suffix}";
+                builderStatements.Add(
+                    $"var {admissionVariable} = ({admissionExpression}) ?? throw new global::System.ArgumentNullException(\"admission\");");
+                builderStatements.Add(
+                    $"__builder.Fork(id: {forkJoin.Identity.Variable}, branches: [{string.Join(", ", branches)}], join: {forkJoin.JoinIdentity.Variable}, limits: new global::Cohesive.Processes.IR.ProcessWorkLimits(maximumItems: {branches.Count.ToString(CultureInfo.InvariantCulture)}, maximumStartsPerActivation: {admissionVariable}.MaximumStartsPerActivation ?? {branches.Count.ToString(CultureInfo.InvariantCulture)}, maximumParallelism: {admissionVariable}.MaximumParallelism, minimumParallelism: {admissionVariable}.MinimumParallelism), capacityDomains: {admissionVariable}.CapacityDomains, {SourceArguments(forkJoin.Source, method.Name)});");
+            }
+            else
+            {
+                builderStatements.Add(
+                    $"__builder.Fork(id: {forkJoin.Identity.Variable}, branches: [{string.Join(", ", branches)}], join: {forkJoin.JoinIdentity.Variable}, {SourceArguments(forkJoin.Source, method.Name)});");
+            }
             builderStatements.Add(
                 $"__builder.Join(id: {forkJoin.JoinIdentity.Variable}, fork: {forkJoin.Identity.Variable}, policy: new global::Cohesive.Processes.IR.ProcessJoinPolicy(mode: global::Cohesive.Processes.IR.ProcessJoinMode.All, requiredCount: 0, failure: global::Cohesive.Processes.IR.ProcessJoinFailurePolicy.FailFast, cancellation: global::Cohesive.Processes.IR.ProcessJoinCancellationPolicy.AwaitRemaining, completionOrder: global::Cohesive.Processes.IR.ProcessJoinCompletionOrder.Unobservable, tieBreak: global::Cohesive.Processes.IR.ProcessJoinTieBreak.BranchIdentity), next: __builder.Edge(owner: {forkJoin.JoinIdentity.Variable}, role: \"next\", target: {successor}, {SourceArguments(forkJoin.Source, method.Name)}), {SourceArguments(forkJoin.Source, method.Name)});");
             return true;
@@ -1237,7 +1443,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     expression = string.Empty;
                     return StatementFailure(
                         syntax,
-                        "exact definition, contract, outcome, and node identities cannot depend on runtime bindings");
+                        "exact semantic arguments—definitions, contracts, outcomes, node identities, admission policies, and capacity domains—cannot depend on runtime bindings");
                 }
             }
             expression = $"({operation.Syntax})";
@@ -1261,6 +1467,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 method,
                 inputParameter,
                 pureLocals,
+                forkResultTuples,
                 awaitByLocal,
                 resolvingPureLocals);
             if (!translator.TryEmit(operation, out var expression, out var failure))
@@ -1312,6 +1519,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         readonly IMethodSymbol method;
         readonly IParameterSymbol inputParameter;
         readonly IReadOnlyDictionary<ILocalSymbol, IOperation> pureLocals;
+        readonly IReadOnlyDictionary<ILocalSymbol, ImmutableArray<IOperation>> forkResultTuples;
         readonly IReadOnlyDictionary<ILocalSymbol, AwaitFlow> awaits;
         readonly HashSet<ILocalSymbol> resolving;
 
@@ -1319,12 +1527,14 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             IMethodSymbol method,
             IParameterSymbol inputParameter,
             IReadOnlyDictionary<ILocalSymbol, IOperation> pureLocals,
+            IReadOnlyDictionary<ILocalSymbol, ImmutableArray<IOperation>> forkResultTuples,
             IReadOnlyDictionary<ILocalSymbol, AwaitFlow> awaits,
             HashSet<ILocalSymbol> resolving)
         {
             this.method = method;
             this.inputParameter = inputParameter;
             this.pureLocals = pureLocals;
+            this.forkResultTuples = forkResultTuples;
             this.awaits = awaits;
             this.resolving = resolving;
         }
@@ -1332,6 +1542,10 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         public bool TryEmit(IOperation operation, out string expression, out string failure)
         {
             operation = Strip(operation);
+            if (TryResolveForkTupleElement(operation, out var tupleElement))
+            {
+                return TryEmit(tupleElement, out expression, out failure);
+            }
             if (operation is IPropertyReferenceOperation pureMember
                 && TryResolvePureMember(pureMember, out var projected))
             {
@@ -1698,10 +1912,9 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             }
 
             var instance = Strip(property.Instance);
-            if (instance is ILocalReferenceOperation local
-                && pureLocals.TryGetValue(local.Local, out var initializer))
+            if (TryResolvePureAlias(instance, out var alias))
             {
-                instance = Strip(initializer);
+                instance = alias;
             }
             else if (instance is IPropertyReferenceOperation parent
                      && TryResolvePureMember(parent, out var parentValue))
@@ -1754,6 +1967,32 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             return false;
         }
 
+        bool TryResolvePureAlias(IOperation operation, out IOperation value)
+        {
+            value = Strip(operation);
+            var changed = false;
+            HashSet<ILocalSymbol> observed = new(SymbolEqualityComparer.Default);
+            while (true)
+            {
+                if (TryResolveForkTupleElement(value, out var tupleElement))
+                {
+                    value = Strip(tupleElement);
+                    changed = true;
+                    continue;
+                }
+                if (value is ILocalReferenceOperation local
+                    && pureLocals.TryGetValue(local.Local, out var initializer)
+                    && observed.Add(local.Local))
+                {
+                    value = Strip(initializer);
+                    changed = true;
+                    continue;
+                }
+
+                return changed;
+            }
+        }
+
         static void CollectConcat(IOperation operation, List<IOperation> parts)
         {
             operation = Strip(operation);
@@ -1795,11 +2034,19 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             while (true)
             {
                 current = Strip(current);
+                if (TryResolveForkTupleElement(current, out var tupleElement))
+                {
+                    current = tupleElement;
+                    continue;
+                }
                 switch (current)
                 {
                     case IPropertyReferenceOperation property when property.Instance is not null:
                         segments.Add(SerializedName(property.Property) ?? property.Property.Name);
                         current = property.Instance;
+                        continue;
+                    case ILocalReferenceOperation local when pureLocals.TryGetValue(local.Local, out var initializer):
+                        current = initializer;
                         continue;
                     case IParameterReferenceOperation parameter
                         when SymbolEqualityComparer.Default.Equals(parameter.Parameter, inputParameter):
@@ -1815,6 +2062,36 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         return false;
                 }
             }
+        }
+
+        bool TryResolveForkTupleElement(IOperation operation, out IOperation value)
+        {
+            value = null!;
+            operation = Strip(operation);
+            if (operation is not IFieldReferenceOperation { Instance: { } instance } field
+                || Strip(instance) is not ILocalReferenceOperation local
+                || !forkResultTuples.TryGetValue(local.Local, out var values)
+                || local.Local.Type is not INamedTypeSymbol { IsTupleType: true } tuple)
+            {
+                return false;
+            }
+
+            var elements = tuple.TupleElements;
+            for (var index = 0; index < elements.Length && index < values.Length; index++)
+            {
+                if (!SymbolEqualityComparer.Default.Equals(elements[index], field.Field)
+                    && !SymbolEqualityComparer.Default.Equals(
+                        elements[index].CorrespondingTupleField,
+                        field.Field.CorrespondingTupleField ?? field.Field))
+                {
+                    continue;
+                }
+
+                value = values[index];
+                return true;
+            }
+
+            return false;
         }
 
         static string BindingField(string binding, IReadOnlyList<string> segments) =>
@@ -2044,6 +2321,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         FlowIdentity Identity,
         string Name,
         FlowBlock Body,
+        IOperation? Result,
+        IArgumentOperation? CapacityDomain,
         SourceReference Source,
         SyntaxNode Syntax);
 

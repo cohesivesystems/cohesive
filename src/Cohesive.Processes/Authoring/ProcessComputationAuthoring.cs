@@ -1,5 +1,7 @@
+using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 using Cohesive.Execution;
+using Cohesive.Processes.IR;
 
 namespace Cohesive.Processes.Authoring;
 
@@ -32,6 +34,8 @@ public sealed class GenerateProcessDefinitionAttribute : Attribute
 /// <remarks>
 /// Members return authoring awaitables solely so ordinary C# <c>async</c>/<c>await</c> syntax type-checks.
 /// Invoking this surface at runtime is unsupported; generated code constructs canonical IR directly.
+/// Typed Fork results and their tuple projection are also syntax-only: an all-branches Join exposes the existing
+/// branch-local bindings, and the generator fuses each pure result expression into its post-Join consumers.
 /// </remarks>
 public sealed class ProcessContext
 {
@@ -101,6 +105,17 @@ public sealed class ProcessContext
         ExecutionNodeId? id = null) =>
         throw SyntaxOnly();
 
+    /// <summary>Annotates one typed Fork branch with a canonical capacity-domain assignment.</summary>
+    /// <typeparam name="TResult">CLR type projected from the branch result after an all-branches Join.</typeparam>
+    /// <param name="branch">Syntax-only local branch computation.</param>
+    /// <param name="capacityDomain">Stable capacity-domain identity declared by the Fork admission policy.</param>
+    /// <returns>A syntax-only annotated branch consumed by a typed <c>ForkJoin</c> overload.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessTask<TResult> Branch<TResult>(
+        ProcessTask<TResult> branch,
+        string capacityDomain) =>
+        throw SyntaxOnly();
+
     /// <summary>
     /// Declares parallel syntax-only branch computations converging through an all-branches Join.
     /// </summary>
@@ -129,12 +144,262 @@ public sealed class ProcessContext
     public ProcessTask ForkJoin(ExecutionNodeId id, params ProcessTask[] branches) =>
         throw SyntaxOnly();
 
+    /// <summary>Declares two typed branches converging through an all-branches Join.</summary>
+    /// <typeparam name="T1">First branch result type.</typeparam>
+    /// <typeparam name="T2">Second branch result type.</typeparam>
+    /// <param name="branch1">First typed branch.</param>
+    /// <param name="branch2">Second typed branch.</param>
+    /// <param name="admission">Optional bounded admission policy; omission preserves eager finite-set admission.</param>
+    /// <param name="id">Optional explicit canonical Fork identity.</param>
+    /// <returns>A syntax-only awaitable projecting both results in authored branch order.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessAwaitable<(T1, T2)> ForkJoin<T1, T2>(
+        ProcessTask<T1> branch1,
+        ProcessTask<T2> branch2,
+        ProcessAdmission? admission = null,
+        ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
+    /// <summary>Declares three typed branches converging through an all-branches Join.</summary>
+    /// <typeparam name="T1">First branch result type.</typeparam>
+    /// <typeparam name="T2">Second branch result type.</typeparam>
+    /// <typeparam name="T3">Third branch result type.</typeparam>
+    /// <param name="branch1">First typed branch.</param>
+    /// <param name="branch2">Second typed branch.</param>
+    /// <param name="branch3">Third typed branch.</param>
+    /// <param name="admission">Optional bounded admission policy; omission preserves eager finite-set admission.</param>
+    /// <param name="id">Optional explicit canonical Fork identity.</param>
+    /// <returns>A syntax-only awaitable projecting all results in authored branch order.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessAwaitable<(T1, T2, T3)> ForkJoin<T1, T2, T3>(
+        ProcessTask<T1> branch1,
+        ProcessTask<T2> branch2,
+        ProcessTask<T3> branch3,
+        ProcessAdmission? admission = null,
+        ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
+    /// <summary>Declares four typed branches converging through an all-branches Join.</summary>
+    /// <typeparam name="T1">First branch result type.</typeparam>
+    /// <typeparam name="T2">Second branch result type.</typeparam>
+    /// <typeparam name="T3">Third branch result type.</typeparam>
+    /// <typeparam name="T4">Fourth branch result type.</typeparam>
+    /// <param name="branch1">First typed branch.</param>
+    /// <param name="branch2">Second typed branch.</param>
+    /// <param name="branch3">Third typed branch.</param>
+    /// <param name="branch4">Fourth typed branch.</param>
+    /// <param name="admission">Optional bounded admission policy; omission preserves eager finite-set admission.</param>
+    /// <param name="id">Optional explicit canonical Fork identity.</param>
+    /// <returns>A syntax-only awaitable projecting all results in authored branch order.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessAwaitable<(T1, T2, T3, T4)> ForkJoin<T1, T2, T3, T4>(
+        ProcessTask<T1> branch1,
+        ProcessTask<T2> branch2,
+        ProcessTask<T3> branch3,
+        ProcessTask<T4> branch4,
+        ProcessAdmission? admission = null,
+        ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
+    /// <summary>Declares five typed branches converging through an all-branches Join.</summary>
+    /// <typeparam name="T1">First branch result type.</typeparam>
+    /// <typeparam name="T2">Second branch result type.</typeparam>
+    /// <typeparam name="T3">Third branch result type.</typeparam>
+    /// <typeparam name="T4">Fourth branch result type.</typeparam>
+    /// <typeparam name="T5">Fifth branch result type.</typeparam>
+    /// <param name="branch1">First typed branch.</param>
+    /// <param name="branch2">Second typed branch.</param>
+    /// <param name="branch3">Third typed branch.</param>
+    /// <param name="branch4">Fourth typed branch.</param>
+    /// <param name="branch5">Fifth typed branch.</param>
+    /// <param name="admission">Optional bounded admission policy; omission preserves eager finite-set admission.</param>
+    /// <param name="id">Optional explicit canonical Fork identity.</param>
+    /// <returns>A syntax-only awaitable projecting all results in authored branch order.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessAwaitable<(T1, T2, T3, T4, T5)> ForkJoin<T1, T2, T3, T4, T5>(
+        ProcessTask<T1> branch1,
+        ProcessTask<T2> branch2,
+        ProcessTask<T3> branch3,
+        ProcessTask<T4> branch4,
+        ProcessTask<T5> branch5,
+        ProcessAdmission? admission = null,
+        ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
+    /// <summary>Declares six typed branches converging through an all-branches Join.</summary>
+    /// <typeparam name="T1">First branch result type.</typeparam>
+    /// <typeparam name="T2">Second branch result type.</typeparam>
+    /// <typeparam name="T3">Third branch result type.</typeparam>
+    /// <typeparam name="T4">Fourth branch result type.</typeparam>
+    /// <typeparam name="T5">Fifth branch result type.</typeparam>
+    /// <typeparam name="T6">Sixth branch result type.</typeparam>
+    /// <param name="branch1">First typed branch.</param>
+    /// <param name="branch2">Second typed branch.</param>
+    /// <param name="branch3">Third typed branch.</param>
+    /// <param name="branch4">Fourth typed branch.</param>
+    /// <param name="branch5">Fifth typed branch.</param>
+    /// <param name="branch6">Sixth typed branch.</param>
+    /// <param name="admission">Optional bounded admission policy; omission preserves eager finite-set admission.</param>
+    /// <param name="id">Optional explicit canonical Fork identity.</param>
+    /// <returns>A syntax-only awaitable projecting all results in authored branch order.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessAwaitable<(T1, T2, T3, T4, T5, T6)> ForkJoin<T1, T2, T3, T4, T5, T6>(
+        ProcessTask<T1> branch1,
+        ProcessTask<T2> branch2,
+        ProcessTask<T3> branch3,
+        ProcessTask<T4> branch4,
+        ProcessTask<T5> branch5,
+        ProcessTask<T6> branch6,
+        ProcessAdmission? admission = null,
+        ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
+    /// <summary>Declares seven typed branches converging through an all-branches Join.</summary>
+    /// <typeparam name="T1">First branch result type.</typeparam>
+    /// <typeparam name="T2">Second branch result type.</typeparam>
+    /// <typeparam name="T3">Third branch result type.</typeparam>
+    /// <typeparam name="T4">Fourth branch result type.</typeparam>
+    /// <typeparam name="T5">Fifth branch result type.</typeparam>
+    /// <typeparam name="T6">Sixth branch result type.</typeparam>
+    /// <typeparam name="T7">Seventh branch result type.</typeparam>
+    /// <param name="branch1">First typed branch.</param>
+    /// <param name="branch2">Second typed branch.</param>
+    /// <param name="branch3">Third typed branch.</param>
+    /// <param name="branch4">Fourth typed branch.</param>
+    /// <param name="branch5">Fifth typed branch.</param>
+    /// <param name="branch6">Sixth typed branch.</param>
+    /// <param name="branch7">Seventh typed branch.</param>
+    /// <param name="admission">Optional bounded admission policy; omission preserves eager finite-set admission.</param>
+    /// <param name="id">Optional explicit canonical Fork identity.</param>
+    /// <returns>A syntax-only awaitable projecting all results in authored branch order.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessAwaitable<(T1, T2, T3, T4, T5, T6, T7)> ForkJoin<T1, T2, T3, T4, T5, T6, T7>(
+        ProcessTask<T1> branch1,
+        ProcessTask<T2> branch2,
+        ProcessTask<T3> branch3,
+        ProcessTask<T4> branch4,
+        ProcessTask<T5> branch5,
+        ProcessTask<T6> branch6,
+        ProcessTask<T7> branch7,
+        ProcessAdmission? admission = null,
+        ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
+    /// <summary>Declares eight typed branches converging through an all-branches Join.</summary>
+    /// <typeparam name="T1">First branch result type.</typeparam>
+    /// <typeparam name="T2">Second branch result type.</typeparam>
+    /// <typeparam name="T3">Third branch result type.</typeparam>
+    /// <typeparam name="T4">Fourth branch result type.</typeparam>
+    /// <typeparam name="T5">Fifth branch result type.</typeparam>
+    /// <typeparam name="T6">Sixth branch result type.</typeparam>
+    /// <typeparam name="T7">Seventh branch result type.</typeparam>
+    /// <typeparam name="T8">Eighth branch result type.</typeparam>
+    /// <param name="branch1">First typed branch.</param>
+    /// <param name="branch2">Second typed branch.</param>
+    /// <param name="branch3">Third typed branch.</param>
+    /// <param name="branch4">Fourth typed branch.</param>
+    /// <param name="branch5">Fifth typed branch.</param>
+    /// <param name="branch6">Sixth typed branch.</param>
+    /// <param name="branch7">Seventh typed branch.</param>
+    /// <param name="branch8">Eighth typed branch.</param>
+    /// <param name="admission">Optional bounded admission policy; omission preserves eager finite-set admission.</param>
+    /// <param name="id">Optional explicit canonical Fork identity.</param>
+    /// <returns>A syntax-only awaitable projecting all results in authored branch order.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessAwaitable<(T1, T2, T3, T4, T5, T6, T7, T8)> ForkJoin<T1, T2, T3, T4, T5, T6, T7, T8>(
+        ProcessTask<T1> branch1,
+        ProcessTask<T2> branch2,
+        ProcessTask<T3> branch3,
+        ProcessTask<T4> branch4,
+        ProcessTask<T5> branch5,
+        ProcessTask<T6> branch6,
+        ProcessTask<T7> branch7,
+        ProcessTask<T8> branch8,
+        ProcessAdmission? admission = null,
+        ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
     static InvalidOperationException SyntaxOnly() => new(
         "Process computation-expression members are syntax-only and must be lowered by Cohesive.Analyzers.");
 }
 
-/// <summary>Task-like result used only to type-check a generated Process computation method.</summary>
-/// <typeparam name="TResult">CLR type of the Process terminal result.</typeparam>
+/// <summary>Authoring-only bounded Fork admission projected into canonical Process work limits.</summary>
+/// <remarks>
+/// This descriptor is consumed only while generating a definition. Generated code projects it into
+/// <see cref="ProcessWorkLimits"/> and <see cref="ProcessCapacityDomainLimit"/> values; it is never persisted or
+/// interpreted as a second admission authority.
+/// </remarks>
+public sealed record ProcessAdmission
+{
+    ProcessAdmission(
+        int minimumParallelism,
+        int maximumParallelism,
+        int? maximumStartsPerActivation,
+        ImmutableArray<ProcessCapacityDomainLimit> capacityDomains)
+    {
+        if (minimumParallelism <= 0)
+            throw new ArgumentOutOfRangeException(nameof(minimumParallelism), "Minimum parallelism must be positive.");
+        if (maximumParallelism < minimumParallelism)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maximumParallelism),
+                "Maximum parallelism cannot be less than minimum parallelism.");
+        }
+        if (maximumStartsPerActivation is <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maximumStartsPerActivation),
+                "Maximum starts per activation must be positive when supplied.");
+        }
+
+        MinimumParallelism = minimumParallelism;
+        MaximumParallelism = maximumParallelism;
+        MaximumStartsPerActivation = maximumStartsPerActivation;
+        CapacityDomains = capacityDomains.IsDefault ? [] : capacityDomains;
+    }
+
+    /// <summary>Hard minimum permitted runtime admission operating point.</summary>
+    public int MinimumParallelism { get; }
+
+    /// <summary>Hard maximum permitted runtime admission operating point.</summary>
+    public int MaximumParallelism { get; }
+
+    /// <summary>Optional maximum branch starts per activation; omission uses the finite branch count.</summary>
+    public int? MaximumStartsPerActivation { get; }
+
+    /// <summary>Canonical capacity-domain limits assigned by annotated branches.</summary>
+    public ImmutableArray<ProcessCapacityDomainLimit> CapacityDomains { get; }
+
+    /// <summary>Creates bounded authoring policy for a finite Fork.</summary>
+    /// <param name="maximumParallelism">Hard maximum permitted runtime admission operating point.</param>
+    /// <param name="minimumParallelism">Hard minimum permitted runtime admission operating point.</param>
+    /// <param name="maximumStartsPerActivation">Optional positive per-activation branch-start limit.</param>
+    /// <param name="capacityDomains">Optional canonical named capacity-domain limits.</param>
+    /// <returns>An authoring descriptor projected into canonical Fork limits by the generator.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// A supplied limit is not positive or the maximum is less than the minimum.
+    /// </exception>
+    public static ProcessAdmission Bounded(
+        int maximumParallelism,
+        int minimumParallelism = 1,
+        int? maximumStartsPerActivation = null,
+        ImmutableArray<ProcessCapacityDomainLimit> capacityDomains = default) =>
+        new(minimumParallelism, maximumParallelism, maximumStartsPerActivation, capacityDomains);
+}
+
+/// <summary>Concise authoring factories for canonical Process capacity values.</summary>
+public static class ProcessCapacity
+{
+    /// <summary>Creates one canonical named capacity-domain limit.</summary>
+    /// <param name="identity">Stable non-empty capacity-domain identity.</param>
+    /// <param name="maximumParallelism">Positive maximum concurrent admitted work in the domain.</param>
+    /// <returns>The canonical capacity-domain limit.</returns>
+    public static ProcessCapacityDomainLimit Domain(string identity, int maximumParallelism) =>
+        new(identity, maximumParallelism);
+}
+
+/// <summary>Task-like result used only to type-check a generated Process method or typed local Fork branch.</summary>
+/// <typeparam name="TResult">CLR type of the Process terminal result or pure typed branch result.</typeparam>
 [AsyncMethodBuilder(typeof(ProcessTaskMethodBuilder<>))]
 public readonly struct ProcessTask<TResult>;
 

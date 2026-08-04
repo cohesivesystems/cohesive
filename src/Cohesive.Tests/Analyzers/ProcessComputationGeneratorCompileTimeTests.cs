@@ -222,6 +222,332 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
         Assert.DoesNotContain("ProcessTaskMethodBuilder", generated);
     }
 
+    [Fact]
+    public void Generator_LowersTypedForkResultsAndAdmissionWithoutPersistingTupleSyntax()
+    {
+        var source = """
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class ParallelReceiptProcess
+                     {
+                         private static RequestContractReference RecordAudit => null!;
+                         private static RequestContractReference NotifyOwner => null!;
+                         private static RequestTerminalOutcomeId Completed => new("completed");
+
+                         private static async ProcessTask<string> Run(ProcessContext process, string input)
+                         {
+                             async ProcessTask<Receipt> Audit()
+                             {
+                                 var receipt = await process.Effect<Receipt>(RecordAudit, Completed, input);
+                                 return new Receipt("audit-" + receipt.Id);
+                             }
+
+                             async ProcessTask<Receipt> Notify()
+                             {
+                                 var receipt = await process.Effect<Receipt>(NotifyOwner, Completed, input);
+                                 return new Receipt("notify-" + receipt.Id);
+                             }
+
+                             var (auditReceipt, notifyReceipt) = await process.ForkJoin(
+                                 process.Branch(Audit(), capacityDomain: "outbound"),
+                                 Notify(),
+                                 admission: ProcessAdmission.Bounded(
+                                     maximumParallelism: 1,
+                                     maximumStartsPerActivation: 1,
+                                     capacityDomains: [ProcessCapacity.Domain("outbound", maximumParallelism: 1)]),
+                                 id: new("parallel-receipts"));
+                             return auditReceipt.Id + notifyReceipt.Id;
+                         }
+                     }
+
+                     public sealed record Receipt(string Id);
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out var outputCompilation);
+        Assert.Empty(runResult.Results.SelectMany(static result => result.Diagnostics));
+        var generated = Assert.Single(runResult.Results.SelectMany(static result => result.GeneratedSources))
+            .SourceText
+            .ToString();
+
+        Assert.DoesNotContain(
+            outputCompilation.GetDiagnostics(),
+            static diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+        Assert.Contains("new global::Cohesive.Processes.IR.ProcessWorkLimits", generated);
+        Assert.Contains("ProcessCapacity.Domain(\"outbound\", maximumParallelism: 1)", generated);
+        Assert.Contains("capacityDomain: (\"outbound\")", generated);
+        Assert.Contains("new(\"parallel-receipts\")", generated);
+        Assert.Equal(2, Count(generated, "FieldPathSegment.ForField(\"Id\")"));
+        Assert.DoesNotContain("ValueTuple", generated);
+        Assert.DoesNotContain("auditReceipt", generated);
+        Assert.DoesNotContain("notifyReceipt", generated);
+    }
+
+    [Theory]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    [InlineData(6)]
+    [InlineData(7)]
+    [InlineData(8)]
+    public void Generator_LowersEverySupportedTypedForkArity(int arity)
+    {
+        var source = TypedForkSource(arity);
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out var outputCompilation);
+        var generated = Assert.Single(runResult.Results.SelectMany(static result => result.GeneratedSources))
+            .SourceText
+            .ToString();
+
+        Assert.Empty(runResult.Results.SelectMany(static result => result.Diagnostics));
+        Assert.DoesNotContain(
+            outputCompilation.GetDiagnostics(),
+            static diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+        Assert.Equal(arity, Count(generated, "__builder.Request(id:"));
+        Assert.Contains($"__fork_branch_{arity - 1}_", generated);
+        Assert.DoesNotContain("ValueTuple", generated);
+    }
+
+    [Fact]
+    public void Generator_ReportsTypedForkBranchWithoutOneFinalResultExpression()
+    {
+        var source = """
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class InvalidTypedForkProcess
+                     {
+                         private static RequestContractReference Request => null!;
+                         private static RequestTerminalOutcomeId Completed => new("completed");
+
+                         private static async ProcessTask<string> Run(ProcessContext process, string input)
+                         {
+                             async ProcessTask<string> ConditionalBranch()
+                             {
+                                 var value = await process.Effect<string>(Request, Completed, input);
+                                 if (input == "special")
+                                     return value;
+                                 return value;
+                             }
+
+                             async ProcessTask<string> FinalBranch()
+                             {
+                                 var value = await process.Effect<string>(Request, Completed, input);
+                                 return value;
+                             }
+
+                             var (first, second) = await process.ForkJoin(ConditionalBranch(), FinalBranch());
+                             return first + second;
+                         }
+                     }
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.Contains("has ambiguous result paths", diagnostic.GetMessage());
+        Assert.Equal(14, diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1);
+    }
+
+    [Fact]
+    public void Generator_ReportsMissingTypedForkBranchResult()
+    {
+        var source = """
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class MissingBranchResultProcess
+                     {
+                         private static RequestContractReference Request => null!;
+                         private static RequestTerminalOutcomeId Completed => new("completed");
+
+                         private static async ProcessTask<string> Run(ProcessContext process, string input)
+                         {
+                             async ProcessTask<string> Missing()
+                             {
+                                 var value = await process.Effect<string>(Request, Completed, input);
+                             }
+
+                             async ProcessTask<string> Complete()
+                             {
+                                 var value = await process.Effect<string>(Request, Completed, input);
+                                 return value;
+                             }
+
+                             var results = await process.ForkJoin(Missing(), Complete());
+                             return results.Item2;
+                         }
+                     }
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.Contains("has no portable result expression", diagnostic.GetMessage());
+        Assert.Equal("/samples/ApproveCustomerProcess.cs", diagnostic.Location.SourceTree?.FilePath);
+    }
+
+    [Fact]
+    public void Generator_ReportsPathPartialTypedForkBranchResult()
+    {
+        var source = """
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class PartialBranchResultProcess
+                     {
+                         private static RequestContractReference Request => null!;
+                         private static RequestTerminalOutcomeId Completed => new("completed");
+
+                         private static async ProcessTask<string> Run(ProcessContext process, string input)
+                         {
+                             async ProcessTask<string> Partial()
+                             {
+                                 var first = await process.Effect<string>(Request, Completed, input);
+                                 if (input == "return")
+                                     return first;
+                                 var second = await process.Effect<string>(Request, Completed, input);
+                             }
+
+                             async ProcessTask<string> Complete()
+                             {
+                                 var value = await process.Effect<string>(Request, Completed, input);
+                                 return value;
+                             }
+
+                             var results = await process.ForkJoin(Partial(), Complete());
+                             return results.Item2;
+                         }
+                     }
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.Contains("has a path-partial result", diagnostic.GetMessage());
+        Assert.Equal(18, diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1);
+    }
+
+    [Fact]
+    public void Generator_ReportsRuntimeDependentForkCapacityAtTheAnnotation()
+    {
+        var source = """
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class InvalidCapacityProcess
+                     {
+                         private static RequestContractReference Request => null!;
+                         private static RequestTerminalOutcomeId Completed => new("completed");
+
+                         private static async ProcessTask<string> Run(ProcessContext process, string input)
+                         {
+                             async ProcessTask<string> First()
+                             {
+                                 var value = await process.Effect<string>(Request, Completed, input);
+                                 return value;
+                             }
+
+                             async ProcessTask<string> Second()
+                             {
+                                 var value = await process.Effect<string>(Request, Completed, input);
+                                 return value;
+                             }
+
+                             var (first, second) = await process.ForkJoin(
+                                 process.Branch(First(), capacityDomain: input),
+                                 Second(),
+                                 admission: ProcessAdmission.Bounded(
+                                     maximumParallelism: 1,
+                                     capacityDomains: [ProcessCapacity.Domain("fixed", maximumParallelism: 1)]));
+                             return first + second;
+                         }
+                     }
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.Contains("capacity domains", diagnostic.GetMessage());
+        Assert.Equal(27, diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1);
+    }
+
+    [Fact]
+    public void Generator_ReportsUnusedNonPortableTypedBranchResult()
+    {
+        var source = """
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class InvalidBranchResultProcess
+                     {
+                         private static RequestContractReference Request => null!;
+                         private static RequestTerminalOutcomeId Completed => new("completed");
+
+                         private static async ProcessTask<string> Run(ProcessContext process, string input)
+                         {
+                             async ProcessTask<string> First()
+                             {
+                                 var value = await process.Effect<string>(Request, Completed, input);
+                                 return value.ToUpperInvariant();
+                             }
+
+                             async ProcessTask<string> Second()
+                             {
+                                 var value = await process.Effect<string>(Request, Completed, input);
+                                 return value;
+                             }
+
+                             var ignored = await process.ForkJoin(First(), Second());
+                             return input;
+                         }
+                     }
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC004");
+
+        Assert.Contains("branch 'First' result is not portable", diagnostic.GetMessage());
+        Assert.Contains("ToUpperInvariant", diagnostic.GetMessage());
+        Assert.Equal(17, diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1);
+    }
+
     static GeneratorDriverRunResult RunGenerator(
         CSharpCompilation compilation,
         out Compilation outputCompilation)
@@ -251,6 +577,44 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
             options: new CSharpCompilationOptions(
                 OutputKind.DynamicallyLinkedLibrary,
                 nullableContextOptions: NullableContextOptions.Enable));
+    }
+
+    static string TypedForkSource(int arity)
+    {
+        var branches = string.Join(
+            ", ",
+            Enumerable.Range(1, arity).Select(static index => $"Branch{index}()"));
+        var functions = string.Join(
+            Environment.NewLine,
+            Enumerable.Range(1, arity).Select(static index => $$"""
+                async ProcessTask<string> Branch{{index}}()
+                {
+                    var value = await process.Effect<string>(Request, Completed, input);
+                    return value;
+                }
+                """));
+
+        return $$"""
+                 using Cohesive.Execution;
+                 using Cohesive.Processes.Authoring;
+
+                 namespace Sample;
+
+                 [GenerateProcessDefinition(nameof(Run))]
+                 public static partial class TypedForkArity{{arity}}Process
+                 {
+                     private static RequestContractReference Request => null!;
+                     private static RequestTerminalOutcomeId Completed => new("completed");
+
+                     private static async ProcessTask<string> Run(ProcessContext process, string input)
+                     {
+                         var results = await process.ForkJoin({{branches}});
+                         return results.Item{{arity}};
+
+                         {{functions}}
+                     }
+                 }
+                 """;
     }
 
     static ImmutableArray<MetadataReference> GetMetadataReferences()
