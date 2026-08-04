@@ -187,6 +187,37 @@ functions and lowers them to the canonical Fork/Join pair. Its convention is an 
 awaits remaining branches, does not expose completion order, and resolves ties by stable branch identity; the local
 functions and their compiler state machines are never retained.
 
+Durable races and partial convergence retain the same readable local-branch style while requiring the canonical
+policies that affect recovery and determinism:
+
+```csharp
+async ProcessTask OnApproved(Approval approval) { /* semantic Process operations */ }
+async ProcessTask OnTimeout() { /* semantic Process operations */ }
+
+await process.AwaitMatch(
+    clauses:
+    [
+        process.Signal<Approval>(Approved, OnApproved, priority: 10),
+        process.Deadline(expiresAt, OnTimeout)
+    ],
+    arbitration: ProcessAwaitArbitration.ExclusivePriorityThenClauseId,
+    lateInput: ProcessAwaitInputDisposition.Observe,
+    staleInput: ProcessAwaitInputDisposition.Reject,
+    duplicateInput: ProcessAwaitInputDisposition.ReusePriorDisposition,
+    missingTarget: ProcessAwaitMissingTargetDisposition.DeadLetter,
+    retentionHorizon: TimeSpan.FromDays(7));
+
+var winner = await process.ForkAny(
+    branches: [Audit(), Notify()],
+    policy: ProcessJoin.Any(ProcessJoinCancellationPolicy.CancelRemaining));
+```
+
+`AwaitMatch` local functions and inline pure guards are source syntax only; generated documents contain canonical
+interaction bindings, Request obligations, timer clauses, arbitration, retention, and input-disposition policies.
+Multi-outcome `Effect` uses `process.Outcome<T>(outcome, LocalBranch)` and binds the selected typed result only inside
+that outcome branch. `ForkAny` returns one `ProcessJoinWinner<T>`; `ForkRequired` returns an immutable selection in
+canonical winner order. Neither can be deconstructed as an all-branch tuple.
+
 Use the explicit input/result contract overload—and explicit output contracts where needed—when top-level CLR
 generic types erase semantic optionality or nullable-reference occurrence. `CanonicalValue` is the deliberate escape
 hatch for an already-portable expression with an explicitly attested contract; canonical validation remains the

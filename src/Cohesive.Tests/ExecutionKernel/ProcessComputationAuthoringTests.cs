@@ -217,6 +217,316 @@ public sealed class ProcessComputationAuthoringTests
     }
 
     [Fact]
+    public void PartialForkComputation_ProjectsOnlyTheCanonicalSelectedWinner()
+    {
+        var generated = GeneratedAnyForkProcess.Define(AnyForkMetadata());
+
+        Assert.True(generated.IsValid, Format(generated.Validation));
+        var fork = Assert.Single(generated.Definition.Nodes.OfType<ForkProcessNode>());
+        var join = Assert.Single(generated.Definition.Nodes.OfType<JoinProcessNode>());
+        var projection = Assert.IsType<ProcessJoinResultProjection>(join.Result);
+        var auditBranchId = Node("fork-0", "branch-Audit");
+        var notifyBranchId = Node("fork-0", "branch-Notify");
+        var auditQuery = Assert.IsType<EvaluateRelationProcessNode>(
+            generated.Definition.Nodes.Single(node => node.Id == fork.Branches.Single(branch => branch.Id == auditBranchId).Start.Target));
+        var notifyQuery = Assert.IsType<EvaluateRelationProcessNode>(
+            generated.Definition.Nodes.Single(node => node.Id == fork.Branches.Single(branch => branch.Id == notifyBranchId).Start.Target));
+        var returned = Assert.IsType<ReturnProcessNode>(
+            generated.Definition.Nodes.Single(node => node.Id == join.Next.Target));
+        var lowLevel = ProcessAuthoring.Create<string, string>(
+            AnyForkMetadata().WithEntry(fork.Id),
+            process =>
+            {
+                var auditOutput = process.Output<string>(
+                    auditQuery.Continuation.Output!.Binding,
+                    auditQuery.Continuation.Output.Contract);
+                var notifyOutput = process.Output<string>(
+                    notifyQuery.Continuation.Output!.Binding,
+                    notifyQuery.Continuation.Output.Contract);
+                var selected = process.Output<ProcessJoinWinner<string>>(
+                    projection.Output.Binding,
+                    projection.Output.Contract);
+                var auditBranch = process.ForkBranch(
+                    auditBranchId,
+                    process.Edge(auditBranchId, "start", auditQuery.Id));
+                var notifyBranch = process.ForkBranch(
+                    notifyBranchId,
+                    process.Edge(notifyBranchId, "start", notifyQuery.Id));
+                var auditResult = process.CanonicalValue<string>(
+                    projection.Branches.Single(branch => branch.Branch == auditBranchId).Result,
+                    projection.ResultContract);
+                var notifyResult = process.CanonicalValue<string>(
+                    projection.Branches.Single(branch => branch.Branch == notifyBranchId).Result,
+                    projection.ResultContract);
+
+                process.EvaluateRelation(
+                    auditQuery.Id,
+                    GeneratedTypedForkProcess.RecordAudit,
+                    process.Input.Value,
+                    process.Continuation(process.Edge(auditQuery.Id, "next", join.Id), auditOutput));
+                process.EvaluateRelation(
+                    notifyQuery.Id,
+                    GeneratedTypedForkProcess.NotifyOwner,
+                    process.Input.Value,
+                    process.Continuation(process.Edge(notifyQuery.Id, "next", join.Id), notifyOutput));
+                process.Fork(fork.Id, [auditBranch, notifyBranch], join.Id);
+                var result = process.JoinResult(
+                    selected,
+                    projection.ResultContract,
+                    [
+                        process.JoinBranchResult(auditBranchId, auditResult),
+                        process.JoinBranchResult(notifyBranchId, notifyResult)
+                    ]);
+                process.Join(
+                    join.Id,
+                    fork.Id,
+                    join.Policy,
+                    process.Edge(join.Id, "next", returned.Id),
+                    result);
+                process.Return(
+                    returned.Id,
+                    process.CanonicalValue<string>(returned.Result, generated.Definition.Result));
+            });
+
+        Assert.True(lowLevel.IsValid, Format(lowLevel.Validation));
+        Assert.Equal(lowLevel.Definition, generated.Definition);
+        Assert.Equal(
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(lowLevel.Document),
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(generated.Document));
+        Assert.Equal(ProcessJoinMode.Any, join.Policy.Mode);
+        Assert.Equal(ProcessJoinCancellationPolicy.CancelRemaining, join.Policy.Cancellation);
+        Assert.Equal(fork.Branches.Select(static branch => branch.Id), projection.Branches.Select(static branch => branch.Branch));
+        Assert.Equal(new ScalarTypeRef(ScalarTypeKind.String), projection.ResultContract.Type);
+        Assert.IsType<ObjectTypeRef>(projection.Output.Contract.Type);
+
+        var canonical = ExecutionDefinitionJsonSerializer.GetCanonicalBytes(generated.Document);
+        var validation = ProcessDefinitionDocuments.TryDeserialize(
+            Encoding.UTF8.GetString(canonical),
+            out var restoredDocument,
+            out var restoredDefinition);
+
+        Assert.True(validation.IsValid, Format(validation));
+        Assert.Equal(generated.Definition, restoredDefinition);
+        Assert.Equal(canonical, ExecutionDefinitionJsonSerializer.GetCanonicalBytes(restoredDocument!));
+
+        var linking = new ProcessDefinitionValidationContext(
+            definitions:
+            [
+                new(
+                    GeneratedTypedForkProcess.RecordAudit,
+                    ProcessDefinitionLinkKind.RelationQuery,
+                    generated.Definition.Input,
+                    projection.ResultContract),
+                new(
+                    GeneratedTypedForkProcess.NotifyOwner,
+                    ProcessDefinitionLinkKind.RelationQuery,
+                    generated.Definition.Input,
+                    projection.ResultContract)
+            ]);
+        var compilation = generated.Compile(linking);
+        Assert.True(compilation.IsSuccessful, Format(compilation.Validation));
+        var plan = Assert.IsType<CompiledProcessPlan>(compilation.Plan);
+        var continuation = new ProcessContinuationIdentity(new("process-instance/any-fork"), new("attempt/1"));
+        var initial = ProcessReferenceInterpreter.Create(
+            plan,
+            continuation,
+            PortableValue.Concrete(plan.Definition.Input, ObservationValue.FromString("work")));
+        var decision = ProcessReferenceInterpreter.Activate(
+            plan,
+            initial,
+            new(
+                id: new("activation/any-fork/1"),
+                cause: ProcessActivationCause.Start,
+                observedAtUtc: new DateTimeOffset(2026, 8, 4, 13, 0, 0, TimeSpan.Zero),
+                context: new(
+                    authorityScope: new("authority/tests", "tenant/cohesive"),
+                    correlationId: new("correlation/any-fork"),
+                    delivery: new(
+                        InteractionDurabilityDemand.Durable,
+                        InteractionVisibilityDemand.AfterOriginCommit),
+                    provenance: generated.Document.Metadata.Provenance)),
+            EchoRelationHost.Instance);
+
+        Assert.Equal(ProcessActivationDisposition.Completed, decision.Disposition);
+        var resolvedFork = Assert.Single(decision.State.Forks);
+        Assert.True(resolvedFork.SelectedBranches.SequenceEqual([Node("fork-0", "branch-Audit")]));
+        Assert.Equal(
+            PortableValue.Concrete(
+                plan.Definition.Result,
+                ObservationValue.FromString($"{Node("fork-0", "branch-Audit").Value}:audit:work")),
+            decision.State.Terminal.Detail?.Value);
+        var stateOptions = InteractionEnvelopeJsonSerializer.CreateOptions();
+        var restoredState = Assert.IsType<ProcessContinuationState>(
+            JsonSerializer.Deserialize<ProcessContinuationState>(
+                JsonSerializer.Serialize(decision.State, stateOptions),
+                stateOptions));
+        Assert.True(
+            ProcessContinuationValidator.Validate(plan, restoredState).IsValid,
+            Format(ProcessContinuationValidator.Validate(plan, restoredState)));
+    }
+
+    [Fact]
+    public void RequiredForkComputation_ProjectsTheCanonicalSelectedSet()
+    {
+        var generated = GeneratedRequiredForkProcess.Define(RequiredForkMetadata());
+
+        Assert.True(generated.IsValid, Format(generated.Validation));
+        var join = Assert.Single(generated.Definition.Nodes.OfType<JoinProcessNode>());
+        Assert.Equal(ProcessJoinMode.RequiredCount, join.Policy.Mode);
+        Assert.Equal(2, join.Policy.RequiredCount);
+        Assert.Equal(ProcessJoinCancellationPolicy.ContinueRemaining, join.Policy.Cancellation);
+        var projection = Assert.IsType<ProcessJoinResultProjection>(join.Result);
+        Assert.IsType<ArrayTypeRef>(projection.Output.Contract.Type);
+
+        var compilation = generated.Compile(new ProcessDefinitionValidationContext(
+            definitions:
+            [
+                new(
+                    GeneratedTypedForkProcess.RecordAudit,
+                    ProcessDefinitionLinkKind.RelationQuery,
+                    generated.Definition.Input,
+                    projection.ResultContract),
+                new(
+                    GeneratedTypedForkProcess.NotifyOwner,
+                    ProcessDefinitionLinkKind.RelationQuery,
+                    generated.Definition.Input,
+                    projection.ResultContract),
+                new(
+                    GeneratedCustomerQueryProcess.Relation,
+                    ProcessDefinitionLinkKind.RelationQuery,
+                    generated.Definition.Input,
+                    projection.ResultContract)
+            ]));
+        Assert.True(compilation.IsSuccessful, Format(compilation.Validation));
+        var plan = Assert.IsType<CompiledProcessPlan>(compilation.Plan);
+        var continuation = new ProcessContinuationIdentity(new("process-instance/required-fork"), new("attempt/1"));
+        var decision = ProcessReferenceInterpreter.Activate(
+            plan,
+            ProcessReferenceInterpreter.Create(
+                plan,
+                continuation,
+                PortableValue.Concrete(plan.Definition.Input, ObservationValue.FromString("work"))),
+            Activation(
+                plan,
+                continuation,
+                id: "activation/required-fork",
+                cause: ProcessActivationCause.Start,
+                observedAtUtc: new DateTimeOffset(2026, 8, 4, 14, 0, 0, TimeSpan.Zero)),
+            EchoRelationHost.Instance);
+
+        Assert.Equal(ProcessActivationDisposition.Completed, decision.Disposition);
+        Assert.Equal(
+            PortableValue.Concrete(plan.Definition.Result, ObservationValue.FromInt64(2)),
+            decision.State.Terminal.Detail?.Value);
+        Assert.True(ProcessContinuationValidator.Validate(plan, decision.State).IsValid);
+    }
+
+    [Fact]
+    public void DurableWaitAndRequestComputation_LowersOnlyToCanonicalNodesAndPolicies()
+    {
+        var generated = GeneratedDurableWaitProcess.Define(DurableWaitMetadata());
+
+        Assert.True(generated.IsValid, Format(generated.Validation));
+        Assert.Single(generated.Definition.Nodes.OfType<TimerProcessNode>());
+        var request = Assert.Single(generated.Definition.Nodes.OfType<RequestProcessNode>());
+        Assert.Equal(2, request.Outcomes.Length);
+        var awaitMatch = Assert.Single(generated.Definition.Nodes.OfType<AwaitMatchProcessNode>());
+        Assert.Equal(ProcessAwaitArbitration.ExclusivePriorityThenClauseId, awaitMatch.Arbitration);
+        Assert.Equal(ProcessAwaitInputDisposition.Observe, awaitMatch.LateInput);
+        Assert.Equal(ProcessAwaitInputDisposition.Reject, awaitMatch.StaleInput);
+        Assert.Equal(ProcessAwaitInputDisposition.ReusePriorDisposition, awaitMatch.DuplicateInput);
+        Assert.Equal(ProcessAwaitMissingTargetDisposition.DeadLetter, awaitMatch.MissingTarget);
+        Assert.Equal(TimeSpan.FromDays(7), awaitMatch.RetentionHorizon);
+        Assert.Equal(4, awaitMatch.Clauses.Length);
+        Assert.Equal(3, awaitMatch.Clauses.OfType<ProcessAwaitInteractionClause>().Count());
+        Assert.Single(awaitMatch.Clauses.OfType<ProcessAwaitTimerClause>());
+        var inboundRequest = Assert.Single(
+            awaitMatch.Clauses.OfType<ProcessAwaitInteractionClause>(),
+            static clause => clause.Contract is RequestContractReference);
+        Assert.NotNull(inboundRequest.RequestObligation);
+        Assert.Contains(generated.Definition.Nodes, static node => node is ReplyProcessNode);
+
+        var canonical = ExecutionDefinitionJsonSerializer.GetCanonicalBytes(generated.Document);
+        var json = Encoding.UTF8.GetString(canonical);
+        var validation = ProcessDefinitionDocuments.TryDeserialize(
+            json,
+            out var restoredDocument,
+            out var restoredDefinition);
+
+        Assert.True(validation.IsValid, Format(validation));
+        Assert.Equal(generated.Definition, restoredDefinition);
+        Assert.Equal(canonical, ExecutionDefinitionJsonSerializer.GetCanonicalBytes(restoredDocument!));
+        Assert.DoesNotContain("delegate", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("callback", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("ProcessTask", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("Task.WhenAny", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SignalTimerRace_IsByteEquivalentAndRecoversIdenticallyToLowLevelAuthoring()
+    {
+        var awaitMatch = Node("await-match-0");
+        var signalClause = Node("await-match-0", "interaction-clause-Signalled");
+        var timerClause = Node("await-match-0", "timer-clause-TimedOut");
+        var returned = Node("return-3");
+        var metadata = SignalTimerMetadata().WithEntry(awaitMatch);
+        var generated = GeneratedSignalTimerWaitProcess.Define(metadata);
+        var lowLevel = ProcessAuthoring.Create<SignalTimerWaitInput, string>(
+            metadata,
+            process =>
+            {
+                var signalInput = process.Output<string>(signalClause, "input");
+                var dueAt = process.Input.Field(static input => input.DueAt);
+                var result = process.Input.Field(static input => input.Value);
+                var signal = process.AwaitInteractionClause(
+                    signalClause,
+                    GeneratedSignalTimerWaitProcess.Signal,
+                    signalInput,
+                    requestObligation: null,
+                    guard: null,
+                    priority: 10,
+                    process.Continuation(process.Edge(signalClause, "next", returned)));
+                var timer = process.AwaitTimerClause(
+                    timerClause,
+                    dueAt,
+                    priority: 0,
+                    process.Continuation(process.Edge(timerClause, "next", returned)));
+
+                process.AwaitMatch(
+                    awaitMatch,
+                    ProcessAwaitArbitration.ExclusivePriorityThenClauseId,
+                    [signal, timer],
+                    ProcessAwaitInputDisposition.Observe,
+                    ProcessAwaitInputDisposition.Reject,
+                    ProcessAwaitInputDisposition.ReusePriorDisposition,
+                    ProcessAwaitMissingTargetDisposition.DeadLetter,
+                    TimeSpan.FromDays(7));
+                process.Return(returned, result);
+            });
+
+        Assert.True(generated.IsValid, Format(generated.Validation));
+        Assert.True(lowLevel.IsValid, Format(lowLevel.Validation));
+        Assert.Equal(lowLevel.Definition, generated.Definition);
+        Assert.Equal(
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(lowLevel.Document),
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(generated.Document));
+
+        var catalogValidation = InteractionContractCatalog.TryCreate(
+            [GeneratedSignalTimerWaitProcess.SignalDocument],
+            out var catalog);
+        Assert.True(catalogValidation.IsValid, Format(catalogValidation));
+        var context = new ProcessDefinitionValidationContext(
+            interactionContracts: Assert.IsType<InteractionContractCatalog>(catalog));
+        var generatedCompilation = generated.Compile(context);
+        var lowLevelCompilation = lowLevel.Compile(context);
+        Assert.True(generatedCompilation.IsSuccessful, Format(generatedCompilation.Validation));
+        Assert.True(lowLevelCompilation.IsSuccessful, Format(lowLevelCompilation.Validation));
+        AssertEquivalentSignalWaitRecovery(
+            Assert.IsType<CompiledProcessPlan>(generatedCompilation.Plan),
+            Assert.IsType<CompiledProcessPlan>(lowLevelCompilation.Plan));
+    }
+
+    [Fact]
     public void ApproveCustomerProcess_CoversSequentialBranchingAndParallelAuthoringConstructs()
     {
         var generated = ApproveCustomerProcess.Define(ApproveCustomerMetadata());
@@ -286,6 +596,42 @@ public sealed class ProcessComputationAuthoringTests
         new(
             new("tests.process-computation", "1"),
             new("tests/ari-227/typed-fork"),
+            DocumentOrigin.User));
+
+    static ProcessAuthoringMetadata AnyForkMetadata() => new(
+        new("process/generated-any-fork"),
+        new("1"),
+        ProcessRecoveryPolicy.ContinueAttempt,
+        new(
+            new("tests.process-computation", "1"),
+            new("tests/ari-228/any-fork"),
+            DocumentOrigin.User));
+
+    static ProcessAuthoringMetadata RequiredForkMetadata() => new(
+        new("process/generated-required-fork"),
+        new("1"),
+        ProcessRecoveryPolicy.ContinueAttempt,
+        new(
+            new("tests.process-computation", "1"),
+            new("tests/ari-228/required-fork"),
+            DocumentOrigin.User));
+
+    static ProcessAuthoringMetadata DurableWaitMetadata() => new(
+        new("process/generated-durable-wait"),
+        new("1"),
+        ProcessRecoveryPolicy.ContinueAttempt,
+        new(
+            new("tests.process-computation", "1"),
+            new("tests/ari-228/durable-wait"),
+            DocumentOrigin.User));
+
+    static ProcessAuthoringMetadata SignalTimerMetadata() => new(
+        new("process/generated-signal-timer-wait"),
+        new("1"),
+        ProcessRecoveryPolicy.ContinueAttempt,
+        new(
+            new("tests.process-computation", "1"),
+            new("tests/ari-228/signal-timer-wait"),
             DocumentOrigin.User));
 
     static ExecutionNodeId Node(params string[] path) =>
@@ -362,6 +708,187 @@ public sealed class ProcessComputationAuthoringTests
                 ObservationValue.FromString("workwork")),
             generatedDecision.State.Terminal.Detail?.Value);
     }
+
+    static void AssertEquivalentSignalWaitRecovery(
+        CompiledProcessPlan generated,
+        CompiledProcessPlan lowLevel)
+    {
+        var dueAt = new DateTimeOffset(2026, 8, 5, 12, 0, 0, TimeSpan.Zero);
+        var continuation = new ProcessContinuationIdentity(new("process-instance/signal-wait"), new("attempt/1"));
+        var input = PortableValue.Concrete(
+            generated.Definition.Input,
+            ObservationValue.FromObject(new SignalTimerWaitInput(dueAt, "accepted")));
+        var generatedState = ProcessReferenceInterpreter.Create(generated, continuation, input);
+        var lowLevelState = ProcessReferenceInterpreter.Create(lowLevel, continuation, input);
+        var start = Activation(
+            generated,
+            continuation,
+            id: "activation/signal-wait/start",
+            cause: ProcessActivationCause.Start,
+            observedAtUtc: dueAt.AddHours(-1));
+
+        var generatedRegistered = ProcessReferenceInterpreter.Activate(
+            generated,
+            generatedState,
+            start,
+            EchoRelationHost.Instance);
+        var lowLevelRegistered = ProcessReferenceInterpreter.Activate(
+            lowLevel,
+            lowLevelState,
+            start,
+            EchoRelationHost.Instance);
+        Assert.True(
+            generatedRegistered.Disposition == ProcessActivationDisposition.DurableCut,
+            $"{generatedRegistered.Disposition}{Environment.NewLine}"
+            + string.Join(Environment.NewLine, generatedRegistered.Diagnostics.Select(static diagnostic => diagnostic.Message)));
+        Assert.Equal(
+            JsonSerializer.Serialize(lowLevelRegistered.State, InteractionEnvelopeJsonSerializer.CreateOptions()),
+            JsonSerializer.Serialize(generatedRegistered.State, InteractionEnvelopeJsonSerializer.CreateOptions()));
+
+        var options = InteractionEnvelopeJsonSerializer.CreateOptions();
+        var restoredJson = JsonSerializer.Serialize(generatedRegistered.State, options);
+        var restored = Assert.IsType<ProcessContinuationState>(
+            JsonSerializer.Deserialize<ProcessContinuationState>(restoredJson, options));
+        Assert.True(ProcessContinuationValidator.Validate(generated, restored).IsValid);
+        var token = Assert.Single(restored.Tokens);
+        var target = new ProcessTokenInteractionTarget(restored.Continuation, token.Id);
+        var signal = new SignalEnvelope(
+            InteractionEnvelope.CurrentSchemaVersion,
+            new(
+                new("emission/signal-wait"),
+                new ProcessInteractionOrigin(
+                    generated.DefinitionReference,
+                    new("source/signal-wait"),
+                    restored.Continuation,
+                    new("activation/source"),
+                    token.Id),
+                new("correlation/signal-wait"),
+                causationId: null,
+                new("authority/tests", "tenant/cohesive"),
+                new("idempotency/signal-wait"),
+                ordering: null,
+                new(
+                    InteractionDurabilityDemand.Durable,
+                    InteractionVisibilityDemand.AfterOriginCommit),
+                generated.Document.Metadata.Provenance),
+            GeneratedSignalTimerWaitProcess.Signal,
+            PortableValue.Concrete(
+                new(new ScalarTypeRef(ScalarTypeKind.String)),
+                ObservationValue.FromString("accepted")),
+            target);
+        var inputActivation = new ProcessActivation(
+            id: new("activation/signal-wait/input"),
+            cause: ProcessActivationCause.Interaction,
+            observedAtUtc: dueAt.AddMinutes(-30),
+            context: start.Context,
+            inputs: [new(target, signal)]);
+
+        var generatedWinner = ProcessReferenceInterpreter.Activate(
+            generated,
+            restored,
+            inputActivation,
+            EchoRelationHost.Instance);
+        var lowLevelWinner = ProcessReferenceInterpreter.Activate(
+            lowLevel,
+            lowLevelRegistered.State,
+            inputActivation,
+            EchoRelationHost.Instance);
+        Assert.Equal(lowLevelWinner.Disposition, generatedWinner.Disposition);
+        Assert.Equal(
+            JsonSerializer.Serialize(lowLevelWinner.State, options),
+            JsonSerializer.Serialize(generatedWinner.State, options));
+        Assert.Equal(
+            Node("await-match-0", "interaction-clause-Signalled"),
+            Assert.Single(generatedWinner.State.Waits).WinnerClause);
+
+        var complete = Activation(
+            generated,
+            continuation,
+            id: "activation/signal-wait/complete",
+            cause: ProcessActivationCause.Continue,
+            observedAtUtc: dueAt.AddMinutes(-29));
+        var generatedCompleted = ProcessReferenceInterpreter.Activate(
+            generated,
+            generatedWinner.State,
+            complete,
+            EchoRelationHost.Instance);
+        var lowLevelCompleted = ProcessReferenceInterpreter.Activate(
+            lowLevel,
+            lowLevelWinner.State,
+            complete,
+            EchoRelationHost.Instance);
+        Assert.Equal(ProcessActivationDisposition.Completed, generatedCompleted.Disposition);
+        Assert.Equal(
+            JsonSerializer.Serialize(lowLevelCompleted.State, options),
+            JsonSerializer.Serialize(generatedCompleted.State, options));
+
+        var lateSignal = new SignalEnvelope(
+            InteractionEnvelope.CurrentSchemaVersion,
+            new(
+                new("emission/signal-wait/late"),
+                new ProcessInteractionOrigin(
+                    generated.DefinitionReference,
+                    new("source/signal-wait"),
+                    restored.Continuation,
+                    new("activation/source"),
+                    token.Id),
+                new("correlation/signal-wait"),
+                causationId: signal.Context.EmissionId,
+                new("authority/tests", "tenant/cohesive"),
+                new("idempotency/signal-wait/late"),
+                ordering: null,
+                new(
+                    InteractionDurabilityDemand.Durable,
+                    InteractionVisibilityDemand.AfterOriginCommit),
+                generated.Document.Metadata.Provenance),
+            GeneratedSignalTimerWaitProcess.Signal,
+            PortableValue.Concrete(
+                new(new ScalarTypeRef(ScalarTypeKind.String)),
+                ObservationValue.FromString("late")),
+            target);
+        var lateActivation = new ProcessActivation(
+            id: new("activation/signal-wait/late"),
+            cause: ProcessActivationCause.Interaction,
+            observedAtUtc: dueAt,
+            context: complete.Context,
+            inputs: [new(target, lateSignal)]);
+        var generatedLate = ProcessReferenceInterpreter.Activate(
+            generated,
+            generatedCompleted.State,
+            lateActivation,
+            EchoRelationHost.Instance);
+        var lowLevelLate = ProcessReferenceInterpreter.Activate(
+            lowLevel,
+            lowLevelCompleted.State,
+            lateActivation,
+            EchoRelationHost.Instance);
+        Assert.Equal(lowLevelLate.Disposition, generatedLate.Disposition);
+        Assert.Equal(
+            lowLevelLate.InputAdmissions.Select(static receipt =>
+                (receipt.Emission, receipt.Disposition, receipt.Reason, receipt.WaitRegistrationId)),
+            generatedLate.InputAdmissions.Select(static receipt =>
+                (receipt.Emission, receipt.Disposition, receipt.Reason, receipt.WaitRegistrationId)));
+        var lateReceipt = Assert.Single(generatedLate.InputAdmissions);
+        Assert.Equal(ProcessInputAdmissionDisposition.Observed, lateReceipt.Disposition);
+        Assert.Equal(ProcessInputAdmissionReason.Late, lateReceipt.Reason);
+    }
+
+    static ProcessActivation Activation(
+        CompiledProcessPlan plan,
+        ProcessContinuationIdentity continuation,
+        string id,
+        ProcessActivationCause cause,
+        DateTimeOffset observedAtUtc) => new(
+        id: new(id),
+        cause: cause,
+        observedAtUtc: observedAtUtc,
+        context: new(
+            authorityScope: new("authority/tests", "tenant/cohesive"),
+            correlationId: new("correlation/signal-wait"),
+            delivery: new(
+                InteractionDurabilityDemand.Durable,
+                InteractionVisibilityDemand.AfterOriginCommit),
+            provenance: plan.Document.Metadata.Provenance));
 
     sealed class EchoRelationHost : IProcessReferenceHost
     {
@@ -463,6 +990,214 @@ public static partial class GeneratedTypedForkProcess
             ExecutionDefinitionFingerprinter.Canonicalization,
             new string(fingerprint, 64)));
 }
+
+/// <summary>Representative generated partial Fork with one typed selected winner.</summary>
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class GeneratedAnyForkProcess
+{
+    static async ProcessTask<string> Run(ProcessContext process, string input)
+    {
+        async ProcessTask<string> Audit()
+        {
+            var value = await process.Query<string>(GeneratedTypedForkProcess.RecordAudit, input);
+            return "audit:" + value;
+        }
+
+        async ProcessTask<string> Notify()
+        {
+            var value = await process.Query<string>(GeneratedTypedForkProcess.NotifyOwner, input);
+            return "notify:" + value;
+        }
+
+        var winner = await process.ForkAny(
+            branches: [Audit(), Notify()],
+            policy: ProcessJoin.Any(ProcessJoinCancellationPolicy.CancelRemaining));
+        return winner.Branch + ":" + winner.Result;
+    }
+}
+
+/// <summary>Representative generated RequiredCount Fork selection.</summary>
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class GeneratedRequiredForkProcess
+{
+    static async ProcessTask<long> Run(ProcessContext process, string input)
+    {
+        async ProcessTask<string> Alpha()
+        {
+            var value = await process.Query<string>(GeneratedTypedForkProcess.RecordAudit, input);
+            return "alpha:" + value;
+        }
+
+        async ProcessTask<string> Beta()
+        {
+            var value = await process.Query<string>(GeneratedTypedForkProcess.NotifyOwner, input);
+            return "beta:" + value;
+        }
+
+        async ProcessTask<string> Gamma()
+        {
+            var value = await process.Query<string>(GeneratedCustomerQueryProcess.Relation, input);
+            return "gamma:" + value;
+        }
+
+        var winners = await process.ForkRequired(
+            branches: [Alpha(), Beta(), Gamma()],
+            policy: ProcessJoin.Required(
+                requiredCount: 2,
+                cancellation: ProcessJoinCancellationPolicy.ContinueRemaining));
+        return winners.Length;
+    }
+}
+
+/// <summary>Representative generated durable Timer, multi-outcome Request, and AwaitMatch.</summary>
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class GeneratedDurableWaitProcess
+{
+    static readonly ExecutionDefinitionReference Observe = Definition("relation/observe", '1');
+    static readonly RequestContractReference Outbound = new(Definition("request/outbound", '2'));
+    static readonly RequestTerminalOutcomeId Completed = new("completed");
+    static readonly RequestTerminalOutcomeId Failed = new("failed");
+    static readonly DomainEventContractReference Reviewed = new(Definition("event/reviewed", '3'));
+    static readonly SignalContractReference Cancelled = new(Definition("signal/cancelled", '4'));
+    static readonly RequestContractReference Review = new(Definition("request/review", '5'));
+    static readonly ReplyContractReference ReviewReply = new(Definition("reply/review", '6'));
+
+    static async ProcessTask<string> Run(ProcessContext process, DurableWaitInput input)
+    {
+        await process.Timer(input.FirstDueAt);
+
+        async ProcessTask OnCompleted(string outcome)
+        {
+            var observed = await process.Query<string>(Observe, outcome);
+        }
+
+        async ProcessTask OnFailed(ProcessFailure outcome)
+        {
+            var observed = await process.Query<string>(Observe, outcome.Message);
+        }
+
+        await process.Effect(
+            contract: Outbound,
+            input: input.Value,
+            outcomes:
+            [
+                process.Outcome<string>(Completed, OnCompleted),
+                process.Outcome<ProcessFailure>(Failed, OnFailed)
+            ]);
+
+        async ProcessTask OnReviewed(string value)
+        {
+            var observed = await process.Query<string>(Observe, value);
+        }
+
+        async ProcessTask OnCancelled(string value)
+        {
+            var observed = await process.Query<string>(Observe, value);
+        }
+
+        async ProcessTask OnReview(
+            string value,
+            Cohesive.Processes.Authoring.ProcessRequestObligation request)
+        {
+            await process.Reply(ReviewReply, request, value);
+        }
+
+        async ProcessTask OnDeadline()
+        {
+            var observed = await process.Query<string>(Observe, input.Value);
+        }
+
+        await process.AwaitMatch(
+            clauses:
+            [
+                process.Event<string>(Reviewed, OnReviewed, priority: 20, when: value => value == input.Value),
+                process.Signal<string>(Cancelled, OnCancelled, priority: 10),
+                process.Request<string>(Review, OnReview, priority: 30),
+                process.Deadline(input.SecondDueAt, OnDeadline, priority: 0)
+            ],
+            arbitration: ProcessAwaitArbitration.ExclusivePriorityThenClauseId,
+            lateInput: ProcessAwaitInputDisposition.Observe,
+            staleInput: ProcessAwaitInputDisposition.Reject,
+            duplicateInput: ProcessAwaitInputDisposition.ReusePriorDisposition,
+            missingTarget: ProcessAwaitMissingTargetDisposition.DeadLetter,
+            retentionHorizon: TimeSpan.FromDays(7));
+        return input.Value;
+    }
+
+    static ExecutionDefinitionReference Definition(string id, char fingerprint) => new(
+        new(id),
+        new("1"),
+        new(
+            ExecutionDefinitionFingerprinter.Algorithm,
+            ExecutionDefinitionFingerprinter.Canonicalization,
+            new string(fingerprint, 64)));
+}
+
+/// <summary>Input to the representative durable-wait computation.</summary>
+/// <param name="FirstDueAt">Absolute due instant of the sequential Timer.</param>
+/// <param name="SecondDueAt">Absolute due instant competing in AwaitMatch.</param>
+/// <param name="Value">Portable payload and final result.</param>
+public sealed record DurableWaitInput(DateTimeOffset FirstDueAt, DateTimeOffset SecondDueAt, string Value);
+
+/// <summary>Representative typed failure outcome.</summary>
+/// <param name="Message">Portable failure message.</param>
+public sealed record ProcessFailure(string Message);
+
+/// <summary>Minimal generated Signal/timer race used by differential recovery tests.</summary>
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class GeneratedSignalTimerWaitProcess
+{
+    /// <summary>Canonical Signal document supplying exact contract evidence.</summary>
+    public static ExecutionDefinitionDocument SignalDocument { get; } =
+        InteractionContractDocuments.Create(
+            new("signal/generated-wait"),
+            new("1"),
+            new SignalContractDefinition(
+                new(
+                    new(new ScalarTypeRef(ScalarTypeKind.String)),
+                    new("signal/generated-wait/payload/v1"))),
+            new(
+                new("tests.process-computation", "1"),
+                new("tests/ari-228/signal-timer-wait-contract"),
+                DocumentOrigin.Generated));
+
+    /// <summary>Exact Signal reference admitted by the generated AwaitMatch.</summary>
+    public static SignalContractReference Signal { get; } = new(
+        new(
+            SignalDocument.Metadata.DefinitionId,
+            SignalDocument.Metadata.RevisionId,
+            SignalDocument.Metadata.Fingerprint));
+
+    static async ProcessTask<string> Run(ProcessContext process, SignalTimerWaitInput input)
+    {
+        async ProcessTask Signalled(string value)
+        {
+        }
+
+        async ProcessTask TimedOut()
+        {
+        }
+
+        await process.AwaitMatch(
+            clauses:
+            [
+                process.Signal<string>(Signal, Signalled, priority: 10),
+                process.Deadline(input.DueAt, TimedOut)
+            ],
+            arbitration: ProcessAwaitArbitration.ExclusivePriorityThenClauseId,
+            lateInput: ProcessAwaitInputDisposition.Observe,
+            staleInput: ProcessAwaitInputDisposition.Reject,
+            duplicateInput: ProcessAwaitInputDisposition.ReusePriorDisposition,
+            missingTarget: ProcessAwaitMissingTargetDisposition.DeadLetter,
+            retentionHorizon: TimeSpan.FromDays(7));
+        return input.Value;
+    }
+}
+
+/// <summary>Input to the minimal generated Signal/timer race.</summary>
+/// <param name="DueAt">Absolute timeout instant.</param>
+/// <param name="Value">Final Process result.</param>
+public sealed record SignalTimerWaitInput(DateTimeOffset DueAt, string Value);
 
 /// <summary>Representative human-facing Process covering sequential, branching, and parallel authoring.</summary>
 [GenerateProcessDefinition(nameof(Run))]

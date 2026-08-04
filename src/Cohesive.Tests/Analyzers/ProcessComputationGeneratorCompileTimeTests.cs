@@ -548,6 +548,188 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
         Assert.Equal(17, diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1);
     }
 
+    [Fact]
+    public void Generator_LowersDurableTimerRequestAndAwaitMatchWithoutCallbacks()
+    {
+        var source = """
+                     using System;
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+                     using Cohesive.Processes.IR;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class DurableWaitProcess
+                     {
+                         private static RequestContractReference Outbound => null!;
+                         private static RequestTerminalOutcomeId Completed => new("completed");
+                         private static SignalContractReference Signal => null!;
+
+                         private static async ProcessTask<string> Run(ProcessContext process, Input input)
+                         {
+                             await process.Timer(input.DueAt);
+
+                             async ProcessTask CompletedBranch(string value) { }
+                             await process.Effect(
+                                 Outbound,
+                                 input.Value,
+                                 [process.Outcome<string>(Completed, CompletedBranch)]);
+
+                             async ProcessTask Signalled(string value) { }
+                             async ProcessTask TimedOut() { }
+                             await process.AwaitMatch(
+                                 clauses:
+                                 [
+                                     process.Signal<string>(Signal, Signalled, priority: 10, when: value => value == input.Value),
+                                     process.Deadline(input.DueAt, TimedOut)
+                                 ],
+                                 arbitration: ProcessAwaitArbitration.ExclusivePriorityThenClauseId,
+                                 lateInput: ProcessAwaitInputDisposition.Observe,
+                                 staleInput: ProcessAwaitInputDisposition.Reject,
+                                 duplicateInput: ProcessAwaitInputDisposition.ReusePriorDisposition,
+                                 missingTarget: ProcessAwaitMissingTargetDisposition.DeadLetter,
+                                 retentionHorizon: TimeSpan.FromDays(7));
+                             return input.Value;
+                         }
+                     }
+
+                     public sealed record Input(DateTimeOffset DueAt, string Value);
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out var outputCompilation);
+        var generated = Assert.Single(runResult.Results.SelectMany(static result => result.GeneratedSources))
+            .SourceText
+            .ToString();
+
+        Assert.Empty(runResult.Results.SelectMany(static result => result.Diagnostics));
+        Assert.DoesNotContain(
+            outputCompilation.GetDiagnostics(),
+            static diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+        Assert.Contains("__builder.Timer", generated);
+        Assert.Contains("__builder.Request", generated);
+        Assert.Contains("__builder.AwaitMatch", generated);
+        Assert.Contains("__builder.AwaitInteractionClause", generated);
+        Assert.Contains("__builder.AwaitTimerClause", generated);
+        Assert.DoesNotContain("CompletedBranch(", generated);
+        Assert.DoesNotContain("Signalled(", generated);
+        Assert.DoesNotContain("TimedOut(", generated);
+        Assert.DoesNotContain("System.Func", generated);
+        Assert.DoesNotContain("callback", generated, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Generator_RejectsCallbackLambdaForDurableOutcomeAtItsSource()
+    {
+        var source = """
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class CallbackProcess
+                     {
+                         private static RequestContractReference Request => null!;
+                         private static RequestTerminalOutcomeId Completed => new("completed");
+
+                         private static async ProcessTask<string> Run(ProcessContext process, string input)
+                         {
+                             await process.Effect(
+                                 Request,
+                                 input,
+                                 [process.Outcome<string>(Completed, async value => { })]);
+                             return input;
+                         }
+                     }
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.Contains("must name a unique local async ProcessTask function", diagnostic.GetMessage());
+        Assert.Equal(17, diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1);
+    }
+
+    [Fact]
+    public void Generator_RejectsPartialJoinTupleDeconstructionAtItsSource()
+    {
+        var source = """
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+                     using Cohesive.Processes.IR;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class PartialJoinProcess
+                     {
+                         private static ExecutionDefinitionReference Query => null!;
+
+                         private static async ProcessTask<string> Run(ProcessContext process, string input)
+                         {
+                             async ProcessTask<string> First()
+                             {
+                                 var value = await process.Query<string>(Query, input);
+                                 return value;
+                             }
+                             async ProcessTask<string> Second()
+                             {
+                                 var value = await process.Query<string>(Query, input);
+                                 return value;
+                             }
+                             var (first, second) = await process.ForkAny(
+                                 branches: [First(), Second()],
+                                 policy: ProcessJoin.Any(ProcessJoinCancellationPolicy.CancelRemaining));
+                             return first + second;
+                         }
+                     }
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.Contains("cannot be deconstructed", diagnostic.GetMessage());
+        Assert.Equal(24, diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1);
+    }
+
+    [Fact]
+    public void Generator_RejectsHostTaskRaceAtItsSource()
+    {
+        var source = """
+                     using System.Threading.Tasks;
+                     using Cohesive.Processes.Authoring;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class HostRaceProcess
+                     {
+                         private static async ProcessTask<string> Run(ProcessContext process, string input)
+                         {
+                             await Task.WhenAny(Task.CompletedTask, Task.CompletedTask);
+                             return input;
+                         }
+                     }
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.Contains("ProcessContext", diagnostic.GetMessage());
+        Assert.Equal(11, diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1);
+    }
+
     static GeneratorDriverRunResult RunGenerator(
         CSharpCompilation compilation,
         out Compilation outputCompilation)

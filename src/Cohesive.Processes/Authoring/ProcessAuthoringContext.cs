@@ -300,6 +300,19 @@ internal sealed class ProcessAuthoringContext
             case JoinProcessNode join:
                 AddConstruct(entries, join.Policy, path.Add("policy"), nodeSource);
                 AddEdge(entries, join.Next, path.Add("next"), nodeSource);
+                if (join.Result is not null)
+                {
+                    var resultPath = path.Add("result");
+                    var resultSource = AddConstruct(entries, join.Result, resultPath, nodeSource);
+                    AddOutput(entries, join.Result.Output, resultPath.Add("output"), resultSource);
+                    AddConstruct(entries, join.Result.ResultContract, resultPath.Add("resultContract"), resultSource);
+                    for (var index = 0; index < join.Result.Branches.Length; index++)
+                    {
+                        var branchPath = resultPath.Add("branches").Add(Index(index));
+                        var branchSource = AddConstruct(entries, join.Result.Branches[index], branchPath, resultSource);
+                        AddConstruct(entries, join.Result.Branches[index].Result, branchPath.Add("result"), branchSource);
+                    }
+                }
                 break;
             case AwaitMatchProcessNode awaitMatch:
                 for (var index = 0; index < awaitMatch.Clauses.Length; index++)

@@ -105,6 +105,146 @@ public sealed class ProcessContext
         ExecutionNodeId? id = null) =>
         throw SyntaxOnly();
 
+    /// <summary>Declares a durable Request whose terminal outcomes select typed source-only branches.</summary>
+    /// <remarks>
+    /// Every outcome branch must be a named local <c>async ProcessTask</c> function. The generator erases the CLR
+    /// branch functions and lowers their bodies to canonical Request continuations.
+    /// </remarks>
+    /// <param name="contract">Exact typed Request contract.</param>
+    /// <param name="input">Pure Request payload fused into the canonical Request node.</param>
+    /// <param name="outcomes">Closed terminal-outcome branch set.</param>
+    /// <param name="id">Optional explicit canonical node identity.</param>
+    /// <returns>A syntax-only task representing completion of the selected terminal-outcome branch.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessTask Effect(
+        RequestContractReference contract,
+        object? input,
+        ProcessRequestOutcomeCase[] outcomes,
+        ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
+    /// <summary>Declares one typed terminal-outcome branch of a durable Request.</summary>
+    /// <typeparam name="TOutcome">CLR type projected from the exact terminal-outcome contract.</typeparam>
+    /// <param name="outcome">Stable terminal-outcome identity declared by the Request contract.</param>
+    /// <param name="branch">Named source-only local branch receiving the selected outcome value.</param>
+    /// <param name="id">Optional explicit canonical outcome-branch identity.</param>
+    /// <returns>An opaque syntax-only Request outcome consumed by <see cref="Effect(RequestContractReference, object?, ProcessRequestOutcomeCase[], ExecutionNodeId?)"/>.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessRequestOutcomeCase Outcome<TOutcome>(
+        RequestTerminalOutcomeId outcome,
+        ProcessOutcomeBranch<TOutcome> branch,
+        ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
+    /// <summary>Declares a durable absolute-time wait.</summary>
+    /// <param name="dueAt">Pure expression yielding the absolute due instant.</param>
+    /// <param name="id">Optional explicit canonical timer identity.</param>
+    /// <returns>A syntax-only task representing durable timer completion.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessTask Timer(DateTimeOffset dueAt, ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
+    /// <summary>Declares one domain-event clause of a durable AwaitMatch.</summary>
+    /// <typeparam name="TInput">CLR type projected from the exact event payload contract.</typeparam>
+    /// <param name="contract">Exact domain-event contract.</param>
+    /// <param name="branch">Named source-only local branch receiving the admitted event payload.</param>
+    /// <param name="priority">Explicit arbitration priority.</param>
+    /// <param name="when">Optional inline portable eligibility predicate.</param>
+    /// <param name="id">Optional explicit canonical clause identity.</param>
+    /// <returns>An opaque syntax-only AwaitMatch clause.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessAwaitCase Event<TInput>(
+        DomainEventContractReference contract,
+        ProcessInteractionBranch<TInput> branch,
+        int priority = 0,
+        ProcessGuard<TInput>? when = null,
+        ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
+    /// <summary>Declares one Signal clause of a durable AwaitMatch.</summary>
+    /// <typeparam name="TInput">CLR type projected from the exact Signal payload contract.</typeparam>
+    /// <param name="contract">Exact Signal contract.</param>
+    /// <param name="branch">Named source-only local branch receiving the admitted Signal payload.</param>
+    /// <param name="priority">Explicit arbitration priority.</param>
+    /// <param name="when">Optional inline portable eligibility predicate.</param>
+    /// <param name="id">Optional explicit canonical clause identity.</param>
+    /// <returns>An opaque syntax-only AwaitMatch clause.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessAwaitCase Signal<TInput>(
+        SignalContractReference contract,
+        ProcessInteractionBranch<TInput> branch,
+        int priority = 0,
+        ProcessGuard<TInput>? when = null,
+        ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
+    /// <summary>Declares one inbound Request clause of a durable AwaitMatch.</summary>
+    /// <typeparam name="TInput">CLR type projected from the exact Request payload contract.</typeparam>
+    /// <param name="contract">Exact inbound Request contract.</param>
+    /// <param name="branch">Named source-only local branch receiving the payload and retained Request obligation.</param>
+    /// <param name="priority">Explicit arbitration priority.</param>
+    /// <param name="when">Optional inline portable eligibility predicate.</param>
+    /// <param name="id">Optional explicit canonical clause identity.</param>
+    /// <returns>An opaque syntax-only AwaitMatch clause.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessAwaitCase Request<TInput>(
+        RequestContractReference contract,
+        ProcessRequestBranch<TInput> branch,
+        int priority = 0,
+        ProcessGuard<TInput>? when = null,
+        ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
+    /// <summary>Declares one absolute-time clause of a durable AwaitMatch.</summary>
+    /// <param name="dueAt">Pure expression yielding the absolute due instant.</param>
+    /// <param name="branch">Named parameterless source-only local branch selected when the timer wins.</param>
+    /// <param name="priority">Explicit arbitration priority.</param>
+    /// <param name="id">Optional explicit canonical clause identity.</param>
+    /// <returns>An opaque syntax-only AwaitMatch clause.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessAwaitCase Deadline(
+        DateTimeOffset dueAt,
+        ProcessTimerBranch branch,
+        int priority = 0,
+        ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
+    /// <summary>Declares a durable exclusive race over a closed set of typed interaction and timer clauses.</summary>
+    /// <param name="clauses">Closed set of source-only AwaitMatch clauses.</param>
+    /// <param name="arbitration">Explicit canonical winner-selection semantics.</param>
+    /// <param name="lateInput">Disposition for input arriving after a winner completed the wait.</param>
+    /// <param name="staleInput">Disposition for input targeting incompatible continuation state.</param>
+    /// <param name="duplicateInput">Disposition for repeated logical input.</param>
+    /// <param name="missingTarget">Disposition when no compatible durable target can be resolved.</param>
+    /// <param name="retentionHorizon">Minimum duration for which the wait remains addressable.</param>
+    /// <param name="id">Optional explicit canonical AwaitMatch identity.</param>
+    /// <returns>A syntax-only task representing completion of the selected clause branch.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessTask AwaitMatch(
+        ProcessAwaitCase[] clauses,
+        ProcessAwaitArbitration arbitration,
+        ProcessAwaitInputDisposition lateInput,
+        ProcessAwaitInputDisposition staleInput,
+        ProcessAwaitInputDisposition duplicateInput,
+        ProcessAwaitMissingTargetDisposition missingTarget,
+        TimeSpan retentionHorizon,
+        ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
+    /// <summary>Declares a typed Reply discharging an admitted inbound Request obligation.</summary>
+    /// <param name="contract">Exact typed Reply contract.</param>
+    /// <param name="request">Request obligation received by the selected inbound Request branch.</param>
+    /// <param name="payload">Pure Reply payload.</param>
+    /// <param name="id">Optional explicit canonical Reply identity.</param>
+    /// <returns>A syntax-only task representing acceptance of the Reply intent.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessTask Reply(
+        ReplyContractReference contract,
+        ProcessRequestObligation request,
+        object? payload,
+        ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
     /// <summary>Annotates one typed Fork branch with a canonical capacity-domain assignment.</summary>
     /// <typeparam name="TResult">CLR type projected from the branch result after an all-branches Join.</typeparam>
     /// <param name="branch">Syntax-only local branch computation.</param>
@@ -319,8 +459,146 @@ public sealed class ProcessContext
         ExecutionNodeId? id = null) =>
         throw SyntaxOnly();
 
+    /// <summary>Declares a homogeneous typed Fork whose first eligible completed branch wins.</summary>
+    /// <typeparam name="TResult">Common portable result type produced by every branch.</typeparam>
+    /// <param name="branches">Two or more typed branch computations in authored result order.</param>
+    /// <param name="policy">Explicit canonical Any-Join policy.</param>
+    /// <param name="admission">Optional bounded admission policy; omission preserves eager finite-set admission.</param>
+    /// <param name="id">Optional explicit canonical Fork identity.</param>
+    /// <returns>A syntax-only awaitable containing the exact selected branch identity and result.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessAwaitable<ProcessJoinWinner<TResult>> ForkAny<TResult>(
+        ProcessTask<TResult>[] branches,
+        ProcessJoinPolicy policy,
+        ProcessAdmission? admission = null,
+        ExecutionNodeId? id = null)
+        where TResult : notnull =>
+        throw SyntaxOnly();
+
+    /// <summary>Declares a homogeneous typed Fork that selects an explicit required number of completed branches.</summary>
+    /// <typeparam name="TResult">Common portable result type produced by every branch.</typeparam>
+    /// <param name="branches">Typed branch computations whose stable identities govern deterministic selection.</param>
+    /// <param name="policy">Explicit canonical RequiredCount-Join policy.</param>
+    /// <param name="admission">Optional bounded admission policy; omission preserves eager finite-set admission.</param>
+    /// <param name="id">Optional explicit canonical Fork identity.</param>
+    /// <returns>A syntax-only awaitable containing selected branch identities and results in canonical selection order.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessAwaitable<ImmutableArray<ProcessJoinWinner<TResult>>> ForkRequired<TResult>(
+        ProcessTask<TResult>[] branches,
+        ProcessJoinPolicy policy,
+        ProcessAdmission? admission = null,
+        ExecutionNodeId? id = null)
+        where TResult : notnull =>
+        throw SyntaxOnly();
+
     static InvalidOperationException SyntaxOnly() => new(
         "Process computation-expression members are syntax-only and must be lowered by Cohesive.Analyzers.");
+}
+
+/// <summary>Source-only typed branch selected by one outbound Request terminal outcome.</summary>
+/// <typeparam name="TOutcome">Portable terminal-outcome result type.</typeparam>
+/// <param name="outcome">Selected typed terminal-outcome value.</param>
+/// <returns>The syntax-only Process branch.</returns>
+public delegate ProcessTask ProcessOutcomeBranch<in TOutcome>(TOutcome outcome);
+
+/// <summary>Source-only typed branch selected by an inbound event or Signal.</summary>
+/// <typeparam name="TInput">Portable admitted interaction payload type.</typeparam>
+/// <param name="input">Admitted typed interaction payload.</param>
+/// <returns>The syntax-only Process branch.</returns>
+public delegate ProcessTask ProcessInteractionBranch<in TInput>(TInput input);
+
+/// <summary>Source-only typed branch selected by an inbound Request.</summary>
+/// <typeparam name="TInput">Portable admitted Request payload type.</typeparam>
+/// <param name="input">Admitted typed Request payload.</param>
+/// <param name="request">Durably retained Request obligation available for a later Reply.</param>
+/// <returns>The syntax-only Process branch.</returns>
+public delegate ProcessTask ProcessRequestBranch<in TInput>(TInput input, ProcessRequestObligation request);
+
+/// <summary>Source-only branch selected by an absolute-time AwaitMatch clause.</summary>
+/// <returns>The syntax-only Process branch.</returns>
+public delegate ProcessTask ProcessTimerBranch();
+
+/// <summary>Inline syntax-only portable guard for one admitted interaction payload.</summary>
+/// <typeparam name="TInput">Portable admitted interaction payload type.</typeparam>
+/// <param name="input">Candidate typed interaction payload.</param>
+/// <returns><see langword="true"/> when the clause is eligible.</returns>
+public delegate bool ProcessGuard<in TInput>(TInput input);
+
+/// <summary>Opaque syntax-only terminal-outcome case consumed by multi-outcome Request authoring.</summary>
+public abstract class ProcessRequestOutcomeCase
+{
+    /// <summary>Restricts outcome cases to syntax recognized by the Process computation generator.</summary>
+    private protected ProcessRequestOutcomeCase()
+    {
+    }
+}
+
+/// <summary>Opaque syntax-only interaction or timer case consumed by AwaitMatch authoring.</summary>
+public abstract class ProcessAwaitCase
+{
+    /// <summary>Restricts AwaitMatch cases to syntax recognized by the Process computation generator.</summary>
+    private protected ProcessAwaitCase()
+    {
+    }
+}
+
+/// <summary>Typed materialized result of one branch selected by a partial Process Join.</summary>
+/// <typeparam name="TResult">Portable branch-result type shared by every candidate branch.</typeparam>
+/// <param name="Branch">Exact stable branch identity selected by canonical Join arbitration.</param>
+/// <param name="Result">Portable result evaluated in the selected branch token scope.</param>
+public sealed record ProcessJoinWinner<TResult>(string Branch, TResult Result)
+    where TResult : notnull;
+
+/// <summary>Readable factories that return the canonical <see cref="ProcessJoinPolicy"/> directly.</summary>
+public static class ProcessJoin
+{
+    /// <summary>Creates a canonical first-eligible-branch Join policy.</summary>
+    /// <param name="cancellation">Behavior for branches remaining after the winner is selected.</param>
+    /// <param name="failure">Branch-failure behavior.</param>
+    /// <param name="completionOrder">Whether logical completion order is observable.</param>
+    /// <param name="tieBreak">Deterministic simultaneous-eligibility arbitration.</param>
+    /// <returns>The canonical Any-Join policy consumed directly by Process IR authoring.</returns>
+    public static ProcessJoinPolicy Any(
+        ProcessJoinCancellationPolicy cancellation,
+        ProcessJoinFailurePolicy failure = ProcessJoinFailurePolicy.FailFast,
+        ProcessJoinCompletionOrder completionOrder = ProcessJoinCompletionOrder.Unobservable,
+        ProcessJoinTieBreak tieBreak = ProcessJoinTieBreak.BranchIdentity) =>
+        new(
+            mode: ProcessJoinMode.Any,
+            requiredCount: 0,
+            failure: failure,
+            cancellation: cancellation,
+            completionOrder: completionOrder,
+            tieBreak: tieBreak);
+
+    /// <summary>Creates a canonical required-eligible-branch-count Join policy.</summary>
+    /// <param name="requiredCount">Positive number of eligible completed branches required to resolve the Join.</param>
+    /// <param name="cancellation">Behavior for branches remaining after the selection threshold is reached.</param>
+    /// <param name="failure">Branch-failure behavior.</param>
+    /// <param name="completionOrder">Whether logical completion order is observable.</param>
+    /// <param name="tieBreak">Deterministic simultaneous-eligibility arbitration.</param>
+    /// <returns>The canonical RequiredCount-Join policy consumed directly by Process IR authoring.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="requiredCount"/> is not positive.</exception>
+    public static ProcessJoinPolicy Required(
+        int requiredCount,
+        ProcessJoinCancellationPolicy cancellation,
+        ProcessJoinFailurePolicy failure = ProcessJoinFailurePolicy.FailFast,
+        ProcessJoinCompletionOrder completionOrder = ProcessJoinCompletionOrder.Unobservable,
+        ProcessJoinTieBreak tieBreak = ProcessJoinTieBreak.BranchIdentity)
+    {
+        if (requiredCount <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(requiredCount), "Required branch count must be positive.");
+        }
+
+        return new(
+            mode: ProcessJoinMode.RequiredCount,
+            requiredCount: requiredCount,
+            failure: failure,
+            cancellation: cancellation,
+            completionOrder: completionOrder,
+            tieBreak: tieBreak);
+    }
 }
 
 /// <summary>Authoring-only bounded Fork admission projected into canonical Process work limits.</summary>
