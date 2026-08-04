@@ -609,7 +609,11 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             switch (invocation.TargetMethod.Name)
             {
                 case "Effect" when Argument(invocation, "outcomes") is not null:
-                    if (!TryParseRequest(statement, structuralPath, invocation, out var request))
+                case "InvokeProcess":
+                    var requestKind = invocation.TargetMethod.Name == "InvokeProcess"
+                        ? RequestAuthoringKind.ChildProcess
+                        : RequestAuthoringKind.Request;
+                    if (!TryParseRequest(statement, structuralPath, invocation, requestKind, out var request))
                     {
                         return false;
                     }
@@ -624,6 +628,15 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     }
 
                     flow = awaitMatch;
+                    return true;
+
+                case "ForEachPartition":
+                    if (!TryParsePartition(statement, structuralPath, invocation, out var partition))
+                    {
+                        return false;
+                    }
+
+                    flow = partition;
                     return true;
 
                 case "Timer":
@@ -648,14 +661,23 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             StatementSyntax statement,
             ImmutableArray<string> structuralPath,
             IInvocationOperation invocation,
+            RequestAuthoringKind kind,
             out RequestFlow flow)
         {
             flow = null!;
-            var requestIdentity = NextIdentity("request", structuralPath);
+            var requestIdentity = NextIdentity(
+                kind == RequestAuthoringKind.ChildProcess ? "invoke-process" : "request",
+                structuralPath);
             var declarations = CollectionArguments(invocation, "outcomes");
             if (declarations.IsEmpty)
             {
                 return StatementFailure(statement, "a multi-outcome Request requires at least one terminal outcome");
+            }
+            if (kind == RequestAuthoringKind.ChildProcess && declarations.Length != 4)
+            {
+                return StatementFailure(
+                    statement,
+                    "InvokeProcess requires exactly one branch for each completed, failed, cancelled, and terminated child outcome");
             }
 
             List<RequestOutcomeFlow> outcomes = [];
@@ -714,10 +736,136 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
 
             flow = new(
                 requestIdentity,
+                kind,
                 [.. outcomes],
                 invocation,
                 SourceLocation(statement),
                 statement);
+            return true;
+        }
+
+        bool TryParsePartition(
+            StatementSyntax statement,
+            ImmutableArray<string> structuralPath,
+            IInvocationOperation invocation,
+            out PartitionFlow flow)
+        {
+            flow = null!;
+            var identity = NextIdentity("for-each-partition", structuralPath);
+            if (!TryGetInlineProjection(
+                    Argument(invocation, "progressIdentity"),
+                    statement,
+                    "progressIdentity",
+                    optional: false,
+                    out var progressIdentity)
+                || !TryGetInlineProjection(
+                    Argument(invocation, "childInput"),
+                    statement,
+                    "childInput",
+                    optional: false,
+                    out var childInput)
+                || !TryGetInlineProjection(
+                    Argument(invocation, "capacityIdentity"),
+                    statement,
+                    "capacityIdentity",
+                    optional: true,
+                    out var capacityIdentity))
+            {
+                return false;
+            }
+
+            var failedArgument = Argument(invocation, "failed");
+            HashSet<IMethodSymbol> observed = new(SymbolEqualityComparer.Default);
+            if (failedArgument is null
+                || !TryGetNamedLocalBranch(
+                    failedArgument.Value,
+                    observed,
+                    parameterCount: 0,
+                    out var failedMethod,
+                    out var failedFunction))
+            {
+                return StatementFailure(
+                    failedArgument?.Syntax ?? statement,
+                    "ForEachPartition failed must name one parameterless local async ProcessTask function");
+            }
+
+            if (!TryParse(
+                    failedFunction.Body!.Statements,
+                    structuralPath.Add(identity.PathSegment).Add($"failed-{failedMethod.Name}"),
+                    out var failedBody))
+            {
+                return false;
+            }
+
+            var partition = new AuthoredOutput(
+                null,
+                progressIdentity!.Parameter.Type,
+                identity,
+                "partition",
+                $"__authored_output_{authoredOutputs.Count.ToString(CultureInfo.InvariantCulture)}",
+                SourceLocation(statement));
+            authoredOutputs.Add(partition);
+            flow = new(
+                identity,
+                partition,
+                progressIdentity,
+                childInput!,
+                capacityIdentity,
+                failedMethod.Name,
+                failedBody,
+                invocation,
+                SourceLocation(statement),
+                statement);
+            return true;
+        }
+
+        bool TryGetInlineProjection(
+            IArgumentOperation? argument,
+            SyntaxNode fallbackSyntax,
+            string name,
+            bool optional,
+            out ProjectionFlow? projection)
+        {
+            projection = null;
+            if (argument is null
+                || argument.IsImplicit
+                || Strip(argument.Value).ConstantValue is { HasValue: true, Value: null })
+            {
+                return optional
+                    || StatementFailure(
+                        argument?.Syntax ?? fallbackSyntax,
+                        $"ForEachPartition {name} requires one inline pure projection lambda");
+            }
+
+            var operation = Strip(argument.Value);
+            if (operation is IDelegateCreationOperation delegateCreation)
+            {
+                operation = Strip(delegateCreation.Target);
+            }
+            if (operation is not IAnonymousFunctionOperation anonymous
+                || anonymous.Symbol.Parameters.Length != 1)
+            {
+                return StatementFailure(
+                    argument.Syntax,
+                    $"ForEachPartition {name} must be one inline pure lambda; runtime delegates and callbacks are not supported");
+            }
+
+            var returns = SelfAndDescendants(anonymous.Body)
+                .OfType<IReturnOperation>()
+                .Where(static returned => returned.ReturnedValue is not null)
+                .ToArray();
+            if (returns.Length != 1 || returns[0].ReturnedValue is not { } returnedValue)
+            {
+                return StatementFailure(
+                    argument.Syntax,
+                    $"ForEachPartition {name} must contain one pure projection expression");
+            }
+
+            projection = new(
+                anonymous.Symbol.Parameters[0],
+                returnedValue,
+                SourceLocation(argument.Syntax),
+                argument.Syntax);
             return true;
         }
 
@@ -1391,7 +1539,12 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             }
 
             foreach (var output in authoredOutputs)
-                outputBySymbol.Add(output.Symbol, output.Variable);
+            {
+                if (output.Symbol is not null)
+                {
+                    outputBySymbol.Add(output.Symbol, output.Variable);
+                }
+            }
 
             foreach (var obligation in requestObligations)
             {
@@ -1413,6 +1566,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                             ForkJoinFlow forkJoin => Argument(forkJoin.Invocation, "id"),
                             ActionFlow action => Argument(action.Invocation, "id"),
                             RequestFlow request => Argument(request.Invocation, "id"),
+                            PartitionFlow partition => Argument(partition.Invocation, "id"),
                             AwaitMatchFlow awaitMatch => Argument(awaitMatch.Invocation, "id"),
                             _ => null
                         },
@@ -1691,6 +1845,22 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         entry = request.Identity.Variable;
                         break;
 
+                    case PartitionFlow partition:
+                        if (entry is null)
+                        {
+                            return StatementFailure(
+                                partition.Syntax,
+                                "ForEachPartition requires a following operation or return");
+                        }
+
+                        if (!TryEmitPartition(partition, entry))
+                        {
+                            return false;
+                        }
+
+                        entry = partition.Identity.Variable;
+                        break;
+
                     case AwaitMatchFlow awaitMatch:
                         if (entry is null)
                         {
@@ -1889,9 +2059,123 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     $"__builder.RequestOutcome(id: {outcome.Identity.Variable}, outcome: {terminalOutcomeExpression}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {outcome.Identity.Variable}, role: \"next\", target: {branchEntry}, {SourceArguments(outcome.Source, method.Name)}), output: {output}, {SourceArguments(outcome.Source, method.Name)}), {SourceArguments(outcome.Source, method.Name)})");
             }
 
+            if (request.Kind == RequestAuthoringKind.Request)
+            {
+                builderStatements.Add(
+                    $"__builder.Request(id: {request.Identity.Variable}, contract: {requestContract}, payload: {payload}, outcomes: [{string.Join(", ", outcomes)}], {SourceArguments(request.Source, method.Name)});");
+                return true;
+            }
+
+            var process = Argument(request.Invocation, "process");
+            var outcomeMapping = Argument(request.Invocation, "outcomeMapping");
+            var purpose = Argument(request.Invocation, "purpose");
+            var cancellation = Argument(request.Invocation, "cancellation");
+            if (process is null
+                || outcomeMapping is null
+                || purpose is null
+                || cancellation is null
+                || !TryEmitExactArgument(process, request.Syntax, out var processExpression)
+                || !TryEmitExactArgument(outcomeMapping, request.Syntax, out var outcomeMappingExpression)
+                || !TryEmitExactArgument(purpose, request.Syntax, out var purposeExpression)
+                || !TryEmitExactArgument(cancellation, request.Syntax, out var cancellationExpression))
+            {
+                return StatementFailure(
+                    request.Syntax,
+                    "InvokeProcess requires exact child definition, outcome mapping, purpose, and cancellation policy");
+            }
+
             builderStatements.Add(
-                $"__builder.Request(id: {request.Identity.Variable}, contract: {requestContract}, payload: {payload}, outcomes: [{string.Join(", ", outcomes)}], {SourceArguments(request.Source, method.Name)});");
+                $"__builder.InvokeProcess(id: {request.Identity.Variable}, process: {processExpression}, contract: {requestContract}, outcomeMapping: {outcomeMappingExpression}, input: {payload}, purpose: {purposeExpression}, cancellation: {cancellationExpression}, outcomes: [{string.Join(", ", outcomes)}], {SourceArguments(request.Source, method.Name)});");
             return true;
+        }
+
+        bool TryEmitPartition(PartitionFlow partition, string successor)
+        {
+            if (!TryLowerBlock(partition.Failed, successor, out var failedEntry) || failedEntry is null)
+            {
+                return StatementFailure(
+                    partition.Syntax,
+                    $"ForEachPartition failed branch '{partition.FailedName}' requires a reachable continuation");
+            }
+
+            var partitions = Argument(partition.Invocation, "partitions");
+            var process = Argument(partition.Invocation, "process");
+            var contract = Argument(partition.Invocation, "contract");
+            var outcomeMapping = Argument(partition.Invocation, "outcomeMapping");
+            var limits = Argument(partition.Invocation, "limits");
+            var failure = Argument(partition.Invocation, "failure");
+            var capacityDomains = Argument(partition.Invocation, "capacityDomains");
+            var cancellation = Argument(partition.Invocation, "cancellation");
+            if (partitions is null
+                || process is null
+                || contract is null
+                || outcomeMapping is null
+                || limits is null
+                || failure is null
+                || capacityDomains is null
+                || cancellation is null
+                || Strip(partitions.Value).Type is not { } partitionsType)
+            {
+                return StatementFailure(
+                    partition.Syntax,
+                    "ForEachPartition requires a portable finite collection and exact child, limits, capacity, failure, and cancellation semantics");
+            }
+            if (!TryEmitValue(partitions.Value, partitionsType, partition.Source, out var partitionsValue)
+                || !TryEmitProjection(
+                    partition.ProgressIdentity,
+                    partition.Partition.Variable,
+                    out var progressIdentity)
+                || !TryEmitProjection(
+                    partition.ChildInput,
+                    partition.Partition.Variable,
+                    out var childInput)
+                || !TryEmitExactArgument(process, process.Syntax, out var processExpression)
+                || !TryEmitExactArgument(contract, contract.Syntax, out var contractExpression)
+                || !TryEmitExactArgument(outcomeMapping, outcomeMapping.Syntax, out var outcomeMappingExpression)
+                || !TryEmitExactArgument(limits, limits.Syntax, out var limitsExpression)
+                || !TryEmitExactArgument(failure, failure.Syntax, out var failureExpression)
+                || !TryEmitExactArgument(
+                    capacityDomains,
+                    capacityDomains.Syntax,
+                    out var capacityDomainsExpression)
+                || !TryEmitExactArgument(cancellation, cancellation.Syntax, out var cancellationExpression))
+            {
+                return false;
+            }
+
+            var capacityIdentity = "null";
+            if (partition.CapacityIdentity is not null
+                && !TryEmitProjection(
+                    partition.CapacityIdentity,
+                    partition.Partition.Variable,
+                    out capacityIdentity))
+            {
+                return false;
+            }
+
+            builderStatements.Add(
+                $"__builder.ForEachPartition(id: {partition.Identity.Variable}, partitions: {partitionsValue}, partition: {partition.Partition.Variable}, progressIdentity: {progressIdentity}, process: {processExpression}, contract: {contractExpression}, outcomeMapping: {outcomeMappingExpression}, childInput: {childInput}, limits: {limitsExpression}, failure: {failureExpression}, capacityIdentity: {capacityIdentity}, capacityDomains: {capacityDomainsExpression}, cancellation: {cancellationExpression}, completed: __builder.Edge(owner: {partition.Identity.Variable}, role: \"completed\", target: {successor}, {SourceArguments(partition.Source, method.Name)}), failed: __builder.Edge(owner: {partition.Identity.Variable}, role: \"failed\", target: {failedEntry}, {SourceArguments(partition.Source, method.Name)}), {SourceArguments(partition.Source, method.Name)});");
+            return true;
+        }
+
+        bool TryEmitProjection(
+            ProjectionFlow projection,
+            string input,
+            out string value)
+        {
+            outputBySymbol.Add(projection.Parameter, input);
+            try
+            {
+                return TryEmitValue(
+                    projection.Expression,
+                    projection.Expression.Type!,
+                    projection.Source,
+                    out value);
+            }
+            finally
+            {
+                outputBySymbol.Remove(projection.Parameter);
+            }
         }
 
         bool TryEmitAwaitMatch(AwaitMatchFlow awaitMatch, string successor)
@@ -2247,17 +2531,6 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             return false;
         }
 
-        static IEnumerable<IOperation> SelfAndDescendants(IOperation operation)
-        {
-            yield return operation;
-            foreach (var child in operation.ChildOperations)
-            {
-                foreach (var descendant in SelfAndDescendants(child))
-                {
-                    yield return descendant;
-                }
-            }
-        }
     }
 
     sealed class PureExpressionEmitter
@@ -2955,6 +3228,18 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         }
     }
 
+    static IEnumerable<IOperation> SelfAndDescendants(IOperation operation)
+    {
+        yield return operation;
+        foreach (var child in operation.ChildOperations)
+        {
+            foreach (var descendant in SelfAndDescendants(child))
+            {
+                yield return descendant;
+            }
+        }
+    }
+
     static IArgumentOperation? Argument(IInvocationOperation invocation, string name) =>
         invocation.Arguments.FirstOrDefault(argument =>
             string.Equals(argument.Parameter?.Name, name, StringComparison.Ordinal));
@@ -3026,6 +3311,13 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         {
                             yield return nested;
                         }
+                    }
+                }
+                else if (statement is PartitionFlow partition)
+                {
+                    foreach (var nested in partition.Failed.Descendants())
+                    {
+                        yield return nested;
                     }
                 }
                 else if (statement is AwaitMatchFlow awaitMatch)
@@ -3116,7 +3408,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         : FlowStatement(Identity, Source, Syntax);
 
     sealed record AuthoredOutput(
-        ISymbol Symbol,
+        ISymbol? Symbol,
         ITypeSymbol Type,
         FlowIdentity Owner,
         string Role,
@@ -3148,7 +3440,27 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
 
     sealed record RequestFlow(
         FlowIdentity Identity,
+        RequestAuthoringKind Kind,
         ImmutableArray<RequestOutcomeFlow> Outcomes,
+        IInvocationOperation Invocation,
+        SourceReference Source,
+        SyntaxNode Syntax)
+        : FlowStatement(Identity, Source, Syntax);
+
+    sealed record ProjectionFlow(
+        IParameterSymbol Parameter,
+        IOperation Expression,
+        SourceReference Source,
+        SyntaxNode Syntax);
+
+    sealed record PartitionFlow(
+        FlowIdentity Identity,
+        AuthoredOutput Partition,
+        ProjectionFlow ProgressIdentity,
+        ProjectionFlow ChildInput,
+        ProjectionFlow? CapacityIdentity,
+        string FailedName,
+        FlowBlock Failed,
         IInvocationOperation Invocation,
         SourceReference Source,
         SyntaxNode Syntax)
@@ -3186,6 +3498,12 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         Read = 2,
         Transition = 3,
         Effect = 4
+    }
+
+    enum RequestAuthoringKind
+    {
+        Request = 1,
+        ChildProcess = 2
     }
 
     enum ForkAuthoringMode
