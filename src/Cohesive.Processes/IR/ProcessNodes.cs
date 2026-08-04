@@ -472,11 +472,16 @@ public sealed record ProcessForkBranch
     /// <summary>Creates a Fork branch.</summary>
     /// <param name="id">Stable branch identity retained through its owning Join.</param>
     /// <param name="start">Stable edge that starts the branch token.</param>
+    /// <param name="capacityDomain">Optional declared capacity domain consumed while the branch is active.</param>
     [JsonConstructor]
-    public ProcessForkBranch(ExecutionNodeId id, ProcessEdge start)
+    public ProcessForkBranch(
+        ExecutionNodeId id,
+        ProcessEdge start,
+        string? capacityDomain = null)
     {
         Id = id;
         Start = start;
+        CapacityDomain = capacityDomain;
     }
 
     /// <summary>Stable branch identity retained through its owning Join.</summary>
@@ -484,6 +489,9 @@ public sealed record ProcessForkBranch
 
     /// <summary>Stable edge that starts the branch token.</summary>
     public ProcessEdge Start { get; }
+
+    /// <summary>Optional declared capacity domain consumed while the branch is active.</summary>
+    public string? CapacityDomain { get; }
 }
 
 /// <summary>Creates a normalized finite set of parallel branch tokens owned by one reciprocal Join.</summary>
@@ -498,15 +506,38 @@ public sealed record ForkProcessNode : ProcessNode
     /// <param name="id">Stable node identity.</param>
     /// <param name="branches">Set-like stable branch declarations.</param>
     /// <param name="join">Stable identity of the Join that owns convergence of these branches.</param>
-    [JsonConstructor]
     public ForkProcessNode(
         ExecutionNodeId id,
         ImmutableArray<ProcessForkBranch> branches,
         ExecutionNodeId join)
+        : this(
+            id,
+            branches,
+            join,
+            ProcessWorkLimits.EagerFiniteSet(branches.IsDefault ? 0 : branches.Length),
+            capacityDomains: [])
+    {
+    }
+
+    /// <summary>Creates a parallel Fork node with explicit durable admission limits.</summary>
+    /// <param name="id">Stable node identity.</param>
+    /// <param name="branches">Set-like stable branch declarations.</param>
+    /// <param name="join">Stable identity of the Join that owns convergence of these branches.</param>
+    /// <param name="limits">Hard finite branch, per-activation start, and parallelism limits.</param>
+    /// <param name="capacityDomains">Optional named capacity limits consumed by assigned branches.</param>
+    [JsonConstructor]
+    public ForkProcessNode(
+        ExecutionNodeId id,
+        ImmutableArray<ProcessForkBranch> branches,
+        ExecutionNodeId join,
+        ProcessWorkLimits limits,
+        ImmutableArray<ProcessCapacityDomainLimit> capacityDomains)
         : base(id)
     {
         Branches = ProcessIrCollections.NormalizeSet(branches, CompareForkBranches);
         Join = join;
+        Limits = limits;
+        CapacityDomains = ProcessIrCollections.NormalizeCapacityDomains(capacityDomains);
     }
 
     /// <summary>Branch declarations in deterministic stable-identity order.</summary>
@@ -514,6 +545,12 @@ public sealed record ForkProcessNode : ProcessNode
 
     /// <summary>Stable identity of the Join that owns convergence of these branches.</summary>
     public ExecutionNodeId Join { get; }
+
+    /// <summary>Hard finite work and admission limits.</summary>
+    public ProcessWorkLimits Limits { get; }
+
+    /// <summary>Capacity-domain limits in deterministic ordinal identity order.</summary>
+    public ImmutableArray<ProcessCapacityDomainLimit> CapacityDomains { get; }
 
     /// <summary>Compares Fork nodes by complete normalized persisted semantics.</summary>
     /// <param name="other">Fork node to compare with this value.</param>
@@ -523,6 +560,8 @@ public sealed record ForkProcessNode : ProcessNode
         || other is not null
         && Id == other.Id
         && Join == other.Join
+        && Limits == other.Limits
+        && CapacityDomains.SequenceEqual(other.CapacityDomains)
         && Branches.SequenceEqual(other.Branches);
 
     /// <summary>Returns a structural hash code for complete normalized Fork semantics.</summary>
@@ -532,6 +571,9 @@ public sealed record ForkProcessNode : ProcessNode
         var hash = new HashCode();
         hash.Add(Id);
         hash.Add(Join);
+        hash.Add(Limits);
+        foreach (var domain in CapacityDomains)
+            hash.Add(domain);
         foreach (var branch in Branches)
             hash.Add(branch);
         return hash.ToHashCode();
@@ -907,9 +949,7 @@ public sealed record ForEachPartitionProcessNode : ProcessNode
         Limits = limits;
         Failure = failure;
         CapacityIdentity = capacityIdentity;
-        CapacityDomains = ProcessIrCollections.NormalizeSet(
-            capacityDomains,
-            CompareCapacityDomains);
+        CapacityDomains = ProcessIrCollections.NormalizeCapacityDomains(capacityDomains);
         Cancellation = cancellation;
         Completed = completed;
         Failed = failed;
@@ -1003,18 +1043,6 @@ public sealed record ForEachPartitionProcessNode : ProcessNode
         return hash.ToHashCode();
     }
 
-    static int CompareCapacityDomains(
-        ProcessCapacityDomainLimit? left,
-        ProcessCapacityDomainLimit? right)
-    {
-        if (ReferenceEquals(left, right))
-            return 0;
-        if (left is null)
-            return -1;
-        if (right is null)
-            return 1;
-        return StringComparer.Ordinal.Compare(left.Identity, right.Identity);
-    }
 }
 
 /// <summary>

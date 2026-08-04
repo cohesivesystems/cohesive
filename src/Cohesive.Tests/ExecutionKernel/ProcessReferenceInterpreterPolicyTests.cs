@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Compilation;
@@ -402,6 +403,321 @@ public sealed class ProcessReferenceInterpreterPolicyTests
     }
 
     [Fact]
+    public void BoundedFork_RetainsPendingBranchesAndParallelismAcrossRestore()
+    {
+        var dueAtUtc = StartedAtUtc.AddDays(1);
+        var plan = Compile(Definition(
+            "fork",
+            ProcessRecoveryPolicy.ContinueAttempt,
+            new ForkProcessNode(
+                new("fork"),
+                [
+                    new(new("branch/alpha"), Edge("edge/fork-alpha", "timer/alpha")),
+                    new(new("branch/beta"), Edge("edge/fork-beta", "timer/beta")),
+                    new(new("branch/delta"), Edge("edge/fork-delta", "timer/delta")),
+                    new(new("branch/gamma"), Edge("edge/fork-gamma", "timer/gamma"))
+                ],
+                new("join"),
+                new(
+                    maximumItems: 4,
+                    maximumStartsPerActivation: 4,
+                    maximumParallelism: 2),
+                capacityDomains: []),
+            Timer("timer/alpha", "edge/alpha-join", dueAtUtc),
+            Timer("timer/beta", "edge/beta-join", dueAtUtc),
+            Timer("timer/delta", "edge/delta-join", dueAtUtc),
+            Timer("timer/gamma", "edge/gamma-join", dueAtUtc),
+            AllJoin(),
+            new ReturnProcessNode(new("return"), Expr.Const("joined"))));
+        var initial = ProcessReferenceInterpreter.Create(plan, Continuation(), StringValue("input"));
+
+        var first = ProcessReferenceInterpreter.Activate(
+            plan,
+            initial,
+            Activation("activation/bounded/start", ProcessActivationCause.Start),
+            RejectingHost.Instance);
+        var firstFork = Assert.Single(first.State.Forks);
+
+        Assert.Equal(ProcessActivationDisposition.DurableCut, first.Disposition);
+        Assert.Equal(2, firstFork.Branches.Count(static branch => IsInFlight(branch.Disposition)));
+        Assert.Equal(2, firstFork.Branches.Count(static branch =>
+            branch.Disposition == ExecutionTokenDisposition.Pending));
+        Assert.Equal(2, firstFork.AdmissionOperatingPoint.MaximumParallelism);
+
+        var options = InteractionEnvelopeJsonSerializer.CreateOptions();
+        var json = JsonSerializer.Serialize(first.State, options);
+        var restored = Assert.IsType<ProcessContinuationState>(
+            JsonSerializer.Deserialize<ProcessContinuationState>(json, options));
+        Assert.Equal(json, JsonSerializer.Serialize(restored, options));
+        Assert.True(ProcessContinuationValidator.Validate(plan, restored).IsValid);
+
+        var second = ProcessReferenceInterpreter.Activate(
+            plan,
+            restored,
+            Activation(
+                "activation/bounded/continue",
+                ProcessActivationCause.Continue,
+                StartedAtUtc.AddMinutes(1)),
+            RejectingHost.Instance);
+        var secondFork = Assert.Single(second.State.Forks);
+
+        Assert.Equal(ProcessActivationDisposition.DurableCut, second.Disposition);
+        Assert.Equal(2, secondFork.Branches.Count(static branch => IsInFlight(branch.Disposition)));
+        Assert.Equal(2, secondFork.Branches.Count(static branch =>
+            branch.Disposition == ExecutionTokenDisposition.Pending));
+        Assert.True(ProcessContinuationValidator.Validate(plan, second.State).IsValid);
+    }
+
+    [Fact]
+    public void ForkStartBudget_AdvancesOneBranchPerDurableActivationWithoutSpinning()
+    {
+        var plan = Compile(Definition(
+            "fork",
+            ProcessRecoveryPolicy.ContinueAttempt,
+            new ForkProcessNode(
+                new("fork"),
+                [
+                    new(new("branch/alpha"), Edge("edge/fork-alpha", "join")),
+                    new(new("branch/beta"), Edge("edge/fork-beta", "join")),
+                    new(new("branch/delta"), Edge("edge/fork-delta", "join")),
+                    new(new("branch/gamma"), Edge("edge/fork-gamma", "join"))
+                ],
+                new("join"),
+                new(
+                    maximumItems: 4,
+                    maximumStartsPerActivation: 1,
+                    maximumParallelism: 4),
+                capacityDomains: []),
+            AllJoin(),
+            new ReturnProcessNode(new("return"), Expr.Const("joined"))));
+        var state = ProcessReferenceInterpreter.Create(plan, Continuation(), StringValue("input"));
+
+        for (var activationIndex = 0; activationIndex < 4; activationIndex++)
+        {
+            var decision = ProcessReferenceInterpreter.Activate(
+                plan,
+                state,
+                Activation(
+                    $"activation/start-budget/{activationIndex}",
+                    activationIndex == 0 ? ProcessActivationCause.Start : ProcessActivationCause.Continue,
+                    StartedAtUtc.AddMinutes(activationIndex)),
+                RejectingHost.Instance);
+            state = decision.State;
+            var fork = Assert.Single(state.Forks);
+
+            Assert.Equal(activationIndex + 1, fork.Branches.Count(static branch =>
+                branch.Disposition == ExecutionTokenDisposition.Completed));
+            Assert.True(ProcessContinuationValidator.Validate(plan, state).IsValid);
+            if (activationIndex < 3)
+            {
+                Assert.Equal(ProcessActivationDisposition.DurableCut, decision.Disposition);
+                Assert.Contains(decision.Evidence.Trace, static trace =>
+                    trace.Kind == ProcessTraceEventKind.ForkAdmissionChanged
+                    && trace.Detail is not null
+                    && trace.Detail.StartsWith("activation-boundary:", StringComparison.Ordinal));
+            }
+            else
+            {
+                Assert.Equal(ProcessActivationDisposition.Completed, decision.Disposition);
+            }
+        }
+    }
+
+    [Fact]
+    public void ForkCapacityDomains_ComposeWithTheForkWideParallelismLimit()
+    {
+        var dueAtUtc = StartedAtUtc.AddDays(1);
+        var plan = Compile(Definition(
+            "fork",
+            ProcessRecoveryPolicy.ContinueAttempt,
+            new ForkProcessNode(
+                new("fork"),
+                [
+                    new(new("branch/alpha"), Edge("edge/fork-alpha", "timer/alpha"), "resource/a"),
+                    new(new("branch/beta"), Edge("edge/fork-beta", "timer/beta"), "resource/a"),
+                    new(new("branch/delta"), Edge("edge/fork-delta", "timer/delta"), "resource/b"),
+                    new(new("branch/gamma"), Edge("edge/fork-gamma", "timer/gamma"), "resource/b")
+                ],
+                new("join"),
+                new(
+                    maximumItems: 4,
+                    maximumStartsPerActivation: 4,
+                    maximumParallelism: 4),
+                [new("resource/a", 1), new("resource/b", 1)]),
+            Timer("timer/alpha", "edge/alpha-join", dueAtUtc),
+            Timer("timer/beta", "edge/beta-join", dueAtUtc),
+            Timer("timer/delta", "edge/delta-join", dueAtUtc),
+            Timer("timer/gamma", "edge/gamma-join", dueAtUtc),
+            AllJoin(),
+            new ReturnProcessNode(new("return"), Expr.Const("joined"))));
+
+        var decision = ProcessReferenceInterpreter.Activate(
+            plan,
+            ProcessReferenceInterpreter.Create(plan, Continuation(), StringValue("input")),
+            Activation("activation/capacity/start", ProcessActivationCause.Start),
+            RejectingHost.Instance);
+        var fork = Assert.Single(decision.State.Forks);
+        var admitted = fork.Branches
+            .Where(static branch => IsInFlight(branch.Disposition))
+            .Select(static branch => branch.Branch.Value)
+            .ToArray();
+
+        Assert.Equal(["branch/alpha", "branch/delta"], admitted);
+        Assert.Equal(2, fork.Branches.Count(static branch =>
+            branch.Disposition == ExecutionTokenDisposition.Pending));
+        Assert.True(ProcessContinuationValidator.Validate(plan, decision.State).IsValid);
+    }
+
+    [Fact]
+    public void AnyCancelRemaining_CancelsPendingBranchesBeforeTheyStart()
+    {
+        var plan = Compile(Definition(
+            "fork",
+            ProcessRecoveryPolicy.ContinueAttempt,
+            new ForkProcessNode(
+                new("fork"),
+                [
+                    new(new("branch/alpha"), Edge("edge/fork-alpha", "join")),
+                    new(new("branch/beta"), Edge("edge/fork-beta", "join")),
+                    new(new("branch/gamma"), Edge("edge/fork-gamma", "join"))
+                ],
+                new("join"),
+                new(
+                    maximumItems: 3,
+                    maximumStartsPerActivation: 3,
+                    maximumParallelism: 1),
+                capacityDomains: []),
+            new JoinProcessNode(
+                new("join"),
+                new("fork"),
+                new(
+                    ProcessJoinMode.Any,
+                    requiredCount: 0,
+                    ProcessJoinFailurePolicy.FailFast,
+                    ProcessJoinCancellationPolicy.CancelRemaining,
+                    ProcessJoinCompletionOrder.Unobservable,
+                    ProcessJoinTieBreak.BranchIdentity),
+                Edge("edge/join-return", "return")),
+            new ReturnProcessNode(new("return"), Expr.Const("joined"))));
+
+        var decision = ProcessReferenceInterpreter.Activate(
+            plan,
+            ProcessReferenceInterpreter.Create(plan, Continuation(), StringValue("input")),
+            Activation("activation/any-pending/start", ProcessActivationCause.Start),
+            RejectingHost.Instance);
+        var fork = Assert.Single(decision.State.Forks);
+
+        Assert.Equal(ProcessActivationDisposition.Completed, decision.Disposition);
+        Assert.Equal(
+            ExecutionTokenDisposition.Completed,
+            fork.Branches.Single(static branch => branch.Branch == new ExecutionNodeId("branch/alpha")).Disposition);
+        foreach (var branchId in new[] { "branch/beta", "branch/gamma" })
+        {
+            var branch = fork.Branches.Single(candidate => candidate.Branch == new ExecutionNodeId(branchId));
+            var token = decision.State.Tokens.Single(candidate => candidate.Id == branch.Token);
+            Assert.Equal(ExecutionTokenDisposition.Cancelled, branch.Disposition);
+            Assert.Equal(0, token.Step);
+        }
+        Assert.Single(decision.Evidence.Trace, static trace =>
+            trace.Kind == ProcessTraceEventKind.ForkAdmissionChanged
+            && trace.BranchOrClause is not null);
+    }
+
+    [Fact]
+    public void AdaptiveAdmission_LowersParallelismByDrainingAndRetainsTheAppliedRevision()
+    {
+        var dueAtUtc = StartedAtUtc.AddDays(1);
+        var plan = Compile(Definition(
+            "fork",
+            ProcessRecoveryPolicy.ContinueAttempt,
+            new ForkProcessNode(
+                new("fork"),
+                [
+                    new(new("branch/alpha"), Edge("edge/fork-alpha", "timer/alpha")),
+                    new(new("branch/beta"), Edge("edge/fork-beta", "timer/beta")),
+                    new(new("branch/gamma"), Edge("edge/fork-gamma", "timer/gamma"))
+                ],
+                new("join"),
+                new(
+                    maximumItems: 3,
+                    maximumStartsPerActivation: 3,
+                    maximumParallelism: 3,
+                    minimumParallelism: 1),
+                capacityDomains: []),
+            Timer("timer/alpha", "edge/alpha-join", dueAtUtc),
+            Timer("timer/beta", "edge/beta-join", dueAtUtc),
+            Timer("timer/gamma", "edge/gamma-join", dueAtUtc),
+            AllJoin(),
+            new ReturnProcessNode(new("return"), Expr.Const("joined"))));
+        var firstPoint = new ProcessAdmissionOperatingPoint(
+            new("fork"),
+            maximumParallelism: 2,
+            revision: 1,
+            authority: "cohesive.control/test",
+            evidenceReference: "control/actuation/1");
+        var initial = ProcessReferenceInterpreter.Create(plan, Continuation(), StringValue("input"));
+        var first = ProcessReferenceInterpreter.Activate(
+            plan,
+            initial,
+            Activation(
+                "activation/adaptive/start",
+                ProcessActivationCause.Start,
+                admissionOperatingPoints: [firstPoint]),
+            RejectingHost.Instance);
+
+        var loweredPoint = new ProcessAdmissionOperatingPoint(
+            new("fork"),
+            maximumParallelism: 1,
+            revision: 2,
+            authority: "cohesive.control/test",
+            evidenceReference: "control/actuation/2");
+        var lowered = ProcessReferenceInterpreter.Activate(
+            plan,
+            first.State,
+            Activation(
+                "activation/adaptive/lower",
+                ProcessActivationCause.Continue,
+                StartedAtUtc.AddMinutes(1),
+                admissionOperatingPoints: [loweredPoint]),
+            RejectingHost.Instance);
+        var loweredFork = Assert.Single(lowered.State.Forks);
+
+        Assert.Equal(loweredPoint, loweredFork.AdmissionOperatingPoint);
+        Assert.Equal(2, loweredFork.Branches.Count(static branch => IsInFlight(branch.Disposition)));
+        Assert.Single(loweredFork.Branches, static branch =>
+            branch.Disposition == ExecutionTokenDisposition.Pending);
+        Assert.True(ProcessContinuationValidator.Validate(plan, lowered.State).IsValid);
+
+        var stale = ProcessReferenceInterpreter.Activate(
+            plan,
+            lowered.State,
+            Activation(
+                "activation/adaptive/stale",
+                ProcessActivationCause.Control,
+                StartedAtUtc.AddMinutes(2),
+                admissionOperatingPoints: [firstPoint]),
+            RejectingHost.Instance);
+        Assert.Equal(ProcessActivationDisposition.Rejected, stale.Disposition);
+        Assert.Same(lowered.State, stale.State);
+
+        var drained = ProcessReferenceInterpreter.Activate(
+            plan,
+            lowered.State,
+            Activation(
+                "activation/adaptive/drain",
+                ProcessActivationCause.Timer,
+                dueAtUtc.AddMinutes(1)),
+            RejectingHost.Instance);
+        var drainedFork = Assert.Single(drained.State.Forks);
+
+        Assert.Equal(loweredPoint, drainedFork.AdmissionOperatingPoint);
+        Assert.Equal(1, drainedFork.Branches.Count(static branch => IsInFlight(branch.Disposition)));
+        Assert.DoesNotContain(drainedFork.Branches, static branch =>
+            branch.Disposition == ExecutionTokenDisposition.Pending);
+        Assert.True(ProcessContinuationValidator.Validate(plan, drained.State).IsValid);
+    }
+
+    [Fact]
     public void RepeatedWait_UnscopedInputPrefersActiveOccurrenceWhileExactOldTargetRemainsLate()
     {
         var eventDocument = InteractionDocument(
@@ -751,7 +1067,8 @@ public sealed class ProcessReferenceInterpreterPolicyTests
         ProcessActivationCause cause,
         DateTimeOffset? observedAtUtc = null,
         ImmutableArray<ProcessActivationInput> inputs = default,
-        ProcessCancellationIntent? cancellation = null) => new(
+        ProcessCancellationIntent? cancellation = null,
+        ImmutableArray<ProcessAdmissionOperatingPoint> admissionOperatingPoints = default) => new(
         new(id),
         cause,
         observedAtUtc ?? StartedAtUtc,
@@ -763,7 +1080,33 @@ public sealed class ProcessReferenceInterpreterPolicyTests
                 InteractionVisibilityDemand.AfterOriginCommit),
             Provenance()),
         inputs,
-        cancellation);
+        cancellation,
+        admissionOperatingPoints);
+
+    static TimerProcessNode Timer(
+        string id,
+        string edge,
+        DateTimeOffset dueAtUtc) => new(
+        new(id),
+        Expr.Const(ObservationValue.FromDateTimeOffset(dueAtUtc)),
+        Edge(edge, "join"));
+
+    static JoinProcessNode AllJoin() => new(
+        new("join"),
+        new("fork"),
+        new(
+            ProcessJoinMode.All,
+            requiredCount: 0,
+            ProcessJoinFailurePolicy.FailFast,
+            ProcessJoinCancellationPolicy.AwaitRemaining,
+            ProcessJoinCompletionOrder.Unobservable,
+            ProcessJoinTieBreak.BranchIdentity),
+        Edge("edge/join-return", "return"));
+
+    static bool IsInFlight(ExecutionTokenDisposition disposition) => disposition is
+        ExecutionTokenDisposition.Ready
+        or ExecutionTokenDisposition.Active
+        or ExecutionTokenDisposition.Waiting;
 
     static InteractionEnvelopeContext IncomingContext(
         CompiledProcessPlan plan,

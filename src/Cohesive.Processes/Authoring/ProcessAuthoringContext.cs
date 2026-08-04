@@ -280,6 +280,15 @@ internal sealed class ProcessAuthoringContext
                     AddFallback(entries, match.Fallback, path.Add("fallback"), nodeSource);
                 break;
             case ForkProcessNode fork:
+                AddConstruct(entries, fork.Limits, path.Add("limits"), nodeSource);
+                for (var index = 0; index < fork.CapacityDomains.Length; index++)
+                {
+                    AddConstruct(
+                        entries,
+                        fork.CapacityDomains[index],
+                        path.Add("capacityDomains").Add(Index(index)),
+                        nodeSource);
+                }
                 for (var index = 0; index < fork.Branches.Length; index++)
                 {
                     var branch = fork.Branches[index];
