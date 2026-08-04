@@ -1,4 +1,3 @@
-using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 using Cohesive.Execution;
 using Cohesive.Processes.IR;
@@ -16,6 +15,7 @@ public sealed partial class ProcessBuilder<TInput, TResult>
     readonly ProcessAuthoringContext context;
     readonly List<ProcessNode> nodes = [];
     readonly HashSet<ExecutionNodeId> nodeIds = [];
+    ExecutionNodeId? derivedEntry;
 
     internal ProcessBuilder(ProcessAuthoringContext context, AuthoredProcessSource rootSource)
     {
@@ -30,6 +30,15 @@ public sealed partial class ProcessBuilder<TInput, TResult>
 
     /// <summary>Typed binding for the complete Process invocation input.</summary>
     public ProcessBinding<TInput> Input { get; }
+
+    internal void UseDerivedEntry(ExecutionNodeId entry)
+    {
+        if (string.IsNullOrWhiteSpace(entry.Value))
+            throw new ArgumentException("A derived Process entry requires a stable node identity.", nameof(entry));
+        if (derivedEntry is not null)
+            throw new InvalidOperationException("A Process authoring frontend supplied its entry more than once.");
+        derivedEntry = entry;
+    }
 
     /// <summary>Wraps an existing canonical expression and its explicitly attested contract.</summary>
     /// <typeparam name="TValue">CLR type projected into the expression contract.</typeparam>
@@ -644,10 +653,16 @@ public sealed partial class ProcessBuilder<TInput, TResult>
     {
         if (nodes.Count == 0)
             throw new InvalidOperationException("Canonical Process authoring requires at least one graph node.");
+        var entry = derivedEntry ?? context.Metadata.EntryId;
+        if (entry is null)
+        {
+            throw new InvalidOperationException(
+                "Low-level Process authoring requires an explicit entry identity; use a higher-level frontend to derive it.");
+        }
         return new(
             context.InputContract,
             context.ResultContract,
-            context.Metadata.EntryId,
+            entry.Value,
             [.. nodes],
             context.Metadata.RecoveryPolicy);
     }

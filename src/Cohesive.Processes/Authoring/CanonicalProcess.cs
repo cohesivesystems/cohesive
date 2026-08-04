@@ -15,6 +15,38 @@ namespace Cohesive.Processes.Authoring;
 /// </summary>
 public sealed record ProcessAuthoringMetadata
 {
+    /// <summary>Creates metadata whose entry identity will be supplied by a higher-level Process frontend.</summary>
+    /// <param name="definitionId">Stable identity shared by every revision of the Process.</param>
+    /// <param name="revisionId">Stable identity of the semantic revision being authored.</param>
+    /// <param name="recoveryPolicy">Explicit recovery behavior after a recoverable interruption.</param>
+    /// <param name="provenance">Producer and root-source attribution for the authored definition.</param>
+    /// <param name="displayName">Optional human-facing name excluded from semantic fingerprinting.</param>
+    /// <param name="description">Optional human-facing description excluded from semantic fingerprinting.</param>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="definitionId"/> or <paramref name="revisionId"/> is default.
+    /// </exception>
+    /// <exception cref="ArgumentNullException"><paramref name="provenance"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="recoveryPolicy"/> is unspecified or is not a supported recovery policy.
+    /// </exception>
+    public ProcessAuthoringMetadata(
+        ExecutionDefinitionId definitionId,
+        ExecutionRevisionId revisionId,
+        ProcessRecoveryPolicy recoveryPolicy,
+        ExecutionProvenance provenance,
+        string? displayName = null,
+        string? description = null)
+        : this(
+            definitionId,
+            revisionId,
+            entryId: null,
+            recoveryPolicy,
+            provenance,
+            displayName,
+            description)
+    {
+    }
+
     /// <summary>Creates metadata for one canonical Process revision.</summary>
     /// <param name="definitionId">Stable identity shared by every revision of the Process.</param>
     /// <param name="revisionId">Stable identity of the semantic revision being authored.</param>
@@ -38,12 +70,31 @@ public sealed record ProcessAuthoringMetadata
         ExecutionProvenance provenance,
         string? displayName = null,
         string? description = null)
+        : this(
+            definitionId,
+            revisionId,
+            (ExecutionNodeId?)entryId,
+            recoveryPolicy,
+            provenance,
+            displayName,
+            description)
+    {
+    }
+
+    ProcessAuthoringMetadata(
+        ExecutionDefinitionId definitionId,
+        ExecutionRevisionId revisionId,
+        ExecutionNodeId? entryId,
+        ProcessRecoveryPolicy recoveryPolicy,
+        ExecutionProvenance provenance,
+        string? displayName,
+        string? description)
     {
         if (string.IsNullOrWhiteSpace(definitionId.Value))
             throw new ArgumentException("Canonical Process authoring requires a definition identity.", nameof(definitionId));
         if (string.IsNullOrWhiteSpace(revisionId.Value))
             throw new ArgumentException("Canonical Process authoring requires a revision identity.", nameof(revisionId));
-        if (string.IsNullOrWhiteSpace(entryId.Value))
+        if (entryId is { } explicitEntry && string.IsNullOrWhiteSpace(explicitEntry.Value))
             throw new ArgumentException("Canonical Process authoring requires an entry-node identity.", nameof(entryId));
         if (!Enum.IsDefined(recoveryPolicy) || recoveryPolicy == ProcessRecoveryPolicy.Unspecified)
         {
@@ -68,8 +119,11 @@ public sealed record ProcessAuthoringMetadata
     /// <summary>Stable identity of this semantic revision.</summary>
     public ExecutionRevisionId RevisionId { get; }
 
-    /// <summary>Stable identity of the first Process node.</summary>
-    public ExecutionNodeId EntryId { get; }
+    /// <summary>
+    /// Optional explicit identity of the first Process node, or <see langword="null"/> when a higher-level frontend
+    /// derives it before canonical IR is built.
+    /// </summary>
+    public ExecutionNodeId? EntryId { get; }
 
     /// <summary>Explicit recovery behavior after a recoverable interruption.</summary>
     public ProcessRecoveryPolicy RecoveryPolicy { get; }
@@ -265,7 +319,7 @@ public sealed class Process<TInput, TResult>
 }
 
 /// <summary>Produces canonical Process IR and execution documents from finite typed C# construction.</summary>
-public static class ProcessAuthoring
+public static partial class ProcessAuthoring
 {
     /// <summary>Stable producer identity for the canonical C# Process frontend.</summary>
     public const string Producer = "cohesive.processes.csharp/v1";
@@ -370,7 +424,8 @@ public static class ProcessAuthoring
         Action<ProcessBuilder<TInput, TResult>> configure,
         string sourceFile,
         int sourceLine,
-        string sourceMember)
+        string sourceMember,
+        Func<CanonicalProcessDefinition, ExecutionSourceMap, ExecutionSourceMap>? enrichSourceMap = null)
     {
         ArgumentNullException.ThrowIfNull(metadata);
         ArgumentNullException.ThrowIfNull(configure);
@@ -394,6 +449,8 @@ public static class ProcessAuthoring
         configure(builder);
         var definition = builder.Build();
         var sourceMap = context.BuildSourceMap(definition, rootSource);
+        if (enrichSourceMap is not null)
+            sourceMap = Guard.RequireNotNull(enrichSourceMap(definition, sourceMap));
 
         var initial = ProcessDefinitionDocuments.Create(
             metadata.DefinitionId,
