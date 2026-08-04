@@ -16,6 +16,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
     const string AttributeName = "Cohesive.Processes.Authoring.GenerateProcessDefinitionAttribute";
     const string ContextName = "Cohesive.Processes.Authoring.ProcessContext";
     const string TaskName = "Cohesive.Processes.Authoring.ProcessTask<TResult>";
+    const string BranchTaskName = "Cohesive.Processes.Authoring.ProcessTask";
 
     static readonly SymbolDisplayFormat FullyQualifiedNullableFormat =
         SymbolDisplayFormat.FullyQualifiedFormat.WithMiscellaneousOptions(
@@ -356,6 +357,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         readonly IParameterSymbol contextParameter;
         readonly IParameterSymbol inputParameter;
         readonly Dictionary<ILocalSymbol, IOperation> pureLocals = new(SymbolEqualityComparer.Default);
+        readonly Dictionary<IMethodSymbol, LocalFunctionStatementSyntax> localFunctions = new(SymbolEqualityComparer.Default);
         readonly List<AwaitFlow> awaits = [];
         int semanticOrdinal;
 
@@ -377,8 +379,19 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
 
         public IReadOnlyList<AwaitFlow> Awaits => awaits;
 
-        public bool TryParse(SyntaxList<StatementSyntax> statements, out FlowBlock block) =>
-            TryParse(statements, ImmutableArray<string>.Empty, out block);
+        public bool TryParse(SyntaxList<StatementSyntax> statements, out FlowBlock block)
+        {
+            foreach (var localFunction in statements.SelectMany(static statement =>
+                         statement.DescendantNodesAndSelf().OfType<LocalFunctionStatementSyntax>()))
+            {
+                if (semanticModel.GetDeclaredSymbol(localFunction) is IMethodSymbol symbol)
+                {
+                    localFunctions[symbol] = localFunction;
+                }
+            }
+
+            return TryParse(statements, ImmutableArray<string>.Empty, out block);
+        }
 
         bool TryParse(
             SyntaxList<StatementSyntax> statements,
@@ -389,6 +402,11 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             var terminalObserved = false;
             foreach (var statement in statements)
             {
+                if (statement is LocalFunctionStatementSyntax)
+                {
+                    continue;
+                }
+
                 if (terminalObserved)
                 {
                     return Failure(
@@ -445,6 +463,15 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         flows.Add(switchFlow);
                         break;
 
+                    case ExpressionStatementSyntax expressionStatement:
+                        if (!TryParseForkJoin(expressionStatement, structuralPath, out var forkJoin))
+                        {
+                            block = null!;
+                            return false;
+                        }
+                        flows.Add(forkJoin);
+                        break;
+
                     case BlockSyntax nested:
                         if (!TryParse(nested.Statements, structuralPath.Add("block"), out var nestedBlock))
                         {
@@ -460,7 +487,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     default:
                         return Failure(
                             statement,
-                            "only pure local declarations, awaited Process operations, if/else, nested blocks, and return are supported",
+                            "only pure local declarations, awaited Process operations, fork/join, if/else, exact switch, nested blocks, and return are supported",
                             out block);
                 }
             }
@@ -531,6 +558,122 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             awaits.Add(authored);
             flow = authored;
             return true;
+        }
+
+        bool TryParseForkJoin(
+            ExpressionStatementSyntax statement,
+            ImmutableArray<string> structuralPath,
+            out ForkJoinFlow flow)
+        {
+            flow = null!;
+            var operation = semanticModel.GetOperation(statement.Expression);
+            if (operation is null
+                || Strip(operation) is not IAwaitOperation awaited
+                || Strip(awaited.Operation) is not IInvocationOperation invocation
+                || invocation.TargetMethod.Name != "ForkJoin"
+                || !SymbolEqualityComparer.Default.Equals(invocation.TargetMethod.ContainingType, contextParameter.Type)
+                || invocation.Instance is null
+                || Strip(invocation.Instance) is not IParameterReferenceOperation contextReference
+                || !SymbolEqualityComparer.Default.Equals(contextReference.Parameter, contextParameter))
+            {
+                return StatementFailure(
+                    statement,
+                    "an expression statement must await ForkJoin on the ProcessContext parameter");
+            }
+
+            var branchOperations = ParamsArguments(invocation, "branches");
+            if (branchOperations.Length < 2)
+            {
+                return StatementFailure(statement, "ForkJoin requires at least two local-function branches");
+            }
+
+            var forkIdentity = NextIdentity("fork", structuralPath);
+            var joinIdentity = NextIdentity("join", structuralPath.Add(forkIdentity.PathSegment));
+            List<ForkBranchFlow> branches = [];
+            HashSet<IMethodSymbol> observed = new(SymbolEqualityComparer.Default);
+            for (var index = 0; index < branchOperations.Length; index++)
+            {
+                var branchOperation = Strip(branchOperations[index]);
+                if (branchOperation is not IInvocationOperation branchInvocation
+                    || branchInvocation.Instance is not null
+                    || branchInvocation.Arguments.Length != 0
+                    || !localFunctions.TryGetValue(branchInvocation.TargetMethod, out var localFunction))
+                {
+                    return StatementFailure(
+                        branchOperations[index].Syntax,
+                        "each ForkJoin branch must invoke a parameterless local function declared in the Process method");
+                }
+                if (!observed.Add(branchInvocation.TargetMethod))
+                {
+                    return StatementFailure(
+                        branchOperations[index].Syntax,
+                        $"ForkJoin branch function '{branchInvocation.TargetMethod.Name}' is invoked more than once");
+                }
+                if (!localFunction.Modifiers.Any(static modifier => modifier.IsKind(SyntaxKind.AsyncKeyword))
+                    || branchInvocation.TargetMethod.ReturnType.ToDisplayString() != BranchTaskName
+                    || localFunction.Body is null
+                    || localFunction.ExpressionBody is not null)
+                {
+                    return StatementFailure(
+                        localFunction,
+                        $"ForkJoin branch '{branchInvocation.TargetMethod.Name}' must be an async, block-bodied, parameterless ProcessTask local function");
+                }
+
+                var branchIdentity = NextIdentity(
+                    "branch",
+                    structuralPath.Add(forkIdentity.PathSegment),
+                    branchInvocation.TargetMethod.Name);
+                if (!TryParse(
+                        localFunction.Body.Statements,
+                        structuralPath.Add(forkIdentity.PathSegment).Add(branchIdentity.PathSegment),
+                        out var branchBody))
+                {
+                    return false;
+                }
+                if (branchBody.Statements.IsEmpty)
+                {
+                    return StatementFailure(localFunction, "ForkJoin branches must contain at least one Process operation");
+                }
+
+                branches.Add(new(
+                    branchIdentity,
+                    branchInvocation.TargetMethod.Name,
+                    branchBody,
+                    SourceLocation(localFunction),
+                    localFunction));
+            }
+
+            flow = new(
+                forkIdentity,
+                joinIdentity,
+                [.. branches],
+                invocation,
+                SourceLocation(statement),
+                statement);
+            return true;
+        }
+
+        static ImmutableArray<IOperation> ParamsArguments(IInvocationOperation invocation, string parameterName)
+        {
+            var arguments = ImmutableArray.CreateBuilder<IOperation>();
+            foreach (var argument in invocation.Arguments)
+            {
+                if (!string.Equals(argument.Parameter?.Name, parameterName, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var value = Strip(argument.Value);
+                if (value is IArrayCreationOperation { Initializer: { } initializer })
+                {
+                    arguments.AddRange(initializer.ElementValues);
+                }
+                else
+                {
+                    arguments.Add(value);
+                }
+            }
+            return arguments.ToImmutable();
         }
 
         bool TryParseIf(
@@ -725,27 +868,43 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             var identities = new List<string>();
             foreach (var statement in body.Descendants())
             {
-                var explicitId = statement is AwaitFlow awaited
-                    ? Argument(awaited.Invocation, "id")
-                    : null;
-                var conventional =
-                    "global::Cohesive.Processes.Authoring.ProcessAuthoringIdentities.NodeFor(" +
-                    Path(statement.Identity.Path) + ")";
-                string value;
-                if (explicitId is null || explicitId.IsImplicit)
+                if (!TryDeclareIdentity(
+                        statement.Identity,
+                        statement switch
+                        {
+                            AwaitFlow awaited => Argument(awaited.Invocation, "id"),
+                            ForkJoinFlow forkJoin => Argument(forkJoin.Invocation, "id"),
+                            _ => null
+                        },
+                        statement.Syntax,
+                        identities))
                 {
-                    value = conventional;
+                    return false;
                 }
-                else
+
+                if (statement is ForkJoinFlow fork)
                 {
-                    if (!TryEmitExactArgument(explicitId, statement.Syntax, out var authoredId))
+                    if (!TryDeclareIdentity(
+                            fork.JoinIdentity,
+                            explicitId: null,
+                            statement.Syntax,
+                            identities))
                     {
                         return false;
                     }
 
-                    value = "((global::Cohesive.Execution.ExecutionNodeId?)(" + authoredId + ")) ?? " + conventional;
+                    foreach (var branch in fork.Branches)
+                    {
+                        if (!TryDeclareIdentity(
+                                branch.Identity,
+                                explicitId: null,
+                                branch.Syntax,
+                                identities))
+                        {
+                            return false;
+                        }
+                    }
                 }
-                identities.Add($"var {statement.Identity.Variable} = {value};");
             }
 
             var outputs = awaits.Select(awaited =>
@@ -771,6 +930,33 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 outputs,
                 [.. builderStatements],
                 entry);
+            return true;
+        }
+
+        bool TryDeclareIdentity(
+            FlowIdentity identity,
+            IArgumentOperation? explicitId,
+            SyntaxNode syntax,
+            ICollection<string> declarations)
+        {
+            var conventional =
+                "global::Cohesive.Processes.Authoring.ProcessAuthoringIdentities.NodeFor(" +
+                Path(identity.Path) + ")";
+            string value;
+            if (explicitId is null || explicitId.IsImplicit)
+            {
+                value = conventional;
+            }
+            else
+            {
+                if (!TryEmitExactArgument(explicitId, syntax, out var authoredId))
+                {
+                    return false;
+                }
+
+                value = "((global::Cohesive.Execution.ExecutionNodeId?)(" + authoredId + ")) ?? " + conventional;
+            }
+            declarations.Add($"var {identity.Variable} = {value};");
             return true;
         }
 
@@ -851,8 +1037,49 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
 
                         entry = matchEntry;
                         break;
+
+                    case ForkJoinFlow forkJoin:
+                        if (entry is null)
+                        {
+                            return StatementFailure(
+                                forkJoin.Syntax,
+                                "ForkJoin requires a following operation or return");
+                        }
+                        if (!TryEmitForkJoin(forkJoin, entry))
+                        {
+                            return false;
+                        }
+
+                        entry = forkJoin.Identity.Variable;
+                        break;
                 }
             }
+            return true;
+        }
+
+        bool TryEmitForkJoin(ForkJoinFlow forkJoin, string successor)
+        {
+            List<string> branches = [];
+            foreach (var branch in forkJoin.Branches)
+            {
+                if (!TryLowerBlock(branch.Body, forkJoin.JoinIdentity.Variable, out var branchEntry)
+                    || branchEntry is null)
+                {
+                    return StatementFailure(
+                        branch.Syntax,
+                        $"ForkJoin branch '{branch.Name}' requires a reachable Process operation");
+                }
+
+                var branchVariable = $"__fork_branch_{branches.Count.ToString(CultureInfo.InvariantCulture)}_{forkJoin.Identity.Variable.Substring("__node_".Length)}";
+                builderStatements.Add(
+                    $"var {branchVariable} = __builder.ForkBranch(id: {branch.Identity.Variable}, start: __builder.Edge(owner: {branch.Identity.Variable}, role: \"start\", target: {branchEntry}, {SourceArguments(branch.Source, method.Name)}), {SourceArguments(branch.Source, method.Name)});");
+                branches.Add(branchVariable);
+            }
+
+            builderStatements.Add(
+                $"__builder.Fork(id: {forkJoin.Identity.Variable}, branches: [{string.Join(", ", branches)}], join: {forkJoin.JoinIdentity.Variable}, {SourceArguments(forkJoin.Source, method.Name)});");
+            builderStatements.Add(
+                $"__builder.Join(id: {forkJoin.JoinIdentity.Variable}, fork: {forkJoin.Identity.Variable}, policy: new global::Cohesive.Processes.IR.ProcessJoinPolicy(mode: global::Cohesive.Processes.IR.ProcessJoinMode.All, requiredCount: 0, failure: global::Cohesive.Processes.IR.ProcessJoinFailurePolicy.FailFast, cancellation: global::Cohesive.Processes.IR.ProcessJoinCancellationPolicy.AwaitRemaining, completionOrder: global::Cohesive.Processes.IR.ProcessJoinCompletionOrder.Unobservable, tieBreak: global::Cohesive.Processes.IR.ProcessJoinTieBreak.BranchIdentity), next: __builder.Edge(owner: {forkJoin.JoinIdentity.Variable}, role: \"next\", target: {successor}, {SourceArguments(forkJoin.Source, method.Name)}), {SourceArguments(forkJoin.Source, method.Name)});");
             return true;
         }
 
@@ -1746,7 +1973,17 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             foreach (var statement in Statements)
             {
                 yield return statement;
-                if (statement is not IfFlow conditional)
+                if (statement is ForkJoinFlow forkJoin)
+                {
+                    foreach (var branch in forkJoin.Branches)
+                    {
+                        foreach (var nested in branch.Body.Descendants())
+                        {
+                            yield return nested;
+                        }
+                    }
+                }
+                else if (statement is not IfFlow conditional)
                 {
                     if (statement is not MatchFlow match)
                     {
@@ -1799,6 +2036,22 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         IOperation Value,
         ImmutableArray<MatchArm> Arms,
         FlowBlock? Fallback,
+        SourceReference Source,
+        SyntaxNode Syntax)
+        : FlowStatement(Identity, Source, Syntax);
+
+    sealed record ForkBranchFlow(
+        FlowIdentity Identity,
+        string Name,
+        FlowBlock Body,
+        SourceReference Source,
+        SyntaxNode Syntax);
+
+    sealed record ForkJoinFlow(
+        FlowIdentity Identity,
+        FlowIdentity JoinIdentity,
+        ImmutableArray<ForkBranchFlow> Branches,
+        IInvocationOperation Invocation,
         SourceReference Source,
         SyntaxNode Syntax)
         : FlowStatement(Identity, Source, Syntax);

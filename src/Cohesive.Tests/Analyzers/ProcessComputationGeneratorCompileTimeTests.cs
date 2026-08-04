@@ -152,6 +152,7 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
 
         var compilation = CreateCompilation(source);
         var runResult = RunGenerator(compilation, out var outputCompilation);
+        Assert.Empty(runResult.Results.SelectMany(static result => result.Diagnostics));
         var generated = Assert.Single(runResult.Results.SelectMany(static result => result.GeneratedSources))
             .SourceText
             .ToString();
@@ -164,6 +165,61 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
         Assert.Contains("pattern: \"ready\"", generated);
         Assert.Contains("pattern: \"blocked\"", generated);
         Assert.Contains("BranchCompleteness.Fallback", generated);
+    }
+
+    [Fact]
+    public void Generator_LowersLocalFunctionBranchesToCanonicalForkAndJoin()
+    {
+        var source = """
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class ParallelNotificationProcess
+                     {
+                         private static RequestContractReference SendEmail => null!;
+                         private static RequestContractReference RecordAudit => null!;
+                         private static RequestTerminalOutcomeId Completed => new("completed");
+
+                         private static async ProcessTask<string> Run(ProcessContext process, string input)
+                         {
+                             async ProcessTask Notify()
+                             {
+                                 var delivery = await process.Effect<string>(SendEmail, Completed, input);
+                             }
+
+                             async ProcessTask Audit()
+                             {
+                                 var receipt = await process.Effect<string>(RecordAudit, Completed, input);
+                             }
+
+                             await process.ForkJoin(new ExecutionNodeId("notifications"), Notify(), Audit());
+                             return input;
+                         }
+                     }
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out var outputCompilation);
+        Assert.Empty(runResult.Results.SelectMany(static result => result.Diagnostics));
+        var generated = Assert.Single(runResult.Results.SelectMany(static result => result.GeneratedSources))
+            .SourceText
+            .ToString();
+
+        Assert.DoesNotContain(
+            outputCompilation.GetDiagnostics(),
+            static diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+        Assert.Contains("__builder.Fork", generated);
+        Assert.Contains("__builder.Join", generated);
+        Assert.Equal(2, Count(generated, "__builder.Request(id:"));
+        Assert.Contains("ProcessJoinMode.All", generated);
+        Assert.Contains("ProcessJoinFailurePolicy.FailFast", generated);
+        Assert.Contains("new ExecutionNodeId(\"notifications\")", generated);
+        Assert.DoesNotContain("Notify()", generated);
+        Assert.DoesNotContain("Audit()", generated);
+        Assert.DoesNotContain("ProcessTaskMethodBuilder", generated);
     }
 
     static GeneratorDriverRunResult RunGenerator(
@@ -219,5 +275,17 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
             .Distinct()
             .Select(static assembly => MetadataReference.CreateFromFile(assembly.Location));
         return [.. assemblies];
+    }
+
+    static int Count(string value, string fragment)
+    {
+        var count = 0;
+        var offset = 0;
+        while ((offset = value.IndexOf(fragment, offset, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            offset += fragment.Length;
+        }
+        return count;
     }
 }

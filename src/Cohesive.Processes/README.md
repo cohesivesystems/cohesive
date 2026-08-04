@@ -155,6 +155,24 @@ public static partial class ApproveCustomerProcess
             new ApproveTransitionInput(input.Reason));
         var message = new WelcomeMessage(customer.Email, "Welcome " + approval.DisplayName);
         var delivery = await process.Effect<Delivery>(SendWelcome, WelcomeSent, message);
+
+        async ProcessTask Audit()
+        {
+            var receipt = await process.Effect<OperationReceipt>(
+                RecordApprovalAudit,
+                AuditRecorded,
+                new ApprovalAudit(customer.Id, approval.DisplayName));
+        }
+
+        async ProcessTask NotifyOwner()
+        {
+            var receipt = await process.Effect<OperationReceipt>(
+                SendOwnerNotification,
+                OwnerNotified,
+                new OwnerNotification(customer.Id, delivery.Id));
+        }
+
+        await process.ForkJoin(Audit(), NotifyOwner());
         return new(customer.Id, ApprovalDisposition.Approved, delivery.Id);
     }
 }
@@ -164,7 +182,10 @@ public static partial class ApproveCustomerProcess
 Process-native entity model. `Effect` lowers to an exact Request contract and selected terminal outcome. Generated
 factories accept `ProcessAuthoringMetadata`, honor an explicit entry when it agrees with the derived entry, and
 otherwise materialize deterministic identities from semantic structure. Inserting or refactoring a pure local does
-not renumber effectful nodes.
+not renumber effectful nodes. `ForkJoin` accepts two or more parameterless local `async ProcessTask` branch
+functions and lowers them to the canonical Fork/Join pair. Its convention is an all-branches, fail-fast Join that
+awaits remaining branches, does not expose completion order, and resolves ties by stable branch identity; the local
+functions and their compiler state machines are never retained.
 
 Use the explicit input/result contract overload—and explicit output contracts where needed—when top-level CLR
 generic types erase semantic optionality or nullable-reference occurrence. `CanonicalValue` is the deliberate escape

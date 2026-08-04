@@ -101,6 +101,34 @@ public sealed class ProcessContext
         ExecutionNodeId? id = null) =>
         throw SyntaxOnly();
 
+    /// <summary>
+    /// Declares parallel syntax-only branch computations converging through an all-branches Join.
+    /// </summary>
+    /// <remarks>
+    /// Each argument must invoke a parameterless local <c>async</c> function returning <see cref="ProcessTask"/>.
+    /// The generator lowers the functions to canonical Fork branches and an explicit deterministic Join policy;
+    /// neither the branch functions nor their compiler state machines are retained by the generated definition.
+    /// </remarks>
+    /// <param name="branches">Two or more syntax-only branch computations.</param>
+    /// <returns>A syntax-only task representing convergence at the reciprocal Join.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessTask ForkJoin(params ProcessTask[] branches) =>
+        throw SyntaxOnly();
+
+    /// <summary>
+    /// Declares identified parallel syntax-only branch computations converging through an all-branches Join.
+    /// </summary>
+    /// <remarks>
+    /// Each argument must invoke a parameterless local <c>async</c> function returning <see cref="ProcessTask"/>.
+    /// The supplied identity belongs to the Fork; the reciprocal Join and branch identities are derived from it.
+    /// </remarks>
+    /// <param name="id">Explicit canonical Fork identity.</param>
+    /// <param name="branches">Two or more syntax-only branch computations.</param>
+    /// <returns>A syntax-only task representing convergence at the reciprocal Join.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessTask ForkJoin(ExecutionNodeId id, params ProcessTask[] branches) =>
+        throw SyntaxOnly();
+
     static InvalidOperationException SyntaxOnly() => new(
         "Process computation-expression members are syntax-only and must be lowered by Cohesive.Analyzers.");
 }
@@ -109,6 +137,42 @@ public sealed class ProcessContext
 /// <typeparam name="TResult">CLR type of the Process terminal result.</typeparam>
 [AsyncMethodBuilder(typeof(ProcessTaskMethodBuilder<>))]
 public readonly struct ProcessTask<TResult>;
+
+/// <summary>
+/// Task-like branch computation used only to type-check local functions supplied to
+/// <see cref="ProcessContext.ForkJoin(ProcessTask[])"/>.
+/// </summary>
+/// <remarks>
+/// The source generator reads the local function bodies and emits canonical branch nodes. This value and its
+/// compiler-generated state machine are never retained or executed by the generated Process definition.
+/// </remarks>
+[AsyncMethodBuilder(typeof(ProcessTaskMethodBuilder))]
+public readonly struct ProcessTask : ICriticalNotifyCompletion
+{
+    /// <summary>Returns this syntax-only value as its awaiter.</summary>
+    /// <returns>This syntax-only task.</returns>
+    public ProcessTask GetAwaiter() => this;
+
+    /// <summary>Indicates that syntax-only branch computations never complete at runtime.</summary>
+    public bool IsCompleted => false;
+
+    /// <summary>Rejects runtime completion of a syntax-only branch computation.</summary>
+    /// <exception cref="InvalidOperationException">Always thrown.</exception>
+    public void GetResult() => throw SyntaxOnly();
+
+    /// <summary>Rejects runtime scheduling of a syntax-only branch continuation.</summary>
+    /// <param name="continuation">Runtime continuation that would have been scheduled.</param>
+    /// <exception cref="InvalidOperationException">Always thrown.</exception>
+    public void OnCompleted(Action continuation) => throw SyntaxOnly();
+
+    /// <summary>Rejects unsafe runtime scheduling of a syntax-only branch continuation.</summary>
+    /// <param name="continuation">Runtime continuation that would have been scheduled.</param>
+    /// <exception cref="InvalidOperationException">Always thrown.</exception>
+    public void UnsafeOnCompleted(Action continuation) => throw SyntaxOnly();
+
+    static InvalidOperationException SyntaxOnly() => new(
+        "Process computation branches are syntax-only and must be lowered by Cohesive.Analyzers.");
+}
 
 /// <summary>Awaitable placeholder used only while parsing a Process computation method.</summary>
 /// <typeparam name="TResult">CLR type of the semantic value bound by <c>await</c>.</typeparam>
@@ -212,4 +276,71 @@ public struct ProcessTaskMethodBuilder<TResult>
 
     static InvalidOperationException SyntaxOnly() => new(
         "Process computation methods are syntax-only and must be lowered by Cohesive.Analyzers.");
+}
+
+/// <summary>Async method builder used only to type-check a syntax-only Process branch function.</summary>
+public struct ProcessTaskMethodBuilder
+{
+    /// <summary>Creates a syntax-only Process branch task builder.</summary>
+    /// <returns>A default syntax-only builder.</returns>
+    public static ProcessTaskMethodBuilder Create() => default;
+
+    /// <summary>Gets the syntax-only Process branch task.</summary>
+    public ProcessTask Task => default;
+
+    /// <summary>Rejects runtime execution of the generated async state machine.</summary>
+    /// <typeparam name="TStateMachine">Compiler-generated async state-machine type.</typeparam>
+    /// <param name="stateMachine">State machine that must never run.</param>
+    /// <exception cref="InvalidOperationException">Always thrown.</exception>
+    public void Start<TStateMachine>(ref TStateMachine stateMachine)
+        where TStateMachine : IAsyncStateMachine =>
+        throw SyntaxOnly();
+
+    /// <summary>Rejects runtime failure propagation from a syntax-only state machine.</summary>
+    /// <param name="exception">Failure that would have completed the runtime task.</param>
+    /// <exception cref="InvalidOperationException">Always thrown.</exception>
+    public void SetException(Exception exception) =>
+        throw new InvalidOperationException(
+            "Process computation branches are syntax-only and must be lowered by Cohesive.Analyzers.",
+            exception);
+
+    /// <summary>Accepts compiler-required branch completion without retaining runtime state.</summary>
+    public void SetResult()
+    {
+    }
+
+    /// <summary>Rejects runtime scheduling through a safe awaiter.</summary>
+    /// <typeparam name="TAwaiter">Awaiter type.</typeparam>
+    /// <typeparam name="TStateMachine">Compiler-generated async state-machine type.</typeparam>
+    /// <param name="awaiter">Awaiter that must never execute.</param>
+    /// <param name="stateMachine">State machine that must never resume.</param>
+    /// <exception cref="InvalidOperationException">Always thrown.</exception>
+    public void AwaitOnCompleted<TAwaiter, TStateMachine>(
+        ref TAwaiter awaiter,
+        ref TStateMachine stateMachine)
+        where TAwaiter : INotifyCompletion
+        where TStateMachine : IAsyncStateMachine =>
+        throw SyntaxOnly();
+
+    /// <summary>Rejects runtime scheduling through an unsafe awaiter.</summary>
+    /// <typeparam name="TAwaiter">Awaiter type.</typeparam>
+    /// <typeparam name="TStateMachine">Compiler-generated async state-machine type.</typeparam>
+    /// <param name="awaiter">Awaiter that must never execute.</param>
+    /// <param name="stateMachine">State machine that must never resume.</param>
+    /// <exception cref="InvalidOperationException">Always thrown.</exception>
+    public void AwaitUnsafeOnCompleted<TAwaiter, TStateMachine>(
+        ref TAwaiter awaiter,
+        ref TStateMachine stateMachine)
+        where TAwaiter : ICriticalNotifyCompletion
+        where TStateMachine : IAsyncStateMachine =>
+        throw SyntaxOnly();
+
+    /// <summary>Accepts the compiler-required state-machine hook without retaining runtime state.</summary>
+    /// <param name="stateMachine">Compiler-generated state machine; ignored.</param>
+    public void SetStateMachine(IAsyncStateMachine stateMachine)
+    {
+    }
+
+    static InvalidOperationException SyntaxOnly() => new(
+        "Process computation branches are syntax-only and must be lowered by Cohesive.Analyzers.");
 }
