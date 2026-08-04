@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using Cohesive.Execution;
 using Cohesive.Model.Authoring;
@@ -83,9 +84,72 @@ public sealed record ProcessAuthoringMetadata
     public string? Description { get; }
 }
 
-/// <summary>Deterministic identities for structural constructs mechanically owned by an authored Process node.</summary>
+/// <summary>Versioned deterministic identities for structural constructs produced by Process authoring frontends.</summary>
+/// <remarks>
+/// These conventions materialize explicit canonical identities before Process IR is persisted. Structural paths,
+/// semantic roles, and ordinals are producer inputs to the convention; source location, builder call order, and
+/// runtime state are deliberately excluded. Frontends may always supply explicit identities instead.
+/// </remarks>
 public static class ProcessAuthoringIdentities
 {
+    /// <summary>Stable authority and version of the deterministic Process identity convention.</summary>
+    public const string ConventionAuthority = "cohesive.processes.authoring.identities/v1";
+
+    /// <summary>Derives a node identity from its stable structural path in an authoring model.</summary>
+    /// <param name="structuralPath">
+    /// Producer-neutral structural path whose segments identify the node independently of source location and
+    /// construction call order.
+    /// </param>
+    /// <returns>An explicit canonical node identity containing the convention version and escaped structural path.</returns>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="structuralPath"/> is a default, uninitialized path.
+    /// </exception>
+    public static ExecutionNodeId NodeFor(ExecutionSemanticPath structuralPath) =>
+        new($"{ConventionAuthority}{RequirePath(structuralPath, nameof(structuralPath))}/node");
+
+    /// <summary>Derives a node identity from an owning node and semantic role.</summary>
+    /// <param name="owner">Stable owning node identity.</param>
+    /// <param name="role">Stable semantic role local to <paramref name="owner"/>.</param>
+    /// <returns>A node identity independent of source location, call order, and runtime state.</returns>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="owner"/> is default, or <paramref name="role"/> is blank or contains a path separator.
+    /// </exception>
+    public static ExecutionNodeId NodeFor(ExecutionNodeId owner, string role) =>
+        new($"{RequireOwner(owner)}/{RequireRole(role)}/node");
+
+    /// <summary>Derives an ordinal node identity from an owning node and semantic role.</summary>
+    /// <param name="owner">Stable owning node identity.</param>
+    /// <param name="role">Stable semantic role local to <paramref name="owner"/>.</param>
+    /// <param name="ordinal">Zero-based ordinal within the owned semantic role.</param>
+    /// <returns>An ordinal node identity independent of source location, call order, culture, and runtime state.</returns>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="owner"/> is default, or <paramref name="role"/> is blank or contains a path separator.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="ordinal"/> is negative.</exception>
+    public static ExecutionNodeId NodeFor(ExecutionNodeId owner, string role, int ordinal)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(ordinal);
+        return new(
+            $"{RequireOwner(owner)}/{RequireRole(role)}/{ordinal.ToString(CultureInfo.InvariantCulture)}/node");
+    }
+
+    /// <summary>Creates portable evidence that a structural path supplied an identity by convention.</summary>
+    /// <param name="structuralPath">Stable structural path consumed by the identity convention.</param>
+    /// <param name="semanticPath">Path of the corresponding construct in canonical Process IR.</param>
+    /// <returns>
+    /// Non-semantic source provenance carrying the convention authority, structural input, and canonical IR path.
+    /// </returns>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="structuralPath"/> or <paramref name="semanticPath"/> is a default, uninitialized path.
+    /// </exception>
+    public static ExecutionSourceProvenance ConventionSourceFor(
+        ExecutionSemanticPath structuralPath,
+        ExecutionSemanticPath semanticPath) =>
+        new(
+            $"{ConventionAuthority}#{RequirePath(structuralPath, nameof(structuralPath))}",
+            RequirePathValue(semanticPath, nameof(semanticPath)),
+            "Identity supplied by the deterministic Process authoring convention.");
+
     /// <summary>Derives a control-flow edge identity from an owning node and semantic role.</summary>
     /// <param name="owner">Stable owning node identity.</param>
     /// <param name="role">Stable semantic role local to <paramref name="owner"/>.</param>
@@ -133,6 +197,19 @@ public static class ProcessAuthoringIdentities
                 nameof(role));
         }
         return role;
+    }
+
+    static string RequirePath(ExecutionSemanticPath path, string parameterName)
+    {
+        if (path.Segments.IsDefaultOrEmpty)
+            throw new ArgumentException("A derived Process identity requires a structural path.", parameterName);
+        return path.ToString();
+    }
+
+    static ExecutionSemanticPath RequirePathValue(ExecutionSemanticPath path, string parameterName)
+    {
+        RequirePath(path, parameterName);
+        return path;
     }
 }
 
