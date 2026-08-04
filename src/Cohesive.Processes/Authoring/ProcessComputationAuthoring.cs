@@ -310,6 +310,34 @@ public sealed class ProcessContext
         ExecutionNodeId? id = null) =>
         throw SyntaxOnly();
 
+    /// <summary>Declares one finite recurrence whose occurrences are separated by durable activation cuts.</summary>
+    /// <remarks>
+    /// <paramref name="occurrence"/> must invoke one parameterless local <c>async ProcessTask&lt;TResult&gt;</c>
+    /// function. The inline termination and progress projections are fused into the canonical recurrence node;
+    /// neither the local function nor the projection delegates survive in persisted IR. A deliberate delay may be
+    /// authored with <see cref="Timer(DateTimeOffset, ExecutionNodeId?)"/> inside the occurrence body.
+    /// </remarks>
+    /// <typeparam name="TResult">Portable result produced by each occurrence and retained after completion.</typeparam>
+    /// <typeparam name="TProgress">Portable progress-evidence type compared across occurrences.</typeparam>
+    /// <param name="occurrence">Invocation of one typed local Process occurrence body.</param>
+    /// <param name="continueWhen">Inline pure projection returning <see langword="true"/> when another occurrence is required.</param>
+    /// <param name="progress">Inline pure projection producing deterministic progress evidence.</param>
+    /// <param name="policy">Explicit total-occurrence and unchanged-progress limits.</param>
+    /// <param name="exhausted">Named branch selected when the total occurrence limit is reached.</param>
+    /// <param name="stalled">Named branch selected when progress remains unchanged beyond its limit.</param>
+    /// <param name="id">Optional explicit canonical recurrence identity.</param>
+    /// <returns>A syntax-only awaitable yielding the final completed occurrence result.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessAwaitable<TResult> RepeatAcrossActivation<TResult, TProgress>(
+        ProcessTask<TResult> occurrence,
+        ProcessProjection<TResult, bool> continueWhen,
+        ProcessProjection<TResult, TProgress> progress,
+        ProcessRecurrencePolicy policy,
+        ProcessBranch exhausted,
+        ProcessBranch stalled,
+        ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
     /// <summary>Annotates one typed Fork branch with a canonical capacity-domain assignment.</summary>
     /// <typeparam name="TResult">CLR type projected from the branch result after an all-branches Join.</typeparam>
     /// <param name="branch">Syntax-only local branch computation.</param>
@@ -748,7 +776,7 @@ public static class ProcessCapacity
         new(identity, maximumParallelism);
 }
 
-/// <summary>Task-like result used only to type-check a generated Process method or typed local Fork branch.</summary>
+/// <summary>Task-like result used only to type-check a generated Process method, typed branch, or recurrence occurrence.</summary>
 /// <typeparam name="TResult">CLR type of the Process terminal result or pure typed branch result.</typeparam>
 [AsyncMethodBuilder(typeof(ProcessTaskMethodBuilder<>))]
 public readonly struct ProcessTask<TResult>;

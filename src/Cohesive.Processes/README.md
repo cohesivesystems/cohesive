@@ -257,6 +257,52 @@ await process.ForEachPartition<TenantPlacement, RebuildInput>(
     failed: OnPartitionFailure);
 ```
 
+Finite recurrence is authored as one typed local occurrence plus pure termination and progress projections. Every
+admitted repeat crosses the canonical durable activation cut, and both total occurrences and unchanged progress are
+explicitly bounded. The final completed occurrence result remains available to ordinary sequential C# flow:
+
+```csharp
+async ProcessTask<TrainingStatus> PollTraining()
+{
+    await process.Timer(nextPollAt);
+    var status = await process.Query<TrainingStatus>(TrainingStatusQuery, trainingId);
+    return status;
+}
+
+var status = await process.RepeatAcrossActivation(
+    occurrence: PollTraining(),
+    continueWhen: observation => observation.State == "running",
+    progress: observation => observation.Version,
+    policy: new ProcessRecurrencePolicy(
+        maximumOccurrences: 100,
+        maximumUnchangedProgressOccurrences: 5),
+    exhausted: OnPollingExhausted,
+    stalled: OnTrainingStalled);
+```
+
+Compensation and reconciliation deliberately reuse exact child Process invocation rather than introducing a second
+recovery protocol. State the purpose on the existing durable child operation:
+
+```csharp
+await process.InvokeProcess(
+    process: UndoReservation,
+    contract: StartUndoReservation,
+    outcomeMapping: UndoOutcomes,
+    input: reservation,
+    purpose: ProcessChildPurpose.Compensation,
+    cancellation: ProcessChildCancellationPolicy.Propagate,
+    outcomes:
+    [
+        process.Outcome<UndoReceipt>(UndoOutcomes.Completed, OnUndone),
+        process.Outcome<UndoFailure>(UndoOutcomes.Failed, OnUndoFailed),
+        process.Outcome<UndoFailure>(UndoOutcomes.Cancelled, OnUndoCancelled),
+        process.Outcome<UndoFailure>(UndoOutcomes.Terminated, OnUndoTerminated)
+    ]);
+```
+
+Use `ProcessChildPurpose.Reconciliation` for recovery work with the same protocol. Host `while`, `for`, `foreach`,
+recursion, mutable loop state, and runtime-derived recurrence policy are rejected by the generator.
+
 Use the explicit input/result contract overload—and explicit output contracts where needed—when top-level CLR
 generic types erase semantic optionality or nullable-reference occurrence. `CanonicalValue` is the deliberate escape
 hatch for an already-portable expression with an explicitly attested contract; canonical validation remains the
