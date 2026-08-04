@@ -584,6 +584,7 @@ public sealed class ProcessComputationAuthoringTests
 
         var json = Encoding.UTF8.GetString(ExecutionDefinitionJsonSerializer.GetCanonicalBytes(generated.Document));
         Assert.DoesNotContain("ProcessTask", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("ProcessProjection", json, StringComparison.Ordinal);
         Assert.DoesNotContain("delegate", json, StringComparison.OrdinalIgnoreCase);
 
         var context = ChildProcessContext(GeneratedChildInvocationProcess.Child);
@@ -594,6 +595,79 @@ public sealed class ProcessComputationAuthoringTests
         AssertEquivalentChildRecovery(
             Assert.IsType<CompiledProcessPlan>(generatedCompilation.Plan),
             Assert.IsType<CompiledProcessPlan>(lowLevelCompilation.Plan));
+    }
+
+    [Fact]
+    public void CompensationComputation_PreservesTheCanonicalChildPurposeAndDurabilityProtocol()
+    {
+        var generated = GeneratedCompensationProcess.Define(CompensationMetadata());
+        var invocation = Assert.Single(generated.Definition.Nodes.OfType<InvokeProcessProcessNode>());
+        var returned = Assert.Single(generated.Definition.Nodes.OfType<ReturnProcessNode>());
+        var lowLevel = ProcessAuthoring.Create<string, string>(
+            CompensationMetadata().WithEntry(invocation.Id),
+            process =>
+            {
+                var outcomes = ImmutableArray.CreateBuilder<ProcessRequestOutcomeBranch>(invocation.Outcomes.Length);
+                foreach (var outcome in invocation.Outcomes)
+                {
+                    var output = process.Output<string>(
+                        outcome.Continuation.Output!.Binding,
+                        outcome.Continuation.Output.Contract);
+                    outcomes.Add(process.RequestOutcome(
+                        outcome.Id,
+                        outcome.Outcome,
+                        process.Continuation(
+                            process.Edge(outcome.Id, "next", returned.Id),
+                            output)));
+                }
+
+                process.InvokeProcess(
+                    invocation.Id,
+                    GeneratedCompensationProcess.Child,
+                    GeneratedChildInvocationProcess.Request,
+                    GeneratedChildInvocationProcess.Mapping,
+                    process.Input.Value,
+                    ProcessChildPurpose.Compensation,
+                    ProcessChildCancellationPolicy.Propagate,
+                    outcomes.MoveToImmutable());
+                process.Return(returned.Id, process.Input.Value);
+            });
+
+        Assert.True(generated.IsValid, Format(generated.Validation));
+        Assert.True(lowLevel.IsValid, Format(lowLevel.Validation));
+        Assert.Equal(lowLevel.Definition, generated.Definition);
+        Assert.Equal(
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(lowLevel.Document),
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(generated.Document));
+        Assert.Equal(ProcessChildPurpose.Compensation, invocation.Purpose);
+
+        var compilation = generated.Compile(ChildProcessContext(GeneratedCompensationProcess.Child));
+        Assert.True(compilation.IsSuccessful, Format(compilation.Validation));
+        var plan = Assert.IsType<CompiledProcessPlan>(compilation.Plan);
+        Assert.Contains(
+            plan.EffectSummary.Effects,
+            effect => effect.Node == invocation.Id && effect.Kind == ProcessEffectKind.Compensation);
+
+        var continuation = new ProcessContinuationIdentity(
+            new("process-instance/compensation"),
+            new("attempt/1"));
+        var input = PortableValue.Concrete(
+            plan.Definition.Input,
+            ObservationValue.FromString("reservation/42"));
+        var decision = ProcessReferenceInterpreter.Activate(
+            plan,
+            ProcessReferenceInterpreter.Create(plan, continuation, input),
+            Activation(
+                plan,
+                continuation,
+                id: "activation/compensation/start",
+                cause: ProcessActivationCause.Start,
+                observedAtUtc: new(2026, 8, 4, 22, 5, 0, TimeSpan.Zero)),
+            EchoRelationHost.Instance);
+
+        Assert.Equal(ProcessActivationDisposition.DurableCut, decision.Disposition);
+        Assert.Equal(ProcessChildPurpose.Compensation, Assert.Single(decision.State.Children).Purpose);
+        Assert.IsType<RequestEnvelope>(Assert.Single(decision.Emissions));
     }
 
     [Fact]
@@ -661,6 +735,72 @@ public sealed class ProcessComputationAuthoringTests
         AssertEquivalentPartitionRecovery(
             Assert.IsType<CompiledProcessPlan>(generatedCompilation.Plan),
             Assert.IsType<CompiledProcessPlan>(lowLevelCompilation.Plan));
+    }
+
+    [Fact]
+    public void RecurrenceComputation_IsByteEquivalentAndRecoversAtTheDurableBoundary()
+    {
+        var generated = GeneratedRecurrenceProcess.Define(RecurrenceMetadata());
+        var recurrence = Assert.Single(generated.Definition.Nodes.OfType<RepeatAcrossActivationProcessNode>());
+        var query = Assert.Single(generated.Definition.Nodes.OfType<EvaluateRelationProcessNode>());
+        var returned = Assert.Single(generated.Definition.Nodes.OfType<ReturnProcessNode>());
+        var lowLevel = ProcessAuthoring.Create<string, string>(
+            RecurrenceMetadata().WithEntry(query.Id),
+            process =>
+            {
+                var observation = process.Output<string>(
+                    query.Continuation.Output!.Binding,
+                    query.Continuation.Output.Contract);
+                var continueWhen = process.CanonicalValue<bool>(
+                    recurrence.ContinueWhen,
+                    new(new ScalarTypeRef(ScalarTypeKind.Bool)));
+
+                process.EvaluateRelation(
+                    query.Id,
+                    GeneratedRecurrenceProcess.Poll,
+                    process.Input.Value,
+                    process.Continuation(
+                        process.Edge(query.Id, "next", recurrence.Id),
+                        observation));
+                process.RepeatAcrossActivation<string>(
+                    recurrence.Id,
+                    continueWhen,
+                    observation.Value,
+                    new ProcessRecurrencePolicy(
+                        maximumOccurrences: 3,
+                        maximumUnchangedProgressOccurrences: 1),
+                    process.Edge(recurrence.Id, "repeat", query.Id),
+                    process.Edge(recurrence.Id, "completed", returned.Id),
+                    process.Edge(recurrence.Id, "exhausted", returned.Id),
+                    process.Edge(recurrence.Id, "stalled", returned.Id));
+                process.Return(returned.Id, observation.Value);
+            });
+
+        Assert.True(generated.IsValid, Format(generated.Validation));
+        Assert.True(lowLevel.IsValid, Format(lowLevel.Validation));
+        Assert.Equal(lowLevel.Definition, generated.Definition);
+        Assert.Equal(
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(lowLevel.Document),
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(generated.Document));
+        Assert.Equal(new(3, 1), recurrence.Policy);
+        Assert.Equal(query.Id, recurrence.Repeat.Target);
+        Assert.Equal(returned.Id, recurrence.Completed.Target);
+        Assert.Equal(returned.Id, recurrence.Exhausted.Target);
+        Assert.Equal(returned.Id, recurrence.Stalled.Target);
+
+        var context = RelationContext(GeneratedRecurrenceProcess.Poll);
+        var generatedCompilation = generated.Compile(context);
+        var lowLevelCompilation = lowLevel.Compile(context);
+        Assert.True(generatedCompilation.IsSuccessful, Format(generatedCompilation.Validation));
+        Assert.True(lowLevelCompilation.IsSuccessful, Format(lowLevelCompilation.Validation));
+        AssertEquivalentRecurrenceRecovery(
+            Assert.IsType<CompiledProcessPlan>(generatedCompilation.Plan),
+            Assert.IsType<CompiledProcessPlan>(lowLevelCompilation.Plan));
+
+        var json = Encoding.UTF8.GetString(ExecutionDefinitionJsonSerializer.GetCanonicalBytes(generated.Document));
+        Assert.DoesNotContain("ProcessTask", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("ProcessProjection", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("delegate", json, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -780,6 +920,15 @@ public sealed class ProcessComputationAuthoringTests
             new("tests/ari-229/child-invocation"),
             DocumentOrigin.User));
 
+    static ProcessAuthoringMetadata CompensationMetadata() => new(
+        new("process/generated-compensation"),
+        new("1"),
+        ProcessRecoveryPolicy.ContinueAttempt,
+        new(
+            new("tests.process-computation", "1"),
+            new("tests/ari-230/compensation"),
+            DocumentOrigin.User));
+
     static ProcessAuthoringMetadata PartitionMetadata() => new(
         new("process/generated-partition-work"),
         new("1"),
@@ -788,6 +937,29 @@ public sealed class ProcessComputationAuthoringTests
             new("tests.process-computation", "1"),
             new("tests/ari-229/partition-work"),
             DocumentOrigin.User));
+
+    static ProcessAuthoringMetadata RecurrenceMetadata() => new(
+        new("process/generated-recurrence"),
+        new("1"),
+        ProcessRecoveryPolicy.ContinueAttempt,
+        new(
+            new("tests.process-computation", "1"),
+            new("tests/ari-230/recurrence"),
+            DocumentOrigin.User));
+
+    static ProcessDefinitionValidationContext RelationContext(ExecutionDefinitionReference relation)
+    {
+        var text = new ValueContract(new ScalarTypeRef(ScalarTypeKind.String));
+        return new(
+            definitions:
+            [
+                new(
+                    relation,
+                    ProcessDefinitionLinkKind.RelationQuery,
+                    text,
+                    text)
+            ]);
+    }
 
     static ProcessDefinitionValidationContext ChildProcessContext(ExecutionDefinitionReference child)
     {
@@ -1205,6 +1377,90 @@ public sealed class ProcessComputationAuthoringTests
         Assert.Equal(json, JsonSerializer.Serialize(restored, options));
     }
 
+    static void AssertEquivalentRecurrenceRecovery(
+        CompiledProcessPlan generated,
+        CompiledProcessPlan lowLevel)
+    {
+        var continuation = new ProcessContinuationIdentity(
+            new("process-instance/recurrence"),
+            new("attempt/1"));
+        var input = PortableValue.Concrete(
+            generated.Definition.Input,
+            ObservationValue.FromString("poll/42"));
+        var generatedState = ProcessReferenceInterpreter.Create(generated, continuation, input);
+        var lowLevelState = ProcessReferenceInterpreter.Create(lowLevel, continuation, input);
+        var generatedHost = new SequenceRelationHost("pending/1", "approved");
+        var lowLevelHost = new SequenceRelationHost("pending/1", "approved");
+        var options = InteractionEnvelopeJsonSerializer.CreateOptions();
+
+        var firstActivation = Activation(
+            generated,
+            continuation,
+            id: "activation/recurrence/1",
+            cause: ProcessActivationCause.Start,
+            observedAtUtc: new(2026, 8, 4, 22, 0, 0, TimeSpan.Zero));
+        var generatedFirst = ProcessReferenceInterpreter.Activate(
+            generated,
+            generatedState,
+            firstActivation,
+            generatedHost);
+        var lowLevelFirst = ProcessReferenceInterpreter.Activate(
+            lowLevel,
+            lowLevelState,
+            firstActivation,
+            lowLevelHost);
+
+        Assert.Equal(ProcessActivationDisposition.DurableCut, generatedFirst.Disposition);
+        Assert.Equal(
+            JsonSerializer.Serialize(lowLevelFirst.State, options),
+            JsonSerializer.Serialize(generatedFirst.State, options));
+        var firstRecurrence = Assert.Single(generatedFirst.State.Recurrences);
+        Assert.True(firstRecurrence.Active);
+        Assert.Equal(1, firstRecurrence.RepeatCount);
+        Assert.Equal(
+            ObservationValue.FromString("pending/1"),
+            firstRecurrence.LastProgress?.Value);
+
+        var generatedJson = JsonSerializer.Serialize(generatedFirst.State, options);
+        var lowLevelJson = JsonSerializer.Serialize(lowLevelFirst.State, options);
+        generatedState = Assert.IsType<ProcessContinuationState>(
+            JsonSerializer.Deserialize<ProcessContinuationState>(generatedJson, options));
+        lowLevelState = Assert.IsType<ProcessContinuationState>(
+            JsonSerializer.Deserialize<ProcessContinuationState>(lowLevelJson, options));
+        Assert.True(ProcessContinuationValidator.Validate(generated, generatedState).IsValid);
+        Assert.True(ProcessContinuationValidator.Validate(lowLevel, lowLevelState).IsValid);
+
+        var secondActivation = Activation(
+            generated,
+            continuation,
+            id: "activation/recurrence/2",
+            cause: ProcessActivationCause.Continue,
+            observedAtUtc: new(2026, 8, 4, 22, 1, 0, TimeSpan.Zero));
+        var generatedCompleted = ProcessReferenceInterpreter.Activate(
+            generated,
+            generatedState,
+            secondActivation,
+            generatedHost);
+        var lowLevelCompleted = ProcessReferenceInterpreter.Activate(
+            lowLevel,
+            lowLevelState,
+            secondActivation,
+            lowLevelHost);
+
+        Assert.Equal(ProcessActivationDisposition.Completed, generatedCompleted.Disposition);
+        Assert.Equal(
+            JsonSerializer.Serialize(lowLevelCompleted.State, options),
+            JsonSerializer.Serialize(generatedCompleted.State, options));
+        Assert.Equal(
+            PortableValue.Concrete(
+                generated.Definition.Result,
+                ObservationValue.FromString("approved")),
+            generatedCompleted.State.Terminal.Detail?.Value);
+        Assert.False(Assert.Single(generatedCompleted.State.Recurrences).Active);
+        Assert.Equal(2, generatedHost.Evaluations.Count);
+        Assert.Equal(2, lowLevelHost.Evaluations.Count);
+    }
+
     static ProcessActivation Activation(
         CompiledProcessPlan plan,
         ProcessContinuationIdentity continuation,
@@ -1231,6 +1487,29 @@ public sealed class ProcessComputationAuthoringTests
 
         public ProcessOperationResult EvaluateRelation(ProcessRelationEvaluation evaluation) =>
             ProcessOperationResult.Completed(evaluation.Input);
+
+        public ProcessSignalTargetResult ResolveSignalTarget(ProcessSignalTargetResolution resolution) =>
+            throw new InvalidOperationException($"Unexpected Signal resolution at '{resolution.Node.Value}'.");
+    }
+
+    sealed class SequenceRelationHost(params string[] observations) : IProcessReferenceHost
+    {
+        int next;
+
+        internal List<ProcessRelationEvaluation> Evaluations { get; } = [];
+
+        public ProcessOperationResult InvokeTransition(ProcessTransitionInvocation invocation) =>
+            throw new InvalidOperationException($"Unexpected Transition invocation at '{invocation.Node.Value}'.");
+
+        public ProcessOperationResult EvaluateRelation(ProcessRelationEvaluation evaluation)
+        {
+            Evaluations.Add(evaluation);
+            var index = Math.Min(next++, observations.Length - 1);
+            return ProcessOperationResult.Completed(
+                PortableValue.Concrete(
+                    evaluation.Input.Contract,
+                    ObservationValue.FromString(observations[index])));
+        }
 
         public ProcessSignalTargetResult ResolveSignalTarget(ProcessSignalTargetResolution resolution) =>
             throw new InvalidOperationException($"Unexpected Signal resolution at '{resolution.Node.Value}'.");
@@ -1623,6 +1902,44 @@ public static partial class GeneratedChildInvocationProcess
             new string(fingerprint, 64)));
 }
 
+/// <summary>Representative generated child Process invocation authored as compensation work.</summary>
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class GeneratedCompensationProcess
+{
+    /// <summary>Exact compensating child Process definition.</summary>
+    public static ExecutionDefinitionReference Child { get; } = new(
+        new("process/undo-reservation"),
+        new("1"),
+        new(
+            ExecutionDefinitionFingerprinter.Algorithm,
+            ExecutionDefinitionFingerprinter.Canonicalization,
+            new string('d', 64)));
+
+    static async ProcessTask<string> Run(ProcessContext process, string input)
+    {
+        async ProcessTask Completed(string result) { }
+        async ProcessTask Failed(string failure) { }
+        async ProcessTask Cancelled(string cancellation) { }
+        async ProcessTask Terminated(string termination) { }
+
+        await process.InvokeProcess(
+            process: Child,
+            contract: GeneratedChildInvocationProcess.Request,
+            outcomeMapping: GeneratedChildInvocationProcess.Mapping,
+            input: input,
+            purpose: ProcessChildPurpose.Compensation,
+            cancellation: ProcessChildCancellationPolicy.Propagate,
+            outcomes:
+            [
+                process.Outcome<string>(GeneratedChildInvocationProcess.Mapping.Completed, Completed),
+                process.Outcome<string>(GeneratedChildInvocationProcess.Mapping.Failed, Failed),
+                process.Outcome<string>(GeneratedChildInvocationProcess.Mapping.Cancelled, Cancelled),
+                process.Outcome<string>(GeneratedChildInvocationProcess.Mapping.Terminated, Terminated)
+            ]);
+        return input;
+    }
+}
+
 /// <summary>Representative generated finite bounded partition work.</summary>
 [GenerateProcessDefinition(nameof(Run))]
 public static partial class GeneratedPartitionProcess
@@ -1673,6 +1990,43 @@ public sealed record PartitionItem(string Id, string Target);
 /// <param name="Partitions">Finite partition collection.</param>
 /// <param name="Value">Value fused into every child input and returned after successful settlement.</param>
 public sealed record PartitionProcessInput(ImmutableArray<PartitionItem> Partitions, string Value);
+
+/// <summary>Representative generated finite recurrence across durable activations.</summary>
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class GeneratedRecurrenceProcess
+{
+    /// <summary>Exact Relation used by each polling occurrence.</summary>
+    public static ExecutionDefinitionReference Poll { get; } = new(
+        new("relation/poll-status"),
+        new("1"),
+        new(
+            ExecutionDefinitionFingerprinter.Algorithm,
+            ExecutionDefinitionFingerprinter.Canonicalization,
+            new string('c', 64)));
+
+    static async ProcessTask<string> Run(ProcessContext process, string input)
+    {
+        async ProcessTask<string> PollOnce()
+        {
+            var observation = await process.Query<string>(Poll, input);
+            return observation;
+        }
+
+        async ProcessTask Exhausted() { }
+        async ProcessTask Stalled() { }
+
+        var observation = await process.RepeatAcrossActivation(
+            occurrence: PollOnce(),
+            continueWhen: status => status != "approved",
+            progress: status => status,
+            policy: new ProcessRecurrencePolicy(
+                maximumOccurrences: 3,
+                maximumUnchangedProgressOccurrences: 1),
+            exhausted: Exhausted,
+            stalled: Stalled);
+        return observation;
+    }
+}
 
 /// <summary>Representative human-facing Process covering sequential, branching, and parallel authoring.</summary>
 [GenerateProcessDefinition(nameof(Run))]

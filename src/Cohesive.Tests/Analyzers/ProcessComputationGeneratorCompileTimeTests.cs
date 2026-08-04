@@ -14,6 +14,7 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
     public void Generator_LowersNaturalAwaitFlowAndFusesPureLocals()
     {
         var source = """
+                     using System;
                      using Cohesive.Execution;
                      using Cohesive.Processes.Authoring;
 
@@ -977,6 +978,144 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
     }
 
     [Fact]
+    public void Generator_LowersBoundedRecurrenceAndCompensationWithoutHostLoopState()
+    {
+        var source = """
+                     using System;
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+                     using Cohesive.Processes.IR;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class PollingProcess
+                     {
+                         private static RequestContractReference PollRequest => null!;
+                         private static RequestTerminalOutcomeId Completed => new("completed");
+                         private static ExecutionDefinitionReference Compensation => null!;
+                         private static RequestContractReference CompensationRequest => null!;
+                         private static ProcessChildOutcomeMapping Mapping => new(
+                             new("completed"), new("failed"), new("cancelled"), new("terminated"));
+
+                         private static async ProcessTask<string> Run(ProcessContext process, Input input)
+                         {
+                             async ProcessTask<PollResult> Poll()
+                             {
+                                 await process.Timer(input.DueAt);
+                                 var observation = await process.Effect<string>(PollRequest, Completed, input.Value);
+                                 return new(observation, observation);
+                             }
+                             async ProcessTask Compensated(string value) { }
+                             async ProcessTask CompensationFailed(string value) { }
+                             async ProcessTask CompensationCancelled(string value) { }
+                             async ProcessTask CompensationTerminated(string value) { }
+                             async ProcessTask Exhausted()
+                             {
+                                 await process.InvokeProcess(
+                                     process: Compensation,
+                                     contract: CompensationRequest,
+                                     outcomeMapping: Mapping,
+                                     input: input.Value,
+                                     purpose: ProcessChildPurpose.Compensation,
+                                     cancellation: ProcessChildCancellationPolicy.Propagate,
+                                     outcomes:
+                                     [
+                                         process.Outcome<string>(Mapping.Completed, Compensated),
+                                         process.Outcome<string>(Mapping.Failed, CompensationFailed),
+                                         process.Outcome<string>(Mapping.Cancelled, CompensationCancelled),
+                                         process.Outcome<string>(Mapping.Terminated, CompensationTerminated)
+                                     ]);
+                             }
+                             async ProcessTask Stalled() { }
+
+                             var final = await process.RepeatAcrossActivation(
+                                 occurrence: Poll(),
+                                 continueWhen: observation => observation.Status == "pending",
+                                 progress: observation => observation.Version,
+                                 policy: new ProcessRecurrencePolicy(
+                                     maximumOccurrences: 5,
+                                     maximumUnchangedProgressOccurrences: 2),
+                                 exhausted: Exhausted,
+                                 stalled: Stalled);
+                             return final.Status;
+                         }
+                     }
+
+                     public sealed record Input(string Value, DateTimeOffset DueAt);
+                     public sealed record PollResult(string Status, string Version);
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out var outputCompilation);
+        var generated = Assert.Single(runResult.Results.SelectMany(static result => result.GeneratedSources))
+            .SourceText
+            .ToString();
+
+        Assert.Empty(runResult.Results.SelectMany(static result => result.Diagnostics));
+        Assert.DoesNotContain(
+            outputCompilation.GetDiagnostics(),
+            static diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+        Assert.Contains("__builder.RepeatAcrossActivation", generated);
+        Assert.Contains("__builder.Timer", generated);
+        Assert.Contains("__builder.InvokeProcess", generated);
+        Assert.Contains("ProcessChildPurpose.Compensation", generated);
+        Assert.Contains("maximumOccurrences: 5", generated);
+        Assert.Contains("role: \"repeat\"", generated);
+        Assert.DoesNotContain("System.Func", generated);
+        Assert.DoesNotContain("ProcessProjection", generated);
+    }
+
+    [Fact]
+    public void Generator_RejectsRuntimeDerivedRecurrencePolicyAtItsSource()
+    {
+        var source = """
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+                     using Cohesive.Processes.IR;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class PollingProcess
+                     {
+                         private static RequestContractReference Request => null!;
+                         private static RequestTerminalOutcomeId Completed => new("completed");
+
+                         private static async ProcessTask<string> Run(ProcessContext process, Input input)
+                         {
+                             async ProcessTask<string> Poll()
+                             {
+                                 var observation = await process.Effect<string>(Request, Completed, input.Value);
+                                 return observation;
+                             }
+                             async ProcessTask Exhausted() { }
+                             async ProcessTask Stalled() { }
+                             var final = await process.RepeatAcrossActivation(
+                                 occurrence: Poll(),
+                                 continueWhen: observation => observation == "pending",
+                                 progress: observation => observation,
+                                 policy: input.Policy,
+                                 exhausted: Exhausted,
+                                 stalled: Stalled);
+                             return final;
+                         }
+                     }
+
+                     public sealed record Input(string Value, ProcessRecurrencePolicy Policy);
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.Contains("cannot depend on runtime bindings", diagnostic.GetMessage());
+        Assert.Equal(26, diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1);
+    }
+
+    [Fact]
     public void Generator_RejectsHostForeachEnumerationAtItsSource()
     {
         var source = """
@@ -1005,8 +1144,92 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
             runResult.Results.SelectMany(static result => result.Diagnostics),
             static diagnostic => diagnostic.Id == "COHPC003");
 
-        Assert.Contains("only pure local declarations", diagnostic.GetMessage());
+        Assert.Contains("host loops are not supported", diagnostic.GetMessage());
         Assert.Equal(11, diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1);
+    }
+
+    [Fact]
+    public void Generator_RejectsMutableRecurrenceStateAtItsSource()
+    {
+        var source = """
+                     using System;
+                     using Cohesive.Processes.Authoring;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class MutableProcess
+                     {
+                         private static async ProcessTask<string> Run(ProcessContext process, string input)
+                         {
+                             var progress = input;
+                             progress = input + "/next";
+                             await process.Timer(DateTimeOffset.UnixEpoch);
+                             return progress;
+                         }
+                     }
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.Contains("mutable Process-local state is not supported", diagnostic.GetMessage());
+        Assert.Equal(12, diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1);
+    }
+
+    [Fact]
+    public void Generator_RejectsRecursiveProcessLocalCallsAtTheirSource()
+    {
+        var source = """
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+                     using Cohesive.Processes.IR;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class RecursiveProcess
+                     {
+                         private static RequestContractReference Request => null!;
+                         private static RequestTerminalOutcomeId Completed => new("completed");
+
+                         private static async ProcessTask<string> Run(ProcessContext process, string input)
+                         {
+                             async ProcessTask Recurse()
+                             {
+                                 await Recurse();
+                             }
+                             async ProcessTask<string> Poll()
+                             {
+                                 await Recurse();
+                                 var observation = await process.Effect<string>(Request, Completed, input);
+                                 return observation;
+                             }
+                             async ProcessTask Exhausted() { }
+                             async ProcessTask Stalled() { }
+                             var final = await process.RepeatAcrossActivation(
+                                 Poll(),
+                                 observation => observation == "pending",
+                                 observation => observation,
+                                 new ProcessRecurrencePolicy(3, 1),
+                                 Exhausted,
+                                 Stalled);
+                             return final;
+                         }
+                     }
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.Contains("recursive local Process calls are not supported", diagnostic.GetMessage());
+        Assert.Equal(21, diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1);
     }
 
     static GeneratorDriverRunResult RunGenerator(

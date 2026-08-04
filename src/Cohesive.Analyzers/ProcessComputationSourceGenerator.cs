@@ -507,6 +507,16 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     case EmptyStatementSyntax:
                         break;
 
+                    case WhileStatementSyntax:
+                    case DoStatementSyntax:
+                    case ForStatementSyntax:
+                    case ForEachStatementSyntax:
+                    case ForEachVariableStatementSyntax:
+                        return Failure(
+                            statement,
+                            "host loops are not supported; use RepeatAcrossActivation with explicit finite occurrence and unchanged-progress limits",
+                            out block);
+
                     default:
                         return Failure(
                             statement,
@@ -557,6 +567,17 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     "await is reserved for Query, Read, Transition, and Effect operations on the ProcessContext parameter");
             }
 
+            if (invocation.TargetMethod.Name == "RepeatAcrossActivation")
+            {
+                if (!TryParseRecurrence(declaration, local, structuralPath, invocation, out var recurrence))
+                {
+                    return false;
+                }
+
+                flow = recurrence;
+                return true;
+            }
+
             var kind = invocation.TargetMethod.Name switch
             {
                 "Query" => AwaitKind.Query,
@@ -599,8 +620,23 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 flow = forkJoin;
                 return true;
             }
+            if (statement.Expression is AssignmentExpressionSyntax)
+            {
+                return StatementFailure(
+                    statement,
+                    "mutable Process-local state is not supported; recurrence state must be represented by canonical outputs and progress evidence");
+            }
             if (!TryGetAwaitedContextInvocation(statement, out var invocation))
             {
+                if (statement.Expression is AwaitExpressionSyntax awaitedSyntax
+                    && semanticModel.GetOperation(awaitedSyntax) is IAwaitOperation awaited
+                    && Strip(awaited.Operation) is IInvocationOperation localInvocation
+                    && localFunctions.ContainsKey(localInvocation.TargetMethod))
+                {
+                    return StatementFailure(
+                        statement,
+                        "direct or recursive local Process calls are not supported; pass the local function to a bounded Fork or RepeatAcrossActivation construct");
+                }
                 return StatementFailure(
                     statement,
                     "an expression statement must await a supported operation on the ProcessContext parameter");
@@ -755,18 +791,21 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             if (!TryGetInlineProjection(
                     Argument(invocation, "progressIdentity"),
                     statement,
+                    "ForEachPartition",
                     "progressIdentity",
                     optional: false,
                     out var progressIdentity)
                 || !TryGetInlineProjection(
                     Argument(invocation, "childInput"),
                     statement,
+                    "ForEachPartition",
                     "childInput",
                     optional: false,
                     out var childInput)
                 || !TryGetInlineProjection(
                     Argument(invocation, "capacityIdentity"),
                     statement,
+                    "ForEachPartition",
                     "capacityIdentity",
                     optional: true,
                     out var capacityIdentity))
@@ -819,9 +858,143 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             return true;
         }
 
+        bool TryParseRecurrence(
+            LocalDeclarationStatementSyntax statement,
+            ILocalSymbol resultLocal,
+            ImmutableArray<string> structuralPath,
+            IInvocationOperation invocation,
+            out RecurrenceFlow flow)
+        {
+            flow = null!;
+            var identity = NextIdentity("repeat-across-activation", structuralPath, resultLocal.Name);
+            if (!TryGetInlineProjection(
+                    Argument(invocation, "continueWhen"),
+                    statement,
+                    "RepeatAcrossActivation",
+                    "continueWhen",
+                    optional: false,
+                    out var continueWhen)
+                || !TryGetInlineProjection(
+                    Argument(invocation, "progress"),
+                    statement,
+                    "RepeatAcrossActivation",
+                    "progress",
+                    optional: false,
+                    out var progress))
+            {
+                return false;
+            }
+
+            var occurrenceArgument = Argument(invocation, "occurrence");
+            var occurrenceOperation = occurrenceArgument is null ? null : Strip(occurrenceArgument.Value);
+            if (occurrenceOperation is not IInvocationOperation occurrenceInvocation
+                || occurrenceInvocation.Instance is not null
+                || occurrenceInvocation.Arguments.Length != 0
+                || !localFunctions.TryGetValue(occurrenceInvocation.TargetMethod, out var occurrenceFunction)
+                || occurrenceInvocation.TargetMethod.ReturnType is not INamedTypeSymbol
+                {
+                    IsGenericType: true
+                } occurrenceTask
+                || occurrenceTask.ConstructedFrom.ToDisplayString() != TaskName
+                || !occurrenceFunction.Modifiers.Any(static modifier => modifier.IsKind(SyntaxKind.AsyncKeyword))
+                || occurrenceFunction.Body is null
+                || occurrenceFunction.ExpressionBody is not null)
+            {
+                return StatementFailure(
+                    occurrenceArgument?.Syntax ?? statement,
+                    "RepeatAcrossActivation occurrence must invoke one parameterless local async ProcessTask<T> function");
+            }
+
+            if (!TryParse(
+                    occurrenceFunction.Body.Statements,
+                    structuralPath.Add(identity.PathSegment).Add($"occurrence-{occurrenceInvocation.TargetMethod.Name}"),
+                    out var occurrenceBody))
+            {
+                return false;
+            }
+
+            var occurrenceReturns = occurrenceBody.Descendants().OfType<ReturnFlow>().ToArray();
+            if (occurrenceReturns.Length != 1
+                || occurrenceBody.Statements.IsEmpty
+                || !ReferenceEquals(
+                    occurrenceBody.Statements[occurrenceBody.Statements.Length - 1],
+                    occurrenceReturns[0]))
+            {
+                return StatementFailure(
+                    occurrenceFunction,
+                    $"RepeatAcrossActivation occurrence '{occurrenceInvocation.TargetMethod.Name}' must end in one path-total portable result expression");
+            }
+
+            var occurrenceResult = occurrenceReturns[0].Result;
+            occurrenceBody = new(occurrenceBody.Statements.RemoveAt(occurrenceBody.Statements.Length - 1));
+            if (occurrenceBody.Statements.IsEmpty)
+            {
+                return StatementFailure(
+                    occurrenceFunction,
+                    "RepeatAcrossActivation occurrence must contain at least one Process operation before its result");
+            }
+
+            var exhaustedArgument = Argument(invocation, "exhausted");
+            var stalledArgument = Argument(invocation, "stalled");
+            HashSet<IMethodSymbol> observed = new(SymbolEqualityComparer.Default);
+            if (exhaustedArgument is null
+                || !TryGetNamedLocalBranch(
+                    exhaustedArgument.Value,
+                    observed,
+                    parameterCount: 0,
+                    out var exhaustedMethod,
+                    out var exhaustedFunction))
+            {
+                return StatementFailure(
+                    exhaustedArgument?.Syntax ?? statement,
+                    "RepeatAcrossActivation exhausted must name one parameterless local async ProcessTask function");
+            }
+            if (stalledArgument is null
+                || !TryGetNamedLocalBranch(
+                    stalledArgument.Value,
+                    observed,
+                    parameterCount: 0,
+                    out var stalledMethod,
+                    out var stalledFunction))
+            {
+                return StatementFailure(
+                    stalledArgument?.Syntax ?? statement,
+                    "RepeatAcrossActivation stalled must name a different parameterless local async ProcessTask function");
+            }
+            if (!TryParse(
+                    exhaustedFunction.Body!.Statements,
+                    structuralPath.Add(identity.PathSegment).Add($"exhausted-{exhaustedMethod.Name}"),
+                    out var exhaustedBody)
+                || !TryParse(
+                    stalledFunction.Body!.Statements,
+                    structuralPath.Add(identity.PathSegment).Add($"stalled-{stalledMethod.Name}"),
+                    out var stalledBody))
+            {
+                return false;
+            }
+
+            pureLocals.Add(resultLocal, occurrenceResult);
+            flow = new(
+                identity,
+                occurrenceInvocation.TargetMethod.Name,
+                occurrenceBody,
+                occurrenceResult,
+                continueWhen!,
+                progress!,
+                exhaustedMethod.Name,
+                exhaustedBody,
+                stalledMethod.Name,
+                stalledBody,
+                invocation,
+                SourceLocation(statement),
+                statement);
+            return true;
+        }
+
         bool TryGetInlineProjection(
             IArgumentOperation? argument,
             SyntaxNode fallbackSyntax,
+            string construct,
             string name,
             bool optional,
             out ProjectionFlow? projection)
@@ -834,7 +1007,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 return optional
                     || StatementFailure(
                         argument?.Syntax ?? fallbackSyntax,
-                        $"ForEachPartition {name} requires one inline pure projection lambda");
+                        $"{construct} {name} requires one inline pure projection lambda");
             }
 
             var operation = Strip(argument.Value);
@@ -847,7 +1020,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             {
                 return StatementFailure(
                     argument.Syntax,
-                    $"ForEachPartition {name} must be one inline pure lambda; runtime delegates and callbacks are not supported");
+                    $"{construct} {name} must be one inline pure lambda; runtime delegates and callbacks are not supported");
             }
 
             var returns = SelfAndDescendants(anonymous.Body)
@@ -858,7 +1031,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             {
                 return StatementFailure(
                     argument.Syntax,
-                    $"ForEachPartition {name} must contain one pure projection expression");
+                    $"{construct} {name} must contain one pure projection expression");
             }
 
             projection = new(
@@ -1567,6 +1740,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                             ActionFlow action => Argument(action.Invocation, "id"),
                             RequestFlow request => Argument(request.Invocation, "id"),
                             PartitionFlow partition => Argument(partition.Invocation, "id"),
+                            RecurrenceFlow recurrence => Argument(recurrence.Invocation, "id"),
                             AwaitMatchFlow awaitMatch => Argument(awaitMatch.Invocation, "id"),
                             _ => null
                         },
@@ -1859,6 +2033,22 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         }
 
                         entry = partition.Identity.Variable;
+                        break;
+
+                    case RecurrenceFlow recurrence:
+                        if (entry is null)
+                        {
+                            return StatementFailure(
+                                recurrence.Syntax,
+                                "RepeatAcrossActivation requires a following operation or return");
+                        }
+
+                        if (!TryEmitRecurrence(recurrence, entry, out var occurrenceEntry))
+                        {
+                            return false;
+                        }
+
+                        entry = occurrenceEntry;
                         break;
 
                     case AwaitMatchFlow awaitMatch:
@@ -2178,6 +2368,74 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             }
         }
 
+        bool TryEmitRecurrence(
+            RecurrenceFlow recurrence,
+            string successor,
+            out string occurrenceEntry)
+        {
+            occurrenceEntry = string.Empty;
+            if (!TryLowerBlock(recurrence.Exhausted, successor, out var exhaustedEntry)
+                || exhaustedEntry is null)
+            {
+                return StatementFailure(
+                    recurrence.Syntax,
+                    $"RepeatAcrossActivation exhausted branch '{recurrence.ExhaustedName}' requires a reachable continuation");
+            }
+            if (!TryLowerBlock(recurrence.Stalled, successor, out var stalledEntry)
+                || stalledEntry is null)
+            {
+                return StatementFailure(
+                    recurrence.Syntax,
+                    $"RepeatAcrossActivation stalled branch '{recurrence.StalledName}' requires a reachable continuation");
+            }
+            if (!TryLowerBlock(recurrence.Occurrence, recurrence.Identity.Variable, out var loweredOccurrence)
+                || loweredOccurrence is null)
+            {
+                return StatementFailure(
+                    recurrence.Syntax,
+                    $"RepeatAcrossActivation occurrence '{recurrence.OccurrenceName}' requires a reachable Process operation");
+            }
+
+            var policy = Argument(recurrence.Invocation, "policy");
+            if (policy is null)
+            {
+                return StatementFailure(
+                    recurrence.Syntax,
+                    "RepeatAcrossActivation requires an exact recurrence policy");
+            }
+            if (!TryEmitProjection(recurrence.ContinueWhen, recurrence.Result, out var continueWhen)
+                || !TryEmitProjection(recurrence.Progress, recurrence.Result, out var progress))
+            {
+                return false;
+            }
+            if (!TryEmitExactArgument(policy, policy.Syntax, out var policyExpression))
+            {
+                return false;
+            }
+
+            builderStatements.Add(
+                $"__builder.RepeatAcrossActivation(id: {recurrence.Identity.Variable}, continueWhen: {continueWhen}, progress: {progress}, policy: {policyExpression}, repeat: __builder.Edge(owner: {recurrence.Identity.Variable}, role: \"repeat\", target: {loweredOccurrence}, {SourceArguments(recurrence.Source, method.Name)}), completed: __builder.Edge(owner: {recurrence.Identity.Variable}, role: \"completed\", target: {successor}, {SourceArguments(recurrence.Source, method.Name)}), exhausted: __builder.Edge(owner: {recurrence.Identity.Variable}, role: \"exhausted\", target: {exhaustedEntry}, {SourceArguments(recurrence.Source, method.Name)}), stalled: __builder.Edge(owner: {recurrence.Identity.Variable}, role: \"stalled\", target: {stalledEntry}, {SourceArguments(recurrence.Source, method.Name)}), {SourceArguments(recurrence.Source, method.Name)});");
+            occurrenceEntry = loweredOccurrence;
+            return true;
+        }
+
+        bool TryEmitProjection(
+            ProjectionFlow projection,
+            IOperation input,
+            out string value)
+        {
+            Dictionary<IParameterSymbol, IOperation> projectedParameters = new(SymbolEqualityComparer.Default)
+            {
+                [projection.Parameter] = input
+            };
+            return TryEmitValue(
+                projection.Expression,
+                projection.Expression.Type!,
+                projection.Source,
+                out value,
+                projectedParameters);
+        }
+
         bool TryEmitAwaitMatch(AwaitMatchFlow awaitMatch, string successor)
         {
             List<string> clauses = [];
@@ -2483,7 +2741,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             IOperation operation,
             ITypeSymbol type,
             SourceReference source,
-            out string valueVariable)
+            out string valueVariable,
+            IReadOnlyDictionary<IParameterSymbol, IOperation>? projectedParameters = null)
         {
             valueVariable = string.Empty;
             var authoredOperation = Strip(operation);
@@ -2499,7 +2758,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 pureLocals,
                 forkResultTuples,
                 outputBySymbol,
-                resolvingPureLocals);
+                resolvingPureLocals,
+                projectedParameters);
             if (!translator.TryEmit(operation, out var expression, out var failure))
             {
                 Report(
@@ -2541,6 +2801,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         readonly IReadOnlyDictionary<ILocalSymbol, ImmutableArray<IOperation>> forkResultTuples;
         readonly IReadOnlyDictionary<ISymbol, string> outputs;
         readonly HashSet<ILocalSymbol> resolving;
+        readonly IReadOnlyDictionary<IParameterSymbol, IOperation>? projectedParameters;
 
         public PureExpressionEmitter(
             IMethodSymbol method,
@@ -2548,7 +2809,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             IReadOnlyDictionary<ILocalSymbol, IOperation> pureLocals,
             IReadOnlyDictionary<ILocalSymbol, ImmutableArray<IOperation>> forkResultTuples,
             IReadOnlyDictionary<ISymbol, string> outputs,
-            HashSet<ILocalSymbol> resolving)
+            HashSet<ILocalSymbol> resolving,
+            IReadOnlyDictionary<IParameterSymbol, IOperation>? projectedParameters = null)
         {
             this.method = method;
             this.inputParameter = inputParameter;
@@ -2556,6 +2818,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             this.forkResultTuples = forkResultTuples;
             this.outputs = outputs;
             this.resolving = resolving;
+            this.projectedParameters = projectedParameters;
         }
 
         public bool TryEmit(IOperation operation, out string expression, out string failure)
@@ -2585,6 +2848,10 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
 
             switch (operation)
             {
+                case IParameterReferenceOperation parameter
+                    when projectedParameters?.TryGetValue(parameter.Parameter, out var parameterProjection) == true:
+                    return TryEmit(parameterProjection, out expression, out failure);
+
                 case IParameterReferenceOperation parameter
                     when SymbolEqualityComparer.Default.Equals(parameter.Parameter, inputParameter):
                     expression = "__builder.Input.Expression";
@@ -3015,6 +3282,13 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     changed = true;
                     continue;
                 }
+                if (value is IParameterReferenceOperation parameter
+                    && projectedParameters?.TryGetValue(parameter.Parameter, out var projected) == true)
+                {
+                    value = Strip(projected);
+                    changed = true;
+                    continue;
+                }
 
                 return changed;
             }
@@ -3074,6 +3348,10 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         continue;
                     case ILocalReferenceOperation local when pureLocals.TryGetValue(local.Local, out var initializer):
                         current = initializer;
+                        continue;
+                    case IParameterReferenceOperation parameter
+                        when projectedParameters?.TryGetValue(parameter.Parameter, out var projected) == true:
+                        current = projected;
                         continue;
                     case IParameterReferenceOperation parameter
                         when SymbolEqualityComparer.Default.Equals(parameter.Parameter, inputParameter):
@@ -3320,6 +3598,21 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         yield return nested;
                     }
                 }
+                else if (statement is RecurrenceFlow recurrence)
+                {
+                    foreach (var nested in recurrence.Occurrence.Descendants())
+                    {
+                        yield return nested;
+                    }
+                    foreach (var nested in recurrence.Exhausted.Descendants())
+                    {
+                        yield return nested;
+                    }
+                    foreach (var nested in recurrence.Stalled.Descendants())
+                    {
+                        yield return nested;
+                    }
+                }
                 else if (statement is AwaitMatchFlow awaitMatch)
                 {
                     foreach (var clause in awaitMatch.Clauses)
@@ -3461,6 +3754,22 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         ProjectionFlow? CapacityIdentity,
         string FailedName,
         FlowBlock Failed,
+        IInvocationOperation Invocation,
+        SourceReference Source,
+        SyntaxNode Syntax)
+        : FlowStatement(Identity, Source, Syntax);
+
+    sealed record RecurrenceFlow(
+        FlowIdentity Identity,
+        string OccurrenceName,
+        FlowBlock Occurrence,
+        IOperation Result,
+        ProjectionFlow ContinueWhen,
+        ProjectionFlow Progress,
+        string ExhaustedName,
+        FlowBlock Exhausted,
+        string StalledName,
+        FlowBlock Stalled,
         IInvocationOperation Invocation,
         SourceReference Source,
         SyntaxNode Syntax)
