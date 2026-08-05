@@ -89,6 +89,8 @@ public sealed class MotionDqInteractionContracts
     public static RequestTerminalOutcomeId RequirementFulfillmentCancelledOutcome { get; } = new("cancelled");
 
     MotionDqInteractionContracts(
+        DomainEventContractReference prequalificationSubmittedEvent,
+        DomainEventContractReference prequalificationAuditEvent,
         SignalContractReference reviewDecisionSignal,
         SignalContractReference caseCancellationSignal,
         RequestProtocol reviewTask,
@@ -97,6 +99,8 @@ public sealed class MotionDqInteractionContracts
         ImmutableArray<ExecutionDefinitionDocument> documents,
         InteractionContractCatalog catalog)
     {
+        PrequalificationSubmittedEvent = prequalificationSubmittedEvent;
+        PrequalificationAuditEvent = prequalificationAuditEvent;
         ReviewDecisionSignal = reviewDecisionSignal;
         CaseCancellationSignal = caseCancellationSignal;
         ReviewTaskRequest = reviewTask.Contract;
@@ -111,6 +115,12 @@ public sealed class MotionDqInteractionContracts
 
     /// <summary>Canonical version-one Motion DQ interaction-contract set.</summary>
     public static MotionDqInteractionContracts Version1 { get; } = CreateVersion1();
+
+    /// <summary>Canonical event announcing an accepted prequalification submission.</summary>
+    public DomainEventContractReference PrequalificationSubmittedEvent { get; }
+
+    /// <summary>Canonical audit event retaining the accepted prequalification evidence.</summary>
+    public DomainEventContractReference PrequalificationAuditEvent { get; }
 
     /// <summary>Exact Signal contract carrying a typed caseworker review decision.</summary>
     public SignalContractReference ReviewDecisionSignal { get; }
@@ -146,6 +156,18 @@ public sealed class MotionDqInteractionContracts
 
     static MotionDqInteractionContracts CreateVersion1()
     {
+        var prequalificationSubmittedDocument = InteractionContractDocuments.Create(
+            new("interaction/motion-dq/prequalification-submitted"),
+            Revision,
+            new DomainEventContractDefinition(
+                Schema<MotionDqPrequalificationSubmission>("motion-dq/prequalification-submitted/v1")),
+            Provenance("prequalification-submitted"));
+        var prequalificationAuditDocument = InteractionContractDocuments.Create(
+            new("interaction/motion-dq/prequalification-audit"),
+            Revision,
+            new DomainEventContractDefinition(
+                Schema<MotionDqPrequalificationSubmission>("motion-dq/prequalification-audit/v1")),
+            Provenance("prequalification-audit"));
         var reviewDecisionDocument = InteractionContractDocuments.Create(
             new("interaction/motion-dq/review-decision"),
             Revision,
@@ -217,6 +239,8 @@ public sealed class MotionDqInteractionContracts
 
         ImmutableArray<ExecutionDefinitionDocument> documents =
         [
+            prequalificationSubmittedDocument,
+            prequalificationAuditDocument,
             reviewDecisionDocument,
             cancellationDocument,
             .. reviewTask.Documents,
@@ -231,6 +255,8 @@ public sealed class MotionDqInteractionContracts
         }
 
         return new(
+            prequalificationSubmittedEvent: new(Reference(prequalificationSubmittedDocument)),
+            prequalificationAuditEvent: new(Reference(prequalificationAuditDocument)),
             reviewDecisionSignal: new(Reference(reviewDecisionDocument)),
             caseCancellationSignal: new(Reference(cancellationDocument)),
             reviewTask: reviewTask,

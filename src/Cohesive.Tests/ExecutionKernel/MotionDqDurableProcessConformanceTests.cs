@@ -4,6 +4,8 @@ using Cohesive.ExecutionKernel.TestFixtures.MotionDq;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Compilation;
 using Cohesive.Processes.Execution;
+using Cohesive.Relations.Model;
+using Cohesive.Storage;
 using Cohesive.Storage.Processes;
 using Cohesive.Transitions.Compilation;
 using Cohesive.Transitions.Execution;
@@ -19,6 +21,132 @@ public sealed class MotionDqDurableProcessConformanceTests
     static readonly InteractionDeliveryRequirements DurableDelivery = new(
         InteractionDurabilityDemand.Durable,
         InteractionVisibilityDemand.AfterOriginCommit);
+
+    [Fact]
+    public async Task ProcessTransitionAdapter_ReplaysEntityHandoffIntoOneProcessReceiptAndOutboxCut()
+    {
+        var fixture = MotionDqProcess.Version1;
+        var clock = new ScenarioClock(new(2026, 8, 1, 10, 0, 0, TimeSpan.Zero));
+        var input = Input(clock.Peek.AddDays(1));
+        var seed = new StatefulTransitionHost(fixture, input);
+        var repository = new InMemoryEntityOutboxRepository(
+            MotionDqOnboardingCaseEntity.Instance.Definition,
+            EntityPartitionKeyPolicy.ObservationId);
+        var context = Context(clock.Next());
+        var initial = await repository.Upsert(
+            context,
+            new(seed.CaseObservation(input.Prequalification.CaseId)));
+        var plans = StatefulTransitionHost.Compile(fixture.Transitions.Documents);
+        HashSet<ExecutionDefinitionReference> caseTransitions =
+        [
+            fixture.Transitions.ResolveCaseProfile.Reference,
+            fixture.Transitions.SubmitPrequalification.Reference,
+            fixture.Transitions.SubmitFullApplication.Reference,
+            fixture.Transitions.RecordReviewDecision.Reference,
+            fixture.Transitions.AdvanceCaseMilestone.Reference,
+            fixture.Transitions.CancelCase.Reference
+        ];
+        var entityAdapter = new EntityTransitionProcessOperationAdapter(invocation =>
+            caseTransitions.Contains(invocation.Definition)
+            && plans.TryGetValue(invocation.Definition, out var transitionPlan)
+                ? new(transitionPlan, repository, fixture.InteractionCatalog)
+                : null);
+        var crashingAdapter = new CrashAfterFirstEntityHandoffAdapter(entityAdapter);
+        var store = new InMemoryProcessDurableStore();
+        var runtime = new ProcessDurableRuntime(
+            store,
+            new RejectingReferenceHost(),
+            new("worker/motion-dq-transition-adapter", TimeSpan.FromMinutes(5)),
+            new ExactBindingResolver(fixture.RequestBindings),
+            transitionOperationAdapter: crashingAdapter);
+        var start = Start(fixture, input, clock.Next(), clock.Next());
+        var initialized = await runtime.InitializeAsync(Context(clock.Next()), fixture.Plan, start);
+        var before = Assert.IsType<ProcessDurableStoreSnapshot>(initialized.Snapshot).Checkpoint;
+        var activation = new ProcessActivation(
+            new("activation/motion-dq/transition-adapter/start"),
+            ProcessActivationCause.Start,
+            clock.Next(),
+            ActivationContext(fixture));
+
+        await Assert.ThrowsAsync<EntityHandoffCrashException>(() =>
+            runtime.ActivateAsync(
+                Context(clock.Next()),
+                fixture.Plan,
+                before.ContinuationIdentity,
+                activation));
+
+        var afterCrash = Assert.IsType<ProcessDurableStoreSnapshot>(await store.LoadAsync(
+            Context(clock.Next()),
+            before.ContinuationIdentity.ProcessInstanceId)).Checkpoint;
+        Assert.Empty(afterCrash.Activations);
+        Assert.Empty(afterCrash.Operations);
+        Assert.Empty(afterCrash.Emissions);
+        var crashedInvocation = Assert.IsType<ProcessTransitionInvocation>(crashingAdapter.CrashedInvocation);
+        var crashedResult = Assert.IsType<ProcessOperationResult>(crashingAdapter.CrashedResult);
+        var subject = new InteractionEntityReference(
+            new(repository.EntityType),
+            new(input.Prequalification.CaseId));
+        var entityReceipt = await repository.TryGetTransitionOperation(
+            Context(clock.Next()),
+            new(
+                new(
+                    crashedInvocation.Continuation,
+                    crashedInvocation.Activation,
+                    crashedInvocation.Token,
+                    crashedInvocation.Node,
+                    crashedInvocation.Occurrence),
+                crashedInvocation.Definition,
+                subject,
+                crashedInvocation.Input));
+        Assert.Equal(EntityTransitionOperationDisposition.Replayed, entityReceipt.Disposition);
+        Assert.Equal(crashedResult, entityReceipt.Receipt!.Result);
+
+        var retried = await runtime.ActivateAsync(
+            Context(clock.Next()),
+            fixture.Plan,
+            before.ContinuationIdentity,
+            activation);
+
+        Assert.Equal(ProcessDurableRuntimeDisposition.Applied, retried.Disposition);
+        var checkpoint = Assert.IsType<ProcessDurableStoreSnapshot>(retried.Snapshot).Checkpoint;
+        Assert.True(ProcessCheckpointCompatibilityValidator.Validate(fixture.Plan, checkpoint).IsValid);
+        var transitionReceipts = checkpoint.Operations
+            .Where(receipt => caseTransitions.Contains(receipt.OperationDefinition))
+            .ToArray();
+        Assert.Equal(2, transitionReceipts.Length);
+        var prequalification = Assert.Single(
+            transitionReceipts,
+            receipt => receipt.OperationDefinition == fixture.Transitions.SubmitPrequalification.Reference);
+        Assert.Equal(crashedResult, prequalification.Result);
+        var events = checkpoint.Emissions
+            .Select(static record => record.Envelope)
+            .OfType<DomainEventEnvelope>()
+            .ToArray();
+        Assert.Equal(2, events.Length);
+        Assert.Equal(
+            crashedResult.Emissions.Select(static envelope => envelope.Context.EmissionId),
+            events.Select(static envelope => envelope.Context.EmissionId));
+        Assert.All(events, envelope =>
+        {
+            var origin = Assert.IsType<ProcessInteractionOrigin>(envelope.Context.Origin);
+            Assert.Equal(fixture.Reference, origin.Definition);
+            Assert.Equal(fixture.Transitions.SubmitPrequalification.Reference, origin.Transition);
+            Assert.Equal(subject, origin.Entity);
+            Assert.NotNull(origin.TransitionNode);
+            Assert.NotNull(origin.Outcome);
+        });
+        Assert.Single(checkpoint.Emissions, static record => record.Envelope is RequestEnvelope);
+        Assert.Single(checkpoint.DurableOperations);
+        var finalCase = Assert.IsType<EntitySnapshot>(await repository.TryGet(
+            Context(clock.Next()),
+            input.Prequalification.CaseId,
+            EntityReadOptions.Full));
+        Assert.Equal(
+            MotionDqCaseMilestone.FullApplicationSubmitted.ToString(),
+            finalCase.Entity.GetField(nameof(MotionDqOnboardingCaseEntity.Milestone))
+                .GetRequiredString());
+        Assert.Equal(initial.Entity.Version + 2, finalCase.Entity.Version);
+    }
 
     [Fact]
     [Trait("Category", "ExecutionKernelExample")]
@@ -1324,6 +1452,46 @@ public sealed class MotionDqDurableProcessConformanceTests
         }
     }
 
+    sealed class CrashAfterFirstEntityHandoffAdapter(IProcessTransitionOperationAdapter inner)
+        : IProcessTransitionOperationAdapter
+    {
+        bool crashPending = true;
+
+        internal ProcessTransitionInvocation? CrashedInvocation { get; private set; }
+
+        internal ProcessOperationResult? CrashedResult { get; private set; }
+
+        public async ValueTask<ProcessOperationResult> ExecuteAsync(
+            OperationContext context,
+            ProcessTransitionInvocation invocation)
+        {
+            var result = await inner.ExecuteAsync(context, invocation);
+            if (crashPending)
+            {
+                crashPending = false;
+                CrashedInvocation = invocation;
+                CrashedResult = result;
+                throw new EntityHandoffCrashException();
+            }
+            return result;
+        }
+    }
+
+    sealed class RejectingReferenceHost : IProcessReferenceHost
+    {
+        public ProcessOperationResult InvokeTransition(ProcessTransitionInvocation invocation) =>
+            throw new InvalidOperationException(
+                $"Transition '{invocation.Definition.DefinitionId.Value}' bypassed its durable entity adapter.");
+
+        public ProcessOperationResult EvaluateRelation(ProcessRelationEvaluation evaluation) =>
+            throw new InvalidOperationException($"Unexpected Relation operation at '{evaluation.Node.Value}'.");
+
+        public ProcessSignalTargetResult ResolveSignalTarget(ProcessSignalTargetResolution resolution) =>
+            throw new InvalidOperationException($"Unexpected Signal resolution at '{resolution.Node.Value}'.");
+    }
+
+    sealed class EntityHandoffCrashException : Exception;
+
     sealed class ExactAdapterResolver(MotionDqScenarioAdapter adapter)
         : IProcessDurableOperationAdapterResolver
     {
@@ -1488,6 +1656,7 @@ public sealed class MotionDqDurableProcessConformanceTests
             Compile(MotionDqProcess.Version1.Transitions.Documents);
 
         readonly MotionDqTransitionDefinitions transitions;
+        readonly MotionDqInteractionContracts interactions;
         readonly Dictionary<ObservationValue, ObservationValue> caseStates;
         readonly Dictionary<ObservationValue, ObservationValue> requirementStates;
         readonly Dictionary<ObservationValue, ObservationValue> subjectStates;
@@ -1497,6 +1666,7 @@ public sealed class MotionDqDurableProcessConformanceTests
         internal StatefulTransitionHost(MotionDqProcess fixture, MotionDqOnboardingInput input)
         {
             transitions = fixture.Transitions;
+            interactions = fixture.Interactions;
             caseStates = [];
             requirementStates = [];
             subjectStates = [];
@@ -1535,6 +1705,7 @@ public sealed class MotionDqDurableProcessConformanceTests
         StatefulTransitionHost(StatefulTransitionHost source)
         {
             transitions = source.transitions;
+            interactions = source.interactions;
             caseStates = new(source.caseStates);
             requirementStates = new(source.requirementStates);
             subjectStates = new(source.subjectStates);
@@ -1558,6 +1729,16 @@ public sealed class MotionDqDurableProcessConformanceTests
         internal MotionDqCaseMilestone CaseMilestone(string caseId) => Enum.Parse<MotionDqCaseMilestone>(
             RequiredField(caseStates[ObservationValue.FromString(caseId)], nameof(MotionDqOnboardingCaseEntity.Milestone))
                 .GetRequiredString());
+
+        internal Observation CaseObservation(string caseId)
+        {
+            var state = caseStates[ObservationValue.FromString(caseId)];
+            return new(
+                MotionDqOnboardingCaseEntity.Instance.Definition.Shape.Id,
+                caseId,
+                state.Fields!,
+                version: 1);
+        }
 
         internal MotionDqRequirementStatus RequirementStatus(MotionDqCaseRequirementReference requirement) =>
             Enum.Parse<MotionDqRequirementStatus>(
@@ -1633,8 +1814,16 @@ public sealed class MotionDqDurableProcessConformanceTests
             states[subject] = Apply(state, decision.Patch);
             if (decision.Outcome is not null)
             {
-                Assert.Empty(decision.Emissions);
-                return ProcessOperationResult.Completed(decision.Outcome);
+                var lowering = ProcessTransitionEmissionEnvelopeLowerer.TryLower(
+                    invocation,
+                    Entity(invocation.Definition, subject),
+                    decision,
+                    interactions.Catalog,
+                    createRequestTarget: null,
+                    out var emissions);
+                return lowering.IsValid
+                    ? ProcessOperationResult.Completed(decision.Outcome, emissions)
+                    : ProcessOperationResult.Failed(lowering.Diagnostics[0]);
             }
 
             var diagnostic = decision.Diagnostics.FirstOrDefault()
@@ -1642,6 +1831,42 @@ public sealed class MotionDqDurableProcessConformanceTests
                     code: "tests.motion-dq.transition.no-outcome",
                     message: $"Transition '{invocation.Definition.DefinitionId.Value}' returned '{decision.Kind}' without an outcome.");
             return ProcessOperationResult.Failed(diagnostic);
+        }
+
+        InteractionEntityReference Entity(
+            ExecutionDefinitionReference definition,
+            ObservationValue subject)
+        {
+            if (definition == transitions.ResolveCaseProfile.Reference
+                || definition == transitions.SubmitPrequalification.Reference
+                || definition == transitions.SubmitFullApplication.Reference
+                || definition == transitions.RecordReviewDecision.Reference
+                || definition == transitions.AdvanceCaseMilestone.Reference
+                || definition == transitions.CancelCase.Reference)
+            {
+                return new(new(nameof(MotionDqOnboardingCaseEntity)), new(subject.GetRequiredString()));
+            }
+            if (definition == transitions.ApplyRequirementEvaluation.Reference)
+            {
+                return new(
+                    new(nameof(MotionDqCaseRequirementEntity)),
+                    new(string.Join(
+                        '/',
+                        RequiredField(subject, nameof(MotionDqCaseRequirementReference.CaseId)).GetRequiredString(),
+                        RequiredField(subject, nameof(MotionDqCaseRequirementReference.RequirementId)).GetRequiredString())));
+            }
+            if (definition == transitions.ActivateSubject.Reference)
+            {
+                return new(
+                    new(nameof(MotionDqSubjectActivationEntity)),
+                    new(string.Join(
+                        '/',
+                        RequiredField(subject, nameof(MotionDqSubjectReference.ApplicationId)).GetRequiredString(),
+                        RequiredField(subject, nameof(MotionDqSubjectReference.Kind)).GetRequiredString(),
+                        RequiredField(subject, nameof(MotionDqSubjectReference.SubjectId)).GetRequiredString())));
+            }
+            throw new InvalidOperationException(
+                $"Unexpected Motion DQ Transition '{definition.DefinitionId.Value}'.");
         }
 
         public ProcessOperationResult EvaluateRelation(ProcessRelationEvaluation evaluation) =>
@@ -1676,7 +1901,7 @@ public sealed class MotionDqDurableProcessConformanceTests
                 $"Unexpected Motion DQ Transition '{definition.DefinitionId.Value}'.");
         }
 
-        static Dictionary<ExecutionDefinitionReference, CompiledTransitionPlan> Compile(
+        internal static Dictionary<ExecutionDefinitionReference, CompiledTransitionPlan> Compile(
             ImmutableArray<ExecutionDefinitionDocument> documents)
         {
             Dictionary<ExecutionDefinitionReference, CompiledTransitionPlan> result = [];

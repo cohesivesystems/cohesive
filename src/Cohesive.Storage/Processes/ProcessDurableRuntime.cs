@@ -14,6 +14,10 @@ namespace Cohesive.Storage.Processes;
 /// Each finite activation is interpreted synchronously in memory and committed once at an invariant-preserving
 /// safe point. The runtime never persists an incomplete activation descriptor. Callers recovering uncommitted
 /// work must therefore resupply the exact stable <see cref="ProcessActivation"/> request.
+/// When an <see cref="IProcessTransitionOperationAdapter"/> is supplied, an unmaterialized Transition suspends the
+/// finite interpretation while the adapter commits or replays the entity-side operation. Interpretation then
+/// restarts against the same activation-local observation cache, and the resulting receipt, continuation, and
+/// canonical emissions enter the Process aggregate in one commit.
 /// A runtime may process different Process instances and operations concurrently. Supplied stores, hosts,
 /// resolvers, planners, classifiers, and adapters must therefore support concurrent calls, or the runtime must be
 /// scoped so that their documented concurrency boundary is not exceeded.
@@ -27,6 +31,7 @@ public sealed partial class ProcessDurableRuntime
     readonly IProcessStoreMutationExceptionClassifier storeMutationExceptionClassifier;
     readonly IProcessDurableOperationAdapterResolver operationAdapterResolver;
     readonly IProcessOperationExceptionClassifier operationExceptionClassifier;
+    readonly IProcessTransitionOperationAdapter? transitionOperationAdapter;
     readonly ProcessDurableRuntimeOptions options;
     readonly ConcurrentDictionary<ProcessInstanceId, SemaphoreSlim> instanceGates = [];
 
@@ -39,6 +44,10 @@ public sealed partial class ProcessDurableRuntime
     /// <param name="storeMutationExceptionClassifier">Optional provider-aware ambiguous store-mutation classifier.</param>
     /// <param name="operationAdapterResolver">Optional exact durable Request adapter resolver.</param>
     /// <param name="operationExceptionClassifier">Optional provider-aware adapter exception classifier.</param>
+    /// <param name="transitionOperationAdapter">
+    /// Optional asynchronous entity Transition operation adapter. When absent, Transition calls use
+    /// <paramref name="host"/> directly.
+    /// </param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="store"/>, <paramref name="host"/>, or <paramref name="options"/> is
     /// <see langword="null"/>.
@@ -51,7 +60,8 @@ public sealed partial class ProcessDurableRuntime
         IProcessLocalMutationPlanner? localMutationPlanner = null,
         IProcessStoreMutationExceptionClassifier? storeMutationExceptionClassifier = null,
         IProcessDurableOperationAdapterResolver? operationAdapterResolver = null,
-        IProcessOperationExceptionClassifier? operationExceptionClassifier = null)
+        IProcessOperationExceptionClassifier? operationExceptionClassifier = null,
+        IProcessTransitionOperationAdapter? transitionOperationAdapter = null)
     {
         this.store = store ?? throw new ArgumentNullException(nameof(store));
         this.host = host ?? throw new ArgumentNullException(nameof(host));
@@ -64,6 +74,7 @@ public sealed partial class ProcessDurableRuntime
             ?? EmptyProcessDurableOperationAdapterResolver.Instance;
         this.operationExceptionClassifier = operationExceptionClassifier
             ?? ConservativeProcessOperationExceptionClassifier.Instance;
+        this.transitionOperationAdapter = transitionOperationAdapter;
     }
 
     /// <summary>Creates the initial clean continuation and control state as one durable aggregate.</summary>
@@ -290,12 +301,26 @@ public sealed partial class ProcessDurableRuntime
                     diagnostics: begun.Diagnostics);
             }
 
-            var replayHost = new ProcessOperationReplayHost(host, checkpoint.Operations);
-            var decision = Activate(
-                plan,
-                checkpoint.Continuation,
-                activation,
-                replayHost);
+            var transitionHost = transitionOperationAdapter is null
+                ? null
+                : new ProcessTransitionOperationSuspensionHost(host);
+            var replayHost = new ProcessOperationReplayHost(
+                transitionHost ?? host,
+                checkpoint.Operations);
+            var decision = transitionHost is null
+                ? Activate(
+                    plan,
+                    checkpoint.Continuation,
+                    activation,
+                    replayHost)
+                : await ActivateWithTransitionOperationsAsync(
+                        context,
+                        plan,
+                        checkpoint.Continuation,
+                        activation,
+                        replayHost,
+                        transitionHost)
+                    .ConfigureAwait(false);
             if (decision.Disposition == ProcessActivationDisposition.Rejected)
             {
                 return new(
@@ -1206,6 +1231,11 @@ public sealed partial class ProcessDurableRuntime
             ExecutionTelemetry.CompleteActivity(activity, outcome);
             return decision;
         }
+        catch (ProcessTransitionOperationPendingException)
+        {
+            activity?.Dispose();
+            throw;
+        }
         catch (OperationCanceledException exception)
         {
             ExecutionTelemetry.CompleteActivity(activity, ExecutionTelemetryOutcome.Cancelled, exception);
@@ -1215,6 +1245,30 @@ public sealed partial class ProcessDurableRuntime
         {
             ExecutionTelemetry.CompleteActivity(activity, ExecutionTelemetryOutcome.Failed, exception);
             throw;
+        }
+    }
+
+    async Task<ProcessActivationDecision> ActivateWithTransitionOperationsAsync(
+        OperationContext context,
+        CompiledProcessPlan plan,
+        ProcessContinuationState state,
+        ProcessActivation activation,
+        ProcessOperationReplayHost replayHost,
+        ProcessTransitionOperationSuspensionHost transitionHost)
+    {
+        while (true)
+        {
+            context.ThrowIfCancellationRequested();
+            try
+            {
+                return Activate(plan, state, activation, replayHost);
+            }
+            catch (ProcessTransitionOperationPendingException pending)
+            {
+                var result = await transitionOperationAdapter!.ExecuteAsync(context, pending.Invocation)
+                    .ConfigureAwait(false);
+                transitionHost.Materialize(pending.Invocation, result);
+            }
         }
     }
 

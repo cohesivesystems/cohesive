@@ -4,6 +4,7 @@ using Cohesive.ExecutionKernel.TestFixtures.MotionDq;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Compilation;
 using Cohesive.Processes.IR;
+using Cohesive.Transitions.IR;
 
 namespace Cohesive.Tests.ExecutionKernel;
 
@@ -18,7 +19,7 @@ public sealed class MotionDqCanonicalProcessFixtureTests
         Assert.NotSame(first, second);
         Assert.NotSame(first.Authored, second.Authored);
         Assert.Equal(
-            "9545a422ee3f7fcb005d29a9567c9b37a378b96ce0293373373878a2d0bf8e81",
+            "15e4d0a9d32329cb9900e57e038e1408d09674b72e35a6d944101edae253ed26",
             first.Document.Metadata.Fingerprint.Value);
         Assert.Equal(first.Definition, second.Definition);
         Assert.Equal(first.Reference, second.Reference);
@@ -40,6 +41,27 @@ public sealed class MotionDqCanonicalProcessFixtureTests
         Assert.Equal(first.Definition, restoredPlan.Definition);
         Assert.Equivalent(first.Plan.Options, restoredPlan.Options, strict: true);
         Assert.Equivalent(first.Plan.EffectSummary, restoredPlan.EffectSummary, strict: true);
+    }
+
+    [Fact]
+    public void PrequalificationTransition_UsesExactCanonicalDomainEventContracts()
+    {
+        var fixture = MotionDqProcess.Version1;
+        var transition = fixture.Transitions.SubmitPrequalification;
+        var emissions = transition.Definition.Body.Steps.OfType<EmitTransitionNode>().ToArray();
+
+        Assert.Collection(
+            emissions,
+            emission => Assert.Equal(
+                fixture.Interactions.PrequalificationSubmittedEvent.Definition,
+                emission.Contract),
+            emission => Assert.Equal(
+                fixture.Interactions.PrequalificationAuditEvent.Definition,
+                emission.Contract));
+        Assert.All(
+            emissions,
+            emission => Assert.True(
+                fixture.Interactions.Catalog.TryResolve(emission.Contract, out _)));
     }
 
     [Fact]
