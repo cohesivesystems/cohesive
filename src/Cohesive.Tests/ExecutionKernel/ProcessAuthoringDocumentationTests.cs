@@ -54,8 +54,19 @@ public sealed class ProcessAuthoringDocumentationTests
                 throwOnError: false));
     }
 
-    static string RepositoryRoot([System.Runtime.CompilerServices.CallerFilePath] string testFile = "") =>
-        Path.GetFullPath(Path.Combine(Path.GetDirectoryName(testFile)!, "..", "..", ".."));
+    static string RepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "Cohesive.sln")))
+                return directory.FullName;
+
+            directory = directory.Parent;
+        }
+
+        throw new InvalidOperationException("Could not locate the Cohesive repository root.");
+    }
 
     static string Extract(string text, string startMarker, string endMarker)
     {
