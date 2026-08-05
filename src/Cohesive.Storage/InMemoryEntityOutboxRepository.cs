@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+using Cohesive.Execution;
 using Cohesive.Relations.Mapping;
 using Cohesive.Relations.Model;
 using Cohesive.Storage.Processes;
@@ -14,7 +16,8 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
     readonly Dictionary<string, EntitySnapshot> snapshotsByKey = new(StringComparer.Ordinal);
     readonly Dictionary<string, HashSet<string>> partitionKeysByObservationId = new(StringComparer.Ordinal);
     readonly Dictionary<ProcessOperationOccurrence, EntityTransitionOperationReceipt> transitionOperationReceipts = [];
-    readonly List<EntityOutboxMessage> outboxMessages = [];
+    readonly List<InteractionEnvelope> outboxEnvelopes = [];
+    readonly Dictionary<EmissionId, InteractionEnvelopeContentFingerprint> outboxEnvelopeFingerprintsById = [];
     readonly EntityDefinition entityDefinition;
     readonly EntityPartitionKeyPolicy partitionKeyPolicy;
     readonly Action<EntityTransitionOperationCommitPhase>? transitionOperationCommitBoundary;
@@ -110,13 +113,13 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
     public EntityTransitionOperationCapabilities TransitionOperationCapabilities =>
         EntityTransitionOperationCapabilities.AtomicStateAndReceipt;
 
-    /// <summary>Gets the outbox messages.</summary>
-    public IReadOnlyList<EntityOutboxMessage> OutboxMessages
+    /// <summary>Gets the canonical envelopes retained by the entity outbox in commit order.</summary>
+    public IReadOnlyList<InteractionEnvelope> OutboxEnvelopes
     {
         get
         {
             lock (gate)
-                return [.. outboxMessages];
+                return [.. outboxEnvelopes];
         }
     }
 
@@ -159,7 +162,7 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
             return Task.FromResult(UpsertUnderLock(context, write));
     }
 
-    /// <summary>Atomically upserts an entity snapshot and appends its outbox messages.</summary>
+    /// <summary>Atomically upserts an entity snapshot and appends its canonical outbox envelopes.</summary>
     public Task<EntityCommitResult> UpsertWithOutbox(OperationContext context, EntityOutboxCommit commit)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -167,12 +170,81 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
         context.ThrowIfCancellationRequested();
         EnsureEntityType(commit.Write.Entity);
 
+        var fingerprints = Fingerprint(commit.Envelopes);
+
         lock (gate)
         {
+            if (TryReplayOutboxCommit(context, commit, fingerprints, out var replay))
+                return Task.FromResult(replay);
+
             var snapshot = UpsertUnderLock(context, commit.Write);
-            outboxMessages.AddRange(commit.Messages);
-            return Task.FromResult(new EntityCommitResult(snapshot, commit.Messages));
+            for (var index = 0; index < commit.Envelopes.Length; index++)
+            {
+                var envelope = commit.Envelopes[index];
+                outboxEnvelopes.Add(envelope);
+                outboxEnvelopeFingerprintsById.Add(
+                    envelope.Context.EmissionId,
+                    fingerprints[index]);
+            }
+            return Task.FromResult(new EntityCommitResult(snapshot, commit.Envelopes));
         }
+    }
+
+    bool TryReplayOutboxCommit(
+        OperationContext context,
+        EntityOutboxCommit commit,
+        ImmutableArray<InteractionEnvelopeContentFingerprint> fingerprints,
+        out EntityCommitResult result)
+    {
+        var retainedCount = 0;
+        for (var index = 0; index < commit.Envelopes.Length; index++)
+        {
+            var identity = commit.Envelopes[index].Context.EmissionId;
+            if (!outboxEnvelopeFingerprintsById.TryGetValue(identity, out var retainedFingerprint))
+                continue;
+
+            retainedCount++;
+            if (retainedFingerprint != fingerprints[index])
+                throw new InvalidOperationException(
+                    $"Entity outbox emission identity '{identity.Value}' is retained with different canonical content.");
+        }
+
+        if (retainedCount == 0)
+        {
+            result = null!;
+            return false;
+        }
+        if (retainedCount != commit.Envelopes.Length)
+        {
+            throw new InvalidOperationException(
+                "An entity outbox retry cannot mix retained and previously unseen emission identities.");
+        }
+
+        var partitionKey = GetPartitionKey(context, commit.Write.Entity);
+        if (!snapshotsByKey.TryGetValue(CreateKey(commit.Write.Entity.Id, partitionKey), out var snapshot)
+            || !snapshot.Entity.HasSameContent(commit.Write.Entity))
+        {
+            throw new InvalidOperationException(
+                "The entity outbox emissions are retained, but the candidate entity differs from their atomic commit.");
+        }
+
+        result = new(snapshot, commit.Envelopes);
+        return true;
+    }
+
+    static ImmutableArray<InteractionEnvelopeContentFingerprint> Fingerprint(
+        ImmutableArray<InteractionEnvelope> envelopes)
+    {
+        if (envelopes.IsEmpty)
+        {
+            return [];
+        }
+
+        var fingerprints = ImmutableArray.CreateBuilder<InteractionEnvelopeContentFingerprint>(envelopes.Length);
+        foreach (var envelope in envelopes)
+            fingerprints.Add(InteractionEnvelopeJsonSerializer.ComputeContentFingerprint(envelope));
+
+        return fingerprints.MoveToImmutable();
     }
 
     /// <summary>Looks up an exact Process Transition operation receipt.</summary>

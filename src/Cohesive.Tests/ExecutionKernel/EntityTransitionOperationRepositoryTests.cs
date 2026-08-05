@@ -59,7 +59,7 @@ public sealed class EntityTransitionOperationRepositoryTests
         Assert.Equal(
             EntityTransitionEmissionPublicationAuthority.ProcessOutbox,
             receipt.PublicationAuthority);
-        Assert.Empty(fixture.Repository.OutboxMessages);
+        Assert.Empty(fixture.Repository.OutboxEnvelopes);
         Assert.Equal(
             "approved",
             receipt.Entity.Entity.GetField(nameof(CustomerEntity.Status)).GetString());

@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Cohesive.Api;
 using Cohesive.Execution;
 using Cohesive.Model;
@@ -16,7 +17,8 @@ sealed class TransitionEntityApiOperationBinding : EntityApiOperationBinding
     readonly Func<EntityApiRequestContext, object?, object?>? createTransitionInput;
     readonly Func<EntityApiCommitContext, EntitySnapshot, IResult> createResult;
     readonly Func<EntityApiRequestContext, object?, EntityConcurrencyToken?>? getExpectedConcurrencyToken;
-    readonly Func<EntityApiCommitContext, IReadOnlyList<EntityOutboxMessage>>? createOutboxMessages;
+    readonly InteractionContractCatalog? interactionContracts;
+    readonly Func<EntityApiCommitContext, TransitionEmissionLoweringPolicy>? createEmissionPolicy;
 
     internal TransitionEntityApiOperationBinding(
         string operationName,
@@ -24,14 +26,16 @@ sealed class TransitionEntityApiOperationBinding : EntityApiOperationBinding
         Func<EntityApiRequestContext, object?, object?>? createTransitionInput,
         Func<EntityApiCommitContext, EntitySnapshot, IResult> createResult,
         Func<EntityApiRequestContext, object?, EntityConcurrencyToken?>? getExpectedConcurrencyToken,
-        Func<EntityApiCommitContext, IReadOnlyList<EntityOutboxMessage>>? createOutboxMessages)
+        InteractionContractCatalog? interactionContracts,
+        Func<EntityApiCommitContext, TransitionEmissionLoweringPolicy>? createEmissionPolicy)
         : base(operationName)
     {
         this.plan = plan ?? throw new ArgumentNullException(nameof(plan));
         this.createTransitionInput = createTransitionInput;
         this.createResult = createResult ?? throw new ArgumentNullException(nameof(createResult));
         this.getExpectedConcurrencyToken = getExpectedConcurrencyToken;
-        this.createOutboxMessages = createOutboxMessages;
+        this.interactionContracts = interactionContracts;
+        this.createEmissionPolicy = createEmissionPolicy;
     }
 
     internal TransitionEntityApiOperationBinding(
@@ -40,14 +44,16 @@ sealed class TransitionEntityApiOperationBinding : EntityApiOperationBinding
         Func<EntityApiRequestContext, object?, object?>? createTransitionInput,
         Func<EntityApiCommitContext, EntitySnapshot, IResult> createResult,
         Func<EntityApiRequestContext, object?, EntityConcurrencyToken?>? getExpectedConcurrencyToken,
-        Func<EntityApiCommitContext, IReadOnlyList<EntityOutboxMessage>>? createOutboxMessages)
+        InteractionContractCatalog? interactionContracts,
+        Func<EntityApiCommitContext, TransitionEmissionLoweringPolicy>? createEmissionPolicy)
         : base(endpoint)
     {
         this.plan = plan ?? throw new ArgumentNullException(nameof(plan));
         this.createTransitionInput = createTransitionInput;
         this.createResult = createResult ?? throw new ArgumentNullException(nameof(createResult));
         this.getExpectedConcurrencyToken = getExpectedConcurrencyToken;
-        this.createOutboxMessages = createOutboxMessages;
+        this.interactionContracts = interactionContracts;
+        this.createEmissionPolicy = createEmissionPolicy;
     }
 
     internal override Delegate CreateHandler(ApiOperation operation, EntityApiEndpointOptions options)
@@ -117,22 +123,45 @@ sealed class TransitionEntityApiOperationBinding : EntityApiOperationBinding
                 return createResult(commitContext, snapshot);
             }
 
-            if (!decision.Emissions.IsDefaultOrEmpty && createOutboxMessages is null)
-            {
-                throw new InvalidOperationException(
-                    $"Canonical Transition '{plan.DefinitionReference.DefinitionId.Value}' emitted interaction "
-                    + "intents, but the ASP.NET binding has no explicit outbox projection.");
-            }
+            var envelopes = LowerEmissions(commitContext, decision);
 
             var expectedToken = getExpectedConcurrencyToken?.Invoke(requestContext, request) ?? snapshot.ConcurrencyToken;
             var updated = await EntityApiRequestSupport.CommitAsync(
                     commitContext,
                     options,
                     expectedToken,
-                    createOutboxMessages)
+                    envelopes)
                 .ConfigureAwait(false);
             return createResult(commitContext, updated);
         };
+    }
+
+    ImmutableArray<InteractionEnvelope> LowerEmissions(
+        EntityApiCommitContext context,
+        TransitionDecision decision)
+    {
+        if (decision.Emissions.IsEmpty)
+            return [];
+
+        if (interactionContracts is null || createEmissionPolicy is null)
+        {
+            throw new InvalidOperationException(
+                $"Canonical Transition '{plan.DefinitionReference.DefinitionId.Value}' emitted interaction "
+                + "intents, but the ASP.NET binding has no canonical interaction catalog and lowering policy.");
+        }
+
+        var validation = TransitionEmissionEnvelopeLowerer.TryLower(
+            decision,
+            interactionContracts,
+            createEmissionPolicy(context),
+            out var envelopes);
+        if (validation.IsValid)
+            return envelopes;
+
+        var diagnostic = validation.Diagnostics[0];
+        throw new InvalidOperationException(
+            $"Canonical Transition emission lowering failed with '{diagnostic.Code}' at "
+            + $"'{diagnostic.Location}': {diagnostic.Message}");
     }
 
     static EntityState CreateCandidateState(

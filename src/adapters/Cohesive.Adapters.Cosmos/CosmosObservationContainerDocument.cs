@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cohesive.Model;
 
@@ -41,6 +42,12 @@ sealed record CosmosObservationContainerDocument(
     [property: JsonPropertyName("spanId")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? SpanId = null,
+    [property: JsonPropertyName("envelope")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    JsonElement? Envelope = null,
+    [property: JsonPropertyName("envelopeFingerprint")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? EnvelopeFingerprint = null,
     [property: JsonPropertyName("_etag")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? ETag = null);

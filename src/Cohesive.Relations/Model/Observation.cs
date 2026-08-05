@@ -98,7 +98,7 @@ public sealed record Observation
         Version = version;
         Lineage = lineage ?? ObservationLineage.Empty;
     }
-    
+
     /// <summary>
     /// Observation shape.
     /// </summary>
@@ -133,6 +133,33 @@ public sealed record Observation
     /// Field values by canonical field name.
     /// </summary>
     public IReadOnlyDictionary<string, ObservationValue> Fields => field ??= BuildDictionary();
+
+    /// <summary>
+    /// Determines whether another observation carries the same semantic identity, version, lineage, and field values.
+    /// Storage concurrency tokens and physical placement are intentionally outside this comparison.
+    /// </summary>
+    /// <param name="other">Observation to compare, or <see langword="null"/>.</param>
+    /// <returns><see langword="true"/> when both observations carry identical semantic content.</returns>
+    public bool HasSameContent(Observation? other)
+    {
+        if (other is null
+            || ShapeId != other.ShapeId
+            || !string.Equals(Id, other.Id, StringComparison.Ordinal)
+            || Version != other.Version
+            || Lineage != other.Lineage
+            || Fields.Count != other.Fields.Count)
+        {
+            return false;
+        }
+
+        foreach (var (name, value) in Fields)
+        {
+            if (!other.Fields.TryGetValue(name, out var candidate) || value != candidate)
+                return false;
+        }
+
+        return true;
+    }
 
     /// <summary>
     /// Materializes this observation into a CLR shape using the shared shape mapper.
@@ -315,7 +342,7 @@ public sealed record Observation
             throw new ArgumentException("JSON payload root must be an object.", SourceName);
 
         var id = options.IdOverride ?? ReadRequiredString(root, options.IdPropertyName);
-        
+
         var version = options.VersionOverride
                       ?? ReadVersion(root, options.VersionPropertyName)
                       ?? 0;
@@ -325,7 +352,7 @@ public sealed record Observation
             : root.TryGetProperty(options.StatePropertyName, out var nestedState)
                 ? nestedState
                 : throw new ArgumentException($"JSON payload does not contain '{options.StatePropertyName}'.", SourceName);
-        
+
         var ignored = BuildIgnoredProperties(options);
         if (root.ValueKind != JsonValueKind.Object)
             throw new ArgumentException("State payload must be a JSON object.", SourceName);

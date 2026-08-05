@@ -1,11 +1,15 @@
 using Cohesive.Adapters.Cosmos;
-using Cohesive.Relations.Model;
+using Cohesive.Execution;
+using Cohesive.Model.Serialization;
 using Cohesive.Storage;
+using Microsoft.Azure.Cosmos;
 
 namespace Cohesive.Tests.Model;
 
 public sealed class EntityRepositoryContractsTests
 {
+    const string EmulatorMasterKey = "C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==";
+
     [Fact]
     public void EntityReadOptions_WithExpectedConcurrencyToken_StoresValue()
     {
@@ -95,6 +99,72 @@ public sealed class EntityRepositoryContractsTests
         Assert.Same(options, CosmosObservationOutboxRepositoryOptions.RequireValid(options));
     }
 
+    [Fact]
+    public void CosmosOutboxDocument_RoundTripsExactCanonicalEnvelopeAndFingerprint()
+    {
+        var eventDocument = InteractionContractDocuments.Create(
+            new("tests/cosmos/outbox/event"),
+            new("revision/1"),
+            new DomainEventContractDefinition(new(
+                new(new ScalarTypeRef(ScalarTypeKind.String)),
+                new("event/v1"))),
+            Provenance());
+        var contracts = Catalog(eventDocument);
+        var state = RepositoryEntity.Instance.CreateState(
+            "obs-1",
+            new RepositoryState("obs-1", "tenant-a", "payload"));
+        var envelope = new DomainEventEnvelope(
+            InteractionEnvelope.CurrentSchemaVersion,
+            new(
+                new("emission/cosmos/1"),
+                new TransitionInteractionOrigin(
+                    Reference(eventDocument),
+                    new("emit/event"),
+                    new(new(state.Observation.ShapeId.Value), new(state.Observation.Id)),
+                    new("outcome/applied")),
+                new("correlation/cosmos/1"),
+                causationId: null,
+                new("authority/tests", "tenant-a"),
+                new("idempotency/cosmos/1"),
+                ordering: null,
+                new(InteractionDurabilityDemand.Durable, InteractionVisibilityDemand.AfterOriginCommit),
+                Provenance()),
+            new(Reference(eventDocument)),
+            PortableValue.Concrete(
+                new(new ScalarTypeRef(ScalarTypeKind.String)),
+                ObservationValue.FromString("payload")));
+        using CosmosClient client = new(
+            "https://localhost:8081/",
+            EmulatorMasterKey,
+            new CosmosClientOptions { ConnectionMode = ConnectionMode.Gateway });
+        var repository = new CosmosEntityOutboxRepository(
+            RepositoryEntity.Instance.Definition,
+            client.GetContainer("tests", "entities"),
+            partitionKeyPolicy: EntityPartitionKeyPolicy.FromField(nameof(RepositoryState.Tenant)));
+        var document = Assert.Single(repository.CreateOutboxDocuments(
+            OperationContext.Create(),
+            new EntityOutboxCommit(new(state.Observation), [envelope]),
+            partitionKey: "tenant-a"));
+        var serializer = new CosmosSystemTextJsonSerializer();
+
+        var roundTrip = serializer.FromStream<CosmosObservationContainerDocument>(serializer.ToStream(document));
+        var restored = CosmosEntityOutboxRepository.DeserializeOutboxEnvelope(roundTrip, contracts);
+
+        Assert.Equal(
+            InteractionEnvelopeJsonSerializer.Serialize(envelope),
+            InteractionEnvelopeJsonSerializer.Serialize(restored));
+        Assert.Equal(document.EnvelopeFingerprint, roundTrip.EnvelopeFingerprint);
+
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            CosmosEntityOutboxRepository.DeserializeOutboxEnvelope(
+                roundTrip with { EnvelopeFingerprint = "sha256-v1:corrupt" },
+                contracts));
+        Assert.Contains("does not match", error.Message, StringComparison.Ordinal);
+        Assert.Equal(eventDocument.Metadata.DefinitionId.Value, document.StreamName);
+        Assert.Equal(state.Observation.ShapeId.Value, document.SubjectType);
+        Assert.Equal("payload", document.Observation?["value"].GetString());
+    }
+
     static CosmosObservationContainerDocument CreateDocument(
         string observationId,
         long version,
@@ -111,4 +181,41 @@ public sealed class EntityRepositoryContractsTests
                 ["Name"] = ObservationValue.FromString("alpha")
             },
             ETag: etag);
+
+    static InteractionContractCatalog Catalog(params ExecutionDefinitionDocument[] documents)
+    {
+        var validation = InteractionContractCatalog.TryCreate(documents, out var catalog);
+        Assert.True(validation.IsValid, string.Join(
+            Environment.NewLine,
+            validation.Diagnostics.Select(static diagnostic => $"{diagnostic.Code}: {diagnostic.Message}")));
+        return Assert.IsType<InteractionContractCatalog>(catalog);
+    }
+
+    static ExecutionDefinitionReference Reference(ExecutionDefinitionDocument document) => new(
+        document.Metadata.DefinitionId,
+        document.Metadata.RevisionId,
+        document.Metadata.Fingerprint);
+
+    static ExecutionProvenance Provenance() => new(
+        new("entity-repository-contract-tests", "1"),
+        new("tests/model/entity-repository-contracts"),
+        DocumentOrigin.Generated);
+
+    sealed class RepositoryEntity : Entity<RepositoryEntity>
+    {
+        public RepositoryEntity()
+        {
+            Id = WriteOnceField<string>(nameof(Id));
+            Tenant = WriteOnceField<string>(nameof(Tenant));
+            Payload = MutableField<string>(nameof(Payload));
+        }
+
+        public Field<string> Id { get; }
+
+        public Field<string> Tenant { get; }
+
+        public Field<string> Payload { get; }
+    }
+
+    sealed record RepositoryState(string Id, string Tenant, string Payload);
 }

@@ -232,10 +232,9 @@ public abstract class EntityApiOperationBinding
         string operationName,
         Func<EntityApiRequestContext, object?, EntityState> createState,
         Func<EntityApiCommitContext, EntitySnapshot, IResult> createResult,
-        Func<EntityApiRequestContext, object?, EntityConcurrencyToken?>? getExpectedConcurrencyToken = null,
-        Func<EntityApiCommitContext, IReadOnlyList<EntityOutboxMessage>>? createOutboxMessages = null
+        Func<EntityApiRequestContext, object?, EntityConcurrencyToken?>? getExpectedConcurrencyToken = null
         ) =>
-        new CreateEntityApiOperationBinding(operationName, createState, createResult, getExpectedConcurrencyToken, createOutboxMessages);
+        new CreateEntityApiOperationBinding(operationName, createState, createResult, getExpectedConcurrencyToken);
 
     /// <summary>
     /// Creates an entity create operation binding.
@@ -244,10 +243,9 @@ public abstract class EntityApiOperationBinding
         ApiEndpoint endpoint,
         Func<EntityApiRequestContext, object?, EntityState> createState,
         Func<EntityApiCommitContext, EntitySnapshot, IResult> createResult,
-        Func<EntityApiRequestContext, object?, EntityConcurrencyToken?>? getExpectedConcurrencyToken = null,
-        Func<EntityApiCommitContext, IReadOnlyList<EntityOutboxMessage>>? createOutboxMessages = null
+        Func<EntityApiRequestContext, object?, EntityConcurrencyToken?>? getExpectedConcurrencyToken = null
         ) =>
-        new CreateEntityApiOperationBinding(endpoint, createState, createResult, getExpectedConcurrencyToken, createOutboxMessages);
+        new CreateEntityApiOperationBinding(endpoint, createState, createResult, getExpectedConcurrencyToken);
 
     /// <summary>
     /// Creates an entity transition operation binding.
@@ -257,21 +255,30 @@ public abstract class EntityApiOperationBinding
     /// <param name="createTransitionInput">Optional projection from HTTP request data to canonical Transition input.</param>
     /// <param name="createResult">Required projection from commit context and effective snapshot to an HTTP result.</param>
     /// <param name="getExpectedConcurrencyToken">Optional expected-concurrency override.</param>
-    /// <param name="createOutboxMessages">
-    /// Optional explicit projection of canonical emission intents and application messages into the entity outbox.
+    /// <param name="interactionContracts">
+    /// Exact interaction-contract catalog used to link and validate emitted Transition intents.
+    /// Required only when the Transition emits.
+    /// </param>
+    /// <param name="createEmissionPolicy">
+    /// Explicit request-scoped identity, authority, delivery, provenance, and Request-target policy.
+    /// Required only when the Transition emits.
     /// </param>
     /// <returns>A binding that interprets <paramref name="plan"/> and commits its decision.</returns>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="plan"/> or <paramref name="createResult"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException"><paramref name="operationName"/> is empty or white space.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// An emitting decision has no canonical interaction catalog or lowering policy, or canonical lowering fails.
+    /// </exception>
     public static EntityApiOperationBinding Transition(
         string operationName,
         CompiledTransitionPlan plan,
         Func<EntityApiRequestContext, object?, object?>? createTransitionInput,
         Func<EntityApiCommitContext, EntitySnapshot, IResult> createResult,
         Func<EntityApiRequestContext, object?, EntityConcurrencyToken?>? getExpectedConcurrencyToken = null,
-        Func<EntityApiCommitContext, IReadOnlyList<EntityOutboxMessage>>? createOutboxMessages = null
+        InteractionContractCatalog? interactionContracts = null,
+        Func<EntityApiCommitContext, TransitionEmissionLoweringPolicy>? createEmissionPolicy = null
         ) =>
         new TransitionEntityApiOperationBinding(
             operationName,
@@ -279,7 +286,8 @@ public abstract class EntityApiOperationBinding
             createTransitionInput,
             createResult,
             getExpectedConcurrencyToken,
-            createOutboxMessages
+            interactionContracts,
+            createEmissionPolicy
             );
 
     /// <summary>
@@ -290,13 +298,21 @@ public abstract class EntityApiOperationBinding
     /// <param name="createTransitionInput">Optional projection from HTTP request data to canonical Transition input.</param>
     /// <param name="createResult">Required projection from commit context and effective snapshot to an HTTP result.</param>
     /// <param name="getExpectedConcurrencyToken">Optional expected-concurrency override.</param>
-    /// <param name="createOutboxMessages">
-    /// Optional explicit projection of canonical emission intents and application messages into the entity outbox.
+    /// <param name="interactionContracts">
+    /// Exact interaction-contract catalog used to link and validate emitted Transition intents.
+    /// Required only when the Transition emits.
+    /// </param>
+    /// <param name="createEmissionPolicy">
+    /// Explicit request-scoped identity, authority, delivery, provenance, and Request-target policy.
+    /// Required only when the Transition emits.
     /// </param>
     /// <returns>A binding that interprets <paramref name="plan"/> and commits its decision.</returns>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="endpoint"/>, <paramref name="plan"/>, or <paramref name="createResult"/> is
     /// <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// An emitting decision has no canonical interaction catalog or lowering policy, or canonical lowering fails.
     /// </exception>
     public static EntityApiOperationBinding Transition(
         ApiEndpoint endpoint,
@@ -304,7 +320,8 @@ public abstract class EntityApiOperationBinding
         Func<EntityApiRequestContext, object?, object?>? createTransitionInput,
         Func<EntityApiCommitContext, EntitySnapshot, IResult> createResult,
         Func<EntityApiRequestContext, object?, EntityConcurrencyToken?>? getExpectedConcurrencyToken = null,
-        Func<EntityApiCommitContext, IReadOnlyList<EntityOutboxMessage>>? createOutboxMessages = null
+        InteractionContractCatalog? interactionContracts = null,
+        Func<EntityApiCommitContext, TransitionEmissionLoweringPolicy>? createEmissionPolicy = null
         ) =>
         new TransitionEntityApiOperationBinding(
             endpoint,
@@ -312,7 +329,8 @@ public abstract class EntityApiOperationBinding
             createTransitionInput,
             createResult,
             getExpectedConcurrencyToken,
-            createOutboxMessages
+            interactionContracts,
+            createEmissionPolicy
             );
 }
 

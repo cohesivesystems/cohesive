@@ -2,7 +2,6 @@ using System.Collections.Immutable;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Execution;
-using Cohesive.Relations.Model;
 using Cohesive.Storage.Processes;
 using Cohesive.Transitions.Execution;
 using Cohesive.Transitions.IR;
@@ -272,7 +271,7 @@ public sealed record EntityTransitionOperationReceipt
     {
         Commit = commit ?? throw new ArgumentNullException(nameof(commit));
         Entity = entity ?? throw new ArgumentNullException(nameof(entity));
-        if (!SameObservation(entity.Entity, commit.Write.Entity))
+        if (!entity.Entity.HasSameContent(commit.Write.Entity))
         {
             throw new ArgumentException(
                 "A Transition operation receipt must retain the exact committed candidate entity state.",
@@ -310,25 +309,6 @@ public sealed record EntityTransitionOperationReceipt
     /// <summary>Sole physical publication authority for the retained canonical envelopes.</summary>
     public EntityTransitionEmissionPublicationAuthority PublicationAuthority => Commit.PublicationAuthority;
 
-    static bool SameObservation(Observation left, Observation right)
-    {
-        if (left.ShapeId != right.ShapeId
-            || !string.Equals(left.Id, right.Id, StringComparison.Ordinal)
-            || left.Version != right.Version
-            || left.Lineage != right.Lineage
-            || left.Fields.Count != right.Fields.Count)
-        {
-            return false;
-        }
-        foreach (var (name, value) in left.Fields)
-        {
-            if (!right.Fields.TryGetValue(name, out var candidate) || value != candidate)
-            {
-                return false;
-            }
-        }
-        return true;
-    }
 }
 
 /// <summary>Observable result of one entity-side Transition operation lookup or commit.</summary>

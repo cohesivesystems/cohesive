@@ -10,34 +10,29 @@ sealed class CreateEntityApiOperationBinding : EntityApiOperationBinding
     readonly Func<EntityApiRequestContext, object?, EntityState> createState;
     readonly Func<EntityApiCommitContext, EntitySnapshot, IResult> createResult;
     readonly Func<EntityApiRequestContext, object?, EntityConcurrencyToken?>? getExpectedConcurrencyToken;
-    readonly Func<EntityApiCommitContext, IReadOnlyList<EntityOutboxMessage>>? createOutboxMessages;
 
     internal CreateEntityApiOperationBinding(
         string operationName,
         Func<EntityApiRequestContext, object?, EntityState> createState,
         Func<EntityApiCommitContext, EntitySnapshot, IResult> createResult,
-        Func<EntityApiRequestContext, object?, EntityConcurrencyToken?>? getExpectedConcurrencyToken,
-        Func<EntityApiCommitContext, IReadOnlyList<EntityOutboxMessage>>? createOutboxMessages)
+        Func<EntityApiRequestContext, object?, EntityConcurrencyToken?>? getExpectedConcurrencyToken)
         : base(operationName)
     {
         this.createState = createState ?? throw new ArgumentNullException(nameof(createState));
         this.createResult = createResult ?? throw new ArgumentNullException(nameof(createResult));
         this.getExpectedConcurrencyToken = getExpectedConcurrencyToken;
-        this.createOutboxMessages = createOutboxMessages;
     }
 
     internal CreateEntityApiOperationBinding(
         ApiEndpoint endpoint,
         Func<EntityApiRequestContext, object?, EntityState> createState,
         Func<EntityApiCommitContext, EntitySnapshot, IResult> createResult,
-        Func<EntityApiRequestContext, object?, EntityConcurrencyToken?>? getExpectedConcurrencyToken,
-        Func<EntityApiCommitContext, IReadOnlyList<EntityOutboxMessage>>? createOutboxMessages)
+        Func<EntityApiRequestContext, object?, EntityConcurrencyToken?>? getExpectedConcurrencyToken)
         : base(endpoint)
     {
         this.createState = createState ?? throw new ArgumentNullException(nameof(createState));
         this.createResult = createResult ?? throw new ArgumentNullException(nameof(createResult));
         this.getExpectedConcurrencyToken = getExpectedConcurrencyToken;
-        this.createOutboxMessages = createOutboxMessages;
     }
 
     internal override Delegate CreateHandler(ApiOperation operation, EntityApiEndpointOptions options) =>
@@ -71,8 +66,7 @@ sealed class CreateEntityApiOperationBinding : EntityApiOperationBinding
             var snapshot = await EntityApiRequestSupport.CommitAsync(
                 commitContext,
                 options,
-                expectedToken,
-                createOutboxMessages
+                expectedToken
                 ).ConfigureAwait(false);
             return createResult(commitContext, snapshot);
         };
