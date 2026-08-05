@@ -224,6 +224,7 @@ public static class ProcessReferenceIdentities
             || origin.Node != node.Id
             || origin.Entity is not null
             || origin.Transition is not null
+            || origin.TransitionNode is not null
             || origin.Outcome is not null
             || request.ResponseTarget is not ProcessTokenInteractionTarget responseTarget)
         {

@@ -957,6 +957,7 @@ public static class ProcessCheckpointCompatibilityValidator
             || origin.Token != trace.Token
             || origin.Entity is not null
             || origin.Transition is not null
+            || origin.TransitionNode is not null
             || origin.Outcome is not null
             || !plan.Definition.Nodes.Any(node => node.Id == trace.Node))
         {
@@ -1013,10 +1014,13 @@ public static class ProcessCheckpointCompatibilityValidator
             ProcessDefinitionLinkKind.RelationQuery =>
                 origin.Entity is null
                 && origin.Transition is null
+                && origin.TransitionNode is null
                 && origin.Outcome is null,
             ProcessDefinitionLinkKind.Transition =>
                 origin.Entity is not null
-                && origin.Transition == receipt.OperationDefinition,
+                && origin.Transition == receipt.OperationDefinition
+                && origin.TransitionNode is not null
+                && origin.Outcome is not null,
             _ => false
         };
     }
