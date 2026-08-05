@@ -10,7 +10,8 @@ namespace Cohesive.Processes.Authoring;
 /// </summary>
 /// <remarks>
 /// The named method is never executed. <c>Cohesive.Analyzers</c> reads its syntax and emits a <c>Define</c>
-/// factory that constructs the canonical Process document through <see cref="ProcessBuilder{TInput,TResult}"/>.
+/// factory that constructs the canonical Process document through the advanced lowering surface. The generated
+/// factory, not the annotated method or a compiler state machine, is the runtime-visible API.
 /// </remarks>
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
 public sealed class GenerateProcessDefinitionAttribute : Attribute

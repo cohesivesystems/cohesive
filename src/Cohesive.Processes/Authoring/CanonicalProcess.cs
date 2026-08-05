@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using Cohesive.Execution;
@@ -357,12 +358,17 @@ public sealed class Process<TInput, TResult>
 }
 
 /// <summary>Produces canonical Process IR and execution documents from finite typed C# construction.</summary>
+/// <remarks>
+/// Human-written Process definitions should normally use <see cref="GenerateProcessDefinitionAttribute"/> and the
+/// generated <c>Define</c> factory. The callback overloads are an advanced lowering escape hatch for generators,
+/// importers, compiler tests, and infrastructure that already owns canonical graph construction.
+/// </remarks>
 public static partial class ProcessAuthoring
 {
     /// <summary>Stable producer identity for the canonical C# Process frontend.</summary>
     public const string Producer = "cohesive.processes.csharp/v1";
 
-    /// <summary>Authors one canonical Process document.</summary>
+    /// <summary>Authors one canonical Process document through the advanced low-level builder surface.</summary>
     /// <remarks>
     /// CLR nullable-reference annotations are not reified in generic <see cref="Type"/> values. Use the explicit
     /// occurrence-contract overload when top-level input or result reference nullability is semantic.
@@ -391,6 +397,7 @@ public static partial class ProcessAuthoring
     /// <exception cref="System.Text.Json.JsonException">
     /// Authored canonical content cannot be encoded by the strict execution serializer.
     /// </exception>
+    [EditorBrowsable(EditorBrowsableState.Advanced)]
     public static Process<TInput, TResult> Create<TInput, TResult>(
         ProcessAuthoringMetadata metadata,
         Action<ProcessBuilder<TInput, TResult>> configure,
@@ -406,7 +413,10 @@ public static partial class ProcessAuthoring
             sourceLine,
             sourceMember);
 
-    /// <summary>Authors one canonical Process document using explicit top-level occurrence contracts.</summary>
+    /// <summary>
+    /// Authors one canonical Process document through the advanced low-level builder surface using explicit
+    /// top-level occurrence contracts.
+    /// </summary>
     /// <typeparam name="TInput">Typed invocation input represented by <paramref name="inputContract"/>.</typeparam>
     /// <typeparam name="TResult">Typed terminal result represented by <paramref name="resultContract"/>.</typeparam>
     /// <param name="metadata">Stable identity, revision, entry, recovery policy, and provenance.</param>
@@ -438,6 +448,7 @@ public static partial class ProcessAuthoring
     /// <exception cref="System.Text.Json.JsonException">
     /// Authored canonical content cannot be encoded by the strict execution serializer.
     /// </exception>
+    [EditorBrowsable(EditorBrowsableState.Advanced)]
     public static Process<TInput, TResult> Create<TInput, TResult>(
         ProcessAuthoringMetadata metadata,
         ValueContract inputContract,
