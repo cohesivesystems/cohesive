@@ -1,5 +1,6 @@
 using Cohesive.Relations.Mapping;
 using Cohesive.Relations.Model;
+using Cohesive.Storage.Processes;
 using Cohesive.Transitions.Model;
 
 namespace Cohesive.Storage;
@@ -7,14 +8,16 @@ namespace Cohesive.Storage;
 /// <summary>
 /// In-memory observation repository with atomic outbox support for one logical observation type.
 /// </summary>
-public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository
+public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IEntityTransitionOperationRepository
 {
     readonly Lock gate = new();
     readonly Dictionary<string, EntitySnapshot> snapshotsByKey = new(StringComparer.Ordinal);
     readonly Dictionary<string, HashSet<string>> partitionKeysByObservationId = new(StringComparer.Ordinal);
+    readonly Dictionary<ProcessOperationOccurrence, EntityTransitionOperationReceipt> transitionOperationReceipts = [];
     readonly List<EntityOutboxMessage> outboxMessages = [];
     readonly EntityDefinition entityDefinition;
     readonly EntityPartitionKeyPolicy partitionKeyPolicy;
+    readonly Action<EntityTransitionOperationCommitPhase>? transitionOperationCommitBoundary;
     long nextConcurrencyVersion;
 
     /// <summary>Initializes a new instance of the in memory entity outbox repository type.</summary>
@@ -48,6 +51,18 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository
 
         foreach (var snapshot in seedSnapshots)
             SeedSnapshot(snapshot);
+    }
+
+    internal InMemoryEntityOutboxRepository(
+        EntityDefinition entityDefinition,
+        EntityPartitionKeyPolicy partitionKeyPolicy,
+        Action<EntityTransitionOperationCommitPhase> transitionOperationCommitBoundary,
+        IEnumerable<EntitySnapshot>? seedSnapshots = null,
+        ShapeMappingContext? mappingContext = null)
+        : this(entityDefinition, partitionKeyPolicy, seedSnapshots, mappingContext)
+    {
+        this.transitionOperationCommitBoundary =
+            transitionOperationCommitBoundary ?? throw new ArgumentNullException(nameof(transitionOperationCommitBoundary));
     }
 
     /// <summary>Initializes a new instance of the in memory entity outbox repository type.</summary>
@@ -90,6 +105,10 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository
 
     /// <summary>Gets the entity type.</summary>
     public string EntityType => entityDefinition.Shape.Id.Value;
+
+    /// <summary>Gets atomic entity-state and Process Transition receipt capabilities.</summary>
+    public EntityTransitionOperationCapabilities TransitionOperationCapabilities =>
+        EntityTransitionOperationCapabilities.AtomicStateAndReceipt;
 
     /// <summary>Gets the outbox messages.</summary>
     public IReadOnlyList<EntityOutboxMessage> OutboxMessages
@@ -137,39 +156,164 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository
         EnsureEntityType(write.Entity);
 
         lock (gate)
-        {
-            var partitionKey = GetPartitionKey(context, write.Entity);
-            var key = CreateKey(write.Entity.Id, partitionKey);
-            if (write.ExpectedConcurrencyToken is { } expected
-                && (!snapshotsByKey.TryGetValue(key, out var current) || current.ConcurrencyToken != expected))
-            {
-                throw new ObservationConcurrencyConflictException(
-                    $"Observation '{EntityType}:{write.Entity.Id}' failed optimistic concurrency validation.");
-            }
-
-            var snapshot = new EntitySnapshot(
-                Entity: write.Entity,
-                PartitionKey: partitionKey,
-                ConcurrencyToken: new(CreateConcurrencyToken()));
-            snapshotsByKey[key] = snapshot;
-            TrackObservation(snapshot.Entity.Id, partitionKey);
-            return Task.FromResult(snapshot);
-        }
+            return Task.FromResult(UpsertUnderLock(context, write));
     }
 
     /// <summary>Atomically upserts an entity snapshot and appends its outbox messages.</summary>
-    public async Task<EntityCommitResult> UpsertWithOutbox(OperationContext context, EntityOutboxCommit commit)
+    public Task<EntityCommitResult> UpsertWithOutbox(OperationContext context, EntityOutboxCommit commit)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(commit);
         context.ThrowIfCancellationRequested();
+        EnsureEntityType(commit.Write.Entity);
 
-        var snapshot = await Upsert(context, commit.Write).ConfigureAwait(false);
         lock (gate)
+        {
+            var snapshot = UpsertUnderLock(context, commit.Write);
             outboxMessages.AddRange(commit.Messages);
-
-        return new(snapshot, commit.Messages);
+            return Task.FromResult(new EntityCommitResult(snapshot, commit.Messages));
+        }
     }
+
+    /// <summary>Looks up an exact Process Transition operation receipt.</summary>
+    /// <param name="context">Operation context and cancellation.</param>
+    /// <param name="request">Exact replay lookup identity.</param>
+    /// <returns>Missing, replay, or identity-conflict evidence.</returns>
+    /// <exception cref="ArgumentNullException">Any argument is <see langword="null"/>.</exception>
+    /// <exception cref="OperationCanceledException">The operation is cancelled before the lookup.</exception>
+    public Task<EntityTransitionOperationResult> TryGetTransitionOperation(
+        OperationContext context,
+        EntityTransitionOperationRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(request);
+        context.ThrowIfCancellationRequested();
+
+        lock (gate)
+        {
+            return Task.FromResult(
+                transitionOperationReceipts.TryGetValue(request.Operation, out var retained)
+                    ? ReplayOrRequestConflict(request, retained)
+                    : EntityTransitionOperationResult.NotFound());
+        }
+    }
+
+    /// <summary>Atomically commits candidate entity state and one Process Transition operation receipt.</summary>
+    /// <param name="context">Operation context, time, and cancellation.</param>
+    /// <param name="commit">Complete deterministic atomic commit intent.</param>
+    /// <returns>Committed, replayed, stale-concurrency, or identity-conflict evidence.</returns>
+    /// <exception cref="ArgumentNullException">Any argument is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The candidate entity does not belong to this repository or cannot resolve a partition key.
+    /// </exception>
+    /// <exception cref="OperationCanceledException">The operation is cancelled before the atomic boundary.</exception>
+    public Task<EntityTransitionOperationResult> CommitTransitionOperation(
+        OperationContext context,
+        EntityTransitionOperationCommit commit)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(commit);
+        context.ThrowIfCancellationRequested();
+        EnsureEntityType(commit.Write.Entity);
+
+        lock (gate)
+        {
+            if (transitionOperationReceipts.TryGetValue(commit.Request.Operation, out var retained))
+                return Task.FromResult(ReplayOrCommitConflict(commit, retained));
+        }
+
+        ObserveTransitionOperationCommitBoundary(EntityTransitionOperationCommitPhase.BeforeAtomicCommit);
+
+        EntityTransitionOperationResult result;
+        lock (gate)
+        {
+            if (transitionOperationReceipts.TryGetValue(commit.Request.Operation, out var retained))
+            {
+                result = ReplayOrCommitConflict(commit, retained);
+            }
+            else
+            {
+                var partitionKey = GetPartitionKey(context, commit.Write.Entity);
+                var key = CreateKey(commit.Write.Entity.Id, partitionKey);
+                var expected = commit.Write.ExpectedConcurrencyToken!.Value;
+                if (!snapshotsByKey.TryGetValue(key, out var current)
+                    || current.ConcurrencyToken != expected)
+                {
+                    result = EntityTransitionOperationRepositoryExtensions.ConcurrencyConflict(
+                        $"Entity '{EntityType}:{commit.Write.Entity.Id}' no longer matches concurrency fence '{expected.Value}'.");
+                }
+                else
+                {
+                    var snapshot = new EntitySnapshot(
+                        Entity: commit.Write.Entity,
+                        PartitionKey: partitionKey,
+                        ConcurrencyToken: new(CreateConcurrencyToken()));
+                    var receipt = new EntityTransitionOperationReceipt(commit, snapshot, context.UtcNow);
+                    snapshotsByKey[key] = snapshot;
+                    transitionOperationReceipts.Add(commit.Request.Operation, receipt);
+                    TrackObservation(snapshot.Entity.Id, partitionKey);
+                    result = EntityTransitionOperationResult.Committed(receipt);
+                }
+            }
+        }
+
+        if (result.Disposition == EntityTransitionOperationDisposition.Committed)
+        {
+            ObserveTransitionOperationCommitBoundary(
+                EntityTransitionOperationCommitPhase.AfterAtomicCommitBeforeReturn);
+        }
+
+        return Task.FromResult(result);
+    }
+
+    EntitySnapshot UpsertUnderLock(OperationContext context, EntityWriteRequest write)
+    {
+        var partitionKey = GetPartitionKey(context, write.Entity);
+        var key = CreateKey(write.Entity.Id, partitionKey);
+        if (write.ExpectedConcurrencyToken is { } expected
+            && (!snapshotsByKey.TryGetValue(key, out var current) || current.ConcurrencyToken != expected))
+        {
+            throw new ObservationConcurrencyConflictException(
+                $"Observation '{EntityType}:{write.Entity.Id}' failed optimistic concurrency validation.");
+        }
+
+        var snapshot = new EntitySnapshot(
+            Entity: write.Entity,
+            PartitionKey: partitionKey,
+            ConcurrencyToken: new(CreateConcurrencyToken()));
+        snapshotsByKey[key] = snapshot;
+        TrackObservation(snapshot.Entity.Id, partitionKey);
+        return snapshot;
+    }
+
+    static EntityTransitionOperationResult ReplayOrRequestConflict(
+        EntityTransitionOperationRequest request,
+        EntityTransitionOperationReceipt retained) =>
+        retained.Request.Fingerprint == request.Fingerprint
+            ? EntityTransitionOperationResult.Replayed(retained)
+            : EntityTransitionOperationRepositoryExtensions.IdentityConflict(
+                "The Process operation occurrence is retained for another Transition, subject, or input.",
+                "/request");
+
+    static EntityTransitionOperationResult ReplayOrCommitConflict(
+        EntityTransitionOperationCommit commit,
+        EntityTransitionOperationReceipt retained)
+    {
+        if (retained.Request.Fingerprint != commit.Request.Fingerprint)
+        {
+            return EntityTransitionOperationRepositoryExtensions.IdentityConflict(
+                "The Process operation occurrence is retained for another Transition, subject, or input.",
+                "/request");
+        }
+        return retained.Commit.Fingerprint == commit.Fingerprint
+            ? EntityTransitionOperationResult.Replayed(retained)
+            : EntityTransitionOperationRepositoryExtensions.IdentityConflict(
+                "The Process operation occurrence is retained with another candidate state or normalized result.",
+                "/commit");
+    }
+
+    void ObserveTransitionOperationCommitBoundary(EntityTransitionOperationCommitPhase phase) =>
+        transitionOperationCommitBoundary?.Invoke(phase);
 
     /// <summary>
     /// Captures one immutable snapshot for canonical in-memory relation/query acquisition.
@@ -316,4 +460,10 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository
 
     static string CreateKey(string id, string partitionKey) => $"{partitionKey}::{id}";
 
+}
+
+internal enum EntityTransitionOperationCommitPhase
+{
+    BeforeAtomicCommit = 0,
+    AfterAtomicCommitBeforeReturn = 1
 }
