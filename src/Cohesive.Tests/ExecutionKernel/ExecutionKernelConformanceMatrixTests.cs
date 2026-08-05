@@ -167,6 +167,10 @@ public sealed class ExecutionKernelConformanceMatrixTests
             "EK-09",
             typeof(CanonicalTransitionAuthoringTests),
             nameof(CanonicalTransitionAuthoringTests.TypedCSharpAuthoring_LowersToEquivalentDirectCanonicalIrDeterministically)),
+        Semantic(
+            "EK-09",
+            typeof(ProcessComputationAuthoringTests),
+            nameof(ProcessComputationAuthoringTests.SignalTimerRace_IsByteEquivalentAndRecoversIdenticallyToLowLevelAuthoring)),
 
         Semantic(
             "EK-10",

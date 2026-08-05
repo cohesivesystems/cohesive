@@ -2,7 +2,7 @@ using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
 using Cohesive.Execution;
-using Cohesive.Model;
+using Cohesive.Model.Authoring;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Authoring;
 using Cohesive.Processes.Compilation;
@@ -665,14 +665,17 @@ public sealed class ProcessComputationAuthoringTests
         var awaitMatch = Node("await-match-0");
         var signalClause = Owned(awaitMatch, "interaction-clause-Signalled");
         var timerClause = Owned(awaitMatch, "timer-clause-TimedOut");
-        var returned = Node("return-0");
+        var signalReturned = ProcessAuthoringIdentities.NodeFor(new(
+            ["body", "await-match-0", "interaction-clause-Signalled", "return-0"]));
+        var timerReturned = ProcessAuthoringIdentities.NodeFor(new(
+            ["body", "await-match-0", "timer-clause-TimedOut", "return-0"]));
         var metadata = SignalTimerMetadata().WithEntry(awaitMatch);
         var generated = GeneratedSignalTimerWaitProcess.Define(metadata);
         var lowLevel = ProcessAuthoring.Create<SignalTimerWaitInput, string>(
             metadata,
             process =>
             {
-                var signalInput = process.Output<string>(signalClause, "input");
+                var signalInput = process.Output<Signalled>(signalClause, "input");
                 var dueAt = process.Input.Field(static input => input.DueAt);
                 var result = process.Input.Field(static input => input.Value);
                 var signal = process.AwaitInteractionClause(
@@ -682,12 +685,12 @@ public sealed class ProcessComputationAuthoringTests
                     requestObligation: null,
                     guard: null,
                     priority: 10,
-                    process.Continuation(process.Edge(signalClause, "next", returned)));
+                    process.Continuation(process.Edge(signalClause, "next", signalReturned)));
                 var timer = process.AwaitTimerClause(
                     timerClause,
                     dueAt,
                     priority: 0,
-                    process.Continuation(process.Edge(timerClause, "next", returned)));
+                    process.Continuation(process.Edge(timerClause, "next", timerReturned)));
 
                 process.AwaitMatch(
                     awaitMatch,
@@ -698,7 +701,8 @@ public sealed class ProcessComputationAuthoringTests
                     ProcessAwaitInputDisposition.ReusePriorDisposition,
                     ProcessAwaitMissingTargetDisposition.DeadLetter,
                     TimeSpan.FromDays(7));
-                process.Return(returned, result);
+                process.Return(signalReturned, signalInput.Field(static input => input.Value));
+                process.Return(timerReturned, result);
             });
 
         Assert.True(generated.IsValid, Format(generated.Validation));
@@ -1017,10 +1021,13 @@ public sealed class ProcessComputationAuthoringTests
                 generated.Definition.Nodes.Select(static (node, index) => $"{index}: {node.GetType().Name} {node.Id.Value}")));
         Assert.Equal(2, generated.Definition.Nodes.OfType<EvaluateRelationProcessNode>().Count());
         Assert.Single(generated.Definition.Nodes.OfType<InvokeTransitionProcessNode>());
-        Assert.Equal(3, generated.Definition.Nodes.OfType<RequestProcessNode>().Count());
-        Assert.Single(generated.Definition.Nodes.OfType<ChoiceProcessNode>());
+        Assert.Equal(4, generated.Definition.Nodes.OfType<RequestProcessNode>().Count());
+        Assert.Equal(2, generated.Definition.Nodes.OfType<ChoiceProcessNode>().Count());
         Assert.Single(generated.Definition.Nodes.OfType<MatchProcessNode>());
-        Assert.Equal(3, generated.Definition.Nodes.OfType<ReturnProcessNode>().Count());
+        Assert.Equal(6, generated.Definition.Nodes.OfType<ReturnProcessNode>().Count());
+        var reviewWait = Assert.Single(generated.Definition.Nodes.OfType<AwaitMatchProcessNode>());
+        Assert.Equal(2, reviewWait.Clauses.OfType<ProcessAwaitInteractionClause>().Count());
+        Assert.Single(reviewWait.Clauses.OfType<ProcessAwaitTimerClause>());
 
         var fork = Assert.Single(generated.Definition.Nodes.OfType<ForkProcessNode>());
         var join = Assert.Single(generated.Definition.Nodes.OfType<JoinProcessNode>());
@@ -1260,7 +1267,9 @@ public sealed class ProcessComputationAuthoringTests
             Assert.True(ProcessContinuationValidator.Validate(generated, generatedState).IsValid);
             Assert.True(ProcessContinuationValidator.Validate(lowLevel, lowLevelState).IsValid);
             if (generatedDecision.Disposition == ProcessActivationDisposition.Completed)
+            {
                 break;
+            }
         }
 
         Assert.NotNull(generatedDecision);
@@ -1317,6 +1326,14 @@ public sealed class ProcessComputationAuthoringTests
         Assert.True(ProcessContinuationValidator.Validate(generated, restored).IsValid);
         var token = Assert.Single(restored.Tokens);
         var target = new ProcessTokenInteractionTarget(restored.Continuation, token.Id);
+        var signalContract = Assert.Single(
+                generated.Definition.Nodes
+                    .OfType<AwaitMatchProcessNode>())
+            .Clauses
+            .OfType<ProcessAwaitInteractionClause>()
+            .Single()
+            .Input
+            .Contract;
         var signal = new SignalEnvelope(
             InteractionEnvelope.CurrentSchemaVersion,
             new(
@@ -1338,8 +1355,8 @@ public sealed class ProcessComputationAuthoringTests
                 generated.Document.Metadata.Provenance),
             GeneratedSignalTimerWaitProcess.Signal,
             PortableValue.Concrete(
-                new(new ScalarTypeRef(ScalarTypeKind.String)),
-                ObservationValue.FromString("accepted")),
+                signalContract,
+                ObservationValue.FromObject(new Signalled("accepted"))),
             target);
         var inputActivation = new ProcessActivation(
             id: new("activation/signal-wait/input"),
@@ -1408,8 +1425,8 @@ public sealed class ProcessComputationAuthoringTests
                 generated.Document.Metadata.Provenance),
             GeneratedSignalTimerWaitProcess.Signal,
             PortableValue.Concrete(
-                new(new ScalarTypeRef(ScalarTypeKind.String)),
-                ObservationValue.FromString("late")),
+                signalContract,
+                ObservationValue.FromObject(new Signalled("late"))),
             target);
         var lateActivation = new ProcessActivation(
             id: new("activation/signal-wait/late"),
@@ -1436,6 +1453,63 @@ public sealed class ProcessComputationAuthoringTests
         var lateReceipt = Assert.Single(generatedLate.InputAdmissions);
         Assert.Equal(ProcessInputAdmissionDisposition.Observed, lateReceipt.Disposition);
         Assert.Equal(ProcessInputAdmissionReason.Late, lateReceipt.Reason);
+
+        var timerContinuation = new ProcessContinuationIdentity(
+            new("process-instance/timer-wait"),
+            new("attempt/1"));
+        var timerInput = PortableValue.Concrete(
+            generated.Definition.Input,
+            ObservationValue.FromObject(new SignalTimerWaitInput(dueAt, "fallback")));
+        var generatedTimerState = ProcessReferenceInterpreter.Create(generated, timerContinuation, timerInput);
+        var lowLevelTimerState = ProcessReferenceInterpreter.Create(lowLevel, timerContinuation, timerInput);
+        var timerStart = Activation(
+            generated,
+            timerContinuation,
+            id: "activation/timer-wait/start",
+            cause: ProcessActivationCause.Start,
+            observedAtUtc: dueAt.AddHours(-1));
+        var generatedTimerRegistered = ProcessReferenceInterpreter.Activate(
+            generated,
+            generatedTimerState,
+            timerStart,
+            EchoRelationHost.Instance);
+        var lowLevelTimerRegistered = ProcessReferenceInterpreter.Activate(
+            lowLevel,
+            lowLevelTimerState,
+            timerStart,
+            EchoRelationHost.Instance);
+        Assert.Equal(ProcessActivationDisposition.DurableCut, generatedTimerRegistered.Disposition);
+
+        var restoredTimer = Assert.IsType<ProcessContinuationState>(
+            JsonSerializer.Deserialize<ProcessContinuationState>(
+                JsonSerializer.Serialize(generatedTimerRegistered.State, options),
+                options));
+        var timerDue = Activation(
+            generated,
+            timerContinuation,
+            id: "activation/timer-wait/due",
+            cause: ProcessActivationCause.Timer,
+            observedAtUtc: dueAt);
+        var generatedTimerCompleted = ProcessReferenceInterpreter.Activate(
+            generated,
+            restoredTimer,
+            timerDue,
+            EchoRelationHost.Instance);
+        var lowLevelTimerCompleted = ProcessReferenceInterpreter.Activate(
+            lowLevel,
+            lowLevelTimerRegistered.State,
+            timerDue,
+            EchoRelationHost.Instance);
+        Assert.Equal(ProcessActivationDisposition.Completed, generatedTimerCompleted.Disposition);
+        Assert.Equal(
+            JsonSerializer.Serialize(lowLevelTimerCompleted.State, options),
+            JsonSerializer.Serialize(generatedTimerCompleted.State, options));
+        Assert.Equal(
+            Owned(Node("await-match-0"), "timer-clause-TimedOut"),
+            Assert.Single(generatedTimerCompleted.State.Waits).WinnerClause);
+        Assert.Equal(
+            PortableValue.Concrete(generated.Definition.Result, ObservationValue.FromString("fallback")),
+            generatedTimerCompleted.State.Terminal.Detail?.Value);
     }
 
     static void AssertEquivalentPartitionRecovery(
@@ -1984,7 +2058,7 @@ public static partial class GeneratedSignalTimerWaitProcess
             new("1"),
             new SignalContractDefinition(
                 new(
-                    new(new ScalarTypeRef(ScalarTypeKind.String)),
+                    new(new DefaultClrTypeRefMapper().Map(typeof(Signalled), null)),
                     new("signal/generated-wait/payload/v1"))),
             new(
                 new("tests.process-computation", "1"),
@@ -2000,19 +2074,11 @@ public static partial class GeneratedSignalTimerWaitProcess
 
     static async ProcessTask<string> Run(ProcessContext process, SignalTimerWaitInput input)
     {
-        async ProcessTask Signalled(string value)
-        {
-        }
-
-        async ProcessTask TimedOut()
-        {
-        }
-
-        await process.AwaitMatch(
+        var outcome = await process.AwaitMatch<SignalTimerWaitOutcome>(
             clauses:
             [
-                process.Signal<string>(Signal, Signalled, priority: 10),
-                process.Deadline(input.DueAt, TimedOut)
+                process.Signal<Signalled>(Signal, priority: 10),
+                process.Deadline<TimedOut>(input.DueAt)
             ],
             arbitration: ProcessAwaitArbitration.ExclusivePriorityThenClauseId,
             lateInput: ProcessAwaitInputDisposition.Observe,
@@ -2020,9 +2086,26 @@ public static partial class GeneratedSignalTimerWaitProcess
             duplicateInput: ProcessAwaitInputDisposition.ReusePriorDisposition,
             missingTarget: ProcessAwaitMissingTargetDisposition.DeadLetter,
             retentionHorizon: TimeSpan.FromDays(7));
-        return input.Value;
+        switch (outcome)
+        {
+            case Signalled signalled:
+                return signalled.Value;
+            case TimedOut _:
+                return input.Value;
+        }
+        return process.Unreachable<string>();
     }
 }
+
+/// <summary>Closed source-only result family selected by the generated Signal/timer AwaitMatch.</summary>
+public abstract record SignalTimerWaitOutcome;
+
+/// <summary>Admitted typed Signal payload and source-only AwaitMatch result case.</summary>
+/// <param name="Value">Value admitted by the exact Signal contract.</param>
+public sealed record Signalled(string Value) : SignalTimerWaitOutcome;
+
+/// <summary>Source-only result case selected when the canonical timer clause wins.</summary>
+public sealed record TimedOut : SignalTimerWaitOutcome;
 
 /// <summary>Input to the minimal generated Signal/timer race.</summary>
 /// <param name="DueAt">Absolute timeout instant.</param>
@@ -2365,6 +2448,9 @@ public static partial class ApproveCustomerProcess
     static readonly RequestContractReference SendWelcome = new(Definition("request/send-welcome", '4'));
     static readonly RequestContractReference RecordAudit = new(Definition("request/record-audit", '5'));
     static readonly RequestContractReference NotifyOwner = new(Definition("request/notify-owner", '6'));
+    static readonly RequestContractReference RequestDocumentReview = new(Definition("request/document-review", '7'));
+    static readonly DomainEventContractReference DocumentReviewSubmitted = new(Definition("event/document-review-submitted", '8'));
+    static readonly DomainEventContractReference ApprovalWithdrawn = new(Definition("event/approval-withdrawn", '9'));
     static readonly RequestTerminalOutcomeId Completed = new("completed");
 
     static async ProcessTask<ApproveCustomerResult> Run(
@@ -2383,6 +2469,58 @@ public static partial class ApproveCustomerProcess
                 DeliveryId: null,
                 AuditReceiptId: null,
                 NotificationReceiptId: null);
+        }
+
+        var reviewTask = await process.Effect<DocumentReviewTask>(
+            RequestDocumentReview,
+            Completed,
+            new DocumentReviewRequest(customer.Id, input.Reason));
+        var review = await process.AwaitMatch<CustomerReviewOutcome>(
+            clauses:
+            [
+                process.Event<DocumentReviewSubmitted>(
+                    DocumentReviewSubmitted,
+                    priority: 10,
+                    when: submitted => submitted.TaskId == reviewTask.Id),
+                process.Event<CustomerApprovalWithdrawn>(
+                    ApprovalWithdrawn,
+                    priority: 20,
+                    when: withdrawn => withdrawn.CustomerId == customer.Id),
+                process.Deadline<DocumentReviewTimedOut>(reviewTask.DueAt)
+            ],
+            arbitration: ProcessAwaitArbitration.ExclusivePriorityThenClauseId,
+            lateInput: ProcessAwaitInputDisposition.Observe,
+            staleInput: ProcessAwaitInputDisposition.Reject,
+            duplicateInput: ProcessAwaitInputDisposition.ReusePriorDisposition,
+            missingTarget: ProcessAwaitMissingTargetDisposition.DeadLetter,
+            retentionHorizon: TimeSpan.FromDays(30));
+        switch (review)
+        {
+            case DocumentReviewTimedOut _:
+                return new(
+                    customer.Id,
+                    "review-timed-out",
+                    DeliveryId: null,
+                    AuditReceiptId: null,
+                    NotificationReceiptId: null);
+            case CustomerApprovalWithdrawn _:
+                return new(
+                    customer.Id,
+                    "withdrawn",
+                    DeliveryId: null,
+                    AuditReceiptId: null,
+                    NotificationReceiptId: null);
+            case DocumentReviewSubmitted { Decision: var decision }:
+                if (decision != "approved")
+                {
+                    return new(
+                        customer.Id,
+                        "rejected",
+                        DeliveryId: null,
+                        AuditReceiptId: null,
+                        NotificationReceiptId: null);
+                }
+                break;
         }
 
         var approval = await process.Transition<Approval>(
@@ -2463,6 +2601,33 @@ public sealed record Customer(string Id, string Status, string Email);
 /// <summary>Approval Transition input.</summary>
 /// <param name="Reason">Approval reason.</param>
 public sealed record ApproveCustomerTransitionInput(string Reason);
+
+/// <summary>Request payload used to create one durable human document-review task.</summary>
+/// <param name="CustomerId">Customer whose submitted evidence requires review.</param>
+/// <param name="Reason">Authored reason supplied to the reviewer.</param>
+public sealed record DocumentReviewRequest(string CustomerId, string Reason);
+
+/// <summary>Stable reference returned after the human document-review task is durably created.</summary>
+/// <param name="Id">Stable review-task identity targeted by the completion interaction.</param>
+/// <param name="DueAt">Absolute deadline participating in canonical AwaitMatch arbitration.</param>
+public sealed record DocumentReviewTask(string Id, DateTimeOffset DueAt);
+
+/// <summary>Closed source-only result family for customer document review.</summary>
+public abstract record CustomerReviewOutcome;
+
+/// <summary>Typed review-completion event and source-only successful AwaitMatch case.</summary>
+/// <param name="TaskId">Exact review-task identity completed by this event.</param>
+/// <param name="Decision">Portable review disposition.</param>
+/// <param name="ReviewerId">Stable reviewer identity retained by downstream work.</param>
+public sealed record DocumentReviewSubmitted(string TaskId, string Decision, string ReviewerId)
+    : CustomerReviewOutcome;
+
+/// <summary>Typed withdrawal event and source-only AwaitMatch result case.</summary>
+/// <param name="CustomerId">Customer whose in-flight approval was withdrawn.</param>
+public sealed record CustomerApprovalWithdrawn(string CustomerId) : CustomerReviewOutcome;
+
+/// <summary>Source-only result case selected when the document-review deadline wins.</summary>
+public sealed record DocumentReviewTimedOut : CustomerReviewOutcome;
 
 /// <summary>Approval Transition result.</summary>
 /// <param name="DisplayName">Customer display name.</param>

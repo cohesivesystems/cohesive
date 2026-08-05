@@ -888,6 +888,130 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
     }
 
     [Fact]
+    public void Generator_FusesTypedAwaitMatchSwitchIntoCanonicalClauseContinuations()
+    {
+        var source = """
+                     using System;
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+                     using Cohesive.Processes.IR;
+
+                     namespace Sample;
+
+                     public abstract record ReviewOutcome;
+                     public sealed record ReviewSubmitted(string Decision) : ReviewOutcome;
+                     public sealed record ReviewTimedOut : ReviewOutcome;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class ReviewProcess
+                     {
+                         private static SignalContractReference Submitted => null!;
+
+                         private static async ProcessTask<string> Run(ProcessContext process, Input input)
+                         {
+                             var review = await process.AwaitMatch<ReviewOutcome>(
+                                 clauses:
+                                 [
+                                     process.Signal<ReviewSubmitted>(Submitted, priority: 10),
+                                     process.Deadline<ReviewTimedOut>(input.DueAt)
+                                 ],
+                                 arbitration: ProcessAwaitArbitration.ExclusivePriorityThenClauseId,
+                                 lateInput: ProcessAwaitInputDisposition.Observe,
+                                 staleInput: ProcessAwaitInputDisposition.Reject,
+                                 duplicateInput: ProcessAwaitInputDisposition.ReusePriorDisposition,
+                                 missingTarget: ProcessAwaitMissingTargetDisposition.DeadLetter,
+                                 retentionHorizon: TimeSpan.FromDays(7));
+                             switch (review)
+                             {
+                                 case ReviewSubmitted { Decision: var decision }:
+                                     return decision;
+                                 case ReviewTimedOut _:
+                                     return input.Fallback;
+                             }
+                             return process.Unreachable<string>();
+                         }
+                     }
+
+                     public sealed record Input(DateTimeOffset DueAt, string Fallback);
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out var outputCompilation);
+        var generated = Assert.Single(runResult.Results.SelectMany(static result => result.GeneratedSources))
+            .SourceText
+            .ToString();
+
+        Assert.Empty(runResult.Results.SelectMany(static result => result.Diagnostics));
+        Assert.DoesNotContain(
+            outputCompilation.GetDiagnostics(),
+            static diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+        Assert.Contains("__builder.AwaitMatch", generated);
+        Assert.Contains("__builder.AwaitInteractionClause", generated);
+        Assert.Contains("__builder.AwaitTimerClause", generated);
+        Assert.Contains("__builder.Output<global::Sample.ReviewSubmitted>", generated);
+        Assert.DoesNotContain("ReviewOutcome", generated);
+        Assert.DoesNotContain("ValueTuple", generated);
+        Assert.DoesNotContain("callback", generated, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Generator_RejectsNonExhaustiveTypedAwaitMatchAtTheSwitch()
+    {
+        var source = """
+                     using System;
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+                     using Cohesive.Processes.IR;
+
+                     namespace Sample;
+
+                     public abstract record ReviewOutcome;
+                     public sealed record ReviewSubmitted(string Decision) : ReviewOutcome;
+                     public sealed record ReviewTimedOut : ReviewOutcome;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class ReviewProcess
+                     {
+                         private static SignalContractReference Submitted => null!;
+
+                         private static async ProcessTask<string> Run(ProcessContext process, Input input)
+                         {
+                             var review = await process.AwaitMatch<ReviewOutcome>(
+                                 clauses:
+                                 [
+                                     process.Signal<ReviewSubmitted>(Submitted),
+                                     process.Deadline<ReviewTimedOut>(input.DueAt)
+                                 ],
+                                 arbitration: ProcessAwaitArbitration.ExclusivePriorityThenClauseId,
+                                 lateInput: ProcessAwaitInputDisposition.Observe,
+                                 staleInput: ProcessAwaitInputDisposition.Reject,
+                                 duplicateInput: ProcessAwaitInputDisposition.ReusePriorDisposition,
+                                 missingTarget: ProcessAwaitMissingTargetDisposition.DeadLetter,
+                                 retentionHorizon: TimeSpan.FromDays(7));
+                             switch (review)
+                             {
+                                 case ReviewSubmitted submitted:
+                                     return submitted.Decision;
+                             }
+                             return input.Fallback;
+                         }
+                     }
+
+                     public sealed record Input(DateTimeOffset DueAt, string Fallback);
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.Contains("typed AwaitMatch switch is not exhaustive", diagnostic.GetMessage());
+        Assert.Contains("ReviewTimedOut", diagnostic.GetMessage());
+        Assert.Equal(31, diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1);
+    }
+
+    [Fact]
     public void Generator_RejectsCallbackLambdaForDurableOutcomeAtItsSource()
     {
         var source = """

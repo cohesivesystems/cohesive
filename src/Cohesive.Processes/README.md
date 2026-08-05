@@ -59,7 +59,46 @@ query/read/Transition/effect/Fork-Join example. Use the Motion DQ
 [`onboarding`](../Cohesive.ExecutionKernel.TestFixtures/MotionDq/MotionDqProcessDefinition.cs) and
 [`monitoring`](../Cohesive.ExecutionKernel.TestFixtures/MotionDq/MotionDqMonitoringProcessDefinition.cs) definitions
 for business-shaped branching, Request outcomes, durable waits, bounded parallelism, polling, escalation, and
-recurrence. These links are the examples; the semantic definitions are not copied into documentation.
+recurrence. Those executable definitions remain the source of truth; this smaller excerpt illustrates the typed-wait
+shape in isolation.
+
+Typed durable races bind a closed source-only result family and consume it with an immediately following exhaustive
+type switch:
+
+```csharp
+var review = await process.AwaitMatch<CustomerReviewOutcome>(
+    clauses:
+    [
+        process.Event<DocumentReviewSubmitted>(
+            ReviewSubmitted,
+            priority: 10,
+            when: submitted => submitted.TaskId == reviewTask.Id),
+        process.Deadline<DocumentReviewTimedOut>(reviewTask.DueAt)
+    ],
+    arbitration: ProcessAwaitArbitration.ExclusivePriorityThenClauseId,
+    lateInput: ProcessAwaitInputDisposition.Observe,
+    staleInput: ProcessAwaitInputDisposition.Reject,
+    duplicateInput: ProcessAwaitInputDisposition.ReusePriorDisposition,
+    missingTarget: ProcessAwaitMissingTargetDisposition.DeadLetter,
+    retentionHorizon: TimeSpan.FromDays(30));
+
+switch (review)
+{
+    case DocumentReviewTimedOut _:
+        return TimedOut();
+    case DocumentReviewSubmitted { Decision: var decision }:
+        await ApplyDecision(decision);
+        break;
+}
+```
+
+The case records and bound `review` local are C# projection types only. Generation fuses each switch section into
+the corresponding canonical `AwaitMatch` clause continuation; no union wrapper, discriminator, callback, or CLR
+state machine is serialized. Every declared alternative must appear exactly once, and adding a clause makes the
+switch diagnostically incomplete until its case is handled. Interaction case values are the exact typed payload;
+timer cases are markers and use lexically visible due-time data rather than manufacturing a runtime value. Runtime
+admission still addresses the exact durable Process token; a portable guard may further constrain the originating
+business occurrence without replacing that canonical target.
 
 ## One semantic lifecycle
 
