@@ -16,7 +16,7 @@ public sealed class ProcessComputationAuthoringTests
     [Fact]
     public void GeneratedComputation_IsByteEquivalentToCanonicalBuilderAuthoring()
     {
-        var generated = GeneratedCustomerQueryProcess.Define(Metadata());
+        var generated = CustomerQueryProcess.Define(Metadata());
         var query = ProcessAuthoringIdentities.NodeFor(new(["body", "query-row"]));
         var returned = ProcessAuthoringIdentities.NodeFor(new(["body", "return-0"]));
         var lowLevel = ProcessAuthoring.Create<string, string>(
@@ -27,7 +27,7 @@ public sealed class ProcessComputationAuthoringTests
 
                 process.EvaluateRelation(
                     query,
-                    GeneratedCustomerQueryProcess.Relation,
+                    CustomerQueryProcess.Relation,
                     process.Input.Value,
                     process.Continuation(
                         process.Edge(query, "next", returned),
@@ -154,8 +154,8 @@ public sealed class ProcessComputationAuthoringTests
     [Fact]
     public void PureLocalInsertion_DoesNotRenumberSemanticNodes()
     {
-        var original = GeneratedCustomerQueryProcess.Define(Metadata());
-        var withPureLocal = GeneratedCustomerQueryProcessWithPureLocal.Define(Metadata());
+        var original = CustomerQueryProcess.Define(Metadata());
+        var withPureLocal = CustomerQueryProcessWithPureLocal.Define(Metadata());
 
         Assert.Equal(original.Definition, withPureLocal.Definition);
         Assert.Equal(
@@ -205,17 +205,17 @@ public sealed class ProcessComputationAuthoringTests
     {
         var entry = ProcessAuthoringIdentities.NodeFor(new(["body", "query-row"]));
 
-        var generated = GeneratedCustomerQueryProcess.Define(Metadata().WithEntry(entry));
+        var generated = CustomerQueryProcess.Define(Metadata().WithEntry(entry));
 
         Assert.Equal(entry, generated.Definition.Entry);
         Assert.Throws<ArgumentException>(() =>
-            GeneratedCustomerQueryProcess.Define(Metadata().WithEntry(new("conflicting-entry"))));
+            CustomerQueryProcess.Define(Metadata().WithEntry(new("conflicting-entry"))));
     }
 
     [Fact]
     public void GeneratedDocument_StrictlyRestoresWithoutHostLanguageState()
     {
-        var generated = GeneratedCustomerQueryProcess.Define(Metadata());
+        var generated = CustomerQueryProcess.Define(Metadata());
         var canonical = ExecutionDefinitionJsonSerializer.GetCanonicalBytes(generated.Document);
 
         var validation = ProcessDefinitionDocuments.TryDeserialize(
@@ -430,7 +430,7 @@ public sealed class ProcessComputationAuthoringTests
                     generated.Definition.Input,
                     projection.ResultContract),
                 new(
-                    GeneratedCustomerQueryProcess.Relation,
+                    CustomerQueryProcess.Relation,
                     ProcessDefinitionLinkKind.RelationQuery,
                     generated.Definition.Input,
                     projection.ResultContract)
@@ -1739,8 +1739,9 @@ public sealed class ProcessComputationAuthoringTests
 }
 
 /// <summary>Representative generated Process used by canonical-equivalence tests.</summary>
+// <docs:sequential-process>
 [GenerateProcessDefinition(nameof(Run))]
-public static partial class GeneratedCustomerQueryProcess
+public static partial class CustomerQueryProcess
 {
     /// <summary>Exact Relation reference used by the generated Process.</summary>
     public static ExecutionDefinitionReference Relation { get; } = new(
@@ -1760,10 +1761,11 @@ public static partial class GeneratedCustomerQueryProcess
         return row;
     }
 }
+// </docs:sequential-process>
 
 /// <summary>Semantically identical generated Process containing a non-effectful local.</summary>
 [GenerateProcessDefinition(nameof(Run))]
-public static partial class GeneratedCustomerQueryProcessWithPureLocal
+public static partial class CustomerQueryProcessWithPureLocal
 {
     static async ProcessTask<string> Run(
         ProcessContext process,
@@ -1771,7 +1773,7 @@ public static partial class GeneratedCustomerQueryProcessWithPureLocal
     {
         var ignored = input + string.Empty;
         var queryInput = input;
-        var row = await process.Query<string>(GeneratedCustomerQueryProcess.Relation, queryInput);
+        var row = await process.Query<string>(CustomerQueryProcess.Relation, queryInput);
         return row;
     }
 }
@@ -1864,7 +1866,7 @@ public static partial class GeneratedRequiredForkProcess
 
         async ProcessTask<string> Gamma()
         {
-            var value = await process.Query<string>(GeneratedCustomerQueryProcess.Relation, input);
+            var value = await process.Query<string>(CustomerQueryProcess.Relation, input);
             return "gamma:" + value;
         }
 

@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using Cohesive.Execution;
 using Cohesive.Processes.IR;
@@ -6,11 +7,17 @@ using CanonicalProcessDefinition = Cohesive.Processes.IR.ProcessDefinition;
 
 namespace Cohesive.Processes.Authoring;
 
-/// <summary>
-/// Authors a finite canonical Process graph using typed values and the closed persisted Process-node union.
-/// </summary>
+/// <summary>Advanced lowering surface for finite canonical Process graphs.</summary>
+/// <remarks>
+/// Application-authored Processes should normally use <see cref="GenerateProcessDefinitionAttribute"/> and
+/// <see cref="ProcessContext"/>. This mutable surface remains public because generated frontends, importers,
+/// compiler tests, and deliberately low-level tooling may need to construct the closed persisted node union
+/// directly. The builder is transient and is never retained by canonical documents, compiled plans, or runtime
+/// evidence.
+/// </remarks>
 /// <typeparam name="TInput">CLR type projected into the Process invocation-input contract.</typeparam>
 /// <typeparam name="TResult">CLR type projected into the Process terminal-result contract.</typeparam>
+[EditorBrowsable(EditorBrowsableState.Advanced)]
 public sealed partial class ProcessBuilder<TInput, TResult>
 {
     readonly ProcessAuthoringContext context;

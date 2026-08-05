@@ -1,383 +1,154 @@
 # Cohesive.Processes
 
-Canonical, portable Process semantics for coordinating entity transitions, relation and query evaluations,
-interactions, durable waits, timers, parallel branches, and terminal outcomes without binding the definition to a
-workflow engine, storage system, or host-language callback.
+Canonical, portable Process semantics for coordinating entity transitions, relation/query evaluations, durable
+interactions, waits, parallel work, recurrence, and terminal outcomes without binding the definition to a workflow
+engine, storage system, or host-language callback.
 
 ## Install
 
 ```bash
 dotnet add package Cohesive.Processes
-# Required only for GenerateProcessDefinition computation-expression authoring:
 dotnet add package Cohesive.Analyzers
 ```
 
-## Canonical Process IR
+`Cohesive.Analyzers` supplies the expression-first C# frontend. Add it as an analyzer when using project references.
 
-`Cohesive.Processes.IR.ProcessDefinition` is the persisted semantic authority. A definition is a normalized graph
-with stable node and edge identities, typed inputs and results, portable expressions and bindings, exact references
-to other canonical definitions, explicit recovery policy, and closed Process-node and AwaitMatch-clause unions.
+## Author a Process in C#
 
-```csharp
-using Cohesive.Execution;
-using Cohesive.Model;
-using Cohesive.Model.Expressions;
-using Cohesive.Model.Serialization;
-using Cohesive.Processes.IR;
+Human-written Processes start with a syntax-only `async ProcessTask<T>` method marked by
+`GenerateProcessDefinition`. `await` binds results from semantic Process operations; ordinary local expressions are
+fused into the nearest effectful operation or terminal result rather than becoming Compute nodes.
 
-var text = new ValueContract(new ScalarTypeRef(ScalarTypeKind.String));
-var definition = new ProcessDefinition(
-    input: text,
-    result: text,
-    entry: new("persist-cut"),
-    nodes:
-    [
-        new DurableCutProcessNode(
-            new("persist-cut"),
-            new(new("resume-after-cut"), new("complete"))),
-        new ReturnProcessNode(new("complete"), Expr.Const("done"))
-    ],
-    recoveryPolicy: ProcessRecoveryPolicy.ContinueAttempt);
-
-var document = ProcessDefinitionDocuments.Create(
-    new("process/example"),
-    new("revision/1"),
-    definition,
-    new(
-        new("example-producer", "1"),
-        new("examples/process/example"),
-        DocumentOrigin.Generated));
-
-var validation = ProcessDefinitionDocuments.Validate(document);
-```
-
-The shared `ExecutionDefinitionDocument` owns definition identity, revision, fingerprint, provenance, source maps,
-and extensions. `ProcessDefinitionDocuments` is a typed facade over that envelope; it does not introduce another
-metadata or fingerprint model.
-
-Static validation checks graph integrity, exact reference families, portable expression types, definite binding
-visibility, proven Choice/Match coverage, Fork-token ownership and Join structure, AwaitMatch policies, child
-Process protocols, bounded partition-work and recurrence policies, and finite activation. Process v2 uses the same
-fixed pure expression-capability closure as Transition v1 rather than the ambient expression catalog. A control-flow
-recurrence is valid only when it crosses a Request, InvokeProcess, ForEachPartition, RepeatAcrossActivation,
-AwaitMatch, Timer, or explicit durable cut. Fork branches may recur across those boundaries when every finite exit
-belongs to the reciprocal Join and at least one structural Join exit exists. The definition contains coordination
-facts—not copied aggregate business state, runtime services, adapters, compiled plans, or delegates.
-
-An AwaitMatch clause receiving a Request retains two distinct facts: its typed application payload and a
-`ProcessRequestObligationBinding` representing the admitted logical Request envelope. `ReplyProcessNode` must
-consume that definitely visible obligation, and linking proves that its Reply contract discharges the exact Request
-contract. The Request identity is therefore never reconstructed from an arbitrary application expression.
-
-## Canonical C# authoring
-
-`Cohesive.Processes.Authoring` is a typed C# producer for the same canonical Process IR. Stable semantic identities
-are explicit; owner-relative helpers derive only mechanically owned edge, value-binding, and Request-obligation
-identities. Typed member selectors are captured immediately as portable `FieldPath` values, and the builder callback
-is discarded after the document is created. The resulting handle retains an `ExecutionDefinitionDocument`, not
-executable Process control flow.
-
-```csharp
-using Cohesive.Execution;
-using Cohesive.Processes.Authoring;
-using Cohesive.Processes.IR;
-
-var review = ProcessAuthoring.Create<ReviewInput, string>(
-    new(
-        new("process/review"),
-        new("revision/1"),
-        new("choose"),
-        ProcessRecoveryPolicy.ContinueAttempt,
-        new(
-            new(ProcessAuthoring.Producer),
-            new("reviews/process/review"),
-            DocumentOrigin.Generated)),
-    process =>
-    {
-        ExecutionNodeId accepted = new("return/accepted");
-        ExecutionNodeId rejected = new("return/rejected");
-        var approved = process.Input.Field(input => input.Approved);
-
-        process.Choice(
-            new("choose"),
-            CaseSelection.OrderedFirstMatch,
-            BranchCompleteness.Fallback,
-            [
-                process.ChoiceCase(
-                    new("case/approved"),
-                    approved,
-                    process.Edge(new("edge/approved"), accepted))
-            ],
-            process.Fallback(
-                new("fallback/rejected"),
-                process.Edge(new("edge/rejected"), rejected)));
-        process.Return(accepted, process.Constant("approved"));
-        process.Fail(rejected, process.Constant("rejected"));
-    });
-
-var compilation = review.Compile(new ProcessDefinitionValidationContext());
-```
-
-The authoring API exposes every canonical Process node and nested construct: exact Transition and Relation/Query
-calls, Requests, events, Signals, Choice and Match, Fork and Join, AwaitMatch and Timer, Reply, durable cuts, child
-Processes, bounded partition work, recurrence across activations, and typed terminal outcomes. Arbitrary CLR
-callbacks, services, tasks, loops, and suspended host frames cannot enter the persisted definition. Unsupported
-portable values, member selectors, expressions, links, contracts, or graph shapes fail during authoring, validation,
-or static compilation with source-mapped diagnostics.
-
-### Computation-expression authoring
-
-Human-facing definitions may use ordinary C# locals, `await`, `if`/`else`, exact-value `switch`, and `return` by
-annotating a syntax-only method with `GenerateProcessDefinition`. `await` is reserved for semantic Process
-operations. Ordinary locals remain pure: the generator translates them into the fixed portable `Expr` closure and
-fuses them into the nearest query input, Transition input, Request payload, predicate, or terminal result. It emits
-hidden output bindings and canonical builder calls in `Define`; it does not emit Compute nodes, CLR delegates, or an
-executable workflow state machine.
-
+<!-- <docs:sequential-process> -->
 ```csharp
 [GenerateProcessDefinition(nameof(Run))]
-public static partial class ApproveCustomerProcess
+public static partial class CustomerQueryProcess
 {
-    static async ProcessTask<ApproveCustomerResult> Run(
+    /// <summary>Exact Relation reference used by the generated Process.</summary>
+    public static ExecutionDefinitionReference Relation { get; } = new(
+        new("relation/customer-query"),
+        new("1"),
+        new(
+            ExecutionDefinitionFingerprinter.Algorithm,
+            ExecutionDefinitionFingerprinter.Canonicalization,
+            new string('1', 64)));
+
+    static async ProcessTask<string> Run(
         ProcessContext process,
-        ApproveCustomerInput input)
+        string input)
     {
-        var lookup = new CustomerLookup(input.Email);
-        var customerId = await process.Query<CustomerId>(CustomerByEmail, lookup);
-        var customer = await process.Read<Customer>(CustomerById, customerId);
-
-        if (customer.Status == CustomerStatus.Suspended)
-            return new(customer.Id, ApprovalDisposition.Rejected, deliveryId: null);
-
-        var approval = await process.Transition<Approval>(
-            ApproveCustomer,
-            customer.Id,
-            new ApproveTransitionInput(input.Reason));
-        var message = new WelcomeMessage(customer.Email, "Welcome " + approval.DisplayName);
-        var delivery = await process.Effect<Delivery>(SendWelcome, WelcomeSent, message);
-
-        async ProcessTask Audit()
-        {
-            var receipt = await process.Effect<OperationReceipt>(
-                RecordApprovalAudit,
-                AuditRecorded,
-                new ApprovalAudit(customer.Id, approval.DisplayName));
-        }
-
-        async ProcessTask NotifyOwner()
-        {
-            var receipt = await process.Effect<OperationReceipt>(
-                SendOwnerNotification,
-                OwnerNotified,
-                new OwnerNotification(customer.Id, delivery.Id));
-        }
-
-        await process.ForkJoin(Audit(), NotifyOwner());
-        return new(customer.Id, ApprovalDisposition.Approved, delivery.Id);
+        var queryInput = input;
+        var row = await process.Query<string>(Relation, queryInput);
+        return row;
     }
 }
 ```
+<!-- </docs:sequential-process> -->
 
-Ordinary `if`/`else` and exact-value `switch` use the ordered-first-match/fallback convention. When selection or
-coverage must be stated explicitly, use the typed Choice/Match forms with named local branches:
+This exact excerpt is compiled and exercised by
+[`ProcessComputationAuthoringTests.cs`](../Cohesive.Tests/ExecutionKernel/ProcessComputationAuthoringTests.cs); a
+documentation invariant test prevents the README from drifting from that executable source. The generated `Define`
+factory accepts `ProcessAuthoringMetadata` and returns a typed handle containing the canonical execution-definition
+document and validation result. The annotated `Run` method is never invoked.
 
-```csharp
-async ProcessTask Escalate() { /* semantic Process operations */ }
-async ProcessTask Continue() { /* semantic Process operations */ }
-async ProcessTask Otherwise() { /* semantic Process operations */ }
+The same syntax supports typed Transition results, Requests/effects, entity reads represented by Relations,
+`if`/`else`, exact `switch`, explicit Choice/Match policies, durable waits, tuple-valued Fork/Join, bounded admission,
+child Processes, partition work, and recurrence. Use the executable
+[`ApproveCustomerProcess`](../Cohesive.Tests/ExecutionKernel/ProcessComputationAuthoringTests.cs) for a compact
+query/read/Transition/effect/Fork-Join example. Use the Motion DQ
+[`onboarding`](../Cohesive.ExecutionKernel.TestFixtures/MotionDq/MotionDqProcessDefinition.cs) and
+[`monitoring`](../Cohesive.ExecutionKernel.TestFixtures/MotionDq/MotionDqMonitoringProcessDefinition.cs) definitions
+for business-shaped branching, Request outcomes, durable waits, bounded parallelism, polling, escalation, and
+recurrence. These links are the examples; the semantic definitions are not copied into documentation.
 
-await process.Choice(
-    selection: CaseSelection.OrderedFirstMatch,
-    completeness: BranchCompleteness.Fallback,
-    cases:
-    [
-        process.When(customer.Risk == Risk.High, Escalate),
-        process.When(customer.Risk == Risk.Low, Continue)
-    ],
-    fallback: Otherwise);
+## One semantic lifecycle
 
-await process.Match(
-    value: customer.Status,
-    selection: CaseSelection.OrderedFirstMatch,
-    completeness: BranchCompleteness.Fallback,
-    cases:
-    [
-        process.Case(CustomerStatus.Ready, Continue),
-        process.Case(CustomerStatus.Blocked, Escalate)
-    ],
-    fallback: Otherwise);
-```
+Expression source, canonical IR, compiled plans, and runtime evidence have distinct ownership:
 
-Predicates remain portable pure expressions and Match patterns remain exact typed values. The local branch methods,
-arm descriptors, and delegates are erased. Fallback completeness requires a fallback branch; exhaustive completeness
-forbids one. Runtime policy values, anonymous callbacks, incompatible patterns, and duplicate exact node identities
-are source diagnostics rather than delayed runtime behavior.
+| Stage | Authority and lifetime |
+| --- | --- |
+| Expression source | A human-readable C# producer. The generator reads its syntax; the method, locals, local branch functions, and compiler state machines are never execution authority. |
+| Canonical IR | The persisted `ExecutionDefinitionDocument` containing `Cohesive.Processes.IR.ProcessDefinition`. It is normalized, versioned, fingerprinted, inspectable, and is the semantic source of truth. |
+| Compiled plan | A target-independent or adapter-specific interpretation derived from one exact canonical definition plus declared capabilities and linking evidence. It is replaceable and retains provenance to the document. |
+| Runtime evidence | Durable continuations, attempts, inputs, outputs, operation receipts, traces, and control state produced while interpreting the compiled plan. It references the exact definition fingerprint and never requires authoring source to resume. |
 
-`Read` is deliberately an authoring alias for exact Relation/Query evaluation; it does not restore a separate
-Process-native entity model. `Effect` lowers to an exact Request contract and selected terminal outcome. Generated
-factories accept `ProcessAuthoringMetadata`, honor an explicit entry when it agrees with the derived entry, and
-otherwise materialize deterministic identities from semantic structure. Convention ordinals are scoped by semantic
-role, and nested Join, branch, outcome, wait-clause, Choice, and Match identities derive from their actual parent
-identity. Inserting an unrelated construct, reordering independent roles, or mixing explicit and conventional parent
-identities therefore does not globally renumber nodes. `ForkJoin` accepts two or more parameterless local
-`async ProcessTask` branch
-functions and lowers them to the canonical Fork/Join pair. Its convention is an all-branches, fail-fast Join that
-awaits remaining branches, does not expose completion order, and resolves ties by stable branch identity; the local
-functions and their compiler state machines are never retained.
+Persist and restore the canonical document. Do not persist an expression tree, generated builder callback, CLR task,
+compiled plan, or authoring session as the Process definition. Static compilation and restored execution consume the
+document plus explicit linking, policy, capability, and runtime evidence.
 
-Durable races and partial convergence retain the same readable local-branch style while requiring the canonical
-policies that affect recovery and determinism:
+## Identity and compatibility
 
-```csharp
-async ProcessTask OnApproved(Approval approval) { /* semantic Process operations */ }
-async ProcessTask OnTimeout() { /* semantic Process operations */ }
+Omitting `ExecutionNodeId` uses deterministic conventions. Conventions are appropriate for local structural details
+whose identity has no independent compatibility promise. They are not a substitute for explicit durable identity.
 
-await process.AwaitMatch(
-    clauses:
-    [
-        process.Signal<Approval>(Approved, OnApproved, priority: 10),
-        process.Deadline(expiresAt, OnTimeout)
-    ],
-    arbitration: ProcessAwaitArbitration.ExclusivePriorityThenClauseId,
-    lateInput: ProcessAwaitInputDisposition.Observe,
-    staleInput: ProcessAwaitInputDisposition.Reject,
-    duplicateInput: ProcessAwaitInputDisposition.ReusePriorDisposition,
-    missingTarget: ProcessAwaitMissingTargetDisposition.DeadLetter,
-    retentionHorizon: TimeSpan.FromDays(7));
+| Use conventions when | Use explicit identities when |
+| --- | --- |
+| A node is local structure and may legitimately receive a new identity when its semantic source path changes. | A persisted continuation, checkpoint, migration, external target, operational command, or cross-revision contract names the node. |
+| A derived branch, edge, output, or outcome is owned entirely by an explicitly identified parent. | A revision must preserve byte-identical canonical IR or resume state authored by an earlier revision. |
+| The definition is new and no deployed state or external integration depends on its internal topology. | Independent producers must converge on the same established identity or an operator must address the construct directly. |
 
-var winner = await process.ForkAny(
-    branches: [Audit(), Notify()],
-    policy: ProcessJoin.Any(ProcessJoinCancellationPolicy.CancelRemaining));
-```
+Convention-derived decisions are deterministic and recorded in the source map. Inserting unrelated constructs does
+not globally renumber semantic roles, but moving or changing structurally identified operations may intentionally
+change their identities and therefore the fingerprint. Treat a change to an explicitly durable identity as a
+compatibility/versioning decision. Motion DQ intentionally spells out durable identities because its reference
+definitions lock recovery and cross-revision behavior.
 
-`AwaitMatch` local functions and inline pure guards are source syntax only; generated documents contain canonical
-interaction bindings, Request obligations, timer clauses, arbitration, retention, and input-disposition policies.
-Multi-outcome `Effect` uses `process.Outcome<T>(outcome, LocalBranch)` and binds the selected typed result only inside
-that outcome branch. `ForkAny` returns one `ProcessJoinWinner<T>`; `ForkRequired` returns an immutable selection in
-canonical winner order. Neither can be deconstructed as an all-branch tuple.
+## Restricted computation model
 
-Exact child invocation reuses the same outcome syntax and lowers through the canonical child Request/Reply protocol:
+The expression frontend accepts only source constructs it can lower into the finite canonical Process model.
+Semantic operations use `await`; pure locals use the portable expression closure. Named local functions may describe
+branches, but are erased after lowering. Arbitrary CLR services, I/O, tasks, reflection, mutable loops, recursion,
+captured runtime delegates, and host-language suspension cannot enter canonical IR. Unsupported syntax is a source
+diagnostic, not a callback deferred to runtime.
 
-```csharp
-await process.InvokeProcess(
-    process: TrainModel,
-    contract: StartTraining,
-    outcomeMapping: TrainingOutcomes,
-    input: trainingInput,
-    purpose: ProcessChildPurpose.Work,
-    cancellation: ProcessChildCancellationPolicy.Propagate,
-    outcomes:
-    [
-        process.Outcome<TrainingReceipt>(TrainingOutcomes.Completed, OnCompleted),
-        process.Outcome<TrainingFailure>(TrainingOutcomes.Failed, OnFailed),
-        process.Outcome<TrainingFailure>(TrainingOutcomes.Cancelled, OnCancelled),
-        process.Outcome<TrainingFailure>(TrainingOutcomes.Terminated, OnTerminated)
-    ]);
-```
+Durability- and scheduling-relevant policy remains explicit. Await arbitration and input disposition, Fork/Join
+completion and cancellation, admission limits, child cancellation, recurrence bounds, and compensation purpose are
+canonical facts. The C# frontend does not infer weaker guarantees or hide those policies behind convenient syntax.
 
-Finite partition work keeps collection traversal, identities, child inputs, and resource limits in one canonical
-node. Projection lambdas are pure source syntax, not runtime callbacks or enumerators; successful settlement resumes
-the normal C# flow while the named failure branch represents the canonical failed edge:
+`Read` is an authoring alias for exact Relation/Query evaluation; it does not create a second entity-read execution
+model. `Effect` lowers to a typed durable Request and selected terminal outcome. Referenced Processes, Transitions,
+Relations/Queries, and interaction contracts use exact definition identity, revision, and fingerprint evidence.
 
-```csharp
-await process.ForEachPartition<TenantPlacement, RebuildInput>(
-    partitions: request.Placements,
-    progressIdentity: placement => placement.Tenant,
-    process: RebuildTenant,
-    contract: StartTenantRebuild,
-    outcomeMapping: RebuildOutcomes,
-    childInput: placement => new RebuildInput(placement.Tenant, placement.Index),
-    limits: new ProcessWorkLimits(100, 10, 8),
-    failure: ProcessPartitionFailurePolicy.FailFast,
-    capacityIdentity: placement => placement.Backend,
-    capacityDomains: [new("elastic-primary", maximumParallelism: 4)],
-    cancellation: ProcessChildCancellationPolicy.Propagate,
-    failed: OnPartitionFailure);
-```
+## Canonical validation and execution
 
-Finite recurrence is authored as one typed local occurrence plus pure termination and progress projections. Every
-admitted repeat crosses the canonical durable activation cut, and both total occurrences and unchanged progress are
-explicitly bounded. The final completed occurrence result remains available to ordinary sequential C# flow:
+`ProcessDefinitionDocuments.Validate` checks graph integrity, exact references, portable expression types, binding
+visibility, Choice/Match coverage, Fork-token and Join structure, AwaitMatch policies, child protocols, bounded work,
+recurrence, and finite activation. `ProcessStaticCompiler` consumes the persisted document and a
+`ProcessDefinitionValidationContext` containing exact linked-definition and interaction evidence.
 
-```csharp
-async ProcessTask<TrainingStatus> PollTraining()
-{
-    await process.Timer(nextPollAt);
-    var status = await process.Query<TrainingStatus>(TrainingStatusQuery, trainingId);
-    return status;
-}
+`ProcessReferenceInterpreter` is the reference in-memory interpretation. Durable execution composes compiled
+canonical definitions with `Cohesive.Storage.Processes.ProcessDurableRuntime` and `IProcessDurableStore`. Other
+interpreters and adapters must declare supported capabilities and preserve the canonical semantics or emit precise
+diagnostics.
 
-var status = await process.RepeatAcrossActivation(
-    occurrence: PollTraining(),
-    continueWhen: observation => observation.State == "running",
-    progress: observation => observation.Version,
-    policy: new ProcessRecurrencePolicy(
-        maximumOccurrences: 100,
-        maximumUnchangedProgressOccurrences: 5),
-    exhausted: OnPollingExhausted,
-    stalled: OnTrainingStalled);
-```
+## Advanced lowering escape hatch
 
-Compensation and reconciliation deliberately reuse exact child Process invocation rather than introducing a second
-recovery protocol. State the purpose on the existing durable child operation:
+`ProcessAuthoring.Create` and `ProcessBuilder<TInput,TResult>` remain public, advanced APIs because source generators,
+importers, compiler tests, and infrastructure may need direct construction of the closed Process-node union. They are
+not the primary application-authoring surface and are hidden from ordinary IntelliSense through
+`EditorBrowsableState.Advanced`. Their callbacks must be finite and synchronous, are discarded immediately, and
+cannot become persisted or runtime authority.
 
-```csharp
-await process.InvokeProcess(
-    process: UndoReservation,
-    contract: StartUndoReservation,
-    outcomeMapping: UndoOutcomes,
-    input: reservation,
-    purpose: ProcessChildPurpose.Compensation,
-    cancellation: ProcessChildCancellationPolicy.Propagate,
-    outcomes:
-    [
-        process.Outcome<UndoReceipt>(UndoOutcomes.Completed, OnUndone),
-        process.Outcome<UndoFailure>(UndoOutcomes.Failed, OnUndoFailed),
-        process.Outcome<UndoFailure>(UndoOutcomes.Cancelled, OnUndoCancelled),
-        process.Outcome<UndoFailure>(UndoOutcomes.Terminated, OnUndoTerminated)
-    ]);
-```
-
-Use `ProcessChildPurpose.Reconciliation` for recovery work with the same protocol. Host `while`, `for`, `foreach`,
-recursion, mutable loop state, and runtime-derived recurrence policy are rejected by the generator.
-
-Use the explicit input/result contract overload—and explicit output contracts where needed—when top-level CLR
-generic types erase semantic optionality or nullable-reference occurrence. `CanonicalValue` is the deliberate escape
-hatch for an already-portable expression with an explicitly attested contract; canonical validation remains the
-authority for whether the expression and contract agree.
-
-When a Process invokes a Transition or evaluates a Relation/Query, use an exact `ExecutionDefinitionReference`.
-Supply `ProcessDefinitionValidationContext` while linking to prove that the referenced definition family and its
-input/result contracts match the call site. Interaction nodes resolve their exact typed references through an
-`InteractionContractCatalog`. Referenced definitions remain the semantic authorities; the Process does not embed
-or duplicate them. `ProcessDefinitionLink.TryCreateTransition` derives evidence from a validated canonical
-Transition document. Until Relations adopts the shared execution-definition envelope, Relation/Query evidence is
-an explicit linker attestation boundary rather than a document-derived proof.
+The former `CreateExpression` collection DSL has been removed. It covered only sequential graph construction and
+duplicated the human-facing role now owned by the more capable generated C# computation frontend. Migrate those
+definitions to `GenerateProcessDefinition`; use the advanced builder only when code is itself lowering or importing
+canonical structure.
 
 ## Retired execution authority
 
-The callback-bearing `Cohesive.Processes.Model` graph, its runtime-delegate source generator, and the single-cursor
-`Cohesive.Processes.Runtime.ProcessCheckpoint` execution path are no longer part of the shipped assemblies. They
-cannot be selected as a compatibility fallback or interpreted by an adapter. Canonical documents compile through
-`ProcessStaticCompiler`, execute through `ProcessReferenceInterpreter`, and become durable through
-`Cohesive.Storage.Processes.ProcessDurableRuntime` and `IProcessDurableStore`.
+The callback-bearing `Cohesive.Processes.Model` graph, runtime-delegate source generator, and single-cursor
+`Cohesive.Processes.Runtime.ProcessCheckpoint` path are not shipped. Canonical documents compile through
+`ProcessStaticCompiler`, execute through declared interpreters, and become durable through the Storage-owned Process
+runtime. Restoring a Process never loads the expression source, a builder callback, or an authoring state machine.
 
-The active computation-expression generator is only a C# syntax producer for canonical IR. Its generated factory
-uses `ProcessBuilder<TInput,TResult>` and discards all construction state before returning; it is not a restoration
-of the retired callback-bearing model or runtime.
-
-The DurableTask package retains authority-neutral task-hub query projections only. A future DurableTask execution
-adapter must consume compiled canonical definitions and implement or compose the canonical durable-store boundary;
-it must not revive registry-by-name definitions, delegate replay, or single-cursor checkpoints.
+The DurableTask package retains authority-neutral task-hub query projections only. A future execution adapter must
+consume compiled canonical definitions and implement or compose the canonical durable-store boundary; it must not
+revive registry-by-name definitions, delegate replay, or single-cursor checkpoints.
 
 ## Related packages
 
-- [Execution Kernel adoption and migration guide](../../docs/EXECUTION_KERNEL_GUIDE.md) for the end-to-end canonical lifecycle, executable examples, and retired-surface replacements.
-- `Cohesive.Transitions` for canonical aggregate transition semantics.
-- `Cohesive.Relations` for canonical relation and query semantics.
-- `Cohesive.Storage` for canonical durable checkpoints, the Process-store contract, and its reference runtime.
-- `Cohesive.Adapters.DurableTask` for authority-neutral task-hub execution-status queries.
-
-```csharp
-public sealed record ReviewInput(bool Approved);
-```
+- [Execution Kernel adoption and migration guide](../../docs/EXECUTION_KERNEL_GUIDE.md)
+- `Cohesive.Transitions` for canonical entity Transition semantics
+- `Cohesive.Relations` for canonical relation and query semantics
+- `Cohesive.Storage` for durable checkpoints, control, and the Process-store contract
+- `Cohesive.Adapters.DurableTask` for authority-neutral task-hub status projections
