@@ -473,8 +473,10 @@ public sealed partial class ProcessDurableRuntime
                 diagnostics: compatibility.Diagnostics);
         }
 
-        var gate = instanceGates.GetOrAdd(candidate.ContinuationIdentity.ProcessInstanceId, static _ => new(1, 1));
-        await gate.WaitAsync(context.CancellationToken).ConfigureAwait(false);
+        var gate = await instanceGates.AcquireAsync(
+                candidate.ContinuationIdentity.ProcessInstanceId,
+                context.CancellationToken)
+            .ConfigureAwait(false);
         try
         {
             var result = await InitializeExactAsync(
@@ -507,7 +509,7 @@ public sealed partial class ProcessDurableRuntime
         }
         finally
         {
-            gate.Release();
+            gate.Dispose();
         }
     }
 

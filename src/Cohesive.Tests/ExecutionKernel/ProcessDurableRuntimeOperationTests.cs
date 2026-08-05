@@ -33,6 +33,10 @@ public sealed class ProcessDurableRuntimeOperationTests
         Assert.True(adapter.SawOrigin);
         Assert.True(adapter.SawDispatchMarker);
         Assert.Equal(DurableOperationStatus.Dispositioned, result.Operation?.Status);
+        Assert.Equal(0, runtime.RetainedInstanceGateCount);
+        Assert.Equal(0, runtime.RegisteredInstanceGateLeaseCount);
+        Assert.Equal(0, runtime.RetainedOperationGateCount);
+        Assert.Equal(0, runtime.RegisteredOperationGateLeaseCount);
     }
 
     [Fact]

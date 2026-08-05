@@ -74,6 +74,8 @@ public sealed partial class ProcessDurableRuntimeTests
             ProcessStorageContentFingerprints.Envelope(request),
             ProcessStorageContentFingerprints.Envelope(durableOperation.Request));
         Assert.Equal(fixture.DurableOperation.Binding, durableOperation.Binding);
+        Assert.Equal(0, runtime.RetainedInstanceGateCount);
+        Assert.Equal(0, runtime.RegisteredInstanceGateLeaseCount);
     }
 
     [Fact]

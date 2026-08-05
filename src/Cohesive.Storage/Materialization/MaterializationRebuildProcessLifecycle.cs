@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
@@ -150,7 +149,7 @@ public sealed class MaterializationRebuildProcessLifecycle
     readonly MaterializationRebuildProcessArtifacts artifacts;
     readonly MaterializationRebuildLeafExecutionAuthority authority;
     readonly IMaterializationRebuildExecutionResolver executionResolver;
-    readonly ConcurrentDictionary<ProcessInstanceId, SemaphoreSlim> instanceGates = [];
+    readonly KeyedAsyncLock<ProcessInstanceId> instanceGates = new();
 
     /// <summary>Creates the lifecycle facade for one exact persisted rebuild plan and canonical Process protocol.</summary>
     /// <param name="runtime">Storage-owned durable Process runtime.</param>
@@ -768,15 +767,15 @@ public sealed class MaterializationRebuildProcessLifecycle
         ProcessInstanceId instanceId,
         Func<Task<MaterializationRebuildProcessLifecycleResult>> action)
     {
-        var gate = instanceGates.GetOrAdd(instanceId, static _ => new(1, 1));
-        await gate.WaitAsync(context.CancellationToken).ConfigureAwait(false);
+        var gate = await instanceGates.AcquireAsync(instanceId, context.CancellationToken)
+            .ConfigureAwait(false);
         try
         {
             return await action().ConfigureAwait(false);
         }
         finally
         {
-            gate.Release();
+            gate.Dispose();
         }
     }
 
