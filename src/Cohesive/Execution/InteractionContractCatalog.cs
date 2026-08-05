@@ -118,6 +118,34 @@ public sealed class InteractionContractCatalog
         return definition is not null;
     }
 
+    /// <summary>Validates and resolves an exact unclassified interaction definition reference.</summary>
+    /// <param name="reference">Exact definition identity, revision, and fingerprint.</param>
+    /// <param name="location">Diagnostic location assigned to the reference.</param>
+    /// <param name="definition">Receives the resolved canonical interaction contract when valid.</param>
+    /// <returns>
+    /// A valid result when the exact reference resolves, or structured definition, revision, and fingerprint
+    /// diagnostics when it does not.
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="reference"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="location"/> is empty or white-space.</exception>
+    public DocumentValidationResult ValidateReference(
+        ExecutionDefinitionReference reference,
+        string location,
+        [NotNullWhen(true)] out InteractionContractDefinition? definition)
+    {
+        ArgumentNullException.ThrowIfNull(reference);
+        Guard.RequireNotNullOrWhiteSpace(location);
+        var status = ResolveExact(reference, out var entry);
+        if (status == ResolutionStatus.Resolved)
+        {
+            definition = entry!.Definition;
+            return DocumentValidationResult.Valid;
+        }
+
+        definition = null;
+        return ResolutionDiagnostic(status, reference, location, nestedDefinition: false);
+    }
+
     internal DocumentValidationResult ValidateReference(
         InteractionContractReference reference,
         string location,
@@ -133,20 +161,30 @@ public sealed class InteractionContractCatalog
 
         definition = null;
         var exact = reference.Definition;
+        return ResolutionDiagnostic(status, exact, location, nestedDefinition: true);
+    }
+
+    static DocumentValidationResult ResolutionDiagnostic(
+        ResolutionStatus status,
+        ExecutionDefinitionReference exact,
+        string location,
+        bool nestedDefinition)
+    {
+        var definitionLocation = nestedDefinition ? location + "/definition" : location;
         return status switch
         {
             ResolutionStatus.DefinitionUnknown => Error(
                 InteractionContractCatalogDiagnosticCodes.DefinitionUnknown,
                 $"Interaction contract '{exact.DefinitionId.Value}' is unknown.",
-                location + "/definition/definitionId"),
+                definitionLocation + "/definitionId"),
             ResolutionStatus.RevisionUnknown => Error(
                 InteractionContractCatalogDiagnosticCodes.RevisionUnknown,
                 $"Interaction revision '{exact.RevisionId.Value}' is unknown for contract '{exact.DefinitionId.Value}'.",
-                location + "/definition/revisionId"),
+                definitionLocation + "/revisionId"),
             ResolutionStatus.FingerprintMismatch => Error(
                 InteractionContractCatalogDiagnosticCodes.FingerprintMismatch,
                 "The interaction contract fingerprint is incompatible with the exact catalog revision.",
-                location + "/definition/fingerprint"),
+                definitionLocation + "/fingerprint"),
             ResolutionStatus.KindMismatch => Error(
                 InteractionContractCatalogDiagnosticCodes.ContractKindMismatch,
                 "The typed interaction reference family differs from the resolved canonical contract family.",

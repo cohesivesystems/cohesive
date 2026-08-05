@@ -225,13 +225,16 @@ public sealed record ProcessInteractionOrigin : InteractionOrigin
     /// <param name="entity">Optional authoritative entity subject involved in the origin.</param>
     /// <param name="transition">Optional exact Transition invoked by the Process origin.</param>
     /// <param name="outcome">Optional stable Transition or Process outcome-node identity.</param>
+    /// <param name="transitionNode">Optional stable emission node in the invoked Transition.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="definition"/> or <paramref name="continuation"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
     /// <paramref name="node"/>, <paramref name="activation"/>, <paramref name="token"/>, or a present
-    /// <paramref name="outcome"/> is a default value; or <paramref name="transition"/> and
-    /// <paramref name="entity"/> are not either both present or both absent.
+    /// <paramref name="transitionNode"/> or <paramref name="outcome"/> is a default value; a Transition origin
+    /// omits <paramref name="outcome"/>; or
+    /// <paramref name="transition"/>, <paramref name="transitionNode"/>, and <paramref name="entity"/> are not
+    /// either all present or all absent.
     /// </exception>
     [JsonConstructor]
     public ProcessInteractionOrigin(
@@ -242,7 +245,8 @@ public sealed record ProcessInteractionOrigin : InteractionOrigin
         TokenId token,
         InteractionEntityReference? entity = null,
         ExecutionDefinitionReference? transition = null,
-        ExecutionNodeId? outcome = null)
+        ExecutionNodeId? outcome = null,
+        ExecutionNodeId? transitionNode = null)
         : base(definition, node)
     {
         if (string.IsNullOrWhiteSpace(activation.Value))
@@ -255,11 +259,24 @@ public sealed record ProcessInteractionOrigin : InteractionOrigin
             throw new ArgumentException("A Process interaction origin requires a token identity.", nameof(token));
         }
 
-        if ((entity is null) != (transition is null))
+        if ((entity is null) != (transition is null)
+            || (entity is null) != (transitionNode is null))
         {
             throw new ArgumentException(
-                "A Process Transition origin must declare both its entity and exact Transition reference.",
+                "A Process Transition origin must declare its entity, exact Transition reference, and Transition node together.",
                 nameof(transition));
+        }
+        if (transitionNode is { } transitionNodeId && string.IsNullOrWhiteSpace(transitionNodeId.Value))
+        {
+            throw new ArgumentException(
+                "An optional Process Transition node identity cannot be default.",
+                nameof(transitionNode));
+        }
+        if (entity is not null && outcome is null)
+        {
+            throw new ArgumentException(
+                "A Process Transition origin requires its terminal Transition outcome identity.",
+                nameof(outcome));
         }
         if (outcome is { } outcomeId && string.IsNullOrWhiteSpace(outcomeId.Value))
         {
@@ -271,6 +288,7 @@ public sealed record ProcessInteractionOrigin : InteractionOrigin
         Token = token;
         Entity = entity;
         Transition = transition;
+        TransitionNode = transitionNode;
         Outcome = outcome;
     }
 
@@ -288,6 +306,10 @@ public sealed record ProcessInteractionOrigin : InteractionOrigin
 
     /// <summary>Optional exact Transition invoked by the Process origin.</summary>
     public ExecutionDefinitionReference? Transition { get; }
+
+    /// <summary>Optional stable emission node in the invoked Transition.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ExecutionNodeId? TransitionNode { get; }
 
     /// <summary>Optional stable Transition or Process outcome-node identity.</summary>
     public ExecutionNodeId? Outcome { get; }
