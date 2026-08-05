@@ -23,7 +23,7 @@ public sealed class MotionDqDurableProcessConformanceTests
         InteractionVisibilityDemand.AfterOriginCommit);
 
     [Fact]
-    public async Task ProcessTransitionAdapter_ReplaysEntityHandoffIntoOneProcessReceiptAndOutboxCut()
+    public async Task ProcessTransitionRecovery_CrashesConvergeToOneReceiptOutboxAndLogicalPublication()
     {
         var fixture = MotionDqProcess.Version1;
         var clock = new ScenarioClock(new(2026, 8, 1, 10, 0, 0, TimeSpan.Zero));
@@ -52,12 +52,25 @@ public sealed class MotionDqDurableProcessConformanceTests
                 ? new(transitionPlan, repository, fixture.InteractionCatalog)
                 : null);
         var crashingAdapter = new CrashAfterFirstEntityHandoffAdapter(entityAdapter);
-        var store = new InMemoryProcessDurableStore();
+        var processCrash = new ProcessStoreCrashScript(
+            new(
+                ProcessStoreMutationKind.AggregateCommit,
+                ProcessStoreCrashPhase.AfterAtomicCommitBeforeReturn),
+            new(
+                ProcessStoreMutationKind.AggregateCommit,
+                ProcessStoreCrashPhase.AfterAtomicCommitBeforeReturn,
+                Occurrence: 3));
+        var store = new InMemoryProcessDurableStore(processCrash.ShouldCrash);
+        var requestAdapter = new MotionDqScenarioAdapter(fixture);
         var runtime = new ProcessDurableRuntime(
             store,
             new RejectingReferenceHost(),
-            new("worker/motion-dq-transition-adapter", TimeSpan.FromMinutes(5)),
+            new(
+                "worker/motion-dq-transition-adapter",
+                TimeSpan.FromMinutes(5),
+                maxAmbiguousStoreMutationAttempts: 1),
             new ExactBindingResolver(fixture.RequestBindings),
+            operationAdapterResolver: new ExactAdapterResolver(requestAdapter),
             transitionOperationAdapter: crashingAdapter);
         var start = Start(fixture, input, clock.Next(), clock.Next());
         var initialized = await runtime.InitializeAsync(Context(clock.Next()), fixture.Plan, start);
@@ -100,14 +113,24 @@ public sealed class MotionDqDurableProcessConformanceTests
                 crashedInvocation.Input));
         Assert.Equal(EntityTransitionOperationDisposition.Replayed, entityReceipt.Disposition);
         Assert.Equal(crashedResult, entityReceipt.Receipt!.Result);
+        Assert.Equal(
+            EntityTransitionEmissionPublicationAuthority.ProcessOutbox,
+            entityReceipt.Receipt.PublicationAuthority);
 
+        var ambiguousProcessCommit = await runtime.ActivateAsync(
+            Context(clock.Next()),
+            fixture.Plan,
+            before.ContinuationIdentity,
+            activation);
+
+        Assert.Equal(ProcessDurableRuntimeDisposition.CommitOutcomeUnknown, ambiguousProcessCommit.Disposition);
         var retried = await runtime.ActivateAsync(
             Context(clock.Next()),
             fixture.Plan,
             before.ContinuationIdentity,
             activation);
 
-        Assert.Equal(ProcessDurableRuntimeDisposition.Applied, retried.Disposition);
+        Assert.Equal(ProcessDurableRuntimeDisposition.Replayed, retried.Disposition);
         var checkpoint = Assert.IsType<ProcessDurableStoreSnapshot>(retried.Snapshot).Checkpoint;
         Assert.True(ProcessCheckpointCompatibilityValidator.Validate(fixture.Plan, checkpoint).IsValid);
         var transitionReceipts = checkpoint.Operations
@@ -137,6 +160,128 @@ public sealed class MotionDqDurableProcessConformanceTests
         });
         Assert.Single(checkpoint.Emissions, static record => record.Envelope is RequestEnvelope);
         Assert.Single(checkpoint.DurableOperations);
+        Assert.Empty(repository.OutboxEnvelopes);
+        var emissionTrace = checkpoint.Activations
+            .SelectMany(static receipt => receipt.Evidence.Trace)
+            .Where(static trace => trace.Kind == ProcessTraceEventKind.InteractionEmitted)
+            .ToDictionary(static trace => trace.Emission!.Value);
+        foreach (var emission in checkpoint.Emissions)
+        {
+            var fingerprint = InteractionEnvelopeJsonSerializer.ComputeContentFingerprint(emission.Envelope);
+            if (emissionTrace.TryGetValue(emission.EmissionId, out var trace))
+            {
+                Assert.Equal(fingerprint, trace.EmissionFingerprint);
+                continue;
+            }
+
+            var operation = Assert.Single(
+                checkpoint.Operations,
+                receipt => receipt.Result.Emissions.Any(candidate =>
+                    candidate.Context.EmissionId == emission.EmissionId));
+            var retained = Assert.Single(
+                operation.Result.Emissions,
+                candidate => candidate.Context.EmissionId == emission.EmissionId);
+            Assert.Equal(
+                fingerprint,
+                InteractionEnvelopeJsonSerializer.ComputeContentFingerprint(retained));
+        }
+
+        var publisher = new IdempotentPublicationSink(crashAfterFirstLogicalPublication: true);
+        var eventRecords = checkpoint.Emissions
+            .Where(static emission => emission.Envelope is DomainEventEnvelope)
+            .ToArray();
+        var firstEvent = eventRecords[0];
+        await Assert.ThrowsAsync<PublicationCrashException>(() => PublishEventAsync(
+            store,
+            Assert.IsType<ProcessDurableStoreSnapshot>(retried.Snapshot),
+            firstEvent.EmissionId,
+            publisher,
+            clock));
+        var afterPublisherCrash = Assert.IsType<ProcessDurableStoreSnapshot>(await store.LoadAsync(
+            Context(clock.Next()),
+            checkpoint.ContinuationIdentity.ProcessInstanceId));
+        var dispatched = Assert.Single(
+            afterPublisherCrash.Checkpoint.Emissions,
+            emission => emission.EmissionId == firstEvent.EmissionId);
+        Assert.Null(dispatched.Publication);
+        Assert.Equal(
+            DurableOperationAttemptStage.Dispatched,
+            Assert.Single(dispatched.Attempts).Stage);
+
+        var staleClaim = PublicationClaim(
+            afterPublisherCrash,
+            eventRecords[1].EmissionId,
+            clock.Next());
+        var staleCommit = PublicationCommit(
+            afterPublisherCrash,
+            staleClaim,
+            owner: "worker/stale-publication",
+            observedAtUtc: staleClaim.UpdatedAtUtc);
+        var stale = await store.CommitAsync(Context(staleClaim.UpdatedAtUtc), staleCommit);
+        Assert.Equal(ProcessStoreMutationDisposition.StaleFence, stale.Disposition);
+        Assert.Single(publisher.LogicalPublications);
+
+        var published = await PublishEventAsync(
+            store,
+            afterPublisherCrash,
+            firstEvent.EmissionId,
+            publisher,
+            clock);
+        published = await PublishEventAsync(
+            store,
+            published,
+            eventRecords[1].EmissionId,
+            publisher,
+            clock);
+        var duplicatePublication = await PublishEventAsync(
+            store,
+            published,
+            firstEvent.EmissionId,
+            publisher,
+            clock);
+
+        Assert.Same(published, duplicatePublication);
+        Assert.True(processCrash.IsComplete);
+        Assert.Equal(2, processCrash.Crashes.Length);
+        Assert.Equal(2, publisher.LogicalPublications.Count);
+        Assert.Equal(3, publisher.PhysicalCalls.Count);
+        Assert.Equal(publisher.PhysicalCalls[0], publisher.PhysicalCalls[1]);
+        Assert.All(
+            published.Checkpoint.Emissions.Where(static emission => emission.Envelope is DomainEventEnvelope),
+            static emission =>
+            {
+                Assert.NotNull(emission.Publication);
+                Assert.Equal(
+                    DurableOperationAttemptStage.Acknowledged,
+                    Assert.Single(emission.Attempts).Stage);
+            });
+
+        var request = Assert.Single(
+            published.Checkpoint.Emissions,
+            static emission => emission.Envelope is RequestEnvelope);
+        var advancedRequest = await runtime.AdvanceOperationAsync(
+            Context(clock.Next()),
+            fixture.Plan,
+            published.Checkpoint.ContinuationIdentity.ProcessInstanceId,
+            request.EmissionId);
+        var replayedRequest = await runtime.AdvanceOperationAsync(
+            Context(clock.Next()),
+            fixture.Plan,
+            published.Checkpoint.ContinuationIdentity.ProcessInstanceId,
+            request.EmissionId);
+
+        Assert.Equal(ProcessDurableRuntimeDisposition.Applied, advancedRequest.Disposition);
+        Assert.Equal(ProcessDurableRuntimeDisposition.Replayed, replayedRequest.Disposition);
+        Assert.Equal(DurableOperationStatus.Dispositioned, replayedRequest.Operation?.Status);
+        Assert.Single(requestAdapter.Invocations);
+        Assert.Equal(
+            request.Envelope.Context.IdempotencyKey,
+            requestAdapter.Invocations[0].DeduplicationKey.IdempotencyKey);
+        checkpoint = Assert.IsType<ProcessDurableStoreSnapshot>(replayedRequest.Snapshot).Checkpoint;
+        Assert.True(ProcessCheckpointCompatibilityValidator.Validate(fixture.Plan, checkpoint).IsValid);
+        Assert.All(
+            checkpoint.Emissions.Where(static emission => emission.Envelope is DomainEventEnvelope),
+            static emission => Assert.NotNull(emission.Publication));
         var finalCase = Assert.IsType<EntitySnapshot>(await repository.TryGet(
             Context(clock.Next()),
             input.Prequalification.CaseId,
@@ -1423,6 +1568,180 @@ public sealed class MotionDqDurableProcessConformanceTests
             new ExactBindingResolver(fixture.RequestBindings),
             operationAdapterResolver: new ExactAdapterResolver(adapter));
 
+    static async Task<ProcessDurableStoreSnapshot> PublishEventAsync(
+        IProcessDurableStore store,
+        ProcessDurableStoreSnapshot snapshot,
+        EmissionId emissionId,
+        IdempotentPublicationSink publisher,
+        ScenarioClock clock)
+    {
+        while (true)
+        {
+            var emission = Assert.Single(
+                snapshot.Checkpoint.Emissions,
+                candidate => candidate.EmissionId == emissionId);
+            if (emission.Publication is not null)
+            {
+                return snapshot;
+            }
+
+            var attempt = emission.Attempts.IsEmpty ? null : emission.Attempts[^1];
+            if (attempt is null)
+            {
+                var claimedAtUtc = clock.Next();
+                snapshot = await CommitPublicationAsync(
+                    store,
+                    snapshot,
+                    PublicationClaim(snapshot, emissionId, claimedAtUtc),
+                    claimedAtUtc);
+                continue;
+            }
+
+            if (attempt.Stage == DurableOperationAttemptStage.Claimed)
+            {
+                var dispatchedAtUtc = clock.Next();
+                var dispatched = new ProcessEmissionRecord(
+                    envelope: emission.Envelope,
+                    enqueuedAtUtc: emission.EnqueuedAtUtc,
+                    attempts: [new(
+                        ordinal: attempt.Ordinal,
+                        claim: attempt.Claim,
+                        stage: DurableOperationAttemptStage.Dispatched,
+                        dispatchedAtUtc: dispatchedAtUtc)]);
+                snapshot = await CommitPublicationAsync(
+                    store,
+                    snapshot,
+                    ReplaceEmission(snapshot.Checkpoint, dispatched, dispatchedAtUtc),
+                    dispatchedAtUtc);
+                continue;
+            }
+
+            if (attempt.Stage != DurableOperationAttemptStage.Dispatched)
+            {
+                throw new InvalidOperationException(
+                    $"Publication attempt '{attempt.Claim.AttemptId.Value}' cannot advance from '{attempt.Stage}'.");
+            }
+
+            await publisher.PublishAsync(Context(clock.Next()), emission.Envelope);
+            var publishedAtUtc = clock.Next();
+            var acknowledged = new DurableOperationAttempt(
+                ordinal: attempt.Ordinal,
+                claim: attempt.Claim,
+                stage: DurableOperationAttemptStage.Acknowledged,
+                dispatchedAtUtc: attempt.DispatchedAtUtc,
+                completedAtUtc: publishedAtUtc);
+            var published = new ProcessEmissionRecord(
+                envelope: emission.Envelope,
+                enqueuedAtUtc: emission.EnqueuedAtUtc,
+                attempts: [acknowledged],
+                publication: new(
+                    attemptId: attempt.Claim.AttemptId,
+                    fence: attempt.Claim.Fence,
+                    publishedAtUtc: publishedAtUtc));
+            return await CommitPublicationAsync(
+                store,
+                snapshot,
+                ReplaceEmission(snapshot.Checkpoint, published, publishedAtUtc),
+                publishedAtUtc);
+        }
+    }
+
+    static ProcessDurableCheckpoint PublicationClaim(
+        ProcessDurableStoreSnapshot snapshot,
+        EmissionId emissionId,
+        DateTimeOffset claimedAtUtc)
+    {
+        var emission = Assert.Single(
+            snapshot.Checkpoint.Emissions,
+            candidate => candidate.EmissionId == emissionId);
+        Assert.Empty(emission.Attempts);
+        var claim = new DurableOperationClaim(
+            attemptId: ProcessDurableRuntimeIdentities.OperationAttempt(emissionId, ordinal: 1),
+            claimant: $"publisher/{emissionId.Value}",
+            fence: new(value: 1),
+            claimedAtUtc: claimedAtUtc,
+            expiresAtUtc: claimedAtUtc.AddMinutes(1),
+            renewedAtUtc: claimedAtUtc);
+        var claimed = new ProcessEmissionRecord(
+            envelope: emission.Envelope,
+            enqueuedAtUtc: emission.EnqueuedAtUtc,
+            attempts: [new(
+                ordinal: 1,
+                claim: claim,
+                stage: DurableOperationAttemptStage.Claimed)]);
+        return ReplaceEmission(snapshot.Checkpoint, claimed, claimedAtUtc);
+    }
+
+    static async Task<ProcessDurableStoreSnapshot> CommitPublicationAsync(
+        IProcessDurableStore store,
+        ProcessDurableStoreSnapshot snapshot,
+        ProcessDurableCheckpoint checkpoint,
+        DateTimeOffset observedAtUtc)
+    {
+        var lease = Assert.IsType<ProcessWorkerLease>(snapshot.WorkerLease);
+        var commit = PublicationCommit(snapshot, checkpoint, lease.Owner, observedAtUtc);
+        ProcessStoreMutationResult result;
+        try
+        {
+            result = await store.CommitAsync(Context(observedAtUtc), commit);
+        }
+        catch (ProcessStoreInjectedCrashException)
+        {
+            result = await store.CommitAsync(Context(observedAtUtc), commit);
+        }
+
+        Assert.Contains(
+            result.Disposition,
+            new[] { ProcessStoreMutationDisposition.Applied, ProcessStoreMutationDisposition.Replayed });
+        return Assert.IsType<ProcessDurableStoreSnapshot>(result.Snapshot);
+    }
+
+    static ProcessDurableCommit PublicationCommit(
+        ProcessDurableStoreSnapshot snapshot,
+        ProcessDurableCheckpoint checkpoint,
+        string owner,
+        DateTimeOffset observedAtUtc)
+    {
+        var lease = Assert.IsType<ProcessWorkerLease>(snapshot.WorkerLease);
+        return new(
+            new($"publication-commit/{ProcessStorageContentFingerprints.Value(checkpoint).Value}"),
+            snapshot.Revision,
+            owner,
+            lease.Fence,
+            checkpoint,
+            localMutations: [],
+            observedAtUtc);
+    }
+
+    static ProcessDurableCheckpoint ReplaceEmission(
+        ProcessDurableCheckpoint checkpoint,
+        ProcessEmissionRecord replacement,
+        DateTimeOffset updatedAtUtc)
+    {
+        var index = -1;
+        for (var candidateIndex = 0; candidateIndex < checkpoint.Emissions.Length; candidateIndex++)
+        {
+            if (checkpoint.Emissions[candidateIndex].EmissionId == replacement.EmissionId)
+            {
+                index = candidateIndex;
+                break;
+            }
+        }
+        Assert.True(index >= 0);
+        return new(
+            checkpoint.SchemaVersion,
+            checkpoint.Start,
+            checkpoint.Continuation,
+            checkpoint.Control,
+            checkpoint.Activations,
+            checkpoint.Operations,
+            checkpoint.Inbox,
+            checkpoint.Emissions.SetItem(index, replacement),
+            checkpoint.DurableOperations,
+            checkpoint.CreatedAtUtc,
+            updatedAtUtc);
+    }
+
     static ProcessInstanceId InstanceId() => new("process-instance/motion-dq/happy-path");
 
     static OperationContext Context(DateTimeOffset utcNow) =>
@@ -1491,6 +1810,56 @@ public sealed class MotionDqDurableProcessConformanceTests
     }
 
     sealed class EntityHandoffCrashException : Exception;
+
+    sealed class IdempotentPublicationSink(bool crashAfterFirstLogicalPublication)
+    {
+        readonly Dictionary<string, InteractionEnvelopeContentFingerprint> logicalPublications =
+            new(StringComparer.Ordinal);
+        bool crashPending = crashAfterFirstLogicalPublication;
+
+        internal IReadOnlyDictionary<string, InteractionEnvelopeContentFingerprint> LogicalPublications =>
+            logicalPublications;
+
+        internal List<string> PhysicalCalls { get; } = [];
+
+        internal ValueTask PublishAsync(OperationContext context, InteractionEnvelope envelope)
+        {
+            ArgumentNullException.ThrowIfNull(context);
+            ArgumentNullException.ThrowIfNull(envelope);
+            context.ThrowIfCancellationRequested();
+            var contract = envelope switch
+            {
+                DomainEventEnvelope domainEvent => domainEvent.Contract.Definition,
+                RequestEnvelope request => request.Contract.Definition,
+                _ => throw new InvalidOperationException(
+                    $"The conformance publisher does not support '{envelope.GetType().Name}'.")
+            };
+            var key = string.Join(
+                '|',
+                envelope.Context.AuthorityScope.Authority,
+                envelope.Context.AuthorityScope.Tenant,
+                contract.DefinitionId.Value,
+                contract.RevisionId.Value,
+                envelope.Context.IdempotencyKey.Value);
+            var fingerprint = InteractionEnvelopeJsonSerializer.ComputeContentFingerprint(envelope);
+            PhysicalCalls.Add(key);
+            if (logicalPublications.TryGetValue(key, out var retained))
+            {
+                Assert.Equal(retained, fingerprint);
+                return ValueTask.CompletedTask;
+            }
+
+            logicalPublications.Add(key, fingerprint);
+            if (crashPending)
+            {
+                crashPending = false;
+                throw new PublicationCrashException();
+            }
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    sealed class PublicationCrashException : Exception;
 
     sealed class ExactAdapterResolver(MotionDqScenarioAdapter adapter)
         : IProcessDurableOperationAdapterResolver

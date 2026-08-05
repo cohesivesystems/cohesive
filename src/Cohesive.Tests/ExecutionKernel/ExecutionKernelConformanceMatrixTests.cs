@@ -70,12 +70,40 @@ public sealed class ExecutionKernelConformanceMatrixTests
 
         Semantic(
             "EK-06",
+            typeof(EntityTransitionOperationRepositoryTests),
+            nameof(EntityTransitionOperationRepositoryTests.CrashAfterAtomicCommit_RetainsOneMutationAndReceipt_AndExactRetryOnlyReplays)),
+        Semantic(
+            "EK-06",
+            typeof(EntityTransitionOperationRepositoryTests),
+            nameof(EntityTransitionOperationRepositoryTests.CrashBeforeAtomicCommit_RetainsNeitherMutationNorReceipt_AndExactRetryCommitsOnce)),
+        Semantic(
+            "EK-06",
+            typeof(EntityTransitionOperationRepositoryTests),
+            nameof(EntityTransitionOperationRepositoryTests.ExactRetry_ReplaysTypedResultAndHandoffWithoutReevaluatingOrPublishing)),
+        Semantic(
+            "EK-06",
+            typeof(EntityTransitionOperationRepositoryTests),
+            nameof(EntityTransitionOperationRepositoryTests.RepositoryWithoutAtomicCapability_ReturnsStructuredDiagnosticBeforeEvaluation)),
+        Semantic(
+            "EK-06",
+            typeof(EntityTransitionOperationRepositoryTests),
+            nameof(EntityTransitionOperationRepositoryTests.ReusedOperationOccurrenceWithDifferentRequestIdentity_FailsBeforeEvaluation)),
+        Semantic(
+            "EK-06",
+            typeof(EntityTransitionOperationRepositoryTests),
+            nameof(EntityTransitionOperationRepositoryTests.StaleEntityConcurrencyFence_FailsWithoutMutationOrReceipt)),
+        Semantic(
+            "EK-06",
             typeof(InMemoryProcessDurableStoreCrashTests),
             nameof(InMemoryProcessDurableStoreCrashTests.AfterAtomicCommitBeforeReturn_ExposesAllAndExactRetryReplays)),
         Semantic(
             "EK-06",
             typeof(InMemoryProcessDurableStoreCrashTests),
             nameof(InMemoryProcessDurableStoreCrashTests.BeforeAtomicCommit_ExposesNoneAndExactRetryApplies)),
+        Semantic(
+            "EK-06",
+            typeof(MotionDqDurableProcessConformanceTests),
+            nameof(MotionDqDurableProcessConformanceTests.ProcessTransitionRecovery_CrashesConvergeToOneReceiptOutboxAndLogicalPublication)),
         Semantic(
             "EK-06",
             typeof(ProcessDurableRuntimeOperationTests),
@@ -88,6 +116,14 @@ public sealed class ExecutionKernelConformanceMatrixTests
             "EK-06",
             typeof(ProcessDurableRuntimeOperationTests),
             nameof(ProcessDurableRuntimeOperationTests.Ek06_CrashBeforeResultAdmissionLaterCommitsExactlyOneDeterministicReply)),
+        Semantic(
+            "EK-06",
+            typeof(TransitionEmissionEnvelopeLowererTests),
+            nameof(TransitionEmissionEnvelopeLowererTests.DirectAndProcessPolicies_LowerEquivalentSemanticsWithExactSourceProvenance)),
+        Semantic(
+            "EK-06",
+            typeof(TransitionEmissionEnvelopeLowererTests),
+            nameof(TransitionEmissionEnvelopeLowererTests.ExactReferenceFailures_AreStructuredAndFailClosed)),
 
         Semantic(
             "EK-07",
