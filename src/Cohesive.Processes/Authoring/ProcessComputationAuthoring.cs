@@ -248,6 +248,34 @@ public sealed class ProcessContext
         ExecutionNodeId? outputOwner = null) =>
         throw SyntaxOnly();
 
+    /// <summary>Declares one typed domain-event alternative of a result-binding AwaitMatch.</summary>
+    /// <remarks>
+    /// <typeparamref name="TCase"/> is a source-only case in the closed result family selected by the generic
+    /// <see cref="AwaitMatch{TResult}"/> overload. The admitted event payload is bound directly as that case; no
+    /// wrapper value or discriminator is persisted in canonical Process IR.
+    /// </remarks>
+    /// <typeparam name="TCase">CLR event payload type used as one pattern-matchable result case.</typeparam>
+    /// <param name="contract">Exact domain-event contract.</param>
+    /// <param name="priority">Explicit arbitration priority.</param>
+    /// <param name="when">Optional inline portable eligibility predicate.</param>
+    /// <param name="id">Optional explicit canonical clause identity.</param>
+    /// <param name="role">Stable semantic role of the winning continuation edge.</param>
+    /// <param name="edgeOwner">Optional durable owner of the winning continuation edge.</param>
+    /// <param name="outputRole">Stable semantic role of the admitted input binding.</param>
+    /// <param name="outputOwner">Optional durable owner of the admitted input binding.</param>
+    /// <returns>An opaque syntax-only AwaitMatch clause.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessAwaitCase Event<TCase>(
+        DomainEventContractReference contract,
+        int priority = 0,
+        ProcessGuard<TCase>? when = null,
+        ExecutionNodeId? id = null,
+        string role = "next",
+        ExecutionNodeId? edgeOwner = null,
+        string outputRole = "input",
+        ExecutionNodeId? outputOwner = null) =>
+        throw SyntaxOnly();
+
     /// <summary>Declares one Signal clause of a durable AwaitMatch.</summary>
     /// <typeparam name="TInput">CLR type projected from the exact Signal payload contract.</typeparam>
     /// <param name="contract">Exact Signal contract.</param>
@@ -266,6 +294,33 @@ public sealed class ProcessContext
         ProcessInteractionBranch<TInput> branch,
         int priority = 0,
         ProcessGuard<TInput>? when = null,
+        ExecutionNodeId? id = null,
+        string role = "next",
+        ExecutionNodeId? edgeOwner = null,
+        string outputRole = "input",
+        ExecutionNodeId? outputOwner = null) =>
+        throw SyntaxOnly();
+
+    /// <summary>Declares one typed Signal alternative of a result-binding AwaitMatch.</summary>
+    /// <remarks>
+    /// The admitted Signal payload is the source-only result case. Its canonical authority remains the existing
+    /// interaction input binding owned by the AwaitMatch clause.
+    /// </remarks>
+    /// <typeparam name="TCase">CLR Signal payload type used as one pattern-matchable result case.</typeparam>
+    /// <param name="contract">Exact Signal contract.</param>
+    /// <param name="priority">Explicit arbitration priority.</param>
+    /// <param name="when">Optional inline portable eligibility predicate.</param>
+    /// <param name="id">Optional explicit canonical clause identity.</param>
+    /// <param name="role">Stable semantic role of the winning continuation edge.</param>
+    /// <param name="edgeOwner">Optional durable owner of the winning continuation edge.</param>
+    /// <param name="outputRole">Stable semantic role of the admitted input binding.</param>
+    /// <param name="outputOwner">Optional durable owner of the admitted input binding.</param>
+    /// <returns>An opaque syntax-only AwaitMatch clause.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessAwaitCase Signal<TCase>(
+        SignalContractReference contract,
+        int priority = 0,
+        ProcessGuard<TCase>? when = null,
         ExecutionNodeId? id = null,
         string role = "next",
         ExecutionNodeId? edgeOwner = null,
@@ -316,6 +371,27 @@ public sealed class ProcessContext
         ExecutionNodeId? edgeOwner = null) =>
         throw SyntaxOnly();
 
+    /// <summary>Declares one typed timer alternative of a result-binding AwaitMatch.</summary>
+    /// <remarks>
+    /// <typeparamref name="TCase"/> is a source-only case marker. Canonical IR retains only the timer clause and
+    /// its due-time expression; it does not materialize or serialize an instance of the CLR case type.
+    /// </remarks>
+    /// <typeparam name="TCase">Source-only pattern type identifying the timer alternative.</typeparam>
+    /// <param name="dueAt">Pure expression yielding the absolute due instant.</param>
+    /// <param name="priority">Explicit arbitration priority.</param>
+    /// <param name="id">Optional explicit canonical clause identity.</param>
+    /// <param name="role">Stable semantic role of the winning continuation edge.</param>
+    /// <param name="edgeOwner">Optional durable owner of the winning continuation edge.</param>
+    /// <returns>An opaque syntax-only AwaitMatch clause.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessAwaitCase Deadline<TCase>(
+        DateTimeOffset dueAt,
+        int priority = 0,
+        ExecutionNodeId? id = null,
+        string role = "next",
+        ExecutionNodeId? edgeOwner = null) =>
+        throw SyntaxOnly();
+
     /// <summary>Declares a durable exclusive race over a closed set of typed interaction and timer clauses.</summary>
     /// <param name="clauses">Closed set of source-only AwaitMatch clauses.</param>
     /// <param name="arbitration">Explicit canonical winner-selection semantics.</param>
@@ -328,6 +404,34 @@ public sealed class ProcessContext
     /// <returns>A syntax-only task representing completion of the selected clause branch.</returns>
     /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
     public ProcessTask AwaitMatch(
+        ProcessAwaitCase[] clauses,
+        ProcessAwaitArbitration arbitration,
+        ProcessAwaitInputDisposition lateInput,
+        ProcessAwaitInputDisposition staleInput,
+        ProcessAwaitInputDisposition duplicateInput,
+        ProcessAwaitMissingTargetDisposition missingTarget,
+        TimeSpan retentionHorizon,
+        ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
+    /// <summary>Binds the selected alternative of a durable AwaitMatch as a closed source-only result family.</summary>
+    /// <remarks>
+    /// The awaited value must be consumed by an immediately following exhaustive type switch. The generator
+    /// fuses each switch section into its canonical clause continuation and erases the CLR result family. Exact
+    /// clause identity, input bindings, timer expressions, policies, and provenance remain the persisted truth.
+    /// </remarks>
+    /// <typeparam name="TResult">Common source-only base type implemented by every declared alternative.</typeparam>
+    /// <param name="clauses">Closed set of typed interaction and timer alternatives.</param>
+    /// <param name="arbitration">Explicit canonical winner-selection semantics.</param>
+    /// <param name="lateInput">Disposition for input arriving after a winner completed the wait.</param>
+    /// <param name="staleInput">Disposition for input targeting incompatible continuation state.</param>
+    /// <param name="duplicateInput">Disposition for repeated logical input.</param>
+    /// <param name="missingTarget">Disposition when no compatible durable target can be resolved.</param>
+    /// <param name="retentionHorizon">Minimum duration for which the wait remains addressable.</param>
+    /// <param name="id">Optional explicit canonical AwaitMatch identity.</param>
+    /// <returns>A syntax-only awaitable whose case is selected by canonical AwaitMatch arbitration.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessAwaitable<TResult> AwaitMatch<TResult>(
         ProcessAwaitCase[] clauses,
         ProcessAwaitArbitration arbitration,
         ProcessAwaitInputDisposition lateInput,

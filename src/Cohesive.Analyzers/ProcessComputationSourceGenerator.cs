@@ -197,6 +197,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             parser.ForkResultTuples,
             parser.Awaits,
             parser.AuthoredOutputs,
+            parser.PatternOutputs,
             parser.RequestObligations);
         if (!emitter.TryEmit(body, out var generatedBody))
         {
@@ -341,6 +342,20 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
 
     static string Literal(string value) => SymbolDisplay.FormatLiteral(value, quote: true);
 
+    static string? SerializedName(ISymbol? member)
+    {
+        if (member is null)
+        {
+            return null;
+        }
+
+        var attribute = member.GetAttributes().FirstOrDefault(static item =>
+            item.AttributeClass?.ToDisplayString() == "System.Text.Json.Serialization.JsonPropertyNameAttribute");
+        return attribute?.ConstructorArguments.Length == 1
+            ? attribute.ConstructorArguments[0].Value as string
+            : member.Name;
+    }
+
     static SourceReference SourceLocation(SyntaxNode syntax)
     {
         var span = syntax.GetLocation().GetLineSpan();
@@ -372,6 +387,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         readonly Dictionary<IMethodSymbol, LocalFunctionStatementSyntax> localFunctions = new(SymbolEqualityComparer.Default);
         readonly List<AwaitFlow> awaits = [];
         readonly List<AuthoredOutput> authoredOutputs = [];
+        readonly List<PatternOutput> patternOutputs = [];
         readonly List<BranchObligation> requestObligations = [];
         readonly Dictionary<string, int> semanticRoleOrdinals = new(StringComparer.Ordinal);
         int variableOrdinal;
@@ -398,6 +414,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
 
         public IReadOnlyList<AuthoredOutput> AuthoredOutputs => authoredOutputs;
 
+        public IReadOnlyList<PatternOutput> PatternOutputs => patternOutputs;
+
         public IReadOnlyList<BranchObligation> RequestObligations => requestObligations;
 
         public bool TryParse(SyntaxList<StatementSyntax> statements, out FlowBlock block)
@@ -417,12 +435,19 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         bool TryParse(
             SyntaxList<StatementSyntax> statements,
             ImmutableArray<string> structuralPath,
-            out FlowBlock block)
+            out FlowBlock block,
+            bool ignoreTerminalBreak = false)
         {
             List<FlowStatement> flows = [];
             var terminalObserved = false;
-            foreach (var statement in statements)
+            var statementCount = ignoreTerminalBreak
+                                 && statements.Count != 0
+                                 && statements[statements.Count - 1] is BreakStatementSyntax
+                ? statements.Count - 1
+                : statements.Count;
+            for (var statementIndex = 0; statementIndex < statementCount; statementIndex++)
             {
+                var statement = statements[statementIndex];
                 if (statement is LocalFunctionStatementSyntax)
                 {
                     continue;
@@ -439,6 +464,42 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 switch (statement)
                 {
                     case LocalDeclarationStatementSyntax localDeclaration:
+                        if (TryGetTypedAwaitMatchInvocation(
+                                localDeclaration,
+                                out var awaitResult,
+                                out var typedAwaitInvocation))
+                        {
+                            var selectionIndex = statementIndex + 1;
+                            while (selectionIndex < statements.Count
+                                   && statements[selectionIndex] is LocalFunctionStatementSyntax)
+                            {
+                                selectionIndex++;
+                            }
+                            if (selectionIndex >= statements.Count
+                                || statements[selectionIndex] is not SwitchStatementSyntax selection)
+                            {
+                                return Failure(
+                                    localDeclaration,
+                                    "a typed AwaitMatch result must be consumed by an immediately following exhaustive type switch",
+                                    out block);
+                            }
+                            if (!TryParseTypedAwaitMatch(
+                                    localDeclaration,
+                                    awaitResult,
+                                    selection,
+                                    structuralPath,
+                                    typedAwaitInvocation,
+                                    out var typedAwaitMatch))
+                            {
+                                block = null!;
+                                return false;
+                            }
+
+                            flows.Add(typedAwaitMatch);
+                            statementIndex = selectionIndex;
+                            break;
+                        }
+
                         if (TryGetForkJoinInvocation(localDeclaration, out _))
                         {
                             if (!TryParseForkJoin(localDeclaration, structuralPath, out var localForkJoin))
@@ -577,6 +638,38 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             }
 
             block = new([.. flows]);
+            return true;
+        }
+
+        bool TryGetTypedAwaitMatchInvocation(
+            LocalDeclarationStatementSyntax declaration,
+            out ILocalSymbol result,
+            out IInvocationOperation invocation)
+        {
+            result = null!;
+            invocation = null!;
+            if (declaration.Declaration.Variables.Count != 1)
+            {
+                return false;
+            }
+
+            var declarator = declaration.Declaration.Variables[0];
+            if (declarator.Initializer is not { Value: { } initializer }
+                || semanticModel.GetDeclaredSymbol(declarator) is not ILocalSymbol local
+                || semanticModel.GetOperation(initializer) is not IAwaitOperation awaited
+                || Strip(awaited.Operation) is not IInvocationOperation candidate
+                || candidate.TargetMethod.Name != "AwaitMatch"
+                || !candidate.TargetMethod.IsGenericMethod
+                || !SymbolEqualityComparer.Default.Equals(candidate.TargetMethod.ContainingType, contextParameter.Type)
+                || candidate.Instance is null
+                || Strip(candidate.Instance) is not IParameterReferenceOperation contextReference
+                || !SymbolEqualityComparer.Default.Equals(contextReference.Parameter, contextParameter))
+            {
+                return false;
+            }
+
+            result = local;
+            invocation = candidate;
             return true;
         }
 
@@ -1194,19 +1287,20 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     return false;
                 }
 
-                IParameterSymbol? input = null;
+                AuthoredOutput? input = null;
                 IParameterSymbol? obligation = null;
                 if (kind != AwaitClauseKind.Timer)
                 {
-                    input = branchMethod.Parameters[0];
-                    authoredOutputs.Add(new(
-                        input,
-                        input.Type,
+                    var inputParameter = branchMethod.Parameters[0];
+                    input = new(
+                        inputParameter,
+                        inputParameter.Type,
                         clauseIdentity,
                         "input",
                         $"__authored_output_{authoredOutputs.Count.ToString(CultureInfo.InvariantCulture)}",
                         clauseDeclaration,
-                        SourceLocation(localFunction)));
+                        SourceLocation(localFunction));
+                    authoredOutputs.Add(input);
                 }
                 if (kind == AwaitClauseKind.Request)
                 {
@@ -1237,6 +1331,337 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 SourceLocation(statement),
                 statement);
             return true;
+        }
+
+        bool TryParseTypedAwaitMatch(
+            LocalDeclarationStatementSyntax statement,
+            ILocalSymbol resultLocal,
+            SwitchStatementSyntax selection,
+            ImmutableArray<string> structuralPath,
+            IInvocationOperation invocation,
+            out AwaitMatchFlow flow)
+        {
+            flow = null!;
+            if (semanticModel.GetOperation(selection.Expression) is not { } selected
+                || Strip(selected) is not ILocalReferenceOperation selectedLocal
+                || !SymbolEqualityComparer.Default.Equals(selectedLocal.Local, resultLocal))
+            {
+                return StatementFailure(
+                    selection.Expression,
+                    $"the type switch following AwaitMatch must select its bound result '{resultLocal.Name}'");
+            }
+
+            var awaitIdentity = NextIdentity("await-match", structuralPath);
+            var declarations = CollectionArguments(invocation, "clauses");
+            if (declarations.IsEmpty)
+            {
+                return StatementFailure(statement, "AwaitMatch requires at least one interaction or timer clause");
+            }
+
+            var resultType = invocation.TargetMethod.TypeArguments[0];
+            List<TypedAwaitClauseDeclaration> typedClauses = [];
+            HashSet<ITypeSymbol> declaredCases = new(SymbolEqualityComparer.Default);
+            for (var index = 0; index < declarations.Length; index++)
+            {
+                var declared = Strip(declarations[index]);
+                if (declared is not IInvocationOperation clause
+                    || !SymbolEqualityComparer.Default.Equals(clause.TargetMethod.ContainingType, contextParameter.Type))
+                {
+                    return StatementFailure(
+                        declarations[index].Syntax,
+                        "every typed AwaitMatch clause must be declared on the ProcessContext parameter");
+                }
+
+                var kind = clause.TargetMethod.Name switch
+                {
+                    "Event" => AwaitClauseKind.Event,
+                    "Signal" => AwaitClauseKind.Signal,
+                    "Deadline" => AwaitClauseKind.Timer,
+                    _ => AwaitClauseKind.Unsupported
+                };
+                if (kind == AwaitClauseKind.Unsupported
+                    || !clause.TargetMethod.IsGenericMethod
+                    || clause.TargetMethod.TypeArguments.Length != 1
+                    || Argument(clause, "branch") is not null)
+                {
+                    return StatementFailure(
+                        clause.Syntax,
+                        $"typed AwaitMatch clause '{clause.TargetMethod.Name}' must be a branch-free typed Event, Signal, or Deadline alternative");
+                }
+
+                var caseType = clause.TargetMethod.TypeArguments[0];
+                if (!caseType.IsReferenceType || !IsAssignableTo(caseType, resultType))
+                {
+                    return StatementFailure(
+                        clause.Syntax,
+                        $"typed AwaitMatch case '{caseType.ToDisplayString()}' must be a reference type assignable to result '{resultType.ToDisplayString()}'");
+                }
+                if (!declaredCases.Add(caseType))
+                {
+                    return StatementFailure(
+                        clause.Syntax,
+                        $"typed AwaitMatch result case '{caseType.ToDisplayString()}' is declared more than once");
+                }
+
+                var identity = NextIdentity(
+                    kind == AwaitClauseKind.Timer ? "timer-clause" : "interaction-clause",
+                    structuralPath.Add(awaitIdentity.PathSegment),
+                    caseType.Name);
+                typedClauses.Add(new(
+                    identity,
+                    kind,
+                    caseType,
+                    clause,
+                    SourceLocation(clause.Syntax),
+                    clause.Syntax));
+            }
+
+            Dictionary<ITypeSymbol, TypedAwaitSelection> selections = new(SymbolEqualityComparer.Default);
+            foreach (var section in selection.Sections)
+            {
+                if (section.Labels.Count != 1
+                    || section.Labels[0] is not CasePatternSwitchLabelSyntax label
+                    || label.WhenClause is not null
+                    || !TryGetTypedAwaitCase(
+                        label,
+                        out var caseType,
+                        out var patternLocal,
+                        out var propertyBindings))
+                {
+                    return StatementFailure(
+                        section,
+                        "typed AwaitMatch switch sections require one unguarded type or portable property-pattern case");
+                }
+                if (!declaredCases.Contains(caseType))
+                {
+                    return StatementFailure(
+                        label,
+                        $"switch case '{caseType.ToDisplayString()}' is not a declared AwaitMatch alternative");
+                }
+                if (selections.ContainsKey(caseType))
+                {
+                    return StatementFailure(
+                        label,
+                        $"switch case '{caseType.ToDisplayString()}' is handled more than once");
+                }
+                selections.Add(
+                    caseType,
+                    new(
+                        section,
+                        patternLocal,
+                        propertyBindings,
+                        SourceLocation(label),
+                        label));
+            }
+
+            var missing = typedClauses
+                .Where(clause => !selections.ContainsKey(clause.CaseType))
+                .Select(clause => clause.CaseType.ToDisplayString())
+                .ToArray();
+            if (missing.Length != 0)
+            {
+                return StatementFailure(
+                    selection,
+                    $"typed AwaitMatch switch is not exhaustive; add case(s): {string.Join(", ", missing)}");
+            }
+
+            List<AwaitClauseFlow> clauses = [];
+            foreach (var declared in typedClauses)
+            {
+                var selectedCase = selections[declared.CaseType];
+                AuthoredOutput? input = null;
+                if (declared.Kind == AwaitClauseKind.Timer)
+                {
+                    if (selectedCase.PatternLocal is not null
+                        || !selectedCase.PropertyBindings.IsEmpty)
+                    {
+                        return StatementFailure(
+                            selectedCase.Syntax,
+                            "a typed AwaitMatch timer case cannot bind a CLR value; use the lexical due-time expression in its branch");
+                    }
+                }
+                else
+                {
+                    input = new(
+                        selectedCase.PatternLocal,
+                        declared.CaseType,
+                        declared.Identity,
+                        "input",
+                        $"__authored_output_{authoredOutputs.Count.ToString(CultureInfo.InvariantCulture)}",
+                        declared.Declaration,
+                        selectedCase.Source);
+                    authoredOutputs.Add(input);
+                    foreach (var propertyBinding in selectedCase.PropertyBindings)
+                    {
+                        patternOutputs.Add(new(
+                            propertyBinding.Symbol,
+                            input,
+                            propertyBinding.Path));
+                    }
+                }
+
+                if (!TryParse(
+                        selectedCase.Section.Statements,
+                        structuralPath.Add(awaitIdentity.PathSegment).Add(declared.Identity.PathSegment),
+                        out var body,
+                        ignoreTerminalBreak: true))
+                {
+                    return false;
+                }
+
+                clauses.Add(new(
+                    declared.Identity,
+                    declared.CaseType.Name,
+                    declared.Kind,
+                    body,
+                    input,
+                    null,
+                    declared.Declaration,
+                    declared.Source,
+                    declared.Syntax));
+            }
+
+            flow = new(
+                awaitIdentity,
+                [.. clauses],
+                invocation,
+                SourceLocation(statement),
+                statement);
+            return true;
+        }
+
+        bool TryGetTypedAwaitCase(
+            CasePatternSwitchLabelSyntax label,
+            out ITypeSymbol caseType,
+            out ILocalSymbol? patternLocal,
+            out ImmutableArray<TypedAwaitPropertyBinding> propertyBindings)
+        {
+            caseType = null!;
+            patternLocal = null;
+            propertyBindings = [];
+            TypeSyntax? typeSyntax;
+            SingleVariableDesignationSyntax? designation;
+            PropertyPatternClauseSyntax? properties = null;
+            switch (label.Pattern)
+            {
+                case DeclarationPatternSyntax declaration:
+                    typeSyntax = declaration.Type;
+                    designation = declaration.Designation as SingleVariableDesignationSyntax;
+                    break;
+                case TypePatternSyntax type:
+                    typeSyntax = type.Type;
+                    designation = null;
+                    break;
+                case RecursivePatternSyntax recursive
+                    when recursive.Type is not null
+                         && recursive.PositionalPatternClause is null:
+                    typeSyntax = recursive.Type;
+                    designation = recursive.Designation as SingleVariableDesignationSyntax;
+                    properties = recursive.PropertyPatternClause;
+                    break;
+                default:
+                    return false;
+            }
+
+            if (semanticModel.GetTypeInfo(typeSyntax).Type is not INamedTypeSymbol resolved)
+            {
+                return false;
+            }
+            if (designation is not null
+                && semanticModel.GetDeclaredSymbol(designation) is not ILocalSymbol local)
+            {
+                return false;
+            }
+
+            caseType = resolved;
+            patternLocal = designation is null
+                ? null
+                : (ILocalSymbol)semanticModel.GetDeclaredSymbol(designation)!;
+            if (properties is null)
+            {
+                return true;
+            }
+
+            var bindings = ImmutableArray.CreateBuilder<TypedAwaitPropertyBinding>();
+            if (!TryGetTypedAwaitPropertyBindings(resolved, properties, [], bindings))
+            {
+                return false;
+            }
+            propertyBindings = bindings.ToImmutable();
+            return true;
+        }
+
+        bool TryGetTypedAwaitPropertyBindings(
+            INamedTypeSymbol containingType,
+            PropertyPatternClauseSyntax properties,
+            ImmutableArray<string> prefix,
+            ImmutableArray<TypedAwaitPropertyBinding>.Builder bindings)
+        {
+            foreach (var subpattern in properties.Subpatterns)
+            {
+                var memberName = subpattern.NameColon?.Name.Identifier.ValueText
+                                 ?? subpattern.ExpressionColon?.Expression.ToString();
+                if (memberName is not { Length: > 0 }
+                    || containingType.GetMembers(memberName).OfType<IPropertySymbol>().SingleOrDefault() is not { } property)
+                {
+                    return false;
+                }
+
+                var path = prefix.Add(SerializedName(property) ?? property.Name);
+                SingleVariableDesignationSyntax? designation = subpattern.Pattern switch
+                {
+                    VarPatternSyntax variable => variable.Designation as SingleVariableDesignationSyntax,
+                    DeclarationPatternSyntax declaration => declaration.Designation as SingleVariableDesignationSyntax,
+                    _ => null
+                };
+                if (designation is not null)
+                {
+                    if (semanticModel.GetDeclaredSymbol(designation) is not ILocalSymbol local)
+                    {
+                        return false;
+                    }
+                    bindings.Add(new(local, path));
+                    continue;
+                }
+
+                if (subpattern.Pattern is not RecursivePatternSyntax
+                    {
+                        Type: null,
+                        PositionalPatternClause: null,
+                        PropertyPatternClause: { } nested
+                    }
+                    || property.Type is not INamedTypeSymbol nestedType
+                    || !TryGetTypedAwaitPropertyBindings(nestedType, nested, path, bindings))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        static bool IsAssignableTo(ITypeSymbol candidate, ITypeSymbol target)
+        {
+            if (SymbolEqualityComparer.Default.Equals(candidate, target))
+            {
+                return true;
+            }
+            if (candidate is not INamedTypeSymbol named)
+            {
+                return false;
+            }
+            if (named.AllInterfaces.Any(@interface => SymbolEqualityComparer.Default.Equals(@interface, target)))
+            {
+                return true;
+            }
+
+            for (var current = named.BaseType; current is not null; current = current.BaseType)
+            {
+                if (SymbolEqualityComparer.Default.Equals(current, target))
+                {
+                    return true;
+                }
+            }
+            return false;
         }
 
         bool TryGetNamedLocalBranch(
@@ -2060,6 +2485,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         readonly IReadOnlyDictionary<ILocalSymbol, ImmutableArray<IOperation>> forkResultTuples;
         readonly IReadOnlyList<AwaitFlow> awaits;
         readonly IReadOnlyList<AuthoredOutput> authoredOutputs;
+        readonly IReadOnlyDictionary<ISymbol, PatternOutput> patternOutputs;
         readonly IReadOnlyList<BranchObligation> requestObligations;
         readonly Dictionary<ISymbol, string> outputBySymbol;
         readonly Dictionary<IParameterSymbol, string> obligationByParameter;
@@ -2078,6 +2504,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             IReadOnlyDictionary<ILocalSymbol, ImmutableArray<IOperation>> forkResultTuples,
             IReadOnlyList<AwaitFlow> awaits,
             IReadOnlyList<AuthoredOutput> authoredOutputs,
+            IReadOnlyList<PatternOutput> patternOutputs,
             IReadOnlyList<BranchObligation> requestObligations)
         {
             this.productionContext = productionContext;
@@ -2088,6 +2515,9 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             this.forkResultTuples = forkResultTuples;
             this.awaits = awaits;
             this.authoredOutputs = authoredOutputs;
+            this.patternOutputs = patternOutputs.ToDictionary(
+                static output => (ISymbol)output.Symbol,
+                SymbolEqualityComparer.Default);
             this.requestObligations = requestObligations;
             outputBySymbol = new(SymbolEqualityComparer.Default);
             obligationByParameter = new(SymbolEqualityComparer.Default);
@@ -2311,6 +2741,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 pureLocals,
                 forkResultTuples,
                 outputBySymbol,
+                patternOutputs,
                 resolvingPureLocals);
             foreach (var branch in body.Descendants()
                          .OfType<ForkJoinFlow>()
@@ -2605,11 +3036,6 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         break;
 
                     case AwaitMatchFlow awaitMatch:
-                        if (entry is null)
-                        {
-                            return StatementFailure(awaitMatch.Syntax, "AwaitMatch requires a following operation or return");
-                        }
-
                         if (!TryEmitAwaitMatch(awaitMatch, entry))
                         {
                             return false;
@@ -3110,7 +3536,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 projectedParameters);
         }
 
-        bool TryEmitAwaitMatch(AwaitMatchFlow awaitMatch, string successor)
+        bool TryEmitAwaitMatch(AwaitMatchFlow awaitMatch, string? successor)
         {
             List<string> clauses = [];
             foreach (var clause in awaitMatch.Clauses)
@@ -3159,7 +3585,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     return StatementFailure(clause.Syntax, "an AwaitMatch interaction clause requires an exact contract and typed input");
                 }
 
-                var output = outputBySymbol[clause.Input];
+                var output = clause.Input.Variable;
                 if (!TryEmitGuard(clause, output, out var guard))
                 {
                     return false;
@@ -3622,6 +4048,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 pureLocals,
                 forkResultTuples,
                 outputBySymbol,
+                patternOutputs,
                 resolvingPureLocals,
                 projectedParameters);
             if (!translator.TryEmit(operation, out var expression, out var failure))
@@ -3664,6 +4091,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         readonly IReadOnlyDictionary<ILocalSymbol, IOperation> pureLocals;
         readonly IReadOnlyDictionary<ILocalSymbol, ImmutableArray<IOperation>> forkResultTuples;
         readonly IReadOnlyDictionary<ISymbol, string> outputs;
+        readonly IReadOnlyDictionary<ISymbol, PatternOutput> patternOutputs;
         readonly HashSet<ILocalSymbol> resolving;
         readonly IReadOnlyDictionary<IParameterSymbol, IOperation>? projectedParameters;
 
@@ -3673,6 +4101,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             IReadOnlyDictionary<ILocalSymbol, IOperation> pureLocals,
             IReadOnlyDictionary<ILocalSymbol, ImmutableArray<IOperation>> forkResultTuples,
             IReadOnlyDictionary<ISymbol, string> outputs,
+            IReadOnlyDictionary<ISymbol, PatternOutput> patternOutputs,
             HashSet<ILocalSymbol> resolving,
             IReadOnlyDictionary<IParameterSymbol, IOperation>? projectedParameters = null)
         {
@@ -3681,6 +4110,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             this.pureLocals = pureLocals;
             this.forkResultTuples = forkResultTuples;
             this.outputs = outputs;
+            this.patternOutputs = patternOutputs;
             this.resolving = resolving;
             this.projectedParameters = projectedParameters;
         }
@@ -3729,6 +4159,14 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
 
                 case ILocalReferenceOperation local when outputs.TryGetValue(local.Local, out var output):
                     expression = output + ".Expression";
+                    failure = string.Empty;
+                    return true;
+
+                case ILocalReferenceOperation local
+                    when patternOutputs.TryGetValue(local.Local, out var patternOutput):
+                    expression = patternOutput.Path.IsEmpty
+                        ? patternOutput.Output.Variable + ".Expression"
+                        : BindingField(patternOutput.Output.Variable + ".Binding", patternOutput.Path);
                     failure = string.Empty;
                     return true;
 
@@ -4230,6 +4668,12 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         segments.Reverse();
                         expression = BindingField(output + ".Binding", segments);
                         return segments.Count != 0;
+                    case ILocalReferenceOperation local
+                        when patternOutputs.TryGetValue(local.Local, out var patternOutput):
+                        segments.Reverse();
+                        var path = patternOutput.Path.AddRange(segments);
+                        expression = BindingField(patternOutput.Output.Variable + ".Binding", path);
+                        return path.Length != 0;
                     default:
                         expression = string.Empty;
                         return false;
@@ -4325,20 +4769,6 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
 
             failure = string.Empty;
             return true;
-        }
-
-        static string? SerializedName(ISymbol? member)
-        {
-            if (member is null)
-            {
-                return null;
-            }
-
-            var attribute = member.GetAttributes().FirstOrDefault(static item =>
-                item.AttributeClass?.ToDisplayString() == "System.Text.Json.Serialization.JsonPropertyNameAttribute");
-            return attribute?.ConstructorArguments.Length == 1
-                ? attribute.ConstructorArguments[0].Value as string
-                : member.Name;
         }
 
         static string ReturnType(ITypeSymbol? type) =>
@@ -4622,6 +5052,11 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         IInvocationOperation? Declaration,
         SourceReference Source);
 
+    sealed record PatternOutput(
+        ILocalSymbol Symbol,
+        AuthoredOutput Output,
+        ImmutableArray<string> Path);
+
     sealed record BranchObligation(
         IParameterSymbol Parameter,
         FlowIdentity Owner,
@@ -4694,11 +5129,30 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         string Name,
         AwaitClauseKind Kind,
         FlowBlock Body,
-        IParameterSymbol? Input,
+        AuthoredOutput? Input,
         IParameterSymbol? RequestObligation,
         IInvocationOperation Declaration,
         SourceReference Source,
         SyntaxNode Syntax);
+
+    sealed record TypedAwaitClauseDeclaration(
+        FlowIdentity Identity,
+        AwaitClauseKind Kind,
+        ITypeSymbol CaseType,
+        IInvocationOperation Declaration,
+        SourceReference Source,
+        SyntaxNode Syntax);
+
+    sealed record TypedAwaitSelection(
+        SwitchSectionSyntax Section,
+        ILocalSymbol? PatternLocal,
+        ImmutableArray<TypedAwaitPropertyBinding> PropertyBindings,
+        SourceReference Source,
+        SyntaxNode Syntax);
+
+    sealed record TypedAwaitPropertyBinding(
+        ILocalSymbol Symbol,
+        ImmutableArray<string> Path);
 
     sealed record AwaitMatchFlow(
         FlowIdentity Identity,
