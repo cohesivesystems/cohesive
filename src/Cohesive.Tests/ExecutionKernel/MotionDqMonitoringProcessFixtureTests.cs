@@ -17,6 +17,9 @@ public sealed class MotionDqMonitoringProcessFixtureTests
         var second = MotionDqMonitoringProcess.AuthorVersion1();
 
         Assert.NotSame(first, second);
+        Assert.Equal(
+            "4d762af6bfac07a63396526d8a9d9fd1fd60623f7ba91fd06a6398abae7cbe46",
+            first.Document.Metadata.Fingerprint.Value);
         Assert.Equal(first.Definition, second.Definition);
         Assert.Equal(first.Reference, second.Reference);
         Assert.Equal(first.Document.Metadata.SourceMap, second.Document.Metadata.SourceMap);

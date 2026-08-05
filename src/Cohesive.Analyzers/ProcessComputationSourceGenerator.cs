@@ -469,9 +469,47 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                             return Failure(returned, "return expression could not be analyzed", out block);
                         }
 
+                        var terminalKind = TerminalAuthoringKind.Return;
+                        IInvocationOperation? terminalInvocation = null;
+                        var terminalResult = returnedOperation;
+                        var terminalRole = "return";
+                        var strippedReturn = Strip(returnedOperation);
+                        if (strippedReturn is IInvocationOperation unreachable
+                            && unreachable.TargetMethod.Name == "Unreachable"
+                            && SymbolEqualityComparer.Default.Equals(unreachable.TargetMethod.ContainingType, contextParameter.Type)
+                            && unreachable.Instance is not null
+                            && Strip(unreachable.Instance) is IParameterReferenceOperation unreachableContext
+                            && SymbolEqualityComparer.Default.Equals(unreachableContext.Parameter, contextParameter))
+                        {
+                            terminalObserved = true;
+                            break;
+                        }
+                        if (strippedReturn is IInvocationOperation candidate
+                            && candidate.TargetMethod.Name is "Complete" or "Fail"
+                            && SymbolEqualityComparer.Default.Equals(candidate.TargetMethod.ContainingType, contextParameter.Type)
+                            && candidate.Instance is not null
+                            && Strip(candidate.Instance) is IParameterReferenceOperation contextReference
+                            && SymbolEqualityComparer.Default.Equals(contextReference.Parameter, contextParameter))
+                        {
+                            var result = Argument(candidate, "result");
+                            if (result is null)
+                            {
+                                return Failure(returned, "an explicit Process terminal requires one portable result", out block);
+                            }
+
+                            terminalKind = candidate.TargetMethod.Name == "Fail"
+                                ? TerminalAuthoringKind.Fail
+                                : TerminalAuthoringKind.Return;
+                            terminalInvocation = candidate;
+                            terminalResult = result.Value;
+                            terminalRole = candidate.TargetMethod.Name.ToLowerInvariant();
+                        }
+
                         flows.Add(new ReturnFlow(
-                            NextIdentity("return", structuralPath),
-                            returnedOperation,
+                            NextIdentity(terminalRole, structuralPath),
+                            terminalResult,
+                            terminalKind,
+                            terminalInvocation,
                             SourceLocation(returned),
                             returned));
                         terminalObserved = true;
@@ -502,6 +540,10 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                             return false;
                         }
                         flows.Add(expressionFlow);
+                        terminalObserved = expressionFlow is ActionFlow
+                        {
+                            Kind: ActionKind.Succeed or ActionKind.Terminate or ActionKind.ContinueAt
+                        };
                         break;
 
                     case BlockSyntax nested:
@@ -704,7 +746,19 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
 
                 case "Timer":
                 case "Reply":
-                    var kind = invocation.TargetMethod.Name == "Timer" ? ActionKind.Timer : ActionKind.Reply;
+                case "Transition":
+                case "ContinueAt":
+                case "Succeed":
+                case "Terminate":
+                    var kind = invocation.TargetMethod.Name switch
+                    {
+                        "Timer" => ActionKind.Timer,
+                        "Reply" => ActionKind.Reply,
+                        "Transition" => ActionKind.Transition,
+                        "ContinueAt" => ActionKind.ContinueAt,
+                        "Succeed" => ActionKind.Succeed,
+                        _ => ActionKind.Terminate
+                    };
                     flow = new ActionFlow(
                         NextIdentity(invocation.TargetMethod.Name.ToLowerInvariant(), structuralPath),
                         kind,
@@ -759,11 +813,12 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
 
                 var branch = Argument(outcomeDeclaration, "branch");
                 if (branch is null
-                    || !TryGetNamedLocalBranch(branch.Value, observed, parameterCount: 1, out var branchMethod, out var localFunction))
+                    || (!TryGetNamedLocalBranch(branch.Value, observed, parameterCount: 1, out var branchMethod, out var localFunction)
+                        && !TryGetNamedLocalBranch(branch.Value, observed, parameterCount: 0, out branchMethod, out localFunction)))
                 {
                     return StatementFailure(
                         branch?.Syntax ?? outcomeDeclaration.Syntax,
-                        "a Request outcome branch must name a unique local async ProcessTask function with one typed outcome parameter");
+                        "a Request outcome branch must name a unique local async ProcessTask function with zero or one typed outcome parameter");
                 }
 
                 var outcomeIdentity = NextIdentity(
@@ -778,15 +833,20 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     return false;
                 }
 
-                var parameter = branchMethod.Parameters[0];
-                var output = new AuthoredOutput(
-                    parameter,
-                    parameter.Type,
-                    outcomeIdentity,
-                    "result",
-                    $"__authored_output_{authoredOutputs.Count.ToString(CultureInfo.InvariantCulture)}",
-                    SourceLocation(localFunction));
-                authoredOutputs.Add(output);
+                IParameterSymbol? parameter = null;
+                if (branchMethod.Parameters.Length == 1)
+                {
+                    parameter = branchMethod.Parameters[0];
+                    var output = new AuthoredOutput(
+                        parameter,
+                        parameter.Type,
+                        outcomeIdentity,
+                        "result",
+                        $"__authored_output_{authoredOutputs.Count.ToString(CultureInfo.InvariantCulture)}",
+                        outcomeDeclaration,
+                        SourceLocation(localFunction));
+                    authoredOutputs.Add(output);
+                }
                 outcomes.Add(new(
                     outcomeIdentity,
                     branchMethod.Name,
@@ -869,6 +929,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 identity,
                 "partition",
                 $"__authored_output_{authoredOutputs.Count.ToString(CultureInfo.InvariantCulture)}",
+                null,
                 SourceLocation(statement));
             authoredOutputs.Add(partition);
             flow = new(
@@ -1144,6 +1205,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         clauseIdentity,
                         "input",
                         $"__authored_output_{authoredOutputs.Count.ToString(CultureInfo.InvariantCulture)}",
+                        clauseDeclaration,
                         SourceLocation(localFunction)));
                 }
                 if (kind == AwaitClauseKind.Request)
@@ -1194,12 +1256,12 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
 
             if (branch is not IMethodReferenceOperation methodReference
                 || !localFunctions.TryGetValue(methodReference.Method, out localFunction)
-                || !observed.Add(methodReference.Method)
                 || methodReference.Method.Parameters.Length != parameterCount
                 || methodReference.Method.ReturnType.ToDisplayString() != BranchTaskName
                 || !localFunction.Modifiers.Any(static modifier => modifier.IsKind(SyntaxKind.AsyncKeyword))
                 || localFunction.Body is null
-                || localFunction.ExpressionBody is not null)
+                || localFunction.ExpressionBody is not null
+                || !observed.Add(methodReference.Method))
             {
                 return false;
             }
@@ -1282,6 +1344,9 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             {
                 var branchOperation = Strip(branchOperations[index]);
                 IArgumentOperation? capacityDomain = null;
+                IArgumentOperation? explicitBranchId = null;
+                IArgumentOperation? explicitBranchRole = null;
+                IArgumentOperation? explicitBranchEdgeOwner = null;
                 if (branchOperation is IInvocationOperation annotation
                     && annotation.TargetMethod.Name == "Branch"
                     && SymbolEqualityComparer.Default.Equals(annotation.TargetMethod.ContainingType, contextParameter.Type)
@@ -1291,11 +1356,36 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 {
                     var annotatedBranch = Argument(annotation, "branch");
                     capacityDomain = Argument(annotation, "capacityDomain");
-                    if (annotatedBranch is null || capacityDomain is null)
+                    explicitBranchId = Argument(annotation, "id");
+                    explicitBranchRole = Argument(annotation, "role");
+                    explicitBranchEdgeOwner = Argument(annotation, "edgeOwner");
+                    if (capacityDomain is { IsImplicit: true }
+                        || capacityDomain is not null
+                        && Strip(capacityDomain.Value).ConstantValue is { HasValue: true, Value: null })
+                    {
+                        capacityDomain = null;
+                    }
+                    if (explicitBranchId is { IsImplicit: true })
+                    {
+                        explicitBranchId = null;
+                    }
+                    if (explicitBranchRole is { IsImplicit: true }
+                        || explicitBranchRole is not null
+                        && Strip(explicitBranchRole.Value).ConstantValue is { HasValue: true, Value: null })
+                    {
+                        explicitBranchRole = null;
+                    }
+                    if (explicitBranchEdgeOwner is { IsImplicit: true }
+                        || explicitBranchEdgeOwner is not null
+                        && Strip(explicitBranchEdgeOwner.Value).ConstantValue is { HasValue: true, Value: null })
+                    {
+                        explicitBranchEdgeOwner = null;
+                    }
+                    if (annotatedBranch is null || capacityDomain is null && explicitBranchId is null)
                     {
                         return StatementFailure(
                             branchOperations[index].Syntax,
-                            "a ForkJoin branch annotation requires a branch and capacity domain");
+                            "a ForkJoin branch annotation requires a branch identity or capacity domain");
                     }
                     branchOperation = Strip(annotatedBranch.Value);
                 }
@@ -1378,7 +1468,10 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     branchInvocation.TargetMethod.Name,
                     branchBody,
                     branchResult,
+                    explicitBranchId,
                     capacityDomain,
+                    explicitBranchRole,
+                    explicitBranchEdgeOwner,
                     SourceLocation(localFunction),
                     localFunction));
             }
@@ -1732,6 +1825,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 joinIdentity,
                 "result",
                 $"__authored_output_{authoredOutputs.Count.ToString(CultureInfo.InvariantCulture)}",
+                null,
                 SourceLocation(statement));
             authoredOutputs.Add(output);
             return true;
@@ -1970,6 +2064,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         readonly Dictionary<ISymbol, string> outputBySymbol;
         readonly Dictionary<IParameterSymbol, string> obligationByParameter;
         readonly Dictionary<string, SyntaxNode> exactIdentities = new(StringComparer.Ordinal);
+        readonly Dictionary<string, string> emittedExactTerminals = new(StringComparer.Ordinal);
         readonly List<string> builderStatements = [];
         readonly HashSet<ILocalSymbol> resolvingPureLocals = new(SymbolEqualityComparer.Default);
         int valueOrdinal;
@@ -2021,6 +2116,10 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             var identities = new List<string>();
             foreach (var statement in body.Descendants())
             {
+                if (statement is ActionFlow { Kind: ActionKind.ContinueAt })
+                {
+                    continue;
+                }
                 if (!TryDeclareIdentity(
                         statement.Identity,
                         statement switch
@@ -2033,6 +2132,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                             RecurrenceFlow recurrence => Argument(recurrence.Invocation, "id"),
                             AwaitMatchFlow awaitMatch => Argument(awaitMatch.Invocation, "id"),
                             ExplicitDecisionFlow decision => Argument(decision.Invocation, "id"),
+                            ReturnFlow terminal when terminal.Invocation is not null =>
+                                Argument(terminal.Invocation, "id"),
                             _ => null
                         },
                         statement.Syntax,
@@ -2045,7 +2146,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 {
                     if (!TryDeclareOwnedIdentity(
                             fork.JoinIdentity,
-                            null,
+                            Argument(fork.Invocation, "joinId"),
                             fork.Identity,
                             "join",
                             statement.Syntax,
@@ -2058,7 +2159,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     {
                         if (!TryDeclareOwnedIdentity(
                                 branch.Identity,
-                                null,
+                                branch.ExplicitId,
                                 fork.Identity,
                                 branch.Identity.PathSegment,
                                 branch.Syntax,
@@ -2118,7 +2219,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     if (decision.Fallback is not null
                         && !TryDeclareOwnedIdentity(
                             decision.Fallback.Identity,
-                            null,
+                            Argument(decision.Invocation, "fallbackId"),
                             decision.Identity,
                             "otherwise",
                             decision.Fallback.Syntax,
@@ -2129,13 +2230,51 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 }
             }
 
-            var outputs = awaits.Select(awaited =>
-                    $"var {awaited.OutputVariable} = __builder.Output<{FormatType(awaited.Local.Type)}>(owner: {awaited.Identity.Variable}, role: \"result\", {SourceArguments(awaited.Source, method.Name)});")
-                .Concat(authoredOutputs.Select(output =>
-                    $"var {output.Variable} = __builder.Output<{FormatType(output.Type)}>(owner: {output.Owner.Variable}, role: {Literal(output.Role)}, {SourceArguments(output.Source, method.Name)});"))
-                .Concat(requestObligations.Select(obligation =>
-                    $"var {obligation.Variable} = __builder.RequestObligation(owner: {obligation.Owner.Variable}, role: \"request\", {SourceArguments(obligation.Source, method.Name)});"))
-                .ToImmutableArray();
+            var outputDeclarations = ImmutableArray.CreateBuilder<string>(
+                awaits.Count + authoredOutputs.Count + requestObligations.Count);
+            foreach (var awaited in awaits)
+            {
+                if (!TryEmitRole(
+                        awaited.Invocation,
+                        "outputRole",
+                        "result",
+                        awaited.Syntax,
+                        out var role))
+                {
+                    return false;
+                }
+                outputDeclarations.Add(
+                    $"var {awaited.OutputVariable} = __builder.Output<{FormatType(awaited.Local.Type)}>(owner: {awaited.Identity.Variable}, role: {role}, {SourceArguments(awaited.Source, method.Name)});");
+            }
+            foreach (var output in authoredOutputs)
+            {
+                var owner = output.Owner.Variable;
+                var role = Literal(output.Role);
+                if (output.Declaration is not null
+                    && (!TryEmitOptionalExact(
+                            output.Declaration,
+                            "outputOwner",
+                            owner,
+                            output.Declaration.Syntax,
+                            out owner)
+                        || !TryEmitRole(
+                            output.Declaration,
+                            "outputRole",
+                            output.Role,
+                            output.Declaration.Syntax,
+                            out role)))
+                {
+                    return false;
+                }
+                outputDeclarations.Add(
+                    $"var {output.Variable} = __builder.Output<{FormatType(output.Type)}>(owner: {owner}, role: {role}, {SourceArguments(output.Source, method.Name)});");
+            }
+            foreach (var obligation in requestObligations)
+            {
+                outputDeclarations.Add(
+                    $"var {obligation.Variable} = __builder.RequestObligation(owner: {obligation.Owner.Variable}, role: \"request\", {SourceArguments(obligation.Source, method.Name)});");
+            }
+            var outputs = outputDeclarations.MoveToImmutable();
 
             if (!TryValidateForkResults(body))
             {
@@ -2289,8 +2428,17 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                             return false;
                         }
 
-                        builderStatements.Add(
-                            $"__builder.Return(id: {returned.Identity.Variable}, result: {returnedValue}, {SourceArguments(returned.Source, method.Name)});");
+                        var terminal = returned.Kind == TerminalAuthoringKind.Fail ? "Fail" : "Return";
+                        if (!TryEmitTerminal(
+                                returned.Identity,
+                                returned.Invocation,
+                                terminal,
+                                returnedValue,
+                                returned.Source,
+                                returned.Syntax))
+                        {
+                            return false;
+                        }
                         entry = returned.Identity.Variable;
                         break;
 
@@ -2309,6 +2457,28 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         break;
 
                     case ActionFlow action:
+                        if (action.Kind == ActionKind.ContinueAt)
+                        {
+                            var target = Argument(action.Invocation, "target");
+                            if (target is null
+                                || !TryEmitExactArgument(target, action.Syntax, out var targetExpression))
+                            {
+                                return StatementFailure(action.Syntax, "ContinueAt requires one exact durable target node");
+                            }
+
+                            entry = targetExpression;
+                            break;
+                        }
+                        if (action.Kind is ActionKind.Succeed or ActionKind.Terminate)
+                        {
+                            if (!TryEmitAction(action, successor: null))
+                            {
+                                return false;
+                            }
+
+                            entry = action.Identity.Variable;
+                            break;
+                        }
                         if (entry is null)
                         {
                             return StatementFailure(action.Syntax, "an awaited Process action requires a following operation or return");
@@ -2370,12 +2540,6 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         break;
 
                     case ExplicitDecisionFlow decision:
-                        if (entry is null)
-                        {
-                            return StatementFailure(
-                                decision.Syntax,
-                                $"{decision.Kind} requires a following operation or return");
-                        }
                         if (!TryEmitExplicitDecision(decision, entry))
                         {
                             return false;
@@ -2400,11 +2564,6 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         break;
 
                     case RequestFlow request:
-                        if (entry is null)
-                        {
-                            return StatementFailure(request.Syntax, "a multi-outcome Request requires a following operation or return");
-                        }
-
                         if (!TryEmitRequest(request, entry))
                         {
                             return false;
@@ -2489,8 +2648,21 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     return false;
                 }
 
+                var branchRole = "\"start\"";
+                if (branch.Role is not null
+                    && !TryEmitExactArgument(branch.Role, branch.Role.Syntax, out branchRole))
+                {
+                    return false;
+                }
+                var branchEdgeOwner = branch.Identity.Variable;
+                if (branch.EdgeOwner is not null
+                    && !TryEmitExactArgument(branch.EdgeOwner, branch.EdgeOwner.Syntax, out branchEdgeOwner))
+                {
+                    return false;
+                }
+
                 builderStatements.Add(
-                    $"var {branchVariable} = __builder.ForkBranch(id: {branch.Identity.Variable}, start: __builder.Edge(owner: {branch.Identity.Variable}, role: \"start\", target: {branchEntry}, {SourceArguments(branch.Source, method.Name)}), capacityDomain: {capacityDomain}, {SourceArguments(branch.Source, method.Name)});");
+                    $"var {branchVariable} = __builder.ForkBranch(id: {branch.Identity.Variable}, start: __builder.Edge(owner: {branchEdgeOwner}, role: {branchRole}, target: {branchEntry}, {SourceArguments(branch.Source, method.Name)}), capacityDomain: {capacityDomain}, {SourceArguments(branch.Source, method.Name)});");
                 branches.Add(branchVariable);
 
                 if (forkJoin.Mode != ForkAuthoringMode.All)
@@ -2542,8 +2714,17 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             }
             if (forkJoin.Mode == ForkAuthoringMode.All)
             {
+                if (!TryEmitRole(
+                        forkJoin.Invocation,
+                        "nextRole",
+                        "next",
+                        forkJoin.Syntax,
+                        out var nextRole))
+                {
+                    return false;
+                }
                 builderStatements.Add(
-                    $"__builder.Join(id: {forkJoin.JoinIdentity.Variable}, fork: {forkJoin.Identity.Variable}, policy: new global::Cohesive.Processes.IR.ProcessJoinPolicy(mode: global::Cohesive.Processes.IR.ProcessJoinMode.All, requiredCount: 0, failure: global::Cohesive.Processes.IR.ProcessJoinFailurePolicy.FailFast, cancellation: global::Cohesive.Processes.IR.ProcessJoinCancellationPolicy.AwaitRemaining, completionOrder: global::Cohesive.Processes.IR.ProcessJoinCompletionOrder.Unobservable, tieBreak: global::Cohesive.Processes.IR.ProcessJoinTieBreak.BranchIdentity), next: __builder.Edge(owner: {forkJoin.JoinIdentity.Variable}, role: \"next\", target: {successor}, {SourceArguments(forkJoin.Source, method.Name)}), {SourceArguments(forkJoin.Source, method.Name)});");
+                    $"__builder.Join(id: {forkJoin.JoinIdentity.Variable}, fork: {forkJoin.Identity.Variable}, policy: new global::Cohesive.Processes.IR.ProcessJoinPolicy(mode: global::Cohesive.Processes.IR.ProcessJoinMode.All, requiredCount: 0, failure: global::Cohesive.Processes.IR.ProcessJoinFailurePolicy.FailFast, cancellation: global::Cohesive.Processes.IR.ProcessJoinCancellationPolicy.AwaitRemaining, completionOrder: global::Cohesive.Processes.IR.ProcessJoinCompletionOrder.Unobservable, tieBreak: global::Cohesive.Processes.IR.ProcessJoinTieBreak.BranchIdentity), next: __builder.Edge(owner: {forkJoin.JoinIdentity.Variable}, role: {nextRole}, target: {successor}, {SourceArguments(forkJoin.Source, method.Name)}), {SourceArguments(forkJoin.Source, method.Name)});");
                 return true;
             }
 
@@ -2571,11 +2752,15 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             return true;
         }
 
-        bool TryEmitAction(ActionFlow action, string successor)
+        bool TryEmitAction(ActionFlow action, string? successor)
         {
             switch (action.Kind)
             {
                 case ActionKind.Timer:
+                    if (successor is null)
+                    {
+                        return StatementFailure(action.Syntax, "Timer requires a following operation or terminal");
+                    }
                     var dueAt = Argument(action.Invocation, "dueAt");
                     if (dueAt is null
                         || !TryEmitValue(dueAt.Value, dueAt.Value.Type!, action.Source, out var dueAtValue))
@@ -2588,6 +2773,10 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     return true;
 
                 case ActionKind.Reply:
+                    if (successor is null)
+                    {
+                        return StatementFailure(action.Syntax, "Reply requires a following operation or terminal");
+                    }
                     var contract = Argument(action.Invocation, "contract");
                     var request = Argument(action.Invocation, "request");
                     var payload = Argument(action.Invocation, "payload");
@@ -2607,12 +2796,93 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         $"__builder.Reply(id: {action.Identity.Variable}, contract: {replyContract}, request: {obligation}, payload: {replyPayload}, next: __builder.Edge(owner: {action.Identity.Variable}, role: \"next\", target: {successor}, {SourceArguments(action.Source, method.Name)}), {SourceArguments(action.Source, method.Name)});");
                     return true;
 
+                case ActionKind.Transition:
+                    if (successor is null)
+                    {
+                        return StatementFailure(action.Syntax, "Transition requires a following operation or terminal");
+                    }
+                    var transition = Argument(action.Invocation, "transition");
+                    var subject = Argument(action.Invocation, "subject");
+                    var transitionInput = Argument(action.Invocation, "input");
+                    if (transition is null
+                        || subject is null
+                        || transitionInput is null
+                        || !TryEmitValue(subject.Value, subject.Value.Type!, action.Source, out var subjectValue)
+                        || !TryEmitValue(transitionInput.Value, transitionInput.Value.Type!, action.Source, out var transitionInputValue)
+                        || !TryEmitExactArgument(transition, action.Syntax, out var transitionReference)
+                        || !TryEmitRole(action.Invocation, "nextRole", "next", action.Syntax, out var transitionRole))
+                    {
+                        return StatementFailure(
+                            action.Syntax,
+                            "Transition requires an exact definition, portable subject and input, and a stable continuation role");
+                    }
+                    builderStatements.Add(
+                        $"__builder.InvokeTransition(id: {action.Identity.Variable}, transition: {transitionReference}, subject: {subjectValue}, input: {transitionInputValue}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {action.Identity.Variable}, role: {transitionRole}, target: {successor}, {SourceArguments(action.Source, method.Name)}), {SourceArguments(action.Source, method.Name)}), {SourceArguments(action.Source, method.Name)});");
+                    return true;
+
+                case ActionKind.Succeed:
+                case ActionKind.Terminate:
+                    var result = Argument(action.Invocation, "result");
+                    if (result is null
+                        || !TryEmitValue(result.Value, resultType, action.Source, out var terminalResult))
+                    {
+                        return StatementFailure(action.Syntax, "an explicit Process terminal requires one portable root result");
+                    }
+                    var terminal = action.Kind == ActionKind.Terminate ? "Fail" : "Return";
+                    return TryEmitTerminal(
+                        action.Identity,
+                        action.Invocation,
+                        terminal,
+                        terminalResult,
+                        action.Source,
+                        action.Syntax);
+
                 default:
                     return StatementFailure(action.Syntax, "unsupported awaited Process action");
             }
         }
 
-        bool TryEmitRequest(RequestFlow request, string successor)
+        bool TryEmitTerminal(
+            FlowIdentity identity,
+            IInvocationOperation? invocation,
+            string terminal,
+            string result,
+            SourceReference source,
+            SyntaxNode syntax)
+        {
+            var id = invocation is null ? null : Argument(invocation, "id");
+            if (id is not null
+                && !id.IsImplicit
+                && Strip(id.Value).ConstantValue is not { HasValue: true, Value: null })
+            {
+                if (!TryEmitExactArgument(id, syntax, out var exactId))
+                {
+                    return false;
+                }
+
+                var authoredResult = Argument(invocation!, "result");
+                var signature = terminal + ":" + (authoredResult?.Value.Syntax.ToString() ?? result);
+                if (emittedExactTerminals.TryGetValue(exactId, out var prior))
+                {
+                    if (prior == signature)
+                    {
+                        return true;
+                    }
+
+                    return StatementFailure(
+                        syntax,
+                        $"exact terminal identity '{exactId}' is reused with incompatible result semantics");
+                }
+
+                emittedExactTerminals.Add(exactId, signature);
+            }
+
+            builderStatements.Add(
+                $"__builder.{terminal}(id: {identity.Variable}, result: {result}, {SourceArguments(source, method.Name)});");
+            return true;
+        }
+
+        bool TryEmitRequest(RequestFlow request, string? successor)
         {
             var contract = Argument(request.Invocation, "contract");
             var input = Argument(request.Invocation, "input");
@@ -2633,14 +2903,24 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 }
                 var terminalOutcome = Argument(outcome.Declaration, "outcome");
                 if (terminalOutcome is null
-                    || !TryEmitExactArgument(terminalOutcome, outcome.Syntax, out var terminalOutcomeExpression))
+                    || !TryEmitExactArgument(terminalOutcome, outcome.Syntax, out var terminalOutcomeExpression)
+                    || !TryEmitRole(outcome.Declaration, "role", "next", outcome.Syntax, out var role)
+                    || !TryEmitOptionalExact(
+                        outcome.Declaration,
+                        "edgeOwner",
+                        outcome.Identity.Variable,
+                        outcome.Syntax,
+                        out var edgeOwner))
                 {
                     return false;
                 }
 
-                var output = outputBySymbol[outcome.Input];
+                var edge = $"__builder.Edge(owner: {edgeOwner}, role: {role}, target: {branchEntry}, {SourceArguments(outcome.Source, method.Name)})";
+                var continuation = outcome.Input is null
+                    ? $"__builder.Continuation(edge: {edge}, {SourceArguments(outcome.Source, method.Name)})"
+                    : $"__builder.Continuation(edge: {edge}, output: {outputBySymbol[outcome.Input]}, {SourceArguments(outcome.Source, method.Name)})";
                 outcomes.Add(
-                    $"__builder.RequestOutcome(id: {outcome.Identity.Variable}, outcome: {terminalOutcomeExpression}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {outcome.Identity.Variable}, role: \"next\", target: {branchEntry}, {SourceArguments(outcome.Source, method.Name)}), output: {output}, {SourceArguments(outcome.Source, method.Name)}), {SourceArguments(outcome.Source, method.Name)})");
+                    $"__builder.RequestOutcome(id: {outcome.Identity.Variable}, outcome: {terminalOutcomeExpression}, continuation: {continuation}, {SourceArguments(outcome.Source, method.Name)})");
             }
 
             if (request.Kind == RequestAuthoringKind.Request)
@@ -2854,13 +3134,20 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 {
                     var dueAt = Argument(clause.Declaration, "dueAt");
                     if (dueAt is null
-                        || !TryEmitValue(dueAt.Value, dueAt.Value.Type!, clause.Source, out var dueAtValue))
+                        || !TryEmitValue(dueAt.Value, dueAt.Value.Type!, clause.Source, out var dueAtValue)
+                        || !TryEmitRole(clause.Declaration, "role", "next", clause.Syntax, out var role)
+                        || !TryEmitOptionalExact(
+                            clause.Declaration,
+                            "edgeOwner",
+                            clause.Identity.Variable,
+                            clause.Syntax,
+                            out var edgeOwner))
                     {
                         return StatementFailure(clause.Syntax, "an AwaitMatch timer clause requires a portable absolute due instant");
                     }
 
                     clauses.Add(
-                        $"__builder.AwaitTimerClause(id: {clause.Identity.Variable}, dueAt: {dueAtValue}, priority: {priorityExpression}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {clause.Identity.Variable}, role: \"next\", target: {branchEntry}, {SourceArguments(clause.Source, method.Name)}), {SourceArguments(clause.Source, method.Name)}), {SourceArguments(clause.Source, method.Name)})");
+                        $"__builder.AwaitTimerClause(id: {clause.Identity.Variable}, dueAt: {dueAtValue}, priority: {priorityExpression}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {edgeOwner}, role: {role}, target: {branchEntry}, {SourceArguments(clause.Source, method.Name)}), {SourceArguments(clause.Source, method.Name)}), {SourceArguments(clause.Source, method.Name)})");
                     continue;
                 }
 
@@ -2877,12 +3164,25 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 {
                     return false;
                 }
+                if (!TryEmitRole(clause.Declaration, "role", "next", clause.Syntax, out var interactionRole))
+                {
+                    return false;
+                }
+                if (!TryEmitOptionalExact(
+                        clause.Declaration,
+                        "edgeOwner",
+                        clause.Identity.Variable,
+                        clause.Syntax,
+                        out var interactionEdgeOwner))
+                {
+                    return false;
+                }
 
                 var obligation = clause.RequestObligation is null
                     ? "null"
                     : obligationByParameter[clause.RequestObligation];
                 clauses.Add(
-                    $"__builder.AwaitInteractionClause(id: {clause.Identity.Variable}, contract: {interactionContract}, input: {output}, requestObligation: {obligation}, guard: {guard}, priority: {priorityExpression}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {clause.Identity.Variable}, role: \"next\", target: {branchEntry}, {SourceArguments(clause.Source, method.Name)}), {SourceArguments(clause.Source, method.Name)}), {SourceArguments(clause.Source, method.Name)})");
+                    $"__builder.AwaitInteractionClause(id: {clause.Identity.Variable}, contract: {interactionContract}, input: {output}, requestObligation: {obligation}, guard: {guard}, priority: {priorityExpression}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {interactionEdgeOwner}, role: {interactionRole}, target: {branchEntry}, {SourceArguments(clause.Source, method.Name)}), {SourceArguments(clause.Source, method.Name)}), {SourceArguments(clause.Source, method.Name)})");
             }
 
             var arbitration = Argument(awaitMatch.Invocation, "arbitration");
@@ -2966,7 +3266,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             return true;
         }
 
-        bool TryEmitExplicitDecision(ExplicitDecisionFlow decision, string successor)
+        bool TryEmitExplicitDecision(ExplicitDecisionFlow decision, string? successor)
         {
             var operation = decision.Kind.ToString();
             var value = string.Empty;
@@ -2998,12 +3298,25 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 {
                     return false;
                 }
+                if (!TryEmitRole(arm.Declaration, "role", "next", arm.Syntax, out var role))
+                {
+                    return false;
+                }
+                if (!TryEmitOptionalExact(
+                        arm.Declaration,
+                        "edgeOwner",
+                        arm.Identity.Variable,
+                        arm.Syntax,
+                        out var edgeOwner))
+                {
+                    return false;
+                }
 
                 var declaration = decision.Kind == DecisionAuthoringKind.Choice
                     ? $"__builder.ChoiceCase(id: {arm.Identity.Variable}, predicate: {selector}"
                     : $"__builder.MatchCase(id: {arm.Identity.Variable}, matchedValue: {value}, pattern: {selector}";
                 cases.Add(
-                    $"{declaration}, next: __builder.Edge(owner: {arm.Identity.Variable}, role: \"next\", target: {armEntry}, {SourceArguments(arm.Source, method.Name)}), {SourceArguments(arm.Source, method.Name)})");
+                    $"{declaration}, next: __builder.Edge(owner: {edgeOwner}, role: {role}, target: {armEntry}, {SourceArguments(arm.Source, method.Name)}), {SourceArguments(arm.Source, method.Name)})");
             }
 
             var fallback = "null";
@@ -3016,8 +3329,26 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         decision.Fallback.Syntax,
                         $"{operation} fallback '{decision.Fallback.Name}' requires a reachable continuation");
                 }
+                if (!TryEmitRole(
+                        decision.Invocation,
+                        "fallbackRole",
+                        "next",
+                        decision.Fallback.Syntax,
+                        out var fallbackRole))
+                {
+                    return false;
+                }
+                if (!TryEmitOptionalExact(
+                        decision.Invocation,
+                        "fallbackEdgeOwner",
+                        decision.Fallback.Identity.Variable,
+                        decision.Fallback.Syntax,
+                        out var fallbackEdgeOwner))
+                {
+                    return false;
+                }
                 fallback =
-                    $"__builder.Fallback(id: {decision.Fallback.Identity.Variable}, next: __builder.Edge(owner: {decision.Fallback.Identity.Variable}, role: \"next\", target: {fallbackEntry}, {SourceArguments(decision.Fallback.Source, method.Name)}), {SourceArguments(decision.Fallback.Source, method.Name)})";
+                    $"__builder.Fallback(id: {decision.Fallback.Identity.Variable}, next: __builder.Edge(owner: {fallbackEdgeOwner}, role: {fallbackRole}, target: {fallbackEntry}, {SourceArguments(decision.Fallback.Source, method.Name)}), {SourceArguments(decision.Fallback.Source, method.Name)})";
             }
 
             var selection = Argument(decision.Invocation, "selection");
@@ -3114,13 +3445,14 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 return StatementFailure(awaited.Syntax, "Query and Read require an exact relation and a portable input");
             }
 
-            if (!TryEmitExactArgument(relation, awaited.Syntax, out var relationReference))
+            if (!TryEmitExactArgument(relation, awaited.Syntax, out var relationReference)
+                || !TryEmitRole(awaited.Invocation, "nextRole", "next", awaited.Syntax, out var nextRole))
             {
                 return false;
             }
 
             builderStatements.Add(
-                $"__builder.EvaluateRelation(id: {awaited.Identity.Variable}, relation: {relationReference}, input: {inputValue}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {awaited.Identity.Variable}, role: \"next\", target: {successor}, {SourceArguments(awaited.Source, method.Name)}), output: {awaited.OutputVariable}, {SourceArguments(awaited.Source, method.Name)}), {SourceArguments(awaited.Source, method.Name)});");
+                $"__builder.EvaluateRelation(id: {awaited.Identity.Variable}, relation: {relationReference}, input: {inputValue}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {awaited.Identity.Variable}, role: {nextRole}, target: {successor}, {SourceArguments(awaited.Source, method.Name)}), output: {awaited.OutputVariable}, {SourceArguments(awaited.Source, method.Name)}), {SourceArguments(awaited.Source, method.Name)});");
             return true;
         }
 
@@ -3136,13 +3468,14 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 return StatementFailure(awaited.Syntax, "Transition requires an exact definition, portable subject, and portable input");
             }
 
-            if (!TryEmitExactArgument(transition, awaited.Syntax, out var transitionReference))
+            if (!TryEmitExactArgument(transition, awaited.Syntax, out var transitionReference)
+                || !TryEmitRole(awaited.Invocation, "nextRole", "next", awaited.Syntax, out var nextRole))
             {
                 return false;
             }
 
             builderStatements.Add(
-                $"__builder.InvokeTransition(id: {awaited.Identity.Variable}, transition: {transitionReference}, subject: {subjectValue}, input: {inputValue}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {awaited.Identity.Variable}, role: \"next\", target: {successor}, {SourceArguments(awaited.Source, method.Name)}), output: {awaited.OutputVariable}, {SourceArguments(awaited.Source, method.Name)}), {SourceArguments(awaited.Source, method.Name)});");
+                $"__builder.InvokeTransition(id: {awaited.Identity.Variable}, transition: {transitionReference}, subject: {subjectValue}, input: {inputValue}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {awaited.Identity.Variable}, role: {nextRole}, target: {successor}, {SourceArguments(awaited.Source, method.Name)}), output: {awaited.OutputVariable}, {SourceArguments(awaited.Source, method.Name)}), {SourceArguments(awaited.Source, method.Name)});");
             return true;
         }
 
@@ -3177,30 +3510,95 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             SyntaxNode syntax,
             out string expression)
         {
-            var operation = Strip(argument.Value);
-            HashSet<ILocalSymbol> observed = new(SymbolEqualityComparer.Default);
-            while (operation is ILocalReferenceOperation local
-                   && pureLocals.TryGetValue(local.Local, out var initializer))
-            {
-                if (!observed.Add(local.Local))
-                {
-                    expression = string.Empty;
-                    return StatementFailure(syntax, "exact semantic-reference locals form a cycle");
-                }
-                operation = Strip(initializer);
-            }
+            return TryRewriteExactOperation(
+                Strip(argument.Value),
+                syntax,
+                new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default),
+                out expression);
+        }
+
+        bool TryRewriteExactOperation(
+            IOperation operation,
+            SyntaxNode syntax,
+            HashSet<ILocalSymbol> resolving,
+            out string expression)
+        {
+            operation = Strip(operation);
+            Dictionary<SyntaxNode, SyntaxNode> replacements = [];
             foreach (var candidate in SelfAndDescendants(operation))
             {
-                if (candidate is IParameterReferenceOperation or ILocalReferenceOperation)
+                if (candidate is IParameterReferenceOperation)
                 {
                     expression = string.Empty;
                     return StatementFailure(
                         syntax,
                         "exact semantic arguments—definitions, contracts, outcomes, node identities, admission policies, and capacity domains—cannot depend on runtime bindings");
                 }
+                if (candidate is not ILocalReferenceOperation local)
+                {
+                    continue;
+                }
+                if (!pureLocals.TryGetValue(local.Local, out var initializer)
+                    || !resolving.Add(local.Local))
+                {
+                    expression = string.Empty;
+                    return StatementFailure(
+                        syntax,
+                        "exact semantic arguments must use acyclic source locals initialized only from exact values");
+                }
+                if (!TryRewriteExactOperation(initializer, syntax, resolving, out var rewrittenInitializer))
+                {
+                    expression = string.Empty;
+                    return false;
+                }
+                resolving.Remove(local.Local);
+                replacements[local.Syntax] = SyntaxFactory.ParenthesizedExpression(
+                    SyntaxFactory.ParseExpression(rewrittenInitializer));
             }
-            expression = $"({operation.Syntax})";
+
+            var rewritten = replacements.Count == 0
+                ? operation.Syntax
+                : operation.Syntax.ReplaceNodes(
+                    replacements.Keys,
+                    (original, _) => replacements[original]);
+            expression = $"({rewritten})";
             return true;
+        }
+
+        bool TryEmitRole(
+            IInvocationOperation invocation,
+            string parameter,
+            string fallback,
+            SyntaxNode syntax,
+            out string expression)
+        {
+            var argument = Argument(invocation, parameter);
+            if (argument is null || argument.IsImplicit)
+            {
+                expression = Literal(fallback);
+                return true;
+            }
+
+            return TryEmitExactArgument(argument, syntax, out expression);
+        }
+
+        bool TryEmitOptionalExact(
+            IInvocationOperation invocation,
+            string parameter,
+            string fallback,
+            SyntaxNode syntax,
+            out string expression)
+        {
+            var argument = Argument(invocation, parameter);
+            if (argument is null
+                || argument.IsImplicit
+                || Strip(argument.Value).ConstantValue is { HasValue: true, Value: null })
+            {
+                expression = fallback;
+                return true;
+            }
+
+            return TryEmitExactArgument(argument, syntax, out expression);
         }
 
         bool TryEmitValue(
@@ -4017,6 +4415,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
     sealed record ReturnFlow(
         FlowIdentity Identity,
         IOperation Result,
+        TerminalAuthoringKind Kind,
+        IInvocationOperation? Invocation,
         SourceReference Source,
         SyntaxNode Syntax)
         : FlowStatement(Identity, Source, Syntax);
@@ -4195,7 +4595,10 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         string Name,
         FlowBlock Body,
         IOperation? Result,
+        IArgumentOperation? ExplicitId,
         IArgumentOperation? CapacityDomain,
+        IArgumentOperation? Role,
+        IArgumentOperation? EdgeOwner,
         SourceReference Source,
         SyntaxNode Syntax);
 
@@ -4216,6 +4619,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         FlowIdentity Owner,
         string Role,
         string Variable,
+        IInvocationOperation? Declaration,
         SourceReference Source);
 
     sealed record BranchObligation(
@@ -4236,7 +4640,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         FlowIdentity Identity,
         string Name,
         FlowBlock Body,
-        IParameterSymbol Input,
+        IParameterSymbol? Input,
         IInvocationOperation Declaration,
         SourceReference Source,
         SyntaxNode Syntax);
@@ -4331,6 +4735,12 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         Match = 2
     }
 
+    enum TerminalAuthoringKind
+    {
+        Return = 1,
+        Fail = 2
+    }
+
     enum ForkAuthoringMode
     {
         Unsupported = 0,
@@ -4343,7 +4753,11 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
     {
         Unsupported = 0,
         Timer = 1,
-        Reply = 2
+        Reply = 2,
+        Transition = 3,
+        ContinueAt = 4,
+        Succeed = 5,
+        Terminate = 6
     }
 
     enum AwaitClauseKind
