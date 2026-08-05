@@ -48,12 +48,16 @@ public sealed class ProcessContext
     /// <param name="relation">Exact Relation or Query definition revision and fingerprint.</param>
     /// <param name="input">Pure query input fused into the canonical evaluation node.</param>
     /// <param name="id">Optional explicit canonical node identity.</param>
+    /// <param name="nextRole">Stable semantic role of the successful continuation edge.</param>
+    /// <param name="outputRole">Stable semantic role of the query result binding.</param>
     /// <returns>A syntax-only awaitable whose result represents the query output.</returns>
     /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
     public ProcessAwaitable<TResult> Query<TResult>(
         ExecutionDefinitionReference relation,
         object? input,
-        ExecutionNodeId? id = null) =>
+        ExecutionNodeId? id = null,
+        string nextRole = "next",
+        string outputRole = "result") =>
         throw SyntaxOnly();
 
     /// <summary>
@@ -67,12 +71,16 @@ public sealed class ProcessContext
     /// <param name="relation">Exact Relation or Query definition revision and fingerprint.</param>
     /// <param name="input">Pure read input fused into the canonical evaluation node.</param>
     /// <param name="id">Optional explicit canonical node identity.</param>
+    /// <param name="nextRole">Stable semantic role of the successful continuation edge.</param>
+    /// <param name="outputRole">Stable semantic role of the read result binding.</param>
     /// <returns>A syntax-only awaitable whose result represents the read output.</returns>
     /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
     public ProcessAwaitable<TResult> Read<TResult>(
         ExecutionDefinitionReference relation,
         object? input,
-        ExecutionNodeId? id = null) =>
+        ExecutionNodeId? id = null,
+        string nextRole = "next",
+        string outputRole = "result") =>
         throw SyntaxOnly();
 
     /// <summary>Declares invocation of an exact aggregate Transition and binds its outcome.</summary>
@@ -81,13 +89,33 @@ public sealed class ProcessContext
     /// <param name="subject">Pure authoritative aggregate-subject expression.</param>
     /// <param name="input">Pure Transition input fused into the canonical invocation node.</param>
     /// <param name="id">Optional explicit canonical node identity.</param>
+    /// <param name="nextRole">Stable semantic role of the completed continuation edge.</param>
+    /// <param name="outputRole">Stable semantic role of the Transition outcome binding.</param>
     /// <returns>A syntax-only awaitable whose result represents the Transition outcome.</returns>
     /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
     public ProcessAwaitable<TResult> Transition<TResult>(
         ExecutionDefinitionReference transition,
         object subject,
         object? input,
-        ExecutionNodeId? id = null) =>
+        ExecutionNodeId? id = null,
+        string nextRole = "next",
+        string outputRole = "result") =>
+        throw SyntaxOnly();
+
+    /// <summary>Declares an exact aggregate Transition whose outcome is not retained.</summary>
+    /// <param name="transition">Exact Transition definition revision and fingerprint.</param>
+    /// <param name="subject">Pure authoritative aggregate-subject expression.</param>
+    /// <param name="input">Pure Transition input fused into the canonical invocation node.</param>
+    /// <param name="id">Optional explicit canonical node identity.</param>
+    /// <param name="nextRole">Stable semantic role of the completed continuation edge.</param>
+    /// <returns>A syntax-only task representing Transition completion.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessTask Transition(
+        ExecutionDefinitionReference transition,
+        object subject,
+        object? input,
+        ExecutionNodeId? id = null,
+        string nextRole = "next") =>
         throw SyntaxOnly();
 
     /// <summary>Declares a durable Request effect with one selected terminal outcome and binds its result.</summary>
@@ -128,12 +156,36 @@ public sealed class ProcessContext
     /// <param name="outcome">Stable terminal-outcome identity declared by the Request contract.</param>
     /// <param name="branch">Named source-only local branch receiving the selected outcome value.</param>
     /// <param name="id">Optional explicit canonical outcome-branch identity.</param>
+    /// <param name="role">Stable semantic role of the selected outcome continuation edge.</param>
+    /// <param name="edgeOwner">Optional durable owner of the selected continuation edge.</param>
+    /// <param name="outputRole">Stable semantic role of the selected outcome binding.</param>
+    /// <param name="outputOwner">Optional durable owner of the selected outcome binding.</param>
     /// <returns>An opaque syntax-only Request outcome consumed by <see cref="Effect(RequestContractReference, object?, ProcessRequestOutcomeCase[], ExecutionNodeId?)"/>.</returns>
     /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
     public ProcessRequestOutcomeCase Outcome<TOutcome>(
         RequestTerminalOutcomeId outcome,
         ProcessOutcomeBranch<TOutcome> branch,
-        ExecutionNodeId? id = null) =>
+        ExecutionNodeId? id = null,
+        string role = "next",
+        ExecutionNodeId? edgeOwner = null,
+        string outputRole = "result",
+        ExecutionNodeId? outputOwner = null) =>
+        throw SyntaxOnly();
+
+    /// <summary>Declares a terminal-outcome branch that does not retain the Request outcome payload.</summary>
+    /// <param name="outcome">Stable terminal-outcome identity declared by the Request contract.</param>
+    /// <param name="branch">Named source-only local branch selected for this outcome.</param>
+    /// <param name="id">Optional explicit canonical outcome-branch identity.</param>
+    /// <param name="role">Stable semantic role of the selected outcome continuation edge.</param>
+    /// <param name="edgeOwner">Optional durable owner of the selected continuation edge.</param>
+    /// <returns>An opaque syntax-only Request outcome consumed by <see cref="Effect(RequestContractReference, object?, ProcessRequestOutcomeCase[], ExecutionNodeId?)"/>.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessRequestOutcomeCase Outcome(
+        RequestTerminalOutcomeId outcome,
+        ProcessBranch branch,
+        ExecutionNodeId? id = null,
+        string role = "next",
+        ExecutionNodeId? edgeOwner = null) =>
         throw SyntaxOnly();
 
     /// <summary>Declares one exact child Process invocation through the canonical Request/Reply protocol.</summary>
@@ -177,6 +229,10 @@ public sealed class ProcessContext
     /// <param name="priority">Explicit arbitration priority.</param>
     /// <param name="when">Optional inline portable eligibility predicate.</param>
     /// <param name="id">Optional explicit canonical clause identity.</param>
+    /// <param name="role">Stable semantic role of the winning continuation edge.</param>
+    /// <param name="edgeOwner">Optional durable owner of the winning continuation edge.</param>
+    /// <param name="outputRole">Stable semantic role of the admitted input binding.</param>
+    /// <param name="outputOwner">Optional durable owner of the admitted input binding.</param>
     /// <returns>An opaque syntax-only AwaitMatch clause.</returns>
     /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
     public ProcessAwaitCase Event<TInput>(
@@ -184,7 +240,11 @@ public sealed class ProcessContext
         ProcessInteractionBranch<TInput> branch,
         int priority = 0,
         ProcessGuard<TInput>? when = null,
-        ExecutionNodeId? id = null) =>
+        ExecutionNodeId? id = null,
+        string role = "next",
+        ExecutionNodeId? edgeOwner = null,
+        string outputRole = "input",
+        ExecutionNodeId? outputOwner = null) =>
         throw SyntaxOnly();
 
     /// <summary>Declares one Signal clause of a durable AwaitMatch.</summary>
@@ -194,6 +254,10 @@ public sealed class ProcessContext
     /// <param name="priority">Explicit arbitration priority.</param>
     /// <param name="when">Optional inline portable eligibility predicate.</param>
     /// <param name="id">Optional explicit canonical clause identity.</param>
+    /// <param name="role">Stable semantic role of the winning continuation edge.</param>
+    /// <param name="edgeOwner">Optional durable owner of the winning continuation edge.</param>
+    /// <param name="outputRole">Stable semantic role of the admitted input binding.</param>
+    /// <param name="outputOwner">Optional durable owner of the admitted input binding.</param>
     /// <returns>An opaque syntax-only AwaitMatch clause.</returns>
     /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
     public ProcessAwaitCase Signal<TInput>(
@@ -201,7 +265,11 @@ public sealed class ProcessContext
         ProcessInteractionBranch<TInput> branch,
         int priority = 0,
         ProcessGuard<TInput>? when = null,
-        ExecutionNodeId? id = null) =>
+        ExecutionNodeId? id = null,
+        string role = "next",
+        ExecutionNodeId? edgeOwner = null,
+        string outputRole = "input",
+        ExecutionNodeId? outputOwner = null) =>
         throw SyntaxOnly();
 
     /// <summary>Declares one inbound Request clause of a durable AwaitMatch.</summary>
@@ -211,6 +279,10 @@ public sealed class ProcessContext
     /// <param name="priority">Explicit arbitration priority.</param>
     /// <param name="when">Optional inline portable eligibility predicate.</param>
     /// <param name="id">Optional explicit canonical clause identity.</param>
+    /// <param name="role">Stable semantic role of the winning continuation edge.</param>
+    /// <param name="edgeOwner">Optional durable owner of the winning continuation edge.</param>
+    /// <param name="outputRole">Stable semantic role of the admitted input binding.</param>
+    /// <param name="outputOwner">Optional durable owner of the admitted input binding.</param>
     /// <returns>An opaque syntax-only AwaitMatch clause.</returns>
     /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
     public ProcessAwaitCase Request<TInput>(
@@ -218,7 +290,11 @@ public sealed class ProcessContext
         ProcessRequestBranch<TInput> branch,
         int priority = 0,
         ProcessGuard<TInput>? when = null,
-        ExecutionNodeId? id = null) =>
+        ExecutionNodeId? id = null,
+        string role = "next",
+        ExecutionNodeId? edgeOwner = null,
+        string outputRole = "input",
+        ExecutionNodeId? outputOwner = null) =>
         throw SyntaxOnly();
 
     /// <summary>Declares one absolute-time clause of a durable AwaitMatch.</summary>
@@ -226,13 +302,17 @@ public sealed class ProcessContext
     /// <param name="branch">Named parameterless source-only local branch selected when the timer wins.</param>
     /// <param name="priority">Explicit arbitration priority.</param>
     /// <param name="id">Optional explicit canonical clause identity.</param>
+    /// <param name="role">Stable semantic role of the winning continuation edge.</param>
+    /// <param name="edgeOwner">Optional durable owner of the winning continuation edge.</param>
     /// <returns>An opaque syntax-only AwaitMatch clause.</returns>
     /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
     public ProcessAwaitCase Deadline(
         DateTimeOffset dueAt,
         ProcessBranch branch,
         int priority = 0,
-        ExecutionNodeId? id = null) =>
+        ExecutionNodeId? id = null,
+        string role = "next",
+        ExecutionNodeId? edgeOwner = null) =>
         throw SyntaxOnly();
 
     /// <summary>Declares a durable exclusive race over a closed set of typed interaction and timer clauses.</summary>
@@ -282,6 +362,9 @@ public sealed class ProcessContext
     /// <param name="cases">One or more predicate arms in semantic selection order.</param>
     /// <param name="fallback">Optional named fallback branch; required exactly when completeness is fallback.</param>
     /// <param name="id">Optional explicit canonical Choice identity.</param>
+    /// <param name="fallbackId">Optional explicit canonical fallback identity.</param>
+    /// <param name="fallbackRole">Stable semantic role of the fallback continuation edge.</param>
+    /// <param name="fallbackEdgeOwner">Optional durable owner of the fallback continuation edge.</param>
     /// <returns>A syntax-only task representing convergence of the selected branch.</returns>
     /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
     public ProcessTask Choice(
@@ -289,19 +372,26 @@ public sealed class ProcessContext
         BranchCompleteness completeness,
         ProcessChoiceArm[] cases,
         ProcessBranch? fallback = null,
-        ExecutionNodeId? id = null) =>
+        ExecutionNodeId? id = null,
+        ExecutionNodeId? fallbackId = null,
+        string fallbackRole = "next",
+        ExecutionNodeId? fallbackEdgeOwner = null) =>
         throw SyntaxOnly();
 
     /// <summary>Declares one ordered predicate arm of an explicit Choice.</summary>
     /// <param name="predicate">Portable Boolean expression deciding whether this arm is eligible.</param>
     /// <param name="branch">Named parameterless local Process branch.</param>
     /// <param name="id">Optional explicit canonical case identity.</param>
+    /// <param name="role">Stable semantic role of the selected case continuation edge.</param>
+    /// <param name="edgeOwner">Optional durable owner of the selected case continuation edge.</param>
     /// <returns>An opaque syntax-only Choice arm consumed by <see cref="Choice"/>.</returns>
     /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
     public ProcessChoiceArm When(
         bool predicate,
         ProcessBranch branch,
-        ExecutionNodeId? id = null) =>
+        ExecutionNodeId? id = null,
+        string role = "next",
+        ExecutionNodeId? edgeOwner = null) =>
         throw SyntaxOnly();
 
     /// <summary>Declares an explicitly typed and ordered exact-value Match.</summary>
@@ -317,6 +407,9 @@ public sealed class ProcessContext
     /// <param name="cases">One or more exact-value arms in semantic selection order.</param>
     /// <param name="fallback">Optional named fallback branch; required exactly when completeness is fallback.</param>
     /// <param name="id">Optional explicit canonical Match identity.</param>
+    /// <param name="fallbackId">Optional explicit canonical fallback identity.</param>
+    /// <param name="fallbackRole">Stable semantic role of the fallback continuation edge.</param>
+    /// <param name="fallbackEdgeOwner">Optional durable owner of the fallback continuation edge.</param>
     /// <returns>A syntax-only task representing convergence of the selected branch.</returns>
     /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
     public ProcessTask Match<TValue>(
@@ -325,7 +418,10 @@ public sealed class ProcessContext
         BranchCompleteness completeness,
         ProcessMatchArm<TValue>[] cases,
         ProcessBranch? fallback = null,
-        ExecutionNodeId? id = null) =>
+        ExecutionNodeId? id = null,
+        ExecutionNodeId? fallbackId = null,
+        string fallbackRole = "next",
+        ExecutionNodeId? fallbackEdgeOwner = null) =>
         throw SyntaxOnly();
 
     /// <summary>Declares one ordered exact-value arm of an explicit Match.</summary>
@@ -333,13 +429,75 @@ public sealed class ProcessContext
     /// <param name="pattern">Exact portable pattern value.</param>
     /// <param name="branch">Named parameterless local Process branch.</param>
     /// <param name="id">Optional explicit canonical case identity.</param>
+    /// <param name="role">Stable semantic role of the selected case continuation edge.</param>
+    /// <param name="edgeOwner">Optional durable owner of the selected case continuation edge.</param>
     /// <returns>An opaque syntax-only Match arm consumed by <see cref="Match{TValue}"/>.</returns>
     /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
     public ProcessMatchArm<TValue> Case<TValue>(
         TValue pattern,
         ProcessBranch branch,
-        ExecutionNodeId? id = null) =>
+        ExecutionNodeId? id = null,
+        string role = "next",
+        ExecutionNodeId? edgeOwner = null) =>
         throw SyntaxOnly();
+
+    /// <summary>Marks one returned value as a successful terminal with an optional durable identity.</summary>
+    /// <typeparam name="TResult">Portable Process result type.</typeparam>
+    /// <param name="result">Pure successful terminal result.</param>
+    /// <param name="id">Optional explicit canonical terminal identity.</param>
+    /// <returns>The syntax-only value consumed by a C# <c>return</c> statement.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public TResult Complete<TResult>(TResult result, ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
+    /// <summary>Marks one returned value as a failed terminal with an optional durable identity.</summary>
+    /// <typeparam name="TResult">Portable Process failure-result type.</typeparam>
+    /// <param name="result">Pure failed terminal result.</param>
+    /// <param name="id">Optional explicit canonical terminal identity.</param>
+    /// <returns>The syntax-only value consumed by a C# <c>return</c> statement.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public TResult Fail<TResult>(TResult result, ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
+    /// <summary>Marks the source position after an exhaustive terminal branch set as unreachable.</summary>
+    /// <remarks>
+    /// This source-only marker satisfies C# definite-return analysis after an explicit <see cref="Match{TValue}"/>
+    /// or <see cref="Choice"/> whose every branch terminates the Process. The generator erases the marker; it does
+    /// not create an IR node or a runtime failure path.
+    /// </remarks>
+    /// <typeparam name="TResult">Portable root Process result type required by the containing C# method.</typeparam>
+    /// <returns>No value; the marker is erased by source generation.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public TResult Unreachable<TResult>() => throw SyntaxOnly();
+
+    /// <summary>Terminates a result-less local branch with a successful root Process result.</summary>
+    /// <typeparam name="TResult">Portable root Process result type.</typeparam>
+    /// <param name="result">Pure successful terminal result.</param>
+    /// <param name="id">Optional explicit canonical terminal identity.</param>
+    /// <returns>A syntax-only terminal task.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessTask Succeed<TResult>(TResult result, ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
+    /// <summary>Terminates a result-less local branch with a failed root Process result.</summary>
+    /// <typeparam name="TResult">Portable root Process failure-result type.</typeparam>
+    /// <param name="result">Pure failed terminal result.</param>
+    /// <param name="id">Optional explicit canonical terminal identity.</param>
+    /// <returns>A syntax-only terminal task.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessTask Terminate<TResult>(TResult result, ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
+    /// <summary>Transfers a branch back to an existing durable Process node.</summary>
+    /// <remarks>
+    /// This source-only construct expresses durable re-entry such as a hold decision returning to the same
+    /// <see cref="AwaitMatch"/>. The generator emits no node for the transfer; the selecting continuation targets
+    /// <paramref name="target"/> directly.
+    /// </remarks>
+    /// <param name="target">Exact existing canonical node selected as the branch continuation.</param>
+    /// <returns>A syntax-only terminal branch task.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessTask ContinueAt(ExecutionNodeId target) => throw SyntaxOnly();
 
     /// <summary>Declares finite, explicitly bounded child Process work over a portable partition collection.</summary>
     /// <remarks>
@@ -419,6 +577,39 @@ public sealed class ProcessContext
         string capacityDomain) =>
         throw SyntaxOnly();
 
+    /// <summary>Annotates a Fork branch with an explicit durable identity and optional capacity domain.</summary>
+    /// <typeparam name="TResult">Portable typed branch-result type.</typeparam>
+    /// <param name="branch">Syntax-only local branch computation.</param>
+    /// <param name="id">Explicit canonical branch identity.</param>
+    /// <param name="capacityDomain">Optional stable capacity-domain identity.</param>
+    /// <param name="role">Optional stable semantic role of the branch start edge.</param>
+    /// <param name="edgeOwner">Optional durable owner of the branch start edge.</param>
+    /// <returns>The syntax-only annotated branch.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessTask<TResult> Branch<TResult>(
+        ProcessTask<TResult> branch,
+        ExecutionNodeId id,
+        string? capacityDomain = null,
+        string? role = null,
+        ExecutionNodeId? edgeOwner = null) =>
+        throw SyntaxOnly();
+
+    /// <summary>Annotates a result-less Fork branch with an explicit durable identity.</summary>
+    /// <param name="branch">Syntax-only local branch computation.</param>
+    /// <param name="id">Explicit canonical branch identity.</param>
+    /// <param name="capacityDomain">Optional stable capacity-domain identity.</param>
+    /// <param name="role">Optional stable semantic role of the branch start edge.</param>
+    /// <param name="edgeOwner">Optional durable owner of the branch start edge.</param>
+    /// <returns>The syntax-only annotated branch.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessTask Branch(
+        ProcessTask branch,
+        ExecutionNodeId id,
+        string? capacityDomain = null,
+        string? role = null,
+        ExecutionNodeId? edgeOwner = null) =>
+        throw SyntaxOnly();
+
     /// <summary>
     /// Declares parallel syntax-only branch computations converging through an all-branches Join.
     /// </summary>
@@ -445,6 +636,20 @@ public sealed class ProcessContext
     /// <returns>A syntax-only task representing convergence at the reciprocal Join.</returns>
     /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
     public ProcessTask ForkJoin(ExecutionNodeId id, params ProcessTask[] branches) =>
+        throw SyntaxOnly();
+
+    /// <summary>Declares a fully identified all-branches Fork/Join compatibility boundary.</summary>
+    /// <param name="id">Explicit canonical Fork identity.</param>
+    /// <param name="joinId">Explicit canonical reciprocal Join identity.</param>
+    /// <param name="nextRole">Stable semantic role of the completed Join continuation edge.</param>
+    /// <param name="branches">Two or more syntax-only branch computations.</param>
+    /// <returns>A syntax-only task representing convergence at the identified Join.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessTask ForkJoin(
+        ExecutionNodeId id,
+        ExecutionNodeId joinId,
+        string nextRole,
+        params ProcessTask[] branches) =>
         throw SyntaxOnly();
 
     /// <summary>Declares two typed branches converging through an all-branches Join.</summary>
@@ -805,7 +1010,10 @@ public sealed record ProcessAdmission
         ImmutableArray<ProcessCapacityDomainLimit> capacityDomains)
     {
         if (minimumParallelism <= 0)
+        {
             throw new ArgumentOutOfRangeException(nameof(minimumParallelism), "Minimum parallelism must be positive.");
+        }
+
         if (maximumParallelism < minimumParallelism)
         {
             throw new ArgumentOutOfRangeException(

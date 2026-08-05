@@ -3,7 +3,6 @@ using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Model.Authoring;
 using Cohesive.Model.Serialization;
-using Cohesive.Processes.Authoring;
 using Cohesive.Processes.Compilation;
 using Cohesive.Processes.IR;
 using AuthoredMonitoringProcess = Cohesive.Processes.Authoring.Process<
@@ -53,7 +52,7 @@ public enum MotionDqMonitoringOutcome
 public sealed class MotionDqMonitoringProcess
 {
     static readonly IClrTypeRefMapper TypeMapper = new DefaultClrTypeRefMapper();
-    static readonly ExecutionDefinitionReference ObservationQueryReference = new(
+    internal static readonly ExecutionDefinitionReference ObservationQueryReference = new(
         new("relation/motion-dq/monitoring-observation"),
         new("revision/1"),
         new(
@@ -131,7 +130,7 @@ public sealed class MotionDqMonitoringProcess
         var linkingContext = new ProcessDefinitionValidationContext(
             definitions: [observationQuery],
             interactionContracts: interactions.Catalog);
-        var authored = Author(interactions);
+        var authored = Author();
         RequireValid(authored.Validation, "context-free Process authoring");
         var compilation = authored.Compile(linkingContext);
         RequireValid(compilation.Validation, "linked Process compilation");
@@ -154,8 +153,8 @@ public sealed class MotionDqMonitoringProcess
             documents: documents);
     }
 
-    static AuthoredMonitoringProcess Author(MotionDqMonitoringInteractionContracts interactions) =>
-        ProcessAuthoring.Create<MotionDqMonitoringCaseReference, MotionDqMonitoringOutcome>(
+    static AuthoredMonitoringProcess Author() =>
+        MotionDqMonitoringProcessDefinition.Define(
             new(
                 new("process/motion-dq/monitoring"),
                 new("revision/1"),
@@ -163,228 +162,7 @@ public sealed class MotionDqMonitoringProcess
                 ProcessRecoveryPolicy.ContinueAttempt,
                 Provenance(),
                 displayName: "Motion DQ monitoring and escalation",
-                description: "Coordinates bounded evidence evaluation, human intervention, and durable recurrence."),
-            process => AuthorGraph(process, interactions));
-
-    static void AuthorGraph(
-        ProcessBuilder<MotionDqMonitoringCaseReference, MotionDqMonitoringOutcome> process,
-        MotionDqMonitoringInteractionContracts interactions)
-    {
-        var observation = process.Output<MotionDqMonitoringObservation>(Identities.EvaluateObservation, "observation");
-        process.EvaluateRelation(
-            Identities.EvaluateObservation,
-            ObservationQueryReference,
-            process.Input.Value,
-            process.Continuation(
-                process.Edge(Identities.EvaluateObservation, "evaluated", Identities.ClassifyObservation),
-                observation));
-
-        var disposition = observation.Field(static value => value.Disposition);
-        process.Match(
-            Identities.ClassifyObservation,
-            CaseSelection.OrderedFirstMatch,
-            BranchCompleteness.Fallback,
-            disposition,
-            [
-                process.MatchCase(
-                    new("motion-dq/monitoring/observation/continue"),
-                    disposition,
-                    MotionDqMonitoringDisposition.Continue,
-                    process.Edge(Identities.ClassifyObservation, "continue", Identities.ScheduleIntervention)),
-                process.MatchCase(
-                    new("motion-dq/monitoring/observation/cleared"),
-                    disposition,
-                    MotionDqMonitoringDisposition.Cleared,
-                    process.Edge(Identities.ClassifyObservation, "cleared", Identities.Repeat)),
-                process.MatchCase(
-                    new("motion-dq/monitoring/observation/escalated"),
-                    disposition,
-                    MotionDqMonitoringDisposition.Escalated,
-                    process.Edge(Identities.ClassifyObservation, "escalated", Identities.Repeat)),
-                process.MatchCase(
-                    new("motion-dq/monitoring/observation/cancelled"),
-                    disposition,
-                    MotionDqMonitoringDisposition.Cancelled,
-                    process.Edge(Identities.ClassifyObservation, "cancelled", Identities.Repeat)),
-                process.MatchCase(
-                    new("motion-dq/monitoring/observation/superseded"),
-                    disposition,
-                    MotionDqMonitoringDisposition.Superseded,
-                    process.Edge(Identities.ClassifyObservation, "superseded", Identities.Repeat))
-            ],
-            process.Fallback(
-                new("motion-dq/monitoring/observation/invalid"),
-                process.Edge(Identities.ClassifyObservation, "invalid", Identities.CoordinationRejected)));
-
-        var work = observation.Field(static value => value.Work);
-        var workReference = process.Output<MotionDqInterventionWorkReference>(Identities.ScheduleIntervention, "scheduled");
-        process.Request(
-            Identities.ScheduleIntervention,
-            interactions.ScheduleInterventionRequest,
-            work,
-            [
-                process.RequestOutcome(
-                    new("motion-dq/monitoring/intervention/scheduled"),
-                    MotionDqMonitoringInteractionContracts.InterventionScheduledOutcome,
-                    process.Continuation(
-                        process.Edge(Identities.ScheduleIntervention, "scheduled", Identities.AwaitIntervention),
-                        workReference)),
-                process.RequestOutcome(
-                    new("motion-dq/monitoring/intervention/failed"),
-                    MotionDqMonitoringInteractionContracts.InterventionSchedulingFailedOutcome,
-                    process.Continuation(process.Edge(
-                        Identities.ScheduleIntervention,
-                        "failed",
-                        Identities.InterventionSchedulingFailed)))
-            ]);
-
-        AuthorInterventionAwait(process, interactions, observation, workReference);
-
-        var continueWhen = process.Equal(
-            disposition,
-            process.Constant(MotionDqMonitoringDisposition.Continue));
-        process.RepeatAcrossActivation(
-            Identities.Repeat,
-            continueWhen,
-            work.Field(static value => value.EvidenceRevision),
-            new(maximumOccurrences: 365, maximumUnchangedProgressOccurrences: 2),
-            process.Edge(Identities.Repeat, "repeat", Identities.EvaluateObservation),
-            process.Edge(Identities.Repeat, "completed", Identities.ReturnDisposition),
-            process.Edge(Identities.Repeat, "exhausted", Identities.OccurrenceLimitReached),
-            process.Edge(Identities.Repeat, "stalled", Identities.EvidenceStalled));
-
-        AuthorTerminalDisposition(process, disposition);
-        process.Return(Identities.Cleared, process.Constant(MotionDqMonitoringOutcome.Cleared));
-        process.Return(Identities.Escalated, process.Constant(MotionDqMonitoringOutcome.Escalated));
-        process.Return(Identities.Cancelled, process.Constant(MotionDqMonitoringOutcome.Cancelled));
-        process.Return(Identities.Superseded, process.Constant(MotionDqMonitoringOutcome.Superseded));
-        process.Fail(
-            Identities.OccurrenceLimitReached,
-            process.Constant(MotionDqMonitoringOutcome.OccurrenceLimitReached));
-        process.Fail(Identities.EvidenceStalled, process.Constant(MotionDqMonitoringOutcome.EvidenceStalled));
-        process.Fail(
-            Identities.InterventionSchedulingFailed,
-            process.Constant(MotionDqMonitoringOutcome.InterventionSchedulingFailed));
-        process.Fail(
-            Identities.CoordinationRejected,
-            process.Constant(MotionDqMonitoringOutcome.CoordinationRejected));
-    }
-
-    static void AuthorInterventionAwait(
-        ProcessBuilder<MotionDqMonitoringCaseReference, MotionDqMonitoringOutcome> process,
-        MotionDqMonitoringInteractionContracts interactions,
-        ProcessBinding<MotionDqMonitoringObservation> observation,
-        ProcessBinding<MotionDqInterventionWorkReference> workReference)
-    {
-        var completed = process.Output<MotionDqInterventionCompleted>(Identities.AwaitIntervention, "completed");
-        var cancellation = process.Output<MotionDqCancellation>(Identities.AwaitIntervention, "cancelled");
-        var supersession = process.Output<MotionDqMonitoringSupersession>(Identities.AwaitIntervention, "superseded");
-        var caseId = process.Input.Field(static value => value.CaseId);
-        var completedGuard = process.And(
-            process.Equal(completed.Field(static value => value.CaseId), caseId),
-            process.Equal(
-                completed.Field(static value => value.WorkItemId),
-                workReference.Field(static value => value.WorkItemId)));
-        completedGuard = process.And(
-            completedGuard,
-            process.NotEqual(
-                completed.Field(static value => value.CompletionEvidenceId),
-                process.Constant(string.Empty)));
-        var cancellationGuard = process.Equal(
-            cancellation.Field(static value => value.CaseId),
-            caseId);
-        var supersessionGuard = process.And(
-            process.Equal(supersession.Field(static value => value.CaseId), caseId),
-            process.NotEqual(
-                supersession.Field(static value => value.SupersedingCaseId),
-                caseId));
-
-        process.AwaitMatch(
-            Identities.AwaitIntervention,
-            ProcessAwaitArbitration.ExclusivePriorityThenClauseId,
-            [
-                process.AwaitInteractionClause(
-                    new("motion-dq/monitoring/intervention/cancelled"),
-                    interactions.CaseCancellationSignal,
-                    cancellation,
-                    requestObligation: null,
-                    cancellationGuard,
-                    priority: 100,
-                    process.Continuation(process.Edge(
-                        Identities.AwaitIntervention,
-                        "cancelled",
-                        Identities.Cancelled))),
-                process.AwaitInteractionClause(
-                    new("motion-dq/monitoring/intervention/superseded"),
-                    interactions.CaseSupersessionSignal,
-                    supersession,
-                    requestObligation: null,
-                    supersessionGuard,
-                    priority: 90,
-                    process.Continuation(process.Edge(
-                        Identities.AwaitIntervention,
-                        "superseded",
-                        Identities.Superseded))),
-                process.AwaitInteractionClause(
-                    new("motion-dq/monitoring/intervention/completed"),
-                    interactions.InterventionCompletedSignal,
-                    completed,
-                    requestObligation: null,
-                    completedGuard,
-                    priority: 80,
-                    process.Continuation(process.Edge(
-                        Identities.AwaitIntervention,
-                        "completed",
-                        Identities.Repeat))),
-                process.AwaitTimerClause(
-                    new("motion-dq/monitoring/intervention/evaluation-due"),
-                    observation.Field(static value => value.Work.NextEvaluationDueAtUtc),
-                    priority: 0,
-                    process.Continuation(process.Edge(
-                        Identities.AwaitIntervention,
-                        "evaluation-due",
-                        Identities.Repeat)))
-            ],
-            lateInput: ProcessAwaitInputDisposition.Observe,
-            staleInput: ProcessAwaitInputDisposition.Reject,
-            duplicateInput: ProcessAwaitInputDisposition.ReusePriorDisposition,
-            missingTarget: ProcessAwaitMissingTargetDisposition.DeadLetter,
-            retentionHorizon: TimeSpan.FromDays(90));
-    }
-
-    static void AuthorTerminalDisposition(
-        ProcessBuilder<MotionDqMonitoringCaseReference, MotionDqMonitoringOutcome> process,
-        ProcessValue<MotionDqMonitoringDisposition> disposition) =>
-        process.Match(
-            Identities.ReturnDisposition,
-            CaseSelection.OrderedFirstMatch,
-            BranchCompleteness.Fallback,
-            disposition,
-            [
-                process.MatchCase(
-                    new("motion-dq/monitoring/terminal-disposition/cleared"),
-                    disposition,
-                    MotionDqMonitoringDisposition.Cleared,
-                    process.Edge(Identities.ReturnDisposition, "cleared", Identities.Cleared)),
-                process.MatchCase(
-                    new("motion-dq/monitoring/terminal-disposition/escalated"),
-                    disposition,
-                    MotionDqMonitoringDisposition.Escalated,
-                    process.Edge(Identities.ReturnDisposition, "escalated", Identities.Escalated)),
-                process.MatchCase(
-                    new("motion-dq/monitoring/terminal-disposition/cancelled"),
-                    disposition,
-                    MotionDqMonitoringDisposition.Cancelled,
-                    process.Edge(Identities.ReturnDisposition, "cancelled", Identities.Cancelled)),
-                process.MatchCase(
-                    new("motion-dq/monitoring/terminal-disposition/superseded"),
-                    disposition,
-                    MotionDqMonitoringDisposition.Superseded,
-                    process.Edge(Identities.ReturnDisposition, "superseded", Identities.Superseded))
-            ],
-            process.Fallback(
-                new("motion-dq/monitoring/terminal-disposition/invalid"),
-                process.Edge(Identities.ReturnDisposition, "invalid", Identities.CoordinationRejected)));
+                description: "Coordinates bounded evidence evaluation, human intervention, and durable recurrence."));
 
     static ValueContract Contract<TValue>() => new(TypeMapper.Map(typeof(TValue), null));
 
@@ -407,7 +185,7 @@ public sealed class MotionDqMonitoringProcess
                     $"{diagnostic.Code} at {diagnostic.Location}: {diagnostic.Message}"))}");
     }
 
-    static class Identities
+    internal static class Identities
     {
         public static readonly ExecutionNodeId EvaluateObservation = new("motion-dq/monitoring/evaluate-observation");
         public static readonly ExecutionNodeId ClassifyObservation = new("motion-dq/monitoring/classify-observation");
@@ -425,5 +203,39 @@ public sealed class MotionDqMonitoringProcess
             new("motion-dq/monitoring/terminal/intervention-scheduling-failed");
         public static readonly ExecutionNodeId CoordinationRejected =
             new("motion-dq/monitoring/terminal/coordination-rejected");
+        public static readonly ExecutionNodeId ObservationContinue =
+            new("motion-dq/monitoring/observation/continue");
+        public static readonly ExecutionNodeId ObservationCleared =
+            new("motion-dq/monitoring/observation/cleared");
+        public static readonly ExecutionNodeId ObservationEscalated =
+            new("motion-dq/monitoring/observation/escalated");
+        public static readonly ExecutionNodeId ObservationCancelled =
+            new("motion-dq/monitoring/observation/cancelled");
+        public static readonly ExecutionNodeId ObservationSuperseded =
+            new("motion-dq/monitoring/observation/superseded");
+        public static readonly ExecutionNodeId ObservationInvalid =
+            new("motion-dq/monitoring/observation/invalid");
+        public static readonly ExecutionNodeId InterventionScheduled =
+            new("motion-dq/monitoring/intervention/scheduled");
+        public static readonly ExecutionNodeId InterventionScheduleFailed =
+            new("motion-dq/monitoring/intervention/failed");
+        public static readonly ExecutionNodeId InterventionCancelled =
+            new("motion-dq/monitoring/intervention/cancelled");
+        public static readonly ExecutionNodeId InterventionSuperseded =
+            new("motion-dq/monitoring/intervention/superseded");
+        public static readonly ExecutionNodeId InterventionCompleted =
+            new("motion-dq/monitoring/intervention/completed");
+        public static readonly ExecutionNodeId InterventionEvaluationDue =
+            new("motion-dq/monitoring/intervention/evaluation-due");
+        public static readonly ExecutionNodeId TerminalCleared =
+            new("motion-dq/monitoring/terminal-disposition/cleared");
+        public static readonly ExecutionNodeId TerminalEscalated =
+            new("motion-dq/monitoring/terminal-disposition/escalated");
+        public static readonly ExecutionNodeId TerminalCancelled =
+            new("motion-dq/monitoring/terminal-disposition/cancelled");
+        public static readonly ExecutionNodeId TerminalSuperseded =
+            new("motion-dq/monitoring/terminal-disposition/superseded");
+        public static readonly ExecutionNodeId TerminalInvalid =
+            new("motion-dq/monitoring/terminal-disposition/invalid");
     }
 }

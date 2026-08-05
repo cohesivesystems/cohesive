@@ -9,6 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Cohesive.Analyzers\Cohesive.Analyzers.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\Cohesive.Transitions\Cohesive.Transitions.csproj" />
     <ProjectReference Include="..\Cohesive.Processes\Cohesive.Processes.csproj" />
   </ItemGroup>
