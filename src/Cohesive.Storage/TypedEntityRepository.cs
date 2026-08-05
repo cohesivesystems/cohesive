@@ -8,7 +8,7 @@ public sealed class TypedEntityRepository<TEntity>(
     IEntityRepository repository,
     Action<ObjectObservationMapperBuilder<TEntity>>? configureObjectMapper = null,
     ShapeMappingContext? mappingContext = null
-    ) : IEntityRepository<TEntity> where TEntity : notnull
+    ) : IEntityRepository<TEntity>, IEntityTransitionOperationRepository where TEntity : notnull
 {
     /// <summary>Gets the entity definition.</summary>
     public EntityDefinition EntityDefinition => repository.EntityDefinition;
@@ -18,6 +18,10 @@ public sealed class TypedEntityRepository<TEntity>(
 
     /// <summary>Gets the entity type.</summary>
     public string EntityType => repository.EntityType;
+
+    /// <summary>Gets atomic Process Transition operation capabilities.</summary>
+    public EntityTransitionOperationCapabilities TransitionOperationCapabilities =>
+        repository.TransitionOperationCapabilities;
 
     /// <summary>Attempts to get the value.</summary>
     public Task<EntitySnapshot?> TryGet(OperationContext context, string id, EntityReadOptions? options = null) =>
@@ -41,13 +45,31 @@ public sealed class TypedEntityRepository<TEntity>(
             expectedConcurrencyToken,
             configureObjectMapper,
             MappingContext);
+
+    /// <summary>Looks up one exact Process Transition operation receipt.</summary>
+    /// <param name="context">Operation context and cancellation.</param>
+    /// <param name="request">Exact replay lookup identity.</param>
+    /// <returns>Missing, replay, conflict, or capability evidence.</returns>
+    public Task<EntityTransitionOperationResult> TryGetTransitionOperation(
+        OperationContext context,
+        EntityTransitionOperationRequest request) =>
+        repository.TryGetTransitionOperation(context, request);
+
+    /// <summary>Atomically commits entity state and one Process Transition operation receipt.</summary>
+    /// <param name="context">Operation context, time, and cancellation.</param>
+    /// <param name="commit">Complete deterministic atomic commit intent.</param>
+    /// <returns>Committed, replayed, conflict, or capability evidence.</returns>
+    public Task<EntityTransitionOperationResult> CommitTransitionOperation(
+        OperationContext context,
+        EntityTransitionOperationCommit commit) =>
+        repository.CommitTransitionOperation(context, commit);
 }
 
 /// <summary>Represents a typed entity outbox repository.</summary>
 public sealed class TypedEntityOutboxRepository<TEntity>(
     IEntityRepository<TEntity> repository,
     IEntityOutboxRepository outboxRepository
-    ) : IEntityOutboxRepository<TEntity> where TEntity : notnull
+    ) : IEntityOutboxRepository<TEntity>, IEntityTransitionOperationRepository where TEntity : notnull
 {
     /// <summary>Gets the entity definition.</summary>
     public EntityDefinition EntityDefinition => repository.EntityDefinition;
@@ -57,6 +79,10 @@ public sealed class TypedEntityOutboxRepository<TEntity>(
 
     /// <summary>Gets the entity type.</summary>
     public string EntityType => repository.EntityType;
+
+    /// <summary>Gets atomic Process Transition operation capabilities.</summary>
+    public EntityTransitionOperationCapabilities TransitionOperationCapabilities =>
+        outboxRepository.TransitionOperationCapabilities;
 
     /// <summary>Attempts to get the value.</summary>
     public Task<EntitySnapshot?> TryGet(OperationContext context, string id, EntityReadOptions? options = null) =>
@@ -77,4 +103,22 @@ public sealed class TypedEntityOutboxRepository<TEntity>(
     /// <summary>Upserts with outbox.</summary>
     public Task<EntityCommitResult> UpsertWithOutbox(OperationContext context, EntityOutboxCommit commit) =>
         outboxRepository.UpsertWithOutbox(context, commit);
+
+    /// <summary>Looks up one exact Process Transition operation receipt.</summary>
+    /// <param name="context">Operation context and cancellation.</param>
+    /// <param name="request">Exact replay lookup identity.</param>
+    /// <returns>Missing, replay, conflict, or capability evidence.</returns>
+    public Task<EntityTransitionOperationResult> TryGetTransitionOperation(
+        OperationContext context,
+        EntityTransitionOperationRequest request) =>
+        outboxRepository.TryGetTransitionOperation(context, request);
+
+    /// <summary>Atomically commits entity state and one Process Transition operation receipt.</summary>
+    /// <param name="context">Operation context, time, and cancellation.</param>
+    /// <param name="commit">Complete deterministic atomic commit intent.</param>
+    /// <returns>Committed, replayed, conflict, or capability evidence.</returns>
+    public Task<EntityTransitionOperationResult> CommitTransitionOperation(
+        OperationContext context,
+        EntityTransitionOperationCommit commit) =>
+        outboxRepository.CommitTransitionOperation(context, commit);
 }

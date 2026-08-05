@@ -30,6 +30,12 @@ public interface IEntityRepository
     EntityBatchCapabilities BatchCapabilities => EntityBatchCapabilities.SingleWriteFallback;
 
     /// <summary>
+    /// Atomic Process-invoked Transition receipt capabilities advertised by this repository.
+    /// </summary>
+    EntityTransitionOperationCapabilities TransitionOperationCapabilities =>
+        EntityTransitionOperationCapabilities.Unsupported;
+
+    /// <summary>
     /// Attempts to load one persisted observation by id.
     /// Implementations may reject ambiguous ids that resolve to multiple partitions.
     /// </summary>
