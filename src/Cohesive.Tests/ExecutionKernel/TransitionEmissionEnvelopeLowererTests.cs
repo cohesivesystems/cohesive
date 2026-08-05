@@ -49,6 +49,9 @@ public sealed class TransitionEmissionEnvelopeLowererTests
             Assert.Equal(fixture.Decision.Emissions[index].Node, processOrigin.TransitionNode);
             Assert.Equal(Entity, processOrigin.Entity);
             Assert.Equal(new ExecutionNodeId("outcome"), processOrigin.Outcome);
+            Assert.NotEqual(
+                InteractionEnvelopeJsonSerializer.ComputeContentFingerprint(direct[index]),
+                InteractionEnvelopeJsonSerializer.ComputeContentFingerprint(process[index]));
         }
 
         var json = InteractionEnvelopeJsonSerializer.Serialize(process[0]);
@@ -61,6 +64,9 @@ public sealed class TransitionEmissionEnvelopeLowererTests
         Assert.True(roundTripValidation.IsValid, Format(roundTripValidation));
         Assert.Equal(fixture.Decision.Emissions[0].Node, restoredOrigin.TransitionNode);
         Assert.Equal(process[0], restored);
+        Assert.Equal(
+            InteractionEnvelopeJsonSerializer.ComputeContentFingerprint(process[0]),
+            InteractionEnvelopeJsonSerializer.ComputeContentFingerprint(restored!));
     }
 
     [Fact]

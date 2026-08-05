@@ -278,6 +278,19 @@ renewal, and commit observations cannot predate retained aggregate or latest-ren
 contract promises atomic local persistence and logical idempotency. It does not promise physical exactly-once
 external publication, and it is not itself a production durability provider.
 
+A Process-invoked Transition first commits entity state and an exact operation receipt under the entity
+repository's atomic authority. That receipt retains the typed outcome and canonical envelopes but declares the
+Process outbox as their sole publication authority; it never appends those envelopes to the entity/API outbox.
+Recovery replays the same receipt until one Process aggregate commit admits the operation result, continuation,
+and canonical outbox records together. Domain-event publication advances only through a retained fenced attempt
+and stable authority/contract/idempotency identity, while durable Requests use the same logical envelope through
+the durable-operation driver. A crash after external publication may repeat physical delivery, but the stable
+identity converges to one logical target consequence and one durable acknowledgement. Stale Process ownership is
+rejected before a new publication attempt can be committed. Direct API invocation deliberately selects the entity
+outbox instead, while sharing the same Transition intent lowering, exact contracts, payloads, and Transition
+provenance. A repository that cannot atomically retain entity state and the Process handoff fails with structured
+capability evidence before evaluating or mutating the Transition.
+
 ## Canonical Process lifecycle control
 
 ARI-162 defines one protocol-neutral lifecycle surface in `Cohesive.Execution`: `Inspect`, `Signal`, `Pause`,
