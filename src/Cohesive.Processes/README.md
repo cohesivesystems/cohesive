@@ -178,11 +178,49 @@ public static partial class ApproveCustomerProcess
 }
 ```
 
+Ordinary `if`/`else` and exact-value `switch` use the ordered-first-match/fallback convention. When selection or
+coverage must be stated explicitly, use the typed Choice/Match forms with named local branches:
+
+```csharp
+async ProcessTask Escalate() { /* semantic Process operations */ }
+async ProcessTask Continue() { /* semantic Process operations */ }
+async ProcessTask Otherwise() { /* semantic Process operations */ }
+
+await process.Choice(
+    selection: CaseSelection.OrderedFirstMatch,
+    completeness: BranchCompleteness.Fallback,
+    cases:
+    [
+        process.When(customer.Risk == Risk.High, Escalate),
+        process.When(customer.Risk == Risk.Low, Continue)
+    ],
+    fallback: Otherwise);
+
+await process.Match(
+    value: customer.Status,
+    selection: CaseSelection.OrderedFirstMatch,
+    completeness: BranchCompleteness.Fallback,
+    cases:
+    [
+        process.Case(CustomerStatus.Ready, Continue),
+        process.Case(CustomerStatus.Blocked, Escalate)
+    ],
+    fallback: Otherwise);
+```
+
+Predicates remain portable pure expressions and Match patterns remain exact typed values. The local branch methods,
+arm descriptors, and delegates are erased. Fallback completeness requires a fallback branch; exhaustive completeness
+forbids one. Runtime policy values, anonymous callbacks, incompatible patterns, and duplicate exact node identities
+are source diagnostics rather than delayed runtime behavior.
+
 `Read` is deliberately an authoring alias for exact Relation/Query evaluation; it does not restore a separate
 Process-native entity model. `Effect` lowers to an exact Request contract and selected terminal outcome. Generated
 factories accept `ProcessAuthoringMetadata`, honor an explicit entry when it agrees with the derived entry, and
-otherwise materialize deterministic identities from semantic structure. Inserting or refactoring a pure local does
-not renumber effectful nodes. `ForkJoin` accepts two or more parameterless local `async ProcessTask` branch
+otherwise materialize deterministic identities from semantic structure. Convention ordinals are scoped by semantic
+role, and nested Join, branch, outcome, wait-clause, Choice, and Match identities derive from their actual parent
+identity. Inserting an unrelated construct, reordering independent roles, or mixing explicit and conventional parent
+identities therefore does not globally renumber nodes. `ForkJoin` accepts two or more parameterless local
+`async ProcessTask` branch
 functions and lowers them to the canonical Fork/Join pair. Its convention is an all-branches, fail-fast Join that
 awaits remaining branches, does not expose completion order, and resolves ties by stable branch identity; the local
 functions and their compiler state machines are never retained.

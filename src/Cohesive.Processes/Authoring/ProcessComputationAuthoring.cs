@@ -271,6 +271,76 @@ public sealed class ProcessContext
         ExecutionNodeId? id = null) =>
         throw SyntaxOnly();
 
+    /// <summary>Declares an explicitly ordered portable predicate Choice.</summary>
+    /// <remarks>
+    /// Each arm and optional fallback must name a parameterless local <c>async ProcessTask</c> function. This form
+    /// exists for policies that ordinary C# <c>if</c>/<c>else</c> cannot state explicitly; it lowers to the same
+    /// canonical Choice node and does not retain delegates or callbacks.
+    /// </remarks>
+    /// <param name="selection">Explicit canonical case-selection policy.</param>
+    /// <param name="completeness">Explicit canonical coverage declaration.</param>
+    /// <param name="cases">One or more predicate arms in semantic selection order.</param>
+    /// <param name="fallback">Optional named fallback branch; required exactly when completeness is fallback.</param>
+    /// <param name="id">Optional explicit canonical Choice identity.</param>
+    /// <returns>A syntax-only task representing convergence of the selected branch.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessTask Choice(
+        CaseSelection selection,
+        BranchCompleteness completeness,
+        ProcessChoiceArm[] cases,
+        ProcessBranch? fallback = null,
+        ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
+    /// <summary>Declares one ordered predicate arm of an explicit Choice.</summary>
+    /// <param name="predicate">Portable Boolean expression deciding whether this arm is eligible.</param>
+    /// <param name="branch">Named parameterless local Process branch.</param>
+    /// <param name="id">Optional explicit canonical case identity.</param>
+    /// <returns>An opaque syntax-only Choice arm consumed by <see cref="Choice"/>.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessChoiceArm When(
+        bool predicate,
+        ProcessBranch branch,
+        ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
+    /// <summary>Declares an explicitly typed and ordered exact-value Match.</summary>
+    /// <remarks>
+    /// Patterns must be exact portable values and every branch must name a parameterless local
+    /// <c>async ProcessTask</c> function. Ordinary exact C# <c>switch</c> remains the concise convention form;
+    /// this method exposes policies that cannot be inferred safely from that syntax.
+    /// </remarks>
+    /// <typeparam name="TValue">Portable matched-value and exact-pattern CLR type.</typeparam>
+    /// <param name="value">Portable value expression to match.</param>
+    /// <param name="selection">Explicit canonical case-selection policy.</param>
+    /// <param name="completeness">Explicit canonical coverage declaration.</param>
+    /// <param name="cases">One or more exact-value arms in semantic selection order.</param>
+    /// <param name="fallback">Optional named fallback branch; required exactly when completeness is fallback.</param>
+    /// <param name="id">Optional explicit canonical Match identity.</param>
+    /// <returns>A syntax-only task representing convergence of the selected branch.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessTask Match<TValue>(
+        TValue value,
+        CaseSelection selection,
+        BranchCompleteness completeness,
+        ProcessMatchArm<TValue>[] cases,
+        ProcessBranch? fallback = null,
+        ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
+    /// <summary>Declares one ordered exact-value arm of an explicit Match.</summary>
+    /// <typeparam name="TValue">Portable matched-value and exact-pattern CLR type.</typeparam>
+    /// <param name="pattern">Exact portable pattern value.</param>
+    /// <param name="branch">Named parameterless local Process branch.</param>
+    /// <param name="id">Optional explicit canonical case identity.</param>
+    /// <returns>An opaque syntax-only Match arm consumed by <see cref="Match{TValue}"/>.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessMatchArm<TValue> Case<TValue>(
+        TValue pattern,
+        ProcessBranch branch,
+        ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
     /// <summary>Declares finite, explicitly bounded child Process work over a portable partition collection.</summary>
     /// <remarks>
     /// Projection lambdas are inline pure source syntax. They are fused into the canonical partition node and are
@@ -617,6 +687,25 @@ public delegate ProcessTask ProcessBranch();
 /// <param name="input">Lexically visible portable input.</param>
 /// <returns>The pure value fused into the nearest canonical Process consumer.</returns>
 public delegate TResult ProcessProjection<in TInput, out TResult>(TInput input);
+
+/// <summary>Opaque syntax-only predicate arm consumed by explicit Choice authoring.</summary>
+public abstract class ProcessChoiceArm
+{
+    /// <summary>Restricts Choice arms to syntax recognized by the Process computation generator.</summary>
+    private protected ProcessChoiceArm()
+    {
+    }
+}
+
+/// <summary>Opaque syntax-only exact-value arm consumed by explicit Match authoring.</summary>
+/// <typeparam name="TValue">Portable matched-value and exact-pattern CLR type.</typeparam>
+public abstract class ProcessMatchArm<TValue>
+{
+    /// <summary>Restricts Match arms to syntax recognized by the Process computation generator.</summary>
+    private protected ProcessMatchArm()
+    {
+    }
+}
 
 /// <summary>Inline syntax-only portable guard for one admitted interaction payload.</summary>
 /// <typeparam name="TInput">Portable admitted interaction payload type.</typeparam>
