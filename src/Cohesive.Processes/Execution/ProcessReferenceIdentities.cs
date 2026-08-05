@@ -29,6 +29,7 @@ public static class ProcessReferenceIdentities
     const string PartitionTokenPurpose = "partition-token";
     const string RecurrenceRegistrationPurpose = "recurrence-registration";
     const string EmissionPurpose = "emission";
+    const string TransitionEmissionPurpose = "transition-emission";
     const string IdempotencyPurpose = "interaction-idempotency";
     const string WaitRegistrationPurpose = "wait-registration";
 
@@ -41,6 +42,7 @@ public static class ProcessReferenceIdentities
     const string PartitionRegistrationPrefix = "process-partition:v1:sha256:";
     const string RecurrenceRegistrationPrefix = "process-recurrence:v1:sha256:";
     const string EmissionPrefix = "process-emission:v1:sha256:";
+    const string TransitionEmissionPrefix = "process-transition-emission:v1:sha256:";
     const string IdempotencyPrefix = "process-idempotency:v1:sha256:";
     const string WaitRegistrationPrefix = "process-wait:v1:sha256:";
 
@@ -421,6 +423,32 @@ public static class ProcessReferenceIdentities
             token.Value,
             node.Value,
             tokenStep.ToString(CultureInfo.InvariantCulture)));
+    }
+
+    /// <summary>
+    /// Derives one logical emission from an exact Process Transition occurrence and canonical Transition node.
+    /// </summary>
+    /// <param name="invocation">Exact Process Transition operation occurrence.</param>
+    /// <param name="transitionNode">Canonical emitting node in the invoked Transition.</param>
+    /// <returns>A replay-stable identity unique to the Transition emission occurrence.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="invocation"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="transitionNode"/> is a default identity.</exception>
+    internal static EmissionId TransitionEmission(
+        ProcessTransitionInvocation invocation,
+        ExecutionNodeId transitionNode)
+    {
+        ArgumentNullException.ThrowIfNull(invocation);
+        RequireIdentity(transitionNode.Value, nameof(transitionNode));
+        return new(Derive(
+            TransitionEmissionPrefix,
+            TransitionEmissionPurpose,
+            invocation.Continuation.ProcessInstanceId.Value,
+            invocation.Continuation.ProcessAttemptId.Value,
+            invocation.Activation.Value,
+            invocation.Token.Value,
+            invocation.Node.Value,
+            invocation.Occurrence.ToString(CultureInfo.InvariantCulture),
+            transitionNode.Value));
     }
 
     /// <summary>Derives the interaction deduplication key owned by one logical Process emission.</summary>

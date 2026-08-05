@@ -6,6 +6,7 @@ using Cohesive.Model.Serialization;
 namespace Cohesive.Processes.Execution;
 
 /// <summary>Complete context of one canonical Process Transition invocation.</summary>
+/// <param name="Process">Exact originating Process definition reference.</param>
 /// <param name="Definition">Exact Transition definition reference.</param>
 /// <param name="Subject">Portable authoritative aggregate subject expression result.</param>
 /// <param name="Input">Typed Transition invocation input.</param>
@@ -17,6 +18,7 @@ namespace Cohesive.Processes.Execution;
 /// <param name="ObservedAtUtc">Explicit UTC observation time of the finite activation.</param>
 /// <param name="Context">Authority, correlation, delivery, ordering, causation, and provenance evidence.</param>
 public sealed record ProcessTransitionInvocation(
+    ExecutionDefinitionReference Process,
     ExecutionDefinitionReference Definition,
     PortableValue Subject,
     PortableValue Input,

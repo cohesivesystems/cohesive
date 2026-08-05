@@ -30,6 +30,7 @@ public sealed class ProcessOperationReplayHostTests
             semanticVariant: "capture");
         var operation = fixture.Operation;
         var invocation = new ProcessTransitionInvocation(
+            fixture.Plan.DefinitionReference,
             operation.Definition,
             ProcessDurabilityTestFixture.StringValue("subject/capture"),
             operation.Input,
@@ -57,6 +58,44 @@ public sealed class ProcessOperationReplayHostTests
         Assert.Equal(operation.Node, observation.Key.Node);
         Assert.Equal(operation.Occurrence, observation.Key.Occurrence);
         Assert.Same(first, observation.Result);
+    }
+
+    [Fact]
+    public void TransitionSuspension_ReusesEarlierRelationEvidenceAcrossInterpreterReplay()
+    {
+        var fixture = ProcessDurabilityTestFixture.Create(
+            definitionId: "process/operation-replay/transition-suspension",
+            semanticVariant: "transition-suspension");
+        var operation = fixture.Operation;
+        var invocation = new ProcessTransitionInvocation(
+            fixture.Plan.DefinitionReference,
+            operation.Definition,
+            ProcessDurabilityTestFixture.StringValue("subject/suspension"),
+            operation.Input,
+            operation.Continuation,
+            operation.Activation,
+            operation.Token,
+            operation.Node,
+            checked(operation.Occurrence + 1),
+            operation.ObservedAtUtc,
+            operation.Context);
+        var result = fixture.OperationResult;
+        var inner = new RecordingHost(result);
+        var transitionHost = new ProcessTransitionOperationSuspensionHost(inner);
+        var replayHost = new ProcessOperationReplayHost(transitionHost);
+
+        Assert.Equal(result, replayHost.EvaluateRelation(operation));
+        var pending = Assert.Throws<ProcessTransitionOperationPendingException>(
+            () => replayHost.InvokeTransition(invocation));
+        Assert.Equal(invocation, pending.Invocation);
+
+        Assert.Equal(result, replayHost.EvaluateRelation(operation));
+        transitionHost.Materialize(invocation, result);
+        Assert.Equal(result, replayHost.InvokeTransition(invocation));
+
+        Assert.Equal(1, inner.RelationCalls);
+        Assert.Equal(0, inner.TransitionCalls);
+        Assert.Equal(2, replayHost.Observations.Length);
     }
 
     [Fact]

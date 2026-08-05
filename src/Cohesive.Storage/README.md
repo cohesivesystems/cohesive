@@ -76,6 +76,12 @@ successor. Compatibility failure, a stale expected attempt, pause, or terminal s
 Host-operation ports must therefore be deterministic for an exact occurrence; externally impure or long-running
 work belongs behind a canonical durable Request rather than a synchronous host call.
 
+An optional asynchronous entity Transition adapter composes that finite interpreter with the entity repository's
+existing atomic state-and-receipt protocol. An unmaterialized Transition suspends interpretation, commits or replays
+the exact entity handoff, and restarts against the same activation-local observation cache. The Process aggregate
+then admits the Transition result, occurrence receipt, continuation, and canonical envelopes in one commit. Entity
+receipts are durable handoff evidence; the Process outbox remains the sole publication authority.
+
 Durable Request advancement persists claim and dispatch evidence before adapter I/O, reloads and reacquires the
 aggregate before accepting returned evidence, and persists acknowledgement separately from target admission. A
 crash after dispatch can repeat only the same fenced invocation and stable target idempotency identity when the

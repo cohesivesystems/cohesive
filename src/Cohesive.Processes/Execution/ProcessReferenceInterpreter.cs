@@ -1211,6 +1211,7 @@ public static class ProcessReferenceInterpreter
             var subject = EvaluateUntyped(node.Subject, token);
             var input = EvaluateTyped(node.Input, link.Input, token);
             var result = host.InvokeTransition(new(
+                plan.DefinitionReference,
                 node.Transition,
                 subject,
                 input,

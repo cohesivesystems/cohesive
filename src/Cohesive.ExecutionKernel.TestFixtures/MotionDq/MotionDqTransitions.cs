@@ -210,6 +210,8 @@ public sealed class MotionDqTransitionDefinitions
 /// <summary>Authors the canonical Transition IR used by the Motion DQ execution-kernel fixture.</summary>
 public static class MotionDqTransitions
 {
+    static readonly MotionDqInteractionContracts Interactions = MotionDqInteractionContracts.Version1;
+
     /// <summary>Authors a fresh deterministic set of canonical Transition documents.</summary>
     /// <returns>Typed handles over canonical documents; no CLR callback remains runtime authority.</returns>
     /// <exception cref="TransitionExpressionTranslationException">A fixture expression falls outside the portable Transition subset.</exception>
@@ -302,6 +304,14 @@ public static class MotionDqTransitions
                     Identities.Prequalification.SetMilestone,
                     entity => entity.Milestone,
                     MotionDqCaseMilestone.PrequalificationSubmitted)
+                .Emit(
+                    Identities.Prequalification.EmitSubmitted,
+                    Interactions.PrequalificationSubmittedEvent.Definition,
+                    (_, input) => input)
+                .Emit(
+                    Identities.Prequalification.EmitAudit,
+                    Interactions.PrequalificationAuditEvent.Definition,
+                    (_, input) => input)
                 .Return(
                     Identities.Prequalification.Outcome,
                     TransitionOutcomeDisposition.Applied,
@@ -796,6 +806,8 @@ public static class MotionDqTransitions
             public static readonly ExecutionNodeId RequirementsSatisfied = new("motion-dq/prequalification/admit/requirements");
             public static readonly ExecutionNodeId SetApplicationId = new("motion-dq/prequalification/set/application-id");
             public static readonly ExecutionNodeId SetMilestone = new("motion-dq/prequalification/set/milestone");
+            public static readonly ExecutionNodeId EmitSubmitted = new("motion-dq/prequalification/emit/submitted");
+            public static readonly ExecutionNodeId EmitAudit = new("motion-dq/prequalification/emit/audit");
             public static readonly ExecutionNodeId Outcome = new("motion-dq/prequalification/outcome/submitted");
         }
 
