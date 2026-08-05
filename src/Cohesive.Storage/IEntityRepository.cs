@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+using Cohesive.Execution;
 using Cohesive.Relations.Mapping;
 using Cohesive.Relations.Model;
 using Cohesive.Transitions.Model;
@@ -99,13 +101,22 @@ public interface IEntityRepository<TEntity> : IEntityRepository where TEntity : 
 }
 
 /// <summary>
-/// Entity repository that can atomically persist entity state together with outbox events.
+/// Entity repository that can atomically persist entity state together with canonical interaction envelopes.
 /// </summary>
 public interface IEntityOutboxRepository : IEntityRepository
 {
     /// <summary>
-    /// Upserts one entity observation and appends zero or more outbox messages atomically.
+    /// Upserts one entity observation and appends zero or more canonical interaction envelopes atomically.
     /// </summary>
+    /// <param name="context">Operation context carrying time, cancellation, and physical attribution.</param>
+    /// <param name="commit">Validated direct-Transition entity and envelope commit.</param>
+    /// <returns>The committed snapshot and exact canonical envelopes, or retained evidence for an exact replay.</returns>
+    /// <exception cref="ArgumentNullException">A required argument is <see langword="null"/>.</exception>
+    /// <exception cref="OperationCanceledException">The operation is cancelled before the atomic boundary.</exception>
+    /// <exception cref="ObservationConcurrencyConflictException">The entity concurrency fence is stale.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// A retained emission identity has different canonical content or candidate entity state.
+    /// </exception>
     Task<EntityCommitResult> UpsertWithOutbox(OperationContext context, EntityOutboxCommit commit);
 }
 
@@ -276,34 +287,96 @@ public sealed record EntityReadOptions
 }
 
 /// <summary>
-/// Atomic outbox commit of an upsert and zero or more outbox messages.
+/// Atomic entity-state and canonical interaction-envelope outbox commit.
 /// </summary>
-/// <param name="Write">The write/upsert request to commit.</param>
-/// <param name="Messages">The outbox messages to commit.</param>
-public sealed record EntityOutboxCommit(
-    EntityWriteRequest Write,
-    IReadOnlyList<EntityOutboxMessage> Messages
-);
+public sealed record EntityOutboxCommit
+{
+    /// <summary>Creates one validated direct-Transition outbox commit.</summary>
+    /// <param name="write">Candidate entity state and optional optimistic-concurrency fence.</param>
+    /// <param name="envelopes">Exact canonical envelopes made durable with the candidate state.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="write"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="envelopes"/> is default, contains a null or duplicate emission, is not a durable direct
+    /// Transition emission, or identifies an entity other than the candidate state.
+    /// </exception>
+    public EntityOutboxCommit(
+        EntityWriteRequest write,
+        ImmutableArray<InteractionEnvelope> envelopes)
+    {
+        Write = write ?? throw new ArgumentNullException(nameof(write));
+        if (envelopes.IsDefault)
+            throw new ArgumentException("Entity outbox envelopes must be initialized.", nameof(envelopes));
 
-/// <summary>
-/// Outbox message carried as an observation.
-/// </summary>
-public sealed record EntityOutboxMessage(
-    string MessageId,
-    string StreamName,
-    string SubjectType,
-    string SubjectId,
-    string PartitionKey,
-    Observation Entity,
-    long? SubjectVersion = null,
-    DateTimeOffset? OccurredAtUtc = null,
-    string? CorrelationId = null
-);
+        HashSet<EmissionId>? identities = envelopes.Length > 1 ? [] : null;
+        var entityType = new EntityTypeName(write.Entity.ShapeId.Value);
+        ExecutionDefinitionReference? transition = null;
+        ExecutionNodeId? outcome = null;
+        foreach (var envelope in envelopes)
+        {
+            if (envelope is null)
+                throw new ArgumentException("Entity outbox envelopes cannot contain null values.", nameof(envelopes));
+
+            if (identities is not null && !identities.Add(envelope.Context.EmissionId))
+                throw new ArgumentException(
+                    $"Entity outbox emission identity '{envelope.Context.EmissionId.Value}' is duplicated.",
+                    nameof(envelopes));
+            if (envelope is not (DomainEventEnvelope or RequestEnvelope))
+                throw new ArgumentException(
+                    "A direct Transition outbox can retain only Domain Event and Request envelopes.",
+                    nameof(envelopes));
+            if (envelope.Context.Origin is not TransitionInteractionOrigin origin)
+                throw new ArgumentException(
+                    "The entity outbox is authoritative only for envelopes emitted by a direct Transition.",
+                    nameof(envelopes));
+            if (origin.Entity.EntityType != entityType
+                || !string.Equals(origin.Entity.EntityId.Value, write.Entity.Id, StringComparison.Ordinal))
+                throw new ArgumentException(
+                    "Every entity outbox envelope must identify the exact candidate entity as its Transition subject.",
+                    nameof(envelopes));
+            if (transition is not null
+                && (origin.Definition != transition || origin.Outcome != outcome))
+                throw new ArgumentException(
+                    "Every entity outbox envelope in one commit must originate from the same Transition decision.",
+                    nameof(envelopes));
+            transition = origin.Definition;
+            outcome = origin.Outcome;
+            if (envelope.Context.Delivery.Durability != InteractionDurabilityDemand.Durable)
+                throw new ArgumentException(
+                    "An entity outbox can retain only interactions that demand durable delivery.",
+                    nameof(envelopes));
+        }
+
+        Envelopes = envelopes;
+    }
+
+    /// <summary>Candidate entity state and optional optimistic-concurrency fence.</summary>
+    public EntityWriteRequest Write { get; }
+
+    /// <summary>Exact canonical envelopes committed under entity-outbox publication authority.</summary>
+    public ImmutableArray<InteractionEnvelope> Envelopes { get; }
+}
 
 /// <summary>
 /// Result of an atomic outbox commit.
 /// </summary>
-public sealed record EntityCommitResult(
-    EntitySnapshot Entity,
-    IReadOnlyList<EntityOutboxMessage> Messages
-);
+public sealed record EntityCommitResult
+{
+    /// <summary>Creates the observable result of one entity outbox commit.</summary>
+    /// <param name="entity">Persisted candidate snapshot or the exact retained replay snapshot.</param>
+    /// <param name="envelopes">Canonical envelopes committed or replayed with the entity.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="entity"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="envelopes"/> is default.</exception>
+    public EntityCommitResult(EntitySnapshot entity, ImmutableArray<InteractionEnvelope> envelopes)
+    {
+        Entity = entity ?? throw new ArgumentNullException(nameof(entity));
+        Envelopes = envelopes.IsDefault
+            ? throw new ArgumentException("Committed outbox envelopes must be initialized.", nameof(envelopes))
+            : envelopes;
+    }
+
+    /// <summary>Persisted candidate snapshot or the exact retained replay snapshot.</summary>
+    public EntitySnapshot Entity { get; }
+
+    /// <summary>Canonical envelopes committed or replayed with the entity.</summary>
+    public ImmutableArray<InteractionEnvelope> Envelopes { get; }
+}

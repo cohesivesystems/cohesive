@@ -618,8 +618,9 @@ provider-owned settlement realization rather than a second application-checkpoin
 The former Cosmos `IObservationStream` surface was removed. Entity and outbox consumption now binds an explicit
 document discriminator, graph-qualified persisted observation type, and optional outbox stream to the managed
 materialization source. `CosmosRelationQuerySourceReader` separately declares its projected semantic shape and its
-persisted envelope type, so an outbox message shape can retain message identity and metadata while projecting an
-embedded entity payload.
+persisted envelope type. Entity-outbox documents retain the exact canonical interaction envelope and its content
+fingerprint; the existing stream, subject, and observation fields are derived physical projections for
+materialization acquisition rather than a parallel message model.
 `CosmosEntityOutboxRepository` owns only entity/outbox persistence and atomic write behavior; it no longer owns a
 lease container or a change processor.
 

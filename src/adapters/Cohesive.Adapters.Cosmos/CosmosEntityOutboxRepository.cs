@@ -1,5 +1,7 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
+using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Relations.Mapping;
 using Cohesive.Relations.Model;
@@ -158,20 +160,15 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
         ArgumentNullException.ThrowIfNull(commit);
         context.ThrowIfCancellationRequested();
 
-        if (commit.Messages.Count == 0)
+        if (commit.Envelopes.IsEmpty)
         {
             var committedSnapshot = await Upsert(context, commit.Write).ConfigureAwait(false);
-            return new(committedSnapshot, commit.Messages);
+            return new(committedSnapshot, commit.Envelopes);
         }
 
         EnsureEntityType(commit.Write.Entity);
         var partitionKey = GetPartitionKey(context, commit.Write.Entity);
-
-        foreach (var message in commit.Messages)
-        {
-            if (!string.Equals(message.PartitionKey, partitionKey, StringComparison.Ordinal))
-                throw new SemanticRuleViolationException($"Outbox message '{message.MessageId}' uses partition '{message.PartitionKey}', but commit partition was '{partitionKey}'.");
-        }
+        var outboxDocuments = CreateOutboxDocuments(context, commit, partitionKey);
 
         var entityDocument = CreateEntityDocument(context, commit.Write.Entity, partitionKey);
         var batch = container.CreateTransactionalBatch(new(partitionKey));
@@ -184,27 +181,38 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
             batch.UpsertItem(entityDocument);
         }
 
-        foreach (var message in commit.Messages)
-            batch.CreateItem(CreateOutboxDocument(context, message));
+        foreach (var document in outboxDocuments)
+            batch.CreateItem(document);
 
         using var response = await batch.ExecuteAsync(context.CancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
+            if ((response.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.PreconditionFailed)
+                && await TryReplayOutboxCommit(context, commit, partitionKey, outboxDocuments).ConfigureAwait(false)
+                    is { } racedReplay)
+            {
+                return racedReplay;
+            }
+
             if (response.StatusCode == HttpStatusCode.PreconditionFailed)
                 throw new ObservationConcurrencyConflictException($"Observation '{observationType}:{commit.Write.Entity.Id}' failed optimistic concurrency validation inside transactional batch.");
 
             throw new InvalidOperationException($"Transactional Cosmos observation commit for '{observationType}:{commit.Write.Entity.Id}' failed with status '{response.StatusCode}'.");
         }
 
-        var snapshot = await TryGet(context, id: commit.Write.Entity.Id, readOptions: EntityReadOptions.Full).ConfigureAwait(false);
+        var snapshot = await TryGet(
+                context,
+                id: commit.Write.Entity.Id,
+                readOptions: EntityReadOptions.Full.WithPartitionKey(partitionKey))
+            .ConfigureAwait(false);
         if (snapshot is null)
             throw new InvalidOperationException($"Transactional Cosmos observation commit for '{observationType}:{commit.Write.Entity.Id}' succeeded, but the entity could not be reloaded.");
 
-        return new(snapshot, commit.Messages);
+        return new(snapshot, commit.Envelopes);
     }
 
     /// <summary>
-    /// Counts outbox documents in this repository's container associated with the supplied subject id.
+    /// Counts canonical outbox-envelope documents in this repository's container associated with the supplied subject id.
     /// </summary>
     /// <param name="context">Operation context carrying cancellation and attribution.</param>
     /// <param name="subjectId">Non-empty outbox subject identity.</param>
@@ -213,7 +221,7 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
     /// <exception cref="ArgumentException"><paramref name="subjectId"/> is empty or white space.</exception>
     /// <exception cref="OperationCanceledException">The operation context is canceled.</exception>
     /// <exception cref="CosmosException">Cosmos rejects or fails the count query.</exception>
-    public async Task<int> CountOutboxMessages(OperationContext context, string subjectId)
+    public async Task<int> CountOutboxEnvelopes(OperationContext context, string subjectId)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(subjectId);
@@ -424,28 +432,153 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
             );
     }
 
-    CosmosObservationContainerDocument CreateOutboxDocument(OperationContext context, EntityOutboxMessage message)
+    internal CosmosObservationContainerDocument[] CreateOutboxDocuments(
+        OperationContext context,
+        EntityOutboxCommit commit,
+        string partitionKey)
     {
         ArgumentNullException.ThrowIfNull(context);
-        ArgumentNullException.ThrowIfNull(message);
+        ArgumentNullException.ThrowIfNull(commit);
+        ArgumentException.ThrowIfNullOrWhiteSpace(partitionKey);
 
-        return new(
-            Id: message.MessageId,
-            PartitionKey: message.PartitionKey,
-            DocumentKind: options.OutboxDocumentKind,
-            ObservationType: message.Entity.ShapeId.Value,
-            ObservationId: message.Entity.Id,
-            ObservationVersion: message.Entity.Version,
-            Observation: message.Entity.Fields as Dictionary<string, ObservationValue> ?? new Dictionary<string, ObservationValue>(message.Entity.Fields, StringComparer.Ordinal),
-            StreamName: message.StreamName,
-            SubjectType: message.SubjectType,
-            SubjectId: message.SubjectId,
-            SubjectVersion: message.SubjectVersion,
-            CorrelationId: message.CorrelationId,
-            OccurredAtUtc: message.OccurredAtUtc ?? context.UtcNow,
-            TraceId: GetTraceId(context),
-            SpanId: GetSpanId(context)
-            );
+        var documents = new CosmosObservationContainerDocument[commit.Envelopes.Length];
+        for (var index = 0; index < commit.Envelopes.Length; index++)
+        {
+            var envelope = commit.Envelopes[index];
+            var origin = (TransitionInteractionOrigin)envelope.Context.Origin;
+            var content = GetContent(envelope);
+            var canonicalBytes = InteractionEnvelopeJsonSerializer.GetCanonicalBytes(
+                envelope,
+                out var envelopeFingerprint);
+            using var canonicalDocument = JsonDocument.Parse(canonicalBytes);
+            documents[index] = new(
+                Id: envelope.Context.EmissionId.Value,
+                PartitionKey: partitionKey,
+                DocumentKind: options.OutboxDocumentKind,
+                ObservationType: origin.Entity.EntityType.Value,
+                ObservationId: origin.Entity.EntityId.Value,
+                ObservationVersion: commit.Write.Entity.Version,
+                Observation: ProjectPayload(content.Payload),
+                StreamName: content.Contract.Definition.DefinitionId.Value,
+                SubjectType: origin.Entity.EntityType.Value,
+                SubjectId: origin.Entity.EntityId.Value,
+                SubjectVersion: commit.Write.Entity.Version,
+                CorrelationId: envelope.Context.CorrelationId.Value,
+                OccurredAtUtc: context.UtcNow,
+                TraceId: GetTraceId(context),
+                SpanId: GetSpanId(context),
+                Envelope: canonicalDocument.RootElement.Clone(),
+                EnvelopeFingerprint: envelopeFingerprint.Value);
+        }
+
+        return documents;
+    }
+
+    async Task<EntityCommitResult?> TryReplayOutboxCommit(
+        OperationContext context,
+        EntityOutboxCommit commit,
+        string partitionKey,
+        IReadOnlyList<CosmosObservationContainerDocument> candidates)
+    {
+        var retainedCount = 0;
+        foreach (var candidate in candidates)
+        {
+            CosmosObservationContainerDocument? retained;
+            try
+            {
+                var response = await container.ReadItemAsync<CosmosObservationContainerDocument>(
+                        id: candidate.Id,
+                        partitionKey: new(partitionKey),
+                        cancellationToken: context.CancellationToken)
+                    .ConfigureAwait(false);
+                retained = response.Resource;
+            }
+            catch (CosmosException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+            {
+                continue;
+            }
+
+            retainedCount++;
+            if (!string.Equals(retained.DocumentKind, options.OutboxDocumentKind, StringComparison.Ordinal)
+                || !string.Equals(
+                    retained.EnvelopeFingerprint,
+                    candidate.EnvelopeFingerprint,
+                    StringComparison.Ordinal)
+                || retained.Envelope is not { } retainedEnvelope
+                || candidate.Envelope is not { } candidateEnvelope
+                || !string.Equals(
+                    retainedEnvelope.GetRawText(),
+                    candidateEnvelope.GetRawText(),
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Cosmos outbox identity '{candidate.Id}' is retained with different canonical content.");
+            }
+        }
+
+        if (retainedCount == 0)
+            return null;
+
+        if (retainedCount != candidates.Count)
+        {
+            throw new InvalidOperationException(
+                "A Cosmos entity outbox retry cannot mix retained and previously unseen emission identities.");
+        }
+
+        var snapshot = await TryGet(
+                context,
+                id: commit.Write.Entity.Id,
+                readOptions: EntityReadOptions.Full.WithPartitionKey(partitionKey))
+            .ConfigureAwait(false);
+        if (snapshot is null || !snapshot.Entity.HasSameContent(commit.Write.Entity))
+        {
+            throw new InvalidOperationException(
+                "The Cosmos outbox emissions are retained, but the candidate entity differs from their atomic commit.");
+        }
+
+        return new(snapshot, commit.Envelopes);
+    }
+
+    internal static InteractionEnvelope DeserializeOutboxEnvelope(
+        CosmosObservationContainerDocument document,
+        InteractionContractCatalog contracts)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(contracts);
+        if (document.Envelope is not { } element || string.IsNullOrWhiteSpace(document.EnvelopeFingerprint))
+            throw new InvalidOperationException($"Cosmos outbox document '{document.Id}' has no canonical envelope evidence.");
+
+        var envelope = InteractionEnvelopeJsonSerializer.Deserialize(element.GetRawText(), contracts);
+        var fingerprint = InteractionEnvelopeJsonSerializer.ComputeContentFingerprint(envelope);
+        if (!string.Equals(fingerprint.Value, document.EnvelopeFingerprint, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Cosmos outbox document '{document.Id}' does not match its canonical envelope fingerprint.");
+        }
+
+        return envelope;
+    }
+
+    static (InteractionContractReference Contract, PortableValue Payload) GetContent(
+        InteractionEnvelope envelope) => envelope switch
+    {
+        DomainEventEnvelope domainEvent => (domainEvent.Contract, domainEvent.Payload),
+        RequestEnvelope request => (request.Contract, request.Payload),
+        _ => throw new InvalidOperationException(
+            $"A direct Transition outbox cannot persist envelope kind '{envelope.GetType().Name}'.")
+    };
+
+    static Dictionary<string, ObservationValue> ProjectPayload(PortableValue payload)
+    {
+        if (payload.Value is { Kind: ObservationValueKind.Object, Fields: { } fields })
+            return fields as Dictionary<string, ObservationValue>
+                ?? new Dictionary<string, ObservationValue>(fields, StringComparer.Ordinal);
+
+        return new(StringComparer.Ordinal)
+        {
+            ["valueState"] = ObservationValue.FromString(payload.State.ToString()),
+            ["value"] = payload.Value ?? ObservationValue.Null
+        };
     }
 
     string? GetTraceId(OperationContext context)

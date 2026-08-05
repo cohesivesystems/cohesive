@@ -108,10 +108,11 @@ records dispatch before adapter I/O, reloads and fences returned evidence, and a
 disposition with Reply inbox admission. The core executor remains repository-free and reusable; production storage
 and operation adapters must separately prove the capabilities they claim.
 
-Raw Process signal payloads, `EntityOutboxMessage`, and legacy Process retry/dead-letter paths remain migration
-surfaces. They may be adapted to canonical Requests and operation observations, but they are not a parallel
-semantic authority and are not silently treated as the new durable protocol. The earlier CLR `EffectRequest` and
-delegate-bound continuation surfaces have been removed rather than adapted into the canonical protocol.
+Raw Process signal payloads and legacy Process retry/dead-letter paths remain migration surfaces. They may be
+adapted to canonical Requests and operation observations, but they are not a parallel semantic authority and are
+not silently treated as the new durable protocol. The earlier CLR `EffectRequest` and delegate-bound continuation
+surfaces have been removed rather than adapted into the canonical protocol. Entity outboxes likewise retain exact
+canonical Domain Event and Request envelopes; an adapter-local message DTO is not a second semantic contract.
 
 ## Canonical Process lifecycle control
 

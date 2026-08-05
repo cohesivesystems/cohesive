@@ -77,6 +77,23 @@ public static class InteractionEnvelopeJsonSerializer
         return StrictDocumentJson.GetCanonicalBytes<InteractionEnvelope>(envelope, CreateOptions());
     }
 
+    /// <summary>Gets canonical UTF-8 JSON and its deterministic content fingerprint in one serialization pass.</summary>
+    /// <param name="envelope">Envelope to encode and fingerprint.</param>
+    /// <param name="fingerprint">Receives the fingerprint of the returned canonical bytes.</param>
+    /// <returns>Canonical exact-decimal JSON bytes preserving all semantic runtime evidence.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="envelope"/> is <see langword="null"/>.</exception>
+    /// <exception cref="JsonException">The envelope violates the strict JSON contract.</exception>
+    /// <exception cref="NotSupportedException">The envelope contains an unsupported runtime type.</exception>
+    /// <exception cref="InvalidOperationException">The envelope has no canonical JSON encoding.</exception>
+    public static byte[] GetCanonicalBytes(
+        InteractionEnvelope envelope,
+        out InteractionEnvelopeContentFingerprint fingerprint)
+    {
+        var bytes = GetCanonicalBytes(envelope);
+        fingerprint = Fingerprint(bytes);
+        return bytes;
+    }
+
     /// <summary>Computes a deterministic content fingerprint for one canonical interaction envelope.</summary>
     /// <param name="envelope">Envelope whose complete canonical content is fingerprinted.</param>
     /// <returns>A versioned lowercase SHA-256 fingerprint of the canonical envelope bytes.</returns>
@@ -86,7 +103,13 @@ public static class InteractionEnvelopeJsonSerializer
     /// <exception cref="InvalidOperationException">The envelope has no canonical JSON encoding.</exception>
     public static InteractionEnvelopeContentFingerprint ComputeContentFingerprint(InteractionEnvelope envelope)
     {
-        var digest = SHA256.HashData(GetCanonicalBytes(envelope));
+        _ = GetCanonicalBytes(envelope, out var fingerprint);
+        return fingerprint;
+    }
+
+    static InteractionEnvelopeContentFingerprint Fingerprint(ReadOnlySpan<byte> canonicalBytes)
+    {
+        var digest = SHA256.HashData(canonicalBytes);
         return new($"sha256-v1:{Convert.ToHexStringLower(digest)}");
     }
 

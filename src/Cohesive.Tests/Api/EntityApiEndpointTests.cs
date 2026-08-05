@@ -4,22 +4,17 @@ using Cohesive.Adapters.AspNet.Entities;
 using Cohesive.Adapters.AspNet.Relations;
 using Cohesive.Api;
 using Cohesive.Execution;
-using Cohesive.Model;
 using Cohesive.Model.Serialization;
-using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
-using Cohesive.Relations.Execution;
 using Cohesive.Relations.IR;
 using Cohesive.Storage;
-using Cohesive.Transitions.Authoring;
 using Cohesive.Transitions.Compilation;
 using Cohesive.Transitions.Execution;
 using Cohesive.Transitions.IR;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Cohesive.Tests.Api;
 
@@ -31,6 +26,14 @@ public sealed class EntityApiEndpointTests
         new ShapeId("Note"));
     static readonly QueryParameterId NotePrefixParameter = new("prefix");
     static readonly QueryResultId NoteRowsResult = new("rows");
+    static readonly ExecutionDefinitionDocument NoteRevisedEvent = InteractionContractDocuments.Create(
+        new("tests/aspnet/entities/note/revised"),
+        new("revision/1"),
+        new DomainEventContractDefinition(new(
+            new(new ScalarTypeRef(ScalarTypeKind.String)),
+            new("note-revised/v1"))),
+        TestProvenance("tests/api/entity-api-endpoint/note-revised"));
+    static readonly InteractionContractCatalog NoteInteractionContracts = CreateInteractionCatalog(NoteRevisedEvent);
 
     [Fact]
     public void MapEntityApiDefinition_CanFilterSharedOperationNamesAndCustomizeEndpointNames()
@@ -180,9 +183,12 @@ public sealed class EntityApiEndpointTests
         Assert.Equal(StatusCodes.Status200OK, inspected.StatusCode);
         Assert.True(ReadJson(inspected.Body).GetProperty(nameof(NoteInspectionResponse.Matches)).GetBoolean());
 
-        var outboxMessage = Assert.Single(repository.OutboxMessages);
-        Assert.Equal("api-transitions", outboxMessage.StreamName);
-        Assert.Equal("note-1", outboxMessage.SubjectId);
+        var envelope = Assert.IsType<DomainEventEnvelope>(Assert.Single(repository.OutboxEnvelopes));
+        Assert.Equal(Reference(NoteRevisedEvent), envelope.Contract.Definition);
+        Assert.Equal("beta one", envelope.Payload.Value?.GetString());
+        var origin = Assert.IsType<TransitionInteractionOrigin>(envelope.Context.Origin);
+        Assert.Equal(new EntityTypeName(entity.Definition.Shape.Id.Value), origin.Entity.EntityType);
+        Assert.Equal(new EntityId("note-1"), origin.Entity.EntityId);
     }
 
     [Fact]
@@ -227,6 +233,38 @@ public sealed class EntityApiEndpointTests
         Assert.Equal(
             "aspnet/request/request%2F42/operation/NoteResource.Revise",
             activation.Value);
+    }
+
+    [Fact]
+    public async Task MapEntityApiDefinition_EmittingTransitionWithoutCanonicalLoweringFailsBeforeMutation()
+    {
+        var entity = NoteEntity.Instance;
+        var repository = new InMemoryEntityOutboxRepository(
+            entity.Definition,
+            partitionKeyFieldName: nameof(NoteState.Tenant));
+        var app = CreateApp(
+            entity,
+            repository,
+            configureTransitionEmissions: false);
+
+        await InvokeAsync(
+            app,
+            route: "/notes",
+            method: "POST",
+            body: new CreateNoteRequest("note-1", "before"));
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => InvokeAsync(
+            app,
+            route: "/notes/{id}",
+            method: "POST",
+            routeValues: new() { ["id"] = "note-1" },
+            body: new ReviseNoteRequest("after")));
+
+        Assert.Contains("no canonical interaction catalog", error.Message, StringComparison.Ordinal);
+        Assert.Empty(repository.OutboxEnvelopes);
+        var retained = await repository.TryGet(OperationContext.Create(), id: "note-1", options: EntityReadOptions.Full);
+        Assert.NotNull(retained);
+        Assert.Equal("before", retained.Entity.GetField(nameof(NoteState.Text)).GetString());
     }
 
     [Fact]
@@ -344,7 +382,9 @@ public sealed class EntityApiEndpointTests
         OperationContext? operationContext = null,
         EntityPartitionKeyPolicy? partitionKeyPolicy = null,
         Action<IServiceCollection>? configureServices = null,
-        Func<IServiceProvider, EntityDefinition, EntityPartitionKeyPolicy?>? partitionKeyPolicyResolver = null)
+        Func<IServiceProvider, EntityDefinition, EntityPartitionKeyPolicy?>? partitionKeyPolicyResolver = null,
+        Func<EntityApiCommitContext, TransitionEmissionLoweringPolicy>? transitionEmissionPolicy = null,
+        bool configureTransitionEmissions = true)
     {
         var builder = WebApplication.CreateSlimBuilder();
         builder.Services.ConfigureHttpJsonOptions(static options =>
@@ -359,6 +399,10 @@ public sealed class EntityApiEndpointTests
 
         var app = builder.Build();
         var revisePlan = CompileReviseTransition(entity);
+        var interactionContracts = configureTransitionEmissions ? NoteInteractionContracts : null;
+        Func<EntityApiCommitContext, TransitionEmissionLoweringPolicy>? emissionPolicy = configureTransitionEmissions
+            ? transitionEmissionPolicy ?? CreateDirectEmissionPolicy
+            : null;
         var api = CreateApi(revisePlan.DefinitionReference);
         var queryEndpoint = Assert.Single(api.Endpoints, static endpoint => endpoint.Name == "Query");
         List<NoteResource> queryDocuments = [];
@@ -397,18 +441,8 @@ public sealed class EntityApiEndpointTests
                     return new NoteEntity.ReviseInput(revise.Text, context.OperationContext.UtcNow);
                 },
                 static (_, snapshot) => Results.Ok(ToResource(snapshot)),
-                createOutboxMessages: static context =>
-                [
-                    new(
-                        MessageId: $"msg-{context.EntityId}-{context.NewState.Version}",
-                        StreamName: "api-transitions",
-                        SubjectType: context.Entity.Shape.Id.Value,
-                        SubjectId: context.EntityId,
-                        PartitionKey: "tenant-a",
-                        Entity: context.NewState.Observation,
-                        SubjectVersion: context.NewState.Version,
-                        OccurredAtUtc: context.OperationContext.UtcNow)
-                ]))
+                interactionContracts: interactionContracts,
+                createEmissionPolicy: emissionPolicy))
             .Bind(EntityApiOperationBinding.Load(
                 "Inspect",
                 static (_, snapshot, request) =>
@@ -491,6 +525,7 @@ public sealed class EntityApiEndpointTests
             transition => transition
                 .Set(new("revise/set-text"), note => note.Text, (_, input) => input.Text)
                 .Set(new("revise/set-updated-at"), note => note.UpdatedAtUtc, (_, input) => input.UpdatedAtUtc)
+                .Emit(new("revise/note-revised"), Reference(NoteRevisedEvent), (_, input) => input.Text)
                 .Return(new("revise/applied"), TransitionOutcomeDisposition.Applied, true));
         var compilation = authored.Compile();
         Assert.True(
@@ -501,6 +536,52 @@ public sealed class EntityApiEndpointTests
                     $"{diagnostic.Code}: {diagnostic.Message}")));
         return Assert.IsType<CompiledTransitionPlan>(compilation.Plan);
     }
+
+    static TransitionEmissionLoweringPolicy CreateDirectEmissionPolicy(EntityApiCommitContext context) =>
+        new((intent, index) =>
+        {
+            var activation = context.Decision?.Evidence.Activation
+                ?? throw new InvalidOperationException("A direct Transition emission requires activation evidence.");
+            var identity = $"{activation.Value}/emission/{index}";
+            return new(
+                new(identity),
+                new TransitionInteractionOrigin(
+                    context.Decision.Evidence.Definition,
+                    intent.Node,
+                    new(new(context.Entity.Shape.Id.Value), new(context.EntityId)),
+                    new("revise/applied")),
+                new(activation.Value),
+                causationId: null,
+                new(
+                    "tests/aspnet/entity-api",
+                    context.NewState.Observation.GetField(nameof(NoteState.Tenant)).GetString()),
+                new(identity),
+                ordering: null,
+                new(InteractionDurabilityDemand.Durable, InteractionVisibilityDemand.AfterOriginCommit),
+                TestProvenance("tests/api/entity-api-endpoint/direct-transition"));
+        });
+
+    static ExecutionDefinitionReference Reference(ExecutionDefinitionDocument document) => new(
+        document.Metadata.DefinitionId,
+        document.Metadata.RevisionId,
+        document.Metadata.Fingerprint);
+
+    static InteractionContractCatalog CreateInteractionCatalog(params ExecutionDefinitionDocument[] documents)
+    {
+        var validation = InteractionContractCatalog.TryCreate(documents, out var catalog);
+        if (!validation.IsValid || catalog is null)
+        {
+            throw new InvalidOperationException(string.Join(
+                Environment.NewLine,
+                validation.Diagnostics.Select(static diagnostic => $"{diagnostic.Code}: {diagnostic.Message}")));
+        }
+        return catalog;
+    }
+
+    static ExecutionProvenance TestProvenance(string source) => new(
+        new("entity-api-endpoint-tests", "1"),
+        new(source),
+        DocumentOrigin.Generated);
 
     static ApiDefinition CreateApi(ExecutionDefinitionReference reviseTransition) => Cohesive.Api.Api.Define()
         .Entity<NoteResource>()

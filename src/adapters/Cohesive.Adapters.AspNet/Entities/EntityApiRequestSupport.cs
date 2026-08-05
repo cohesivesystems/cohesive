@@ -1,4 +1,6 @@
+using System.Collections.Immutable;
 using Cohesive.Api;
+using Cohesive.Execution;
 using Cohesive.Storage;
 using Microsoft.AspNetCore.Http;
 
@@ -31,16 +33,16 @@ static class EntityApiRequestSupport
         EntityApiCommitContext context,
         EntityApiEndpointOptions options,
         EntityConcurrencyToken? expectedConcurrencyToken,
-        Func<EntityApiCommitContext, IReadOnlyList<EntityOutboxMessage>>? createOutboxMessages
+        ImmutableArray<InteractionEnvelope> envelopes = default
         )
     {
         var write = new EntityWriteRequest(context.NewState.Observation, expectedConcurrencyToken);
-        if (createOutboxMessages is not null)
+        if (!envelopes.IsDefaultOrEmpty)
         {
             var outboxRepository = options.OutboxRepositoryResolver(context.HttpContext.RequestServices, options.Entity);
             var commit = await outboxRepository.UpsertWithOutbox(
                     context.OperationContext,
-                    new EntityOutboxCommit(write, createOutboxMessages(context)))
+                    new EntityOutboxCommit(write, envelopes))
                 .ConfigureAwait(false);
             return commit.Entity;
         }
