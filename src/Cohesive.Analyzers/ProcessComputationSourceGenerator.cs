@@ -71,6 +71,14 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    static readonly DiagnosticDescriptor DuplicateExactIdentity = new(
+        id: "COHPC007",
+        title: "Process computation identity is duplicated",
+        messageFormat: "Process computation method '{0}' declares exact node identity '{1}' more than once.",
+        category: "Cohesive.Processes",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     /// <inheritdoc />
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
@@ -365,7 +373,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         readonly List<AwaitFlow> awaits = [];
         readonly List<AuthoredOutput> authoredOutputs = [];
         readonly List<BranchObligation> requestObligations = [];
-        int semanticOrdinal;
+        readonly Dictionary<string, int> semanticRoleOrdinals = new(StringComparer.Ordinal);
+        int variableOrdinal;
 
         public FlowParser(
             SourceProductionContext productionContext,
@@ -644,6 +653,24 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
 
             switch (invocation.TargetMethod.Name)
             {
+                case "Choice":
+                    if (!TryParseExplicitChoice(statement, structuralPath, invocation, out var choice))
+                    {
+                        return false;
+                    }
+
+                    flow = choice;
+                    return true;
+
+                case "Match":
+                    if (!TryParseExplicitMatch(statement, structuralPath, invocation, out var match))
+                    {
+                        return false;
+                    }
+
+                    flow = match;
+                    return true;
+
                 case "Effect" when Argument(invocation, "outcomes") is not null:
                 case "InvokeProcess":
                     var requestKind = invocation.TargetMethod.Name == "InvokeProcess"
@@ -1419,6 +1446,265 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             return true;
         }
 
+        bool TryParseExplicitChoice(
+            StatementSyntax statement,
+            ImmutableArray<string> structuralPath,
+            IInvocationOperation invocation,
+            out ExplicitDecisionFlow flow)
+        {
+            flow = null!;
+            var identity = NextIdentity("choice", structuralPath);
+            HashSet<IMethodSymbol> observed = new(SymbolEqualityComparer.Default);
+            if (!TryParseDecisionArms(
+                    statement,
+                    structuralPath,
+                    identity,
+                    invocation,
+                    declarationMethod: "When",
+                    selectorParameter: "predicate",
+                    operation: "Choice",
+                    observed: observed,
+                    arms: out var arms)
+                || !TryParseDecisionFallback(
+                    statement,
+                    structuralPath.Add(identity.PathSegment),
+                    invocation,
+                    observed,
+                    out var fallback))
+            {
+                return false;
+            }
+            if (!ValidateDecisionPolicies(statement, invocation, fallback is not null, "Choice"))
+            {
+                return false;
+            }
+
+            flow = new(
+                identity,
+                DecisionAuthoringKind.Choice,
+                null,
+                arms,
+                fallback,
+                invocation,
+                SourceLocation(statement),
+                statement);
+            return true;
+        }
+
+        bool TryParseExplicitMatch(
+            StatementSyntax statement,
+            ImmutableArray<string> structuralPath,
+            IInvocationOperation invocation,
+            out ExplicitDecisionFlow flow)
+        {
+            flow = null!;
+            var value = Argument(invocation, "value");
+            if (value is null)
+            {
+                return StatementFailure(statement, "Match requires one portable typed value");
+            }
+
+            var identity = NextIdentity("match", structuralPath);
+            HashSet<IMethodSymbol> observed = new(SymbolEqualityComparer.Default);
+            if (!TryParseDecisionArms(
+                    statement,
+                    structuralPath,
+                    identity,
+                    invocation,
+                    declarationMethod: "Case",
+                    selectorParameter: "pattern",
+                    operation: "Match",
+                    observed: observed,
+                    arms: out var arms)
+                || !TryParseDecisionFallback(
+                    statement,
+                    structuralPath.Add(identity.PathSegment),
+                    invocation,
+                    observed,
+                    out var fallback))
+            {
+                return false;
+            }
+            if (!ValidateDecisionPolicies(statement, invocation, fallback is not null, "Match"))
+            {
+                return false;
+            }
+
+            flow = new(
+                identity,
+                DecisionAuthoringKind.Match,
+                value.Value,
+                arms,
+                fallback,
+                invocation,
+                SourceLocation(statement),
+                statement);
+            return true;
+        }
+
+        bool TryParseDecisionArms(
+            StatementSyntax statement,
+            ImmutableArray<string> structuralPath,
+            FlowIdentity identity,
+            IInvocationOperation invocation,
+            string declarationMethod,
+            string selectorParameter,
+            string operation,
+            HashSet<IMethodSymbol> observed,
+            out ImmutableArray<DecisionArmFlow> arms)
+        {
+            arms = [];
+            var declarations = CollectionArguments(invocation, "cases");
+            if (declarations.IsEmpty)
+            {
+                return StatementFailure(
+                    statement,
+                    $"{operation} requires at least one process.{declarationMethod} arm");
+            }
+
+            var builder = ImmutableArray.CreateBuilder<DecisionArmFlow>(declarations.Length);
+            foreach (var candidate in declarations)
+            {
+                var declaration = Strip(candidate);
+                if (declaration is not IInvocationOperation armDeclaration
+                    || armDeclaration.TargetMethod.Name != declarationMethod
+                    || !SymbolEqualityComparer.Default.Equals(armDeclaration.TargetMethod.ContainingType, contextParameter.Type))
+                {
+                    return StatementFailure(
+                        candidate.Syntax,
+                        $"every {operation} arm must be declared with process.{declarationMethod}");
+                }
+
+                var selector = Argument(armDeclaration, selectorParameter);
+                var branch = Argument(armDeclaration, "branch");
+                if (selector is null
+                    || branch is null
+                    || !TryGetNamedLocalBranch(
+                        branch.Value,
+                        observed,
+                        parameterCount: 0,
+                        out var branchMethod,
+                        out var localFunction))
+                {
+                    return StatementFailure(
+                        branch?.Syntax ?? armDeclaration.Syntax,
+                        $"a {operation} arm must name a unique parameterless async ProcessTask local function");
+                }
+
+                var armIdentity = NextIdentity(
+                    "case",
+                    structuralPath.Add(identity.PathSegment),
+                    branchMethod.Name);
+                if (!TryParse(
+                        localFunction.Body!.Statements,
+                        structuralPath.Add(identity.PathSegment).Add(armIdentity.PathSegment),
+                        out var body))
+                {
+                    return false;
+                }
+
+                builder.Add(new(
+                    armIdentity,
+                    branchMethod.Name,
+                    selector,
+                    body,
+                    armDeclaration,
+                    SourceLocation(armDeclaration.Syntax),
+                    armDeclaration.Syntax));
+            }
+
+            arms = builder.MoveToImmutable();
+            return true;
+        }
+
+        bool TryParseDecisionFallback(
+            StatementSyntax statement,
+            ImmutableArray<string> structuralPath,
+            IInvocationOperation invocation,
+            HashSet<IMethodSymbol> observed,
+            out DecisionFallbackFlow? fallback)
+        {
+            fallback = null;
+            var argument = Argument(invocation, "fallback");
+            if (argument is null
+                || argument.IsImplicit
+                || Strip(argument.Value).ConstantValue is { HasValue: true, Value: null })
+            {
+                return true;
+            }
+            if (!TryGetNamedLocalBranch(
+                    argument.Value,
+                    observed,
+                    parameterCount: 0,
+                    out var branchMethod,
+                    out var localFunction))
+            {
+                return StatementFailure(
+                    argument.Syntax,
+                    "a Choice or Match fallback must name a unique parameterless async ProcessTask local function");
+            }
+
+            var identity = NextIdentity("fallback", structuralPath, branchMethod.Name);
+            if (!TryParse(
+                    localFunction.Body!.Statements,
+                    structuralPath.Add(identity.PathSegment),
+                    out var body))
+            {
+                return false;
+            }
+
+            fallback = new(
+                identity,
+                branchMethod.Name,
+                body,
+                SourceLocation(argument.Syntax),
+                argument.Syntax);
+            return true;
+        }
+
+        bool ValidateDecisionPolicies(
+            StatementSyntax statement,
+            IInvocationOperation invocation,
+            bool hasFallback,
+            string operation)
+        {
+            var selection = ExactEnumMember(Argument(invocation, "selection"));
+            var completeness = ExactEnumMember(Argument(invocation, "completeness"));
+            if (selection is null || completeness is null)
+            {
+                return StatementFailure(
+                    statement,
+                    $"{operation} requires named exact selection and completeness policies");
+            }
+            if (selection == "Unspecified" || completeness == "Unspecified")
+            {
+                return StatementFailure(
+                    statement,
+                    $"{operation} selection and completeness policies cannot be Unspecified");
+            }
+            if (completeness == "Fallback" && !hasFallback)
+            {
+                return StatementFailure(statement, $"{operation} fallback completeness requires a named fallback branch");
+            }
+            if (completeness == "Exhaustive" && hasFallback)
+            {
+                return StatementFailure(statement, $"{operation} exhaustive completeness cannot declare a fallback branch");
+            }
+            return true;
+        }
+
+        static string? ExactEnumMember(IArgumentOperation? argument)
+        {
+            if (argument is null)
+            {
+                return null;
+            }
+            var value = Strip(argument.Value);
+            return value is IFieldReferenceOperation { Field.ContainingType.TypeKind: TypeKind.Enum } field
+                ? field.Field.Name
+                : null;
+        }
+
         bool TryBindPartialForkResult(
             StatementSyntax statement,
             FlowIdentity joinIdentity,
@@ -1639,12 +1925,15 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             ImmutableArray<string> structuralPath,
             string? semanticName = null)
         {
-            var ordinal = semanticOrdinal++;
+            var variable = variableOrdinal++;
+            var key = string.Join("\u001f", structuralPath) + "\u001e" + role;
+            semanticRoleOrdinals.TryGetValue(key, out var ordinal);
+            semanticRoleOrdinals[key] = ordinal + 1;
             var segment = semanticName is null
                 ? $"{role}-{ordinal.ToString(CultureInfo.InvariantCulture)}"
                 : $"{role}-{semanticName}";
             return new(
-                $"__node_{ordinal.ToString(CultureInfo.InvariantCulture)}",
+                $"__node_{variable.ToString(CultureInfo.InvariantCulture)}",
                 ["body", .. structuralPath, segment],
                 segment);
         }
@@ -1680,6 +1969,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         readonly IReadOnlyList<BranchObligation> requestObligations;
         readonly Dictionary<ISymbol, string> outputBySymbol;
         readonly Dictionary<IParameterSymbol, string> obligationByParameter;
+        readonly Dictionary<string, SyntaxNode> exactIdentities = new(StringComparer.Ordinal);
         readonly List<string> builderStatements = [];
         readonly HashSet<ILocalSymbol> resolvingPureLocals = new(SymbolEqualityComparer.Default);
         int valueOrdinal;
@@ -1742,6 +2032,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                             PartitionFlow partition => Argument(partition.Invocation, "id"),
                             RecurrenceFlow recurrence => Argument(recurrence.Invocation, "id"),
                             AwaitMatchFlow awaitMatch => Argument(awaitMatch.Invocation, "id"),
+                            ExplicitDecisionFlow decision => Argument(decision.Invocation, "id"),
                             _ => null
                         },
                         statement.Syntax,
@@ -1752,9 +2043,11 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
 
                 if (statement is ForkJoinFlow fork)
                 {
-                    if (!TryDeclareIdentity(
+                    if (!TryDeclareOwnedIdentity(
                             fork.JoinIdentity,
-                            explicitId: null,
+                            null,
+                            fork.Identity,
+                            "join",
                             statement.Syntax,
                             identities))
                     {
@@ -1763,9 +2056,11 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
 
                     foreach (var branch in fork.Branches)
                     {
-                        if (!TryDeclareIdentity(
+                        if (!TryDeclareOwnedIdentity(
                                 branch.Identity,
-                                explicitId: null,
+                                null,
+                                fork.Identity,
+                                branch.Identity.PathSegment,
                                 branch.Syntax,
                                 identities))
                         {
@@ -1777,9 +2072,11 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 {
                     foreach (var outcome in request.Outcomes)
                     {
-                        if (!TryDeclareIdentity(
+                        if (!TryDeclareOwnedIdentity(
                                 outcome.Identity,
                                 Argument(outcome.Declaration, "id"),
+                                request.Identity,
+                                outcome.Identity.PathSegment,
                                 outcome.Syntax,
                                 identities))
                         {
@@ -1791,14 +2088,43 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 {
                     foreach (var clause in awaitMatch.Clauses)
                     {
-                        if (!TryDeclareIdentity(
+                        if (!TryDeclareOwnedIdentity(
                                 clause.Identity,
                                 Argument(clause.Declaration, "id"),
+                                awaitMatch.Identity,
+                                clause.Identity.PathSegment,
                                 clause.Syntax,
                                 identities))
                         {
                             return false;
                         }
+                    }
+                }
+                else if (statement is ExplicitDecisionFlow decision)
+                {
+                    foreach (var arm in decision.Arms)
+                    {
+                        if (!TryDeclareOwnedIdentity(
+                                arm.Identity,
+                                Argument(arm.Declaration, "id"),
+                                decision.Identity,
+                                arm.Identity.PathSegment,
+                                arm.Syntax,
+                                identities))
+                        {
+                            return false;
+                        }
+                    }
+                    if (decision.Fallback is not null
+                        && !TryDeclareOwnedIdentity(
+                            decision.Fallback.Identity,
+                            null,
+                            decision.Identity,
+                            "otherwise",
+                            decision.Fallback.Syntax,
+                            identities))
+                    {
+                        return false;
                     }
                 }
             }
@@ -1878,6 +2204,30 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             var conventional =
                 "global::Cohesive.Processes.Authoring.ProcessAuthoringIdentities.NodeFor(" +
                 Path(identity.Path) + ")";
+            return TryDeclareIdentity(identity, explicitId, conventional, syntax, declarations);
+        }
+
+        bool TryDeclareOwnedIdentity(
+            FlowIdentity identity,
+            IArgumentOperation? explicitId,
+            FlowIdentity owner,
+            string role,
+            SyntaxNode syntax,
+            ICollection<string> declarations)
+        {
+            var conventional =
+                "global::Cohesive.Processes.Authoring.ProcessAuthoringIdentities.NodeFor(" +
+                $"owner: {owner.Variable}, role: {Literal(role)})";
+            return TryDeclareIdentity(identity, explicitId, conventional, syntax, declarations);
+        }
+
+        bool TryDeclareIdentity(
+            FlowIdentity identity,
+            IArgumentOperation? explicitId,
+            string conventional,
+            SyntaxNode syntax,
+            ICollection<string> declarations)
+        {
             string value;
             if (explicitId is null || explicitId.IsImplicit)
             {
@@ -1885,6 +2235,10 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             }
             else
             {
+                if (!TryRegisterExactIdentity(explicitId, syntax))
+                {
+                    return false;
+                }
                 if (!TryEmitExactArgument(explicitId, syntax, out var authoredId))
                 {
                     return false;
@@ -1894,6 +2248,31 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             }
             declarations.Add($"var {identity.Variable} = {value};");
             return true;
+        }
+
+        bool TryRegisterExactIdentity(IArgumentOperation explicitId, SyntaxNode syntax)
+        {
+            var operation = Strip(explicitId.Value);
+            if (operation is not IObjectCreationOperation creation
+                || creation.Constructor?.ContainingType.ToDisplayString() != "Cohesive.Execution.ExecutionNodeId"
+                || creation.Arguments.Length != 1
+                || Strip(creation.Arguments[0].Value).ConstantValue is not { HasValue: true, Value: string value })
+            {
+                return true;
+            }
+            if (!exactIdentities.ContainsKey(value))
+            {
+                exactIdentities.Add(value, syntax);
+                return true;
+            }
+
+            Report(
+                productionContext,
+                DuplicateExactIdentity,
+                explicitId.Syntax.GetLocation(),
+                method.Name,
+                value);
+            return false;
         }
 
         bool TryLowerBlock(FlowBlock block, string? successor, out string? entry)
@@ -1988,6 +2367,21 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         }
 
                         entry = matchEntry;
+                        break;
+
+                    case ExplicitDecisionFlow decision:
+                        if (entry is null)
+                        {
+                            return StatementFailure(
+                                decision.Syntax,
+                                $"{decision.Kind} requires a following operation or return");
+                        }
+                        if (!TryEmitExplicitDecision(decision, entry))
+                        {
+                            return false;
+                        }
+
+                        entry = decision.Identity.Variable;
                         break;
 
                     case ForkJoinFlow forkJoin:
@@ -2569,6 +2963,78 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             {
                 outputBySymbol.Remove(parameter);
             }
+            return true;
+        }
+
+        bool TryEmitExplicitDecision(ExplicitDecisionFlow decision, string successor)
+        {
+            var operation = decision.Kind.ToString();
+            var value = string.Empty;
+            if (decision.Kind == DecisionAuthoringKind.Match
+                && (decision.Value is null
+                    || !TryEmitValue(decision.Value, decision.Value.Type!, decision.Source, out value)))
+            {
+                return false;
+            }
+
+            List<string> cases = [];
+            foreach (var arm in decision.Arms)
+            {
+                if (!TryLowerBlock(arm.Body, successor, out var armEntry) || armEntry is null)
+                {
+                    return StatementFailure(
+                        arm.Syntax,
+                        $"{operation} arm '{arm.Name}' requires a reachable continuation");
+                }
+
+                string selector;
+                if (decision.Kind == DecisionAuthoringKind.Choice
+                    ? !TryEmitValue(
+                        arm.Selector.Value,
+                        arm.Selector.Value.Type!,
+                        arm.Source,
+                        out selector)
+                    : !TryEmitExactArgument(arm.Selector, arm.Syntax, out selector))
+                {
+                    return false;
+                }
+
+                var declaration = decision.Kind == DecisionAuthoringKind.Choice
+                    ? $"__builder.ChoiceCase(id: {arm.Identity.Variable}, predicate: {selector}"
+                    : $"__builder.MatchCase(id: {arm.Identity.Variable}, matchedValue: {value}, pattern: {selector}";
+                cases.Add(
+                    $"{declaration}, next: __builder.Edge(owner: {arm.Identity.Variable}, role: \"next\", target: {armEntry}, {SourceArguments(arm.Source, method.Name)}), {SourceArguments(arm.Source, method.Name)})");
+            }
+
+            var fallback = "null";
+            if (decision.Fallback is not null)
+            {
+                if (!TryLowerBlock(decision.Fallback.Body, successor, out var fallbackEntry)
+                    || fallbackEntry is null)
+                {
+                    return StatementFailure(
+                        decision.Fallback.Syntax,
+                        $"{operation} fallback '{decision.Fallback.Name}' requires a reachable continuation");
+                }
+                fallback =
+                    $"__builder.Fallback(id: {decision.Fallback.Identity.Variable}, next: __builder.Edge(owner: {decision.Fallback.Identity.Variable}, role: \"next\", target: {fallbackEntry}, {SourceArguments(decision.Fallback.Source, method.Name)}), {SourceArguments(decision.Fallback.Source, method.Name)})";
+            }
+
+            var selection = Argument(decision.Invocation, "selection");
+            var completeness = Argument(decision.Invocation, "completeness");
+            if (selection is null
+                || completeness is null
+                || !TryEmitExactArgument(selection, decision.Syntax, out var selectionExpression)
+                || !TryEmitExactArgument(completeness, decision.Syntax, out var completenessExpression))
+            {
+                return StatementFailure(
+                    decision.Syntax,
+                    $"{operation} requires exact selection and completeness policies");
+            }
+
+            var valueArgument = decision.Kind == DecisionAuthoringKind.Match ? $", value: {value}" : string.Empty;
+            builderStatements.Add(
+                $"__builder.{operation}(id: {decision.Identity.Variable}, selection: {selectionExpression}, completeness: {completenessExpression}{valueArgument}, cases: [{string.Join(", ", cases)}], fallback: {fallback}, {SourceArguments(decision.Source, method.Name)});");
             return true;
         }
 
@@ -3623,6 +4089,23 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         }
                     }
                 }
+                else if (statement is ExplicitDecisionFlow decision)
+                {
+                    foreach (var arm in decision.Arms)
+                    {
+                        foreach (var nested in arm.Body.Descendants())
+                        {
+                            yield return nested;
+                        }
+                    }
+                    if (decision.Fallback is not null)
+                    {
+                        foreach (var nested in decision.Fallback.Body.Descendants())
+                        {
+                            yield return nested;
+                        }
+                    }
+                }
                 else if (statement is not IfFlow conditional)
                 {
                     if (statement is not MatchFlow match)
@@ -3676,6 +4159,33 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         IOperation Value,
         ImmutableArray<MatchArm> Arms,
         FlowBlock? Fallback,
+        SourceReference Source,
+        SyntaxNode Syntax)
+        : FlowStatement(Identity, Source, Syntax);
+
+    sealed record DecisionArmFlow(
+        FlowIdentity Identity,
+        string Name,
+        IArgumentOperation Selector,
+        FlowBlock Body,
+        IInvocationOperation Declaration,
+        SourceReference Source,
+        SyntaxNode Syntax);
+
+    sealed record DecisionFallbackFlow(
+        FlowIdentity Identity,
+        string Name,
+        FlowBlock Body,
+        SourceReference Source,
+        SyntaxNode Syntax);
+
+    sealed record ExplicitDecisionFlow(
+        FlowIdentity Identity,
+        DecisionAuthoringKind Kind,
+        IOperation? Value,
+        ImmutableArray<DecisionArmFlow> Arms,
+        DecisionFallbackFlow? Fallback,
+        IInvocationOperation Invocation,
         SourceReference Source,
         SyntaxNode Syntax)
         : FlowStatement(Identity, Source, Syntax);
@@ -3813,6 +4323,12 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
     {
         Request = 1,
         ChildProcess = 2
+    }
+
+    enum DecisionAuthoringKind
+    {
+        Choice = 1,
+        Match = 2
     }
 
     enum ForkAuthoringMode

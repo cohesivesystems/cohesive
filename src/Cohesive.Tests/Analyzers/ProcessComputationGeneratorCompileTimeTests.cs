@@ -169,6 +169,273 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
     }
 
     [Fact]
+    public void Generator_LowersExplicitChoiceAndMatchPoliciesWithoutCallbacks()
+    {
+        var source = """
+                     using System;
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class ExplicitDecisionProcess
+                     {
+                         private static ExecutionDefinitionReference StatusQuery => null!;
+
+                         private static async ProcessTask<string> Run(ProcessContext process, DecisionInput input)
+                         {
+                             async ProcessTask Escalate()
+                             {
+                                 await process.Timer(input.DueAt);
+                             }
+
+                             async ProcessTask Continue()
+                             {
+                                 await process.Timer(input.DueAt);
+                             }
+
+                             async ProcessTask Otherwise()
+                             {
+                                 await process.Timer(input.DueAt);
+                             }
+
+                             var status = await process.Query<string>(StatusQuery, input.Status, id: new("status"));
+                             await process.Choice(
+                                 selection: CaseSelection.OrderedFirstMatch,
+                                 completeness: BranchCompleteness.Fallback,
+                                 cases:
+                                 [
+                                     process.When(status == "blocked", Escalate, id: new("choice/blocked")),
+                                     process.When(status == "ready", Continue)
+                                 ],
+                                 fallback: Otherwise,
+                                 id: new("status-choice"));
+                             await process.Match(
+                                 value: status,
+                                 selection: CaseSelection.OrderedFirstMatch,
+                                 completeness: BranchCompleteness.Fallback,
+                                 cases:
+                                 [
+                                     process.Case("blocked", Escalate, id: new("match/blocked")),
+                                     process.Case("ready", Continue)
+                                 ],
+                                 fallback: Otherwise,
+                                 id: new("status-match"));
+                             return status;
+                         }
+                     }
+
+                     public sealed record DecisionInput(string Status, DateTimeOffset DueAt);
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out var outputCompilation);
+        Assert.Empty(runResult.Results.SelectMany(static result => result.Diagnostics));
+        var generated = Assert.Single(runResult.Results.SelectMany(static result => result.GeneratedSources))
+            .SourceText
+            .ToString();
+
+        Assert.DoesNotContain(
+            outputCompilation.GetDiagnostics(),
+            static diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+        Assert.Contains("__builder.Choice(id:", generated);
+        Assert.Contains("new(\"status-choice\")", generated);
+        Assert.Contains("selection: (CaseSelection.OrderedFirstMatch)", generated);
+        Assert.Contains("completeness: (BranchCompleteness.Fallback)", generated);
+        Assert.Contains("__builder.Match(id:", generated);
+        Assert.Contains("new(\"status-match\")", generated);
+        Assert.Contains("matchedValue:", generated);
+        Assert.Contains("pattern: (\"blocked\")", generated);
+        Assert.Contains("new(\"choice/blocked\")", generated);
+        Assert.Contains("new(\"match/blocked\")", generated);
+        Assert.DoesNotContain("ProcessChoiceArm", generated);
+        Assert.DoesNotContain("ProcessMatchArm", generated);
+        Assert.DoesNotContain("ProcessBranch", generated);
+        Assert.DoesNotContain("System.Func", generated);
+    }
+
+    [Theory]
+    [InlineData("BranchCompleteness.Fallback", "null", "fallback completeness requires a named fallback branch")]
+    [InlineData("BranchCompleteness.Exhaustive", "Otherwise", "exhaustive completeness cannot declare a fallback branch")]
+    public void Generator_RejectsChoicePolicyAndFallbackMismatch(
+        string completeness,
+        string fallback,
+        string expected)
+    {
+        var source = $$"""
+                     using System;
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class InvalidChoiceProcess
+                     {
+                         private static async ProcessTask<string> Run(ProcessContext process, string input)
+                         {
+                             async ProcessTask Selected()
+                             {
+                                 await process.Timer(DateTimeOffset.UnixEpoch);
+                             }
+                             async ProcessTask Otherwise()
+                             {
+                                 await process.Timer(DateTimeOffset.UnixEpoch);
+                             }
+                             await process.Choice(
+                                 selection: CaseSelection.OrderedFirstMatch,
+                                 completeness: {{completeness}},
+                                 cases: [process.When(input == "selected", Selected)],
+                                 fallback: {{fallback}});
+                             return input;
+                         }
+                     }
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.Contains(expected, diagnostic.GetMessage());
+    }
+
+    [Theory]
+    [InlineData("CaseSelection.Unspecified", "BranchCompleteness.Fallback")]
+    [InlineData("CaseSelection.OrderedFirstMatch", "BranchCompleteness.Unspecified")]
+    public void Generator_RejectsUnspecifiedExplicitDecisionPolicies(
+        string selection,
+        string completeness)
+    {
+        var source = $$"""
+                     using System;
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class InvalidPolicyProcess
+                     {
+                         private static async ProcessTask<string> Run(ProcessContext process, string input)
+                         {
+                             async ProcessTask Selected()
+                             {
+                                 await process.Timer(DateTimeOffset.UnixEpoch);
+                             }
+                             async ProcessTask Otherwise()
+                             {
+                                 await process.Timer(DateTimeOffset.UnixEpoch);
+                             }
+                             await process.Choice(
+                                 selection: {{selection}},
+                                 completeness: {{completeness}},
+                                 cases: [process.When(input == "selected", Selected)],
+                                 fallback: Otherwise);
+                             return input;
+                         }
+                     }
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.Contains("cannot be Unspecified", diagnostic.GetMessage());
+    }
+
+    [Fact]
+    public void Generator_ReportsDuplicateExactIdentityAtTheSecondDeclaration()
+    {
+        var source = """
+                     using System;
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class DuplicateIdentityProcess
+                     {
+                         private static async ProcessTask<string> Run(ProcessContext process, string input)
+                         {
+                             async ProcessTask First()
+                             {
+                                 await process.Timer(DateTimeOffset.UnixEpoch, id: new("timer/first"));
+                             }
+                             async ProcessTask Second()
+                             {
+                                 await process.Timer(DateTimeOffset.UnixEpoch, id: new("timer/second"));
+                             }
+                             await process.Choice(
+                                 selection: CaseSelection.OrderedFirstMatch,
+                                 completeness: BranchCompleteness.Exhaustive,
+                                 cases:
+                                 [
+                                     process.When(input == "first", First, id: new("case/duplicate")),
+                                     process.When(input != "first", Second, id: new("case/duplicate"))
+                                 ]);
+                             return input;
+                         }
+                     }
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC007");
+
+        Assert.Contains("case/duplicate", diagnostic.GetMessage());
+        Assert.Equal(26, diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1);
+    }
+
+    [Fact]
+    public void Generator_RejectsRuntimeDerivedExactMatchPattern()
+    {
+        var source = """
+                     using System;
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class RuntimePatternProcess
+                     {
+                         private static async ProcessTask<string> Run(ProcessContext process, PatternInput input)
+                         {
+                             async ProcessTask Selected()
+                             {
+                                 await process.Timer(input.DueAt);
+                             }
+                             await process.Match(
+                                 value: input.Value,
+                                 selection: CaseSelection.OrderedFirstMatch,
+                                 completeness: BranchCompleteness.Exhaustive,
+                                 cases: [process.Case(input.Value, Selected)]);
+                             return input.Value;
+                         }
+                     }
+
+                     public sealed record PatternInput(string Value, DateTimeOffset DueAt);
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.Contains("cannot depend on runtime bindings", diagnostic.GetMessage());
+        Assert.Equal(20, diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1);
+    }
+
+    [Fact]
     public void Generator_LowersLocalFunctionBranchesToCanonicalForkAndJoin()
     {
         var source = """

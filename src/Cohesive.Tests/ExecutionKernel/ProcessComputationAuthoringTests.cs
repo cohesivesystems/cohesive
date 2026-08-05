@@ -18,7 +18,7 @@ public sealed class ProcessComputationAuthoringTests
     {
         var generated = GeneratedCustomerQueryProcess.Define(Metadata());
         var query = ProcessAuthoringIdentities.NodeFor(new(["body", "query-row"]));
-        var returned = ProcessAuthoringIdentities.NodeFor(new(["body", "return-1"]));
+        var returned = ProcessAuthoringIdentities.NodeFor(new(["body", "return-0"]));
         var lowLevel = ProcessAuthoring.Create<string, string>(
             Metadata().WithEntry(query),
             process =>
@@ -49,12 +49,12 @@ public sealed class ProcessComputationAuthoringTests
     public void TypedForkComputation_IsByteEquivalentToCanonicalBuilderAuthoring()
     {
         var fork = Node("fork-0");
-        var join = Node("fork-0", "join-1");
-        var auditBranch = Node("fork-0", "branch-Audit");
+        var join = Owned(fork, "join");
+        var auditBranch = Owned(fork, "branch-Audit");
         var auditQuery = Node("fork-0", "branch-Audit", "query-value");
-        var notifyBranch = Node("fork-0", "branch-Notify");
+        var notifyBranch = Owned(fork, "branch-Notify");
         var notifyQuery = Node("fork-0", "branch-Notify", "query-value");
-        var returned = Node("return-8");
+        var returned = Node("return-0");
         var generated = GeneratedTypedForkProcess.Define(TypedForkMetadata().WithEntry(fork));
         var lowLevel = ProcessAuthoring.Create<string, string>(
             TypedForkMetadata().WithEntry(fork),
@@ -164,6 +164,43 @@ public sealed class ProcessComputationAuthoringTests
     }
 
     [Fact]
+    public void ConventionIdentities_AreStableAcrossHeterogeneousInsertionAndIndependentReordering()
+    {
+        var baseline = GeneratedIdentityBaselineProcess.Define(IdentityMetadata());
+        var reordered = GeneratedIdentityReorderedProcess.Define(IdentityMetadata());
+        var inserted = GeneratedIdentityInsertedProcess.Define(IdentityMetadata());
+
+        Assert.True(baseline.IsValid, Format(baseline.Validation));
+        Assert.True(reordered.IsValid, Format(reordered.Validation));
+        Assert.True(inserted.IsValid, Format(inserted.Validation));
+        var baselineRelations = RelationIdentities(baseline.Definition);
+        var reorderedRelations = RelationIdentities(reordered.Definition);
+        var insertedRelations = RelationIdentities(inserted.Definition);
+        Assert.Equal(baselineRelations, reorderedRelations);
+        Assert.Equal(baselineRelations, insertedRelations);
+        Assert.Equal(
+            Assert.Single(baseline.Definition.Nodes.OfType<ReturnProcessNode>()).Id,
+            Assert.Single(reordered.Definition.Nodes.OfType<ReturnProcessNode>()).Id);
+        Assert.Equal(
+            Assert.Single(baseline.Definition.Nodes.OfType<ReturnProcessNode>()).Id,
+            Assert.Single(inserted.Definition.Nodes.OfType<ReturnProcessNode>()).Id);
+        Assert.Equal(Node("return-0"), Assert.Single(inserted.Definition.Nodes.OfType<ReturnProcessNode>()).Id);
+
+        var decision = GeneratedDecisionProcess.Define(DecisionMetadata());
+        var choice = Assert.Single(decision.Definition.Nodes.OfType<ChoiceProcessNode>());
+        var match = Assert.Single(decision.Definition.Nodes.OfType<MatchProcessNode>());
+        Assert.Equal(new ExecutionNodeId("decision/category/fast"), Assert.Single(choice.Cases).Id);
+        Assert.Equal(Owned(choice.Id, "otherwise"), choice.Fallback?.Id);
+        Assert.Equal(Owned(match.Id, "case-Wait"), Assert.Single(match.Cases).Id);
+        Assert.Equal(Owned(match.Id, "otherwise"), match.Fallback?.Id);
+
+        static Dictionary<ExecutionDefinitionId, ExecutionNodeId> RelationIdentities(ProcessDefinition definition) =>
+            definition.Nodes
+                .OfType<EvaluateRelationProcessNode>()
+                .ToDictionary(static node => node.Relation.DefinitionId, static node => node.Id);
+    }
+
+    [Fact]
     public void GeneratedComputation_HonorsMatchingExplicitEntryAndRejectsConflict()
     {
         var entry = ProcessAuthoringIdentities.NodeFor(new(["body", "query-row"]));
@@ -226,8 +263,8 @@ public sealed class ProcessComputationAuthoringTests
         var fork = Assert.Single(generated.Definition.Nodes.OfType<ForkProcessNode>());
         var join = Assert.Single(generated.Definition.Nodes.OfType<JoinProcessNode>());
         var projection = Assert.IsType<ProcessJoinResultProjection>(join.Result);
-        var auditBranchId = Node("fork-0", "branch-Audit");
-        var notifyBranchId = Node("fork-0", "branch-Notify");
+        var auditBranchId = Owned(fork.Id, "branch-Audit");
+        var notifyBranchId = Owned(fork.Id, "branch-Notify");
         var auditQuery = Assert.IsType<EvaluateRelationProcessNode>(
             generated.Definition.Nodes.Single(node => node.Id == fork.Branches.Single(branch => branch.Id == auditBranchId).Start.Target));
         var notifyQuery = Assert.IsType<EvaluateRelationProcessNode>(
@@ -350,11 +387,11 @@ public sealed class ProcessComputationAuthoringTests
 
         Assert.Equal(ProcessActivationDisposition.Completed, decision.Disposition);
         var resolvedFork = Assert.Single(decision.State.Forks);
-        Assert.True(resolvedFork.SelectedBranches.SequenceEqual([Node("fork-0", "branch-Audit")]));
+        Assert.True(resolvedFork.SelectedBranches.SequenceEqual([auditBranchId]));
         Assert.Equal(
             PortableValue.Concrete(
                 plan.Definition.Result,
-                ObservationValue.FromString($"{Node("fork-0", "branch-Audit").Value}:audit:work")),
+                ObservationValue.FromString($"{auditBranchId.Value}:audit:work")),
             decision.State.Terminal.Detail?.Value);
         var stateOptions = InteractionEnvelopeJsonSerializer.CreateOptions();
         var restoredState = Assert.IsType<ProcessContinuationState>(
@@ -464,12 +501,171 @@ public sealed class ProcessComputationAuthoringTests
     }
 
     [Fact]
+    public void ExplicitNestedDecisions_AreDifferentiallyEquivalentAndStrictlyRecoverable()
+    {
+        ExecutionNodeId choice = new("decision/category");
+        ExecutionNodeId fastCase = new("decision/category/fast");
+        var choiceFallback = Owned(choice, "otherwise");
+        ExecutionNodeId match = new("decision/state");
+        var waitCase = Owned(match, "case-Wait");
+        var matchFallback = Owned(match, "otherwise");
+        ExecutionNodeId timer = new("decision/timer");
+        var returned = Node("return-0");
+        var metadata = DecisionMetadata().WithEntry(choice);
+        var generated = GeneratedDecisionProcess.Define(metadata);
+        var lowLevel = ProcessAuthoring.Create<DecisionProcessInput, string>(
+            metadata,
+            process =>
+            {
+                var category = process.Input.Field(static input => input.Category);
+                var state = process.Input.Field(static input => input.State);
+                var dueAt = process.Input.Field(static input => input.DueAt);
+                var fast = process.CanonicalValue<bool>(
+                    Expr.Eq(category.Expression, Expr.Const("fast")),
+                    new(new ScalarTypeRef(ScalarTypeKind.Bool)));
+                var categoryCase = process.ChoiceCase(
+                    fastCase,
+                    fast,
+                    process.Edge(fastCase, "next", match));
+                var stateCase = process.MatchCase(
+                    waitCase,
+                    state,
+                    "wait",
+                    process.Edge(waitCase, "next", timer));
+
+                process.Choice(
+                    choice,
+                    CaseSelection.OrderedFirstMatch,
+                    BranchCompleteness.Fallback,
+                    [categoryCase],
+                    process.Fallback(
+                        choiceFallback,
+                        process.Edge(choiceFallback, "next", returned)));
+                process.Match(
+                    match,
+                    CaseSelection.OrderedFirstMatch,
+                    BranchCompleteness.Fallback,
+                    state,
+                    [stateCase],
+                    process.Fallback(
+                        matchFallback,
+                        process.Edge(matchFallback, "next", returned)));
+                process.Timer(timer, dueAt, process.Edge(timer, "next", returned));
+                process.Return(returned, state);
+            });
+
+        Assert.True(generated.IsValid, Format(generated.Validation));
+        Assert.True(lowLevel.IsValid, Format(lowLevel.Validation));
+        Assert.Equal(lowLevel.Definition, generated.Definition);
+        Assert.Equal(lowLevel.Document.Metadata.Fingerprint, generated.Document.Metadata.Fingerprint);
+        Assert.Equal(
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(lowLevel.Document),
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(generated.Document));
+        Assert.Equal(
+            CaseSelection.OrderedFirstMatch,
+            Assert.Single(generated.Definition.Nodes.OfType<ChoiceProcessNode>()).Selection);
+        Assert.Equal(
+            BranchCompleteness.Fallback,
+            Assert.Single(generated.Definition.Nodes.OfType<MatchProcessNode>()).Completeness);
+        var sourceMap = Assert.IsType<ExecutionSourceMap>(generated.Document.Metadata.SourceMap);
+        Assert.Contains(
+            sourceMap.Entries,
+            static entry => entry.Description?.Contains("ProcessComputationAuthoringTests.cs", StringComparison.Ordinal) == true);
+
+        var canonical = ExecutionDefinitionJsonSerializer.GetCanonicalBytes(generated.Document);
+        var json = Encoding.UTF8.GetString(canonical);
+        var restoration = ProcessDefinitionDocuments.TryDeserialize(
+            json,
+            out var restoredDocument,
+            out var restoredDefinition);
+        Assert.True(restoration.IsValid, Format(restoration));
+        Assert.Equal(generated.Definition, restoredDefinition);
+        Assert.Equal(canonical, ExecutionDefinitionJsonSerializer.GetCanonicalBytes(restoredDocument!));
+        Assert.DoesNotContain("ProcessChoiceArm", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("ProcessMatchArm", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("ProcessTask", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("delegate", json, StringComparison.OrdinalIgnoreCase);
+
+        var generatedCompilation = generated.Compile(new ProcessDefinitionValidationContext());
+        var lowLevelCompilation = lowLevel.Compile(new ProcessDefinitionValidationContext());
+        Assert.True(generatedCompilation.IsSuccessful, Format(generatedCompilation.Validation));
+        Assert.True(lowLevelCompilation.IsSuccessful, Format(lowLevelCompilation.Validation));
+        var generatedPlan = Assert.IsType<CompiledProcessPlan>(generatedCompilation.Plan);
+        var lowLevelPlan = Assert.IsType<CompiledProcessPlan>(lowLevelCompilation.Plan);
+        Assert.Equal(lowLevelPlan.Definition, generatedPlan.Definition);
+        Assert.Equivalent(lowLevelPlan.Options, generatedPlan.Options, strict: true);
+        Assert.Equivalent(lowLevelPlan.EffectSummary, generatedPlan.EffectSummary, strict: true);
+
+        var dueAtUtc = new DateTimeOffset(2026, 8, 6, 12, 0, 0, TimeSpan.Zero);
+        var input = PortableValue.Concrete(
+            generated.Definition.Input,
+            ObservationValue.FromObject(new DecisionProcessInput("fast", "wait", dueAtUtc)));
+        var continuation = new ProcessContinuationIdentity(new("process-instance/decision"), new("attempt/1"));
+        var generatedState = ProcessReferenceInterpreter.Create(generatedPlan, continuation, input);
+        var lowLevelState = ProcessReferenceInterpreter.Create(lowLevelPlan, continuation, input);
+        var started = Activation(
+            generatedPlan,
+            continuation,
+            id: "activation/decision/start",
+            cause: ProcessActivationCause.Start,
+            observedAtUtc: dueAtUtc.AddMinutes(-1));
+        var generatedCut = ProcessReferenceInterpreter.Activate(
+            generatedPlan,
+            generatedState,
+            started,
+            EchoRelationHost.Instance);
+        var lowLevelCut = ProcessReferenceInterpreter.Activate(
+            lowLevelPlan,
+            lowLevelState,
+            started,
+            EchoRelationHost.Instance);
+        Assert.Equal(ProcessActivationDisposition.DurableCut, generatedCut.Disposition);
+        var options = InteractionEnvelopeJsonSerializer.CreateOptions();
+        Assert.Equal(
+            JsonSerializer.Serialize(lowLevelCut.State, options),
+            JsonSerializer.Serialize(generatedCut.State, options));
+
+        var restoredState = Assert.IsType<ProcessContinuationState>(
+            JsonSerializer.Deserialize<ProcessContinuationState>(
+                JsonSerializer.Serialize(generatedCut.State, options),
+                options));
+        var due = Activation(
+            generatedPlan,
+            continuation,
+            id: "activation/decision/due",
+            cause: ProcessActivationCause.Timer,
+            observedAtUtc: dueAtUtc);
+        var generatedCompleted = ProcessReferenceInterpreter.Activate(
+            generatedPlan,
+            restoredState,
+            due,
+            EchoRelationHost.Instance);
+        var lowLevelCompleted = ProcessReferenceInterpreter.Activate(
+            lowLevelPlan,
+            lowLevelCut.State,
+            due,
+            EchoRelationHost.Instance);
+        Assert.Equal(ProcessActivationDisposition.Completed, generatedCompleted.Disposition);
+        Assert.Equal(
+            lowLevelCompleted.Evidence.Trace.Select(static trace =>
+                (trace.Sequence, trace.Kind, trace.Node, trace.BranchOrClause, trace.Detail)),
+            generatedCompleted.Evidence.Trace.Select(static trace =>
+                (trace.Sequence, trace.Kind, trace.Node, trace.BranchOrClause, trace.Detail)));
+        Assert.Equal(
+            JsonSerializer.Serialize(lowLevelCompleted.State, options),
+            JsonSerializer.Serialize(generatedCompleted.State, options));
+        Assert.Equal(
+            PortableValue.Concrete(generated.Definition.Result, ObservationValue.FromString("wait")),
+            generatedCompleted.State.Terminal.Detail?.Value);
+    }
+
+    [Fact]
     public void SignalTimerRace_IsByteEquivalentAndRecoversIdenticallyToLowLevelAuthoring()
     {
         var awaitMatch = Node("await-match-0");
-        var signalClause = Node("await-match-0", "interaction-clause-Signalled");
-        var timerClause = Node("await-match-0", "timer-clause-TimedOut");
-        var returned = Node("return-3");
+        var signalClause = Owned(awaitMatch, "interaction-clause-Signalled");
+        var timerClause = Owned(awaitMatch, "timer-clause-TimedOut");
+        var returned = Node("return-0");
         var metadata = SignalTimerMetadata().WithEntry(awaitMatch);
         var generated = GeneratedSignalTimerWaitProcess.Define(metadata);
         var lowLevel = ProcessAuthoring.Create<SignalTimerWaitInput, string>(
@@ -947,6 +1143,24 @@ public sealed class ProcessComputationAuthoringTests
             new("tests/ari-230/recurrence"),
             DocumentOrigin.User));
 
+    static ProcessAuthoringMetadata DecisionMetadata() => new(
+        new("process/generated-explicit-decision"),
+        new("1"),
+        ProcessRecoveryPolicy.ContinueAttempt,
+        new(
+            new("tests.process-computation", "1"),
+            new("tests/ari-231/explicit-decision"),
+            DocumentOrigin.User));
+
+    static ProcessAuthoringMetadata IdentityMetadata() => new(
+        new("process/generated-identity-stability"),
+        new("1"),
+        ProcessRecoveryPolicy.ContinueAttempt,
+        new(
+            new("tests.process-computation", "1"),
+            new("tests/ari-231/identity-stability"),
+            DocumentOrigin.User));
+
     static ProcessDefinitionValidationContext RelationContext(ExecutionDefinitionReference relation)
     {
         var text = new ValueContract(new ScalarTypeRef(ScalarTypeKind.String));
@@ -984,6 +1198,9 @@ public sealed class ProcessComputationAuthoringTests
 
     static ExecutionNodeId Node(params string[] path) =>
         ProcessAuthoringIdentities.NodeFor(new(["body", .. path]));
+
+    static ExecutionNodeId Owned(ExecutionNodeId owner, string role) =>
+        ProcessAuthoringIdentities.NodeFor(owner, role);
 
     static void AssertEquivalentReferenceRecovery(
         CompiledProcessPlan generated,
@@ -1146,7 +1363,7 @@ public sealed class ProcessComputationAuthoringTests
             JsonSerializer.Serialize(lowLevelWinner.State, options),
             JsonSerializer.Serialize(generatedWinner.State, options));
         Assert.Equal(
-            Node("await-match-0", "interaction-clause-Signalled"),
+            Owned(Node("await-match-0"), "interaction-clause-Signalled"),
             Assert.Single(generatedWinner.State.Waits).WinnerClause);
 
         var complete = Activation(
@@ -2027,6 +2244,114 @@ public static partial class GeneratedRecurrenceProcess
         return observation;
     }
 }
+
+/// <summary>Baseline convention-identity computation used for stability comparison.</summary>
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class GeneratedIdentityBaselineProcess
+{
+    /// <summary>First exact Relation reference.</summary>
+    public static ExecutionDefinitionReference Alpha { get; } = Definition("relation/identity-alpha", 'e');
+
+    /// <summary>Second exact Relation reference.</summary>
+    public static ExecutionDefinitionReference Beta { get; } = Definition("relation/identity-beta", 'f');
+
+    static async ProcessTask<string> Run(ProcessContext process, IdentityProcessInput input)
+    {
+        var alpha = await process.Query<string>(Alpha, input.Value);
+        var beta = await process.Query<string>(Beta, input.Value);
+        return alpha + beta;
+    }
+
+    static ExecutionDefinitionReference Definition(string id, char fingerprint) => new(
+        new(id),
+        new("1"),
+        new(
+            ExecutionDefinitionFingerprinter.Algorithm,
+            ExecutionDefinitionFingerprinter.Canonicalization,
+            new string(fingerprint, 64)));
+}
+
+/// <summary>Equivalent independent queries authored in the opposite order.</summary>
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class GeneratedIdentityReorderedProcess
+{
+    static async ProcessTask<string> Run(ProcessContext process, IdentityProcessInput input)
+    {
+        var beta = await process.Query<string>(GeneratedIdentityBaselineProcess.Beta, input.Value);
+        var alpha = await process.Query<string>(GeneratedIdentityBaselineProcess.Alpha, input.Value);
+        return alpha + beta;
+    }
+}
+
+/// <summary>Baseline queries with a heterogeneous Timer inserted between them.</summary>
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class GeneratedIdentityInsertedProcess
+{
+    static async ProcessTask<string> Run(ProcessContext process, IdentityProcessInput input)
+    {
+        var alpha = await process.Query<string>(GeneratedIdentityBaselineProcess.Alpha, input.Value);
+        await process.Timer(input.DueAt);
+        var beta = await process.Query<string>(GeneratedIdentityBaselineProcess.Beta, input.Value);
+        return alpha + beta;
+    }
+}
+
+/// <summary>Input to convention-identity stability fixtures.</summary>
+/// <param name="Value">Portable query input.</param>
+/// <param name="DueAt">Absolute due instant for the heterogeneous insertion fixture.</param>
+public sealed record IdentityProcessInput(string Value, DateTimeOffset DueAt);
+
+/// <summary>Representative explicit nested Choice/Match policy computation.</summary>
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class GeneratedDecisionProcess
+{
+    static async ProcessTask<string> Run(ProcessContext process, DecisionProcessInput input)
+    {
+        async ProcessTask Wait()
+        {
+            await process.Timer(input.DueAt, id: new("decision/timer"));
+        }
+
+        async ProcessTask Continue()
+        {
+        }
+
+        async ProcessTask Fast()
+        {
+            await process.Match(
+                value: input.State,
+                selection: CaseSelection.OrderedFirstMatch,
+                completeness: BranchCompleteness.Fallback,
+                cases:
+                [
+                    process.Case("wait", Wait)
+                ],
+                fallback: Continue,
+                id: new("decision/state"));
+        }
+
+        async ProcessTask Other()
+        {
+        }
+
+        await process.Choice(
+            selection: CaseSelection.OrderedFirstMatch,
+            completeness: BranchCompleteness.Fallback,
+            cases:
+            [
+                process.When(input.Category == "fast", Fast, id: new("decision/category/fast"))
+            ],
+            fallback: Other,
+            id: new("decision/category"));
+        return input.State;
+    }
+}
+
+/// <summary>Input to the explicit nested Choice/Match computation.</summary>
+/// <param name="Category">Outer predicate-selection value.</param>
+/// <param name="State">Inner exact-match value and terminal result.</param>
+/// <param name="DueAt">Absolute due instant selected by the nested wait arm.</param>
+public sealed record DecisionProcessInput(string Category, string State, DateTimeOffset DueAt);
 
 /// <summary>Representative human-facing Process covering sequential, branching, and parallel authoring.</summary>
 [GenerateProcessDefinition(nameof(Run))]
