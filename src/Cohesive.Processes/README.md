@@ -190,4 +190,5 @@ revive registry-by-name definitions, delegate replay, or single-cursor checkpoin
 - `Cohesive.Transitions` for canonical entity Transition semantics
 - `Cohesive.Relations` for canonical relation and query semantics
 - `Cohesive.Storage` for durable checkpoints, control, and the Process-store contract
+- `Cohesive.Processes.Distribution` for optional portable worker pools, durable claims, capacity, leases, fencing, and recovery
 - `Cohesive.Adapters.DurableTask` for authority-neutral task-hub status projections

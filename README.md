@@ -21,6 +21,7 @@ The [Execution Kernel adoption and migration guide](docs/EXECUTION_KERNEL_GUIDE.
 | `Cohesive.Relations.Contracts` | Contract assembly for relation-oriented generated surfaces. |
 | `Cohesive.Transitions` | Canonical entity-transition IR, typed authoring, validation, compilation, decisions, and reference interpretation. |
 | `Cohesive.Processes` | Canonical multistep Process IR, typed authoring, validation, compilation, continuations, and reference interpretation. |
+| `Cohesive.Processes.Distribution` | Optional portable worker pools, durable competing-consumer claims, capacity, leases, fencing, and recovery for canonical Process work. |
 | `Cohesive.Presentation` | Backend-declared presentation IR for navigation, views, actions, forms, and flows. |
 | `Cohesive.Api` | Semantic API declarations and endpoint metadata. |
 | `Cohesive.Storage` | Entity repository, durable Process state, materialization, Control, and storage adapter contracts. |
@@ -48,7 +49,7 @@ The [Execution Kernel adoption and migration guide](docs/EXECUTION_KERNEL_GUIDE.
 | `Cohesive.Adapters.ONNX` | ONNX Runtime inference adapters. |
 | `Cohesive.Adapters.OpenApi` | OpenAPI document emission from Cohesive API declarations. |
 | `Cohesive.Adapters.Parquet` | Parquet row and column writing helpers. |
-| `Cohesive.Adapters.Postgres` | PostgreSQL relation/query compilation plus Npgsql-backed bounded source acquisition and rebuild/reconciliation materialization. |
+| `Cohesive.Adapters.Postgres` | PostgreSQL relation/query and materialization integrations plus a durable Process distribution ledger. |
 | `Cohesive.Adapters.TypeScript` | TypeScript emitters for shapes, API clients, constants, and test mocks. |
 
 ## Frontend Packages

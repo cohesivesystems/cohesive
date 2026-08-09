@@ -34,6 +34,7 @@
     <ProjectReference Include="..\Cohesive.ExecutionKernel.TestFixtures\Cohesive.ExecutionKernel.TestFixtures.csproj" />
     <ProjectReference Include="..\Cohesive.Relations.Contracts\Cohesive.Relations.Contracts.csproj" />
     <ProjectReference Include="..\Cohesive.Processes\Cohesive.Processes.csproj" />
+    <ProjectReference Include="..\Cohesive.Processes.Distribution\Cohesive.Processes.Distribution.csproj" />
     <ProjectReference Include="..\Cohesive.CodeGen.Cli\Cohesive.CodeGen.Cli.csproj" />
     <ProjectReference Include="..\adapters\Cohesive.Adapters.Cosmos\Cohesive.Adapters.Cosmos.csproj" />
     <ProjectReference Include="..\adapters\Cohesive.Adapters.Elastic\Cohesive.Adapters.Elastic.csproj" />
