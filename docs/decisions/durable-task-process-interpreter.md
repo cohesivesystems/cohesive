@@ -139,9 +139,9 @@ an error. An adapter cannot claim conformance merely because its recognizer neve
 requirement. Adding a canonical node kind or guarantee must therefore fail inventory-completeness
 tests until the target-neutral collector and Durable Task profile state its disposition.
 
-The executable inventory, target profile, realization ledger and structured diagnostics are the
-scope of the subsequent capability-contract and target-planning changes. This document fixes their
-required behavior without prematurely defining another competing enum or wire schema.
+The executable target-neutral inventory, profile, realization ledger, and structured diagnostics are implemented in
+`Cohesive.Processes.Compilation`. Construct kinds are projected from the canonical persisted-union metadata instead
+of another enum. The Durable Task capability profile and physical target plan remain subsequent adapter work.
 
 ## Conformance and promotion
 
@@ -190,10 +190,11 @@ a native realization.
 
 ## Implementation status and provenance
 
-This decision is accepted direction, not an implementation claim. As of 2026-08-09,
-`Cohesive.Adapters.DurableTask` provides historical monitoring only. The executable target-neutral
-inventory, Durable Task realization planner, interpreter, conformance suite and ARI adoption are
-tracked from ARI-285, beginning with ARI-286.
+This decision remains accepted direction for Durable Task execution. As of 2026-08-09,
+`Cohesive.Processes` implements the target-neutral requirement inventory, capability evidence, exhaustive
+disposition ledger, and structured matching diagnostics. `Cohesive.Adapters.DurableTask` still provides historical
+monitoring only; its capability profile, physical realization planner, interpreter, conformance suite, and ARI
+adoption remain tracked from ARI-285.
 
 Target facts should be revalidated against the official
 [Durable Task documentation](https://learn.microsoft.com/azure/durable-task/),

@@ -160,6 +160,27 @@ canonical definitions with `Cohesive.Storage.Processes.ProcessDurableRuntime` an
 interpreters and adapters must declare supported capabilities and preserve the canonical semantics or emit precise
 diagnostics.
 
+## Interpreter capability realization
+
+`ProcessInterpreterRequirementCollector` acquires a target-neutral inventory from one exact
+`CompiledProcessPlan`. Concrete construct requirements come directly from the closed `ProcessNode` persisted-union
+metadata; the collector does not maintain a second node-kind enum or recognizer switch. Cross-cutting requirements
+are derived from the complete graph, linked definitions and interaction contracts, effect summary, and explicit
+compilation demands.
+
+A `ProcessInterpreterCapabilityProfile` declares one target's versioned capability evidence using the shared
+`CapabilityRealizationKind`: native, composed, constrained, or unavailable. The profile is physical-target evidence,
+not Process semantics. `ProcessInterpreterRealizationCompiler` matches the source inventory to that evidence and
+always produces one `ProcessInterpreterRealizationDecision` per inventory item. Missing declarations become explicit
+unavailable decisions and errors; multiple declarations are ambiguous errors; constrained decisions retain named
+operating boundaries and warnings. `ProcessInterpreterRealizationLedger.ValidateCoverage` independently rejects a
+missing, duplicated, or uninventoried disposition before target-specific planning or execution.
+
+These contracts deliberately contain no Durable Task, storage-provider, or workflow-engine types. A target adapter
+supplies its profile and consumes only a successful exhaustive report when compiling a physical realization plan.
+The first intended consumer is the Durable Task parallel interpreter, but the same contracts also govern native
+Postgres, Cosmos, simulation, and future orchestration profiles.
+
 ## Advanced lowering escape hatch
 
 `ProcessAuthoring.Create` and `ProcessBuilder<TInput,TResult>` remain public, advanced APIs because source generators,
