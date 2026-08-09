@@ -2,9 +2,24 @@
 
 `Cohesive.Adapters.Postgres` is the single PostgreSQL adapter package. It provides an injection-safe standalone
 `SELECT` builder, canonical Relations compilation, exact persistable storage bindings, and Npgsql-backed bounded
-Relations, rebuild, reconciliation, and transaction-aligned logical-replication sources. The builder can be used
+Relations, rebuild, reconciliation, transaction-aligned logical-replication sources, and a durable competing-consumer
+ledger for `Cohesive.Processes.Distribution`. The builder can be used
 without Cohesive.Relations query compilation; the storage binding remains the shared physical authority for
 compilation and runtime source execution.
+
+## Process distribution ledger
+
+`PostgresProcessDistributionStore` is the first durable reference realization of the portable
+`IProcessDistributionStore` contract. It persists one complete, versioned distribution ledger per authority row and
+performs each placement or lifecycle decision under a serializable transaction, row lock, provider clock, and revision
+compare-and-swap. Work execution occurs outside the transaction, so multiple processes can compete for claims and run
+them concurrently without a singleton coordinator.
+
+Create and validate `PostgresProcessDistributionStoreOptions`, construct the store with a caller-owned
+`NpgsqlDataSource`, and run `EnsureCreatedAsync` explicitly during deployment or bootstrap. Ordinary distribution
+operations never execute DDL. See the
+[`Cohesive.Processes.Distribution` guide](../../Cohesive.Processes.Distribution/README.md) for the authority boundary,
+worker configuration, recovery guarantees, target profiles, observability, and current atomic-composition limitation.
 
 For convention-first C# authoring, begin with the
 [`Cohesive.Relations` quick start](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Relations/docs/GETTING_STARTED.md).
