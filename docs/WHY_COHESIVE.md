@@ -221,9 +221,10 @@ cost pays back through reuse of the same semantic evidence.
 A process captures coordination semantics above any one execution substrate. It can replace the
 application-service layer that otherwise mixes reads, commands, retries, effects, time, and vendor
 SDK calls. Local execution provides a cheap starting point and fast tests; durable execution can be
-introduced where recovery requirements justify it. Durable Task is the current concrete adapter.
-Temporal and other custom managers are target-adapter opportunities, not assumptions embedded in
-the process definition.
+introduced where recovery requirements justify it. The native durable runtime is implemented over
+the Process store contract. Durable Task is an accepted parallel interpreter target whose executable
+adapter is not yet implemented. Temporal and other custom managers are later target-adapter
+opportunities, not assumptions embedded in the process definition.
 
 The intended semantic surface includes durable execution, process managers, sagas, compensation,
 and other workflow patterns. Not all execution-kernel guarantees are complete today. Before relying

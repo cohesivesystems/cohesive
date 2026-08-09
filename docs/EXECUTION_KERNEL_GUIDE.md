@@ -83,8 +83,9 @@ Important adapter placements include:
 - `Cohesive.Adapters.Elastic` as a generation-isolated materialization target and read-alias
   activation boundary;
 - `Cohesive.Adapters.AspNet`, OpenAPI, GraphQL, and TypeScript as API interpretations; and
-- `Cohesive.Adapters.DurableTask` as a monitoring projection, not the authoritative durable Process
-  runtime.
+- `Cohesive.Adapters.DurableTask` currently as a historical monitoring projection. The accepted future
+  [parallel interpreter](decisions/durable-task-process-interpreter.md) will execute exact compiled canonical plans
+  through Durable Task Scheduler without becoming another Process definition authority.
 
 ## Canonical lifecycle
 

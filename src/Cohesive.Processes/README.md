@@ -180,9 +180,13 @@ The callback-bearing `Cohesive.Processes.Model` graph, runtime-delegate source g
 `ProcessStaticCompiler`, execute through declared interpreters, and become durable through the Storage-owned Process
 runtime. Restoring a Process never loads the expression source, a builder callback, or an authoring state machine.
 
-The DurableTask package retains authority-neutral task-hub query projections only. A future execution adapter must
-consume compiled canonical definitions and implement or compose the canonical durable-store boundary; it must not
-revive registry-by-name definitions, delegate replay, or single-cursor checkpoints.
+The DurableTask package currently retains authority-neutral task-hub query projections only. The accepted future
+execution target is a parallel durable interpreter of exact compiled canonical definitions. It need not implement
+`IProcessDurableStore` when Durable Task history directly preserves the declared semantics, but it must publish an
+explicit capability closure, reject missing or weaker realizations, and pass differential conformance against the
+reference interpreter. It must not revive registry-by-name definitions, delegate replay, single-cursor checkpoints,
+or one opaque activity for an entire Process. See the accepted
+[Durable Task Process interpreter decision](../../docs/decisions/durable-task-process-interpreter.md).
 
 ## Related packages
 
@@ -191,4 +195,4 @@ revive registry-by-name definitions, delegate replay, or single-cursor checkpoin
 - `Cohesive.Relations` for canonical relation and query semantics
 - `Cohesive.Storage` for durable checkpoints, control, and the Process-store contract
 - `Cohesive.Processes.Distribution` for optional portable worker pools, durable claims, capacity, leases, fencing, and recovery
-- `Cohesive.Adapters.DurableTask` for authority-neutral task-hub status projections
+- `Cohesive.Adapters.DurableTask` for current authority-neutral task-hub status projections and the accepted future parallel interpreter target
