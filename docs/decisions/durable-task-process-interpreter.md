@@ -141,7 +141,9 @@ tests until the target-neutral collector and Durable Task profile state its disp
 
 The executable target-neutral inventory, profile, realization ledger, and structured diagnostics are implemented in
 `Cohesive.Processes.Compilation`. Construct kinds are projected from the canonical persisted-union metadata instead
-of another enum. The Durable Task capability profile and physical target plan remain subsequent adapter work.
+of another enum. `Cohesive.Adapters.DurableTask` now publishes the versioned planning profile and compiles successful
+exhaustive reports into deterministic physical plans that retain the exact canonical plan. These artifacts do not
+admit execution; the generic Durable Task interpreter and its conformance evidence remain subsequent work.
 
 ## Conformance and promotion
 
@@ -192,9 +194,9 @@ a native realization.
 
 This decision remains accepted direction for Durable Task execution. As of 2026-08-09,
 `Cohesive.Processes` implements the target-neutral requirement inventory, capability evidence, exhaustive
-disposition ledger, and structured matching diagnostics. `Cohesive.Adapters.DurableTask` still provides historical
-monitoring only; its capability profile, physical realization planner, interpreter, conformance suite, and ARI
-adoption remain tracked from ARI-285.
+disposition ledger, and structured matching diagnostics. `Cohesive.Adapters.DurableTask` implements historical
+monitoring plus a planning-only target profile and physical realization compiler. It still exposes no Process
+execution admission or host; the interpreter, conformance suite, and ARI adoption remain tracked from ARI-285.
 
 Target facts should be revalidated against the official
 [Durable Task documentation](https://learn.microsoft.com/azure/durable-task/),
