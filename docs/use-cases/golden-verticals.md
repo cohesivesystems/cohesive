@@ -200,8 +200,8 @@ eligibility query or state-change policy.
 ### Possible realizations
 
 - An in-memory runtime supports fast deterministic tests and simulation.
-- A Durable Task adapter supplies durable scheduling and checkpoint behavior within its declared
-  capability closure.
+- The accepted Durable Task target interprets the same exact compiled plan through native and composed
+  Scheduler facilities within an explicit capability closure; it is not implemented yet.
 - A future Temporal or custom runtime adapter maps the same nodes and obligations to a different
   physical substrate.
 - A simulation interpreter explores message order, retry schedules, failures, and recovery without
@@ -230,10 +230,12 @@ reason the process is waiting or terminal.
 
 ### Current implementation anchor
 
-Processes, the reference runtime, durable-operation contracts, and Durable Task integration have
-implemented subsets of this lifecycle. Advanced control, durable signal arbitration, parallelism,
-compensation, and migration must be checked against the
-[Execution Kernel compatibility inventory](../EXECUTION_KERNEL_COMPATIBILITY.md).
+Processes, the reference interpreter, native durable runtime, durable-operation contracts, and distribution
+semantics implement substantial subsets of this lifecycle. Durable Task execution is accepted future direction;
+the current package provides historical monitoring only. Advanced control, durable signal arbitration,
+parallelism, compensation, migration, and every target adapter claim must be checked against the
+[Execution Kernel compatibility inventory](../EXECUTION_KERNEL_COMPATIBILITY.md) and the accepted
+[Durable Task interpreter decision](../decisions/durable-task-process-interpreter.md).
 
 ## Vertical 4: One semantic operation from backend to user interface
 
