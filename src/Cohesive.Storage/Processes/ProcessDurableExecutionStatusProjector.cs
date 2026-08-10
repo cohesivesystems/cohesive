@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using Cohesive.Execution;
+using Cohesive.Processes.Execution;
 
 namespace Cohesive.Storage.Processes;
 
@@ -33,73 +34,11 @@ public static class ProcessDurableExecutionStatusProjector
         ImmutableArray<ExecutionRuntimeStatusExtension> extensions)
     {
         ArgumentNullException.ThrowIfNull(checkpoint);
-        return ExecutionStatusProjector.Project(
-            state: checkpoint.Control,
-            runtime: ProjectRuntime(checkpoint, extensions),
-            terminalOutcome: checkpoint.Continuation.Terminal);
-    }
-
-    static ExecutionRuntimeStatusDetails ProjectRuntime(
-        ProcessDurableCheckpoint checkpoint,
-        ImmutableArray<ExecutionRuntimeStatusExtension> extensions)
-    {
-        var state = checkpoint.Continuation;
-        var health = GetHealth(checkpoint);
-        HashSet<TokenId> activeWaitTokens =
-        [
-            .. state.Waits.Where(static wait => wait.Active).Select(static wait => wait.Token)
-        ];
-        return new(
-            tokensDisclosure: ExecutionStatusDisclosure.Disclosed,
-            tokens:
-            [
-                .. state.Tokens
-                    .Where(token => token.Disposition != ExecutionTokenDisposition.Waiting
-                        || activeWaitTokens.Contains(token.Id))
-                    .Select(static token => new ExecutionTokenStatus(
-                    tokenId: token.Id,
-                    node: token.Node,
-                    disposition: token.Disposition))
-            ],
-            waitsDisclosure: ExecutionStatusDisclosure.Disclosed,
-            waits:
-            [
-                .. state.Waits.Where(static wait => wait.Active).Select(static wait => new ExecutionWaitStatus(
-                    tokenId: wait.Token,
-                    node: wait.Node,
-                    waitingSinceUtc: wait.RegisteredAtUtc,
-                    deadlineUtc: wait.Timers.IsEmpty
-                        ? null
-                        : wait.Timers.Min(static timer => timer.DueAtUtc)))
-            ],
-            progressDisclosure: ExecutionStatusDisclosure.Disclosed,
-            progress: new(
-                completed: state.CompletedActivationCount,
-                total: null,
-                unit: "activation"),
-            demandDisclosure: ExecutionStatusDisclosure.Disclosed,
-            demand: new(
-                ready: state.Tokens.Count(static token => token.Disposition == ExecutionTokenDisposition.Ready),
-                delayed: state.Tokens.Count(static token => token.Disposition == ExecutionTokenDisposition.Pending)),
-            health: health,
-            extensions: extensions);
-    }
-
-    static ExecutionHealthStatus GetHealth(ProcessDurableCheckpoint checkpoint)
-    {
-        if (checkpoint.Continuation.Terminal.Kind is ExecutionTerminalOutcomeKind.Failed
-                or ExecutionTerminalOutcomeKind.Terminated
-            || checkpoint.Continuation.Tokens.Any(static token =>
-                token.Disposition == ExecutionTokenDisposition.Failed)
-            || checkpoint.DurableOperations.Any(static operation => operation.Status is
-                DurableOperationStatus.TerminalOutcomeRequired or DurableOperationStatus.EscalationRequired))
-        {
-            return ExecutionHealthStatus.Unhealthy;
-        }
-
-        return checkpoint.DurableOperations.Any(static operation => operation.Status is
-            DurableOperationStatus.RetryEligible or DurableOperationStatus.ReconciliationRequired)
-                ? ExecutionHealthStatus.Degraded
-                : ExecutionHealthStatus.Healthy;
+        return ProcessExecutionStatusProjector.Project(
+            checkpoint.Continuation,
+            checkpoint.Control,
+            checkpoint.DurableOperations,
+            extensions,
+            ExecutionStatusDisclosure.Disclosed);
     }
 }

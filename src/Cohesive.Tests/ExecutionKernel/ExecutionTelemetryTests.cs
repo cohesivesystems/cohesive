@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
+using Cohesive.Processes.Execution;
 using Cohesive.Storage;
 using Cohesive.Storage.Processes;
 
@@ -235,6 +236,37 @@ public sealed class ExecutionTelemetryTests
             fixture.Plan.Document.Metadata.Provenance);
         Assert.Equal(ExecutionHealthStatus.Unknown, unknownHealth.Health);
         Assert.Equal(ExecutionReadinessStatus.Unknown, unknownHealth.Readiness);
+    }
+
+    [Fact]
+    public void ProcessStateProjection_RequiresExactContinuationAndControlAffinity()
+    {
+        var fixture = ProcessDurabilityTestFixture.Create();
+        var checkpoint = fixture.Checkpoint;
+
+        var status = ProcessExecutionStatusProjector.Project(
+            checkpoint.Continuation,
+            checkpoint.Control,
+            checkpoint.DurableOperations);
+
+        Assert.Equal(checkpoint.Definition, status.Definition);
+        Assert.Equal(checkpoint.ContinuationIdentity.ProcessInstanceId, status.ProcessInstanceId);
+        Assert.Equal(checkpoint.ContinuationIdentity.ProcessAttemptId, status.CurrentAttemptId);
+        Assert.Equal(checkpoint.Control.Revision, status.ControlRevision);
+        Assert.Equal(checkpoint.Continuation.CompletedActivationCount, status.Runtime.Progress?.Completed);
+
+        var unrelatedControl = ProcessControlTestFixture.Create().State();
+        var exception = Assert.Throws<ArgumentException>(() => ProcessExecutionStatusProjector.Project(
+            checkpoint.Continuation,
+            unrelatedControl,
+            checkpoint.DurableOperations));
+        Assert.Contains("same exact definition", exception.Message, StringComparison.Ordinal);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => ProcessExecutionStatusProjector.Project(
+            checkpoint.Continuation,
+            checkpoint.Control,
+            checkpoint.DurableOperations,
+            terminalDetailDisclosure: ExecutionStatusDisclosure.Unknown));
     }
 
     static (ExecutionExplainArtifact Explain, NormalizedExecutionTrace Trace) ExplainAndTrace()

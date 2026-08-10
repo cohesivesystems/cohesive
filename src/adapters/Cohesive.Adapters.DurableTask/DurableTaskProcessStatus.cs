@@ -1,9 +1,20 @@
+using Cohesive.Execution;
+using Cohesive.Processes.Execution;
 using DurableTask.Core;
 
 namespace Cohesive.Adapters.DurableTask;
 
 static class DurableTaskProcessStatus
 {
+    public static ExecutionStatus Project(DurableTaskSequentialProcessResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        return ProcessExecutionStatusProjector.Project(
+            result.State,
+            result.Control,
+            [.. result.DurableOperations.Select(static operation => operation.State)]);
+    }
+
     public static ProcessExecutionStatus ResolveStatus(
         OrchestrationStatus orchestrationStatus,
         DurableTaskProcessOrchestrationStatus? customStatus,
