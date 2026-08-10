@@ -16,6 +16,9 @@ public static class ExecutionApiProblemCodes
 
     /// <summary>The supplied runtime request type does not match the declared endpoint contract.</summary>
     public const string RequestTypeMismatch = "execution.api.requestTypeMismatch";
+
+    /// <summary>The projected transport address is absent or malformed.</summary>
+    public const string InvalidRequest = "execution.api.invalidRequest";
 }
 
 /// <summary>A non-sensitive API boundary failure that intentionally omits target and runtime state.</summary>

@@ -160,6 +160,15 @@ public class ApiEndpoint
     /// </summary>
     public ApiOperation Operation { get; }
 
+    /// <summary>Creates an equivalent endpoint handle projected through HTTP.</summary>
+    /// <param name="http">HTTP operation binding to attach.</param>
+    /// <returns>
+    /// A new endpoint retaining this handle's semantic identity, request and result contracts, policies, and
+    /// authority references while adding the supplied HTTP projection.
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="http"/> is <see langword="null"/>.</exception>
+    public ApiEndpoint WithHttp(HttpBinding http) => new(Operation.WithHttp(http));
+
     /// <inheritdoc />
     public override string ToString() => Id.Value;
 }

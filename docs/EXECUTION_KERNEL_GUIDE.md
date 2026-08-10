@@ -141,12 +141,20 @@ a canonical artifact. Available records expose a missing-prefix count; only zero
 Use `IProcessExecutionExplainRepository` to compose retained runtime observations into the existing canonical
 `ExecutionExplainArtifact`. The repository may return a partial artifact for pending or active execution, but it must
 not invent unavailable trace or realization evidence. Exact definition identity remains available independently on
-`ProcessExecutionRecord.Definition` when runtime status has not yet been published.
+`ProcessExecutionRecord.Definition` when runtime status has not yet been published. Application-facing reads address
+the repository with a trusted `InteractionAuthorityScope` plus canonical `ProcessInstanceId`; physical execution
+keys remain an explicit engine-administration path.
 
 API, CLI, tests, and documentation serialize the same artifacts through
 `ExecutionExplainJsonSerializer` and `ExecutionTraceJsonSerializer`. A transport may format or
 redact according to the declared disclosure contract; it must not translate the artifact into an
 independent diagnostics type.
+
+For ASP.NET, `MapProcessExecutionExplainApi` derives one GET endpoint from
+`ExecutionControlApiCatalog.Explain`. The route supplies only `processInstanceId`; a required server-side resolver
+supplies the authority scope, and a required authorization-policy resolver projects the catalog requirement. The
+adapter writes the artifact's canonical bytes and uses the catalog's existing opaque problem results. It does not
+deserialize caller-authored command authorization, issuance, or provenance evidence.
 
 ## Executable examples
 
@@ -249,6 +257,11 @@ typed `ExecutionControlApiCatalog.Explain` operation and renders that exact retu
 `ExecutionExplainArtifact` through a `CliApplication`. Both surfaces use the JSON emitted by
 `ExecutionExplainJsonSerializer`; the test asserts byte-for-text equality of the CLI output and the
 canonical formatted projection.
+
+[`ProcessExecutionExplainApiEndpointRouteBuilderExtensionsTests`](../src/Cohesive.Tests/Api/ProcessExecutionExplainApiEndpointRouteBuilderExtensionsTests.cs)
+projects the same catalog handle through ASP.NET. It proves that the request carries no command body, the repository
+receives the server-resolved logical address, authorization metadata cannot be omitted, and the response body equals
+the canonical explain bytes exactly.
 
 Documentation should link this source or show the same serializer call. It should not copy the
 artifact into a documentation-only DTO.

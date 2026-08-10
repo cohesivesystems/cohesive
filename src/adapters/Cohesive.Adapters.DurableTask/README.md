@@ -69,7 +69,8 @@ IProcessExecutionExplainRepository explainRepository =
 
 ExecutionExplainArtifact? explanation = await explainRepository.GetExplainAsync(
     operationContext,
-    currentExecutionId);
+    trustedAuthorityScope,
+    logicalProcessInstanceId);
 
 // Migration-only reader for task hubs created by the retired Core adapter.
 IProcessExecutionRepository historicalRepository = new DurableTaskProcessExecutionRepository(
@@ -140,8 +141,10 @@ partial or conflicting Cohesive tag set fails closed. Normalized trace retention
 activations, and terminal trace retrieval is available through the current standalone-client repository. The
 migration-only Core reader explicitly does not fabricate canonical traces from historical provider records.
 Canonical runtime explain composition is available through the current repository and exact deployed plan catalog.
-Execution-control API binding, live trace streaming, richer dashboard presentation, and history-event
-normalization remain follow-up ARI-292 work.
+The provider-neutral explain boundary supports both trusted authority-scope/logical-identity reads for application
+surfaces and physical-key reads for engine administration. The ASP.NET execution-control explain binding performs
+the logical read without accepting caller-authored authority evidence. Other execution-control bindings, live trace
+streaming, richer dashboard presentation, and history-event normalization remain follow-up ARI-292 work.
 
 ## Realization planning
 

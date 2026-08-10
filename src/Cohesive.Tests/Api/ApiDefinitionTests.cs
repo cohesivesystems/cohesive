@@ -65,24 +65,26 @@ public sealed class ApiDefinitionTests
             authority: "cohesive.execution.process-control",
             schemaVersion: new("cohesive-process-control/v1"),
             path: ExecutionSemanticPath.From("commands").Append("pause"));
-        var semantic = Cohesive.Api.Api.Define("Execution")
+        var semanticEndpoint = Cohesive.Api.Api.Define("Execution")
             .Command("Pause")
                 .Accepts<PauseRequest>()
                 .Returns<ExecutionStatus>()
                 .Result<ApiProblem>(ApiResultKind.Conflict)
                 .Requirement(authorization)
                 .SemanticReference(reference)
-                .Build()
-            .Operation;
+                .Build();
+        var semantic = semanticEndpoint.Operation;
 
-        var projected = semantic.WithHttp(new HttpBinding(
+        var projectedEndpoint = semanticEndpoint.WithHttp(new HttpBinding(
             method: "POST",
             route: "/api/executions/{instance}/pause",
             parameters: [new("instance", HttpParameterSource.Route, typeof(string))],
             body: new(typeof(PauseRequest))));
+        var projected = projectedEndpoint.Operation;
 
         Assert.Null(semantic.Http);
         Assert.All(semantic.Results, static result => Assert.Null(result.Http));
+        Assert.Equal(semanticEndpoint.Id, projectedEndpoint.Id);
         Assert.Equal("POST", projected.Http?.Method);
         Assert.Equal(StatusCodes.Status200OK, projected.Results[0].Http?.StatusCode);
         Assert.Equal(StatusCodes.Status409Conflict, projected.Results[1].Http?.StatusCode);
