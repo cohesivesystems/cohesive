@@ -4,7 +4,7 @@ status: accepted
 authority: cohesive.processes.interpreters.durable-task
 owners: [cohesive-core]
 applies_to: [cohesive-processes, cohesive-adapters-durable-task]
-last_verified: 2026-08-09
+last_verified: 2026-08-10
 supersedes: []
 ---
 
@@ -36,8 +36,9 @@ the canonical Process definition fingerprint, multi-token continuation, wait and
 operation ledger, lifecycle control, child protocol, or attempt and activation lineage. It was
 removed rather than treated as a compatibility authority.
 
-The current adapter intentionally exposes only historical task-hub monitoring. The accepted target
-uses the standalone Microsoft Durable Task SDK and Azure Durable Task Scheduler. It should leverage
+The current adapter exposes canonical status through the standalone task-hub client and retains a separate
+historical query-client path for records created by the retired adapter. The accepted target uses the standalone
+Microsoft Durable Task SDK and Azure Durable Task Scheduler. It should leverage
 native orchestrations, activities, durable timers, external events, sub-orchestrations, orchestration
 versioning, lifecycle APIs, tags, custom status and the Scheduler dashboard whenever those facilities
 preserve the requested canonical semantics.
@@ -238,8 +239,16 @@ Storage and Durable Task interpretations and derives lifecycle from `ProcessCont
 demand, health, and terminal evidence from `ProcessContinuationState` and canonical durable-operation state. The
 Durable Task projection always redacts terminal detail and does not copy command receipts, reasons, Signals,
 interaction payloads, bindings, operation ledgers, wait keys, input values, or output values. Scheduler custom status
-and dashboard history are bounded physical projections, not continuation or control authority. Current task-hub
-repository, trace, explain, tag, and migrated-history integration remains the next ARI-292 observability work.
+and dashboard history are bounded physical projections, not continuation or control authority.
+
+`DurableTaskProcessExecutionRepository` queries current instances through the standalone `DurableTaskClient`, exposes
+the exact `ExecutionStatus`, and does not return the fetched start input, orchestration output, provider failure body,
+or raw custom-status JSON. The task-hub ID remains the physical repository key; the status retains the distinct
+logical Process identity. The repository validates the physical ID against the retained authority-scoped start and
+validates status identity and exact definition affinity against that start receipt. A separate Core query-client
+constructor reads the retired adapter's historical wire shapes until those task hubs leave the supported migration
+window. Logical-ID lookup requires the later Scheduler-tag projection. Trace, explain, tag, dashboard, and
+history-event normalization remain ARI-292 follow-up work.
 
 This is not promotion of the full planning profile. Authored timeout, terminal-failure, escalation, and cancellation
 execution paths for general Requests, domain-event/Reply emission, activation-local and non-Process Signal targets,

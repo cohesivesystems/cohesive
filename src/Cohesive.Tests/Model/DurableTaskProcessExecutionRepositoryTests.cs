@@ -64,6 +64,7 @@ public sealed class DurableTaskProcessExecutionRepositoryTests
         Assert.Equal("edi-1", trigger.EdiSpecId);
         var output = Assert.IsType<SampleResult>(item.Output);
         Assert.Equal("shape-graph", output.ArtifactId);
+        Assert.Null(item.RuntimeStatus);
     }
 
     [Fact]

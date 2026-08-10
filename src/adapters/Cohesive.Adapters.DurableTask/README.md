@@ -1,7 +1,7 @@
 # Cohesive.Adapters.DurableTask
 
-Azure Durable Task integration for historical Process monitoring, realization planning, and an executable
-bounded Process profile over the standalone Microsoft Durable Task SDK.
+Azure Durable Task integration for current and migrated historical Process monitoring, realization planning, and
+an executable bounded Process profile over the standalone Microsoft Durable Task SDK.
 
 The former adapter executed callback-bearing Process definitions through a single-cursor checkpoint. ARI-170
 retired that path because it could not preserve canonical Process semantics. The replacement keeps the exact
@@ -42,13 +42,23 @@ closed with their canonical operation ledger because this slice does not fabrica
 ```csharp
 using Cohesive.Adapters.DurableTask;
 
-IProcessExecutionRepository repository = new DurableTaskProcessExecutionRepository(
-    queryClient,
+IProcessExecutionRepository currentRepository = new DurableTaskProcessExecutionRepository(
+    client,
+    taskHubName: "orders");
+
+// Migration-only reader for task hubs created by the retired Core adapter.
+IProcessExecutionRepository historicalRepository = new DurableTaskProcessExecutionRepository(
+    historicalQueryClient,
     taskHubName: "orders");
 ```
 
-The repository projects lifecycle, timing, input, output, and failure evidence only. Historical current-node,
-place, wait, run-option, callback, and definition-registry data is intentionally not an execution authority.
+The primary constructor queries the same standalone `DurableTaskClient` used to schedule canonical Process
+orchestrations. Exact lookup accepts the physical task-hub ID returned by `ScheduleCohesiveProcessAsync`; the
+`ProcessExecutionRecord.ProcessId` remains that authority-scoped physical identity. Its
+`RuntimeStatus.ProcessInstanceId` is the distinct logical Process identity. The repository validates the physical ID
+from the retained start receipt and validates the custom status against the receipt's exact logical identity and
+definition reference.
+
 Current canonical interpreter custom status is a serialized `ExecutionStatus`, not the full orchestration result.
 It exposes the exact definition, logical instance and attempt lineage, control revision and mode, active activation,
 safe token locations, active waits and deadlines, activation progress, work demand, health, and terminal kind. The
@@ -56,10 +66,18 @@ projection is derived from `ProcessControlState` and `ProcessContinuationState`;
 receipts, interaction envelopes, buffered inputs, wait keys, bindings, operation ledgers, input/output values, or
 terminal payload. Terminal detail is explicitly redacted while retaining its portable contract.
 
-This first observability slice does not yet teach `DurableTaskProcessExecutionRepository` to return the new
-canonical status, normalized traces, or explain artifacts. That repository continues to read its historical
-monitoring wire shapes until the follow-up ARI-292 integration slice adds a version-aware current/historical query
-projection. Scheduler custom status and dashboard history remain operational evidence, never semantic authority.
+The current repository returns that exact projection in `ProcessExecutionRecord.RuntimeStatus` and derives the
+compatibility lifecycle field from it. A terminal Scheduler state may close stale nonterminal custom status, but a
+contradictory terminal cut fails instead of being normalized away. Although the pinned client API requires
+`FetchInputsAndOutputs` to retrieve custom status, current records never project the fetched start payload,
+orchestration output, provider failure body, or raw JSON. Scheduler custom status and task-hub history remain
+operational evidence, never semantic authority.
+
+The Core query-client constructor remains an explicit migration reader for the retired adapter's status, input,
+output, and failure projections. It can be removed only after those task hubs are outside the supported retention
+window. Logical-ID lookup for current executions requires the later Scheduler-tag projection because the primary
+task-hub query key is intentionally physical. Normalized trace and explain retrieval, tags, and dashboard enrichment
+remain follow-up ARI-292 work.
 
 ## Realization planning
 
@@ -276,8 +294,9 @@ activity dispatch and Reply admission, child sub-orchestration, recurrence histo
 duplicate start admission, cross-instance and self-Signal delivery, and worker restart while an unbound Request,
 canonical Timer, and AwaitMatch are waiting. The restart assertions verify that retained Transition activity history
 is not reinvoked, Timer keeps its persisted due instant, and an AwaitMatch input is admitted once after replay. The
-emulator reads only the safe `ExecutionStatus` custom-status projection while orchestrations are live; it does not
-use custom status as a hidden continuation, inbox, outbox, or control-receipt channel. It also proves both AwaitMatch
+emulator reads the safe `ExecutionStatus` custom-status projection directly and through
+`IProcessExecutionRepository` while orchestrations are live and after semantic cancellation; it does not use custom
+status as a hidden continuation, inbox, outbox, or control-receipt channel. It also proves both AwaitMatch
 interaction and timer winners. Deterministic conformance tests additionally cover
 lifecycle authorization and revision fences, deferred safe-point control during active host work,
 replacement-attempt lineage, operational/semantic cancellation separation, exact Signal target and envelope

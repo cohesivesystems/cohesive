@@ -1,3 +1,5 @@
+using Cohesive.Execution;
+
 namespace Cohesive.Processes.Runtime;
 
 /// <summary>
@@ -9,10 +11,16 @@ public interface IProcessExecutionRepository
     /// Returns a process execution by id, when it is still retained by the backing engine.
     /// </summary>
     /// <param name="context">Operation context that supplies cancellation for the query.</param>
-    /// <param name="processId">Stable process instance identifier to retrieve.</param>
+    /// <param name="processId">
+    /// Stable repository key assigned by the backing execution engine. When <see cref="ProcessExecutionRecord.RuntimeStatus"/>
+    /// is available, its logical <see cref="ExecutionStatus.ProcessInstanceId"/> may intentionally differ from this physical key.
+    /// </param>
     /// <returns>The retained execution record, or <see langword="null"/> when no matching execution is retained.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="context"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException"><paramref name="processId"/> is empty or whitespace.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// Retained execution metadata is malformed or contains conflicting physical and canonical evidence.
+    /// </exception>
     /// <exception cref="OperationCanceledException">Cancellation is requested through <paramref name="context"/>.</exception>
     ValueTask<ProcessExecutionRecord?> GetAsync(OperationContext context, string processId);
 
@@ -23,6 +31,9 @@ public interface IProcessExecutionRepository
     /// <param name="query">Provider-neutral filters and paging request to apply.</param>
     /// <returns>The retained executions in the requested page and an opaque continuation token when another page is available.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="context"/> or <paramref name="query"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// Retained execution metadata is malformed or contains conflicting physical and canonical evidence.
+    /// </exception>
     /// <exception cref="OperationCanceledException">Cancellation is requested through <paramref name="context"/>.</exception>
     ValueTask<ProcessExecutionQueryResult> QueryAsync(OperationContext context, ProcessExecutionQuery query);
 }
@@ -33,12 +44,12 @@ public interface IProcessExecutionRepository
 public sealed record ProcessExecutionQuery
 {
     /// <summary>
-    /// Optional process instance id prefix.
+    /// Optional physical repository-key prefix.
     /// </summary>
     public string? ProcessIdPrefix { get; init; }
 
     /// <summary>
-    /// Optional process definition name.
+    /// Optional process definition name or stable definition identity.
     /// </summary>
     public string? ProcessName { get; init; }
 
@@ -81,8 +92,8 @@ public sealed record ProcessExecutionQueryResult(
 /// <summary>
 /// Durable process execution state retained by a process-engine execution index.
 /// </summary>
-/// <param name="ProcessId">Stable process instance identifier.</param>
-/// <param name="ProcessName">Process definition name when retained by the execution engine.</param>
+/// <param name="ProcessId">Stable physical repository key assigned by the backing execution engine.</param>
+/// <param name="ProcessName">Process definition name or stable definition identity when retained by the execution engine.</param>
 /// <param name="Status">Current high-level lifecycle status.</param>
 /// <param name="StartedAtUtc">UTC creation or start time when retained by the execution engine.</param>
 /// <param name="UpdatedAtUtc">UTC time of the latest retained execution update.</param>
@@ -91,6 +102,11 @@ public sealed record ProcessExecutionQueryResult(
 /// <param name="FailureMessage">Human-readable failure summary when available.</param>
 /// <param name="Error">Structured failure evidence when available.</param>
 /// <param name="Output">Process output when retained by the execution engine.</param>
+/// <param name="RuntimeStatus">
+/// Protocol-neutral canonical Process status when the execution interpretation published one. Its
+/// <see cref="ExecutionStatus.ProcessInstanceId"/> is the logical Process identity and need not equal the physical
+/// <paramref name="ProcessId"/> used by the backing engine.
+/// </param>
 public sealed record ProcessExecutionRecord(
     string ProcessId,
     string? ProcessName,
@@ -101,7 +117,8 @@ public sealed record ProcessExecutionRecord(
     IReadOnlyDictionary<string, object?>? Parameters = null,
     string? FailureMessage = null,
     ProcessExecutionError? Error = null,
-    object? Output = null
+    object? Output = null,
+    ExecutionStatus? RuntimeStatus = null
 )
 {
     /// <summary>

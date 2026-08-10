@@ -61,8 +61,8 @@ public sealed record ProcessStartResult(
 /// <summary>
 /// Current durable process execution state.
 /// </summary>
-/// <param name="ProcessId">Stable process instance identifier.</param>
-/// <param name="ProcessName">Process definition name when retained by the execution engine.</param>
+/// <param name="ProcessId">Stable physical repository key assigned by the backing execution engine.</param>
+/// <param name="ProcessName">Process definition name or stable definition identity when retained by the execution engine.</param>
 /// <param name="Status">Current high-level lifecycle status.</param>
 /// <param name="StartedAtUtc">UTC creation or start time when retained by the execution engine.</param>
 /// <param name="UpdatedAtUtc">UTC time of the latest retained execution update.</param>
