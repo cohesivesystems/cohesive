@@ -18,7 +18,9 @@ namespace Cohesive.Adapters.DurableTask;
 /// derived <see cref="ExecutionStatus"/> observation; the retained start receipt supplies exact identity and definition
 /// affinity. The Core query-client constructor exists only for historical executions created by the retired adapter.
 /// </remarks>
-public sealed class DurableTaskProcessExecutionRepository : IProcessExecutionRepository
+public sealed class DurableTaskProcessExecutionRepository :
+    IProcessExecutionRepository,
+    IProcessExecutionTraceRepository
 {
     const int DefaultPageSize = 100;
     const int MaxPageSize = 1000;
@@ -110,6 +112,60 @@ public sealed class DurableTaskProcessExecutionRepository : IProcessExecutionRep
     }
 
     /// <inheritdoc />
+    public ValueTask<ProcessExecutionTraceReadResult> GetTracesAsync(
+        OperationContext context,
+        string processId)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(processId);
+        context.ThrowIfCancellationRequested();
+        if (currentClient is null)
+        {
+            throw new NotSupportedException(
+                "Canonical normalized trace retrieval is unavailable on the migration-only Durable Task Core repository.");
+        }
+
+        return GetCurrentTracesAsync(context, processId);
+    }
+
+    /// <summary>Reads retained canonical traces by trusted authority scope and logical Process identity.</summary>
+    /// <param name="context">Operation context that supplies cancellation for the read.</param>
+    /// <param name="authorityScope">Exact trusted authority and optional tenant that isolate the physical execution.</param>
+    /// <param name="processInstanceId">Canonical logical Process instance identity.</param>
+    /// <returns>An explicit availability result and canonical trace coverage when available.</returns>
+    /// <remarks>
+    /// This overload derives the same authority-scoped physical identity used for scheduling and performs one exact
+    /// task-hub lookup. It never enumerates execution pages or relies on tags as semantic authority.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="context"/> or <paramref name="authorityScope"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="processInstanceId"/> is the default identity.</exception>
+    /// <exception cref="InvalidOperationException">Retained canonical evidence is malformed or contradictory.</exception>
+    /// <exception cref="NotSupportedException">This repository was constructed as the historical Core reader.</exception>
+    /// <exception cref="OperationCanceledException">Cancellation is requested through <paramref name="context"/>.</exception>
+    public ValueTask<ProcessExecutionTraceReadResult> GetTracesAsync(
+        OperationContext context,
+        InteractionAuthorityScope authorityScope,
+        ProcessInstanceId processInstanceId)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(authorityScope);
+        context.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(processInstanceId.Value))
+            throw new ArgumentException("A logical Process trace read requires an initialized instance identity.", nameof(processInstanceId));
+        if (currentClient is null)
+        {
+            throw new NotSupportedException(
+                "Canonical normalized trace retrieval is unavailable on the migration-only Durable Task Core repository.");
+        }
+
+        return GetCurrentTracesAsync(
+            context,
+            DurableTaskProcessExecutionIdentity.GetPhysicalInstanceId(authorityScope, processInstanceId));
+    }
+
+    /// <inheritdoc />
     public ValueTask<ProcessExecutionQueryResult> QueryAsync(
         OperationContext context,
         ProcessExecutionQuery query)
@@ -132,6 +188,50 @@ public sealed class DurableTaskProcessExecutionRepository : IProcessExecutionRep
         return metadata is null || !IsCurrentProcess(metadata)
             ? null
             : MapCurrent(metadata);
+    }
+
+    async ValueTask<ProcessExecutionTraceReadResult> GetCurrentTracesAsync(
+        OperationContext context,
+        string processId)
+    {
+        var metadata = await currentClient!.GetInstanceAsync(
+            processId,
+            getInputsAndOutputs: true,
+            context.CancellationToken).ConfigureAwait(false);
+        if (metadata is null || !IsCurrentProcess(metadata))
+            return ProcessExecutionTraceReadResult.NotFound();
+
+        var execution = MapCurrent(metadata);
+        if (!DurableTaskProcessStatus.IsTerminal(metadata.RuntimeStatus))
+        {
+            if (!string.IsNullOrWhiteSpace(metadata.SerializedOutput))
+            {
+                throw InvalidCurrentEvidence(
+                    metadata,
+                    "contains a terminal canonical result while its task-hub execution is not terminal");
+            }
+            return ProcessExecutionTraceReadResult.InProgress();
+        }
+        if (string.IsNullOrWhiteSpace(metadata.SerializedOutput))
+            return ProcessExecutionTraceReadResult.TerminalArtifactUnavailable();
+        if (metadata.RuntimeStatus != ModernOrchestrationStatus.Completed)
+        {
+            throw InvalidCurrentEvidence(
+                metadata,
+                "contains a canonical result artifact even though the task-hub execution did not complete normally");
+        }
+
+        var result = ReadCurrentResult(metadata);
+        var runtimeStatus = execution.RuntimeStatus
+            ?? throw InvalidCurrentEvidence(metadata, "has a canonical result but no canonical terminal custom status");
+        ValidateResultAffinity(metadata, result, runtimeStatus);
+        var missingTracePrefixCount = result.Evidence.Length - result.Traces.Length;
+        return ProcessExecutionTraceReadResult.Available(new(
+            metadata.InstanceId,
+            result.State.Definition,
+            result.State.Continuation.ProcessInstanceId,
+            missingTracePrefixCount,
+            result.Traces));
     }
 
     async ValueTask<ProcessExecutionQueryResult> QueryCurrentAsync(
@@ -251,6 +351,20 @@ public sealed class DurableTaskProcessExecutionRepository : IProcessExecutionRep
         }
     }
 
+    static DurableTaskSequentialProcessResult ReadCurrentResult(ModernOrchestrationMetadata metadata)
+    {
+        try
+        {
+            return metadata.ReadOutputAs<DurableTaskSequentialProcessResult>()
+                ?? throw InvalidCurrentEvidence(metadata, "contains a null canonical result artifact");
+        }
+        catch (Exception exception) when (exception is not InvalidOperationException
+                                          || !exception.Message.StartsWith("Durable Task Process instance", StringComparison.Ordinal))
+        {
+            throw InvalidCurrentEvidence(metadata, "contains a malformed canonical result artifact", exception);
+        }
+    }
+
     static void ValidatePhysicalIdentity(
         ModernOrchestrationMetadata metadata,
         DurableTaskSequentialProcessStart start)
@@ -281,6 +395,29 @@ public sealed class DurableTaskProcessExecutionRepository : IProcessExecutionRep
             throw InvalidCurrentEvidence(
                 metadata,
                 "contains canonical custom status with Process identity or exact definition affinity that conflicts with its start receipt");
+        }
+    }
+
+    static void ValidateResultAffinity(
+        ModernOrchestrationMetadata metadata,
+        DurableTaskSequentialProcessResult result,
+        ExecutionStatus runtimeStatus)
+    {
+        var projected = DurableTaskProcessStatus.Project(result);
+        if (projected.TerminalOutcome.Kind == ExecutionTerminalOutcomeKind.None)
+        {
+            throw InvalidCurrentEvidence(metadata, "contains a nonterminal canonical result artifact at a terminal cut");
+        }
+        if (projected.Definition != runtimeStatus.Definition
+            || projected.ProcessInstanceId != runtimeStatus.ProcessInstanceId
+            || projected.CurrentAttemptId != runtimeStatus.CurrentAttemptId
+            || projected.ControlRevision != runtimeStatus.ControlRevision
+            || projected.ControlMode != runtimeStatus.ControlMode
+            || projected.TerminalOutcome.Kind != runtimeStatus.TerminalOutcome.Kind)
+        {
+            throw InvalidCurrentEvidence(
+                metadata,
+                "contains a canonical result whose definition, continuation, control, or terminal outcome conflicts with custom status");
         }
     }
 

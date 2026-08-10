@@ -134,6 +134,10 @@ Use the common projections:
   actionable diagnostics; and
 - `ExecutionTelemetry` plus Storage telemetry bridges for low-cardinality operational signals.
 
+Use `IProcessExecutionTraceRepository` when a runtime must retrieve retained Process traces separately from status.
+Its explicit read state distinguishes an active execution from a missing execution or a terminal execution without
+a canonical artifact. Available records expose a missing-prefix count; only zero proves complete activation coverage.
+
 API, CLI, tests, and documentation serialize the same artifacts through
 `ExecutionExplainJsonSerializer` and `ExecutionTraceJsonSerializer`. A transport may format or
 redact according to the declared disclosure contract; it must not translate the artifact into an

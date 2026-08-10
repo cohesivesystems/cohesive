@@ -99,6 +99,19 @@ public sealed class DurableTaskProcessExecutionRepositoryTests
     }
 
     [Fact]
+    public async Task HistoricalCoreReader_DoesNotFabricateCanonicalNormalizedTraces()
+    {
+        IProcessExecutionTraceRepository repository = new DurableTaskProcessExecutionRepository(
+            new FakeOrchestrationServiceQueryClient([]));
+
+        var exception = await Assert.ThrowsAsync<NotSupportedException>(async () =>
+            await repository.GetTracesAsync(OperationContext.Create(), "proc-1"));
+
+        Assert.Contains("migration-only", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("unavailable", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task QueryAsync_UsesTerminalRuntimeStatusWhenCustomStatusIsStale()
     {
         var converter = CreateConverter();

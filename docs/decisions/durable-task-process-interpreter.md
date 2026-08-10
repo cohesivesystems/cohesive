@@ -249,6 +249,13 @@ orchestration instead of omitting the activation. These traces are deliberately 
 Scheduler history describes physical orchestration execution and cannot reconstruct semantic traces that predate
 this retention boundary.
 
+Current standalone-client monitoring also implements the provider-neutral `IProcessExecutionTraceRepository`.
+It reads a terminal `DurableTaskSequentialProcessResult` internally, validates it against retained start and custom
+status affinity, and exposes only `NormalizedExecutionTrace` artifacts plus an exact missing-prefix count. Read state
+separates not found, in-progress, available, and terminal-without-artifact outcomes; an empty trace collection alone
+never claims completeness. The migration-only Core reader is unsupported because its provider history is not
+canonical trace evidence.
+
 New schedules also project one versioned immutable Scheduler tag set from the canonical start receipt. It contains
 only the logical Process instance ID and the exact definition identity, revision, fingerprint algorithm,
 canonicalization, and value. It does not contain authority or tenant, command or idempotency identity, Process input
@@ -266,8 +273,9 @@ constructor reads the retired adapter's historical wire shapes until those task 
 window. Current logical-ID lookup accepts trusted authority scope plus `ProcessInstanceId`, derives the same versioned
 opaque physical ID used at scheduling, and performs one exact lookup. Scheduler tags support dashboard discovery, but
 the pinned .NET `OrchestrationQuery` has no tag predicate; Cohesive therefore does not emulate a tag index by scanning
-task-hub pages. Canonical trace retention now occurs at execution time; trace/explain retrieval, richer dashboard
-presentation, and history-event normalization remain ARI-292 follow-up work.
+task-hub pages. Canonical trace retention and terminal retrieval are implemented; execution-control API/explain
+binding, live trace streaming, richer dashboard presentation, and history-event normalization remain ARI-292
+follow-up work.
 
 This is not promotion of the full planning profile. Authored timeout, terminal-failure, escalation, and cancellation
 execution paths for general Requests, domain-event/Reply emission, activation-local and non-Process Signal targets,
