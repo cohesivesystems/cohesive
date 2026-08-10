@@ -2348,6 +2348,13 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         Assert.Equal(
             ProcessActivationDisposition.Completed,
             completed.ReadOutputAs<DurableTaskSequentialProcessResult>()!.Disposition);
+        var completedTraceRead = await new DurableTaskProcessExecutionRepository(firstClient).GetTracesAsync(
+            OperationContext.Create(cancellationToken: timeout.Token),
+            scheduled.InstanceId);
+        Assert.Equal(ProcessExecutionTraceReadState.Available, completedTraceRead.State);
+        var completedTraces = Assert.IsType<ProcessExecutionTraceRecord>(completedTraceRead.Record);
+        Assert.True(completedTraces.IsComplete);
+        Assert.NotEmpty(completedTraces.Traces);
 
         var duplicate = await firstClient.ScheduleCohesiveProcessAsync(completedStart, timeout.Token);
         Assert.True(duplicate.Replayed);

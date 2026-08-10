@@ -1,9 +1,13 @@
 using System.Collections.Immutable;
 using Cohesive.Execution;
+using Cohesive.Model.Serialization;
+using Cohesive.Processes.Compilation;
 using Cohesive.Processes.Execution;
+using Cohesive.Processes.IR;
 using Cohesive.Processes.Runtime;
 using Microsoft.DurableTask;
 using Microsoft.DurableTask.Client;
+using CanonicalProcessDefinition = Cohesive.Processes.IR.ProcessDefinition;
 
 namespace Cohesive.Tests.ExecutionKernel;
 
@@ -153,6 +157,144 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
             DurableTaskProcessExecutionIdentity.GetPhysicalInstanceId(
                 new(fixture.Scope.Authority, "tenant/other"),
                 fixture.LogicalInstanceId));
+    }
+
+    [Fact]
+    public async Task GetTracesAsync_DistinguishesMissingActiveUnavailableAndAvailableArtifacts()
+    {
+        const string PrivateInput = "private-input-ari-318";
+        const string PrivateOutput = "private-output-ari-318";
+        var completed = await CreateCompletedFixtureAsync(
+            "process/repository-trace-available",
+            PrivateInput,
+            PrivateOutput);
+        var completedMetadata = Metadata(
+            completed.Fixture,
+            completed.Fixture.WaitingStatus,
+            OrchestrationRuntimeStatus.Completed,
+            serializedOutput: completed.Fixture.Converter.Serialize(completed.Result));
+        var completedClient = new FakeDurableTaskClient([completedMetadata]);
+        IProcessExecutionTraceRepository completedRepository =
+            new DurableTaskProcessExecutionRepository(completedClient);
+
+        var available = await completedRepository.GetTracesAsync(
+            OperationContext.Create(),
+            completed.Fixture.PhysicalInstanceId);
+
+        Assert.Equal(ProcessExecutionTraceReadState.Available, available.State);
+        var record = Assert.IsType<ProcessExecutionTraceRecord>(available.Record);
+        Assert.True(record.IsComplete);
+        Assert.Equal(0, record.MissingTracePrefixCount);
+        Assert.Equal(completed.Result.Evidence.Length, record.ActivationEvidenceCount);
+        Assert.Equal(
+            completed.Result.Traces.Select(static trace => ExecutionTraceJsonSerializer.Serialize(trace)),
+            record.Traces.Select(static trace => ExecutionTraceJsonSerializer.Serialize(trace)));
+        Assert.Equal(1, completedClient.GetCount);
+        Assert.Equal(0, completedClient.QueryCount);
+        var serializedRecord = completed.Fixture.Converter.Serialize(available);
+        Assert.DoesNotContain(PrivateInput, serializedRecord, StringComparison.Ordinal);
+        Assert.DoesNotContain(PrivateOutput, serializedRecord, StringComparison.Ordinal);
+
+        var activeFixture = CreateFixture();
+        var active = await new DurableTaskProcessExecutionRepository(new FakeDurableTaskClient([
+            Metadata(activeFixture, activeFixture.WaitingStatus, OrchestrationRuntimeStatus.Running)
+        ])).GetTracesAsync(OperationContext.Create(), activeFixture.PhysicalInstanceId);
+        Assert.Equal(ProcessExecutionTraceReadState.InProgress, active.State);
+
+        var terminalStatus = Terminal(
+            activeFixture.WaitingStatus,
+            ExecutionTerminalOutcomeKind.Completed,
+            ExecutionAttemptDisposition.Completed,
+            ProcessControlMode.Running);
+        var unavailable = await new DurableTaskProcessExecutionRepository(new FakeDurableTaskClient([
+            Metadata(activeFixture, terminalStatus, OrchestrationRuntimeStatus.Completed)
+        ])).GetTracesAsync(OperationContext.Create(), activeFixture.PhysicalInstanceId);
+        Assert.Equal(ProcessExecutionTraceReadState.TerminalArtifactUnavailable, unavailable.State);
+
+        var missing = await new DurableTaskProcessExecutionRepository(new FakeDurableTaskClient([]))
+            .GetTracesAsync(OperationContext.Create(), activeFixture.PhysicalInstanceId);
+        Assert.Equal(ProcessExecutionTraceReadState.NotFound, missing.State);
+    }
+
+    [Fact]
+    public async Task GetTracesAsync_ReportsLegacyPrefixAndUsesExactLogicalIdentityLookup()
+    {
+        var completed = await CreateCompletedFixtureAsync(
+            "process/repository-trace-legacy",
+            "legacy-input",
+            "legacy-output");
+        var result = completed.Result;
+        var legacy = new DurableTaskSequentialProcessResult(
+            result.Disposition,
+            result.State,
+            result.Control,
+            result.LatestControlDecision,
+            result.Emissions,
+            result.InputAdmissions,
+            result.Diagnostics,
+            result.Evidence,
+            result.DurableOperations);
+        var metadata = Metadata(
+            completed.Fixture,
+            completed.Fixture.WaitingStatus,
+            OrchestrationRuntimeStatus.Completed,
+            serializedOutput: completed.Fixture.Converter.Serialize(legacy));
+        var client = new FakeDurableTaskClient([metadata]);
+        var repository = new DurableTaskProcessExecutionRepository(client);
+
+        var read = await repository.GetTracesAsync(
+            OperationContext.Create(),
+            completed.Fixture.Scope,
+            completed.Fixture.LogicalInstanceId);
+
+        var record = Assert.IsType<ProcessExecutionTraceRecord>(read.Record);
+        Assert.False(record.IsComplete);
+        Assert.Empty(record.Traces);
+        Assert.Equal(result.Evidence.Length, record.MissingTracePrefixCount);
+        Assert.Equal(completed.Fixture.PhysicalInstanceId, record.ProcessId);
+        Assert.Equal(completed.Fixture.PhysicalInstanceId, client.LastGetInstanceId);
+        Assert.Equal(1, client.GetCount);
+        Assert.Equal(0, client.QueryCount);
+    }
+
+    [Fact]
+    public async Task GetTracesAsync_FailsClosedOnMalformedOrConflictingTerminalResults()
+    {
+        var completed = await CreateCompletedFixtureAsync(
+            "process/repository-trace-affinity",
+            "input",
+            "output");
+        var malformed = Metadata(
+            completed.Fixture,
+            completed.Fixture.WaitingStatus,
+            OrchestrationRuntimeStatus.Completed,
+            serializedOutput: "{not-json");
+        var malformedRepository = new DurableTaskProcessExecutionRepository(
+            new FakeDurableTaskClient([malformed]));
+
+        var malformedException = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await malformedRepository.GetTracesAsync(
+                OperationContext.Create(),
+                completed.Fixture.PhysicalInstanceId));
+        Assert.Contains("malformed canonical result artifact", malformedException.Message, StringComparison.Ordinal);
+
+        var other = await CreateCompletedFixtureAsync(
+            "process/repository-trace-other",
+            "input",
+            "output");
+        var conflicting = Metadata(
+            completed.Fixture,
+            completed.Fixture.WaitingStatus,
+            OrchestrationRuntimeStatus.Completed,
+            serializedOutput: completed.Fixture.Converter.Serialize(other.Result));
+        var conflictingRepository = new DurableTaskProcessExecutionRepository(
+            new FakeDurableTaskClient([conflicting]));
+
+        var conflictException = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await conflictingRepository.GetTracesAsync(
+                OperationContext.Create(),
+                completed.Fixture.PhysicalInstanceId));
+        Assert.Contains("conflicts with custom status", conflictException.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -360,6 +502,86 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
             DurableTaskProcessDataConverter.Create());
     }
 
+    static async Task<CompletedTraceFixture> CreateCompletedFixtureAsync(
+        string definitionId,
+        string input,
+        string output)
+    {
+        var provenance = new ExecutionProvenance(
+            new("durable-task-trace-read-tests", "1"),
+            new("tests/execution-kernel/durable-task-trace-reads"),
+            DocumentOrigin.Generated);
+        CanonicalProcessDefinition definition = new(
+            ProcessDurabilityTestFixture.StringContract,
+            ProcessDurabilityTestFixture.StringContract,
+            new("return"),
+            [new ReturnProcessNode(new("return"), Expr.Const(output))],
+            ProcessRecoveryPolicy.ContinueAttempt);
+        var document = ProcessDefinitionDocuments.Create(
+            new(definitionId),
+            new("revision/1"),
+            definition,
+            provenance);
+        var compilation = ProcessStaticCompiler.Compile(
+            document,
+            new ProcessDefinitionValidationContext());
+        Assert.True(compilation.IsSuccessful, string.Join("; ", compilation.Validation.Diagnostics));
+        var plan = Assert.IsType<CompiledProcessPlan>(compilation.Plan);
+        var continuation = new ProcessContinuationIdentity(
+            new($"process-instance/{definitionId}"),
+            new("process-attempt/1"));
+        var scope = new InteractionAuthorityScope("authority/tests", "tenant/cohesive");
+        var startedAtUtc = ProcessDurabilityTestFixture.AcceptedAtUtc;
+        var start = new DurableTaskSequentialProcessStart(
+            new ProcessStartReceipt(
+                new(
+                    ProcessStartRequest.CurrentSchemaVersion,
+                    plan.DefinitionReference,
+                    new(
+                        new("command/start"),
+                        new("idempotency/start"),
+                        continuation.ProcessInstanceId,
+                        new("test-runner", scope, "authorization/tests"),
+                        startedAtUtc,
+                        provenance),
+                    continuation,
+                    PortableValue.Concrete(
+                        ProcessDurabilityTestFixture.StringContract,
+                        ObservationValue.FromString(input))),
+                startedAtUtc),
+            new(
+                scope,
+                new("correlation/durable-task-trace-read-tests"),
+                new(
+                    InteractionDurabilityDemand.Durable,
+                    InteractionVisibilityDemand.AfterOriginCommit),
+                provenance));
+        var result = await DurableTaskSequentialProcessInterpreter.RunAsync(
+            plan,
+            start,
+            EmptyDurableRequestBindingResolver.Instance,
+            static operation => throw new InvalidOperationException($"Unexpected host operation '{operation.Kind}'."),
+            static invocation => throw new InvalidOperationException(
+                $"Unexpected durable operation '{invocation.Request.Context.EmissionId.Value}'."),
+            static invocation => throw new InvalidOperationException(
+                $"Unexpected child Process '{invocation.Request.Context.EmissionId.Value}'."),
+            static operation => throw new InvalidOperationException(
+                $"Unexpected reconciliation '{operation.OperationId.Value}'."),
+            static () => throw new InvalidOperationException("Unexpected interaction wait."),
+            static (delay, cancellationToken) => throw new InvalidOperationException(
+                $"Unexpected durable timer '{delay}' ({cancellationToken.CanBeCanceled})."),
+            () => startedAtUtc.AddSeconds(1));
+        var status = DurableTaskProcessStatus.Project(result);
+        var fixture = new CurrentFixture(
+            start,
+            status,
+            DurableTaskSequentialProcessIdentities.OrchestrationInstance(start),
+            scope,
+            continuation.ProcessInstanceId,
+            DurableTaskProcessDataConverter.Create());
+        return new(fixture, result);
+    }
+
     static OrchestrationMetadata Metadata(
         CurrentFixture fixture,
         ExecutionStatus? status,
@@ -440,6 +662,10 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
         InteractionAuthorityScope Scope,
         ProcessInstanceId LogicalInstanceId,
         DataConverter Converter);
+
+    sealed record CompletedTraceFixture(
+        CurrentFixture Fixture,
+        DurableTaskSequentialProcessResult Result);
 
     sealed class FakeDurableTaskClient(
         IReadOnlyList<OrchestrationMetadata> metadata,

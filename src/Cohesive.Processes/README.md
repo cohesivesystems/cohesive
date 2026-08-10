@@ -160,6 +160,12 @@ canonical definitions with `Cohesive.Storage.Processes.ProcessDurableRuntime` an
 interpreters and adapters must declare supported capabilities and preserve the canonical semantics or emit precise
 diagnostics.
 
+`IProcessExecutionTraceRepository` is the opt-in runtime boundary for reading retained payload-safe traces without
+adding them to ordinary execution status or listing records. Its result distinguishes not found, in-progress,
+available, and terminal-without-artifact executions. An available `ProcessExecutionTraceRecord` carries an explicit
+missing-prefix count, so pre-retention gaps cannot be mistaken for complete trace coverage. The repository envelope
+does not replace `NormalizedExecutionTrace`; it describes provider availability and coverage of that shared artifact.
+
 ## Interpreter capability realization
 
 `ProcessInterpreterRequirementCollector` acquires a target-neutral inventory from one exact

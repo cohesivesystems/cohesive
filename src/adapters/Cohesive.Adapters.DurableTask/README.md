@@ -51,6 +51,19 @@ ProcessExecutionRecord? execution = await currentRepository.GetAsync(
     trustedAuthorityScope,
     logicalProcessInstanceId);
 
+ProcessExecutionTraceReadResult traceRead = await currentRepository.GetTracesAsync(
+    operationContext,
+    trustedAuthorityScope,
+    logicalProcessInstanceId);
+
+if (traceRead.Record is { IsComplete: true } complete)
+{
+    foreach (NormalizedExecutionTrace trace in complete.Traces)
+    {
+        // Render or serialize the shared canonical artifact.
+    }
+}
+
 // Migration-only reader for task hubs created by the retired Core adapter.
 IProcessExecutionRepository historicalRepository = new DurableTaskProcessExecutionRepository(
     historicalQueryClient,
@@ -89,6 +102,13 @@ silently creating a trace gap. Traces remain outside custom status, and Schedule
 evidence rather than a source from which missing semantic traces may be fabricated. Results written before trace
 retention can therefore contain canonical activation evidence without a corresponding normalized trace prefix.
 
+The same current repository implements `IProcessExecutionTraceRepository` as a separate opt-in read. It performs one
+exact task-hub lookup, validates start, custom-status, terminal-result, and trace affinity, and returns only the
+normalized traces plus coverage evidence. `NotFound`, `InProgress`, `Available`, and
+`TerminalArtifactUnavailable` are distinct outcomes. Available records report the exact count of earliest activation
+evidence entries without a trace; only a zero missing-prefix count is complete. Trace artifacts are available after a
+canonical terminal result exists—this boundary does not stream live event traces or enlarge custom status.
+
 The current repository returns that exact projection in `ProcessExecutionRecord.RuntimeStatus` and derives the
 compatibility lifecycle field from it. A terminal Scheduler state may close stale nonterminal custom status, but a
 contradictory terminal cut fails instead of being normalized away. Although the pinned client API requires
@@ -100,8 +120,10 @@ The Core query-client constructor remains an explicit migration reader for the r
 output, and failure projections. It can be removed only after those task hubs are outside the supported retention
 window. Tagless canonical instances created before the discovery projection remain readable, while a recognized
 partial or conflicting Cohesive tag set fails closed. Normalized trace retention is complete for newly executed
-activations; trace/explain retrieval, richer dashboard presentation, and history-event normalization remain
-follow-up ARI-292 work.
+activations, and terminal trace retrieval is available through the current standalone-client repository. The
+migration-only Core reader explicitly does not fabricate canonical traces from historical provider records.
+Execution-control API/explain binding, live trace streaming, richer dashboard presentation, and history-event
+normalization remain follow-up ARI-292 work.
 
 ## Realization planning
 
