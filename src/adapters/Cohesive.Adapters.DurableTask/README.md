@@ -42,9 +42,14 @@ closed with their canonical operation ledger because this slice does not fabrica
 ```csharp
 using Cohesive.Adapters.DurableTask;
 
-IProcessExecutionRepository currentRepository = new DurableTaskProcessExecutionRepository(
+var currentRepository = new DurableTaskProcessExecutionRepository(
     client,
     taskHubName: "orders");
+
+ProcessExecutionRecord? execution = await currentRepository.GetAsync(
+    operationContext,
+    trustedAuthorityScope,
+    logicalProcessInstanceId);
 
 // Migration-only reader for task hubs created by the retired Core adapter.
 IProcessExecutionRepository historicalRepository = new DurableTaskProcessExecutionRepository(
@@ -57,7 +62,16 @@ orchestrations. Exact lookup accepts the physical task-hub ID returned by `Sched
 `ProcessExecutionRecord.ProcessId` remains that authority-scoped physical identity. Its
 `RuntimeStatus.ProcessInstanceId` is the distinct logical Process identity. The repository validates the physical ID
 from the retained start receipt and validates the custom status against the receipt's exact logical identity and
-definition reference.
+definition reference. The logical overload derives the same opaque authority-scoped physical ID used at scheduling
+and performs one exact lookup; it does not enumerate task-hub pages.
+
+New schedules publish immutable `cohesive.process.tags/v1` Scheduler discovery tags for the logical Process instance
+and the exact definition identity, revision, fingerprint algorithm, canonicalization, and value. The centralized
+`DurableTaskProcessTags` catalog owns their names and projection. Every value is validated against Scheduler's
+1,000-byte UTF-8 limit before admission. The set excludes authority, tenant, command/idempotency identity, input,
+output, interaction content, waits, failure detail, and all mutable state. Tags can be filtered in the Scheduler
+dashboard; the pinned .NET `OrchestrationQuery` has no tag predicate, so programmatic exact lookup uses deterministic
+key derivation rather than a hidden page scan.
 
 Current canonical interpreter custom status is a serialized `ExecutionStatus`, not the full orchestration result.
 It exposes the exact definition, logical instance and attempt lineage, control revision and mode, active activation,
@@ -75,9 +89,9 @@ operational evidence, never semantic authority.
 
 The Core query-client constructor remains an explicit migration reader for the retired adapter's status, input,
 output, and failure projections. It can be removed only after those task hubs are outside the supported retention
-window. Logical-ID lookup for current executions requires the later Scheduler-tag projection because the primary
-task-hub query key is intentionally physical. Normalized trace and explain retrieval, tags, and dashboard enrichment
-remain follow-up ARI-292 work.
+window. Tagless canonical instances created before the discovery projection remain readable, while a recognized
+partial or conflicting Cohesive tag set fails closed. Normalized trace and explain retrieval, richer dashboard
+presentation, and history-event normalization remain follow-up ARI-292 work.
 
 ## Realization planning
 

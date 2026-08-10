@@ -241,14 +241,25 @@ Durable Task projection always redacts terminal detail and does not copy command
 interaction payloads, bindings, operation ledgers, wait keys, input values, or output values. Scheduler custom status
 and dashboard history are bounded physical projections, not continuation or control authority.
 
+New schedules also project one versioned immutable Scheduler tag set from the canonical start receipt. It contains
+only the logical Process instance ID and the exact definition identity, revision, fingerprint algorithm,
+canonicalization, and value. It does not contain authority or tenant, command or idempotency identity, Process input
+or output, interaction content, wait keys, failure detail, or mutable lifecycle/location. Each value is checked against
+Scheduler's 1,000-byte UTF-8 limit before admission. Recognized partial or conflicting tag sets fail repository reads;
+tagless canonical instances created before this projection remain readable. Tags are dashboard discovery metadata,
+not semantic authority, and their immutability is why changing Process state remains in canonical custom status.
+
 `DurableTaskProcessExecutionRepository` queries current instances through the standalone `DurableTaskClient`, exposes
 the exact `ExecutionStatus`, and does not return the fetched start input, orchestration output, provider failure body,
 or raw custom-status JSON. The task-hub ID remains the physical repository key; the status retains the distinct
 logical Process identity. The repository validates the physical ID against the retained authority-scoped start and
 validates status identity and exact definition affinity against that start receipt. A separate Core query-client
 constructor reads the retired adapter's historical wire shapes until those task hubs leave the supported migration
-window. Logical-ID lookup requires the later Scheduler-tag projection. Trace, explain, tag, dashboard, and
-history-event normalization remain ARI-292 follow-up work.
+window. Current logical-ID lookup accepts trusted authority scope plus `ProcessInstanceId`, derives the same versioned
+opaque physical ID used at scheduling, and performs one exact lookup. Scheduler tags support dashboard discovery, but
+the pinned .NET `OrchestrationQuery` has no tag predicate; Cohesive therefore does not emulate a tag index by scanning
+task-hub pages. Trace, explain, richer dashboard presentation, and history-event normalization remain ARI-292
+follow-up work.
 
 This is not promotion of the full planning profile. Authored timeout, terminal-failure, escalation, and cancellation
 execution paths for general Requests, domain-event/Reply emission, activation-local and non-Process Signal targets,
