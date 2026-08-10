@@ -628,6 +628,206 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     }
 
     [Fact]
+    public async Task Signal_TargetResolutionAndDeliveryPreserveTheExactCanonicalEnvelope()
+    {
+        var fixture = CompileSignalFixture("process/durable-task-signal-exact");
+        var receiverStart = Start(fixture.Receiver, "receiver", "instance/signal-exact-receiver");
+        var receiverInitial = ProcessReferenceInterpreter.Create(fixture.Receiver, receiverStart.Receipt);
+        var target = new ProcessTokenInteractionTarget(
+            receiverInitial.Continuation,
+            Assert.Single(receiverInitial.Tokens).Id);
+        var senderStart = Start(fixture.Sender, "payload", "instance/signal-exact-sender");
+        List<ProcessSignalTargetResolution> resolutions = [];
+        List<SignalEnvelope> deliveries = [];
+
+        var actual = await DurableTaskSequentialProcessInterpreter.RunAsync(
+            fixture.Sender,
+            senderStart,
+            EmptyDurableRequestBindingResolver.Instance,
+            UnexpectedOperation,
+            UnexpectedDurableOperation,
+            UnexpectedChildProcess,
+            UnexpectedReconciliation,
+            UnexpectedInteraction,
+            TestDurableTimer,
+            () => StartedAtUtc,
+            resolveSignalTarget: resolution =>
+            {
+                resolutions.Add(resolution);
+                return Task.FromResult(ProcessSignalTargetResult.Resolved(target));
+            },
+            deliverSignal: signal =>
+            {
+                deliveries.Add(signal);
+                return Task.CompletedTask;
+            });
+
+        var initial = ProcessReferenceInterpreter.Create(fixture.Sender, senderStart.Receipt);
+        var expected = ProcessReferenceInterpreter.Activate(
+            fixture.Sender,
+            initial,
+            Activation(initial, ProcessActivationCause.Start, senderStart),
+            new FixedSignalTargetHost(target));
+
+        Assert.Equal(ProcessActivationDisposition.Completed, actual.Disposition);
+        Assert.Equal(Serialize(expected.State), Serialize(actual.State));
+        Assert.Equal(Serialize(expected.Evidence), Serialize(Assert.Single(actual.Evidence)));
+        Assert.Equal(expected.Emissions.Select(Serialize), actual.Emissions.Select(Serialize));
+        var resolution = Assert.Single(resolutions);
+        Assert.Equal("route/process", resolution.Value.Value?.GetRequiredString());
+        Assert.Equal(senderStart.Receipt.Request.InitialContinuation, resolution.Continuation);
+        Assert.Equal(new ExecutionNodeId("signal"), resolution.Node);
+        var signal = Assert.Single(deliveries);
+        Assert.Equal(Assert.Single(actual.Emissions), signal);
+        Assert.Equal(fixture.Contract, signal.Contract);
+        Assert.Equal(StringValue("payload"), signal.Payload);
+        Assert.Equal(target, signal.Target);
+        Assert.Equal(senderStart.ActivationContext.CorrelationId, signal.Context.CorrelationId);
+        Assert.Equal(senderStart.ActivationContext.Delivery, signal.Context.Delivery);
+        Assert.Equal(senderStart.ActivationContext.Provenance, signal.Context.Provenance);
+        var origin = Assert.IsType<ProcessInteractionOrigin>(signal.Context.Origin);
+        Assert.Equal(fixture.Sender.DefinitionReference, origin.Definition);
+        Assert.Equal(senderStart.Receipt.Request.InitialContinuation, origin.Continuation);
+        Assert.Equal(new ExecutionNodeId("signal"), origin.Node);
+    }
+
+    [Fact]
+    public async Task Signal_RecipientRetainsMissingStaleDuplicateAndConsumedCanonicalDispositions()
+    {
+        var fixture = CompileSignalFixture("process/durable-task-signal-admission");
+        var receiverStart = Start(fixture.Receiver, "receiver", "instance/signal-admission-receiver");
+        var receiverInitial = ProcessReferenceInterpreter.Create(fixture.Receiver, receiverStart.Receipt);
+        var receiverToken = Assert.Single(receiverInitial.Tokens).Id;
+        var correct = new ProcessTokenInteractionTarget(receiverInitial.Continuation, receiverToken);
+        var missing = new ProcessTokenInteractionTarget(receiverInitial.Continuation, new("token/missing"));
+        var stale = new ProcessTokenInteractionTarget(
+            new(receiverInitial.Continuation.ProcessInstanceId, new("process-attempt/stale")),
+            receiverToken);
+        var missingSignal = await EmitSignalAsync(fixture.Sender, "sender/missing", missing);
+        var staleSignal = await EmitSignalAsync(fixture.Sender, "sender/stale", stale);
+        var first = await EmitSignalAsync(fixture.Sender, "sender/first", correct);
+        var second = await EmitSignalAsync(fixture.Sender, "sender/second", correct);
+        Queue<ProcessActivationInput> interactions = new([
+            new(missing, missingSignal),
+            new(stale, staleSignal),
+            new(correct, first),
+            new(correct, first),
+            new(correct, second)
+        ]);
+
+        var actual = await DurableTaskSequentialProcessInterpreter.RunAsync(
+            fixture.Receiver,
+            receiverStart,
+            EmptyDurableRequestBindingResolver.Instance,
+            UnexpectedOperation,
+            UnexpectedDurableOperation,
+            UnexpectedChildProcess,
+            UnexpectedReconciliation,
+            () => Task.FromResult(interactions.Dequeue()),
+            TestDurableTimer,
+            () => StartedAtUtc.AddMinutes(1));
+
+        var firstDecision = Activate(receiverInitial, ProcessActivationCause.Start, new(missing, missingSignal));
+        var staleDecision = Activate(firstDecision.State, ProcessActivationCause.Interaction, new(stale, staleSignal));
+        var firstConsumed = Activate(staleDecision.State, ProcessActivationCause.Interaction, new(correct, first));
+        var continued = Activate(firstConsumed.State, ProcessActivationCause.Continue);
+        var duplicate = Activate(continued.State, ProcessActivationCause.Interaction, new(correct, first));
+        var secondConsumed = Activate(duplicate.State, ProcessActivationCause.Interaction, new(correct, second));
+        var expected = new[]
+        {
+            firstDecision,
+            staleDecision,
+            firstConsumed,
+            continued,
+            duplicate,
+            secondConsumed
+        };
+
+        Assert.Equal(ProcessActivationDisposition.Completed, actual.Disposition);
+        Assert.Empty(interactions);
+        Assert.Equal(Serialize(secondConsumed.State), Serialize(actual.State));
+        Assert.Equal(expected.Select(static decision => Serialize(decision.Evidence)), actual.Evidence.Select(Serialize));
+        Assert.Equal(
+            expected.SelectMany(static decision => decision.InputAdmissions).Select(Serialize),
+            actual.InputAdmissions.Select(Serialize));
+        Assert.Equal(
+            [
+                ProcessInputAdmissionReason.MissingTarget,
+                ProcessInputAdmissionReason.Stale,
+                ProcessInputAdmissionReason.Consumed,
+                ProcessInputAdmissionReason.Duplicate,
+                ProcessInputAdmissionReason.Consumed
+            ],
+            actual.InputAdmissions.Select(static admission => admission.Reason));
+        var waits = actual.State.Waits
+            .Where(static wait => wait.Kind == ProcessWaitKind.AwaitMatch)
+            .OrderBy(static wait => wait.Node.Value, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(2, waits.Length);
+        Assert.Equal(first.Context.EmissionId, waits[0].WinnerInput);
+        Assert.Equal(second.Context.EmissionId, waits[1].WinnerInput);
+
+        ProcessActivationDecision Activate(
+            ProcessContinuationState state,
+            ProcessActivationCause cause,
+            ProcessActivationInput? input = null) => ProcessReferenceInterpreter.Activate(
+            fixture.Receiver,
+            state,
+            Activation(
+                state,
+                cause,
+                receiverStart,
+                cause == ProcessActivationCause.Start ? StartedAtUtc : StartedAtUtc.AddMinutes(1),
+                input is null ? [] : [input]),
+            RejectingHost.Instance);
+    }
+
+    [Fact]
+    public async Task SignalDelivery_FailsClosedForActivationLocalAndNonProcessTargets()
+    {
+        var fixture = CompileSignalFixture("process/durable-task-signal-delivery-boundary");
+        var receiverStart = Start(fixture.Receiver, "receiver", "instance/signal-delivery-boundary");
+        var receiverInitial = ProcessReferenceInterpreter.Create(fixture.Receiver, receiverStart.Receipt);
+        var processTarget = new ProcessTokenInteractionTarget(
+            receiverInitial.Continuation,
+            Assert.Single(receiverInitial.Tokens).Id);
+        var signal = await EmitSignalAsync(fixture.Sender, "sender/delivery-boundary", processTarget);
+        var local = Copy(
+            new(
+                InteractionDurabilityDemand.ActivationLocal,
+                InteractionVisibilityDemand.ActivationLocal),
+            processTarget);
+        var transitionTarget = new TransitionInteractionTarget(
+            DefinitionReference("transition/signal-delivery-boundary", '8'),
+            new("continuation/signal"),
+            new(new("entity/order"), new("order/42")));
+        var nonProcess = Copy(signal.Context.Delivery, transitionTarget);
+
+        var localFailure = Assert.Throws<InvalidOperationException>(() =>
+            DurableTaskSequentialProcessOrchestrator.RequireDurableProcessSignalTarget(local));
+        Assert.Contains("activation-local", localFailure.Message, StringComparison.Ordinal);
+        var targetFailure = Assert.Throws<InvalidOperationException>(() =>
+            DurableTaskSequentialProcessOrchestrator.RequireDurableProcessSignalTarget(nonProcess));
+        Assert.Contains(nameof(TransitionInteractionTarget), targetFailure.Message, StringComparison.Ordinal);
+
+        SignalEnvelope Copy(InteractionDeliveryRequirements delivery, InteractionTarget target) => new(
+            signal.SchemaVersion,
+            new(
+                signal.Context.EmissionId,
+                signal.Context.Origin,
+                signal.Context.CorrelationId,
+                signal.Context.CausationId,
+                signal.Context.AuthorityScope,
+                signal.Context.IdempotencyKey,
+                signal.Context.Ordering,
+                delivery,
+                signal.Context.Provenance),
+            signal.Contract,
+            signal.Payload,
+            target);
+    }
+
+    [Fact]
     public async Task Request_WaitsForExactReplyAndPreservesTheCanonicalObligation()
     {
         var (plan, replyContract) = CompileRequestPlan(
@@ -1344,18 +1544,20 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     }
 
     [Fact]
-    public void PlanCatalog_AdmitsTimerAndAwaitMatchButRejectsEmitEventOutsideTheExecutableSlice()
+    public void PlanCatalog_AdmitsTimerAwaitMatchAndSignalButRejectsEmitEventOutsideTheExecutableSlice()
     {
         var timerPlan = CompileTimerPlan(
             StartedAtUtc.AddMinutes(1),
             "process/durable-task-catalog-timer");
         var awaitMatchPlan = CompileAwaitMatchTimerPlan(StartedAtUtc.AddMinutes(1));
+        var signalPlan = CompileSignalFixture("process/durable-task-catalog-signal").Sender;
         var admitted = new DurableTaskSequentialProcessPlanCatalog([
             Physical(timerPlan),
-            Physical(awaitMatchPlan)
+            Physical(awaitMatchPlan),
+            Physical(signalPlan)
         ]);
 
-        Assert.Equal(2, admitted.Count);
+        Assert.Equal(3, admitted.Count);
 
         var eventDocument = InteractionDocument(
             "interaction/event/durable-task-catalog-unsupported",
@@ -1413,15 +1615,24 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             [new ReturnProcessNode(new("return"), Expr.BoundValue(ProcessBindingIds.Input))]));
         var start = Start(plan, "portable");
         var result = await Run(plan, start, UnexpectedOperation);
+        var initial = ProcessReferenceInterpreter.Create(plan, start.Receipt);
+        var signalTarget = ProcessSignalTargetResult.Resolved(new ProcessTokenInteractionTarget(
+            initial.Continuation,
+            Assert.Single(initial.Tokens).Id));
         var converter = DurableTaskProcessDataConverter.Create();
 
         var restoredStart = Assert.IsType<DurableTaskSequentialProcessStart>(
             converter.Deserialize(converter.Serialize(start), typeof(DurableTaskSequentialProcessStart)));
         var restoredResult = Assert.IsType<DurableTaskSequentialProcessResult>(
             converter.Deserialize(converter.Serialize(result), typeof(DurableTaskSequentialProcessResult)));
+        var restoredSignalTarget = Assert.IsType<ProcessSignalTargetResult>(
+            converter.Deserialize(
+                converter.Serialize(signalTarget),
+                typeof(ProcessSignalTargetResult)));
 
         Assert.Equal(Serialize(start), Serialize(restoredStart));
         Assert.Equal(Serialize(result), Serialize(restoredResult));
+        Assert.Equal(Serialize(signalTarget), Serialize(restoredSignalTarget));
     }
 
     [DurableTaskSchedulerFact]
@@ -1455,6 +1666,10 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             interactionPriority: 10,
             timerPriority: 0,
             "process/durable-task-scheduler-await-match");
+        var signalFixture = CompileSignalFixture(
+            "process/durable-task-scheduler-signal",
+            receiveTwice: false);
+        var selfSignalFixture = CompileSelfSignalFixture("process/durable-task-scheduler-self-signal");
         var catalog = new DurableTaskSequentialProcessPlanCatalog([
             Physical(completedPlan),
             Physical(failedPlan),
@@ -1467,7 +1682,10 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             Physical(forkChildFixture.SlowChild),
             Physical(recurrencePlan),
             Physical(timerPlan),
-            Physical(awaitMatchFixture.Plan)
+            Physical(awaitMatchFixture.Plan),
+            Physical(signalFixture.Sender),
+            Physical(signalFixture.Receiver),
+            Physical(selfSignalFixture.Plan)
         ], new BindingResolver(durableBinding, childFixture.Binding, forkChildFixture.Binding));
         var operations = new CountingEchoHost();
         var durableOperations = new CountingDurableOperationAdapter(durableBinding.Request);
@@ -1497,6 +1715,113 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         var duplicate = await firstClient.ScheduleCohesiveProcessAsync(completedStart, timeout.Token);
         Assert.True(duplicate.Replayed);
         Assert.Equal(scheduled.InstanceId, duplicate.InstanceId);
+
+        var signalReceiverStart = Start(
+            signalFixture.Receiver,
+            "receiver",
+            "instance/scheduler-signal-receiver");
+        var signalReceiverSchedule = await firstClient.ScheduleCohesiveProcessAsync(
+            signalReceiverStart,
+            timeout.Token);
+        var signalReceiverWaiting = await WaitForActiveWait(
+            firstClient,
+            signalReceiverSchedule.InstanceId,
+            ProcessWaitKind.AwaitMatch,
+            timeout.Token);
+        var signalReceiverToken = Assert.Single(signalReceiverWaiting.State.Tokens).Id;
+        operations.RegisterSignalTarget(
+            "route/process",
+            new(signalReceiverWaiting.State.Continuation, signalReceiverToken));
+        var firstSignalStart = Start(
+            signalFixture.Sender,
+            "first",
+            "instance/scheduler-signal-sender-first");
+        var firstSignalSchedule = await firstClient.ScheduleCohesiveProcessAsync(firstSignalStart, timeout.Token);
+        var firstSignalCompleted = await firstClient.WaitForInstanceCompletionAsync(
+            firstSignalSchedule.InstanceId,
+            getInputsAndOutputs: true,
+            timeout.Token);
+        Assert.True(
+            firstSignalCompleted.RuntimeStatus == OrchestrationRuntimeStatus.Completed,
+            firstSignalCompleted.FailureDetails?.ToString());
+        var firstSignalResult = Assert.IsType<DurableTaskSequentialProcessResult>(
+            firstSignalCompleted.ReadOutputAs<DurableTaskSequentialProcessResult>());
+        var firstSignal = Assert.IsType<SignalEnvelope>(Assert.Single(firstSignalResult.Emissions));
+        Assert.Equal(signalFixture.Contract, firstSignal.Contract);
+        var signalReceiverCompleted = await firstClient.GetInstanceAsync(
+            signalReceiverSchedule.InstanceId,
+            getInputsAndOutputs: true,
+            timeout.Token);
+        for (var attempt = 0;
+            attempt < 100 && signalReceiverCompleted?.RuntimeStatus == OrchestrationRuntimeStatus.Running;
+            attempt++)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(50), timeout.Token);
+            signalReceiverCompleted = await firstClient.GetInstanceAsync(
+                signalReceiverSchedule.InstanceId,
+                getInputsAndOutputs: true,
+                timeout.Token);
+        }
+        Assert.True(
+            signalReceiverCompleted?.RuntimeStatus == OrchestrationRuntimeStatus.Completed,
+            $"Signal receiver status: {signalReceiverCompleted?.RuntimeStatus}; "
+            + $"custom status: {signalReceiverCompleted?.SerializedCustomStatus}; "
+            + $"failure: {signalReceiverCompleted?.FailureDetails}.");
+        Assert.NotNull(signalReceiverCompleted);
+        var signalReceiverResult = Assert.IsType<DurableTaskSequentialProcessResult>(
+            signalReceiverCompleted.ReadOutputAs<DurableTaskSequentialProcessResult>());
+        Assert.Equal(ProcessActivationDisposition.Completed, signalReceiverResult.Disposition);
+        Assert.Equal(1, signalReceiverResult.InputAdmissions.Count(static admission =>
+            admission.Disposition == ProcessInputAdmissionDisposition.Consumed));
+        Assert.Contains(signalReceiverResult.InputAdmissions, admission =>
+            admission.Input.Envelope == firstSignal);
+        var firstSignalReplay = await firstClient.ScheduleCohesiveProcessAsync(firstSignalStart, timeout.Token);
+        Assert.True(firstSignalReplay.Replayed);
+        var signalReceiverAfterReplay = await firstClient.GetInstanceAsync(
+            signalReceiverSchedule.InstanceId,
+            getInputsAndOutputs: true,
+            timeout.Token);
+        Assert.Equal(OrchestrationRuntimeStatus.Completed, signalReceiverAfterReplay?.RuntimeStatus);
+        var signalReceiverReplayResult = Assert.IsType<DurableTaskSequentialProcessResult>(
+            signalReceiverAfterReplay!.ReadOutputAs<DurableTaskSequentialProcessResult>());
+        Assert.Equal(
+            signalReceiverResult.InputAdmissions.Select(Serialize),
+            signalReceiverReplayResult.InputAdmissions.Select(Serialize));
+
+        const string selfSignalInstance = "instance/scheduler-self-signal";
+        var selfSignalStart = Start(
+            selfSignalFixture.Plan,
+            "self",
+            selfSignalInstance);
+        var selfSignalInitial = ProcessReferenceInterpreter.Create(
+            selfSignalFixture.Plan,
+            selfSignalStart.Receipt);
+        var selfSignalRegistered = ProcessReferenceInterpreter.Activate(
+            selfSignalFixture.Plan,
+            selfSignalInitial,
+            Activation(selfSignalInitial, ProcessActivationCause.Start, selfSignalStart),
+            RejectingHost.Instance);
+        var selfSignalWait = Assert.Single(selfSignalRegistered.State.Waits, static wait =>
+            wait.Active && wait.Kind == ProcessWaitKind.AwaitMatch);
+        operations.RegisterSignalTarget(
+            "route/self",
+            new(selfSignalRegistered.State.Continuation, selfSignalWait.Token));
+        var selfSignalSchedule = await firstClient.ScheduleCohesiveProcessAsync(selfSignalStart, timeout.Token);
+        var selfSignalCompleted = await firstClient.WaitForInstanceCompletionAsync(
+            selfSignalSchedule.InstanceId,
+            getInputsAndOutputs: true,
+            timeout.Token);
+        Assert.True(
+            selfSignalCompleted.RuntimeStatus == OrchestrationRuntimeStatus.Completed,
+            selfSignalCompleted.FailureDetails?.ToString());
+        var selfSignalResult = Assert.IsType<DurableTaskSequentialProcessResult>(
+            selfSignalCompleted.ReadOutputAs<DurableTaskSequentialProcessResult>());
+        var selfSignal = Assert.IsType<SignalEnvelope>(Assert.Single(selfSignalResult.Emissions));
+        Assert.Equal(selfSignalFixture.Contract, selfSignal.Contract);
+        Assert.Equal(
+            ProcessInputAdmissionDisposition.Consumed,
+            Assert.Single(selfSignalResult.InputAdmissions).Disposition);
+        Assert.Equal(2, Assert.Single(selfSignalResult.State.Forks).SelectedBranches.Length);
 
         var durableStart = Start(
             durableRequestPlan,
@@ -2153,6 +2478,124 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         return new(plan, eventContract, alternateEventContract);
     }
 
+    static SignalFixture CompileSignalFixture(string definitionId, bool receiveTwice = true)
+    {
+        var signalDocument = InteractionDocument(
+            $"interaction/signal/{definitionId}",
+            new SignalContractDefinition(new(StringContract, new("signal-payload/v1"))));
+        SignalContractReference signalContract = new(Reference(signalDocument));
+        var contracts = Catalog(signalDocument);
+        var sender = Compile(
+            Definition(
+                "signal",
+                [
+                    new SendSignalProcessNode(
+                        new("signal"),
+                        signalContract,
+                        Expr.Const("route/process"),
+                        Expr.BoundValue(ProcessBindingIds.Input),
+                        Edge("edge/signal-return", "return")),
+                    new ReturnProcessNode(new("return"), Expr.Const("sent"))
+                ]),
+            contracts,
+            definitionId: $"{definitionId}/sender");
+        ImmutableArray<ProcessNode> receiverNodes = receiveTwice
+            ? [
+                AwaitSignal("await/one", "one", "cut"),
+                new DurableCutProcessNode(new("cut"), Edge("edge/cut-await-two", "await/two")),
+                AwaitSignal("await/two", "two", "return"),
+                new ReturnProcessNode(new("return"), Expr.Const("received"))
+            ]
+            : [
+                AwaitSignal("await/one", "one", "return"),
+                new ReturnProcessNode(new("return"), Expr.Const("received"))
+            ];
+        var receiver = Compile(
+            Definition(
+                "await/one",
+                receiverNodes),
+            contracts,
+            definitionId: $"{definitionId}/receiver");
+        return new(sender, receiver, signalContract);
+
+        AwaitMatchProcessNode AwaitSignal(string node, string suffix, string next) => new(
+            new(node),
+            ProcessAwaitArbitration.ExclusivePriorityThenClauseId,
+            [new ProcessAwaitInteractionClause(
+                new($"clause/{suffix}"),
+                signalContract,
+                new(new($"signal.{suffix}"), StringContract),
+                requestObligation: null,
+                guard: null,
+                priority: 0,
+                new(Edge($"edge/{node}-{next}", next)))],
+            ProcessAwaitInputDisposition.Reject,
+            ProcessAwaitInputDisposition.Reject,
+            ProcessAwaitInputDisposition.ReusePriorDisposition,
+            ProcessAwaitMissingTargetDisposition.Observe,
+            TimeSpan.FromDays(1));
+    }
+
+    static SelfSignalFixture CompileSelfSignalFixture(string definitionId)
+    {
+        var signalDocument = InteractionDocument(
+            $"interaction/signal/{definitionId}",
+            new SignalContractDefinition(new(StringContract, new("self-signal-payload/v1"))));
+        SignalContractReference signalContract = new(Reference(signalDocument));
+        var plan = Compile(
+            Definition(
+                "fork",
+                [
+                    new ForkProcessNode(
+                        new("fork"),
+                        [
+                            new(new("branch/wait"), Edge("edge/fork-wait", "await")),
+                            new(new("branch/signal"), Edge("edge/fork-signal", "cut/signal"))
+                        ],
+                        new("join")),
+                    new AwaitMatchProcessNode(
+                        new("await"),
+                        ProcessAwaitArbitration.ExclusivePriorityThenClauseId,
+                        [new ProcessAwaitInteractionClause(
+                            new("clause/signal"),
+                            signalContract,
+                            new(new("signal.input"), StringContract),
+                            requestObligation: null,
+                            guard: null,
+                            priority: 0,
+                            new(Edge("edge/await-join", "join")))],
+                        ProcessAwaitInputDisposition.Reject,
+                        ProcessAwaitInputDisposition.Reject,
+                        ProcessAwaitInputDisposition.ReusePriorDisposition,
+                        ProcessAwaitMissingTargetDisposition.Observe,
+                        TimeSpan.FromDays(1)),
+                    new DurableCutProcessNode(
+                        new("cut/signal"),
+                        Edge("edge/cut-signal", "signal")),
+                    new SendSignalProcessNode(
+                        new("signal"),
+                        signalContract,
+                        Expr.Const("route/self"),
+                        Expr.BoundValue(ProcessBindingIds.Input),
+                        Edge("edge/signal-join", "join")),
+                    new JoinProcessNode(
+                        new("join"),
+                        new("fork"),
+                        new(
+                            ProcessJoinMode.All,
+                            requiredCount: 0,
+                            ProcessJoinFailurePolicy.FailFast,
+                            ProcessJoinCancellationPolicy.AwaitRemaining,
+                            ProcessJoinCompletionOrder.Unobservable,
+                            ProcessJoinTieBreak.BranchIdentity),
+                        Edge("edge/join-return", "return")),
+                    new ReturnProcessNode(new("return"), Expr.Const("self-signalled"))
+                ]),
+            Catalog(signalDocument),
+            definitionId: definitionId);
+        return new(plan, signalContract);
+    }
+
     static CompiledProcessPlan CompileAwaitMatchTimerPlan(DateTimeOffset dueAtUtc) => Compile(
         Definition(
             "await",
@@ -2716,6 +3159,32 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         return new(target, envelope);
     }
 
+    static async Task<SignalEnvelope> EmitSignalAsync(
+        CompiledProcessPlan sender,
+        string senderInstance,
+        InteractionTarget target)
+    {
+        SignalEnvelope? delivered = null;
+        _ = await DurableTaskSequentialProcessInterpreter.RunAsync(
+            sender,
+            Start(sender, "signal", senderInstance),
+            EmptyDurableRequestBindingResolver.Instance,
+            UnexpectedOperation,
+            UnexpectedDurableOperation,
+            UnexpectedChildProcess,
+            UnexpectedReconciliation,
+            UnexpectedInteraction,
+            TestDurableTimer,
+            () => StartedAtUtc,
+            resolveSignalTarget: resolution => Task.FromResult(ProcessSignalTargetResult.Resolved(target)),
+            deliverSignal: signal =>
+            {
+                delivered = signal;
+                return Task.CompletedTask;
+            });
+        return Assert.IsType<SignalEnvelope>(delivered);
+    }
+
     static PortableValue CollectionValue(params string[] values) => PortableValue.Concrete(
         StringCollectionContract,
         ObservationValue.FromImmutableArray(
@@ -2752,8 +3221,17 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     sealed class CountingEchoHost : IProcessReferenceHost
     {
         readonly ConcurrentQueue<ProcessTransitionInvocation> transitions = [];
+        readonly ConcurrentDictionary<string, ProcessTokenInteractionTarget> signalTargets =
+            new(StringComparer.Ordinal);
 
         internal IReadOnlyCollection<ProcessTransitionInvocation> Transitions => transitions.ToArray();
+
+        internal void RegisterSignalTarget(string route, ProcessTokenInteractionTarget target)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(route);
+            ArgumentNullException.ThrowIfNull(target);
+            signalTargets[route] = target;
+        }
 
         public ProcessOperationResult InvokeTransition(ProcessTransitionInvocation invocation)
         {
@@ -2764,8 +3242,14 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         public ProcessOperationResult EvaluateRelation(ProcessRelationEvaluation evaluation) =>
             ProcessOperationResult.Completed(evaluation.Input);
 
-        public ProcessSignalTargetResult ResolveSignalTarget(ProcessSignalTargetResolution resolution) =>
-            throw new InvalidOperationException("Unexpected Signal target resolution.");
+        public ProcessSignalTargetResult ResolveSignalTarget(ProcessSignalTargetResolution resolution)
+        {
+            var route = resolution.Value.Value?.GetRequiredString()
+                ?? throw new InvalidOperationException("A Scheduler Signal route must be a concrete string.");
+            return signalTargets.TryGetValue(route, out var target)
+                ? ProcessSignalTargetResult.Resolved(target)
+                : throw new InvalidOperationException($"No Scheduler Signal target is registered for '{route}'.");
+        }
     }
 
     sealed class BindingResolver : IDurableRequestBindingResolver
@@ -2849,6 +3333,15 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         DomainEventContractReference EventContract,
         DomainEventContractReference AlternateEventContract);
 
+    sealed record SignalFixture(
+        CompiledProcessPlan Sender,
+        CompiledProcessPlan Receiver,
+        SignalContractReference Contract);
+
+    sealed record SelfSignalFixture(
+        CompiledProcessPlan Plan,
+        SignalContractReference Contract);
+
     sealed record SchedulerForkChildFixture(
         CompiledProcessPlan Parent,
         CompiledProcessPlan FastChild,
@@ -2872,6 +3365,18 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
 
         public ProcessSignalTargetResult ResolveSignalTarget(ProcessSignalTargetResolution resolution) =>
             throw new InvalidOperationException("Unexpected Signal target resolution.");
+    }
+
+    sealed class FixedSignalTargetHost(InteractionTarget target) : IProcessReferenceHost
+    {
+        public ProcessOperationResult InvokeTransition(ProcessTransitionInvocation invocation) =>
+            throw new InvalidOperationException("Unexpected Transition invocation.");
+
+        public ProcessOperationResult EvaluateRelation(ProcessRelationEvaluation evaluation) =>
+            throw new InvalidOperationException("Unexpected Relation evaluation.");
+
+        public ProcessSignalTargetResult ResolveSignalTarget(ProcessSignalTargetResolution resolution) =>
+            ProcessSignalTargetResult.Resolved(target);
     }
 
     sealed class DurableTaskSchedulerFactAttribute : FactAttribute

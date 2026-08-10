@@ -23,7 +23,9 @@ static class DurableTaskSequentialProcessInterpreter
         Action<DurableTaskSequentialProcessResult>? observe = null,
         Func<DurableTaskSequentialProcessStart, Task>? continueAsNew = null,
         Func<ProcessChildCancellationIntent, Task>? dispatchChildCancellation = null,
-        Func<Task<ProcessChildCancellationIntent>>? waitForChildCancellation = null)
+        Func<Task<ProcessChildCancellationIntent>>? waitForChildCancellation = null,
+        Func<ProcessSignalTargetResolution, Task<ProcessSignalTargetResult>>? resolveSignalTarget = null,
+        Func<SignalEnvelope, Task>? deliverSignal = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(start);
@@ -38,6 +40,12 @@ static class DurableTaskSequentialProcessInterpreter
         if (plan.DefinitionReference != start.Receipt.Request.Definition)
         {
             throw new ArgumentException("The Process start pins a different exact compiled definition.", nameof(start));
+        }
+        var planSendsSignals = plan.Definition.Nodes.Any(static node => node is SendSignalProcessNode);
+        if (planSendsSignals)
+        {
+            ArgumentNullException.ThrowIfNull(resolveSignalTarget);
+            ArgumentNullException.ThrowIfNull(deliverSignal);
         }
 
         var resumed = start.Resume?.Result;
@@ -88,12 +96,25 @@ static class DurableTaskSequentialProcessInterpreter
                 inputs,
                 cancellation);
             cancellation = null;
-            var decision = await ActivateAsync(plan, state, activation, executeOperation).ConfigureAwait(true);
+            var decision = await ActivateAsync(
+                    plan,
+                    state,
+                    activation,
+                    executeOperation,
+                    resolveSignalTarget)
+                .ConfigureAwait(true);
             state = decision.State;
             emissions.AddRange(decision.Emissions);
             inputAdmissions.AddRange(decision.InputAdmissions);
             diagnostics.AddRange(decision.Diagnostics);
             evidence.Add(decision.Evidence);
+            foreach (var signal in decision.Emissions.OfType<SignalEnvelope>())
+            {
+                var dispatcher = deliverSignal
+                    ?? throw new InvalidOperationException(
+                        "A canonical host operation emitted a Signal without a Durable Task delivery projection.");
+                await dispatcher(signal).ConfigureAwait(true);
+            }
             var result = new DurableTaskSequentialProcessResult(
                 decision.Disposition,
                 state,
@@ -608,7 +629,8 @@ static class DurableTaskSequentialProcessInterpreter
         CompiledProcessPlan plan,
         ProcessContinuationState state,
         ProcessActivation activation,
-        Func<DurableTaskProcessHostOperation, Task<ProcessOperationResult>> executeOperation)
+        Func<DurableTaskProcessHostOperation, Task<ProcessOperationResult>> executeOperation,
+        Func<ProcessSignalTargetResolution, Task<ProcessSignalTargetResult>>? resolveSignalTarget)
     {
         var host = new SuspendingHost();
         while (true)
@@ -622,6 +644,16 @@ static class DurableTaskSequentialProcessInterpreter
                 var result = await executeOperation(pending.Operation).ConfigureAwait(true)
                     ?? throw new InvalidOperationException("A Durable Task host-operation activity returned null.");
                 host.Materialize(pending.Operation, result);
+            }
+            catch (PendingSignalTargetResolutionException pending)
+            {
+                var resolver = resolveSignalTarget
+                    ?? throw new InvalidOperationException(
+                        "The Process reached a Signal node without a Durable Task target-resolution activity.");
+                var result = await resolver(pending.Resolution).ConfigureAwait(true)
+                    ?? throw new InvalidOperationException(
+                        "A Durable Task Signal-target activity returned null evidence.");
+                host.Materialize(pending.Resolution, result);
             }
         }
     }
@@ -640,9 +672,15 @@ static class DurableTaskSequentialProcessInterpreter
         internal DurableTaskProcessHostOperation Operation { get; } = operation;
     }
 
+    sealed class PendingSignalTargetResolutionException(ProcessSignalTargetResolution resolution) : Exception
+    {
+        internal ProcessSignalTargetResolution Resolution { get; } = resolution;
+    }
+
     sealed class SuspendingHost : IProcessReferenceHost
     {
         readonly Dictionary<OperationKey, MaterializedOperation> materialized = [];
+        readonly Dictionary<OperationKey, MaterializedSignalTarget> signalTargets = [];
 
         public ProcessOperationResult InvokeTransition(ProcessTransitionInvocation invocation) =>
             Resolve(DurableTaskProcessHostOperation.For(invocation));
@@ -650,9 +688,20 @@ static class DurableTaskSequentialProcessInterpreter
         public ProcessOperationResult EvaluateRelation(ProcessRelationEvaluation evaluation) =>
             Resolve(DurableTaskProcessHostOperation.For(evaluation));
 
-        public ProcessSignalTargetResult ResolveSignalTarget(ProcessSignalTargetResolution resolution) =>
-            throw new NotSupportedException(
-                $"Signal target resolution at '{resolution.Node.Value}' is outside the bounded executable slice.");
+        public ProcessSignalTargetResult ResolveSignalTarget(ProcessSignalTargetResolution resolution)
+        {
+            var key = Key(resolution);
+            if (!signalTargets.TryGetValue(key, out var retained))
+            {
+                throw new PendingSignalTargetResolutionException(resolution);
+            }
+            if (retained.Resolution != resolution)
+            {
+                throw new InvalidOperationException(
+                    "One Process Signal-target occurrence produced inconsistent resolution evidence during replay.");
+            }
+            return retained.Result;
+        }
 
         internal void Materialize(DurableTaskProcessHostOperation operation, ProcessOperationResult result)
         {
@@ -674,6 +723,23 @@ static class DurableTaskSequentialProcessInterpreter
                 return;
             }
             materialized.Add(key, new(operation, result));
+        }
+
+        internal void Materialize(ProcessSignalTargetResolution resolution, ProcessSignalTargetResult result)
+        {
+            ArgumentNullException.ThrowIfNull(resolution);
+            ArgumentNullException.ThrowIfNull(result);
+            var key = Key(resolution);
+            if (signalTargets.TryGetValue(key, out var retained))
+            {
+                if (retained.Resolution != resolution || retained.Result != result)
+                {
+                    throw new InvalidOperationException(
+                        "One Process Signal-target occurrence was materialized with conflicting evidence.");
+                }
+                return;
+            }
+            signalTargets.Add(key, new(resolution, result));
         }
 
         ProcessOperationResult Resolve(DurableTaskProcessHostOperation operation)
@@ -711,6 +777,13 @@ static class DurableTaskSequentialProcessInterpreter
             evaluation.Token,
             evaluation.Node,
             evaluation.Occurrence);
+
+        static OperationKey Key(ProcessSignalTargetResolution resolution) => new(
+            resolution.Continuation,
+            resolution.Activation,
+            resolution.Token,
+            resolution.Node,
+            resolution.Occurrence);
     }
 
     readonly record struct OperationKey(
@@ -723,6 +796,10 @@ static class DurableTaskSequentialProcessInterpreter
     sealed record MaterializedOperation(
         DurableTaskProcessHostOperation Operation,
         ProcessOperationResult Result);
+
+    sealed record MaterializedSignalTarget(
+        ProcessSignalTargetResolution Resolution,
+        ProcessSignalTargetResult Result);
 
     sealed record PendingDurableOperation(
         RequestEnvelope Request,
