@@ -96,6 +96,7 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
             Assert.IsType<ExecutionStatus>(record.RuntimeStatus).ProcessInstanceId);
         Assert.NotEqual(record.ProcessId, record.RuntimeStatus.ProcessInstanceId.Value);
         Assert.Equal(fixture.WaitingStatus.Definition.DefinitionId.Value, record.ProcessName);
+        Assert.Equal(fixture.WaitingStatus.Definition, record.Definition);
         Assert.Equal(ProcessExecutionStatus.Waiting, record.Status);
         Assert.Null(record.Parameters);
         Assert.Null(record.Output);
@@ -116,6 +117,7 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
         Assert.NotNull(record);
         Assert.Equal(ProcessExecutionStatus.Pending, record.Status);
         Assert.Null(record.RuntimeStatus);
+        Assert.Equal(fixture.Start.Receipt.Request.Definition, record.Definition);
         Assert.Equal(fixture.WaitingStatus.Definition.DefinitionId.Value, record.ProcessName);
 
         var running = Metadata(fixture, status: null, OrchestrationRuntimeStatus.Running);
@@ -295,6 +297,209 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
                 OperationContext.Create(),
                 completed.Fixture.PhysicalInstanceId));
         Assert.Contains("conflicts with custom status", conflictException.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetExplainAsync_ComposesExactPlanStatusTraceAndRealizationWithoutPayloads()
+    {
+        const string PrivateInput = "private-input-ari-319";
+        const string PrivateOutput = "private-output-ari-319";
+        var completed = await CreateCompletedFixtureAsync(
+            "process/repository-explain-complete",
+            PrivateInput,
+            PrivateOutput);
+        var metadata = Metadata(
+            completed.Fixture,
+            completed.Fixture.WaitingStatus,
+            OrchestrationRuntimeStatus.Completed,
+            serializedOutput: completed.Fixture.Converter.Serialize(completed.Result));
+        var client = new FakeDurableTaskClient([metadata]);
+        var executionRepository = new DurableTaskProcessExecutionRepository(client);
+        var explainRepository = new DurableTaskProcessExecutionExplainRepository(
+            executionRepository,
+            new([completed.Fixture.Plan]));
+
+        var artifact = await explainRepository.GetExplainAsync(
+            OperationContext.Create(),
+            completed.Fixture.Scope,
+            completed.Fixture.LogicalInstanceId);
+
+        Assert.NotNull(artifact);
+        Assert.Equal(completed.Fixture.Plan.Definition, artifact.Definition.Definition);
+        Assert.Equal(
+            completed.Fixture.WaitingStatus.ProcessInstanceId,
+            artifact.RuntimeStatus?.ProcessInstanceId);
+        Assert.Equal(
+            completed.Fixture.WaitingStatus.CurrentAttemptId,
+            artifact.RuntimeStatus?.CurrentAttemptId);
+        Assert.Equal(
+            completed.Fixture.WaitingStatus.TerminalOutcome.Kind,
+            artifact.RuntimeStatus?.TerminalOutcome.Kind);
+        var expectedTrace = completed.Result.Traces.Last(trace =>
+            trace.Continuation?.ProcessAttemptId == completed.Fixture.WaitingStatus.CurrentAttemptId);
+        Assert.Equal(expectedTrace.Activation, artifact.Trace?.Activation);
+        Assert.Equal(
+            DurableTaskProcessTargetProfile.Target.Value,
+            artifact.Interpreter.Id);
+        var realizations = artifact.Evidence
+            .Where(static evidence =>
+                evidence.Kind == DurableTaskProcessExecutionExplainRepository.RealizationEvidenceKind)
+            .ToArray();
+        Assert.Equal(completed.Fixture.Plan.Requirements.Length, realizations.Length);
+        Assert.Equal(
+            completed.Fixture.Plan.Requirements.Select(static requirement => requirement.Requirement.Key.ToString()),
+            realizations.Select(static evidence => evidence.Subject));
+        Assert.All(realizations, static evidence =>
+            Assert.Equal(ExecutionExplainEvidenceAuthority.AdapterSupplied, evidence.Authority));
+        var constrainedPayload = Assert.Single(realizations, static evidence =>
+            evidence.Subject == ProcessInterpreterGuarantees.SensitiveAndOversizedPayloads.ToString());
+        Assert.Equal(CapabilityRealizationKind.Constrained, constrainedPayload.Realization);
+        Assert.Contains(
+            $"boundary:{DurableTaskProcessTargetProfile.PayloadBoundary.Value}",
+            constrainedPayload.RelatedSubjects);
+        Assert.Contains(DurableTaskProcessTargetProfile.PlanningProfileId.Value, constrainedPayload.SourceReferences);
+        Assert.DoesNotContain(
+            artifact.Diagnostics,
+            static diagnostic => diagnostic.Code is
+                DurableTaskProcessExecutionExplainRepository.TraceCoverageIncompleteDiagnosticCode
+                or DurableTaskProcessExecutionExplainRepository.TraceArtifactUnavailableDiagnosticCode);
+        var serialized = ExecutionExplainJsonSerializer.Serialize(artifact);
+        Assert.DoesNotContain(PrivateInput, serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain(PrivateOutput, serialized, StringComparison.Ordinal);
+        Assert.Equal(completed.Fixture.PhysicalInstanceId, client.LastGetInstanceId);
+        Assert.Equal(2, client.GetCount);
+        Assert.Equal(0, client.QueryCount);
+    }
+
+    [Fact]
+    public async Task GetExplainAsync_ProjectsPendingAndActiveLifecyclePrefixesWithoutInventingTraces()
+    {
+        var fixture = CreateFixture();
+        var plans = new DurableTaskSequentialProcessPlanCatalog([fixture.Plan]);
+        var pendingClient = new FakeDurableTaskClient([
+            Metadata(fixture, status: null, OrchestrationRuntimeStatus.Pending)
+        ]);
+        var pendingRepository = new DurableTaskProcessExecutionExplainRepository(
+            new(pendingClient),
+            plans);
+
+        var pending = await pendingRepository.GetExplainAsync(
+            OperationContext.Create(),
+            fixture.PhysicalInstanceId);
+
+        Assert.NotNull(pending);
+        Assert.Equal(fixture.Plan.Definition, pending.Definition.Definition);
+        Assert.Null(pending.RuntimeStatus);
+        Assert.Null(pending.Trace);
+
+        var activeClient = new FakeDurableTaskClient([
+            Metadata(fixture, fixture.WaitingStatus, OrchestrationRuntimeStatus.Running)
+        ]);
+        IProcessExecutionExplainRepository activeRepository = new DurableTaskProcessExecutionExplainRepository(
+            new(activeClient),
+            plans);
+
+        var active = await activeRepository.GetExplainAsync(
+            OperationContext.Create(),
+            fixture.PhysicalInstanceId);
+
+        Assert.NotNull(active);
+        Assert.Equal(fixture.WaitingStatus.Definition, active.RuntimeStatus?.Definition);
+        Assert.Equal(fixture.WaitingStatus.ProcessInstanceId, active.RuntimeStatus?.ProcessInstanceId);
+        Assert.Equal(fixture.WaitingStatus.CurrentAttemptId, active.RuntimeStatus?.CurrentAttemptId);
+        Assert.Equal(fixture.WaitingStatus.ControlRevision, active.RuntimeStatus?.ControlRevision);
+        Assert.Null(active.Trace);
+        Assert.DoesNotContain(
+            active.Diagnostics,
+            static diagnostic => diagnostic.Code.StartsWith("process.explain.trace", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task GetExplainAsync_ReportsLegacyCoverageAndTerminalArtifactGaps()
+    {
+        var completed = await CreateCompletedFixtureAsync(
+            "process/repository-explain-gaps",
+            "input",
+            "output");
+        var result = completed.Result;
+        var legacy = new DurableTaskSequentialProcessResult(
+            result.Disposition,
+            result.State,
+            result.Control,
+            result.LatestControlDecision,
+            result.Emissions,
+            result.InputAdmissions,
+            result.Diagnostics,
+            result.Evidence,
+            result.DurableOperations);
+        var plans = new DurableTaskSequentialProcessPlanCatalog([completed.Fixture.Plan]);
+        var legacyRepository = new DurableTaskProcessExecutionExplainRepository(
+            new(new FakeDurableTaskClient([
+                Metadata(
+                    completed.Fixture,
+                    completed.Fixture.WaitingStatus,
+                    OrchestrationRuntimeStatus.Completed,
+                    serializedOutput: completed.Fixture.Converter.Serialize(legacy))
+            ])),
+            plans);
+
+        var legacyArtifact = await legacyRepository.GetExplainAsync(
+            OperationContext.Create(),
+            completed.Fixture.PhysicalInstanceId);
+
+        Assert.NotNull(legacyArtifact);
+        Assert.Null(legacyArtifact.Trace);
+        var coverage = Assert.Single(
+            legacyArtifact.Diagnostics,
+            static diagnostic =>
+                diagnostic.Code == DurableTaskProcessExecutionExplainRepository.TraceCoverageIncompleteDiagnosticCode);
+        Assert.Equal(
+            $"missingTracePrefixCount={result.Evidence.Length}",
+            coverage.Evidence?.Observed);
+
+        var unavailableRepository = new DurableTaskProcessExecutionExplainRepository(
+            new(new FakeDurableTaskClient([
+                Metadata(
+                    completed.Fixture,
+                    completed.Fixture.WaitingStatus,
+                    OrchestrationRuntimeStatus.Completed)
+            ])),
+            plans);
+
+        var unavailable = await unavailableRepository.GetExplainAsync(
+            OperationContext.Create(),
+            completed.Fixture.PhysicalInstanceId);
+
+        Assert.NotNull(unavailable);
+        Assert.Null(unavailable.Trace);
+        Assert.Contains(
+            unavailable.Diagnostics,
+            static diagnostic =>
+                diagnostic.Code == DurableTaskProcessExecutionExplainRepository.TraceArtifactUnavailableDiagnosticCode);
+    }
+
+    [Fact]
+    public async Task GetExplainAsync_ReturnsNotFoundAndRequiresTheExactDeployedPlan()
+    {
+        var missingClient = new FakeDurableTaskClient([]);
+        IProcessExecutionExplainRepository missingRepository = new DurableTaskProcessExecutionExplainRepository(
+            new(missingClient),
+            new([]));
+
+        Assert.Null(await missingRepository.GetExplainAsync(OperationContext.Create(), "physical/missing"));
+
+        var fixture = CreateFixture();
+        var undeployedRepository = new DurableTaskProcessExecutionExplainRepository(
+            new(new FakeDurableTaskClient([
+                Metadata(fixture, fixture.WaitingStatus, OrchestrationRuntimeStatus.Running)
+            ])),
+            new([]));
+
+        var exception = await Assert.ThrowsAsync<KeyNotFoundException>(async () =>
+            await undeployedRepository.GetExplainAsync(
+                OperationContext.Create(),
+                fixture.PhysicalInstanceId));
+        Assert.Contains(fixture.Plan.Definition.Fingerprint.Value, exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -499,7 +704,8 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
             DurableTaskSequentialProcessIdentities.OrchestrationInstance(start),
             start.Receipt.Request.Context.Authorization.AuthorityScope,
             start.Receipt.Request.InitialContinuation.ProcessInstanceId,
-            DurableTaskProcessDataConverter.Create());
+            DurableTaskProcessDataConverter.Create(),
+            Physical(fixture.Plan));
     }
 
     static async Task<CompletedTraceFixture> CreateCompletedFixtureAsync(
@@ -578,7 +784,8 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
             DurableTaskSequentialProcessIdentities.OrchestrationInstance(start),
             scope,
             continuation.ProcessInstanceId,
-            DurableTaskProcessDataConverter.Create());
+            DurableTaskProcessDataConverter.Create(),
+            Physical(plan));
         return new(fixture, result);
     }
 
@@ -655,13 +862,23 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
             occurredAtUtc);
     }
 
+    static DurableTaskProcessRealizationPlan Physical(CompiledProcessPlan plan)
+    {
+        var result = DurableTaskProcessRealizationCompiler.Compile(plan);
+        Assert.True(
+            result.IsSuccessful,
+            string.Join("; ", result.Realization.Diagnostics.Select(static diagnostic => diagnostic.Message)));
+        return Assert.IsType<DurableTaskProcessRealizationPlan>(result.Plan);
+    }
+
     sealed record CurrentFixture(
         DurableTaskSequentialProcessStart Start,
         ExecutionStatus WaitingStatus,
         string PhysicalInstanceId,
         InteractionAuthorityScope Scope,
         ProcessInstanceId LogicalInstanceId,
-        DataConverter Converter);
+        DataConverter Converter,
+        DurableTaskProcessRealizationPlan Plan);
 
     sealed record CompletedTraceFixture(
         CurrentFixture Fixture,

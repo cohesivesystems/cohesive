@@ -310,7 +310,8 @@ public sealed class DurableTaskProcessExecutionRepository :
             FailureMessage: null,
             Error: null,
             Output: null,
-            RuntimeStatus: runtimeStatus);
+            RuntimeStatus: runtimeStatus,
+            Definition: definition);
     }
 
     static DurableTaskSequentialProcessStart ReadCurrentStart(ModernOrchestrationMetadata metadata)

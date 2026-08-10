@@ -65,6 +65,7 @@ public sealed class DurableTaskProcessExecutionRepositoryTests
         var output = Assert.IsType<SampleResult>(item.Output);
         Assert.Equal("shape-graph", output.ArtifactId);
         Assert.Null(item.RuntimeStatus);
+        Assert.Null(item.Definition);
     }
 
     [Fact]
@@ -106,6 +107,22 @@ public sealed class DurableTaskProcessExecutionRepositoryTests
 
         var exception = await Assert.ThrowsAsync<NotSupportedException>(async () =>
             await repository.GetTracesAsync(OperationContext.Create(), "proc-1"));
+
+        Assert.Contains("migration-only", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("unavailable", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task HistoricalCoreReader_DoesNotFabricateCanonicalExplanations()
+    {
+        var executionRepository = new DurableTaskProcessExecutionRepository(
+            new FakeOrchestrationServiceQueryClient([]));
+        IProcessExecutionExplainRepository repository = new DurableTaskProcessExecutionExplainRepository(
+            executionRepository,
+            new([]));
+
+        var exception = await Assert.ThrowsAsync<NotSupportedException>(async () =>
+            await repository.GetExplainAsync(OperationContext.Create(), "proc-1"));
 
         Assert.Contains("migration-only", exception.Message, StringComparison.Ordinal);
         Assert.Contains("unavailable", exception.Message, StringComparison.Ordinal);

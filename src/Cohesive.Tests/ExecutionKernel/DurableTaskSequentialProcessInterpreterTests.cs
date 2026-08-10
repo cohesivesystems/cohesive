@@ -2355,6 +2355,14 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         var completedTraces = Assert.IsType<ProcessExecutionTraceRecord>(completedTraceRead.Record);
         Assert.True(completedTraces.IsComplete);
         Assert.NotEmpty(completedTraces.Traces);
+        var completedExplanation = await new DurableTaskProcessExecutionExplainRepository(
+            new(firstClient),
+            catalog).GetExplainAsync(
+                OperationContext.Create(cancellationToken: timeout.Token),
+                scheduled.InstanceId);
+        Assert.NotNull(completedExplanation);
+        Assert.Equal(completedPlan.DefinitionReference, completedExplanation.Definition.Definition);
+        Assert.NotNull(completedExplanation.Trace);
 
         var duplicate = await firstClient.ScheduleCohesiveProcessAsync(completedStart, timeout.Token);
         Assert.True(duplicate.Replayed);

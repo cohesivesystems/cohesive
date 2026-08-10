@@ -256,6 +256,16 @@ separates not found, in-progress, available, and terminal-without-artifact outco
 never claims completeness. The migration-only Core reader is unsupported because its provider history is not
 canonical trace evidence.
 
+Current monitoring retains the start receipt's exact definition reference directly on `ProcessExecutionRecord`,
+including the pending admission window before custom status exists. `DurableTaskProcessExecutionExplainRepository`
+combines that current repository with the immutable exact deployed plan catalog and returns the shared
+`ExecutionExplainArtifact`. It projects static evidence from the already compiled canonical plan, one realization
+claim for every source-inventory disposition in the retained target report, safe current state from `ExecutionStatus`,
+and at most the latest retained normalized trace for the current attempt. Pending and active observations remain
+partial artifacts without fabricated traces. Pre-retention trace prefixes and terminal executions without canonical
+results become structured warnings. The repository fails closed when exact plan, definition, instance, attempt,
+status, or trace affinity disagrees; Scheduler history is not used to fill an evidence gap.
+
 New schedules also project one versioned immutable Scheduler tag set from the canonical start receipt. It contains
 only the logical Process instance ID and the exact definition identity, revision, fingerprint algorithm,
 canonicalization, and value. It does not contain authority or tenant, command or idempotency identity, Process input
@@ -273,8 +283,8 @@ constructor reads the retired adapter's historical wire shapes until those task 
 window. Current logical-ID lookup accepts trusted authority scope plus `ProcessInstanceId`, derives the same versioned
 opaque physical ID used at scheduling, and performs one exact lookup. Scheduler tags support dashboard discovery, but
 the pinned .NET `OrchestrationQuery` has no tag predicate; Cohesive therefore does not emulate a tag index by scanning
-task-hub pages. Canonical trace retention and terminal retrieval are implemented; execution-control API/explain
-binding, live trace streaming, richer dashboard presentation, and history-event normalization remain ARI-292
+task-hub pages. Canonical trace retention, terminal retrieval, and runtime explain composition are implemented;
+execution-control API binding, live trace streaming, richer dashboard presentation, and history-event normalization remain ARI-292
 follow-up work.
 
 This is not promotion of the full planning profile. Authored timeout, terminal-failure, escalation, and cancellation
