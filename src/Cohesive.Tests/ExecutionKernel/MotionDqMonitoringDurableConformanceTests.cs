@@ -528,7 +528,7 @@ public sealed class MotionDqMonitoringDurableConformanceTests
             throw new InvalidOperationException($"Unexpected Signal target resolution at '{resolution.Node.Value}'.");
     }
 
-    sealed class BindingResolver(DurableRequestBinding binding) : IProcessDurableRequestBindingResolver
+    sealed class BindingResolver(DurableRequestBinding binding) : IDurableRequestBindingResolver
     {
         public bool TryResolve(RequestEnvelope request, out DurableRequestBinding? resolved)
         {
@@ -537,7 +537,7 @@ public sealed class MotionDqMonitoringDurableConformanceTests
         }
     }
 
-    sealed class AdapterResolver(MonitoringWorkAdapter adapter) : IProcessDurableOperationAdapterResolver
+    sealed class AdapterResolver(MonitoringWorkAdapter adapter) : IDurableOperationAdapterResolver
     {
         public bool TryResolve(RequestEnvelope request, out IDurableOperationAdapter? resolved)
         {

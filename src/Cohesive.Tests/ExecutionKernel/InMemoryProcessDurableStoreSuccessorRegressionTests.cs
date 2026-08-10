@@ -1242,7 +1242,7 @@ public sealed class InMemoryProcessDurableStoreSuccessorRegressionTests
             source.CreatedAtUtc,
             updatedAtUtc);
 
-    sealed class BindingResolver(DurableRequestBinding binding) : IProcessDurableRequestBindingResolver
+    sealed class BindingResolver(DurableRequestBinding binding) : IDurableRequestBindingResolver
     {
         public bool TryResolve(RequestEnvelope request, out DurableRequestBinding? resolved)
         {

@@ -17,11 +17,17 @@ public sealed class DurableTaskSequentialProcessPlanCatalog
 
     /// <summary>Creates an immutable catalog from completely planned canonical Processes.</summary>
     /// <param name="plans">Exact Durable Task realization plans deployed to this worker.</param>
+    /// <param name="bindingResolver">
+    /// Deterministic exact Request binding resolver used during orchestration replay. The default leaves Requests
+    /// as external interactions instead of automatically dispatching them.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="plans"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
     /// An entry is null, repeats an exact reference, or includes constructs outside the sequential executable slice.
     /// </exception>
-    public DurableTaskSequentialProcessPlanCatalog(IEnumerable<DurableTaskProcessRealizationPlan> plans)
+    public DurableTaskSequentialProcessPlanCatalog(
+        IEnumerable<DurableTaskProcessRealizationPlan> plans,
+        IDurableRequestBindingResolver? bindingResolver = null)
     {
         ArgumentNullException.ThrowIfNull(plans);
         var builder = ImmutableDictionary.CreateBuilder<ExecutionDefinitionReference, DurableTaskProcessRealizationPlan>();
@@ -55,10 +61,13 @@ public sealed class DurableTaskSequentialProcessPlanCatalog
         }
 
         this.plans = builder.ToImmutable();
+        BindingResolver = bindingResolver ?? EmptyDurableRequestBindingResolver.Instance;
     }
 
     /// <summary>Number of exact Process plans deployed to the worker.</summary>
     public int Count => plans.Count;
+
+    internal IDurableRequestBindingResolver BindingResolver { get; }
 
     /// <summary>Resolves the precompiled plan matching one complete canonical definition reference.</summary>
     /// <param name="definition">Exact definition identity, revision, and fingerprint.</param>

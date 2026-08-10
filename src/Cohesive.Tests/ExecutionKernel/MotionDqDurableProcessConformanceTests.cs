@@ -1762,7 +1762,7 @@ public sealed class MotionDqDurableProcessConformanceTests
             $"{diagnostic.Code} at {diagnostic.Location}: {diagnostic.Message}"));
 
     sealed class ExactBindingResolver(ImmutableArray<DurableRequestBinding> bindings)
-        : IProcessDurableRequestBindingResolver
+        : IDurableRequestBindingResolver
     {
         public bool TryResolve(RequestEnvelope request, out DurableRequestBinding? binding)
         {
@@ -1862,7 +1862,7 @@ public sealed class MotionDqDurableProcessConformanceTests
     sealed class PublicationCrashException : Exception;
 
     sealed class ExactAdapterResolver(MotionDqScenarioAdapter adapter)
-        : IProcessDurableOperationAdapterResolver
+        : IDurableOperationAdapterResolver
     {
         public bool TryResolve(RequestEnvelope request, out IDurableOperationAdapter? resolved)
         {

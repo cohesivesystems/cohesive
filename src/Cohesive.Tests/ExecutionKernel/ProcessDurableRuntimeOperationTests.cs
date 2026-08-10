@@ -242,7 +242,7 @@ public sealed class ProcessDurableRuntimeOperationTests
         Assert.Equal(DurableOperationFailurePhase.InCall, attempt.Failure?.Phase);
         Assert.Equal(DurableOperationEffectEvidence.Ambiguous, attempt.Failure?.EffectEvidence);
         Assert.Equal(
-            ConservativeProcessOperationExceptionClassifier.AmbiguousAdapterException,
+            ConservativeDurableOperationExceptionClassifier.AmbiguousAdapterException,
             attempt.Failure?.Code);
         Assert.Equal(1, adapter.ExecutionCalls);
         Assert.Equal(0, adapter.ReconciliationCalls);
@@ -1601,7 +1601,7 @@ public sealed class ProcessDurableRuntimeOperationTests
 
     static ProcessDurableRuntime Runtime(
         IProcessDurableStore store,
-        IProcessDurableOperationAdapterResolver resolver,
+        IDurableOperationAdapterResolver resolver,
         int maxAmbiguousStoreMutationAttempts = 3,
         TimeSpan? workerLease = null) =>
         new(
@@ -1803,7 +1803,7 @@ public sealed class ProcessDurableRuntimeOperationTests
     }
 
     sealed class SingleAdapterResolver(IDurableOperationAdapter adapter)
-        : IProcessDurableOperationAdapterResolver
+        : IDurableOperationAdapterResolver
     {
         public bool TryResolve(RequestEnvelope request, out IDurableOperationAdapter? resolved)
         {
@@ -1812,7 +1812,7 @@ public sealed class ProcessDurableRuntimeOperationTests
         }
     }
 
-    sealed class RejectingAdapterResolver : IProcessDurableOperationAdapterResolver
+    sealed class RejectingAdapterResolver : IDurableOperationAdapterResolver
     {
         internal int ResolutionCalls { get; private set; }
 

@@ -867,7 +867,7 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
     }
 
     sealed class ExactBindingResolver(ImmutableArray<DurableRequestBinding> bindings)
-        : IProcessDurableRequestBindingResolver
+        : IDurableRequestBindingResolver
     {
         public bool TryResolve(RequestEnvelope request, out DurableRequestBinding? binding)
         {
@@ -877,7 +877,7 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
     }
 
     sealed class ExactAdapterResolver(ImmutableArray<IDurableOperationAdapter> adapters)
-        : IProcessDurableOperationAdapterResolver
+        : IDurableOperationAdapterResolver
     {
         public bool TryResolve(RequestEnvelope request, out IDurableOperationAdapter? adapter)
         {

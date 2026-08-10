@@ -71,13 +71,13 @@ static class ProcessDurableRuntimeIdentities
             ProcessStorageContentFingerprints.Value(affinity).Value));
 
     internal static OperationAttemptId OperationAttempt(EmissionId operationId, int ordinal) =>
-        new(Derive("operation-attempt", operationId.Value, ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        DurableOperationIdentities.Attempt(operationId, ordinal);
 
     internal static EmissionId OperationReply(EmissionId operationId) =>
-        new(Derive("operation-reply", operationId.Value));
+        DurableOperationIdentities.Reply(operationId);
 
     internal static InteractionIdempotencyKey OperationReplyIdempotency(EmissionId operationId) =>
-        new(Derive("operation-reply-idempotency", operationId.Value));
+        DurableOperationIdentities.ReplyIdempotency(operationId);
 
     internal static ProcessCommitId OperationLedgerCommit(DurableOperationState operation) =>
         new(Derive(

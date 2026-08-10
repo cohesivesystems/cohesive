@@ -109,9 +109,12 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         var actual = await DurableTaskSequentialProcessInterpreter.RunAsync(
             plan,
             start,
+            EmptyDurableRequestBindingResolver.Instance,
             UnexpectedOperation,
+            UnexpectedDurableOperation,
+            UnexpectedReconciliation,
             UnexpectedInteraction,
-            () =>
+            (delay, cancellationToken) =>
             {
                 cuts++;
                 return Task.CompletedTask;
@@ -150,7 +153,10 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         var actual = await DurableTaskSequentialProcessInterpreter.RunAsync(
             plan,
             start,
+            EmptyDurableRequestBindingResolver.Instance,
             UnexpectedOperation,
+            UnexpectedDurableOperation,
+            UnexpectedReconciliation,
             () =>
             {
                 var requested = Assert.IsType<RequestEnvelope>(Assert.Single(observed!.Emissions));
@@ -170,7 +176,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
                     new(observed.State.Continuation, token.Id),
                     reply));
             },
-            () => Task.CompletedTask,
+            (delay, cancellationToken) => Task.CompletedTask,
             () => StartedAtUtc.AddMinutes(1),
             result => observed = result);
 
@@ -183,6 +189,274 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             .Where(static item => item.Kind == ProcessTraceEventKind.InteractionEmitted)).Emission);
         Assert.Contains(actual.InputAdmissions, static receipt =>
             receipt.Disposition == ProcessInputAdmissionDisposition.Consumed);
+    }
+
+    [Fact]
+    public async Task DurableRequest_AutomaticallyDispatchesAndAdmitsTheExactCanonicalReply()
+    {
+        var (plan, replyContract) = CompileRequestPlan("process/durable-task-durable-request");
+        var binding = Binding(plan, replyContract);
+        var start = Start(plan, "review/42");
+        List<DurableOperationInvocation> invocations = [];
+
+        var actual = await RunDurableRequest(
+            plan,
+            start,
+            binding,
+            invocation =>
+            {
+                invocations.Add(invocation);
+                return new(
+                    new DurableOperationOutcomeObservation(
+                        new RequestResultOutcome(new("accepted"), StringValue("accepted"))),
+                    deadlineElapsed: false);
+            });
+
+        Assert.Equal(ProcessActivationDisposition.Completed, actual.Disposition);
+        Assert.Equal(StringValue("accepted"), actual.State.Terminal.Detail?.Value);
+        var operation = Assert.Single(actual.DurableOperations).State;
+        Assert.Equal(DurableOperationStatus.Dispositioned, operation.Status);
+        Assert.Equal(Assert.Single(actual.Emissions).Context.EmissionId, operation.OperationId);
+        Assert.Equal(DurableOperationIdentities.Attempt(operation.OperationId, 1), Assert.Single(invocations).AttemptId);
+        Assert.Equal(
+            DurableOperationIdentities.Reply(operation.OperationId),
+            Assert.Single(actual.InputAdmissions).Emission);
+        var converter = DurableTaskProcessDataConverter.Create();
+        var restoredInvocation = Assert.IsType<DurableOperationInvocation>(converter.Deserialize(
+            converter.Serialize(Assert.Single(invocations)),
+            typeof(DurableOperationInvocation)));
+        Assert.Equal(Serialize(Assert.Single(invocations)), Serialize(restoredInvocation));
+
+        var replayInvocations = new List<DurableOperationInvocation>();
+        var replay = await RunDurableRequest(
+            plan,
+            start,
+            binding,
+            invocation =>
+            {
+                replayInvocations.Add(invocation);
+                return new(
+                    new DurableOperationOutcomeObservation(
+                        new RequestResultOutcome(new("accepted"), StringValue("accepted"))),
+                    deadlineElapsed: false);
+            });
+        Assert.Equal(Serialize(actual), Serialize(replay));
+        Assert.Equal(Serialize(Assert.Single(invocations)), Serialize(Assert.Single(replayInvocations)));
+    }
+
+    [Fact]
+    public async Task DurableRequest_UsesCanonicalBoundedRetryAndStableLogicalIdentity()
+    {
+        var (plan, replyContract) = CompileRequestPlan("process/durable-task-durable-retry");
+        var binding = Binding(plan, replyContract, maxAttempts: 2);
+        var start = Start(plan, "review/retry");
+        List<DurableOperationInvocation> invocations = [];
+
+        var actual = await RunDurableRequest(
+            plan,
+            start,
+            binding,
+            invocation =>
+            {
+                invocations.Add(invocation);
+                return invocation.AttemptOrdinal == 1
+                    ? new(
+                        new DurableOperationFailureObservation(new(
+                            DurableOperationFailurePhase.PreCall,
+                            DurableOperationEffectEvidence.NotExecuted,
+                            DurableOperationFailureDisposition.Retryable,
+                            "tests.retry")),
+                        deadlineElapsed: false)
+                    : new(
+                        new DurableOperationOutcomeObservation(
+                            new RequestResultOutcome(new("accepted"), StringValue("accepted"))),
+                        deadlineElapsed: false);
+            });
+
+        var operation = Assert.Single(actual.DurableOperations).State;
+        Assert.Equal(DurableOperationStatus.Dispositioned, operation.Status);
+        Assert.Equal(2, invocations.Count);
+        Assert.All(invocations, invocation => Assert.Equal(operation.OperationId, invocation.Request.Context.EmissionId));
+        Assert.All(invocations, invocation => Assert.Equal(operation.DeduplicationKey, invocation.DeduplicationKey));
+        Assert.Equal(DurableOperationIdentities.Attempt(operation.OperationId, 1), invocations[0].AttemptId);
+        Assert.Equal(DurableOperationIdentities.Attempt(operation.OperationId, 2), invocations[1].AttemptId);
+    }
+
+    [Fact]
+    public async Task DurableRequest_ReconcilesAmbiguousDispatchBeforeAdmittingReply()
+    {
+        var (plan, replyContract) = CompileRequestPlan("process/durable-task-durable-reconcile");
+        var binding = Binding(plan, replyContract);
+        var start = Start(plan, "review/reconcile");
+        DurableOperationState? reconciledState = null;
+
+        var actual = await RunDurableRequest(
+            plan,
+            start,
+            binding,
+            invocation => new(
+                new DurableOperationFailureObservation(new(
+                    DurableOperationFailurePhase.InCall,
+                    DurableOperationEffectEvidence.Ambiguous,
+                    DurableOperationFailureDisposition.Retryable,
+                    "tests.ambiguous")),
+                deadlineElapsed: false),
+            operation =>
+            {
+                reconciledState = operation;
+                return new(
+                    new DurableOperationReconciledOutcome(
+                        new RequestResultOutcome(new("accepted"), StringValue("accepted"))),
+                    deadlineElapsed: false);
+            });
+
+        var final = Assert.Single(actual.DurableOperations).State;
+        Assert.Equal(DurableOperationStatus.ReconciliationRequired, reconciledState!.Status);
+        Assert.Equal(DurableOperationStatus.Dispositioned, final.Status);
+        Assert.Single(final.Reconciliations);
+        Assert.Equal(
+            DurableOperationRecoveryRequirement.Reconcile,
+            final.Acknowledgement!.RecoveryIdentity!.Requirement);
+    }
+
+    [Fact]
+    public async Task DurableRequest_UnresolvedReconciliationFailsClosedWithExactEscalationIntent()
+    {
+        var (plan, replyContract) = CompileRequestPlan("process/durable-task-durable-escalation");
+        var binding = Binding(plan, replyContract);
+        var start = Start(plan, "review/escalate");
+
+        var actual = await RunDurableRequest(
+            plan,
+            start,
+            binding,
+            invocation => new(
+                new DurableOperationFailureObservation(new(
+                    DurableOperationFailurePhase.InCall,
+                    DurableOperationEffectEvidence.Ambiguous,
+                    DurableOperationFailureDisposition.Retryable,
+                    "tests.ambiguous")),
+                deadlineElapsed: false),
+            operation => new(new DurableOperationUnresolved(), deadlineElapsed: false));
+
+        Assert.Equal(ProcessActivationDisposition.DurableCut, actual.Disposition);
+        var operationResult = Assert.Single(actual.DurableOperations);
+        var operation = operationResult.State;
+        Assert.Equal(DurableTaskDurableOperationDisposition.RecoveryRequired, operationResult.Disposition);
+        Assert.Equal(DurableOperationStatus.EscalationRequired, operation.Status);
+        var intent = Assert.IsType<DurableOperationRecoveryIntent>(
+            DurableOperationReferenceExecutor.GetRecoveryIntent(operation));
+        Assert.Equal(binding.EscalationTarget, intent.Target);
+        Assert.Equal(operation.OperationId, intent.Identity.OperationId);
+    }
+
+    [Fact]
+    public async Task DurableRequest_RejectsAtLeastOnceActivityDispatchWithoutTargetIdempotencyEvidence()
+    {
+        var (plan, replyContract) = CompileRequestPlan("process/durable-task-durable-no-idempotency");
+        var binding = Binding(
+            plan,
+            replyContract,
+            idempotencyEvidence: DurableOperationIdempotencyEvidence.None);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => RunDurableRequest(
+            plan,
+            Start(plan, "review/unsafe"),
+            binding,
+            invocation => throw new InvalidOperationException("Dispatch must not run.")));
+
+        Assert.Contains("at-least-once", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DurableRequest_DeadlineFailsClosedWithoutFabricatingTypedTimeoutEvidence()
+    {
+        var fixture = DurableOperationTestFixture.Create(timeoutAfter: TimeSpan.FromMinutes(1));
+        var now = DurableOperationTestFixture.CreatedAtUtc;
+        var neverCompletes = new TaskCompletionSource<DurableTaskDurableOperationAttemptResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var result = await DurableTaskDurableOperationInterpreter.RunAsync(
+            fixture.Catalog,
+            fixture.Request(),
+            fixture.Binding,
+            invocation => neverCompletes.Task,
+            UnexpectedReconciliation,
+            (delay, cancellationToken) =>
+            {
+                now = now.Add(delay);
+                return Task.CompletedTask;
+            },
+            () => now);
+
+        Assert.Equal(DurableTaskDurableOperationDisposition.DeadlineElapsed, result.Disposition);
+        Assert.Null(result.State.Acknowledgement);
+        Assert.Equal(DurableOperationStatus.Dispatched, result.State.Status);
+        Assert.Equal(fixture.Binding.TimeoutAfter, now - result.State.CreatedAtUtc);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public async Task DurableRequest_CrashCutsReplayOneLogicalTargetEffect(int crashCutValue)
+    {
+        var crashCut = (DurableTaskDurableOperationCut)crashCutValue;
+        var (plan, replyContract) = CompileRequestPlan($"process/durable-task-cut-{crashCut}");
+        var binding = Binding(plan, replyContract);
+        var start = Start(plan, "review/crash");
+        var initial = ProcessReferenceInterpreter.Create(plan, start.Receipt);
+        var first = ProcessReferenceInterpreter.Activate(
+            plan,
+            initial,
+            Activation(initial, ProcessActivationCause.Start, start),
+            RejectingHost.Instance);
+        var request = Assert.IsType<RequestEnvelope>(Assert.Single(first.Emissions));
+        Dictionary<OperationAttemptId, DurableTaskDurableOperationAttemptResult> activityHistory = [];
+        var targetEffects = 0;
+        var crashed = false;
+
+        Task<DurableTaskDurableOperationAttemptResult> Execute(DurableOperationInvocation invocation)
+        {
+            if (!activityHistory.TryGetValue(invocation.AttemptId, out var result))
+            {
+                targetEffects++;
+                result = new(
+                    new DurableOperationOutcomeObservation(
+                        new RequestResultOutcome(new("accepted"), StringValue("accepted"))),
+                    deadlineElapsed: false);
+                activityHistory.Add(invocation.AttemptId, result);
+            }
+            return Task.FromResult(result);
+        }
+
+        async Task RunOnce()
+        {
+            _ = await DurableTaskDurableOperationInterpreter.RunAsync(
+                plan.ValidationContext.InteractionContracts!,
+                request,
+                binding,
+                Execute,
+                UnexpectedReconciliation,
+                (delay, cancellationToken) => Task.CompletedTask,
+                () => StartedAtUtc,
+                (cut, operation) =>
+                {
+                    if (!crashed && cut == crashCut)
+                    {
+                        crashed = true;
+                        throw new SimulatedCrashException();
+                    }
+                    return Task.CompletedTask;
+                });
+        }
+
+        await Assert.ThrowsAsync<SimulatedCrashException>(RunOnce);
+        await RunOnce();
+
+        Assert.Equal(1, targetEffects);
+        Assert.Single(activityHistory);
     }
 
     [Fact]
@@ -269,15 +543,20 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         var (restartPlan, replyContract) = CompileRequestPlan(
             "process/durable-task-scheduler-restart",
             transition);
+        var (durableRequestPlan, durableReplyContract) = CompileRequestPlan(
+            "process/durable-task-scheduler-durable-request");
+        var durableBinding = Binding(durableRequestPlan, durableReplyContract);
         var catalog = new DurableTaskSequentialProcessPlanCatalog([
             Physical(completedPlan),
             Physical(failedPlan),
-            Physical(restartPlan)
-        ]);
+            Physical(restartPlan),
+            Physical(durableRequestPlan)
+        ], new BindingResolver(durableBinding));
         var operations = new CountingEchoHost();
+        var durableOperations = new CountingDurableOperationAdapter(durableBinding.Request);
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-        using var firstWorker = SchedulerHost(connectionString, catalog, operations);
+        using var firstWorker = SchedulerHost(connectionString, catalog, operations, durableOperations);
         var workerOptions = firstWorker.Services
             .GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<DurableTaskWorkerOptions>>()
             .Get(Microsoft.Extensions.Options.Options.DefaultName);
@@ -302,6 +581,23 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         Assert.True(duplicate.Replayed);
         Assert.Equal(scheduled.InstanceId, duplicate.InstanceId);
 
+        var durableStart = Start(
+            durableRequestPlan,
+            "durable-request",
+            "instance/durable-request");
+        var durableSchedule = await firstClient.ScheduleCohesiveProcessAsync(durableStart, timeout.Token);
+        var durableCompleted = await firstClient.WaitForInstanceCompletionAsync(
+            durableSchedule.InstanceId,
+            getInputsAndOutputs: true,
+            timeout.Token);
+        Assert.Equal(OrchestrationRuntimeStatus.Completed, durableCompleted.RuntimeStatus);
+        var durableResult = Assert.IsType<DurableTaskSequentialProcessResult>(
+            durableCompleted.ReadOutputAs<DurableTaskSequentialProcessResult>());
+        Assert.Equal(
+            DurableOperationStatus.Dispositioned,
+            Assert.Single(durableResult.DurableOperations).State.Status);
+        Assert.Single(durableOperations.Invocations);
+
         var restartStart = Start(restartPlan, "restart", "instance/restart");
         var restartSchedule = await firstClient.ScheduleCohesiveProcessAsync(restartStart, timeout.Token);
         var waiting = await WaitForOutstandingRequest(
@@ -314,7 +610,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
 
         await firstWorker.StopAsync(timeout.Token);
 
-        using var recoveredWorker = SchedulerHost(connectionString, catalog, operations);
+        using var recoveredWorker = SchedulerHost(connectionString, catalog, operations, durableOperations);
         await recoveredWorker.StartAsync(timeout.Token);
         var recoveredClient = recoveredWorker.Services.GetRequiredService<DurableTaskClient>();
         var requested = Assert.IsType<RequestEnvelope>(Assert.Single(waiting.Emissions));
@@ -365,10 +661,16 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     static Microsoft.Extensions.Hosting.IHost SchedulerHost(
         string connectionString,
         DurableTaskSequentialProcessPlanCatalog catalog,
-        IProcessReferenceHost processHost)
+        IProcessReferenceHost processHost,
+        IDurableOperationAdapter? durableOperationAdapter = null)
     {
         var builder = Microsoft.Extensions.Hosting.Host.CreateApplicationBuilder();
         builder.Services.AddSingleton(processHost);
+        if (durableOperationAdapter is not null)
+        {
+            builder.Services.AddSingleton<IDurableOperationAdapterResolver>(
+                new AdapterResolver(durableOperationAdapter));
+        }
         builder.Services.AddDurableTaskWorker(worker =>
         {
             worker.AddCohesiveSequentialProcesses(catalog);
@@ -413,13 +715,66 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         DurableTaskSequentialProcessInterpreter.RunAsync(
             plan,
             start,
+            EmptyDurableRequestBindingResolver.Instance,
             executeOperation,
+            UnexpectedDurableOperation,
+            UnexpectedReconciliation,
             UnexpectedInteraction,
-            () => Task.CompletedTask,
+            (delay, cancellationToken) => Task.CompletedTask,
             () => StartedAtUtc.AddMinutes(1));
+
+    static Task<DurableTaskSequentialProcessResult> RunDurableRequest(
+        CompiledProcessPlan plan,
+        DurableTaskSequentialProcessStart start,
+        DurableRequestBinding binding,
+        Func<DurableOperationInvocation, DurableTaskDurableOperationAttemptResult> execute,
+        Func<DurableOperationState, DurableTaskDurableOperationReconciliationResult>? reconcile = null) =>
+        DurableTaskSequentialProcessInterpreter.RunAsync(
+            plan,
+            start,
+            new BindingResolver(binding),
+            UnexpectedOperation,
+            invocation => Task.FromResult(execute(invocation)),
+            operation => Task.FromResult((reconcile ?? (static state =>
+                throw new InvalidOperationException("Unexpected durable Request reconciliation.")))(operation)),
+            UnexpectedInteraction,
+            (delay, cancellationToken) => Task.CompletedTask,
+            () => StartedAtUtc);
+
+    static DurableRequestBinding Binding(
+        CompiledProcessPlan plan,
+        ReplyContractReference reply,
+        int maxAttempts = 2,
+        DurableOperationIdempotencyEvidence idempotencyEvidence =
+            DurableOperationIdempotencyEvidence.TargetDeduplication)
+    {
+        var request = Assert.IsType<RequestProcessNode>(plan.GetNode(new("request"))).Contract;
+        return new(
+            request,
+            [new(new("accepted"), reply)],
+            maxAttempts,
+            TimeSpan.FromMinutes(5),
+            timeoutAfter: null,
+            idempotencyEvidence,
+            reconciliationTarget: new(
+                DefinitionReference("process/reconcile", '7'),
+                new("node/reconcile")),
+            escalationTarget: new(
+                DefinitionReference("process/escalate", '8'),
+                new("node/escalate")));
+    }
 
     static Task<ProcessOperationResult> UnexpectedOperation(DurableTaskProcessHostOperation operation) =>
         throw new InvalidOperationException($"Unexpected host operation '{operation.Kind}'.");
+
+    static Task<DurableTaskDurableOperationAttemptResult> UnexpectedDurableOperation(
+        DurableOperationInvocation invocation) =>
+        throw new InvalidOperationException(
+            $"Unexpected durable operation '{invocation.Request.Context.EmissionId.Value}'.");
+
+    static Task<DurableTaskDurableOperationReconciliationResult> UnexpectedReconciliation(
+        DurableOperationState operation) =>
+        throw new InvalidOperationException($"Unexpected reconciliation '{operation.OperationId.Value}'.");
 
     static Task<ProcessActivationInput> UnexpectedInteraction() =>
         throw new InvalidOperationException("Unexpected Process interaction wait.");
@@ -666,6 +1021,56 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         public ProcessSignalTargetResult ResolveSignalTarget(ProcessSignalTargetResolution resolution) =>
             throw new InvalidOperationException("Unexpected Signal target resolution.");
     }
+
+    sealed class BindingResolver(DurableRequestBinding binding) : IDurableRequestBindingResolver
+    {
+        public bool TryResolve(RequestEnvelope request, out DurableRequestBinding? resolved)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            resolved = request.Contract == binding.Request ? binding : null;
+            return resolved is not null;
+        }
+    }
+
+    sealed class AdapterResolver(IDurableOperationAdapter adapter) : IDurableOperationAdapterResolver
+    {
+        public bool TryResolve(RequestEnvelope request, out IDurableOperationAdapter? resolved)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            resolved = adapter.Capabilities.Supports(request.Contract) ? adapter : null;
+            return resolved is not null;
+        }
+    }
+
+    sealed class CountingDurableOperationAdapter(RequestContractReference request) : IDurableOperationAdapter
+    {
+        readonly ConcurrentQueue<DurableOperationInvocation> invocations = [];
+
+        public DurableOperationAdapterCapabilities Capabilities { get; } = new(
+            DurableOperationIdempotencyEvidence.TargetDeduplication,
+            DurableOperationReconciliationCapability.Supported,
+            [request]);
+
+        internal IReadOnlyCollection<DurableOperationInvocation> Invocations => invocations.ToArray();
+
+        public ValueTask<DurableOperationAttemptObservation> ExecuteAsync(
+            OperationContext context,
+            DurableOperationInvocation invocation)
+        {
+            context.ThrowIfCancellationRequested();
+            invocations.Enqueue(invocation);
+            return ValueTask.FromResult<DurableOperationAttemptObservation>(
+                new DurableOperationOutcomeObservation(
+                    new RequestResultOutcome(new("accepted"), StringValue("accepted"))));
+        }
+
+        public ValueTask<DurableOperationReconciliationObservation> ReconcileAsync(
+            OperationContext context,
+            DurableOperationReconciliationRequest request) =>
+            throw new InvalidOperationException("Unexpected Scheduler-emulator reconciliation.");
+    }
+
+    sealed class SimulatedCrashException : Exception;
 
     sealed class RejectingHost : IProcessReferenceHost
     {

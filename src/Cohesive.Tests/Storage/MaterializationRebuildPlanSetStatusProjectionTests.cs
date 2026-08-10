@@ -552,7 +552,7 @@ public sealed class MaterializationRebuildPlanSetStatusProjectionTests
     }
 
     sealed class ExactBindingResolver(ImmutableArray<DurableRequestBinding> bindings)
-        : IProcessDurableRequestBindingResolver
+        : IDurableRequestBindingResolver
     {
         public bool TryResolve(RequestEnvelope request, out DurableRequestBinding? binding)
         {
@@ -562,7 +562,7 @@ public sealed class MaterializationRebuildPlanSetStatusProjectionTests
     }
 
     sealed class ExactAdapterResolver(IDurableOperationAdapter adapter)
-        : IProcessDurableOperationAdapterResolver
+        : IDurableOperationAdapterResolver
     {
         public bool TryResolve(RequestEnvelope request, out IDurableOperationAdapter? resolved)
         {

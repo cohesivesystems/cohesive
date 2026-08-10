@@ -109,7 +109,7 @@ tests, and eventually a repository-wide maturity matrix.
 
 | Decision | Status | Scope |
 | --- | --- | --- |
-| [Durable Task as a parallel Process interpreter](decisions/durable-task-process-interpreter.md) | Accepted; execution not yet implemented | Canonical Process authority, target capability inventory, Durable Task interpretation, conformance and alternatives |
+| [Durable Task as a parallel Process interpreter](decisions/durable-task-process-interpreter.md) | Accepted; sequential execution and durable Request recovery slice implemented | Canonical Process authority, target capability inventory, Durable Task interpretation, conformance and alternatives |
 
 ## Package documentation
 

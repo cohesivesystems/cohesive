@@ -2851,7 +2851,7 @@ public sealed class ProcessHigherOrderReferenceInterpreterTests
         }
     }
 
-    sealed class BindingResolver(DurableRequestBinding binding) : IProcessDurableRequestBindingResolver
+    sealed class BindingResolver(DurableRequestBinding binding) : IDurableRequestBindingResolver
     {
         public bool TryResolve(RequestEnvelope request, out DurableRequestBinding? resolved)
         {
@@ -2860,7 +2860,7 @@ public sealed class ProcessHigherOrderReferenceInterpreterTests
         }
     }
 
-    sealed class AdapterResolver(IDurableOperationAdapter adapter) : IProcessDurableOperationAdapterResolver
+    sealed class AdapterResolver(IDurableOperationAdapter adapter) : IDurableOperationAdapterResolver
     {
         public bool TryResolve(RequestEnvelope request, out IDurableOperationAdapter? resolved)
         {
