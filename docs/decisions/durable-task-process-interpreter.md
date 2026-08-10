@@ -196,8 +196,9 @@ a native realization.
 This decision remains accepted direction for Durable Task execution. As of 2026-08-09,
 `Cohesive.Processes` implements the target-neutral requirement inventory, capability evidence, exhaustive
 disposition ledger, structured matching diagnostics, and reference interpreter. `Cohesive.Adapters.DurableTask`
-implements historical monitoring, the planning profile, and a generic executable slice for sequential
-Transition, Relation/Query, Request, Choice, Match, Durable Cut, Return, and Fail constructs. It resolves only exact
+implements historical monitoring, the planning profile, and a generic executable slice for Transition,
+Relation/Query, Request, Choice, Match, Fork, Join, child Process, bounded partition, bounded recurrence, Durable Cut,
+Return, and Fail constructs. It resolves only exact
 definition identity/revision/fingerprint tuples from an immutable worker deployment catalog and uses standalone SDK
 activities for bounded host I/O. Bound Requests reuse the canonical `DurableOperationReferenceExecutor` and ledger
 for stable claim, attempt, dispatch, bounded retry, acknowledgement, reconciliation, and Reply-admission semantics.
@@ -205,14 +206,18 @@ Because activities are at-least-once, automatic dispatch rejects bindings withou
 idempotency evidence; SDK activity retry does not substitute for the canonical retry policy. Exact typed timeout,
 terminal-failure, or escalation evidence that this slice cannot author fails the orchestration closed while retaining
 the canonical operation status and recovery intent. Differential tests cover canonical decisions and evidence; a pinned Scheduler
-emulator proves completion, bound Request activity dispatch and Reply admission, authored failure, duplicate start
-admission, and worker restart at an unbound Request boundary
+emulator proves completion, bound Request activity dispatch and Reply admission, child sub-orchestration, recurrence
+Continue-as-new, authored failure, duplicate start admission, and worker restart at an unbound Request boundary
 without re-invoking an activity already retained in Scheduler history.
 
 This is not promotion of the full planning profile. Authored timeout, terminal-failure, escalation, and cancellation
-execution paths, waits and timers, signals, fork/join, child Processes, control and lifecycle semantics, observability,
-and the complete target qualification matrix remain outside the current slice. Unsupported node kinds fail catalog
-construction before execution.
+execution paths for general Requests, waits and timers, signals, root control and lifecycle semantics, observability,
+and the complete target qualification matrix remain outside the current slice. Higher-order execution retains
+canonical branch selection and lineage, schedules bounded branch work concurrently, maps exact child terminal status
+through the authored Request contract, and enforces partition and recurrence bounds without truncation. Parent child
+`Propagate` and `Detach` policies are realized explicitly: propagated cancellation is delivered as an exact portable
+intent at a child safe point and awaited, while detached child work remains independently active. Unsupported node
+kinds fail catalog construction before execution.
 
 Target facts should be revalidated against the official
 [Durable Task documentation](https://learn.microsoft.com/azure/durable-task/),

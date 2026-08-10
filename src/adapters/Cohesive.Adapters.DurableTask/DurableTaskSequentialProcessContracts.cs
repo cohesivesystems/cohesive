@@ -8,7 +8,7 @@ using Cohesive.Processes.Execution;
 
 namespace Cohesive.Adapters.DurableTask;
 
-/// <summary>Stable task and event names owned by the sequential Durable Task Process interpreter.</summary>
+/// <summary>Stable task and event names owned by the Durable Task Process interpreter.</summary>
 public static class DurableTaskSequentialProcessNames
 {
     /// <summary>Generic orchestration that interprets an exact canonical Process plan.</summary>
@@ -26,18 +26,24 @@ public static class DurableTaskSequentialProcessNames
 
     /// <summary>External event carrying one canonical interaction into a waiting Process.</summary>
     public const string InteractionEvent = "Cohesive.Processes.Interaction.v1";
+
+    /// <summary>Parent-originated event carrying one exact propagated child-cancellation intent.</summary>
+    public const string ChildCancellationEvent = "Cohesive.Processes.ChildCancellation.v1";
 }
 
 /// <summary>Exact canonical start evidence supplied to one Durable Task Process orchestration.</summary>
 /// <remarks>
 /// The Process document is not copied into this transport value. The receipt pins its exact identity, revision, and
-/// fingerprint, which must resolve to a precompiled plan in the worker's immutable plan catalog.
+/// fingerprint, which must resolve to a precompiled plan in the worker's immutable plan catalog. A target-owned
+/// <see cref="Resume"/> snapshot may carry the complete canonical continuation across Continue-as-new history
+/// rollover; it is derived evidence and never replaces the pinned plan as semantic authority.
 /// </remarks>
 public sealed record DurableTaskSequentialProcessStart
 {
     /// <summary>Creates one exact Process start input.</summary>
     /// <param name="receipt">Durably admitted canonical Process-start evidence.</param>
     /// <param name="activationContext">Explicit authority, correlation, delivery, and provenance for emissions.</param>
+    /// <param name="resume">Optional exact canonical state retained across one target history rollover.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="receipt"/> or <paramref name="activationContext"/> is <see langword="null"/>.
     /// </exception>
@@ -45,7 +51,8 @@ public sealed record DurableTaskSequentialProcessStart
     [JsonConstructor]
     public DurableTaskSequentialProcessStart(
         ProcessStartReceipt receipt,
-        ProcessActivationContext activationContext)
+        ProcessActivationContext activationContext,
+        DurableTaskSequentialProcessResume? resume = null)
     {
         Receipt = receipt ?? throw new ArgumentNullException(nameof(receipt));
         ActivationContext = activationContext ?? throw new ArgumentNullException(nameof(activationContext));
@@ -55,6 +62,30 @@ public sealed record DurableTaskSequentialProcessStart
                 "Process-start and activation contexts must have the same authority scope.",
                 nameof(activationContext));
         }
+        if (resume is not null)
+        {
+            if (resume.Result.Disposition != ProcessActivationDisposition.DurableCut)
+            {
+                throw new ArgumentException(
+                    "A Durable Task resume snapshot must close at a canonical durable cut.",
+                    nameof(resume));
+            }
+            if (resume.Result.State.Definition != receipt.Request.Definition
+                || resume.Result.State.Continuation != receipt.Request.InitialContinuation)
+            {
+                throw new ArgumentException(
+                    "A Durable Task resume snapshot must retain the exact started definition and continuation.",
+                    nameof(resume));
+            }
+            if (resume.Result.DurableOperations.Any(static operation =>
+                    operation.State.Status != DurableOperationStatus.Dispositioned))
+            {
+                throw new ArgumentException(
+                    "Continue-as-new cannot discard an incomplete durable Request task.",
+                    nameof(resume));
+            }
+        }
+        Resume = resume;
     }
 
     /// <summary>Durably admitted exact Process-start evidence.</summary>
@@ -62,6 +93,26 @@ public sealed record DurableTaskSequentialProcessStart
 
     /// <summary>Explicit context used for canonical interaction emissions.</summary>
     public ProcessActivationContext ActivationContext { get; }
+
+    /// <summary>Optional complete canonical result retained at the preceding target history boundary.</summary>
+    public DurableTaskSequentialProcessResume? Resume { get; }
+
+    internal DurableTaskSequentialProcessStart ContinueFrom(DurableTaskSequentialProcessResult result) =>
+        new(Receipt, ActivationContext, new(result));
+}
+
+/// <summary>Target-owned carrier for exact canonical state across Durable Task Continue-as-new.</summary>
+public sealed record DurableTaskSequentialProcessResume
+{
+    /// <summary>Creates a history-rollover carrier from one canonical result.</summary>
+    /// <param name="result">Complete accumulated canonical result at the preceding durable activation boundary.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="result"/> is <see langword="null"/>.</exception>
+    [JsonConstructor]
+    public DurableTaskSequentialProcessResume(DurableTaskSequentialProcessResult result) =>
+        Result = result ?? throw new ArgumentNullException(nameof(result));
+
+    /// <summary>Complete accumulated canonical result at the preceding durable activation boundary.</summary>
+    public DurableTaskSequentialProcessResult Result { get; }
 }
 
 /// <summary>Kind of one activity-bound canonical Process host operation.</summary>
@@ -123,7 +174,7 @@ public sealed record DurableTaskProcessHostOperation
         new(DurableTaskProcessHostOperationKind.RelationQuery, relationQuery: evaluation);
 }
 
-/// <summary>Canonical semantic result and accumulated evidence from a sequential Durable Task execution.</summary>
+/// <summary>Canonical semantic result and accumulated evidence from a Durable Task execution.</summary>
 public sealed record DurableTaskSequentialProcessResult
 {
     /// <summary>Creates an immutable Process execution projection.</summary>
@@ -198,12 +249,25 @@ static class DurableTaskSequentialProcessIdentities
     {
         ArgumentNullException.ThrowIfNull(start);
         var request = start.Receipt.Request;
-        var scope = request.Context.Authorization.AuthorityScope;
+        return OrchestrationInstance(
+            request.Context.Authorization.AuthorityScope,
+            request.InitialContinuation.ProcessInstanceId);
+    }
+
+    internal static string OrchestrationInstance(
+        InteractionAuthorityScope scope,
+        ProcessInstanceId processInstanceId)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        if (string.IsNullOrWhiteSpace(processInstanceId.Value))
+        {
+            throw new ArgumentException("A physical orchestration identity requires a Process instance.", nameof(processInstanceId));
+        }
         return "cohesive-process:v1:sha256:" + Hash(
             "orchestration-instance",
             scope.Authority,
             scope.Tenant ?? string.Empty,
-            request.InitialContinuation.ProcessInstanceId.Value);
+            processInstanceId.Value);
     }
 
     internal static ActivationId Activation(ProcessContinuationState state)

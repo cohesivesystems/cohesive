@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json.Serialization;
 using Cohesive.Execution;
 using Cohesive.Processes.IR;
 
@@ -8,12 +9,17 @@ namespace Cohesive.Processes.Execution;
 /// <remarks>
 /// The authoritative durable source is the owning <see cref="ProcessChildState"/> in
 /// <see cref="ProcessChildDisposition.CancellationRequested"/>. This projection gives runtimes and adapters a
-/// deterministic control surface after recovery without creating a second state authority. Physical delivery and
-/// acknowledgement evidence are deliberately deferred to a later child-control adapter contract.
+/// deterministic, portable control surface after recovery without creating a second state authority. Construction
+/// validates transport integrity; only projection from authoritative parent state proves that cancellation was
+/// semantically requested.
 /// </remarks>
 public sealed record ProcessChildCancellationIntent
 {
-    internal ProcessChildCancellationIntent(
+    /// <summary>Restores one exact portable cancellation intent projected from authoritative parent state.</summary>
+    /// <exception cref="ArgumentException">Any required identity is empty or semantic identity evidence is incomplete.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="purpose"/> is unspecified or unsupported.</exception>
+    [JsonConstructor]
+    public ProcessChildCancellationIntent(
         string intentId,
         ExecutionDefinitionReference parentDefinition,
         ProcessContinuationIdentity parentContinuation,
@@ -26,6 +32,24 @@ public sealed record ProcessChildCancellationIntent
         ProcessContinuationIdentity childContinuation,
         ProcessChildPurpose purpose)
     {
+        if (string.IsNullOrWhiteSpace(intentId)
+            || string.IsNullOrWhiteSpace(owner.Value)
+            || string.IsNullOrWhiteSpace(token.Value)
+            || string.IsNullOrWhiteSpace(node.Value)
+            || string.IsNullOrWhiteSpace(childRegistrationId)
+            || string.IsNullOrWhiteSpace(requestEmission.Value)
+            || !IsValid(parentDefinition)
+            || !IsValid(parentContinuation)
+            || !IsValid(childDefinition)
+            || !IsValid(childContinuation))
+        {
+            throw new ArgumentException(
+                "A child cancellation intent requires complete parent, child, node, registration, and Request identity evidence.");
+        }
+        if (!Enum.IsDefined(purpose) || purpose == ProcessChildPurpose.Unspecified)
+        {
+            throw new ArgumentOutOfRangeException(nameof(purpose), purpose, "A child cancellation purpose is required.");
+        }
         IntentId = intentId;
         ParentDefinition = parentDefinition;
         ParentContinuation = parentContinuation;
@@ -38,6 +62,20 @@ public sealed record ProcessChildCancellationIntent
         ChildContinuation = childContinuation;
         Purpose = purpose;
     }
+
+    static bool IsValid(ExecutionDefinitionReference? definition) =>
+        definition is not null
+        && !string.IsNullOrWhiteSpace(definition.DefinitionId.Value)
+        && !string.IsNullOrWhiteSpace(definition.RevisionId.Value)
+        && definition.Fingerprint is not null
+        && !string.IsNullOrWhiteSpace(definition.Fingerprint.Algorithm)
+        && !string.IsNullOrWhiteSpace(definition.Fingerprint.Canonicalization)
+        && !string.IsNullOrWhiteSpace(definition.Fingerprint.Value);
+
+    static bool IsValid(ProcessContinuationIdentity? continuation) =>
+        continuation is not null
+        && !string.IsNullOrWhiteSpace(continuation.ProcessInstanceId.Value)
+        && !string.IsNullOrWhiteSpace(continuation.ProcessAttemptId.Value);
 
     /// <summary>Opaque deterministic intent identity.</summary>
     public string IntentId { get; }

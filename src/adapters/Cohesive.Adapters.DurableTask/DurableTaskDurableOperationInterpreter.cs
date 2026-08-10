@@ -15,7 +15,8 @@ static class DurableTaskDurableOperationInterpreter
         Func<DurableOperationState, Task<DurableTaskDurableOperationReconciliationResult>> reconcile,
         Func<TimeSpan, CancellationToken, Task> createTimer,
         Func<DateTimeOffset> getCurrentUtc,
-        Func<DurableTaskDurableOperationCut, DurableOperationState, Task>? createCut = null)
+        Func<DurableTaskDurableOperationCut, DurableOperationState, Task>? createCut = null,
+        Func<DurableOperationState, DurableOperationTargetObservation>? observeTarget = null)
     {
         ArgumentNullException.ThrowIfNull(contracts);
         ArgumentNullException.ThrowIfNull(request);
@@ -40,7 +41,7 @@ static class DurableTaskDurableOperationInterpreter
         {
             if (state.Status == DurableOperationStatus.Acknowledged)
             {
-                return await AdmitReplyAsync(state, executor, createCut).ConfigureAwait(true);
+                return await AdmitReplyAsync(state, executor, createCut, observeTarget).ConfigureAwait(true);
             }
             if (state.Status is DurableOperationStatus.TerminalOutcomeRequired
                 or DurableOperationStatus.EscalationRequired
@@ -171,7 +172,8 @@ static class DurableTaskDurableOperationInterpreter
     static async Task<DurableTaskDurableOperationResult> AdmitReplyAsync(
         DurableOperationState state,
         DurableOperationReferenceExecutor executor,
-        Func<DurableTaskDurableOperationCut, DurableOperationState, Task>? createCut)
+        Func<DurableTaskDurableOperationCut, DurableOperationState, Task>? createCut,
+        Func<DurableOperationState, DurableOperationTargetObservation>? observeTarget)
     {
         await CreateCutAsync(createCut, DurableTaskDurableOperationCut.AfterAcknowledgement, state).ConfigureAwait(true);
         if (state.Request.ResponseTarget is not ProcessTokenInteractionTarget target)
@@ -180,16 +182,20 @@ static class DurableTaskDurableOperationInterpreter
                 "The sequential Durable Task interpreter admits durable Replies only to Process-token targets.");
         }
         await CreateCutAsync(createCut, DurableTaskDurableOperationCut.BeforeReplyAdmission, state).ConfigureAwait(true);
-        var admission = executor.AdmitResult(
-            state,
-            new DurableOperationTargetObservation(target, DurableOperationResultArrival.Eligible));
+        var targetObservation = observeTarget?.Invoke(state)
+            ?? new DurableOperationTargetObservation(target, DurableOperationResultArrival.Eligible);
+        var admission = executor.AdmitResult(state, targetObservation);
         if (admission.Kind != DurableOperationAdmissionResultKind.Dispositioned
-            || admission.Admission is not { AdvancesTarget: true })
+            || admission.Admission is null)
         {
             throw new InvalidOperationException(
-                $"The canonical durable Reply could not advance its live Process target: {admission.Kind}.");
+                $"The canonical durable Reply could not be dispositioned at its Process target: {admission.Kind}.");
         }
         state = admission.State;
+        if (!admission.Admission.AdvancesTarget)
+        {
+            return new(DurableTaskDurableOperationDisposition.ResultDispositioned, state);
+        }
         var reply = state.CreateReply(
             DurableOperationIdentities.Reply(state.OperationId),
             DurableOperationIdentities.ReplyIdempotency(state.OperationId),

@@ -982,35 +982,20 @@ static class ProcessChildStartSemantics
     internal static ProcessStartReceipt Create(
         RequestEnvelope request,
         ProcessChildRequestTarget target,
-        DateTimeOffset observedAtUtc)
-    {
-        var start = new ProcessStartRequest(
-            ProcessStartRequest.CurrentSchemaVersion,
-            target.Definition,
-            new(
-                CommandId(request),
-                IdempotencyKey(request),
-                target.Continuation.ProcessInstanceId,
-                Authorization(request),
-                observedAtUtc,
-                request.Context.Provenance),
-            target.Continuation,
-            request.Payload);
-        return new(start, observedAtUtc);
-    }
+        DateTimeOffset observedAtUtc) => ProcessChildStartProjection.Create(
+            request,
+            target,
+            Authorization(request),
+            observedAtUtc);
 
     internal static bool Matches(
         ProcessStartReceipt retained,
         RequestEnvelope request,
-        ProcessChildRequestTarget target) =>
-        retained.Request.Definition == target.Definition
-        && retained.Request.InitialContinuation == target.Continuation
-        && retained.Request.Context.CommandId == CommandId(request)
-        && retained.Request.Context.IdempotencyKey == IdempotencyKey(request)
-        && retained.Request.Context.ProcessInstanceId == target.Continuation.ProcessInstanceId
-        && retained.Request.Context.Authorization == Authorization(request)
-        && retained.Request.Context.Provenance == request.Context.Provenance
-        && retained.Request.Input == request.Payload;
+        ProcessChildRequestTarget target) => ProcessChildStartProjection.Matches(
+            retained,
+            request,
+            target,
+            Authorization(request));
 
     internal static bool IsExactPrevention(
         ProcessDurableStoreSnapshot snapshot,
@@ -1091,12 +1076,6 @@ static class ProcessChildStartSemantics
             && closure.CommandId == cancellation.Context.CommandId
             && closure.OccurredAtUtc == checkpoint.UpdatedAtUtc;
     }
-
-    static ProcessControlCommandId CommandId(RequestEnvelope request) =>
-        new($"process-child-start/{request.Context.EmissionId.Value}");
-
-    static ProcessControlIdempotencyKey IdempotencyKey(RequestEnvelope request) =>
-        new($"process-child-start/{request.Context.IdempotencyKey.Value}");
 
     static ProcessControlAuthorizationContext Authorization(RequestEnvelope request) =>
         new(

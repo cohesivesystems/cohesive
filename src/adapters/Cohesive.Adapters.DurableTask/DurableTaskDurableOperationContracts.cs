@@ -73,7 +73,10 @@ public enum DurableTaskDurableOperationDisposition
     RecoveryRequired = 2,
 
     /// <summary>The semantic deadline elapsed and requires its exact authored typed timeout outcome.</summary>
-    DeadlineElapsed = 3
+    DeadlineElapsed = 3,
+
+    /// <summary>The canonical acknowledgement was dispositioned without advancing its closed or incompatible target.</summary>
+    ResultDispositioned = 4
 }
 
 /// <summary>Canonical durable Request state and optional Process input produced by the Durable Task interpreter.</summary>

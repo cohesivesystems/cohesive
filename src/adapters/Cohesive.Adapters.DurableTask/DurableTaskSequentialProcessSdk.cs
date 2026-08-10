@@ -43,7 +43,7 @@ public static class DurableTaskProcessDataConverter
     }
 }
 
-/// <summary>Registers the generic sequential Process orchestration and bounded host-operation activity.</summary>
+/// <summary>Registers the generic bounded Process orchestration and its host-operation activities.</summary>
 public static class DurableTaskSequentialProcessWorkerBuilderExtensions
 {
     /// <summary>Adds the initial canonical Process executable slice to a standalone Durable Task worker.</summary>
@@ -103,6 +103,10 @@ public sealed class DurableTaskSequentialProcessOrchestrator
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(input);
         var physical = catalog.GetExact(input.Receipt.Request.Definition);
+        Func<Task<ProcessChildCancellationIntent>>? waitForChildCancellation = context.Parent is null
+            ? null
+            : () => context.WaitForExternalEvent<ProcessChildCancellationIntent>(
+                DurableTaskSequentialProcessNames.ChildCancellationEvent);
         var result = await DurableTaskSequentialProcessInterpreter.RunAsync(
             physical.CanonicalPlan,
             input,
@@ -113,6 +117,7 @@ public sealed class DurableTaskSequentialProcessOrchestrator
             invocation => context.CallActivityAsync<DurableTaskDurableOperationAttemptResult>(
                 DurableTaskSequentialProcessNames.DurableOperationActivity,
                 invocation),
+            invocation => ExecuteChildProcessAsync(context, catalog, invocation),
             state => context.CallActivityAsync<DurableTaskDurableOperationReconciliationResult>(
                 DurableTaskSequentialProcessNames.DurableOperationReconciliationActivity,
                 state),
@@ -120,7 +125,23 @@ public sealed class DurableTaskSequentialProcessOrchestrator
                 DurableTaskSequentialProcessNames.InteractionEvent),
             (delay, cancellationToken) => context.CreateTimer(delay, cancellationToken),
             () => ToUtc(context.CurrentUtcDateTime),
-            context.SetCustomStatus).ConfigureAwait(true);
+            context.SetCustomStatus,
+            next =>
+            {
+                context.ContinueAsNew(next, preserveUnprocessedEvents: true);
+                return Task.CompletedTask;
+            },
+            intent =>
+            {
+                context.SendEvent(
+                    DurableTaskSequentialProcessIdentities.OrchestrationInstance(
+                        input.ActivationContext.AuthorityScope,
+                        intent.ChildContinuation.ProcessInstanceId),
+                    DurableTaskSequentialProcessNames.ChildCancellationEvent,
+                    intent);
+                return Task.CompletedTask;
+            },
+            waitForChildCancellation).ConfigureAwait(true);
 
         var blockedOperation = result.DurableOperations.FirstOrDefault(static operation =>
             operation.State.Status is not DurableOperationStatus.Dispositioned);
@@ -132,7 +153,7 @@ public sealed class DurableTaskSequentialProcessOrchestrator
                 blockedOperation.State.Status,
                 DurableOperationReferenceExecutor.GetRecoveryIntent(blockedOperation.State));
         }
-        if (result.Disposition == ProcessActivationDisposition.Failed)
+        if (result.Disposition == ProcessActivationDisposition.Failed && context.Parent is null)
         {
             var detail = result.Diagnostics.IsEmpty
                 ? "Canonical Process execution reached a failed terminal."
@@ -140,6 +161,89 @@ public sealed class DurableTaskSequentialProcessOrchestrator
             throw new DurableTaskProcessFailedException(detail);
         }
         return result;
+    }
+
+    static async Task<DurableTaskDurableOperationAttemptResult> ExecuteChildProcessAsync(
+        TaskOrchestrationContext context,
+        DurableTaskSequentialProcessPlanCatalog catalog,
+        DurableOperationInvocation invocation)
+    {
+        var request = invocation.Request;
+        var target = request.ChildTarget
+            ?? throw new InvalidOperationException("A child sub-orchestration requires an exact child Request target.");
+        var child = catalog.GetExact(target.Definition).CanonicalPlan;
+        var acceptedAtUtc = ToUtc(context.CurrentUtcDateTime);
+        var authorization = new ProcessControlAuthorizationContext(
+            "cohesive.adapters.durable-task.child-sub-orchestration",
+            request.Context.AuthorityScope,
+            $"request/{request.Context.EmissionId.Value}/"
+            + InteractionEnvelopeJsonSerializer.ComputeContentFingerprint(request).Value);
+        var receipt = ProcessChildStartProjection.Create(request, target, authorization, acceptedAtUtc);
+        var start = new DurableTaskSequentialProcessStart(
+            receipt,
+            new(
+                request.Context.AuthorityScope,
+                request.Context.CorrelationId,
+                request.Context.Delivery,
+                child.Document.Metadata.Provenance,
+                causationId: request.Context.EmissionId,
+                ordering: request.Context.Ordering));
+        var result = await context.CallSubOrchestratorAsync<DurableTaskSequentialProcessResult>(
+            DurableTaskSequentialProcessNames.Orchestration,
+            start,
+            new TaskOptions().WithInstanceId(
+                DurableTaskSequentialProcessIdentities.OrchestrationInstance(start))).ConfigureAwait(true);
+        return ProjectChildTerminal(child, target, result);
+    }
+
+    static DurableTaskDurableOperationAttemptResult ProjectChildTerminal(
+        Cohesive.Processes.Compilation.CompiledProcessPlan child,
+        ProcessChildRequestTarget target,
+        DurableTaskSequentialProcessResult result)
+    {
+        if (result.State.Definition != target.Definition
+            || result.State.Continuation != target.Continuation)
+        {
+            throw new InvalidOperationException(
+                "A child sub-orchestration returned another definition or continuation identity.");
+        }
+        var terminal = result.State.Terminal;
+        if (terminal.Kind == ExecutionTerminalOutcomeKind.None
+            || terminal.Detail is { Disclosure: not ExecutionStatusDisclosure.Disclosed })
+        {
+            throw new InvalidOperationException(
+                "A child sub-orchestration did not return a materializable terminal outcome.");
+        }
+        var value = terminal.Detail?.Value ?? PortableValue.Missing(child.Definition.Result);
+        if (value.Contract != child.Definition.Result
+            || value.State is PortableValueState.Unknown or PortableValueState.Failed)
+        {
+            throw new InvalidOperationException(
+                "A child sub-orchestration returned terminal detail outside its exact result contract.");
+        }
+        var terminalEvidence = result.Evidence
+            .Where(evidence => evidence.Definition == target.Definition)
+            .Reverse()
+            .FirstOrDefault(evidence => evidence.Trace.Any(static trace => trace.Kind is
+                ProcessTraceEventKind.TerminalReached or ProcessTraceEventKind.CancellationApplied))
+            ?? throw new InvalidOperationException(
+                "A child sub-orchestration returned no attributable terminal trace.");
+        var terminalTrace = terminalEvidence.Trace.Last(trace => trace.Kind is
+            ProcessTraceEventKind.TerminalReached or ProcessTraceEventKind.CancellationApplied);
+        var outcomeId = target.OutcomeMapping.For(terminal.Kind);
+        RequestTerminalOutcome outcome = terminal.Kind == ExecutionTerminalOutcomeKind.Completed
+            ? new RequestResultOutcome(outcomeId, value)
+            : new RequestFailureOutcome(outcomeId, value);
+        var origin = new ProcessInteractionOrigin(
+            target.Definition,
+            terminalTrace.Node,
+            target.Continuation,
+            terminalEvidence.Activation,
+            terminalTrace.Token,
+            outcome: terminalTrace.Node);
+        return new(
+            new DurableOperationOutcomeObservation(outcome, replyOrigin: origin),
+            deadlineElapsed: false);
     }
 
     static DateTimeOffset ToUtc(DateTime value) => new(
@@ -331,7 +435,7 @@ public sealed class DurableTaskDurableOperationRecoveryRequiredException : Excep
     public DurableOperationRecoveryIntent? RecoveryIntent { get; }
 }
 
-/// <summary>Idempotent client operations for the generic sequential Process orchestration.</summary>
+/// <summary>Idempotent client operations for the generic bounded Process orchestration.</summary>
 public static class DurableTaskSequentialProcessClientExtensions
 {
     /// <summary>Schedules one exact Process start or reuses an identical existing physical instance.</summary>
@@ -352,6 +456,12 @@ public static class DurableTaskSequentialProcessClientExtensions
     {
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(start);
+        if (start.Resume is not null)
+        {
+            throw new ArgumentException(
+                "Client admission accepts only initial Process starts; resume state is target-owned.",
+                nameof(start));
+        }
         var instanceId = DurableTaskSequentialProcessIdentities.OrchestrationInstance(start);
         var options = new StartOrchestrationOptions(instanceId)
             .WithDedupeStatuses([.. StartOrchestrationOptionsExtensions.ValidDedupeStatuses]);
@@ -373,7 +483,14 @@ public static class DurableTaskSequentialProcessClientExtensions
             var retained = existing?.ReadInputAs<DurableTaskSequentialProcessStart>();
             var converter = DurableTaskProcessDataConverter.Create();
             if (retained is null
-                || !string.Equals(converter.Serialize(retained), converter.Serialize(start), StringComparison.Ordinal))
+                || !string.Equals(
+                    converter.Serialize(retained.Receipt),
+                    converter.Serialize(start.Receipt),
+                    StringComparison.Ordinal)
+                || !string.Equals(
+                    converter.Serialize(retained.ActivationContext),
+                    converter.Serialize(start.ActivationContext),
+                    StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(
                     "The stable Durable Task Process instance identity is already bound to different start evidence.");

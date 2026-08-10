@@ -17,6 +17,14 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
 {
     static readonly DateTimeOffset StartedAtUtc = new(2026, 8, 9, 12, 0, 0, TimeSpan.Zero);
     static readonly ValueContract StringContract = new(new ScalarTypeRef(ScalarTypeKind.String));
+    static readonly ValueContract StringCollectionContract = new(
+        new ScalarTypeRef(ScalarTypeKind.String),
+        cardinality: FieldCardinality.Many);
+    static readonly ProcessChildOutcomeMapping ChildOutcomeMapping = new(
+        new("completed"),
+        new("failed"),
+        new("cancelled"),
+        new("terminated"));
 
     [Fact]
     public async Task SequentialHostOperations_AreDifferentiallyConformantAndReplayStable()
@@ -112,6 +120,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             EmptyDurableRequestBindingResolver.Instance,
             UnexpectedOperation,
             UnexpectedDurableOperation,
+            UnexpectedChildProcess,
             UnexpectedReconciliation,
             UnexpectedInteraction,
             (delay, cancellationToken) =>
@@ -156,6 +165,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             EmptyDurableRequestBindingResolver.Instance,
             UnexpectedOperation,
             UnexpectedDurableOperation,
+            UnexpectedChildProcess,
             UnexpectedReconciliation,
             () =>
             {
@@ -189,6 +199,404 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             .Where(static item => item.Kind == ProcessTraceEventKind.InteractionEmitted)).Emission);
         Assert.Contains(actual.InputAdmissions, static receipt =>
             receipt.Disposition == ProcessInputAdmissionDisposition.Consumed);
+    }
+
+    [Fact]
+    public async Task ForkJoin_BoundRequestsAreInFlightTogetherAndCanonicalSelectionRemainsAuthoritative()
+    {
+        var fixture = CompileForkRequestPlan();
+        var start = Start(fixture.Plan, "fork-input", "instance/fork-join");
+        ConcurrentDictionary<EmissionId, TaskCompletionSource<DurableTaskDurableOperationAttemptResult>> pending = [];
+
+        var execution = RunBoundRequests(
+            fixture.Plan,
+            start,
+            fixture.Binding,
+            invocation =>
+            {
+                var completion = new TaskCompletionSource<DurableTaskDurableOperationAttemptResult>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                Assert.True(pending.TryAdd(invocation.Request.Context.EmissionId, completion));
+                return completion.Task;
+            });
+
+        for (var attempt = 0; attempt < 100 && pending.Count != 2; attempt++)
+        {
+            await Task.Delay(10);
+        }
+        Assert.Equal(2, pending.Count);
+        Assert.False(execution.IsCompleted);
+
+        foreach (var completion in pending.OrderByDescending(static pair => pair.Key.Value, StringComparer.Ordinal))
+        {
+            completion.Value.SetResult(new(
+                new DurableOperationOutcomeObservation(
+                    new RequestResultOutcome(new("accepted"), StringValue("accepted"))),
+                deadlineElapsed: false));
+        }
+
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(ProcessActivationDisposition.Completed, result.Disposition);
+        Assert.Equal(2, result.DurableOperations.Length);
+        Assert.All(result.DurableOperations, static operation =>
+            Assert.Equal(DurableOperationStatus.Dispositioned, operation.State.Status));
+        var fork = Assert.Single(result.State.Forks);
+        Assert.True(fork.Resolved);
+        Assert.True(fork.SelectedBranches.SequenceEqual([
+            new ExecutionNodeId("branch/a"),
+            new ExecutionNodeId("branch/b")
+        ]));
+        Assert.Contains(
+            result.Evidence.SelectMany(static item => item.Trace),
+            static trace => trace.Kind == ProcessTraceEventKind.ForkCreated);
+        Assert.Contains(
+            result.Evidence.SelectMany(static item => item.Trace),
+            static trace => trace.Kind == ProcessTraceEventKind.JoinResolved);
+    }
+
+    [Fact]
+    public async Task ChildRequest_UsesChildExecutorAndAdmitsOnlyExactTerminalLineage()
+    {
+        var fixture = CompileChildParentPlan();
+        var start = Start(fixture.Parent, "child-input", "instance/child-parent");
+        ProcessChildRequestTarget? scheduledTarget = null;
+
+        var result = await RunChildRequest(
+            fixture.Parent,
+            start,
+            fixture.Binding,
+            invocation =>
+            {
+                var request = invocation.Request;
+                var target = Assert.IsType<ProcessChildRequestTarget>(request.ChildTarget);
+                scheduledTarget = target;
+                var outcome = new RequestResultOutcome(
+                    ChildOutcomeMapping.Completed,
+                    StringValue("child-completed"));
+                var origin = new ProcessInteractionOrigin(
+                    target.Definition,
+                    new("return"),
+                    target.Continuation,
+                    new("activation/child-terminal"),
+                    new("token/child-terminal"),
+                    outcome: new("return"));
+                return Task.FromResult(new DurableTaskDurableOperationAttemptResult(
+                    new DurableOperationOutcomeObservation(outcome, replyOrigin: origin),
+                    deadlineElapsed: false));
+            });
+
+        var child = Assert.Single(result.State.Children);
+        Assert.Equal(fixture.Child.DefinitionReference, scheduledTarget!.Definition);
+        Assert.Equal(child.Continuation, scheduledTarget.Continuation);
+        Assert.Equal(ProcessChildCancellationPolicy.Propagate, child.Cancellation);
+        Assert.Equal(ProcessChildDisposition.Completed, child.Disposition);
+        Assert.Equal(ChildOutcomeMapping.Completed, child.TerminalOutcome);
+        Assert.Equal(StringValue("child-completed"), child.Result);
+        Assert.Equal(ProcessActivationDisposition.Completed, result.Disposition);
+    }
+
+    [Fact]
+    public async Task ForkJoin_PropagatesExactCancellationAndWaitsForTheCancelledChildToClose()
+    {
+        var fixture = CompileForkChildPlan(ProcessChildCancellationPolicy.Propagate);
+        var start = Start(fixture.Parent, "child-input", "instance/fork-child-propagate");
+        ConcurrentDictionary<EmissionId, PendingChild> pending = [];
+        var dispatched = new TaskCompletionSource<ProcessChildCancellationIntent>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var execution = DurableTaskSequentialProcessInterpreter.RunAsync(
+            fixture.Parent,
+            start,
+            new BindingResolver(fixture.Binding),
+            UnexpectedOperation,
+            UnexpectedDurableOperation,
+            invocation =>
+            {
+                var target = Assert.IsType<ProcessChildRequestTarget>(invocation.Request.ChildTarget);
+                var completion = new TaskCompletionSource<DurableTaskDurableOperationAttemptResult>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                Assert.True(pending.TryAdd(
+                    invocation.Request.Context.EmissionId,
+                    new(target, completion)));
+                return completion.Task;
+            },
+            UnexpectedReconciliation,
+            UnexpectedInteraction,
+            TestDurableTimer,
+            () => StartedAtUtc.AddMinutes(1),
+            dispatchChildCancellation: intent =>
+            {
+                dispatched.SetResult(intent);
+                return Task.CompletedTask;
+            });
+
+        await WaitUntilAsync(() => pending.Count == 2);
+        var winner = pending.OrderBy(static pair => pair.Key.Value, StringComparer.Ordinal).First();
+        var loser = pending.Single(pair => pair.Key != winner.Key);
+        winner.Value.Completion.SetResult(CompletedChild(winner.Key, winner.Value.Target));
+
+        var intent = await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(execution.IsCompleted);
+        Assert.Equal(fixture.Parent.DefinitionReference, intent.ParentDefinition);
+        Assert.Equal(start.Receipt.Request.InitialContinuation, intent.ParentContinuation);
+        Assert.Equal(loser.Key, intent.RequestEmission);
+        Assert.Equal(fixture.Child.DefinitionReference, intent.ChildDefinition);
+        Assert.Equal(loser.Value.Target.Continuation, intent.ChildContinuation);
+
+        loser.Value.Completion.SetResult(CancelledChild(loser.Key, loser.Value.Target));
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(ProcessActivationDisposition.Completed, result.Disposition);
+        Assert.Equal(ProcessChildDisposition.Completed, result.State.Children.Single(
+            child => child.RequestEmission == winner.Key).Disposition);
+        Assert.Equal(ProcessChildDisposition.CancellationRequested, result.State.Children.Single(
+            child => child.RequestEmission == loser.Key).Disposition);
+        var losingOperation = result.DurableOperations.Single(operation => operation.State.OperationId == loser.Key);
+        Assert.Equal(DurableTaskDurableOperationDisposition.ResultDispositioned, losingOperation.Disposition);
+        Assert.Equal(DurableOperationResultArrival.Late, losingOperation.State.Admission?.Arrival);
+        Assert.Equal(DurableOperationAdmissionDisposition.Observed, losingOperation.State.Admission?.Disposition);
+    }
+
+    [Fact]
+    public async Task ForkJoin_DetachesTheLosingChildWithoutDispatchingCancellationOrAwaitingIt()
+    {
+        var fixture = CompileForkChildPlan(ProcessChildCancellationPolicy.Detach);
+        var start = Start(fixture.Parent, "child-input", "instance/fork-child-detach");
+        ConcurrentDictionary<EmissionId, PendingChild> pending = [];
+        var cancellationDispatches = 0;
+
+        var execution = DurableTaskSequentialProcessInterpreter.RunAsync(
+            fixture.Parent,
+            start,
+            new BindingResolver(fixture.Binding),
+            UnexpectedOperation,
+            UnexpectedDurableOperation,
+            invocation =>
+            {
+                var target = Assert.IsType<ProcessChildRequestTarget>(invocation.Request.ChildTarget);
+                var completion = new TaskCompletionSource<DurableTaskDurableOperationAttemptResult>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                Assert.True(pending.TryAdd(
+                    invocation.Request.Context.EmissionId,
+                    new(target, completion)));
+                return completion.Task;
+            },
+            UnexpectedReconciliation,
+            UnexpectedInteraction,
+            TestDurableTimer,
+            () => StartedAtUtc.AddMinutes(1),
+            dispatchChildCancellation: intent =>
+            {
+                Interlocked.Increment(ref cancellationDispatches);
+                return Task.CompletedTask;
+            });
+
+        await WaitUntilAsync(() => pending.Count == 2);
+        var winner = pending.OrderBy(static pair => pair.Key.Value, StringComparer.Ordinal).First();
+        var loser = pending.Single(pair => pair.Key != winner.Key);
+        winner.Value.Completion.SetResult(CompletedChild(winner.Key, winner.Value.Target));
+
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(ProcessActivationDisposition.Completed, result.Disposition);
+        Assert.Equal(0, cancellationDispatches);
+        Assert.Equal(ProcessChildDisposition.Detached, result.State.Children.Single(
+            child => child.RequestEmission == loser.Key).Disposition);
+        Assert.DoesNotContain(result.DurableOperations, operation => operation.State.OperationId == loser.Key);
+
+        loser.Value.Completion.SetResult(CancelledChild(loser.Key, loser.Value.Target));
+    }
+
+    [Fact]
+    public async Task ChildOrchestration_AppliesTheExactParentCancellationAtItsNextSafePoint()
+    {
+        var (child, _) = CompileRequestPlan("process/durable-task-child-cancellation-receiver");
+        var start = Start(child, "waiting", "instance/child-cancellation-receiver");
+        var intent = new ProcessChildCancellationIntent(
+            "intent/parent-cancel",
+            DefinitionReference("process/parent", '4'),
+            new(new("instance/parent"), new("attempt/parent")),
+            new("token/owner"),
+            new("token/child"),
+            new("child"),
+            "child/registration",
+            new("emission/child-request"),
+            child.DefinitionReference,
+            start.Receipt.Request.InitialContinuation,
+            ProcessChildPurpose.Work);
+        var neverInteracts = new TaskCompletionSource<ProcessActivationInput>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var result = await DurableTaskSequentialProcessInterpreter.RunAsync(
+            child,
+            start,
+            EmptyDurableRequestBindingResolver.Instance,
+            UnexpectedOperation,
+            UnexpectedDurableOperation,
+            UnexpectedChildProcess,
+            UnexpectedReconciliation,
+            () => neverInteracts.Task,
+            TestDurableTimer,
+            () => StartedAtUtc.AddMinutes(1),
+            waitForChildCancellation: () => Task.FromResult(intent));
+
+        Assert.Equal(ProcessActivationDisposition.Cancelled, result.Disposition);
+        Assert.Equal(ExecutionTerminalOutcomeKind.Cancelled, result.State.Terminal.Kind);
+        Assert.Contains(
+            result.Evidence.SelectMany(static item => item.Trace),
+            static trace => trace.Kind == ProcessTraceEventKind.CancellationApplied);
+        var converter = DurableTaskProcessDataConverter.Create();
+        var restored = Assert.IsType<ProcessChildCancellationIntent>(converter.Deserialize(
+            converter.Serialize(intent),
+            typeof(ProcessChildCancellationIntent)));
+        Assert.Equal(Serialize(intent), Serialize(restored));
+    }
+
+    [Fact]
+    public async Task ForEachPartition_EnforcesParallelismAndActivationStartBoundsBeforeSchedulingChildren()
+    {
+        var fixture = CompilePartitionParentPlan();
+        var start = Start(
+            fixture.Parent,
+            CollectionValue("partition/c", "partition/a", "partition/b"),
+            "instance/partition-parent");
+        ConcurrentDictionary<EmissionId, TaskCompletionSource<DurableTaskDurableOperationAttemptResult>> pending = [];
+        ConcurrentDictionary<EmissionId, ProcessChildRequestTarget> scheduled = [];
+
+        var execution = RunChildRequest(
+            fixture.Parent,
+            start,
+            fixture.Binding,
+            invocation =>
+            {
+                var target = Assert.IsType<ProcessChildRequestTarget>(invocation.Request.ChildTarget);
+                Assert.True(scheduled.TryAdd(invocation.Request.Context.EmissionId, target));
+                var completion = new TaskCompletionSource<DurableTaskDurableOperationAttemptResult>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                Assert.True(pending.TryAdd(invocation.Request.Context.EmissionId, completion));
+                return completion.Task;
+            });
+
+        for (var attempt = 0; attempt < 100 && pending.Count != 2; attempt++)
+        {
+            await Task.Yield();
+        }
+        Assert.Equal(2, pending.Count);
+        Assert.Equal(2, scheduled.Count);
+
+        var firstTarget = scheduled.Single(static pair => pair.Value.ProgressIdentity == "partition/a");
+        var first = new KeyValuePair<EmissionId, TaskCompletionSource<DurableTaskDurableOperationAttemptResult>>(
+            firstTarget.Key,
+            pending[firstTarget.Key]);
+        first.Value.SetResult(CompletedChild(first.Key, firstTarget.Value));
+
+        for (var attempt = 0; attempt < 100 && pending.Count != 3 && !execution.IsCompleted; attempt++)
+        {
+            await Task.Delay(10);
+        }
+        if (execution.IsCompleted)
+        {
+            _ = await execution;
+        }
+        Assert.Equal(3, pending.Count);
+        Assert.Equal(3, scheduled.Count);
+
+        foreach (var candidate in pending.Where(candidate => !ReferenceEquals(candidate.Value, first.Value)))
+        {
+            candidate.Value.SetResult(CompletedChild(candidate.Key, scheduled[candidate.Key]));
+        }
+
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(ProcessActivationDisposition.Completed, result.Disposition);
+        Assert.Equal(3, result.DurableOperations.Length);
+        Assert.All(result.State.Children, static child =>
+            Assert.Equal(ProcessChildDisposition.Completed, child.Disposition));
+        Assert.Equal(
+            ["partition/a", "partition/b", "partition/c"],
+            result.State.Children.Select(static child => child.ProgressIdentity).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task ForEachPartition_RejectsAnOverBoundWorkSetBeforeAnySubOrchestrationIsScheduled()
+    {
+        var fixture = CompilePartitionParentPlan();
+        var start = Start(
+            fixture.Parent,
+            CollectionValue("partition/a", "partition/b", "partition/c", "partition/d"),
+            "instance/partition-over-bound");
+        var scheduled = 0;
+
+        var result = await RunChildRequest(
+            fixture.Parent,
+            start,
+            fixture.Binding,
+            invocation =>
+            {
+                scheduled++;
+                return Task.FromResult(CompletedChild(
+                    invocation.Request.Context.EmissionId,
+                    Assert.IsType<ProcessChildRequestTarget>(invocation.Request.ChildTarget)));
+            });
+
+        Assert.Equal(0, scheduled);
+        Assert.Equal(ProcessActivationDisposition.Failed, result.Disposition);
+        Assert.Contains(
+            result.Diagnostics,
+            static diagnostic => diagnostic.Code == ProcessExecutionDiagnosticCodes.ContinuationInvalid
+                                 && diagnostic.Message.Contains("explicit maximum of 3", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task RepeatAcrossActivation_ContinuesAsNewWithExactBoundedCanonicalState()
+    {
+        var plan = CompileRecurrencePlan();
+        var current = Start(plan, "input", "instance/recurrence");
+        List<DurableTaskSequentialProcessStart> rollovers = [];
+        DurableTaskSequentialProcessResult result;
+
+        do
+        {
+            DurableTaskSequentialProcessStart? next = null;
+            result = await DurableTaskSequentialProcessInterpreter.RunAsync(
+                plan,
+                current,
+                EmptyDurableRequestBindingResolver.Instance,
+                UnexpectedOperation,
+                UnexpectedDurableOperation,
+                UnexpectedChildProcess,
+                UnexpectedReconciliation,
+                UnexpectedInteraction,
+                (delay, cancellationToken) => Task.CompletedTask,
+                () => StartedAtUtc.AddMinutes(rollovers.Count + 1),
+                continueAsNew: resumed =>
+                {
+                    next = resumed;
+                    return Task.CompletedTask;
+                });
+            if (next is null)
+            {
+                break;
+            }
+            rollovers.Add(next);
+            current = next;
+        }
+        while (true);
+
+        Assert.Equal(2, rollovers.Count);
+        Assert.All(rollovers, static rollover => Assert.NotNull(rollover.Resume));
+        Assert.Equal(ProcessActivationDisposition.Completed, result.Disposition);
+        Assert.Equal(StringValue("exhausted"), result.State.Terminal.Detail?.Value);
+        Assert.Equal(3, result.State.CompletedActivationCount);
+        var recurrence = Assert.Single(result.State.Recurrences);
+        Assert.False(recurrence.Active);
+        Assert.Equal(2, recurrence.RepeatCount);
+
+        var converter = DurableTaskProcessDataConverter.Create();
+        var restored = Assert.IsType<DurableTaskSequentialProcessStart>(converter.Deserialize(
+            converter.Serialize(rollovers[1]),
+            typeof(DurableTaskSequentialProcessStart)));
+        Assert.Equal(Serialize(rollovers[1]), Serialize(restored));
     }
 
     [Fact]
@@ -546,12 +954,21 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         var (durableRequestPlan, durableReplyContract) = CompileRequestPlan(
             "process/durable-task-scheduler-durable-request");
         var durableBinding = Binding(durableRequestPlan, durableReplyContract);
+        var childFixture = CompileChildParentPlan();
+        var forkChildFixture = CompileSchedulerForkChildPlan();
+        var recurrencePlan = CompileRecurrencePlan();
         var catalog = new DurableTaskSequentialProcessPlanCatalog([
             Physical(completedPlan),
             Physical(failedPlan),
             Physical(restartPlan),
-            Physical(durableRequestPlan)
-        ], new BindingResolver(durableBinding));
+            Physical(durableRequestPlan),
+            Physical(childFixture.Parent),
+            Physical(childFixture.Child),
+            Physical(forkChildFixture.Parent),
+            Physical(forkChildFixture.FastChild),
+            Physical(forkChildFixture.SlowChild),
+            Physical(recurrencePlan)
+        ], new BindingResolver(durableBinding, childFixture.Binding, forkChildFixture.Binding));
         var operations = new CountingEchoHost();
         var durableOperations = new CountingDurableOperationAdapter(durableBinding.Request);
 
@@ -597,6 +1014,71 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             DurableOperationStatus.Dispositioned,
             Assert.Single(durableResult.DurableOperations).State.Status);
         Assert.Single(durableOperations.Invocations);
+
+        var childStart = Start(childFixture.Parent, "child", "instance/scheduler-child-parent");
+        var childSchedule = await firstClient.ScheduleCohesiveProcessAsync(childStart, timeout.Token);
+        var childCompleted = await firstClient.WaitForInstanceCompletionAsync(
+            childSchedule.InstanceId,
+            getInputsAndOutputs: true,
+            timeout.Token);
+        Assert.True(
+            childCompleted.RuntimeStatus == OrchestrationRuntimeStatus.Completed,
+            childCompleted.FailureDetails?.ToString());
+        var childResult = Assert.IsType<DurableTaskSequentialProcessResult>(
+            childCompleted.ReadOutputAs<DurableTaskSequentialProcessResult>());
+        Assert.Equal(ProcessActivationDisposition.Completed, childResult.Disposition);
+        Assert.Equal(ProcessChildDisposition.Completed, Assert.Single(childResult.State.Children).Disposition);
+        Assert.Equal(
+            DurableOperationStatus.Dispositioned,
+            Assert.Single(childResult.DurableOperations).State.Status);
+        Assert.Single(durableOperations.Invocations);
+
+        var forkChildStart = Start(
+            forkChildFixture.Parent,
+            "fork-child",
+            "instance/scheduler-fork-child-parent");
+        var forkChildSchedule = await firstClient.ScheduleCohesiveProcessAsync(forkChildStart, timeout.Token);
+        var forkChildCompleted = await firstClient.WaitForInstanceCompletionAsync(
+            forkChildSchedule.InstanceId,
+            getInputsAndOutputs: true,
+            timeout.Token);
+        Assert.True(
+            forkChildCompleted.RuntimeStatus == OrchestrationRuntimeStatus.Completed,
+            forkChildCompleted.FailureDetails?.ToString());
+        var forkChildResult = Assert.IsType<DurableTaskSequentialProcessResult>(
+            forkChildCompleted.ReadOutputAs<DurableTaskSequentialProcessResult>());
+        Assert.Equal(ProcessActivationDisposition.Completed, forkChildResult.Disposition);
+        Assert.Equal(2, forkChildResult.DurableOperations.Length);
+        Assert.Contains(forkChildResult.State.Children, static child =>
+            child.Disposition == ProcessChildDisposition.Completed);
+        var cancelledChild = Assert.Single(forkChildResult.State.Children, static child =>
+            child.Disposition == ProcessChildDisposition.CancellationRequested);
+        var cancelledChildInstance = await firstClient.GetInstanceAsync(
+            DurableTaskSequentialProcessIdentities.OrchestrationInstance(
+                forkChildStart.ActivationContext.AuthorityScope,
+                cancelledChild.Continuation.ProcessInstanceId),
+            getInputsAndOutputs: true,
+            timeout.Token);
+        Assert.Equal(OrchestrationRuntimeStatus.Completed, cancelledChildInstance?.RuntimeStatus);
+        Assert.Equal(
+            ProcessActivationDisposition.Cancelled,
+            cancelledChildInstance?.ReadOutputAs<DurableTaskSequentialProcessResult>()?.Disposition);
+
+        var recurrenceStart = Start(recurrencePlan, "recurrence", "instance/scheduler-recurrence");
+        var recurrenceSchedule = await firstClient.ScheduleCohesiveProcessAsync(recurrenceStart, timeout.Token);
+        var recurrenceCompleted = await firstClient.WaitForInstanceCompletionAsync(
+            recurrenceSchedule.InstanceId,
+            getInputsAndOutputs: true,
+            timeout.Token);
+        Assert.True(
+            recurrenceCompleted.RuntimeStatus == OrchestrationRuntimeStatus.Completed,
+            recurrenceCompleted.FailureDetails?.ToString());
+        var recurrenceResult = Assert.IsType<DurableTaskSequentialProcessResult>(
+            recurrenceCompleted.ReadOutputAs<DurableTaskSequentialProcessResult>());
+        Assert.Equal(3, recurrenceResult.State.CompletedActivationCount);
+        Assert.Equal(StringValue("exhausted"), recurrenceResult.State.Terminal.Detail?.Value);
+        var recurrenceDuplicate = await firstClient.ScheduleCohesiveProcessAsync(recurrenceStart, timeout.Token);
+        Assert.True(recurrenceDuplicate.Replayed);
 
         var restartStart = Start(restartPlan, "restart", "instance/restart");
         var restartSchedule = await firstClient.ScheduleCohesiveProcessAsync(restartStart, timeout.Token);
@@ -718,9 +1200,10 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             EmptyDurableRequestBindingResolver.Instance,
             executeOperation,
             UnexpectedDurableOperation,
+            UnexpectedChildProcess,
             UnexpectedReconciliation,
             UnexpectedInteraction,
-            (delay, cancellationToken) => Task.CompletedTask,
+            TestDurableTimer,
             () => StartedAtUtc.AddMinutes(1));
 
     static Task<DurableTaskSequentialProcessResult> RunDurableRequest(
@@ -735,11 +1218,51 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             new BindingResolver(binding),
             UnexpectedOperation,
             invocation => Task.FromResult(execute(invocation)),
+            UnexpectedChildProcess,
             operation => Task.FromResult((reconcile ?? (static state =>
                 throw new InvalidOperationException("Unexpected durable Request reconciliation.")))(operation)),
             UnexpectedInteraction,
             (delay, cancellationToken) => Task.CompletedTask,
             () => StartedAtUtc);
+
+    static Task<DurableTaskSequentialProcessResult> RunBoundRequests(
+        CompiledProcessPlan plan,
+        DurableTaskSequentialProcessStart start,
+        DurableRequestBinding binding,
+        Func<DurableOperationInvocation, Task<DurableTaskDurableOperationAttemptResult>> execute) =>
+        DurableTaskSequentialProcessInterpreter.RunAsync(
+            plan,
+            start,
+            new BindingResolver(binding),
+            UnexpectedOperation,
+            execute,
+            UnexpectedChildProcess,
+            UnexpectedReconciliation,
+            UnexpectedInteraction,
+            TestDurableTimer,
+            () => StartedAtUtc.AddMinutes(1));
+
+    static Task<DurableTaskSequentialProcessResult> RunChildRequest(
+        CompiledProcessPlan plan,
+        DurableTaskSequentialProcessStart start,
+        DurableRequestBinding binding,
+        Func<DurableOperationInvocation, Task<DurableTaskDurableOperationAttemptResult>> execute) =>
+        DurableTaskSequentialProcessInterpreter.RunAsync(
+            plan,
+            start,
+            new BindingResolver(binding),
+            UnexpectedOperation,
+            UnexpectedDurableOperation,
+            execute,
+            UnexpectedReconciliation,
+            UnexpectedInteraction,
+            TestDurableTimer,
+            () => StartedAtUtc.AddMinutes(1));
+
+    static Task TestDurableTimer(TimeSpan delay, CancellationToken cancellationToken) =>
+        delay == TimeSpan.Zero
+            ? Task.CompletedTask
+            : Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
 
     static DurableRequestBinding Binding(
         CompiledProcessPlan plan,
@@ -771,6 +1294,11 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         DurableOperationInvocation invocation) =>
         throw new InvalidOperationException(
             $"Unexpected durable operation '{invocation.Request.Context.EmissionId.Value}'.");
+
+    static Task<DurableTaskDurableOperationAttemptResult> UnexpectedChildProcess(
+        DurableOperationInvocation invocation) =>
+        throw new InvalidOperationException(
+            $"Unexpected child Process '{invocation.Request.Context.EmissionId.Value}'.");
 
     static Task<DurableTaskDurableOperationReconciliationResult> UnexpectedReconciliation(
         DurableOperationState operation) =>
@@ -841,6 +1369,402 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
                 Edge("edge/accepted-return", "return"),
                 new(new("request.accepted"), StringContract)))]);
 
+    static ForkRequestFixture CompileForkRequestPlan()
+    {
+        var interactions = RequestContracts("fork", "accepted");
+        var plan = Compile(
+            Definition(
+                "fork",
+                [
+                    new ForkProcessNode(
+                        new("fork"),
+                        [
+                            new(new("branch/a"), Edge("edge/fork-a", "request/a")),
+                            new(new("branch/b"), Edge("edge/fork-b", "request/b"))
+                        ],
+                        new("join")),
+                    ForkRequest("request/a", interactions.Request, "edge/request-a-join"),
+                    ForkRequest("request/b", interactions.Request, "edge/request-b-join"),
+                    new JoinProcessNode(
+                        new("join"),
+                        new("fork"),
+                        new(
+                            ProcessJoinMode.All,
+                            requiredCount: 0,
+                            ProcessJoinFailurePolicy.FailFast,
+                            ProcessJoinCancellationPolicy.AwaitRemaining,
+                            ProcessJoinCompletionOrder.Unobservable,
+                            ProcessJoinTieBreak.BranchIdentity),
+                        Edge("edge/join-return", "return")),
+                    new ReturnProcessNode(new("return"), Expr.Const("joined"))
+                ]),
+            interactions.Catalog,
+            definitionId: "process/durable-task-fork-join");
+        return new(plan, interactions.Binding);
+    }
+
+    static CompiledProcessPlan CompileRecurrencePlan() => Compile(
+        Definition(
+            "repeat",
+            [
+                new RepeatAcrossActivationProcessNode(
+                    new("repeat"),
+                    Expr.Const(true),
+                    Expr.Const("unchanged"),
+                    StringContract,
+                    new(maximumOccurrences: 2, maximumUnchangedProgressOccurrences: 1),
+                    Edge("edge/repeat", "repeat"),
+                    Edge("edge/completed", "completed"),
+                    Edge("edge/exhausted", "exhausted"),
+                    Edge("edge/stalled", "stalled")),
+                new ReturnProcessNode(new("completed"), Expr.Const("completed")),
+                new ReturnProcessNode(new("exhausted"), Expr.Const("exhausted")),
+                new FailProcessNode(new("stalled"), Expr.Const("stalled"))
+            ]),
+        definitionId: "process/durable-task-recurrence");
+
+    static RequestProcessNode ForkRequest(
+        string id,
+        RequestContractReference request,
+        string edge) => new(
+        new(id),
+        request,
+        Expr.BoundValue(ProcessBindingIds.Input),
+        [new(
+            new($"outcome/{id}"),
+            new("accepted"),
+            new(Edge(edge, "join")))]);
+
+    static ChildProcessFixture CompileChildParentPlan()
+    {
+        var child = Compile(
+            Definition("return", [new ReturnProcessNode(new("return"), Expr.BoundValue(ProcessBindingIds.Input))]),
+            definitionId: "process/durable-task-child");
+        var interactions = RequestContracts(
+            "child",
+            "completed",
+            "failed",
+            "cancelled",
+            "terminated");
+        var parent = Compile(
+            Definition(
+                "child",
+                [
+                    new InvokeProcessProcessNode(
+                        new("child"),
+                        child.DefinitionReference,
+                        interactions.Request,
+                        ChildOutcomeMapping,
+                        Expr.BoundValue(ProcessBindingIds.Input),
+                        ProcessChildPurpose.Work,
+                        ProcessChildCancellationPolicy.Propagate,
+                        ChildOutcomes()),
+                    new ReturnProcessNode(new("completed"), Expr.Const("parent-completed")),
+                    new FailProcessNode(new("failed"), Expr.Const("child-failed")),
+                    new FailProcessNode(new("cancelled"), Expr.Const("child-cancelled")),
+                    new FailProcessNode(new("terminated"), Expr.Const("child-terminated"))
+                ]),
+            interactions.Catalog,
+            [new(
+                child.DefinitionReference,
+                ProcessDefinitionLinkKind.Process,
+                child.Definition.Input,
+                child.Definition.Result,
+                [],
+                child.Definition.RecoveryPolicy)],
+            "process/durable-task-child-parent");
+        return new(parent, child, interactions.Binding);
+    }
+
+    static ChildProcessFixture CompileForkChildPlan(ProcessChildCancellationPolicy cancellation)
+    {
+        var child = Compile(
+            Definition("return", [new ReturnProcessNode(new("return"), Expr.BoundValue(ProcessBindingIds.Input))]),
+            definitionId: $"process/durable-task-fork-child-{cancellation.ToString().ToLowerInvariant()}");
+        var interactions = RequestContracts(
+            $"fork-child-{cancellation.ToString().ToLowerInvariant()}",
+            "completed",
+            "failed",
+            "cancelled",
+            "terminated");
+        var childLink = new ProcessDefinitionLink(
+            child.DefinitionReference,
+            ProcessDefinitionLinkKind.Process,
+            child.Definition.Input,
+            child.Definition.Result,
+            [],
+            child.Definition.RecoveryPolicy);
+        var parent = Compile(
+            Definition(
+                "fork",
+                [
+                    new ForkProcessNode(
+                        new("fork"),
+                        [
+                            new(new("branch/a"), Edge("edge/fork-a", "child/a")),
+                            new(new("branch/b"), Edge("edge/fork-b", "child/b"))
+                        ],
+                        new("join")),
+                    ForkChild("child/a"),
+                    ForkChild("child/b"),
+                    new JoinProcessNode(
+                        new("join"),
+                        new("fork"),
+                        new(
+                            ProcessJoinMode.Any,
+                            requiredCount: 0,
+                            ProcessJoinFailurePolicy.FailFast,
+                            ProcessJoinCancellationPolicy.CancelRemaining,
+                            ProcessJoinCompletionOrder.Unobservable,
+                            ProcessJoinTieBreak.BranchIdentity),
+                        Edge("edge/join-return", "return")),
+                    new ReturnProcessNode(new("return"), Expr.Const("joined"))
+                ]),
+            interactions.Catalog,
+            [childLink],
+            $"process/durable-task-fork-child-parent-{cancellation.ToString().ToLowerInvariant()}");
+        return new(parent, child, interactions.Binding);
+
+        InvokeProcessProcessNode ForkChild(string id) => new(
+            new(id),
+            child.DefinitionReference,
+            interactions.Request,
+            ChildOutcomeMapping,
+            Expr.BoundValue(ProcessBindingIds.Input),
+            ProcessChildPurpose.Work,
+            cancellation,
+            [
+                new(new($"outcome/{id}/completed"), ChildOutcomeMapping.Completed, new(Edge($"edge/{id}/join", "join"))),
+                new(new($"outcome/{id}/failed"), ChildOutcomeMapping.Failed, new(Edge($"edge/{id}/failed", "join"))),
+                new(new($"outcome/{id}/cancelled"), ChildOutcomeMapping.Cancelled, new(Edge($"edge/{id}/cancelled", "join"))),
+                new(new($"outcome/{id}/terminated"), ChildOutcomeMapping.Terminated, new(Edge($"edge/{id}/terminated", "join")))
+            ]);
+    }
+
+    static SchedulerForkChildFixture CompileSchedulerForkChildPlan()
+    {
+        var fastChild = Compile(
+            Definition("return", [new ReturnProcessNode(new("return"), Expr.BoundValue(ProcessBindingIds.Input))]),
+            definitionId: "process/durable-task-scheduler-fast-child");
+        var (slowChild, _) = CompileRequestPlan("process/durable-task-scheduler-slow-child");
+        var interactions = RequestContracts(
+            "scheduler-fork-child",
+            "completed",
+            "failed",
+            "cancelled",
+            "terminated");
+        var parent = Compile(
+            Definition(
+                "fork",
+                [
+                    new ForkProcessNode(
+                        new("fork"),
+                        [
+                            new(new("branch/fast"), Edge("edge/fork-fast", "child/fast")),
+                            new(new("branch/slow"), Edge("edge/fork-slow", "child/slow"))
+                        ],
+                        new("join")),
+                    Child("child/fast", fastChild.DefinitionReference),
+                    Child("child/slow", slowChild.DefinitionReference),
+                    new JoinProcessNode(
+                        new("join"),
+                        new("fork"),
+                        new(
+                            ProcessJoinMode.Any,
+                            requiredCount: 0,
+                            ProcessJoinFailurePolicy.FailFast,
+                            ProcessJoinCancellationPolicy.CancelRemaining,
+                            ProcessJoinCompletionOrder.Unobservable,
+                            ProcessJoinTieBreak.BranchIdentity),
+                        Edge("edge/join-return", "return")),
+                    new ReturnProcessNode(new("return"), Expr.Const("joined"))
+                ]),
+            interactions.Catalog,
+            [Link(fastChild), Link(slowChild)],
+            "process/durable-task-scheduler-fork-child-parent");
+        return new(parent, fastChild, slowChild, interactions.Binding);
+
+        InvokeProcessProcessNode Child(string id, ExecutionDefinitionReference definition) => new(
+            new(id),
+            definition,
+            interactions.Request,
+            ChildOutcomeMapping,
+            Expr.BoundValue(ProcessBindingIds.Input),
+            ProcessChildPurpose.Work,
+            ProcessChildCancellationPolicy.Propagate,
+            [
+                new(new($"outcome/{id}/completed"), ChildOutcomeMapping.Completed, new(Edge($"edge/{id}/completed", "join"))),
+                new(new($"outcome/{id}/failed"), ChildOutcomeMapping.Failed, new(Edge($"edge/{id}/failed", "join"))),
+                new(new($"outcome/{id}/cancelled"), ChildOutcomeMapping.Cancelled, new(Edge($"edge/{id}/cancelled", "join"))),
+                new(new($"outcome/{id}/terminated"), ChildOutcomeMapping.Terminated, new(Edge($"edge/{id}/terminated", "join")))
+            ]);
+
+        static ProcessDefinitionLink Link(CompiledProcessPlan child) => new(
+            child.DefinitionReference,
+            ProcessDefinitionLinkKind.Process,
+            child.Definition.Input,
+            child.Definition.Result,
+            [],
+            child.Definition.RecoveryPolicy);
+    }
+
+    static ChildProcessFixture CompilePartitionParentPlan()
+    {
+        var child = Compile(
+            Definition("return", [new ReturnProcessNode(new("return"), Expr.BoundValue(ProcessBindingIds.Input))]),
+            definitionId: "process/durable-task-partition-child");
+        var interactions = RequestContracts(
+            "partition-child",
+            "completed",
+            "failed",
+            "cancelled",
+            "terminated");
+        ValueBindingId partitionBinding = new("partition.item");
+        var parent = Compile(
+            Definition(
+                StringCollectionContract,
+                "partitions",
+                [
+                    new ForEachPartitionProcessNode(
+                        new("partitions"),
+                        Expr.BoundValue(ProcessBindingIds.Input),
+                        new(partitionBinding, StringContract),
+                        Expr.BoundValue(partitionBinding),
+                        child.DefinitionReference,
+                        interactions.Request,
+                        ChildOutcomeMapping,
+                        Expr.BoundValue(partitionBinding),
+                        new(
+                            maximumItems: 3,
+                            maximumStartsPerActivation: 2,
+                            maximumParallelism: 2),
+                        ProcessPartitionFailurePolicy.FailFast,
+                        capacityIdentity: null,
+                        capacityDomains: [],
+                        ProcessChildCancellationPolicy.Propagate,
+                        Edge("edge/partitions-completed", "completed"),
+                        Edge("edge/partitions-failed", "failed")),
+                    new ReturnProcessNode(new("completed"), Expr.Const("partitions-completed")),
+                    new FailProcessNode(new("failed"), Expr.Const("partitions-failed"))
+                ]),
+            interactions.Catalog,
+            [new(
+                child.DefinitionReference,
+                ProcessDefinitionLinkKind.Process,
+                child.Definition.Input,
+                child.Definition.Result,
+                [],
+                child.Definition.RecoveryPolicy)],
+            "process/durable-task-partition-parent");
+        return new(parent, child, interactions.Binding);
+    }
+
+    static ImmutableArray<ProcessRequestOutcomeBranch> ChildOutcomes() =>
+    [
+        ChildOutcome("completed"),
+        ChildOutcome("failed"),
+        ChildOutcome("cancelled"),
+        ChildOutcome("terminated")
+    ];
+
+    static ProcessRequestOutcomeBranch ChildOutcome(string outcome) => new(
+        new($"outcome/{outcome}"),
+        new(outcome),
+        new(Edge($"edge/{outcome}", outcome)));
+
+    static RequestContractFixture RequestContracts(string name, params string[] outcomes)
+    {
+        var requestDocument = InteractionDocument(
+            $"interaction/request/durable-task-{name}",
+            new RequestContractDefinition(
+                new(StringContract, new("request/v1")),
+                new RequestResponseObligation(
+                    [.. outcomes.Select(outcome => outcome is "failed" or "cancelled" or "terminated"
+                        ? (RequestTerminalOutcomeDefinition)new RequestFailureDefinition(
+                            new(outcome),
+                            new(StringContract, new($"{outcome}/v1")))
+                        : new RequestResultDefinition(
+                            new(outcome),
+                            new(StringContract, new($"{outcome}/v1"))))],
+                    RequestOptionalTerminalSemantics.Unsupported,
+                    RequestOptionalTerminalSemantics.Unsupported,
+                    RequestResultDisposition.Observe,
+                    RequestResultDisposition.Reject,
+                    RequestResultDisposition.ReusePriorDisposition,
+                    RequestRetrySemantics.StableIdentity,
+                    RequestResolutionSemantics.Reconcile,
+                    RequestResolutionSemantics.Escalate,
+                    TimeSpan.FromDays(30))));
+        RequestContractReference request = new(Reference(requestDocument));
+        var replyDocuments = outcomes.Select(outcome => InteractionDocument(
+                $"interaction/reply/durable-task-{name}-{outcome}",
+                new ReplyContractDefinition(request, new(outcome))))
+            .ToArray();
+        var replies = replyDocuments
+            .Select(static document => new ReplyContractReference(Reference(document)))
+            .ToArray();
+        var catalog = Catalog([requestDocument, .. replyDocuments]);
+        var binding = new DurableRequestBinding(
+            request,
+            [.. outcomes.Select((outcome, index) => new DurableReplyBinding(new(outcome), replies[index]))],
+            maxAttempts: 2,
+            claimLease: TimeSpan.FromMinutes(5),
+            timeoutAfter: null,
+            DurableOperationIdempotencyEvidence.TargetDeduplication,
+            reconciliationTarget: new(
+                DefinitionReference($"process/reconcile/{name}", '7'),
+                new("node/reconcile")),
+            escalationTarget: new(
+                DefinitionReference($"process/escalate/{name}", '8'),
+                new("node/escalate")));
+        return new(request, catalog, binding);
+    }
+
+    static DurableTaskDurableOperationAttemptResult CompletedChild(
+        EmissionId request,
+        ProcessChildRequestTarget target)
+    {
+        var outcome = new RequestResultOutcome(ChildOutcomeMapping.Completed, StringValue(target.ProgressIdentity ?? "done"));
+        return new(
+            new DurableOperationOutcomeObservation(
+                outcome,
+                replyOrigin: new ProcessInteractionOrigin(
+                    target.Definition,
+                    new("return"),
+                    target.Continuation,
+                    new($"activation/{request.Value}"),
+                    new($"token/{request.Value}"),
+                    outcome: new("return"))),
+            deadlineElapsed: false);
+    }
+
+    static DurableTaskDurableOperationAttemptResult CancelledChild(
+        EmissionId request,
+        ProcessChildRequestTarget target)
+    {
+        var outcome = new RequestFailureOutcome(ChildOutcomeMapping.Cancelled, StringValue("cancelled"));
+        return new(
+            new DurableOperationOutcomeObservation(
+                outcome,
+                replyOrigin: new ProcessInteractionOrigin(
+                    target.Definition,
+                    new("cancelled"),
+                    target.Continuation,
+                    new($"activation/{request.Value}/cancelled"),
+                    new($"token/{request.Value}/cancelled"),
+                    outcome: new("cancelled"))),
+            deadlineElapsed: false);
+    }
+
+    static async Task WaitUntilAsync(Func<bool> predicate)
+    {
+        for (var attempt = 0; attempt < 100 && !predicate(); attempt++)
+        {
+            await Task.Delay(10);
+        }
+        Assert.True(predicate(), "The expected asynchronous condition was not observed before the test deadline.");
+    }
+
     static DurableTaskProcessRealizationPlan Physical(CompiledProcessPlan plan)
     {
         var result = DurableTaskProcessRealizationCompiler.Compile(plan);
@@ -877,10 +1801,26 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         nodes,
         ProcessRecoveryPolicy.ContinueAttempt);
 
+    static CanonicalProcessDefinition Definition(
+        ValueContract input,
+        string entry,
+        ImmutableArray<ProcessNode> nodes) => new(
+        input,
+        StringContract,
+        new(entry),
+        nodes,
+        ProcessRecoveryPolicy.ContinueAttempt);
+
     static DurableTaskSequentialProcessStart Start(
         CompiledProcessPlan plan,
         string input,
-        string instance = "process-instance/durable-task-sequential-tests")
+        string instance = "process-instance/durable-task-sequential-tests") =>
+        Start(plan, StringValue(input), instance);
+
+    static DurableTaskSequentialProcessStart Start(
+        CompiledProcessPlan plan,
+        PortableValue input,
+        string instance)
     {
         var continuation = new ProcessContinuationIdentity(
             new(instance),
@@ -898,7 +1838,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             plan.DefinitionReference,
             context,
             continuation,
-            StringValue(input));
+            input);
         return new(
             new ProcessStartReceipt(request, StartedAtUtc),
             new ProcessActivationContext(
@@ -975,6 +1915,11 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     static PortableValue StringValue(string value) =>
         PortableValue.Concrete(StringContract, ObservationValue.FromString(value));
 
+    static PortableValue CollectionValue(params string[] values) => PortableValue.Concrete(
+        StringCollectionContract,
+        ObservationValue.FromImmutableArray(
+            [.. values.Select(ObservationValue.FromString)]));
+
     static ExecutionProvenance Provenance() => new(
         new("durable-task-sequential-tests", "1"),
         new("tests/execution-kernel/durable-task-sequential"),
@@ -1022,12 +1967,20 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             throw new InvalidOperationException("Unexpected Signal target resolution.");
     }
 
-    sealed class BindingResolver(DurableRequestBinding binding) : IDurableRequestBindingResolver
+    sealed class BindingResolver : IDurableRequestBindingResolver
     {
+        readonly ImmutableArray<DurableRequestBinding> bindings;
+
+        internal BindingResolver(params DurableRequestBinding[] bindings)
+        {
+            ArgumentNullException.ThrowIfNull(bindings);
+            this.bindings = [.. bindings];
+        }
+
         public bool TryResolve(RequestEnvelope request, out DurableRequestBinding? resolved)
         {
             ArgumentNullException.ThrowIfNull(request);
-            resolved = request.Contract == binding.Request ? binding : null;
+            resolved = bindings.SingleOrDefault(binding => request.Contract == binding.Request);
             return resolved is not null;
         }
     }
@@ -1071,6 +2024,30 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     }
 
     sealed class SimulatedCrashException : Exception;
+
+    sealed record ForkRequestFixture(
+        CompiledProcessPlan Plan,
+        DurableRequestBinding Binding);
+
+    sealed record ChildProcessFixture(
+        CompiledProcessPlan Parent,
+        CompiledProcessPlan Child,
+        DurableRequestBinding Binding);
+
+    sealed record PendingChild(
+        ProcessChildRequestTarget Target,
+        TaskCompletionSource<DurableTaskDurableOperationAttemptResult> Completion);
+
+    sealed record SchedulerForkChildFixture(
+        CompiledProcessPlan Parent,
+        CompiledProcessPlan FastChild,
+        CompiledProcessPlan SlowChild,
+        DurableRequestBinding Binding);
+
+    sealed record RequestContractFixture(
+        RequestContractReference Request,
+        InteractionContractCatalog Catalog,
+        DurableRequestBinding Binding);
 
     sealed class RejectingHost : IProcessReferenceHost
     {
