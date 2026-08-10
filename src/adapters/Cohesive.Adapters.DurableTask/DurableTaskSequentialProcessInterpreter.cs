@@ -53,6 +53,7 @@ static class DurableTaskSequentialProcessInterpreter
             ? []
             : resumed.DurableOperations.ToDictionary(static operation => operation.State.OperationId);
         Dictionary<EmissionId, PendingDurableOperation> pendingOperations = [];
+        Dictionary<ProcessWaitRegistrationId, PendingProcessTimer> pendingTimers = [];
         Task<ProcessActivationInput>? pendingInteraction = null;
         Task<ProcessChildCancellationIntent>? pendingChildCancellation = null;
         HashSet<string> dispatchedChildCancellations = new(StringComparer.Ordinal);
@@ -85,6 +86,7 @@ static class DurableTaskSequentialProcessInterpreter
                     static operation => operation.State.OperationId.Value,
                     StringComparer.Ordinal)]);
             await SynchronizeChildLifecycleAsync().ConfigureAwait(true);
+            SynchronizeTimers();
             result = CurrentResult(decision.Disposition);
             observe?.Invoke(result);
 
@@ -98,7 +100,9 @@ static class DurableTaskSequentialProcessInterpreter
 
                 case ProcessActivationDisposition.Quiescent:
                 case ProcessActivationDisposition.Rejected:
-                    if (pendingOperations.Count == 0 && state.OutstandingRequests.IsEmpty)
+                    if (pendingOperations.Count == 0
+                        && pendingTimers.Count == 0
+                        && state.OutstandingRequests.IsEmpty)
                     {
                         return result;
                     }
@@ -118,6 +122,26 @@ static class DurableTaskSequentialProcessInterpreter
                         ?? throw new InvalidOperationException("A durable-cut decision did not identify its safe-point node.");
                     switch (plan.GetNode(safePoint))
                     {
+                        case TimerProcessNode:
+                            if (state.Tokens.Any(static token =>
+                                    token.Disposition == ExecutionTokenDisposition.Ready))
+                            {
+                                inputs = [];
+                                cause = ProcessActivationCause.Continue;
+                                observedAtUtc = RequireUtc(getCurrentUtc());
+                                break;
+                            }
+
+                            var timerStimulus = await WaitForNextStimulusAsync().ConfigureAwait(true);
+                            result = CurrentResult(decision.Disposition);
+                            observe?.Invoke(result);
+                            if (!timerStimulus.Available)
+                            {
+                                return result;
+                            }
+                            Apply(timerStimulus);
+                            observedAtUtc = RequireUtc(getCurrentUtc());
+                            break;
                         case RequestProcessNode:
                         case InvokeProcessProcessNode:
                         case ForEachPartitionProcessNode:
@@ -183,7 +207,7 @@ static class DurableTaskSequentialProcessInterpreter
                                 throw new InvalidOperationException(
                                     "Continue-as-new cannot discard incomplete durable Request tasks.");
                             }
-                            if (continueAsNew is not null)
+                            if (pendingTimers.Count == 0 && continueAsNew is not null)
                             {
                                 await continueAsNew(start.ContinueFrom(result)).ConfigureAwait(true);
                                 return result;
@@ -239,7 +263,10 @@ static class DurableTaskSequentialProcessInterpreter
                 [
                     .. pendingOperations
                         .OrderBy(static pair => pair.Key.Value, StringComparer.Ordinal)
-                        .Select(static pair => (Task)pair.Value.Execution)
+                        .Select(static pair => (Task)pair.Value.Execution),
+                    .. pendingTimers
+                        .OrderBy(static pair => pair.Key.Value, StringComparer.Ordinal)
+                        .Select(static pair => pair.Value.Execution)
                 ];
                 if (pendingInteraction is not null)
                 {
@@ -267,6 +294,17 @@ static class DurableTaskSequentialProcessInterpreter
                     var intent = await pendingChildCancellation!.ConfigureAwait(true);
                     pendingChildCancellation = null;
                     return NextProcessStimulus.For(ToCancellation(intent));
+                }
+
+                var completedTimer = pendingTimers
+                    .OrderBy(static candidate => candidate.Key.Value, StringComparer.Ordinal)
+                    .FirstOrDefault(candidate => ReferenceEquals(candidate.Value.Execution, completed));
+                if (completedTimer.Value is not null)
+                {
+                    await completedTimer.Value.Execution.ConfigureAwait(true);
+                    pendingTimers.Remove(completedTimer.Key);
+                    completedTimer.Value.Cancellation.Dispose();
+                    return NextProcessStimulus.ForTimer();
                 }
 
                 var pair = pendingOperations
@@ -317,6 +355,47 @@ static class DurableTaskSequentialProcessInterpreter
             }
         }
 
+        void SynchronizeTimers()
+        {
+            var active = state.Waits
+                .Where(static wait => wait.Active && wait.Kind == ProcessWaitKind.Timer)
+                .ToDictionary(static wait => wait.RegistrationId);
+            foreach (var obsolete in pendingTimers.Keys.Where(key => !active.ContainsKey(key)).ToArray())
+            {
+                var pending = pendingTimers[obsolete];
+                pendingTimers.Remove(obsolete);
+                pending.Cancellation.Cancel();
+                pending.Cancellation.Dispose();
+                ObserveAbandoned(pending.Execution);
+            }
+
+            if (active.Count == 0)
+            {
+                return;
+            }
+
+            var currentUtc = RequireUtc(getCurrentUtc());
+            foreach (var wait in active.Values.OrderBy(static wait => wait.RegistrationId.Value, StringComparer.Ordinal))
+            {
+                if (pendingTimers.ContainsKey(wait.RegistrationId))
+                {
+                    continue;
+                }
+                var timer = wait.Timers.Single();
+                var delay = timer.DueAtUtc - currentUtc;
+                if (delay < TimeSpan.Zero)
+                {
+                    delay = TimeSpan.Zero;
+                }
+                var cancellationSource = new CancellationTokenSource();
+                var execution = createTimer(delay, cancellationSource.Token)
+                    ?? throw new InvalidOperationException("The Durable Task timer delegate returned null.");
+                pendingTimers.Add(
+                    wait.RegistrationId,
+                    new(cancellationSource, execution));
+            }
+        }
+
         async Task AwaitPropagatedChildClosuresAsync()
         {
             var propagated = state.Children
@@ -357,6 +436,13 @@ static class DurableTaskSequentialProcessInterpreter
 
         void Apply(NextProcessStimulus stimulus)
         {
+            if (stimulus.TimerElapsed)
+            {
+                inputs = [];
+                cancellation = null;
+                cause = ProcessActivationCause.Timer;
+                return;
+            }
             if (stimulus.Input is not null)
             {
                 inputs = [stimulus.Input];
@@ -577,17 +663,24 @@ static class DurableTaskSequentialProcessInterpreter
         RequestEnvelope Request,
         Task<DurableTaskDurableOperationResult> Execution);
 
+    sealed record PendingProcessTimer(
+        CancellationTokenSource Cancellation,
+        Task Execution);
+
     readonly record struct NextProcessStimulus(
         bool Available,
         ProcessActivationInput? Input,
-        ProcessCancellationIntent? Cancellation)
+        ProcessCancellationIntent? Cancellation,
+        bool TimerElapsed)
     {
-        internal static NextProcessStimulus Unavailable => new(false, null, null);
+        internal static NextProcessStimulus Unavailable => new(false, null, null, false);
 
         internal static NextProcessStimulus For(ProcessActivationInput input) =>
-            new(true, input ?? throw new ArgumentNullException(nameof(input)), null);
+            new(true, input ?? throw new ArgumentNullException(nameof(input)), null, false);
 
         internal static NextProcessStimulus For(ProcessCancellationIntent cancellation) =>
-            new(true, null, cancellation ?? throw new ArgumentNullException(nameof(cancellation)));
+            new(true, null, cancellation ?? throw new ArgumentNullException(nameof(cancellation)), false);
+
+        internal static NextProcessStimulus ForTimer() => new(true, null, null, true);
     }
 }

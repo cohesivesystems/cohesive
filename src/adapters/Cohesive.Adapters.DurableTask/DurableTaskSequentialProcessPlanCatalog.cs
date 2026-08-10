@@ -101,6 +101,7 @@ static class DurableTaskSequentialProcessEligibility
                 or MatchProcessNode
                 or ForkProcessNode
                 or JoinProcessNode
+                or TimerProcessNode
                 or DurableCutProcessNode
                 or InvokeProcessProcessNode
                 or ForEachPartitionProcessNode

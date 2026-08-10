@@ -27,13 +27,13 @@ dotnet add package Cohesive.Adapters.DurableTask
 - You need an `IProcessExecutionRepository` monitoring projection over an existing Durable Task hub.
 - You need to inspect whether an exact `CompiledProcessPlan` has a complete intended Durable Task realization.
 - You need to execute an exact Process containing Transition, Relation/Query, Request, Choice, Match, bounded
-  Fork/Join, child Process, bounded partition, bounded recurrence, Durable Cut, Return, and Fail constructs.
+  Fork/Join, Timer, child Process, bounded partition, bounded recurrence, Durable Cut, Return, and Fail constructs.
 
-The executable profile remains narrower than the complete planning profile. Timers, signals, general external waits,
-root lifecycle control, and complete operational lifecycle semantics remain outside this slice and are rejected when
-the worker catalog is built. Request dispatch, bounded retry, reconciliation, acknowledgement, and Reply admission
-are implemented; typed timeout, terminal-failure, and escalation paths fail closed with their canonical operation
-ledger because this slice does not fabricate the authored recovery outcome.
+The executable profile remains narrower than the complete planning profile. AwaitMatch, signals, general external
+waits, root lifecycle control, and complete operational lifecycle semantics remain outside this slice and are
+rejected when the worker catalog is built. Request dispatch, bounded retry, reconciliation, acknowledgement, and
+Reply admission are implemented; typed timeout, terminal-failure, and escalation paths fail closed with their
+canonical operation ledger because this slice does not fabricate the authored recovery outcome.
 
 ## Monitoring boundary
 
@@ -149,6 +149,14 @@ Fork/Durable Cut boundaries use Durable Task Continue-as-new with the complete c
 resume carrier is target-owned derived evidence: it retains definition, continuation, recurrence, operation, and
 activation lineage and cannot replace the exact compiled plan.
 
+A `Timer` node evaluates its absolute due expression once in the canonical reference interpreter. The persisted
+`ProcessTimerState.DueAtUtc` is the semantic authority; the adapter only projects that instant into a Durable Task
+timer relative to replay-stable orchestration time. An early physical wake remains canonically quiescent and
+reschedules the same retained wait. Closing a competing branch cancels only its physical timer projection, and
+an active timer prevents Continue-as-new from discarding its physical task. Worker replay reconstructs timers from
+active canonical waits. This does not yet realize timer clauses inside `AwaitMatch`, whose arbitration and input
+policies remain a separate executable slice.
+
 If the semantic deadline wins, or canonical policy requires a typed terminal outcome or escalation that this slice
 cannot author, the orchestration fails closed with `DurableTaskDurableOperationRecoveryRequiredException`. Its
 custom status contains the full canonical operation ledger and exact recovery intent when one exists. The runtime
@@ -176,11 +184,12 @@ eng/test-durable-task-integration.sh
 
 The script pins the emulator image by digest. Emulator coverage proves successful completion, bound Request
 activity dispatch and Reply admission, child sub-orchestration, recurrence history rollover, authored failure,
-duplicate start admission, and worker restart while an unbound Request is waiting. The restart assertion also
-verifies that the Transition activity already retained in Scheduler history is not invoked again. Deterministic
-conformance tests additionally cover concurrent fork Requests, Join selection, child lineage and cancellation,
-partition bounds, recurrence bounds, bounded retry, reconciliation, deadline and escalation fail-closed behavior,
-and crash cuts before dispatch, after dispatch, after acknowledgement, and before Reply admission.
+duplicate start admission, and worker restart while an unbound Request and a canonical Timer are waiting. The
+restart assertions verify both that retained Transition activity history is not reinvoked and that the Timer keeps
+its persisted due instant. Deterministic conformance tests additionally cover concurrent fork Requests, Join
+selection, timer replay and competing-wait cancellation, child lineage and cancellation, partition bounds,
+recurrence bounds, bounded retry, reconciliation, deadline and escalation fail-closed behavior, and crash cuts
+before dispatch, after dispatch, after acknowledgement, and before Reply admission.
 
 ## Capability boundary
 
