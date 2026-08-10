@@ -22,9 +22,18 @@ public static class DurableTaskProcessDataConverter
     {
         readonly JsonSerializerOptions options = options ?? throw new ArgumentNullException(nameof(options));
 
-        public override string? Serialize(object? value) => value is null
-            ? null
-            : JsonSerializer.Serialize(value, value.GetType(), options);
+        public override string? Serialize(object? value)
+        {
+            if (value is null)
+            {
+                return null;
+            }
+
+            var contract = value is ProcessControlCommand
+                ? typeof(ProcessControlCommand)
+                : value.GetType();
+            return JsonSerializer.Serialize(value, contract, options);
+        }
 
         public override object? Deserialize(string? data, Type targetType)
         {
@@ -146,7 +155,9 @@ public sealed class DurableTaskSequentialProcessOrchestrator
             resolution => context.CallActivityAsync<ProcessSignalTargetResult>(
                 DurableTaskSequentialProcessNames.SignalTargetResolutionActivity,
                 resolution),
-            signal => DeliverSignal(context, signal)).ConfigureAwait(true);
+            signal => DeliverSignal(context, signal),
+            () => context.WaitForExternalEvent<ProcessControlCommand>(
+                DurableTaskSequentialProcessNames.ControlEvent)).ConfigureAwait(true);
 
         var blockedOperation = result.DurableOperations.FirstOrDefault(static operation =>
             operation.State.Status is not DurableOperationStatus.Dispositioned);
@@ -582,6 +593,50 @@ public static class DurableTaskSequentialProcessClientExtensions
             DurableTaskSequentialProcessIdentities.OrchestrationInstance(start),
             DurableTaskSequentialProcessNames.InteractionEvent,
             input,
+            cancellationToken);
+    }
+
+    /// <summary>Raises one canonical lifecycle command to the exact physical instance selected by a Process start.</summary>
+    /// <remarks>
+    /// Completion confirms provider admission of the external event only. The command's canonical disposition,
+    /// receipt, diagnostics, and any realization intent are exposed through the orchestration result or custom status.
+    /// </remarks>
+    /// <param name="client">Standalone Durable Task client.</param>
+    /// <param name="start">Original canonical start used to derive the physical instance identity.</param>
+    /// <param name="command">Canonical lifecycle command to evaluate inside the orchestration.</param>
+    /// <param name="cancellationToken">Cancels transport delivery only; it never requests semantic cancellation.</param>
+    /// <returns>A task that completes when the provider admits the external event.</returns>
+    /// <exception cref="ArgumentNullException">Any required argument is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// The command targets another Process instance or carries authorization from another authority scope.
+    /// </exception>
+    public static Task RaiseCohesiveProcessControlAsync(
+        this DurableTaskClient client,
+        DurableTaskSequentialProcessStart start,
+        ProcessControlCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        ArgumentNullException.ThrowIfNull(start);
+        ArgumentNullException.ThrowIfNull(command);
+        if (command.Context.ProcessInstanceId
+            != start.Receipt.Request.InitialContinuation.ProcessInstanceId)
+        {
+            throw new ArgumentException(
+                "A Durable Task lifecycle command must target the started Process instance.",
+                nameof(command));
+        }
+        if (command.Context.Authorization.AuthorityScope != start.ActivationContext.AuthorityScope)
+        {
+            throw new ArgumentException(
+                "A Durable Task lifecycle command must carry the started Process authority scope.",
+                nameof(command));
+        }
+
+        return client.RaiseEventAsync(
+            DurableTaskSequentialProcessIdentities.OrchestrationInstance(start),
+            DurableTaskSequentialProcessNames.ControlEvent,
+            command,
             cancellationToken);
     }
 }
