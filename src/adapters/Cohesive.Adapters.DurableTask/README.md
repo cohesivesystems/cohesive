@@ -27,12 +27,13 @@ dotnet add package Cohesive.Adapters.DurableTask
 - You need an `IProcessExecutionRepository` monitoring projection over an existing Durable Task hub.
 - You need to inspect whether an exact `CompiledProcessPlan` has a complete intended Durable Task realization.
 - You need to execute an exact Process containing Transition, Relation/Query, Request, Choice, Match, bounded
-  Fork/Join, Timer, child Process, bounded partition, bounded recurrence, Durable Cut, Return, and Fail constructs.
+  Fork/Join, AwaitMatch, Timer, child Process, bounded partition, bounded recurrence, Durable Cut, Return, and Fail
+  constructs.
 
-The executable profile remains narrower than the complete planning profile. AwaitMatch, signals, general external
-waits, root lifecycle control, and complete operational lifecycle semantics remain outside this slice and are
-rejected when the worker catalog is built. Request dispatch, bounded retry, reconciliation, acknowledgement, and
-Reply admission are implemented; typed timeout, terminal-failure, and escalation paths fail closed with their
+The executable profile remains narrower than the complete planning profile. Domain-event, Signal, and Reply
+emission nodes, root lifecycle control, and complete operational lifecycle semantics remain outside this slice and
+are rejected when the worker catalog is built. Request dispatch, bounded retry, reconciliation, acknowledgement,
+and Reply admission are implemented; typed timeout, terminal-failure, and escalation paths fail closed with their
 canonical operation ledger because this slice does not fabricate the authored recovery outcome.
 
 ## Monitoring boundary
@@ -154,8 +155,17 @@ A `Timer` node evaluates its absolute due expression once in the canonical refer
 timer relative to replay-stable orchestration time. An early physical wake remains canonically quiescent and
 reschedules the same retained wait. Closing a competing branch cancels only its physical timer projection, and
 an active timer prevents Continue-as-new from discarding its physical task. Worker replay reconstructs timers from
-active canonical waits. This does not yet realize timer clauses inside `AwaitMatch`, whose arbitration and input
-policies remain a separate executable slice.
+active canonical waits. Timer clauses inside `AwaitMatch` use the same projection without becoming a second source
+of deadline or winner semantics.
+
+`AwaitMatch` uses the same canonical wait state for every typed interaction and timer clause. The adapter subscribes
+to the Durable Task external-event stream before the first canonical activation so an already queued unscoped input
+retains canonical early-delivery evidence. Active timer clauses become physical timers keyed by exact wait and clause
+identity. When an external input and one or more timers are ready in the same deterministic wake, they are presented
+together at one canonical activation time; `ProcessReferenceInterpreter` alone applies guards, priority,
+clause-identity tie-break, winner selection, and early, late, stale, duplicate, or missing-target policy. This admits
+canonical `ProcessActivationInput` evidence but does not implement authored Signal-send, domain-event emission, or
+Reply-emission nodes.
 
 If the semantic deadline wins, or canonical policy requires a typed terminal outcome or escalation that this slice
 cannot author, the orchestration fails closed with `DurableTaskDurableOperationRecoveryRequiredException`. Its
@@ -184,12 +194,14 @@ eng/test-durable-task-integration.sh
 
 The script pins the emulator image by digest. Emulator coverage proves successful completion, bound Request
 activity dispatch and Reply admission, child sub-orchestration, recurrence history rollover, authored failure,
-duplicate start admission, and worker restart while an unbound Request and a canonical Timer are waiting. The
-restart assertions verify both that retained Transition activity history is not reinvoked and that the Timer keeps
-its persisted due instant. Deterministic conformance tests additionally cover concurrent fork Requests, Join
-selection, timer replay and competing-wait cancellation, child lineage and cancellation, partition bounds,
-recurrence bounds, bounded retry, reconciliation, deadline and escalation fail-closed behavior, and crash cuts
-before dispatch, after dispatch, after acknowledgement, and before Reply admission.
+duplicate start admission, and worker restart while an unbound Request, canonical Timer, and AwaitMatch are waiting.
+The restart assertions verify that retained Transition activity history is not reinvoked, Timer keeps its persisted
+due instant, and an AwaitMatch input is admitted once after replay. The emulator proves both AwaitMatch interaction
+and timer winners. Deterministic conformance tests additionally cover the interaction/timer priority and tie-break
+matrix, early and policy-disposition evidence, multiple timer clauses, concurrent fork Requests, Join selection,
+timer replay and competing-wait cancellation, child lineage and cancellation, partition bounds, recurrence bounds,
+bounded retry, reconciliation, deadline and escalation fail-closed behavior, and crash cuts before dispatch, after
+dispatch, after acknowledgement, and before Reply admission.
 
 ## Capability boundary
 

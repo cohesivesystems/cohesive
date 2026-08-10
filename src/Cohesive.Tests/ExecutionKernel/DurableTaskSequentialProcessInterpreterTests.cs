@@ -338,6 +338,295 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
                 && trace.Node.Value.StartsWith("timer/", StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData(10, 0, "clause/interaction", true)]
+    [InlineData(0, 10, "clause/timer", false)]
+    [InlineData(10, 10, "clause/interaction", true)]
+    public async Task AwaitMatch_InteractionAndTimerRaceUsesCanonicalPriorityAndClauseTieBreak(
+        int interactionPriority,
+        int timerPriority,
+        string expectedWinner,
+        bool completeTimerFirst)
+    {
+        var dueAtUtc = StartedAtUtc.AddMinutes(5);
+        var fixture = CompileAwaitMatchPlan(
+            interactionPriority,
+            timerPriority,
+            $"process/durable-task-await-match-{interactionPriority}-{timerPriority}-{completeTimerFirst}");
+        var start = Start(fixture.Plan, InstantValue(dueAtUtc), "instance/await-match-race");
+        var now = StartedAtUtc;
+        var timer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var interaction = new TaskCompletionSource<ProcessActivationInput>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var timerScheduled = new TaskCompletionSource<TimeSpan>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var interactionWaitStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var waitRegistered = new TaskCompletionSource<DurableTaskSequentialProcessResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var execution = DurableTaskSequentialProcessInterpreter.RunAsync(
+            fixture.Plan,
+            start,
+            EmptyDurableRequestBindingResolver.Instance,
+            UnexpectedOperation,
+            UnexpectedDurableOperation,
+            UnexpectedChildProcess,
+            UnexpectedReconciliation,
+            () =>
+            {
+                interactionWaitStarted.TrySetResult();
+                return interaction.Task;
+            },
+            (delay, cancellationToken) =>
+            {
+                Assert.False(cancellationToken.IsCancellationRequested);
+                timerScheduled.TrySetResult(delay);
+                return timer.Task;
+            },
+            () => now,
+            result =>
+            {
+                if (result.State.Waits.Any(static wait =>
+                        wait.Active && wait.Kind == ProcessWaitKind.AwaitMatch))
+                {
+                    waitRegistered.TrySetResult(result);
+                }
+            });
+
+        Assert.Equal(TimeSpan.FromMinutes(5), await timerScheduled.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+        await interactionWaitStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var registeredResult = await waitRegistered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var input = AwaitMatchInput(fixture, registeredResult, "emission/await-match-race");
+        now = dueAtUtc;
+        if (completeTimerFirst)
+        {
+            timer.SetResult();
+            interaction.SetResult(input);
+        }
+        else
+        {
+            interaction.SetResult(input);
+            timer.SetResult();
+        }
+
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
+        var initial = ProcessReferenceInterpreter.Create(fixture.Plan, start.Receipt);
+        var registered = ProcessReferenceInterpreter.Activate(
+            fixture.Plan,
+            initial,
+            Activation(initial, ProcessActivationCause.Start, start),
+            RejectingHost.Instance);
+        var expected = ProcessReferenceInterpreter.Activate(
+            fixture.Plan,
+            registered.State,
+            Activation(
+                registered.State,
+                ProcessActivationCause.Interaction,
+                start,
+                dueAtUtc,
+                [input]),
+            RejectingHost.Instance);
+
+        Assert.Equal(ProcessActivationDisposition.Completed, result.Disposition);
+        Assert.Equal(new ExecutionNodeId(expectedWinner), Assert.Single(result.State.Waits).WinnerClause);
+        Assert.Equal(Serialize(expected.State), Serialize(result.State));
+        Assert.Equal(
+            [Serialize(registered.Evidence), Serialize(expected.Evidence)],
+            result.Evidence.Select(Serialize));
+        var admission = Assert.Single(result.InputAdmissions);
+        Assert.Equal(
+            expectedWinner == "clause/interaction"
+                ? ProcessInputAdmissionDisposition.Consumed
+                : ProcessInputAdmissionDisposition.Observed,
+            admission.Disposition);
+    }
+
+    [Fact]
+    public async Task AwaitMatch_MultipleDueTimersUseCanonicalPriorityIndependentOfPhysicalCompletion()
+    {
+        var dueAtUtc = StartedAtUtc.AddMinutes(5);
+        var plan = CompileAwaitMatchTimerPlan(dueAtUtc);
+        var now = StartedAtUtc;
+        ConcurrentQueue<ScheduledTimer> scheduled = [];
+
+        var execution = DurableTaskSequentialProcessInterpreter.RunAsync(
+            plan,
+            Start(plan, "timers", "instance/await-match-timers"),
+            EmptyDurableRequestBindingResolver.Instance,
+            UnexpectedOperation,
+            UnexpectedDurableOperation,
+            UnexpectedChildProcess,
+            UnexpectedReconciliation,
+            UnexpectedInteraction,
+            (delay, cancellationToken) =>
+            {
+                var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                scheduled.Enqueue(new(delay, cancellationToken, completion));
+                return completion.Task;
+            },
+            () => now);
+
+        await WaitUntilAsync(() => scheduled.Count == 2);
+        var timers = scheduled.ToArray();
+        Assert.All(timers, timer => Assert.Equal(TimeSpan.FromMinutes(5), timer.Delay));
+        now = dueAtUtc;
+        foreach (var timer in timers)
+        {
+            timer.Completion.SetResult();
+        }
+
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(ProcessActivationDisposition.Completed, result.Disposition);
+        Assert.Equal(new ExecutionNodeId("clause/high"), Assert.Single(result.State.Waits).WinnerClause);
+        Assert.Equal(StringValue("high"), result.State.Terminal.Detail?.Value);
+    }
+
+    [Fact]
+    public async Task AwaitMatch_QueuedInputBeforeRegistrationRetainsCanonicalEarlyEvidence()
+    {
+        var dueAtUtc = StartedAtUtc.AddMinutes(5);
+        var fixture = CompileAwaitMatchPlan(
+            interactionPriority: 10,
+            timerPriority: 0,
+            "process/durable-task-await-match-early");
+        var start = Start(fixture.Plan, InstantValue(dueAtUtc), "instance/await-match-early");
+        var initial = ProcessReferenceInterpreter.Create(fixture.Plan, start.Receipt);
+        var token = Assert.Single(initial.Tokens);
+        var input = AwaitMatchInput(
+            fixture,
+            initial.Continuation,
+            token.Id,
+            waitRegistrationId: null,
+            "emission/await-match-early");
+        var scheduledTimers = 0;
+
+        var result = await DurableTaskSequentialProcessInterpreter.RunAsync(
+            fixture.Plan,
+            start,
+            EmptyDurableRequestBindingResolver.Instance,
+            UnexpectedOperation,
+            UnexpectedDurableOperation,
+            UnexpectedChildProcess,
+            UnexpectedReconciliation,
+            () => Task.FromResult(input),
+            (delay, cancellationToken) =>
+            {
+                Interlocked.Increment(ref scheduledTimers);
+                return Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            },
+            () => StartedAtUtc);
+
+        var expectedFirst = ProcessReferenceInterpreter.Activate(
+            fixture.Plan,
+            initial,
+            Activation(
+                initial,
+                ProcessActivationCause.Start,
+                start,
+                inputs: [input]),
+            RejectingHost.Instance);
+        var expected = ProcessReferenceInterpreter.Activate(
+            fixture.Plan,
+            expectedFirst.State,
+            Activation(expectedFirst.State, ProcessActivationCause.Continue, start),
+            RejectingHost.Instance);
+
+        Assert.Equal(0, scheduledTimers);
+        Assert.Equal(ProcessActivationDisposition.Completed, result.Disposition);
+        Assert.Equal(Serialize(expected.State), Serialize(result.State));
+        Assert.Contains(
+            result.Evidence.SelectMany(static evidence => evidence.Trace),
+            static trace => trace.Kind == ProcessTraceEventKind.InputAdmitted
+                && trace.InputReason == ProcessInputAdmissionReason.Early);
+    }
+
+    [Fact]
+    public async Task AwaitMatch_MissingDuplicateAndStaleInputsRetainAuthoredCanonicalDispositions()
+    {
+        var dueAtUtc = StartedAtUtc.AddDays(1);
+        var fixture = CompileAwaitMatchPlan(
+            interactionPriority: 10,
+            timerPriority: 0,
+            "process/durable-task-await-match-input-policy");
+        var start = Start(fixture.Plan, InstantValue(dueAtUtc), "instance/await-match-input-policy");
+        ConcurrentQueue<TaskCompletionSource<ProcessActivationInput>> waiters = [];
+        DurableTaskSequentialProcessResult? observed = null;
+
+        var execution = DurableTaskSequentialProcessInterpreter.RunAsync(
+            fixture.Plan,
+            start,
+            EmptyDurableRequestBindingResolver.Instance,
+            UnexpectedOperation,
+            UnexpectedDurableOperation,
+            UnexpectedChildProcess,
+            UnexpectedReconciliation,
+            () =>
+            {
+                var waiter = new TaskCompletionSource<ProcessActivationInput>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                waiters.Enqueue(waiter);
+                return waiter.Task;
+            },
+            (delay, cancellationToken) => Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken),
+            () => StartedAtUtc,
+            result => observed = result);
+
+        await WaitUntilAsync(() => observed?.State.Waits.Any(static wait => wait.Active) == true
+            && waiters.Count == 1);
+        var waiting = observed!;
+        var incompatible = AwaitMatchInput(
+            fixture,
+            waiting,
+            "emission/await-match-incompatible",
+            fixture.AlternateEventContract);
+        Assert.True(waiters.TryDequeue(out var missingWaiter));
+        missingWaiter.SetResult(incompatible);
+
+        await WaitUntilAsync(() => observed?.InputAdmissions.Length == 1 && waiters.Count == 1);
+        Assert.True(waiters.TryDequeue(out var duplicateWaiter));
+        duplicateWaiter.SetResult(incompatible);
+
+        await WaitUntilAsync(() => observed?.InputAdmissions.Length == 2 && waiters.Count == 1);
+        var activeWait = Assert.Single(observed!.State.Waits, static wait => wait.Active);
+        var stale = AwaitMatchInput(
+            fixture,
+            new(
+                observed.State.Continuation.ProcessInstanceId,
+                new("process-attempt/stale")),
+            activeWait.Token,
+            activeWait.RegistrationId,
+            "emission/await-match-stale");
+        Assert.True(waiters.TryDequeue(out var staleWaiter));
+        staleWaiter.SetResult(stale);
+
+        await WaitUntilAsync(() => observed?.InputAdmissions.Length == 3 && waiters.Count == 1);
+        var accepted = AwaitMatchInput(
+            fixture,
+            observed!,
+            "emission/await-match-accepted");
+        Assert.True(waiters.TryDequeue(out var acceptedWaiter));
+        acceptedWaiter.SetResult(accepted);
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(ProcessActivationDisposition.Completed, result.Disposition);
+        Assert.Equal(
+            [
+                ProcessInputAdmissionDisposition.DeadLettered,
+                ProcessInputAdmissionDisposition.DeadLettered,
+                ProcessInputAdmissionDisposition.Rejected,
+                ProcessInputAdmissionDisposition.Consumed
+            ],
+            result.InputAdmissions.Select(static admission => admission.Disposition));
+        Assert.Equal(
+            [
+                ProcessInputAdmissionReason.MissingTarget,
+                ProcessInputAdmissionReason.Duplicate,
+                ProcessInputAdmissionReason.Stale,
+                ProcessInputAdmissionReason.Consumed
+            ],
+            result.InputAdmissions.Select(static admission => admission.Reason));
+    }
+
     [Fact]
     public async Task Request_WaitsForExactReplyAndPreservesTheCanonicalObligation()
     {
@@ -1055,39 +1344,40 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     }
 
     [Fact]
-    public void PlanCatalog_AdmitsTimerButRejectsAwaitMatchOutsideTheExecutableSequentialSlice()
+    public void PlanCatalog_AdmitsTimerAndAwaitMatchButRejectsEmitEventOutsideTheExecutableSlice()
     {
         var timerPlan = CompileTimerPlan(
             StartedAtUtc.AddMinutes(1),
             "process/durable-task-catalog-timer");
-        var timerCatalog = new DurableTaskSequentialProcessPlanCatalog([Physical(timerPlan)]);
+        var awaitMatchPlan = CompileAwaitMatchTimerPlan(StartedAtUtc.AddMinutes(1));
+        var admitted = new DurableTaskSequentialProcessPlanCatalog([
+            Physical(timerPlan),
+            Physical(awaitMatchPlan)
+        ]);
 
-        Assert.Equal(1, timerCatalog.Count);
+        Assert.Equal(2, admitted.Count);
 
-        var awaitMatchPlan = Compile(Definition(
-            "await",
+        var eventDocument = InteractionDocument(
+            "interaction/event/durable-task-catalog-unsupported",
+            new DomainEventContractDefinition(new(StringContract, new("catalog-event/v1"))));
+        DomainEventContractReference eventContract = new(Reference(eventDocument));
+        var emitPlan = Compile(Definition(
+            "emit",
             [
-                new AwaitMatchProcessNode(
-                    new("await"),
-                    ProcessAwaitArbitration.ExclusivePriorityThenClauseId,
-                    [new ProcessAwaitTimerClause(
-                        new("clause/timer"),
-                        Expr.Const(ObservationValue.FromDateTimeOffset(StartedAtUtc.AddMinutes(1))),
-                        0,
-                        new(Edge("edge/timer-return", "return")))],
-                    ProcessAwaitInputDisposition.Observe,
-                    ProcessAwaitInputDisposition.Reject,
-                    ProcessAwaitInputDisposition.ReusePriorDisposition,
-                    ProcessAwaitMissingTargetDisposition.DeadLetter,
-                    TimeSpan.FromDays(1)),
+                new EmitEventProcessNode(
+                    new("emit"),
+                    eventContract,
+                    Expr.Const("event"),
+                    Edge("edge/emit-return", "return")),
                 new ReturnProcessNode(new("return"), Expr.Const("done"))
             ]),
-            definitionId: "process/durable-task-catalog-await-match");
+            Catalog(eventDocument),
+            definitionId: "process/durable-task-catalog-emit-event");
 
         var exception = Assert.Throws<ArgumentException>(() =>
-            new DurableTaskSequentialProcessPlanCatalog([Physical(awaitMatchPlan)]));
+            new DurableTaskSequentialProcessPlanCatalog([Physical(emitPlan)]));
 
-        Assert.Contains("await:awaitMatch", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("emit:emitEvent", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1161,6 +1451,10 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         var forkChildFixture = CompileSchedulerForkChildPlan();
         var recurrencePlan = CompileRecurrencePlan();
         var timerPlan = CompileInputTimerPlan();
+        var awaitMatchFixture = CompileAwaitMatchPlan(
+            interactionPriority: 10,
+            timerPriority: 0,
+            "process/durable-task-scheduler-await-match");
         var catalog = new DurableTaskSequentialProcessPlanCatalog([
             Physical(completedPlan),
             Physical(failedPlan),
@@ -1172,7 +1466,8 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             Physical(forkChildFixture.FastChild),
             Physical(forkChildFixture.SlowChild),
             Physical(recurrencePlan),
-            Physical(timerPlan)
+            Physical(timerPlan),
+            Physical(awaitMatchFixture.Plan)
         ], new BindingResolver(durableBinding, childFixture.Binding, forkChildFixture.Binding));
         var operations = new CountingEchoHost();
         var durableOperations = new CountingDurableOperationAdapter(durableBinding.Request);
@@ -1291,13 +1586,28 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             InstantValue(timerDueAtUtc),
             "instance/scheduler-timer-restart");
         var timerSchedule = await firstClient.ScheduleCohesiveProcessAsync(timerStart, timeout.Token);
-        var timerWaiting = await WaitForActiveTimer(
+        var timerWaiting = await WaitForActiveWait(
             firstClient,
             timerSchedule.InstanceId,
+            ProcessWaitKind.Timer,
             timeout.Token);
         Assert.Equal(
             timerDueAtUtc,
             Assert.Single(Assert.Single(timerWaiting.State.Waits).Timers).DueAtUtc);
+
+        var awaitMatchDueAtUtc = DateTimeOffset.UtcNow.AddMinutes(1);
+        var awaitMatchStart = Start(
+            awaitMatchFixture.Plan,
+            InstantValue(awaitMatchDueAtUtc),
+            "instance/scheduler-await-match-restart");
+        var awaitMatchSchedule = await firstClient.ScheduleCohesiveProcessAsync(
+            awaitMatchStart,
+            timeout.Token);
+        var awaitMatchWaiting = await WaitForActiveWait(
+            firstClient,
+            awaitMatchSchedule.InstanceId,
+            ProcessWaitKind.AwaitMatch,
+            timeout.Token);
 
         var restartStart = Start(restartPlan, "restart", "instance/restart");
         var restartSchedule = await firstClient.ScheduleCohesiveProcessAsync(restartStart, timeout.Token);
@@ -1346,6 +1656,49 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             recoveredResult.Evidence,
             item => Assert.Equal(restartPlan.DefinitionReference, item.Definition));
         Assert.Single(operations.Transitions);
+
+        var awaitMatchInput = AwaitMatchInput(
+            awaitMatchFixture,
+            awaitMatchWaiting,
+            "emission/scheduler-await-match");
+        await recoveredClient.RaiseCohesiveProcessInteractionAsync(
+            awaitMatchStart,
+            awaitMatchInput,
+            timeout.Token);
+        var awaitMatchRecovered = await recoveredClient.WaitForInstanceCompletionAsync(
+            awaitMatchSchedule.InstanceId,
+            getInputsAndOutputs: true,
+            timeout.Token);
+        Assert.Equal(OrchestrationRuntimeStatus.Completed, awaitMatchRecovered.RuntimeStatus);
+        var awaitMatchResult = Assert.IsType<DurableTaskSequentialProcessResult>(
+            awaitMatchRecovered.ReadOutputAs<DurableTaskSequentialProcessResult>());
+        Assert.Equal(ProcessActivationDisposition.Completed, awaitMatchResult.Disposition);
+        Assert.Equal(
+            new ExecutionNodeId("clause/interaction"),
+            Assert.Single(awaitMatchResult.State.Waits).WinnerClause);
+        Assert.Equal(
+            ProcessInputAdmissionDisposition.Consumed,
+            Assert.Single(awaitMatchResult.InputAdmissions).Disposition);
+
+        var awaitMatchTimerDueAtUtc = DateTimeOffset.UtcNow.AddSeconds(2);
+        var awaitMatchTimerStart = Start(
+            awaitMatchFixture.Plan,
+            InstantValue(awaitMatchTimerDueAtUtc),
+            "instance/scheduler-await-match-timer");
+        var awaitMatchTimerSchedule = await recoveredClient.ScheduleCohesiveProcessAsync(
+            awaitMatchTimerStart,
+            timeout.Token);
+        var awaitMatchTimerCompleted = await recoveredClient.WaitForInstanceCompletionAsync(
+            awaitMatchTimerSchedule.InstanceId,
+            getInputsAndOutputs: true,
+            timeout.Token);
+        Assert.Equal(OrchestrationRuntimeStatus.Completed, awaitMatchTimerCompleted.RuntimeStatus);
+        var awaitMatchTimerResult = Assert.IsType<DurableTaskSequentialProcessResult>(
+            awaitMatchTimerCompleted.ReadOutputAs<DurableTaskSequentialProcessResult>());
+        Assert.Equal(
+            new ExecutionNodeId("clause/timer"),
+            Assert.Single(awaitMatchTimerResult.State.Waits).WinnerClause);
+        Assert.Empty(awaitMatchTimerResult.InputAdmissions);
 
         var timerRecovered = await recoveredClient.WaitForInstanceCompletionAsync(
             timerSchedule.InstanceId,
@@ -1424,9 +1777,10 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             + $"failure: {retained?.FailureDetails}.");
     }
 
-    static async Task<DurableTaskSequentialProcessResult> WaitForActiveTimer(
+    static async Task<DurableTaskSequentialProcessResult> WaitForActiveWait(
         DurableTaskClient client,
         string instanceId,
+        ProcessWaitKind kind,
         CancellationToken cancellationToken)
     {
         for (var attempt = 0; attempt < 200; attempt++)
@@ -1436,8 +1790,8 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
                 getInputsAndOutputs: true,
                 cancellationToken);
             var status = instance?.ReadCustomStatusAs<DurableTaskSequentialProcessResult>();
-            if (status is not null && status.State.Waits.Any(static wait =>
-                    wait.Active && wait.Kind == ProcessWaitKind.Timer))
+            if (status is not null && status.State.Waits.Any(wait =>
+                    wait.Active && wait.Kind == kind))
             {
                 return status;
             }
@@ -1448,7 +1802,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             getInputsAndOutputs: true,
             cancellationToken);
         throw new InvalidOperationException(
-            $"Durable Task instance '{instanceId}' did not expose a canonical active Timer. "
+            $"Durable Task instance '{instanceId}' did not expose a canonical active {kind} wait. "
             + $"Runtime status: {retained?.RuntimeStatus}; custom status: {retained?.SerializedCustomStatus}; "
             + $"failure: {retained?.FailureDetails}.");
     }
@@ -1749,6 +2103,84 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
                 new ReturnProcessNode(new("return"), Expr.Const("done"))
             ]),
         definitionId: "process/durable-task-fork-timer");
+
+    static AwaitMatchFixture CompileAwaitMatchPlan(
+        int interactionPriority,
+        int timerPriority,
+        string definitionId)
+    {
+        var eventDocument = InteractionDocument(
+            $"interaction/event/{definitionId}",
+            new DomainEventContractDefinition(new(StringContract, new("await-match-event/v1"))));
+        var alternateEventDocument = InteractionDocument(
+            $"interaction/event/{definitionId}/alternate",
+            new DomainEventContractDefinition(new(StringContract, new("await-match-event/v1"))));
+        DomainEventContractReference eventContract = new(Reference(eventDocument));
+        DomainEventContractReference alternateEventContract = new(Reference(alternateEventDocument));
+        var plan = Compile(
+            Definition(
+                InstantContract,
+                "await",
+                [
+                    new AwaitMatchProcessNode(
+                        new("await"),
+                        ProcessAwaitArbitration.ExclusivePriorityThenClauseId,
+                        [
+                            new ProcessAwaitInteractionClause(
+                                new("clause/interaction"),
+                                eventContract,
+                                new(new("await.interaction"), StringContract),
+                                requestObligation: null,
+                                guard: null,
+                                interactionPriority,
+                                new(Edge("edge/interaction-return", "return/interaction"))),
+                            new ProcessAwaitTimerClause(
+                                new("clause/timer"),
+                                Expr.BoundValue(ProcessBindingIds.Input),
+                                timerPriority,
+                                new(Edge("edge/timer-return", "return/timer")))
+                        ],
+                        ProcessAwaitInputDisposition.Observe,
+                        ProcessAwaitInputDisposition.Reject,
+                        ProcessAwaitInputDisposition.ReusePriorDisposition,
+                        ProcessAwaitMissingTargetDisposition.DeadLetter,
+                        TimeSpan.FromDays(1)),
+                    new ReturnProcessNode(new("return/interaction"), Expr.Const("interaction")),
+                    new ReturnProcessNode(new("return/timer"), Expr.Const("timer"))
+                ]),
+            Catalog(eventDocument, alternateEventDocument),
+            definitionId: definitionId);
+        return new(plan, eventContract, alternateEventContract);
+    }
+
+    static CompiledProcessPlan CompileAwaitMatchTimerPlan(DateTimeOffset dueAtUtc) => Compile(
+        Definition(
+            "await",
+            [
+                new AwaitMatchProcessNode(
+                    new("await"),
+                    ProcessAwaitArbitration.ExclusivePriorityThenClauseId,
+                    [
+                        new ProcessAwaitTimerClause(
+                            new("clause/low"),
+                            Expr.Const(ObservationValue.FromDateTimeOffset(dueAtUtc)),
+                            0,
+                            new(Edge("edge/low-return", "return/low"))),
+                        new ProcessAwaitTimerClause(
+                            new("clause/high"),
+                            Expr.Const(ObservationValue.FromDateTimeOffset(dueAtUtc)),
+                            10,
+                            new(Edge("edge/high-return", "return/high")))
+                    ],
+                    ProcessAwaitInputDisposition.Observe,
+                    ProcessAwaitInputDisposition.Reject,
+                    ProcessAwaitInputDisposition.ReusePriorDisposition,
+                    ProcessAwaitMissingTargetDisposition.DeadLetter,
+                    TimeSpan.FromDays(1)),
+                new ReturnProcessNode(new("return/low"), Expr.Const("low")),
+                new ReturnProcessNode(new("return/high"), Expr.Const("high"))
+            ]),
+        definitionId: "process/durable-task-await-match-timers");
 
     static RequestProcessNode ForkRequest(
         string id,
@@ -2245,6 +2677,45 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     static PortableValue InstantValue(DateTimeOffset value) =>
         PortableValue.Concrete(InstantContract, ObservationValue.FromDateTimeOffset(value));
 
+    static ProcessActivationInput AwaitMatchInput(
+        AwaitMatchFixture fixture,
+        DurableTaskSequentialProcessResult waiting,
+        string emission,
+        DomainEventContractReference? contract = null)
+    {
+        var token = Assert.Single(waiting.State.Tokens);
+        var wait = Assert.Single(waiting.State.Waits, static candidate => candidate.Active);
+        return AwaitMatchInput(
+            fixture,
+            waiting.State.Continuation,
+            token.Id,
+            wait.RegistrationId,
+            emission,
+            contract);
+    }
+
+    static ProcessActivationInput AwaitMatchInput(
+        AwaitMatchFixture fixture,
+        ProcessContinuationIdentity continuation,
+        TokenId token,
+        ProcessWaitRegistrationId? waitRegistrationId,
+        string emission,
+        DomainEventContractReference? contract = null)
+    {
+        var target = new ProcessTokenInteractionTarget(continuation, token, waitRegistrationId);
+        var envelope = new DomainEventEnvelope(
+            InteractionEnvelope.CurrentSchemaVersion,
+            IncomingContext(
+                fixture.Plan,
+                continuation,
+                token,
+                emission,
+                new($"causation/{emission}")),
+            contract ?? fixture.EventContract,
+            StringValue("event"));
+        return new(target, envelope);
+    }
+
     static PortableValue CollectionValue(params string[] values) => PortableValue.Concrete(
         StringCollectionContract,
         ObservationValue.FromImmutableArray(
@@ -2372,6 +2843,11 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         TimeSpan Delay,
         CancellationToken CancellationToken,
         TaskCompletionSource Completion);
+
+    sealed record AwaitMatchFixture(
+        CompiledProcessPlan Plan,
+        DomainEventContractReference EventContract,
+        DomainEventContractReference AlternateEventContract);
 
     sealed record SchedulerForkChildFixture(
         CompiledProcessPlan Parent,
