@@ -696,7 +696,8 @@ static class DurableTaskSequentialProcessInterpreter
                 {
                     var intent = await pendingChildCancellation!.ConfigureAwait(true);
                     pendingChildCancellation = null;
-                    return NextProcessStimulus.For(ToCancellation(intent));
+                    await ApplyControlCommandAsync(ToCancellationCommand(intent)).ConfigureAwait(true);
+                    return NextProcessStimulus.ForControl();
                 }
 
                 var pair = pendingOperations
@@ -852,7 +853,7 @@ static class DurableTaskSequentialProcessInterpreter
             }
         }
 
-        ProcessCancellationIntent ToCancellation(ProcessChildCancellationIntent intent)
+        CancelProcessCommand ToCancellationCommand(ProcessChildCancellationIntent intent)
         {
             if (intent.ChildDefinition != state.Definition
                 || intent.ChildContinuation != state.Continuation)
@@ -861,8 +862,16 @@ static class DurableTaskSequentialProcessInterpreter
                     "A propagated child cancellation named another definition or continuation.");
             }
             return new(
-                state.Continuation.ProcessAttemptId,
-                new ProcessControlReason("parent.child-cancellation"));
+                ProcessControlCommand.CurrentSchemaVersion,
+                new(
+                    new(intent.IntentId),
+                    new(intent.IntentId),
+                    state.Continuation.ProcessInstanceId,
+                    start.Receipt.Request.Context.Authorization,
+                    RequireUtc(getCurrentUtc()),
+                    start.Receipt.Request.Context.Provenance),
+                Expectation(control),
+                new("parent.child-cancellation"));
         }
 
         void Apply(NextProcessStimulus stimulus)

@@ -232,17 +232,27 @@ authority; Durable Task events and timers are replayable physical stimuli. Co-re
 stimuli enter one canonical activation, where the reference interpreter retains exclusive authority for guard,
 priority, tie-break, winner, and input-disposition decisions.
 
+The orchestration publishes the existing protocol-neutral `ExecutionStatus` as custom status at active, safe-point,
+waiting, lifecycle, Continue-as-new, and terminal cuts. `ProcessExecutionStatusProjector` is shared by the native
+Storage and Durable Task interpretations and derives lifecycle from `ProcessControlState` plus token, wait, progress,
+demand, health, and terminal evidence from `ProcessContinuationState` and canonical durable-operation state. The
+Durable Task projection always redacts terminal detail and does not copy command receipts, reasons, Signals,
+interaction payloads, bindings, operation ledgers, wait keys, input values, or output values. Scheduler custom status
+and dashboard history are bounded physical projections, not continuation or control authority. Current task-hub
+repository, trace, explain, tag, and migrated-history integration remains the next ARI-292 observability work.
+
 This is not promotion of the full planning profile. Authored timeout, terminal-failure, escalation, and cancellation
 execution paths for general Requests, domain-event/Reply emission, activation-local and non-Process Signal targets,
 external Signal adapters, lifecycle Signal qualification, general attempt-resource/affinity cleanup, exhaustive
-durable Request pause/retry/reconciliation races, observability, and the complete target qualification matrix remain
-outside the current slice. RestartAttempt and Terminate currently accept only `RetainEvidence`; stronger cleanup
+durable Request pause/retry/reconciliation races, complete observability, and the complete target qualification
+matrix remain outside the current slice. RestartAttempt and Terminate currently accept only `RetainEvidence`; stronger cleanup
 demands fail before canonical admission. Higher-order execution retains
 canonical branch selection and lineage, schedules bounded branch work concurrently, maps exact child terminal status
 through the authored Request contract, and enforces partition and recurrence bounds without truncation. Parent child
 `Propagate` and `Detach` policies are realized explicitly: propagated cancellation is delivered as an exact portable
-intent at a child safe point and awaited, while detached child work remains independently active. Unsupported node
-kinds fail catalog construction before execution.
+intent, lowered deterministically at the child to a canonical `CancelProcessCommand`, applied through the same
+control receipt and cancellation activation, and awaited, while detached child work remains independently active.
+Unsupported node kinds fail catalog construction before execution.
 
 Target facts should be revalidated against the official
 [Durable Task documentation](https://learn.microsoft.com/azure/durable-task/),

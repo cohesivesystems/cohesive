@@ -135,7 +135,7 @@ public sealed class DurableTaskSequentialProcessOrchestrator
                 DurableTaskSequentialProcessNames.InteractionEvent),
             (delay, cancellationToken) => context.CreateTimer(delay, cancellationToken),
             () => ToUtc(context.CurrentUtcDateTime),
-            context.SetCustomStatus,
+            result => context.SetCustomStatus(DurableTaskProcessStatus.Project(result)),
             next =>
             {
                 context.ContinueAsNew(next, preserveUnprocessedEvents: true);

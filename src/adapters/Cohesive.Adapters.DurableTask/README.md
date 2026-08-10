@@ -49,6 +49,17 @@ IProcessExecutionRepository repository = new DurableTaskProcessExecutionReposito
 
 The repository projects lifecycle, timing, input, output, and failure evidence only. Historical current-node,
 place, wait, run-option, callback, and definition-registry data is intentionally not an execution authority.
+Current canonical interpreter custom status is a serialized `ExecutionStatus`, not the full orchestration result.
+It exposes the exact definition, logical instance and attempt lineage, control revision and mode, active activation,
+safe token locations, active waits and deadlines, activation progress, work demand, health, and terminal kind. The
+projection is derived from `ProcessControlState` and `ProcessContinuationState`; it contains no control commands or
+receipts, interaction envelopes, buffered inputs, wait keys, bindings, operation ledgers, input/output values, or
+terminal payload. Terminal detail is explicitly redacted while retaining its portable contract.
+
+This first observability slice does not yet teach `DurableTaskProcessExecutionRepository` to return the new
+canonical status, normalized traces, or explain artifacts. That repository continues to read its historical
+monitoring wire shapes until the follow-up ARI-292 integration slice adds a version-aware current/historical query
+projection. Scheduler custom status and dashboard history remain operational evidence, never semantic authority.
 
 ## Realization planning
 
@@ -135,10 +146,12 @@ await client.RaiseCohesiveProcessControlAsync(start, pauseCommand, cancellationT
 ```
 
 Completion of the client call confirms provider event admission only. Read the orchestration custom status or final
-`DurableTaskSequentialProcessResult.Control` and `LatestControlDecision` for the canonical disposition, diagnostics,
-receipt, and current fence. The result requires its continuation and control state to identify the same exact
-definition, Process instance, and current attempt; Continue-as-new carries both without making target history a
-second checkpoint authority.
+`DurableTaskSequentialProcessResult.Control` and `LatestControlDecision` according to the evidence required. Custom
+status is the safe `ExecutionStatus` projection used for the current lifecycle fence and operational location; it
+deliberately omits commands, receipts, reasons, and payloads. The final result retains the canonical command
+disposition, diagnostics, receipt, and control state. The result requires its continuation and control state to
+identify the same exact definition, Process instance, and current attempt; Continue-as-new carries both without
+making target history a second checkpoint authority.
 
 Every ordinary finite activation is enclosed by canonical `BeginActivation` and `ReachSafePoint` observations.
 Commands are prioritized when co-ready with an ordinary stimulus. A command arriving while a Transition,
@@ -186,7 +199,10 @@ Fork branches retain canonical tokens and lineage while bound Requests are sched
 Join alone selects winning branches and applies its authored cancellation policy. A child invocation becomes a
 sub-orchestration with the interpreter-derived child instance and attempt; its terminal status is mapped through the
 authored child outcome mapping rather than through physical task success or failure. `Propagate` sends the portable
-`ProcessChildCancellationIntent` to the exact child instance and the parent waits for that child to close;
+`ProcessChildCancellationIntent` to the exact child instance. The child validates the exact definition and
+continuation, deterministically lowers the intent to a canonical `CancelProcessCommand`, and closes its control
+attempt and continuation through the same receipt and cancellation-activation protocol; the parent waits for that
+child to close.
 `Detach` deliberately stops awaiting the child. A late result from either policy is admitted through the Request's
 late-result rule and cannot advance the already-closed parent wait.
 
@@ -229,8 +245,10 @@ capabilities; the control stream preserves the canonical command family without 
 
 If the semantic deadline wins, or canonical policy requires a typed terminal outcome or escalation that this slice
 cannot author, the orchestration fails closed with `DurableTaskDurableOperationRecoveryRequiredException`. Its
-custom status contains the full canonical operation ledger and exact recovery intent when one exists. The runtime
-does not turn worker cancellation into semantic cancellation or invent timeout/escalation values.
+safe custom status identifies the exact Process cut and reports degraded or unhealthy runtime health without copying
+the operation ledger. Canonical operation state remains in deterministic orchestration history; a later ARI-292
+repository/explain slice owns supported retrieval of that evidence. The runtime does not turn worker cancellation
+into semantic cancellation or invent timeout/escalation values.
 
 `Return` completes the orchestration. An authored root `Fail` produces canonical failure evidence and a failed
 physical orchestration; child failure remains a semantic child result for its parent. A canonical Durable Cut closes
@@ -258,7 +276,9 @@ activity dispatch and Reply admission, child sub-orchestration, recurrence histo
 duplicate start admission, cross-instance and self-Signal delivery, and worker restart while an unbound Request,
 canonical Timer, and AwaitMatch are waiting. The restart assertions verify that retained Transition activity history
 is not reinvoked, Timer keeps its persisted due instant, and an AwaitMatch input is admitted once after replay. The
-emulator proves both AwaitMatch interaction and timer winners. Deterministic conformance tests additionally cover
+emulator reads only the safe `ExecutionStatus` custom-status projection while orchestrations are live; it does not
+use custom status as a hidden continuation, inbox, outbox, or control-receipt channel. It also proves both AwaitMatch
+interaction and timer winners. Deterministic conformance tests additionally cover
 lifecycle authorization and revision fences, deferred safe-point control during active host work,
 replacement-attempt lineage, operational/semantic cancellation separation, exact Signal target and envelope
 preservation, recipient missing/stale/duplicate/consumed dispositions, the
