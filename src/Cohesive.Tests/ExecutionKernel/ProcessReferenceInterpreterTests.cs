@@ -141,6 +141,25 @@ public sealed class ProcessReferenceInterpreterTests
     }
 
     [Fact]
+    public void ExplainProjection_ProjectsAnAlreadyCompiledPlanWithoutRecompilation()
+    {
+        var compilation = CompileResult(Definition(
+            "return",
+            [new ReturnProcessNode(new("return"), Expr.Const("done"))]));
+        var plan = Assert.IsType<CompiledProcessPlan>(compilation.Plan);
+
+        var fromCompilation = ProcessExecutionExplainProjector.ProjectArtifacts(compilation);
+        var fromPlan = ProcessExecutionExplainProjector.ProjectArtifacts(plan);
+
+        Assert.True(fromCompilation.IsSuccessful);
+        Assert.True(fromPlan.IsSuccessful);
+        Assert.Equal(fromCompilation.Artifact?.Fingerprint, fromPlan.Artifact?.Fingerprint);
+        Assert.Equal(
+            ExecutionExplainJsonSerializer.Serialize(fromCompilation.Artifact!),
+            ExecutionExplainJsonSerializer.Serialize(fromPlan.Artifact!));
+    }
+
+    [Fact]
     public void ExplainProjection_FailsClosedWhenRuntimeStatusHasDifferentDefinitionAffinity()
     {
         var compilation = CompileResult(Definition(

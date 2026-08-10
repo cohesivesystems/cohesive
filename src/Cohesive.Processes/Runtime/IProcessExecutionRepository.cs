@@ -107,6 +107,11 @@ public sealed record ProcessExecutionQueryResult(
 /// <see cref="ExecutionStatus.ProcessInstanceId"/> is the logical Process identity and need not equal the physical
 /// <paramref name="ProcessId"/> used by the backing engine.
 /// </param>
+/// <param name="Definition">
+/// Exact canonical definition identity, revision, and fingerprint when retained by the backing interpretation.
+/// This remains available during admission windows in which <paramref name="RuntimeStatus"/> has not yet been
+/// published.
+/// </param>
 public sealed record ProcessExecutionRecord(
     string ProcessId,
     string? ProcessName,
@@ -118,7 +123,8 @@ public sealed record ProcessExecutionRecord(
     string? FailureMessage = null,
     ProcessExecutionError? Error = null,
     object? Output = null,
-    ExecutionStatus? RuntimeStatus = null
+    ExecutionStatus? RuntimeStatus = null,
+    ExecutionDefinitionReference? Definition = null
 )
 {
     /// <summary>

@@ -95,25 +95,89 @@ public static class ProcessExecutionExplainProjector
         ImmutableArray<DocumentValidationDiagnostic> additionalDiagnostics = default)
     {
         ArgumentNullException.ThrowIfNull(compilation);
+        return ProjectArtifactsCore(
+            compilation.Document,
+            compilation.Plan,
+            compilation.IsSuccessful,
+            compilation.Validation.Diagnostics,
+            trace,
+            runtimeStatus,
+            interpreter,
+            additionalEvidence,
+            additionalDiagnostics);
+    }
+
+    /// <summary>Projects an already compiled exact Process plan and later lifecycle artifacts.</summary>
+    /// <param name="plan">Successfully compiled canonical Process plan retained by the execution target.</param>
+    /// <param name="trace">Optional normalized trace projected from the authoritative runtime or durable store.</param>
+    /// <param name="runtimeStatus">Optional safe Process runtime-status observation.</param>
+    /// <param name="interpreter">
+    /// Explicit interpreter profile, or null to use <see cref="ReferenceInterpreterProfile"/> by convention.
+    /// </param>
+    /// <param name="additionalEvidence">
+    /// Optional effect realization, Control, materialization, or adapter evidence from later lifecycle stages.
+    /// </param>
+    /// <param name="additionalDiagnostics">
+    /// Optional retained compilation diagnostics and diagnostics from later lifecycle stages. A compiled plan proves
+    /// successful static compilation but does not itself retain non-fatal diagnostics from its original result.
+    /// </param>
+    /// <returns>An execution explain artifact, or structured artifact-affinity diagnostics.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="plan"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">Supplied evidence or diagnostics are malformed.</exception>
+    /// <exception cref="InvalidOperationException">Explain content cannot be materialized.</exception>
+    /// <exception cref="System.Text.Json.JsonException">Explain content cannot be serialized.</exception>
+    /// <exception cref="NotSupportedException">Explain content contains an unsupported serialization type.</exception>
+    public static ExecutionExplainProjectionResult ProjectArtifacts(
+        CompiledProcessPlan plan,
+        NormalizedExecutionTrace? trace = null,
+        ExecutionStatus? runtimeStatus = null,
+        ExecutionInterpreterProfileReference? interpreter = null,
+        ImmutableArray<ExecutionExplainEvidence> additionalEvidence = default,
+        ImmutableArray<DocumentValidationDiagnostic> additionalDiagnostics = default)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        return ProjectArtifactsCore(
+            plan.Document,
+            plan,
+            compilationSuccessful: true,
+            compilationDiagnostics: [],
+            trace,
+            runtimeStatus,
+            interpreter,
+            additionalEvidence,
+            additionalDiagnostics);
+    }
+
+    static ExecutionExplainProjectionResult ProjectArtifactsCore(
+        ExecutionDefinitionDocument document,
+        CompiledProcessPlan? plan,
+        bool compilationSuccessful,
+        ImmutableArray<DocumentValidationDiagnostic> compilationDiagnostics,
+        NormalizedExecutionTrace? trace,
+        ExecutionStatus? runtimeStatus,
+        ExecutionInterpreterProfileReference? interpreter,
+        ImmutableArray<ExecutionExplainEvidence> additionalEvidence,
+        ImmutableArray<DocumentValidationDiagnostic> additionalDiagnostics)
+    {
         List<ExecutionExplainEvidence> evidence =
         [
             new(
                 ExecutionExplainStageNames.StaticCompilation,
                 CompilationEvidenceKind,
-                compilation.Document.Metadata.DefinitionId.Value,
+                document.Metadata.DefinitionId.Value,
                 ExecutionExplainEvidenceAuthority.Derived,
-                compilation.IsSuccessful ? "Complete" : "Invalid",
-                sourceReferences: [compilation.Document.Metadata.Provenance.Source.Reference])
+                compilationSuccessful ? "Complete" : "Invalid",
+                sourceReferences: [document.Metadata.Provenance.Source.Reference])
         ];
-        if (compilation.Plan is { } plan)
+        if (plan is not null)
         {
             evidence.Add(new(
                 ExecutionExplainStageNames.StaticCompilation,
                 AtomicScopeDemandKind,
-                compilation.Document.Metadata.DefinitionId.Value,
+                document.Metadata.DefinitionId.Value,
                 ExecutionExplainEvidenceAuthority.Declared,
                 plan.Options.AtomicScope.ToString(),
-                sourceReferences: [compilation.Document.Metadata.Provenance.Source.Reference]));
+                sourceReferences: [document.Metadata.Provenance.Source.Reference]));
             foreach (var effect in plan.EffectSummary.Effects)
             {
                 evidence.Add(new(
@@ -122,7 +186,7 @@ public static class ProcessExecutionExplainProjector
                     effect.Node.Value,
                     ExecutionExplainEvidenceAuthority.Derived,
                     effect.Kind.ToString(),
-                    sourceReferences: [compilation.Document.Metadata.Provenance.Source.Reference]));
+                    sourceReferences: [document.Metadata.Provenance.Source.Reference]));
             }
             HashSet<(ExecutionNodeId Node, string Definition, ProcessResourceAccessKind Access)> resourceClaims = [];
             foreach (var resource in plan.EffectSummary.Resources)
@@ -137,18 +201,18 @@ public static class ProcessExecutionExplainProjector
                     ExecutionExplainEvidenceAuthority.Derived,
                     resource.Access.ToString(),
                     relatedSubjects: [resource.Node.Value, definition],
-                    sourceReferences: [compilation.Document.Metadata.Provenance.Source.Reference]));
+                    sourceReferences: [document.Metadata.Provenance.Source.Reference]));
             }
         }
         if (!additionalEvidence.IsDefaultOrEmpty)
             evidence.AddRange(additionalEvidence);
 
-        List<DocumentValidationDiagnostic> diagnostics = [.. compilation.Validation.Diagnostics];
+        List<DocumentValidationDiagnostic> diagnostics = [.. compilationDiagnostics];
         if (!additionalDiagnostics.IsDefaultOrEmpty)
             diagnostics.AddRange(additionalDiagnostics);
 
         return ExecutionExplainArtifactProjector.Project(
-            compilation.Document,
+            document,
             interpreter ?? ReferenceInterpreterProfile,
             [.. evidence],
             trace,

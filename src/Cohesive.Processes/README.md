@@ -166,6 +166,12 @@ available, and terminal-without-artifact executions. An available `ProcessExecut
 missing-prefix count, so pre-retention gaps cannot be mistaken for complete trace coverage. The repository envelope
 does not replace `NormalizedExecutionTrace`; it describes provider availability and coverage of that shared artifact.
 
+`IProcessExecutionExplainRepository` is the asynchronous runtime boundary for composing retained observations into
+the existing `ExecutionExplainArtifact`. Pending and active executions may yield partial lifecycle artifacts without
+trace evidence; a missing execution yields no artifact. The repository does not authorize another explain DTO or
+re-execution path. `ProcessExecutionRecord.Definition` retains the exact canonical identity independently of optional
+runtime status so admission-window observations can still resolve their deployed definition.
+
 ## Interpreter capability realization
 
 `ProcessInterpreterRequirementCollector` acquires a target-neutral inventory from one exact

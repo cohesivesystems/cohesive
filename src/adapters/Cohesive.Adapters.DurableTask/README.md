@@ -64,6 +64,13 @@ if (traceRead.Record is { IsComplete: true } complete)
     }
 }
 
+IProcessExecutionExplainRepository explainRepository =
+    new DurableTaskProcessExecutionExplainRepository(currentRepository, deployedPlanCatalog);
+
+ExecutionExplainArtifact? explanation = await explainRepository.GetExplainAsync(
+    operationContext,
+    currentExecutionId);
+
 // Migration-only reader for task hubs created by the retired Core adapter.
 IProcessExecutionRepository historicalRepository = new DurableTaskProcessExecutionRepository(
     historicalQueryClient,
@@ -72,7 +79,8 @@ IProcessExecutionRepository historicalRepository = new DurableTaskProcessExecuti
 
 The primary constructor queries the same standalone `DurableTaskClient` used to schedule canonical Process
 orchestrations. Exact lookup accepts the physical task-hub ID returned by `ScheduleCohesiveProcessAsync`; the
-`ProcessExecutionRecord.ProcessId` remains that authority-scoped physical identity. Its
+`ProcessExecutionRecord.ProcessId` remains that authority-scoped physical identity. Its exact `Definition` is
+retained from canonical start evidence even before custom status is available, while its
 `RuntimeStatus.ProcessInstanceId` is the distinct logical Process identity. The repository validates the physical ID
 from the retained start receipt and validates the custom status against the receipt's exact logical identity and
 definition reference. The logical overload derives the same opaque authority-scoped physical ID used at scheduling
@@ -109,6 +117,15 @@ normalized traces plus coverage evidence. `NotFound`, `InProgress`, `Available`,
 evidence entries without a trace; only a zero missing-prefix count is complete. Trace artifacts are available after a
 canonical terminal result exists—this boundary does not stream live event traces or enlarge custom status.
 
+`DurableTaskProcessExecutionExplainRepository` composes that same current repository with the immutable exact plan
+catalog. It returns the shared `ExecutionExplainArtifact`, never a Scheduler-specific diagnostics DTO. Static
+compilation evidence comes from the already compiled canonical plan; realization evidence is projected one-to-one
+from the plan's exhaustive requirement disposition ledger; safe current state comes from `ExecutionStatus`; and only
+the latest retained normalized trace for the current attempt becomes the artifact's trace reference. Pending and
+active executions therefore remain explainable as partial lifecycle artifacts without inventing traces. Legacy
+missing prefixes and terminal executions without canonical results become structured warnings, preserving the exact
+coverage limitation. Missing plans and definition, instance, attempt, status, or trace conflicts fail closed.
+
 The current repository returns that exact projection in `ProcessExecutionRecord.RuntimeStatus` and derives the
 compatibility lifecycle field from it. A terminal Scheduler state may close stale nonterminal custom status, but a
 contradictory terminal cut fails instead of being normalized away. Although the pinned client API requires
@@ -122,7 +139,8 @@ window. Tagless canonical instances created before the discovery projection rema
 partial or conflicting Cohesive tag set fails closed. Normalized trace retention is complete for newly executed
 activations, and terminal trace retrieval is available through the current standalone-client repository. The
 migration-only Core reader explicitly does not fabricate canonical traces from historical provider records.
-Execution-control API/explain binding, live trace streaming, richer dashboard presentation, and history-event
+Canonical runtime explain composition is available through the current repository and exact deployed plan catalog.
+Execution-control API binding, live trace streaming, richer dashboard presentation, and history-event
 normalization remain follow-up ARI-292 work.
 
 ## Realization planning

@@ -138,6 +138,11 @@ Use `IProcessExecutionTraceRepository` when a runtime must retrieve retained Pro
 Its explicit read state distinguishes an active execution from a missing execution or a terminal execution without
 a canonical artifact. Available records expose a missing-prefix count; only zero proves complete activation coverage.
 
+Use `IProcessExecutionExplainRepository` to compose retained runtime observations into the existing canonical
+`ExecutionExplainArtifact`. The repository may return a partial artifact for pending or active execution, but it must
+not invent unavailable trace or realization evidence. Exact definition identity remains available independently on
+`ProcessExecutionRecord.Definition` when runtime status has not yet been published.
+
 API, CLI, tests, and documentation serialize the same artifacts through
 `ExecutionExplainJsonSerializer` and `ExecutionTraceJsonSerializer`. A transport may format or
 redact according to the declared disclosure contract; it must not translate the artifact into an
