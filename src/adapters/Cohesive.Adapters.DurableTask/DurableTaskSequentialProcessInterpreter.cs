@@ -62,6 +62,7 @@ static class DurableTaskSequentialProcessInterpreter
         List<ProcessInputReceipt> inputAdmissions = resumed is null ? [] : [.. resumed.InputAdmissions];
         List<DocumentValidationDiagnostic> diagnostics = resumed is null ? [] : [.. resumed.Diagnostics];
         List<ProcessExecutionEvidence> evidence = resumed is null ? [] : [.. resumed.Evidence];
+        List<NormalizedExecutionTrace> traces = resumed is null ? [] : [.. resumed.Traces];
         Dictionary<EmissionId, DurableTaskDurableOperationResult> durableOperations = resumed is null
             ? []
             : resumed.DurableOperations.ToDictionary(static operation => operation.State.OperationId);
@@ -168,12 +169,14 @@ static class DurableTaskSequentialProcessInterpreter
                 return CurrentResult(lastDisposition);
             }
 
+            var trace = ProjectTrace(decision);
             state = decision.State;
             lastDisposition = decision.Disposition;
             emissions.AddRange(decision.Emissions);
             inputAdmissions.AddRange(decision.InputAdmissions);
             diagnostics.AddRange(decision.Diagnostics);
             evidence.Add(decision.Evidence);
+            traces.Add(trace);
             foreach (var signal in decision.Emissions.OfType<SignalEnvelope>())
             {
                 var dispatcher = deliverSignal
@@ -213,7 +216,8 @@ static class DurableTaskSequentialProcessInterpreter
                 [.. evidence],
                 [.. durableOperations.Values.OrderBy(
                     static operation => operation.State.OperationId.Value,
-                    StringComparer.Ordinal)]);
+                    StringComparer.Ordinal)],
+                [.. traces]);
             await SynchronizeChildLifecycleAsync().ConfigureAwait(true);
             SynchronizeTimers();
             result = CurrentResult(decision.Disposition);
@@ -388,7 +392,8 @@ static class DurableTaskSequentialProcessInterpreter
             [.. evidence],
             [.. durableOperations.Values.OrderBy(
                 static operation => operation.State.OperationId.Value,
-                StringComparer.Ordinal)]);
+                StringComparer.Ordinal)],
+            [.. traces]);
 
         async Task DrainCompletedControlCommandsAsync()
         {
@@ -535,12 +540,14 @@ static class DurableTaskSequentialProcessInterpreter
                         throw new InvalidOperationException(
                             "Canonical cooperative cancellation did not close the Process as Cancelled.");
                     }
+                    var cancellationTrace = ProjectTrace(cancellationDecision);
                     state = cancellationDecision.State;
                     lastDisposition = cancellationDecision.Disposition;
                     emissions.AddRange(cancellationDecision.Emissions);
                     inputAdmissions.AddRange(cancellationDecision.InputAdmissions);
                     diagnostics.AddRange(cancellationDecision.Diagnostics);
                     evidence.Add(cancellationDecision.Evidence);
+                    traces.Add(cancellationTrace);
                     return;
 
                 case ProcessTerminationIntent termination:
@@ -931,6 +938,26 @@ static class DurableTaskSequentialProcessInterpreter
         decision.Diagnostics.IsEmpty
             ? decision.Disposition.ToString()
             : string.Join("; ", decision.Diagnostics.Select(static diagnostic => diagnostic.Message));
+
+    static NormalizedExecutionTrace ProjectTrace(ProcessActivationDecision decision) =>
+        RequireTrace(ProcessExecutionTraceProjector.Project(decision));
+
+    internal static NormalizedExecutionTrace RequireTrace(ExecutionTraceProjectionResult projection)
+    {
+        ArgumentNullException.ThrowIfNull(projection);
+        if (projection.Trace is { } trace)
+        {
+            return trace;
+        }
+
+        var diagnostics = string.Join(
+            "; ",
+            projection.Validation.Diagnostics.Select(static diagnostic =>
+                $"{diagnostic.Code}: {diagnostic.Message}"));
+        throw new InvalidOperationException(
+            "The Durable Task Process interpreter could not retain the canonical normalized activation trace: "
+            + diagnostics);
+    }
 
     static DurableOperationTargetObservation ObserveTarget(
         ProcessContinuationState state,

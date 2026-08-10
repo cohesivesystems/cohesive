@@ -85,6 +85,9 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             scheduled.Select(static operation => operation.Kind));
         Assert.Equal(Serialize(expected.State), Serialize(actual.State));
         Assert.Equal(Serialize(expected.Evidence), Serialize(Assert.Single(actual.Evidence)));
+        var expectedTrace = ProcessExecutionTraceProjector.Project(expected);
+        Assert.True(expectedTrace.IsSuccessful);
+        Assert.Equal(Serialize(expectedTrace.Trace), Serialize(Assert.Single(actual.Traces)));
         var converter = DurableTaskProcessDataConverter.Create();
         foreach (var operation in scheduled)
         {
@@ -167,6 +170,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         var waitingJson = converter.Serialize(status)!;
         Assert.Contains(PrivateInput, Serialize(waiting));
         Assert.DoesNotContain(PrivateInput, waitingJson, StringComparison.Ordinal);
+        Assert.DoesNotContain(NormalizedExecutionTrace.CurrentSchemaVersion.Value, waitingJson, StringComparison.Ordinal);
         Assert.DoesNotContain("Receipts", waitingJson, StringComparison.Ordinal);
         Assert.DoesNotContain("BufferedInputs", waitingJson, StringComparison.Ordinal);
         var restored = Assert.IsType<ExecutionStatus>(
@@ -183,6 +187,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         Assert.Equal(ExecutionStatusDisclosure.Redacted, completedStatus.TerminalOutcome.Detail?.Disclosure);
         Assert.DoesNotContain(PrivateInput, completedJson, StringComparison.Ordinal);
         Assert.DoesNotContain(PrivateOutput, completedJson, StringComparison.Ordinal);
+        Assert.DoesNotContain(NormalizedExecutionTrace.CurrentSchemaVersion.Value, completedJson, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -638,6 +643,13 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             [ProcessControlAttemptDisposition.Abandoned, ProcessControlAttemptDisposition.Current],
             result.Control.Attempts.Select(static attempt => attempt.Disposition));
         Assert.Equal(restart.Context.CommandId, result.Control.Attempts[0].Closure?.CommandId);
+        Assert.Equal(
+            [
+                start.Receipt.Request.InitialContinuation.ProcessAttemptId,
+                new ProcessAttemptId("process-attempt/2"),
+                new ProcessAttemptId("process-attempt/2")
+            ],
+            result.Traces.Select(static trace => trace.Continuation!.ProcessAttemptId));
     }
 
     [Fact]
@@ -655,6 +667,9 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         Assert.Contains("operator.cancel", Serialize(cancelled.Result));
         Assert.DoesNotContain("operator.cancel", cancelledStatusJson, StringComparison.Ordinal);
         Assert.DoesNotContain("control/cancel", cancelledStatusJson, StringComparison.Ordinal);
+        Assert.Equal(2, cancelled.Result.Traces.Length);
+        Assert.Equal(cancelled.Result.Evidence[^1].Activation, cancelled.Result.Traces[^1].Activation);
+        Assert.Equal("cancelled", cancelled.Result.Traces[^1].Disposition);
 
         var terminated = await RunTerminalControlAsync(terminate: true);
         Assert.Equal(ProcessControlMode.Terminated, terminated.Result.Control.Mode);
@@ -1681,12 +1696,42 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             Assert.Equal(ExecutionTerminalOutcomeKind.None, status.TerminalOutcome.Kind);
         });
         Assert.All(rollovers, static rollover => Assert.NotNull(rollover.Resume));
+        Assert.Equal(
+            [1, 2],
+            rollovers.Select(static rollover => rollover.Resume!.Result.Traces.Length));
         Assert.Equal(ProcessActivationDisposition.Completed, result.Disposition);
         Assert.Equal(StringValue("exhausted"), result.State.Terminal.Detail?.Value);
         Assert.Equal(3, result.State.CompletedActivationCount);
         var recurrence = Assert.Single(result.State.Recurrences);
         Assert.False(recurrence.Active);
         Assert.Equal(2, recurrence.RepeatCount);
+        Assert.Equal(3, result.Traces.Length);
+        Assert.Equal(
+            result.Evidence.Select(static evidence => evidence.Activation),
+            result.Traces.Select(static trace => trace.Activation));
+        var legacyResult = new DurableTaskSequentialProcessResult(
+            result.Disposition,
+            result.State,
+            result.Control,
+            result.LatestControlDecision,
+            result.Emissions,
+            result.InputAdmissions,
+            result.Diagnostics,
+            result.Evidence,
+            result.DurableOperations);
+        Assert.Empty(legacyResult.Traces);
+        var reordered = Assert.Throws<ArgumentException>(() => new DurableTaskSequentialProcessResult(
+            result.Disposition,
+            result.State,
+            result.Control,
+            result.LatestControlDecision,
+            result.Emissions,
+            result.InputAdmissions,
+            result.Diagnostics,
+            result.Evidence,
+            result.DurableOperations,
+            result.Traces.Reverse().ToImmutableArray()));
+        Assert.Contains("ordered canonical activation evidence", reordered.Message, StringComparison.Ordinal);
 
         var converter = DurableTaskProcessDataConverter.Create();
         var restored = Assert.IsType<DurableTaskSequentialProcessStart>(converter.Deserialize(
@@ -2061,8 +2106,27 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
 
         Assert.Equal(Serialize(start), Serialize(restoredStart));
         Assert.Equal(Serialize(result), Serialize(restoredResult));
+        Assert.Single(restoredResult.Traces);
         Assert.Equal(Serialize(signalTarget), Serialize(restoredSignalTarget));
         Assert.Equal(Serialize(controlCommand), Serialize(restoredControl));
+    }
+
+    [Fact]
+    public void TraceRetention_FailsClosedWithCanonicalProjectionDiagnostics()
+    {
+        var failure = ExecutionTraceProjectionResult.Failure(
+        [
+            new(
+                ExecutionTraceDiagnosticCodes.DefinitionMismatch,
+                DiagnosticSeverity.Error,
+                "Process trace evidence and replacement state must name the same exact definition.")
+        ]);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            DurableTaskSequentialProcessInterpreter.RequireTrace(failure));
+
+        Assert.Contains(ExecutionTraceDiagnosticCodes.DefinitionMismatch, exception.Message, StringComparison.Ordinal);
+        Assert.Contains("same exact definition", exception.Message, StringComparison.Ordinal);
     }
 
     [DurableTaskSchedulerFact]

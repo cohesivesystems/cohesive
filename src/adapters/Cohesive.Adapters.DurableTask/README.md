@@ -80,6 +80,15 @@ projection is derived from `ProcessControlState` and `ProcessContinuationState`;
 receipts, interaction envelopes, buffered inputs, wait keys, bindings, operation ledgers, input/output values, or
 terminal payload. Terminal detail is explicitly redacted while retaining its portable contract.
 
+Every finite activation is also projected immediately from its authoritative `ProcessActivationDecision` through
+the shared `ProcessExecutionTraceProjector`. The payload-safe `NormalizedExecutionTrace` artifacts accumulate in
+`DurableTaskSequentialProcessResult` and cross Continue-as-new boundaries with the existing result carrier. This
+preserves the exact definition, instance, attempt, activation, disposition, safe point, and normalized semantic event
+order before those per-activation facts leave scope. Projection diagnostics fail the orchestration rather than
+silently creating a trace gap. Traces remain outside custom status, and Scheduler history remains provider execution
+evidence rather than a source from which missing semantic traces may be fabricated. Results written before trace
+retention can therefore contain canonical activation evidence without a corresponding normalized trace prefix.
+
 The current repository returns that exact projection in `ProcessExecutionRecord.RuntimeStatus` and derives the
 compatibility lifecycle field from it. A terminal Scheduler state may close stale nonterminal custom status, but a
 contradictory terminal cut fails instead of being normalized away. Although the pinned client API requires
@@ -90,8 +99,9 @@ operational evidence, never semantic authority.
 The Core query-client constructor remains an explicit migration reader for the retired adapter's status, input,
 output, and failure projections. It can be removed only after those task hubs are outside the supported retention
 window. Tagless canonical instances created before the discovery projection remain readable, while a recognized
-partial or conflicting Cohesive tag set fails closed. Normalized trace and explain retrieval, richer dashboard
-presentation, and history-event normalization remain follow-up ARI-292 work.
+partial or conflicting Cohesive tag set fails closed. Normalized trace retention is complete for newly executed
+activations; trace/explain retrieval, richer dashboard presentation, and history-event normalization remain
+follow-up ARI-292 work.
 
 ## Realization planning
 

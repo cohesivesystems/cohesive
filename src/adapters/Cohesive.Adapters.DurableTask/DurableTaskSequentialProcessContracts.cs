@@ -195,6 +195,7 @@ public sealed record DurableTaskSequentialProcessResult
     /// <param name="diagnostics">All canonical interpreter diagnostics in activation order.</param>
     /// <param name="evidence">Canonical evidence for every completed finite activation.</param>
     /// <param name="durableOperations">Canonical durable Request ledgers in logical operation identity order.</param>
+    /// <param name="traces">Payload-safe normalized traces for activations executed after trace retention began.</param>
     /// <exception cref="ArgumentNullException"><paramref name="state"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="disposition"/> is unspecified.</exception>
     [JsonConstructor]
@@ -207,7 +208,8 @@ public sealed record DurableTaskSequentialProcessResult
         ImmutableArray<ProcessInputReceipt> inputAdmissions = default,
         ImmutableArray<DocumentValidationDiagnostic> diagnostics = default,
         ImmutableArray<ProcessExecutionEvidence> evidence = default,
-        ImmutableArray<DurableTaskDurableOperationResult> durableOperations = default)
+        ImmutableArray<DurableTaskDurableOperationResult> durableOperations = default,
+        ImmutableArray<NormalizedExecutionTrace> traces = default)
     {
         if (!Enum.IsDefined(disposition) || disposition == ProcessActivationDisposition.Unspecified)
         {
@@ -239,6 +241,8 @@ public sealed record DurableTaskSequentialProcessResult
         InputAdmissions = inputAdmissions.IsDefault ? [] : inputAdmissions;
         Diagnostics = diagnostics.IsDefault ? [] : diagnostics;
         Evidence = evidence.IsDefault ? [] : evidence;
+        Traces = traces.IsDefault ? [] : traces;
+        ValidateTraces(Traces, Evidence, state, control);
         DurableOperations = durableOperations.IsDefault ? [] : durableOperations;
     }
 
@@ -266,8 +270,61 @@ public sealed record DurableTaskSequentialProcessResult
     /// <summary>Canonical evidence for every completed finite activation.</summary>
     public ImmutableArray<ProcessExecutionEvidence> Evidence { get; }
 
+    /// <summary>
+    /// Payload-safe normalized traces in activation order for decisions executed after trace retention began.
+    /// </summary>
+    /// <remarks>
+    /// An empty or shorter collection can identify a result written before this adapter retained normalized traces;
+    /// provider history cannot be used to fabricate the missing semantic evidence.
+    /// </remarks>
+    public ImmutableArray<NormalizedExecutionTrace> Traces { get; }
+
     /// <summary>Canonical durable Request results and complete ledgers in logical operation identity order.</summary>
     public ImmutableArray<DurableTaskDurableOperationResult> DurableOperations { get; }
+
+    static void ValidateTraces(
+        ImmutableArray<NormalizedExecutionTrace> traces,
+        ImmutableArray<ProcessExecutionEvidence> evidence,
+        ProcessContinuationState state,
+        ProcessControlState control)
+    {
+        if (traces.Length > evidence.Length)
+        {
+            throw new ArgumentException(
+                "Retained normalized traces cannot outnumber canonical activation evidence.",
+                nameof(traces));
+        }
+
+        HashSet<(ProcessAttemptId Attempt, ActivationId Activation)> identities = [];
+        var attempts = control.Attempts.Select(static attempt => attempt.AttemptId).ToHashSet();
+        var evidenceOffset = evidence.Length - traces.Length;
+        for (var index = 0; index < traces.Length; index++)
+        {
+            var trace = traces[index];
+            if (trace is null)
+            {
+                throw new ArgumentException("A retained normalized Process trace cannot be null.", nameof(traces));
+            }
+            if (trace.Kind != Processes.IR.ProcessDefinitionDocuments.Kind
+                || trace.Definition != state.Definition
+                || trace.Definition != evidence[evidenceOffset + index].Definition
+                || trace.Activation != evidence[evidenceOffset + index].Activation
+                || trace.Continuation is not { } continuation
+                || continuation.ProcessInstanceId != state.Continuation.ProcessInstanceId
+                || !attempts.Contains(continuation.ProcessAttemptId))
+            {
+                throw new ArgumentException(
+                    "Every retained normalized trace must match its ordered canonical activation evidence and identify this exact Process definition, instance, and retained attempt lineage.",
+                    nameof(traces));
+            }
+            if (!identities.Add((continuation.ProcessAttemptId, trace.Activation)))
+            {
+                throw new ArgumentException(
+                    "Retained normalized traces cannot repeat an activation within one Process attempt.",
+                    nameof(traces));
+            }
+        }
+    }
 }
 
 /// <summary>Result of idempotently scheduling one exact Process orchestration instance.</summary>
