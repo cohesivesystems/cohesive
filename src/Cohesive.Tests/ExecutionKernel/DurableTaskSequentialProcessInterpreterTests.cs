@@ -2097,10 +2097,20 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             controlledSchedule.InstanceId,
             ProcessWaitKind.Timer,
             timeout.Token);
-        IProcessExecutionRepository executionRepository = new DurableTaskProcessExecutionRepository(client);
+        var scheduledMetadata = await client.GetInstanceAsync(
+            controlledSchedule.InstanceId,
+            getInputsAndOutputs: false,
+            timeout.Token);
+        Assert.NotNull(scheduledMetadata);
+        var expectedTags = DurableTaskProcessTags.Create(controlledStart.Receipt);
+        Assert.Equal(expectedTags.Count, scheduledMetadata.Tags.Count);
+        Assert.All(expectedTags, expected =>
+            Assert.Equal(expected.Value, scheduledMetadata.Tags[expected.Key]));
+        var executionRepository = new DurableTaskProcessExecutionRepository(client);
         var observed = await executionRepository.GetAsync(
             OperationContext.Create(cancellationToken: timeout.Token),
-            controlledSchedule.InstanceId);
+            controlledStart.Receipt.Request.Context.Authorization.AuthorityScope,
+            controlledStart.Receipt.Request.InitialContinuation.ProcessInstanceId);
         Assert.NotNull(observed);
         Assert.Equal(ProcessExecutionStatus.Waiting, observed.Status);
         Assert.Equal(Serialize(running), Serialize(observed.RuntimeStatus));

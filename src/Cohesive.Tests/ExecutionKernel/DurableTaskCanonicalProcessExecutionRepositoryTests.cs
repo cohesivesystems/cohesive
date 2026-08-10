@@ -10,6 +10,67 @@ namespace Cohesive.Tests.ExecutionKernel;
 public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
 {
     [Fact]
+    public async Task ScheduleAsync_PublishesOnlyVersionedCanonicalDiscoveryTags()
+    {
+        var fixture = CreateFixture();
+        var client = new FakeDurableTaskClient([]);
+
+        var result = await client.ScheduleCohesiveProcessAsync(fixture.Start);
+
+        Assert.Equal(fixture.PhysicalInstanceId, result.InstanceId);
+        Assert.False(result.Replayed);
+        Assert.Equal(1, client.ScheduleCount);
+        var options = Assert.IsType<StartOrchestrationOptions>(client.LastStartOptions);
+        Assert.Equal(fixture.PhysicalInstanceId, options.InstanceId);
+        var expected = DurableTaskProcessTags.Create(fixture.Start.Receipt);
+        Assert.Equal(expected, options.Tags);
+        string[] expectedTagNames =
+            [
+                DurableTaskProcessTags.DefinitionFingerprintAlgorithmTagName,
+                DurableTaskProcessTags.DefinitionFingerprintCanonicalizationTagName,
+                DurableTaskProcessTags.DefinitionFingerprintValueTagName,
+                DurableTaskProcessTags.DefinitionIdTagName,
+                DurableTaskProcessTags.DefinitionRevisionIdTagName,
+                DurableTaskProcessTags.ProcessInstanceIdTagName,
+                DurableTaskProcessTags.ProjectionVersionTagName
+            ];
+        Assert.Equal(
+            expectedTagNames.Order(StringComparer.Ordinal),
+            options.Tags.Keys.Order(StringComparer.Ordinal));
+        var serializedTags = fixture.Converter.Serialize(options.Tags);
+        Assert.DoesNotContain(fixture.Scope.Authority, serializedTags, StringComparison.Ordinal);
+        Assert.DoesNotContain(fixture.Scope.Tenant!, serializedTags, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            fixture.Start.Receipt.Request.Context.CommandId.Value,
+            serializedTags,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            fixture.Start.Receipt.Request.Context.IdempotencyKey.Value,
+            serializedTags,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("input/durable-checkpoint-tests", serializedTags, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ScheduleAsync_RejectsOversizedUtf8TagValueBeforeTransportAdmission()
+    {
+        var source = ProcessDurabilityTestFixture.Create(
+            definitionId: "process/" + new string('\u00e9', 497));
+        var start = new DurableTaskSequentialProcessStart(source.Start, source.Activation.Context);
+        var client = new FakeDurableTaskClient([]);
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await client.ScheduleCohesiveProcessAsync(start));
+
+        Assert.Contains(
+            DurableTaskProcessTags.DefinitionIdTagName,
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.Contains("1000 bytes", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, client.ScheduleCount);
+    }
+
+    [Fact]
     public async Task GetAsync_ProjectsCanonicalStatusWithoutRetainedPayloads()
     {
         var fixture = CreateFixture();
@@ -58,6 +119,40 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await invalidRepository.GetAsync(OperationContext.Create(), fixture.PhysicalInstanceId));
         Assert.Contains("outside the pending admission state", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetAsync_ByLogicalIdentityDerivesOneAuthorityScopedExactLookup()
+    {
+        var fixture = CreateFixture();
+        var metadata = Metadata(
+            fixture,
+            fixture.WaitingStatus,
+            OrchestrationRuntimeStatus.Running,
+            tags: DurableTaskProcessTags.Create(fixture.Start.Receipt));
+        var client = new FakeDurableTaskClient([metadata]);
+        var repository = new DurableTaskProcessExecutionRepository(client);
+
+        var record = await repository.GetAsync(
+            OperationContext.Create(),
+            fixture.Scope,
+            fixture.LogicalInstanceId);
+
+        Assert.NotNull(record);
+        Assert.Equal(fixture.PhysicalInstanceId, record.ProcessId);
+        Assert.Equal(fixture.PhysicalInstanceId, client.LastGetInstanceId);
+        Assert.Equal(1, client.GetCount);
+        Assert.Equal(0, client.QueryCount);
+        Assert.Equal(
+            fixture.PhysicalInstanceId,
+            DurableTaskProcessExecutionIdentity.GetPhysicalInstanceId(
+                fixture.Scope,
+                fixture.LogicalInstanceId));
+        Assert.NotEqual(
+            fixture.PhysicalInstanceId,
+            DurableTaskProcessExecutionIdentity.GetPhysicalInstanceId(
+                new(fixture.Scope.Authority, "tenant/other"),
+                fixture.LogicalInstanceId));
     }
 
     [Fact]
@@ -137,6 +232,37 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
         var physicalException = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await wrongPhysicalRepository.GetAsync(OperationContext.Create(), "wrong-physical-id"));
         Assert.Contains("physical identity derived", physicalException.Message, StringComparison.Ordinal);
+
+        var expectedTags = DurableTaskProcessTags.Create(fixture.Start.Receipt);
+        var partialTags = expectedTags
+            .Where(pair => pair.Key != DurableTaskProcessTags.DefinitionRevisionIdTagName)
+            .ToDictionary();
+        var partial = Metadata(
+            fixture,
+            fixture.WaitingStatus,
+            OrchestrationRuntimeStatus.Running,
+            tags: partialTags);
+        var partialRepository = new DurableTaskProcessExecutionRepository(new FakeDurableTaskClient([partial]));
+        var partialException = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await partialRepository.GetAsync(OperationContext.Create(), fixture.PhysicalInstanceId));
+        Assert.Contains("partial canonical Process tag projection", partialException.Message, StringComparison.Ordinal);
+
+        var conflictingTags = expectedTags.ToDictionary();
+        conflictingTags[DurableTaskProcessTags.ProcessInstanceIdTagName] = "process-instance/conflict";
+        var conflictingTagMetadata = Metadata(
+            fixture,
+            fixture.WaitingStatus,
+            OrchestrationRuntimeStatus.Running,
+            tags: conflictingTags);
+        var conflictingTagRepository = new DurableTaskProcessExecutionRepository(
+            new FakeDurableTaskClient([conflictingTagMetadata]));
+        var tagException = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await conflictingTagRepository.GetAsync(OperationContext.Create(), fixture.PhysicalInstanceId));
+        Assert.Contains(
+            $"tag '{DurableTaskProcessTags.ProcessInstanceIdTagName}'",
+            tagException.Message,
+            StringComparison.Ordinal);
+        Assert.Contains("conflicts with its retained start receipt", tagException.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -229,6 +355,8 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
             start,
             status,
             DurableTaskSequentialProcessIdentities.OrchestrationInstance(start),
+            start.Receipt.Request.Context.Authorization.AuthorityScope,
+            start.Receipt.Request.InitialContinuation.ProcessInstanceId,
             DurableTaskProcessDataConverter.Create());
     }
 
@@ -238,7 +366,8 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
         OrchestrationRuntimeStatus runtimeStatus,
         string? serializedOutput = null,
         string? instanceId = null,
-        string? serializedCustomStatus = null) => new(
+        string? serializedCustomStatus = null,
+        IReadOnlyDictionary<string, string>? tags = null) => new(
             DurableTaskSequentialProcessNames.Orchestration,
             instanceId ?? fixture.PhysicalInstanceId)
         {
@@ -249,7 +378,8 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
             SerializedInput = fixture.Converter.Serialize(fixture.Start),
             SerializedOutput = serializedOutput,
             SerializedCustomStatus = serializedCustomStatus
-                ?? (status is null ? null : fixture.Converter.Serialize(status))
+                ?? (status is null ? null : fixture.Converter.Serialize(status)),
+            Tags = tags ?? ImmutableDictionary<string, string>.Empty
         };
 
     static ExecutionStatus Copy(
@@ -307,6 +437,8 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
         DurableTaskSequentialProcessStart Start,
         ExecutionStatus WaitingStatus,
         string PhysicalInstanceId,
+        InteractionAuthorityScope Scope,
+        ProcessInstanceId LogicalInstanceId,
         DataConverter Converter);
 
     sealed class FakeDurableTaskClient(
@@ -319,12 +451,24 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
 
         public bool LastGetInputsAndOutputs { get; private set; }
 
+        public string? LastGetInstanceId { get; private set; }
+
+        public int GetCount { get; private set; }
+
+        public int QueryCount { get; private set; }
+
+        public int ScheduleCount { get; private set; }
+
+        public StartOrchestrationOptions? LastStartOptions { get; private set; }
+
         public override Task<OrchestrationMetadata?> GetInstancesAsync(
             string instanceId,
             bool getInputsAndOutputs = false,
             CancellationToken cancellation = default)
         {
             cancellation.ThrowIfCancellationRequested();
+            GetCount++;
+            LastGetInstanceId = instanceId;
             LastGetInputsAndOutputs = getInputsAndOutputs;
             return Task.FromResult(metadata.FirstOrDefault(candidate =>
                 string.Equals(candidate.InstanceId, instanceId, StringComparison.Ordinal)));
@@ -333,6 +477,7 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
         public override AsyncPageable<OrchestrationMetadata> GetAllInstancesAsync(
             OrchestrationQuery? filter = null)
         {
+            QueryCount++;
             LastQuery = filter;
             return Pageable.Create<OrchestrationMetadata>((continuation, pageSize, cancellation) =>
             {
@@ -346,7 +491,13 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
             TaskName orchestratorName,
             object? input = null,
             StartOrchestrationOptions? options = null,
-            CancellationToken cancellation = default) => throw new NotSupportedException();
+            CancellationToken cancellation = default)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            ScheduleCount++;
+            LastStartOptions = options;
+            return Task.FromResult(options?.InstanceId ?? "generated-instance");
+        }
 
         public override Task RaiseEventAsync(
             string instanceId,

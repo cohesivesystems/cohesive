@@ -533,8 +533,13 @@ public static class DurableTaskSequentialProcessClientExtensions
                 "Client admission accepts only initial Process starts; resume state is target-owned.",
                 nameof(start));
         }
-        var instanceId = DurableTaskSequentialProcessIdentities.OrchestrationInstance(start);
+        var instanceId = DurableTaskProcessExecutionIdentity.GetPhysicalInstanceId(
+            start.Receipt.Request.Context.Authorization.AuthorityScope,
+            start.Receipt.Request.InitialContinuation.ProcessInstanceId);
         var options = new StartOrchestrationOptions(instanceId)
+        {
+            Tags = DurableTaskProcessTags.Create(start.Receipt)
+        }
             .WithDedupeStatuses([.. StartOrchestrationOptionsExtensions.ValidDedupeStatuses]);
         try
         {
