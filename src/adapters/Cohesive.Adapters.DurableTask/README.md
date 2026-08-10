@@ -7,7 +7,8 @@ The former adapter executed callback-bearing Process definitions through a singl
 retired that path because it could not preserve canonical Process semantics. The replacement keeps the exact
 `CompiledProcessPlan` and `ProcessReferenceInterpreter` as semantic authority. A generic Durable Task orchestration
 now executes the admitted bounded slice; activities invoke canonical Transition, Relation/Query, and Request host
-operations, sub-orchestrations execute child Processes, and Durable Task owns physical scheduling, history, and replay.
+operations and resolve Signal targets, sub-orchestrations execute child Processes, and Durable Task owns physical
+scheduling, history, and replay.
 
 The accepted execution direction is a parallel durable interpreter that consumes an exact `CompiledProcessPlan`
 and uses Azure Durable Task Scheduler as physical execution evidence. It is not required to implement
@@ -27,14 +28,14 @@ dotnet add package Cohesive.Adapters.DurableTask
 - You need an `IProcessExecutionRepository` monitoring projection over an existing Durable Task hub.
 - You need to inspect whether an exact `CompiledProcessPlan` has a complete intended Durable Task realization.
 - You need to execute an exact Process containing Transition, Relation/Query, Request, Choice, Match, bounded
-  Fork/Join, AwaitMatch, Timer, child Process, bounded partition, bounded recurrence, Durable Cut, Return, and Fail
-  constructs.
+  Fork/Join, AwaitMatch, Timer, Signal send to a Process token, child Process, bounded partition, bounded recurrence,
+  Durable Cut, Return, and Fail constructs.
 
-The executable profile remains narrower than the complete planning profile. Domain-event, Signal, and Reply
-emission nodes, root lifecycle control, and complete operational lifecycle semantics remain outside this slice and
-are rejected when the worker catalog is built. Request dispatch, bounded retry, reconciliation, acknowledgement,
-and Reply admission are implemented; typed timeout, terminal-failure, and escalation paths fail closed with their
-canonical operation ledger because this slice does not fabricate the authored recovery outcome.
+The executable profile remains narrower than the complete planning profile. Domain-event and Reply emission nodes,
+non-Process Signal targets, activation-local Signal delivery, root lifecycle control, and complete operational
+lifecycle semantics remain outside this slice and fail closed. Request dispatch, bounded retry, reconciliation,
+acknowledgement, and Reply admission are implemented; typed timeout, terminal-failure, and escalation paths fail
+closed with their canonical operation ledger because this slice does not fabricate the authored recovery outcome.
 
 ## Monitoring boundary
 
@@ -164,8 +165,22 @@ retains canonical early-delivery evidence. Active timer clauses become physical 
 identity. When an external input and one or more timers are ready in the same deterministic wake, they are presented
 together at one canonical activation time; `ProcessReferenceInterpreter` alone applies guards, priority,
 clause-identity tie-break, winner selection, and early, late, stale, duplicate, or missing-target policy. This admits
-canonical `ProcessActivationInput` evidence but does not implement authored Signal-send, domain-event emission, or
-Reply-emission nodes.
+canonical `ProcessActivationInput` evidence for external inputs and addressed Signals. Domain-event and Reply
+emission nodes remain outside this executable slice.
+
+`SendSignalProcessNode` target evaluation stays inside the canonical reference interpreter. When materialization is
+required, a replayable activity asks the registered `IProcessReferenceHost` for the existing closed
+`ProcessSignalTargetResult`; no Durable Task target DTO or second resolution policy exists. The interpreter then
+authors the exact `SignalEnvelope`, including contract, target, correlation, delivery, ordering, origin, occurrence,
+and provenance. The orchestrator routes that envelope unchanged inside a `ProcessActivationInput` external event to
+the exact authority-scoped Process instance.
+
+The external event is only delivery evidence. The recipient `ProcessReferenceInterpreter` remains the authority for
+target validation, wait arbitration, and consumed, stale, duplicate, early, late, or missing-target disposition. A
+replayed sender history cannot reapply a logical Signal as a second canonical admission. This executable slice
+requires durable delivery and a `ProcessTokenInteractionTarget`; activation-local delivery and Transition targets
+fail before dispatch. General external adapter dispatch and lifecycle `Signal` command admission remain separate
+capabilities.
 
 If the semantic deadline wins, or canonical policy requires a typed terminal outcome or escalation that this slice
 cannot author, the orchestration fails closed with `DurableTaskDurableOperationRecoveryRequiredException`. Its
@@ -194,14 +209,16 @@ eng/test-durable-task-integration.sh
 
 The script pins the emulator image by digest. Emulator coverage proves successful completion, bound Request
 activity dispatch and Reply admission, child sub-orchestration, recurrence history rollover, authored failure,
-duplicate start admission, and worker restart while an unbound Request, canonical Timer, and AwaitMatch are waiting.
-The restart assertions verify that retained Transition activity history is not reinvoked, Timer keeps its persisted
-due instant, and an AwaitMatch input is admitted once after replay. The emulator proves both AwaitMatch interaction
-and timer winners. Deterministic conformance tests additionally cover the interaction/timer priority and tie-break
-matrix, early and policy-disposition evidence, multiple timer clauses, concurrent fork Requests, Join selection,
-timer replay and competing-wait cancellation, child lineage and cancellation, partition bounds, recurrence bounds,
-bounded retry, reconciliation, deadline and escalation fail-closed behavior, and crash cuts before dispatch, after
-dispatch, after acknowledgement, and before Reply admission.
+duplicate start admission, cross-instance and self-Signal delivery, and worker restart while an unbound Request,
+canonical Timer, and AwaitMatch are waiting. The restart assertions verify that retained Transition activity history
+is not reinvoked, Timer keeps its persisted due instant, and an AwaitMatch input is admitted once after replay. The
+emulator proves both AwaitMatch interaction and timer winners. Deterministic conformance tests additionally cover
+exact Signal target and envelope preservation, recipient missing/stale/duplicate/consumed dispositions, the
+interaction/timer priority and tie-break matrix, early and policy-disposition evidence, multiple timer clauses,
+concurrent fork Requests, Join selection, timer replay and competing-wait cancellation, child lineage and
+cancellation, partition bounds, recurrence bounds, bounded retry, reconciliation, deadline and escalation
+fail-closed behavior, and crash cuts before dispatch, after dispatch, after acknowledgement, and before Reply
+admission.
 
 ## Capability boundary
 

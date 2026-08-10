@@ -76,6 +76,7 @@ public static class DurableTaskSequentialProcessWorkerBuilderExtensions
         {
             tasks.AddOrchestrator(new DurableTaskSequentialProcessOrchestrator(catalog));
             tasks.AddActivity<DurableTaskProcessHostOperationActivity>();
+            tasks.AddActivity<DurableTaskProcessSignalTargetActivity>();
             tasks.AddActivity<DurableTaskDurableOperationActivity>();
             tasks.AddActivity<DurableTaskDurableOperationReconciliationActivity>();
         });
@@ -141,7 +142,11 @@ public sealed class DurableTaskSequentialProcessOrchestrator
                     intent);
                 return Task.CompletedTask;
             },
-            waitForChildCancellation).ConfigureAwait(true);
+            waitForChildCancellation,
+            resolution => context.CallActivityAsync<ProcessSignalTargetResult>(
+                DurableTaskSequentialProcessNames.SignalTargetResolutionActivity,
+                resolution),
+            signal => DeliverSignal(context, signal)).ConfigureAwait(true);
 
         var blockedOperation = result.DurableOperations.FirstOrDefault(static operation =>
             operation.State.Status is not DurableOperationStatus.Dispositioned);
@@ -248,6 +253,35 @@ public sealed class DurableTaskSequentialProcessOrchestrator
 
     static DateTimeOffset ToUtc(DateTime value) => new(
         value.Kind == DateTimeKind.Utc ? value : DateTime.SpecifyKind(value, DateTimeKind.Utc));
+
+    static Task DeliverSignal(TaskOrchestrationContext context, SignalEnvelope signal)
+    {
+        var target = RequireDurableProcessSignalTarget(signal);
+        context.SendEvent(
+            DurableTaskSequentialProcessIdentities.OrchestrationInstance(
+                signal.Context.AuthorityScope,
+                target.Continuation.ProcessInstanceId),
+            DurableTaskSequentialProcessNames.InteractionEvent,
+            new ProcessActivationInput(target, signal));
+        return Task.CompletedTask;
+    }
+
+    internal static ProcessTokenInteractionTarget RequireDurableProcessSignalTarget(SignalEnvelope signal)
+    {
+        ArgumentNullException.ThrowIfNull(signal);
+        if (signal.Context.Delivery.Durability != InteractionDurabilityDemand.Durable)
+        {
+            throw new InvalidOperationException(
+                $"Durable Task cannot deliver activation-local Signal '{signal.Context.EmissionId.Value}' as an external event.");
+        }
+        if (signal.Target is not ProcessTokenInteractionTarget target)
+        {
+            throw new InvalidOperationException(
+                $"Durable Task Signal '{signal.Context.EmissionId.Value}' resolved to unsupported target "
+                + $"'{signal.Target.GetType().Name}'; this executable slice requires a Process-token target.");
+        }
+        return target;
+    }
 }
 
 /// <summary>Activity boundary for one exact fenced canonical durable Request invocation.</summary>
@@ -383,6 +417,32 @@ public sealed class DurableTaskProcessHostOperationActivity
         };
         return Task.FromResult(result
             ?? throw new InvalidOperationException("The Process host returned null operation evidence."));
+    }
+}
+
+/// <summary>Activity boundary for exact canonical Signal-target resolution.</summary>
+[DurableTask(DurableTaskSequentialProcessNames.SignalTargetResolutionActivity)]
+public sealed class DurableTaskProcessSignalTargetActivity
+    : TaskActivity<ProcessSignalTargetResolution, ProcessSignalTargetResult>
+{
+    readonly IProcessReferenceHost host;
+
+    /// <summary>Creates a Signal-target activity over the application's canonical Process host.</summary>
+    /// <param name="host">Host that resolves portable values into the closed canonical interaction-target union.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="host"/> is <see langword="null"/>.</exception>
+    public DurableTaskProcessSignalTargetActivity(IProcessReferenceHost host) =>
+        this.host = host ?? throw new ArgumentNullException(nameof(host));
+
+    /// <inheritdoc />
+    public override Task<ProcessSignalTargetResult> RunAsync(
+        TaskActivityContext context,
+        ProcessSignalTargetResolution input)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(input);
+        var result = host.ResolveSignalTarget(input)
+            ?? throw new InvalidOperationException("The Process host returned null Signal-target evidence.");
+        return Task.FromResult(result);
     }
 }
 

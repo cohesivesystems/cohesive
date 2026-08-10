@@ -17,6 +17,9 @@ public static class DurableTaskSequentialProcessNames
     /// <summary>Activity that materializes one exact Transition or Relation/Query operation.</summary>
     public const string HostOperationActivity = "Cohesive.Processes.HostOperation.v1";
 
+    /// <summary>Activity that resolves one exact canonical Signal target.</summary>
+    public const string SignalTargetResolutionActivity = "Cohesive.Processes.SignalTargetResolution.v1";
+
     /// <summary>Activity that dispatches one fenced canonical durable Request attempt.</summary>
     public const string DurableOperationActivity = "Cohesive.Processes.DurableOperation.v1";
 

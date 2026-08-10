@@ -171,8 +171,19 @@ public sealed record ProcessOperationResult
 /// <summary>Success or structured failure from explicit Signal-target resolution.</summary>
 public sealed record ProcessSignalTargetResult
 {
+    [JsonConstructor]
     ProcessSignalTargetResult(InteractionTarget? target, DocumentValidationDiagnostic? failure)
     {
+        if ((target is null) == (failure is null))
+        {
+            throw new ArgumentException(
+                "Signal target resolution requires exactly one resolved target or failure diagnostic.");
+        }
+        if (failure is not null && failure.Severity != DiagnosticSeverity.Error)
+        {
+            throw new ArgumentException("Failed target resolution requires an error diagnostic.", nameof(failure));
+        }
+
         Target = target;
         Failure = failure;
     }

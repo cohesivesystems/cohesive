@@ -97,6 +97,7 @@ static class DurableTaskSequentialProcessEligibility
             if (node is not (InvokeTransitionProcessNode
                 or EvaluateRelationProcessNode
                 or RequestProcessNode
+                or SendSignalProcessNode
                 or ChoiceProcessNode
                 or MatchProcessNode
                 or ForkProcessNode
