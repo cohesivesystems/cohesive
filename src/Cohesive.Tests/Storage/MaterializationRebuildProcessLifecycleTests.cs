@@ -772,7 +772,7 @@ public sealed class MaterializationRebuildProcessLifecycleTests
     static ProcessDurableRuntime Runtime(
         InMemoryProcessDurableStore store,
         int maximumStoreAttempts = 3,
-        IProcessDurableRequestBindingResolver? bindingResolver = null) =>
+        IDurableRequestBindingResolver? bindingResolver = null) =>
         new(
             store,
             RejectingHost.Instance,
@@ -1016,7 +1016,7 @@ public sealed class MaterializationRebuildProcessLifecycleTests
     }
 
     sealed class ExactBindingResolver(DurableRequestBinding binding)
-        : IProcessDurableRequestBindingResolver
+        : IDurableRequestBindingResolver
     {
         public bool TryResolve(RequestEnvelope request, out DurableRequestBinding? resolved)
         {

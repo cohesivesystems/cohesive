@@ -67,11 +67,17 @@ public static class DurableTaskSequentialProcessWorkerBuilderExtensions
         var converter = DurableTaskProcessDataConverter.Create();
         builder.Services.TryAddSingleton(catalog);
         builder.Services.TryAddSingleton(converter);
+        builder.Services.TryAddSingleton<IDurableOperationAdapterResolver>(
+            EmptyDurableOperationAdapterResolver.Instance);
+        builder.Services.TryAddSingleton<IDurableOperationExceptionClassifier>(
+            ConservativeDurableOperationExceptionClassifier.Instance);
         builder.Configure(options => options.DataConverter = converter);
         return builder.AddTasks(tasks =>
         {
             tasks.AddOrchestrator(new DurableTaskSequentialProcessOrchestrator(catalog));
             tasks.AddActivity<DurableTaskProcessHostOperationActivity>();
+            tasks.AddActivity<DurableTaskDurableOperationActivity>();
+            tasks.AddActivity<DurableTaskDurableOperationReconciliationActivity>();
         });
     }
 }
@@ -100,15 +106,32 @@ public sealed class DurableTaskSequentialProcessOrchestrator
         var result = await DurableTaskSequentialProcessInterpreter.RunAsync(
             physical.CanonicalPlan,
             input,
+            catalog.BindingResolver,
             operation => context.CallActivityAsync<ProcessOperationResult>(
                 DurableTaskSequentialProcessNames.HostOperationActivity,
                 operation),
+            invocation => context.CallActivityAsync<DurableTaskDurableOperationAttemptResult>(
+                DurableTaskSequentialProcessNames.DurableOperationActivity,
+                invocation),
+            state => context.CallActivityAsync<DurableTaskDurableOperationReconciliationResult>(
+                DurableTaskSequentialProcessNames.DurableOperationReconciliationActivity,
+                state),
             () => context.WaitForExternalEvent<ProcessActivationInput>(
                 DurableTaskSequentialProcessNames.InteractionEvent),
-            () => context.CreateTimer(TimeSpan.Zero, CancellationToken.None),
+            (delay, cancellationToken) => context.CreateTimer(delay, cancellationToken),
             () => ToUtc(context.CurrentUtcDateTime),
             context.SetCustomStatus).ConfigureAwait(true);
 
+        var blockedOperation = result.DurableOperations.FirstOrDefault(static operation =>
+            operation.State.Status is not DurableOperationStatus.Dispositioned);
+        if (blockedOperation is not null)
+        {
+            throw new DurableTaskDurableOperationRecoveryRequiredException(
+                blockedOperation.State.OperationId,
+                blockedOperation.Disposition,
+                blockedOperation.State.Status,
+                DurableOperationReferenceExecutor.GetRecoveryIntent(blockedOperation.State));
+        }
         if (result.Disposition == ProcessActivationDisposition.Failed)
         {
             var detail = result.Diagnostics.IsEmpty
@@ -121,6 +144,111 @@ public sealed class DurableTaskSequentialProcessOrchestrator
 
     static DateTimeOffset ToUtc(DateTime value) => new(
         value.Kind == DateTimeKind.Utc ? value : DateTime.SpecifyKind(value, DateTimeKind.Utc));
+}
+
+/// <summary>Activity boundary for one exact fenced canonical durable Request invocation.</summary>
+[DurableTask(DurableTaskSequentialProcessNames.DurableOperationActivity)]
+public sealed class DurableTaskDurableOperationActivity
+    : TaskActivity<DurableOperationInvocation, DurableTaskDurableOperationAttemptResult>
+{
+    readonly IDurableOperationAdapterResolver resolver;
+    readonly IDurableOperationExceptionClassifier exceptionClassifier;
+
+    /// <summary>Creates an activity over exact adapter resolution and explicit exception classification.</summary>
+    /// <param name="resolver">Exact canonical Request adapter resolver.</param>
+    /// <param name="exceptionClassifier">Provider-aware adapter exception classifier.</param>
+    /// <exception cref="ArgumentNullException">Either dependency is <see langword="null"/>.</exception>
+    public DurableTaskDurableOperationActivity(
+        IDurableOperationAdapterResolver resolver,
+        IDurableOperationExceptionClassifier exceptionClassifier)
+    {
+        this.resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
+        this.exceptionClassifier = exceptionClassifier ?? throw new ArgumentNullException(nameof(exceptionClassifier));
+    }
+
+    /// <inheritdoc />
+    public override async Task<DurableTaskDurableOperationAttemptResult> RunAsync(
+        TaskActivityContext context,
+        DurableOperationInvocation input)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(input);
+        var adapter = Resolve(input.Request);
+        DurableOperationReferenceExecutor.ValidateAdapterCapabilities(input.Binding, adapter.Capabilities);
+        try
+        {
+            var observation = await DurableOperationReferenceExecutor.ExecuteAsync(
+                    OperationContext.Create(),
+                    input,
+                    adapter)
+                .ConfigureAwait(false);
+            return new(observation, deadlineElapsed: false);
+        }
+        catch (DurableOperationDeadlineElapsedException)
+        {
+            return new(observation: null, deadlineElapsed: true);
+        }
+        catch (Exception exception)
+        {
+            return new(
+                new DurableOperationFailureObservation(exceptionClassifier.Classify(exception)),
+                deadlineElapsed: false);
+        }
+    }
+
+    IDurableOperationAdapter Resolve(RequestEnvelope request) =>
+        resolver.TryResolve(request, out var adapter) && adapter is not null
+            ? adapter
+            : throw new InvalidOperationException(
+                "No durable operation adapter is registered for the exact Request contract.");
+}
+
+/// <summary>Activity boundary for explicit reconciliation of one failed ambiguous durable Request attempt.</summary>
+[DurableTask(DurableTaskSequentialProcessNames.DurableOperationReconciliationActivity)]
+public sealed class DurableTaskDurableOperationReconciliationActivity
+    : TaskActivity<DurableOperationState, DurableTaskDurableOperationReconciliationResult>
+{
+    readonly IDurableOperationAdapterResolver resolver;
+
+    /// <summary>Creates an activity over exact adapter resolution.</summary>
+    /// <param name="resolver">Exact canonical Request adapter resolver.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="resolver"/> is <see langword="null"/>.</exception>
+    public DurableTaskDurableOperationReconciliationActivity(IDurableOperationAdapterResolver resolver) =>
+        this.resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
+
+    /// <inheritdoc />
+    public override async Task<DurableTaskDurableOperationReconciliationResult> RunAsync(
+        TaskActivityContext context,
+        DurableOperationState input)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(input);
+        var adapter = resolver.TryResolve(input.Request, out var resolved) && resolved is not null
+            ? resolved
+            : throw new InvalidOperationException(
+                "No durable operation adapter is registered for the exact Request contract.");
+        DurableOperationReferenceExecutor.ValidateReconciliationAdapterCapabilities(
+            input.Binding,
+            adapter.Capabilities);
+        try
+        {
+            var observation = await DurableOperationReferenceExecutor.ReconcileAsync(
+                    OperationContext.Create(),
+                    input,
+                    adapter)
+                .ConfigureAwait(false);
+            return new(observation, deadlineElapsed: false);
+        }
+        catch (DurableOperationDeadlineElapsedException)
+        {
+            return new(observation: null, deadlineElapsed: true);
+        }
+        catch
+        {
+            // A thrown reconciliation exception supplies no safe target-side evidence. Preserve ambiguity.
+            return new(new DurableOperationUnresolved(), deadlineElapsed: false);
+        }
+    }
 }
 
 /// <summary>Activity boundary for one exact canonical Transition or Relation/Query host operation.</summary>
@@ -162,6 +290,45 @@ public sealed class DurableTaskProcessFailedException : Exception
     public DurableTaskProcessFailedException(string message) : base(message)
     {
     }
+}
+
+/// <summary>Physical fail-closed signal that a durable Request requires authored recovery evidence.</summary>
+public sealed class DurableTaskDurableOperationRecoveryRequiredException : Exception
+{
+    /// <summary>Creates a failure retaining exact logical operation and recovery status evidence.</summary>
+    /// <param name="operationId">Canonical Request emission identity.</param>
+    /// <param name="disposition">Target reason automatic execution stopped.</param>
+    /// <param name="status">Canonical durable-operation status requiring recovery.</param>
+    /// <param name="recoveryIntent">Exact reconciliation or escalation intent when the status declares one.</param>
+    /// <exception cref="ArgumentException"><paramref name="operationId"/> is default.</exception>
+    public DurableTaskDurableOperationRecoveryRequiredException(
+        EmissionId operationId,
+        DurableTaskDurableOperationDisposition disposition,
+        DurableOperationStatus status,
+        DurableOperationRecoveryIntent? recoveryIntent)
+        : base($"Durable Request '{operationId.Value}' requires authored recovery: {disposition}/{status}.")
+    {
+        if (string.IsNullOrWhiteSpace(operationId.Value))
+        {
+            throw new ArgumentException("A recovery failure requires its operation identity.", nameof(operationId));
+        }
+        OperationId = operationId;
+        Disposition = disposition;
+        Status = status;
+        RecoveryIntent = recoveryIntent;
+    }
+
+    /// <summary>Canonical Request emission identity.</summary>
+    public EmissionId OperationId { get; }
+
+    /// <summary>Target reason automatic execution stopped.</summary>
+    public DurableTaskDurableOperationDisposition Disposition { get; }
+
+    /// <summary>Canonical durable-operation status requiring authored evidence.</summary>
+    public DurableOperationStatus Status { get; }
+
+    /// <summary>Exact reconciliation or escalation intent when declared by the operation state.</summary>
+    public DurableOperationRecoveryIntent? RecoveryIntent { get; }
 }
 
 /// <summary>Idempotent client operations for the generic sequential Process orchestration.</summary>

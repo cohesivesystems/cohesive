@@ -16,7 +16,7 @@ static class ProcessDurableCheckpointReducer
         ProcessActivationDecision decision,
         ProcessControlState control,
         ImmutableArray<ProcessOperationReplayObservation> operationObservations,
-        IProcessDurableRequestBindingResolver bindingResolver,
+        IDurableRequestBindingResolver bindingResolver,
         DateTimeOffset committedAtUtc,
         out ProcessDurableCheckpoint? replacement,
         out ImmutableArray<DocumentValidationDiagnostic> diagnostics)
@@ -444,7 +444,7 @@ static class ProcessDurableCheckpointReducer
         CompiledProcessPlan plan,
         ProcessDurableCheckpoint checkpoint,
         ImmutableArray<RequestEnvelope> requests,
-        IProcessDurableRequestBindingResolver bindingResolver,
+        IDurableRequestBindingResolver bindingResolver,
         DateTimeOffset createdAtUtc,
         ICollection<DocumentValidationDiagnostic> diagnostics)
     {

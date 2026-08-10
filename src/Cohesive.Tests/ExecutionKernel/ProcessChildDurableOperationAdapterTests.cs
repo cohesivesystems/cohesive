@@ -856,7 +856,7 @@ public sealed class ProcessChildDurableOperationAdapterTests
         }
     }
 
-    sealed class ExactBindingResolver(DurableRequestBinding binding) : IProcessDurableRequestBindingResolver
+    sealed class ExactBindingResolver(DurableRequestBinding binding) : IDurableRequestBindingResolver
     {
         public bool TryResolve(RequestEnvelope request, out DurableRequestBinding? resolved)
         {
@@ -865,7 +865,7 @@ public sealed class ProcessChildDurableOperationAdapterTests
         }
     }
 
-    sealed class ExactAdapterResolver(IDurableOperationAdapter adapter) : IProcessDurableOperationAdapterResolver
+    sealed class ExactAdapterResolver(IDurableOperationAdapter adapter) : IDurableOperationAdapterResolver
     {
         public bool TryResolve(RequestEnvelope request, out IDurableOperationAdapter? resolved)
         {

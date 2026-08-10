@@ -12,17 +12,23 @@ static class DurableTaskSequentialProcessInterpreter
     internal static async Task<DurableTaskSequentialProcessResult> RunAsync(
         CompiledProcessPlan plan,
         DurableTaskSequentialProcessStart start,
+        IDurableRequestBindingResolver bindingResolver,
         Func<DurableTaskProcessHostOperation, Task<ProcessOperationResult>> executeOperation,
+        Func<DurableOperationInvocation, Task<DurableTaskDurableOperationAttemptResult>> executeDurableOperation,
+        Func<DurableOperationState, Task<DurableTaskDurableOperationReconciliationResult>> reconcileDurableOperation,
         Func<Task<ProcessActivationInput>> waitForInteraction,
-        Func<Task> createDurableCut,
+        Func<TimeSpan, CancellationToken, Task> createTimer,
         Func<DateTimeOffset> getCurrentUtc,
         Action<DurableTaskSequentialProcessResult>? observe = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(start);
+        ArgumentNullException.ThrowIfNull(bindingResolver);
         ArgumentNullException.ThrowIfNull(executeOperation);
+        ArgumentNullException.ThrowIfNull(executeDurableOperation);
+        ArgumentNullException.ThrowIfNull(reconcileDurableOperation);
         ArgumentNullException.ThrowIfNull(waitForInteraction);
-        ArgumentNullException.ThrowIfNull(createDurableCut);
+        ArgumentNullException.ThrowIfNull(createTimer);
         ArgumentNullException.ThrowIfNull(getCurrentUtc);
         if (plan.DefinitionReference != start.Receipt.Request.Definition)
         {
@@ -37,6 +43,7 @@ static class DurableTaskSequentialProcessInterpreter
         List<ProcessInputReceipt> inputAdmissions = [];
         List<DocumentValidationDiagnostic> diagnostics = [];
         List<ProcessExecutionEvidence> evidence = [];
+        Dictionary<EmissionId, DurableTaskDurableOperationResult> durableOperations = [];
 
         while (true)
         {
@@ -58,7 +65,10 @@ static class DurableTaskSequentialProcessInterpreter
                 [.. emissions],
                 [.. inputAdmissions],
                 [.. diagnostics],
-                [.. evidence]);
+                [.. evidence],
+                [.. durableOperations.Values.OrderBy(
+                    static operation => operation.State.OperationId.Value,
+                    StringComparer.Ordinal)]);
             observe?.Invoke(result);
 
             switch (decision.Disposition)
@@ -85,12 +95,51 @@ static class DurableTaskSequentialProcessInterpreter
                     switch (plan.GetNode(safePoint))
                     {
                         case RequestProcessNode:
-                            inputs = [await waitForInteraction().ConfigureAwait(true)];
+                            var request = decision.Emissions
+                                .OfType<RequestEnvelope>()
+                                .Single(candidate => !durableOperations.ContainsKey(candidate.Context.EmissionId));
+                            if (!bindingResolver.TryResolve(request, out var binding) || binding is null)
+                            {
+                                inputs = [await waitForInteraction().ConfigureAwait(true)];
+                                cause = ProcessActivationCause.Interaction;
+                                observedAtUtc = RequireUtc(getCurrentUtc());
+                                break;
+                            }
+                            var contracts = plan.ValidationContext.InteractionContracts
+                                ?? throw new InvalidOperationException(
+                                    "Automatic durable Request execution requires the compiled interaction catalog.");
+                            var operation = await DurableTaskDurableOperationInterpreter.RunAsync(
+                                    contracts,
+                                    request,
+                                    binding,
+                                    executeDurableOperation,
+                                    reconcileDurableOperation,
+                                    createTimer,
+                                    getCurrentUtc,
+                                    (cut, operationState) => createTimer(TimeSpan.Zero, CancellationToken.None))
+                                .ConfigureAwait(true);
+                            durableOperations[operation.State.OperationId] = operation;
+                            result = new DurableTaskSequentialProcessResult(
+                                decision.Disposition,
+                                state,
+                                [.. emissions],
+                                [.. inputAdmissions],
+                                [.. diagnostics],
+                                [.. evidence],
+                                [.. durableOperations.Values.OrderBy(
+                                    static candidate => candidate.State.OperationId.Value,
+                                    StringComparer.Ordinal)]);
+                            observe?.Invoke(result);
+                            if (operation.Disposition != DurableTaskDurableOperationDisposition.ReplyReady)
+                            {
+                                return result;
+                            }
+                            inputs = [operation.Input!];
                             cause = ProcessActivationCause.Interaction;
                             observedAtUtc = RequireUtc(getCurrentUtc());
                             break;
                         case DurableCutProcessNode:
-                            await createDurableCut().ConfigureAwait(true);
+                            await createTimer(TimeSpan.Zero, CancellationToken.None).ConfigureAwait(true);
                             inputs = [];
                             cause = ProcessActivationCause.Continue;
                             observedAtUtc = RequireUtc(getCurrentUtc());

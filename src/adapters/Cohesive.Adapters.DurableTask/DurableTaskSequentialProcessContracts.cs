@@ -17,6 +17,13 @@ public static class DurableTaskSequentialProcessNames
     /// <summary>Activity that materializes one exact Transition or Relation/Query operation.</summary>
     public const string HostOperationActivity = "Cohesive.Processes.HostOperation.v1";
 
+    /// <summary>Activity that dispatches one fenced canonical durable Request attempt.</summary>
+    public const string DurableOperationActivity = "Cohesive.Processes.DurableOperation.v1";
+
+    /// <summary>Activity that reconciles one failed ambiguous canonical durable Request attempt.</summary>
+    public const string DurableOperationReconciliationActivity =
+        "Cohesive.Processes.DurableOperationReconciliation.v1";
+
     /// <summary>External event carrying one canonical interaction into a waiting Process.</summary>
     public const string InteractionEvent = "Cohesive.Processes.Interaction.v1";
 }
@@ -126,6 +133,7 @@ public sealed record DurableTaskSequentialProcessResult
     /// <param name="inputAdmissions">All canonical input dispositions in activation order.</param>
     /// <param name="diagnostics">All canonical interpreter diagnostics in activation order.</param>
     /// <param name="evidence">Canonical evidence for every completed finite activation.</param>
+    /// <param name="durableOperations">Canonical durable Request ledgers in logical operation identity order.</param>
     /// <exception cref="ArgumentNullException"><paramref name="state"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="disposition"/> is unspecified.</exception>
     [JsonConstructor]
@@ -135,7 +143,8 @@ public sealed record DurableTaskSequentialProcessResult
         ImmutableArray<InteractionEnvelope> emissions = default,
         ImmutableArray<ProcessInputReceipt> inputAdmissions = default,
         ImmutableArray<DocumentValidationDiagnostic> diagnostics = default,
-        ImmutableArray<ProcessExecutionEvidence> evidence = default)
+        ImmutableArray<ProcessExecutionEvidence> evidence = default,
+        ImmutableArray<DurableTaskDurableOperationResult> durableOperations = default)
     {
         if (!Enum.IsDefined(disposition) || disposition == ProcessActivationDisposition.Unspecified)
         {
@@ -151,6 +160,7 @@ public sealed record DurableTaskSequentialProcessResult
         InputAdmissions = inputAdmissions.IsDefault ? [] : inputAdmissions;
         Diagnostics = diagnostics.IsDefault ? [] : diagnostics;
         Evidence = evidence.IsDefault ? [] : evidence;
+        DurableOperations = durableOperations.IsDefault ? [] : durableOperations;
     }
 
     /// <summary>Latest canonical activation disposition.</summary>
@@ -170,6 +180,9 @@ public sealed record DurableTaskSequentialProcessResult
 
     /// <summary>Canonical evidence for every completed finite activation.</summary>
     public ImmutableArray<ProcessExecutionEvidence> Evidence { get; }
+
+    /// <summary>Canonical durable Request results and complete ledgers in logical operation identity order.</summary>
+    public ImmutableArray<DurableTaskDurableOperationResult> DurableOperations { get; }
 }
 
 /// <summary>Result of idempotently scheduling one exact Process orchestration instance.</summary>

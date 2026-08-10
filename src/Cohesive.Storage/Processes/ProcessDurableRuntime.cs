@@ -25,11 +25,11 @@ public sealed partial class ProcessDurableRuntime
 {
     readonly IProcessDurableStore store;
     readonly IProcessReferenceHost host;
-    readonly IProcessDurableRequestBindingResolver bindingResolver;
+    readonly IDurableRequestBindingResolver bindingResolver;
     readonly IProcessLocalMutationPlanner localMutationPlanner;
     readonly IProcessStoreMutationExceptionClassifier storeMutationExceptionClassifier;
-    readonly IProcessDurableOperationAdapterResolver operationAdapterResolver;
-    readonly IProcessOperationExceptionClassifier operationExceptionClassifier;
+    readonly IDurableOperationAdapterResolver operationAdapterResolver;
+    readonly IDurableOperationExceptionClassifier operationExceptionClassifier;
     readonly IProcessTransitionOperationAdapter? transitionOperationAdapter;
     readonly ProcessDurableRuntimeOptions options;
     readonly KeyedAsyncLock<ProcessInstanceId> instanceGates = new();
@@ -59,24 +59,24 @@ public sealed partial class ProcessDurableRuntime
         IProcessDurableStore store,
         IProcessReferenceHost host,
         ProcessDurableRuntimeOptions options,
-        IProcessDurableRequestBindingResolver? bindingResolver = null,
+        IDurableRequestBindingResolver? bindingResolver = null,
         IProcessLocalMutationPlanner? localMutationPlanner = null,
         IProcessStoreMutationExceptionClassifier? storeMutationExceptionClassifier = null,
-        IProcessDurableOperationAdapterResolver? operationAdapterResolver = null,
-        IProcessOperationExceptionClassifier? operationExceptionClassifier = null,
+        IDurableOperationAdapterResolver? operationAdapterResolver = null,
+        IDurableOperationExceptionClassifier? operationExceptionClassifier = null,
         IProcessTransitionOperationAdapter? transitionOperationAdapter = null)
     {
         this.store = store ?? throw new ArgumentNullException(nameof(store));
         this.host = host ?? throw new ArgumentNullException(nameof(host));
         this.options = options ?? throw new ArgumentNullException(nameof(options));
-        this.bindingResolver = bindingResolver ?? EmptyProcessDurableRequestBindingResolver.Instance;
+        this.bindingResolver = bindingResolver ?? EmptyDurableRequestBindingResolver.Instance;
         this.localMutationPlanner = localMutationPlanner ?? EmptyProcessLocalMutationPlanner.Instance;
         this.storeMutationExceptionClassifier = storeMutationExceptionClassifier
             ?? ConservativeProcessStoreMutationExceptionClassifier.Instance;
         this.operationAdapterResolver = operationAdapterResolver
-            ?? EmptyProcessDurableOperationAdapterResolver.Instance;
+            ?? EmptyDurableOperationAdapterResolver.Instance;
         this.operationExceptionClassifier = operationExceptionClassifier
-            ?? ConservativeProcessOperationExceptionClassifier.Instance;
+            ?? ConservativeDurableOperationExceptionClassifier.Instance;
         this.transitionOperationAdapter = transitionOperationAdapter;
     }
 

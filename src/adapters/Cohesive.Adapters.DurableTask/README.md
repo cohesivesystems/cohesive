@@ -1,6 +1,6 @@
 # Cohesive.Adapters.DurableTask
 
-Azure Durable Task integration for historical Process monitoring, realization planning, and the first executable
+Azure Durable Task integration for historical Process monitoring, realization planning, and an executable
 sequential profile over the standalone Microsoft Durable Task SDK.
 
 The former adapter executed callback-bearing Process definitions through a single-cursor checkpoint. ARI-170
@@ -30,8 +30,10 @@ dotnet add package Cohesive.Adapters.DurableTask
   Durable Cut, Return, and Fail constructs.
 
 The executable profile is intentionally narrower than the complete planning profile. Timers, signals, fork/join,
-child Processes, controls, full request dispatch/recovery, and complete operational lifecycle semantics remain
-outside this slice and are rejected when the worker catalog is built.
+child Processes, controls, and complete operational lifecycle semantics remain outside this slice and are rejected
+when the worker catalog is built. Request dispatch, bounded retry, reconciliation, acknowledgement, and Reply
+admission are implemented; typed timeout, terminal-failure, and escalation paths fail closed with their canonical
+operation ledger because this slice does not fabricate the authored recovery outcome.
 
 ## Monitoring boundary
 
@@ -74,14 +76,19 @@ performs the additional executable-slice check before worker startup.
 
 ## Sequential execution
 
-Compile every deployed definition, retain its exact physical plan, and register one canonical host for bounded I/O:
+Compile every deployed definition, retain its exact physical plan, and register one canonical host for bounded I/O.
+To dispatch Requests automatically, also supply deterministic exact binding and adapter resolvers:
 
 ```csharp
 DurableTaskProcessRealizationPlan physicalPlan =
     DurableTaskProcessRealizationCompiler.Compile(compiledProcessPlan).Plan!;
-var catalog = new DurableTaskSequentialProcessPlanCatalog([physicalPlan]);
+var catalog = new DurableTaskSequentialProcessPlanCatalog(
+    [physicalPlan],
+    new ApplicationDurableRequestBindingResolver());
 
 services.AddSingleton<IProcessReferenceHost, ApplicationProcessHost>();
+services.AddSingleton<IDurableOperationAdapterResolver, ApplicationDurableOperationAdapterResolver>();
+// Register a provider-aware IDurableOperationExceptionClassifier here when available.
 services.AddDurableTaskWorker(worker =>
 {
     worker.AddCohesiveSequentialProcesses(catalog);
@@ -90,10 +97,15 @@ services.AddDurableTaskWorker(worker =>
 services.AddDurableTaskClient(client => client.UseDurableTaskScheduler(connectionString));
 ```
 
+Register application resolvers before `AddCohesiveSequentialProcesses`; the worker method installs empty,
+fail-closed defaults only when the application has not supplied them. `IDurableRequestBindingResolver`,
+`IDurableOperationAdapterResolver`, and `IDurableOperationExceptionClassifier` are shared execution ports used by
+both native Storage and Durable Task interpretations, rather than target-specific copies.
+
 The worker catalog is a deployment projection, not a mutable definition registry. Each lookup requires the full
 definition identity, revision, and fingerprint from the canonical `ProcessStartReceipt`; workers must reconstruct
-an equivalent immutable catalog after restart. The package registers the same portable JSON converter for worker
-and client payloads.
+an equivalent immutable catalog and deterministic Request bindings after restart. The package registers the same
+portable JSON converter for worker and client payloads.
 
 Schedule the admitted start evidence with the client extension:
 
@@ -107,10 +119,25 @@ byte-equivalent start reuses the instance; conflicting start evidence is rejecte
 invocation runs as a bounded activity and is materialized back into the reference interpreter. Durable Task replay
 then reuses activity history instead of committing that logical operation again.
 
-A Request emits canonical request evidence and waits for a canonical `ProcessActivationInput` external event. Use
-`RaiseCohesiveProcessInteractionAsync` to exercise that boundary. Automatic request dispatch, durable recovery,
-redelivery, and reconciliation are deliberately deferred to the next profile slice; applications must not infer
-those guarantees from this initial event bridge.
+A Request without an exact binding still emits canonical evidence and waits for a canonical
+`ProcessActivationInput` external event; use `RaiseCohesiveProcessInteractionAsync` for that deliberately external
+boundary. A bound Request creates the canonical `DurableOperationState`, crosses explicit before/after dispatch and
+acknowledgement/admission history cuts, and dispatches through an activity. The canonical
+`DurableOperationReferenceExecutor` alone decides claims, bounded retries, ambiguity, reconciliation,
+acknowledgement, and Reply admission. Activity and orchestration replay retain the Request emission, scoped target
+deduplication key, attempt IDs, fences, and Reply IDs.
+
+Durable Task activities are at-least-once. The executable profile therefore rejects a binding whose
+`IdempotencyEvidence` is `None`; automatic dispatch requires `TargetDeduplication` or `NaturallyIdempotent`, with
+matching adapter capability evidence. No SDK retry policy is installed around the activity. Explicit adapter
+failure evidence feeds the canonical retry policy, and thrown adapter exceptions use the registered classifier
+(conservatively ambiguous by default). Claim leases are renewed with durable timers while activity I/O is in
+flight. Ambiguous outcomes invoke the exact adapter reconciliation path before retry or admission.
+
+If the semantic deadline wins, or canonical policy requires a typed terminal outcome or escalation that this slice
+cannot author, the orchestration fails closed with `DurableTaskDurableOperationRecoveryRequiredException`. Its
+custom status contains the full canonical operation ledger and exact recovery intent when one exists. The runtime
+does not turn worker cancellation into semantic cancellation or invent timeout/escalation values.
 
 `Return` completes the orchestration. An authored `Fail` produces canonical failure evidence and a failed physical
 orchestration. A canonical Durable Cut closes one finite activation and creates a zero-duration durable timer before
@@ -132,9 +159,12 @@ Run the Scheduler-emulator integration test with Docker, or point the same scrip
 eng/test-durable-task-integration.sh
 ```
 
-The script pins the emulator image by digest. Emulator coverage proves successful completion, authored failure,
-duplicate start admission, and worker restart while a Request is waiting. The restart assertion also verifies that
-the Transition activity already retained in Scheduler history is not invoked again.
+The script pins the emulator image by digest. Emulator coverage proves successful completion, bound Request
+activity dispatch and Reply admission, authored failure, duplicate start admission, and worker restart while an
+unbound Request is waiting. The restart assertion also verifies that
+the Transition activity already retained in Scheduler history is not invoked again. Deterministic conformance tests
+cover bound Request success, bounded retry, reconciliation, deadline and escalation fail-closed behavior, and crash
+cuts before dispatch, after dispatch, after acknowledgement, and before Reply admission.
 
 ## Capability boundary
 

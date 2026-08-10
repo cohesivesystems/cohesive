@@ -36,8 +36,8 @@ public sealed record DurableTaskProcessRequirementRealization
 /// </summary>
 /// <remarks>
 /// This value does not contain an independently authored Durable Task workflow. The canonical plan remains semantic
-/// authority; the requirement realizations are target-owned physical evidence consumed by the future generic
-/// interpreter. Creating this plan proves planning feasibility only and does not admit execution.
+/// authority; the requirement realizations are target-owned physical evidence consumed by the generic
+/// interpreter. Creating this plan proves planning feasibility only and does not by itself admit worker execution.
 /// </remarks>
 public sealed class DurableTaskProcessRealizationPlan
 {

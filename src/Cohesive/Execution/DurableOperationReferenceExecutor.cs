@@ -228,7 +228,8 @@ public sealed record DurableOperationInvocation
     /// not derive from that Request; or <paramref name="deadlineUtc"/> is not UTC.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="attemptOrdinal"/> is not positive.</exception>
-    internal DurableOperationInvocation(
+    [System.Text.Json.Serialization.JsonConstructor]
+    public DurableOperationInvocation(
         RequestEnvelope request,
         DurableRequestBinding binding,
         OperationAttemptId attemptId,
@@ -409,6 +410,106 @@ public interface IDurableOperationAdapter
     ValueTask<DurableOperationReconciliationObservation> ReconcileAsync(
         OperationContext context,
         DurableOperationReconciliationRequest request);
+}
+
+/// <summary>Resolves one exact durable execution binding for a canonical Request.</summary>
+/// <remarks>
+/// Implementations are deployment policy shared by durable Process runtimes. They do not own Request semantics;
+/// the exact canonical interaction contract and returned <see cref="DurableRequestBinding"/> remain authoritative.
+/// A resolver used by a replaying runtime must return the same binding for the same immutable Request evidence.
+/// </remarks>
+public interface IDurableRequestBindingResolver
+{
+    /// <summary>Attempts to resolve the binding used to initialize one durable Request operation.</summary>
+    /// <param name="request">Exact canonical Request emitted by a Process activation.</param>
+    /// <param name="binding">Receives the exact durable execution binding when available.</param>
+    /// <returns><see langword="true"/> when an exact binding is available; otherwise <see langword="false"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <see langword="null"/>.</exception>
+    bool TryResolve(RequestEnvelope request, out DurableRequestBinding? binding);
+}
+
+/// <summary>Binding resolver that deliberately supports no durable Request contract.</summary>
+public sealed class EmptyDurableRequestBindingResolver : IDurableRequestBindingResolver
+{
+    /// <summary>Shared stateless empty resolver.</summary>
+    public static EmptyDurableRequestBindingResolver Instance { get; } = new();
+
+    EmptyDurableRequestBindingResolver()
+    {
+    }
+
+    /// <inheritdoc />
+    public bool TryResolve(RequestEnvelope request, out DurableRequestBinding? binding)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        binding = null;
+        return false;
+    }
+}
+
+/// <summary>Resolves the impure adapter for one already-bound durable Request operation.</summary>
+public interface IDurableOperationAdapterResolver
+{
+    /// <summary>Attempts to resolve the adapter for an exact canonical Request.</summary>
+    /// <param name="request">Exact canonical logical Request retained by the durable operation.</param>
+    /// <param name="adapter">Receives the impure adapter when available.</param>
+    /// <returns><see langword="true"/> when an exact adapter is available; otherwise <see langword="false"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <see langword="null"/>.</exception>
+    bool TryResolve(RequestEnvelope request, out IDurableOperationAdapter? adapter);
+}
+
+/// <summary>Adapter resolver that deliberately supports no durable Request contract.</summary>
+public sealed class EmptyDurableOperationAdapterResolver : IDurableOperationAdapterResolver
+{
+    /// <summary>Shared stateless empty resolver.</summary>
+    public static EmptyDurableOperationAdapterResolver Instance { get; } = new();
+
+    EmptyDurableOperationAdapterResolver()
+    {
+    }
+
+    /// <inheritdoc />
+    public bool TryResolve(RequestEnvelope request, out IDurableOperationAdapter? adapter)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        adapter = null;
+        return false;
+    }
+}
+
+/// <summary>Classifies an adapter exception as explicit durable failure evidence.</summary>
+public interface IDurableOperationExceptionClassifier
+{
+    /// <summary>Classifies an exception thrown after a durable dispatch marker.</summary>
+    /// <param name="exception">Adapter exception carrying provider-specific execution evidence.</param>
+    /// <returns>Explicit phase, effect, retry, code, and optional portable detail to retain.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="exception"/> is <see langword="null"/>.</exception>
+    DurableOperationFailure Classify(Exception exception);
+}
+
+/// <summary>Conservative classifier that treats a thrown adapter exception as effect-ambiguous.</summary>
+public sealed class ConservativeDurableOperationExceptionClassifier : IDurableOperationExceptionClassifier
+{
+    /// <summary>Stable failure code used when an adapter throws without more precise evidence.</summary>
+    public const string AmbiguousAdapterException = "operation.adapter.exception.ambiguous";
+
+    /// <summary>Shared stateless conservative classifier.</summary>
+    public static ConservativeDurableOperationExceptionClassifier Instance { get; } = new();
+
+    ConservativeDurableOperationExceptionClassifier()
+    {
+    }
+
+    /// <inheritdoc />
+    public DurableOperationFailure Classify(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        return new(
+            DurableOperationFailurePhase.InCall,
+            DurableOperationEffectEvidence.Ambiguous,
+            DurableOperationFailureDisposition.Retryable,
+            AmbiguousAdapterException);
+    }
 }
 
 /// <summary>Per-item evidence returned from one physical batch adapter invocation.</summary>

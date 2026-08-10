@@ -1749,7 +1749,7 @@ public sealed partial class ProcessDurableRuntimeTests
     static ProcessDurableRuntime Runtime(
         IProcessDurableStore store,
         IProcessReferenceHost host,
-        IProcessDurableRequestBindingResolver? bindingResolver = null) =>
+        IDurableRequestBindingResolver? bindingResolver = null) =>
         new(
             store,
             host,
@@ -1809,7 +1809,7 @@ public sealed partial class ProcessDurableRuntimeTests
                 : steppedUtcNow;
     }
 
-    sealed class BindingResolver(DurableRequestBinding binding) : IProcessDurableRequestBindingResolver
+    sealed class BindingResolver(DurableRequestBinding binding) : IDurableRequestBindingResolver
     {
         public bool TryResolve(RequestEnvelope request, out DurableRequestBinding? resolved)
         {
