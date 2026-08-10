@@ -170,7 +170,10 @@ does not replace `NormalizedExecutionTrace`; it describes provider availability 
 the existing `ExecutionExplainArtifact`. Pending and active executions may yield partial lifecycle artifacts without
 trace evidence; a missing execution yields no artifact. The repository does not authorize another explain DTO or
 re-execution path. `ProcessExecutionRecord.Definition` retains the exact canonical identity independently of optional
-runtime status so admission-window observations can still resolve their deployed definition.
+runtime status so admission-window observations can still resolve their deployed definition. Application and API
+reads use the provider-neutral logical address formed by a server-resolved `InteractionAuthorityScope` and canonical
+`ProcessInstanceId`; engine administration may use the separate exact physical-key overload. An untrusted request
+must never choose the authority or tenant supplied to the logical read.
 
 ## Interpreter capability realization
 

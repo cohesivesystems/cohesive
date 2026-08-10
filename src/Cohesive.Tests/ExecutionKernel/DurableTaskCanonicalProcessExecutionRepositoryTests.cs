@@ -315,7 +315,7 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
             serializedOutput: completed.Fixture.Converter.Serialize(completed.Result));
         var client = new FakeDurableTaskClient([metadata]);
         var executionRepository = new DurableTaskProcessExecutionRepository(client);
-        var explainRepository = new DurableTaskProcessExecutionExplainRepository(
+        IProcessExecutionExplainRepository explainRepository = new DurableTaskProcessExecutionExplainRepository(
             executionRepository,
             new([completed.Fixture.Plan]));
 
