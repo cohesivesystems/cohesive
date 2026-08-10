@@ -32,8 +32,8 @@ dotnet add package Cohesive.Adapters.DurableTask
   Durable Cut, Return, and Fail constructs.
 
 The executable profile remains narrower than the complete planning profile. Domain-event and Reply emission nodes,
-non-Process Signal targets, activation-local Signal delivery, root lifecycle control, and complete operational
-lifecycle semantics remain outside this slice and fail closed. Request dispatch, bounded retry, reconciliation,
+non-Process Signal targets, activation-local Signal delivery, lifecycle Signal qualification, and complete provider
+cleanup/recovery semantics remain outside this slice and fail closed. Request dispatch, bounded retry, reconciliation,
 acknowledgement, and Reply admission are implemented; typed timeout, terminal-failure, and escalation paths fail
 closed with their canonical operation ledger because this slice does not fabricate the authored recovery outcome.
 
@@ -122,6 +122,51 @@ byte-equivalent start reuses the instance; conflicting start evidence is rejecte
 invocation runs as a bounded activity and is materialized back into the reference interpreter. Durable Task replay
 then reuses activity history instead of committing that logical operation again.
 
+### Lifecycle control
+
+The worker subscribes to the versioned `Cohesive.Processes.Control.v1` external-event stream and evaluates each
+`InspectProcessCommand`, `PauseProcessCommand`, `ContinueProcessCommand`, `RestartProcessAttemptCommand`,
+`CancelProcessCommand`, or `TerminateProcessCommand` with the canonical `ProcessControlReferenceExecutor`.
+Durable Task transports and replays commands; `ProcessControlState`, exact command receipts, attempt/revision
+expectations, authorization evidence, and canonical intents remain semantic authority.
+
+```csharp
+await client.RaiseCohesiveProcessControlAsync(start, pauseCommand, cancellationToken);
+```
+
+Completion of the client call confirms provider event admission only. Read the orchestration custom status or final
+`DurableTaskSequentialProcessResult.Control` and `LatestControlDecision` for the canonical disposition, diagnostics,
+receipt, and current fence. The result requires its continuation and control state to identify the same exact
+definition, Process instance, and current attempt; Continue-as-new carries both without making target history a
+second checkpoint authority.
+
+Every ordinary finite activation is enclosed by canonical `BeginActivation` and `ReachSafePoint` observations.
+Commands are prioritized when co-ready with an ordinary stimulus. A command arriving while a Transition,
+Relation/Query, or Signal-target activity is in flight is evaluated against the visible in-activation fence:
+Pause, RestartAttempt, and Cancel drain that finite work and apply at its exact safe point, while Terminate stops
+admission of its result. A paused orchestration remains alive and admits only control commands until Continue.
+An already-admitted durable Request owns its current retry/reconciliation task and may finish that logical operation
+while the Process is paused; its result is not admitted into a new Process activation until Continue. A physical
+timer may likewise become ready but cannot advance canonical state while paused. ARI-302 owns qualification of this
+policy across every provider recovery cut.
+
+RestartAttempt retains the Process instance and canonical attempt lineage, closes the old attempt, creates the exact
+authored replacement attempt, abandons old target-local timers and pending result tasks, and starts the replacement
+with a `Control` activation cause. Cancel performs a canonical cooperative cancellation activation and retains its
+terminal trace. Terminate is represented by terminal `ProcessControlState`; the physical orchestration completes
+normally so the canonical termination receipt and cleanup decision remain queryable. The adapter intentionally does
+not substitute similarly named Scheduler suspend/terminate APIs because they cannot preserve this complete protocol.
+
+The current bounded cleanup profile accepts `RetainEvidence` for RestartAttempt and Terminate. Commands demanding
+attempt-resource release or affinity abandonment fail before canonical admission because no general provider cleanup
+port exists yet. Target-local timer cancellation and abandoned-task observation are physical hygiene, not a claim
+that an external activity or child was recalled. Complete durable Request retry/reconciliation pausing, general
+external cleanup, lifecycle Signal qualification, and exhaustive crash/race closure remain the follow-up
+qualification scope tracked by ARI-302.
+
+Transport cancellation tokens cancel only scheduling or event delivery. Worker shutdown and SDK task cancellation
+never become `CancelProcessCommand` and cannot produce semantic cancellation evidence.
+
 A Request without an exact binding still emits canonical evidence and waits for a canonical
 `ProcessActivationInput` external event; use `RaiseCohesiveProcessInteractionAsync` for that deliberately external
 boundary. A bound Request creates the canonical `DurableOperationState`, crosses explicit before/after dispatch and
@@ -179,8 +224,8 @@ The external event is only delivery evidence. The recipient `ProcessReferenceInt
 target validation, wait arbitration, and consumed, stale, duplicate, early, late, or missing-target disposition. A
 replayed sender history cannot reapply a logical Signal as a second canonical admission. This executable slice
 requires durable delivery and a `ProcessTokenInteractionTarget`; activation-local delivery and Transition targets
-fail before dispatch. General external adapter dispatch and lifecycle `Signal` command admission remain separate
-capabilities.
+fail before dispatch. General external adapter dispatch and full lifecycle `Signal` qualification remain separate
+capabilities; the control stream preserves the canonical command family without advertising that remaining closure.
 
 If the semantic deadline wins, or canonical policy requires a typed terminal outcome or escalation that this slice
 cannot author, the orchestration fails closed with `DurableTaskDurableOperationRecoveryRequiredException`. Its
@@ -207,13 +252,16 @@ Run the Scheduler-emulator integration test with Docker, or point the same scrip
 eng/test-durable-task-integration.sh
 ```
 
-The script pins the emulator image by digest. Emulator coverage proves successful completion, bound Request
+The script pins the emulator image by digest. Emulator coverage proves successful completion, canonical Pause,
+Inspect, exact replay, Continue, RestartAttempt, Cancel, and Terminate through the public event API, bound Request
 activity dispatch and Reply admission, child sub-orchestration, recurrence history rollover, authored failure,
 duplicate start admission, cross-instance and self-Signal delivery, and worker restart while an unbound Request,
 canonical Timer, and AwaitMatch are waiting. The restart assertions verify that retained Transition activity history
 is not reinvoked, Timer keeps its persisted due instant, and an AwaitMatch input is admitted once after replay. The
 emulator proves both AwaitMatch interaction and timer winners. Deterministic conformance tests additionally cover
-exact Signal target and envelope preservation, recipient missing/stale/duplicate/consumed dispositions, the
+lifecycle authorization and revision fences, deferred safe-point control during active host work,
+replacement-attempt lineage, operational/semantic cancellation separation, exact Signal target and envelope
+preservation, recipient missing/stale/duplicate/consumed dispositions, the
 interaction/timer priority and tie-break matrix, early and policy-disposition evidence, multiple timer clauses,
 concurrent fork Requests, Join selection, timer replay and competing-wait cancellation, child lineage and
 cancellation, partition bounds, recurrence bounds, bounded retry, reconciliation, deadline and escalation

@@ -32,6 +32,9 @@ public static class DurableTaskSequentialProcessNames
 
     /// <summary>Parent-originated event carrying one exact propagated child-cancellation intent.</summary>
     public const string ChildCancellationEvent = "Cohesive.Processes.ChildCancellation.v1";
+
+    /// <summary>External event carrying one canonical Process lifecycle command.</summary>
+    public const string ControlEvent = "Cohesive.Processes.Control.v1";
 }
 
 /// <summary>Exact canonical start evidence supplied to one Durable Task Process orchestration.</summary>
@@ -74,10 +77,12 @@ public sealed record DurableTaskSequentialProcessStart
                     nameof(resume));
             }
             if (resume.Result.State.Definition != receipt.Request.Definition
-                || resume.Result.State.Continuation != receipt.Request.InitialContinuation)
+                || resume.Result.State.Continuation.ProcessInstanceId
+                    != receipt.Request.InitialContinuation.ProcessInstanceId
+                || resume.Result.Control.AuthorityScope != activationContext.AuthorityScope)
             {
                 throw new ArgumentException(
-                    "A Durable Task resume snapshot must retain the exact started definition and continuation.",
+                    "A Durable Task resume snapshot must retain the exact started definition, Process instance, and authority scope.",
                     nameof(resume));
             }
             if (resume.Result.DurableOperations.Any(static operation =>
@@ -183,6 +188,8 @@ public sealed record DurableTaskSequentialProcessResult
     /// <summary>Creates an immutable Process execution projection.</summary>
     /// <param name="disposition">Latest canonical activation disposition.</param>
     /// <param name="state">Complete canonical replacement continuation.</param>
+    /// <param name="control">Complete canonical lifecycle-control state governing <paramref name="state"/>.</param>
+    /// <param name="latestControlDecision">Latest command or execution observation projected for operators.</param>
     /// <param name="emissions">All canonical interactions emitted in activation order.</param>
     /// <param name="inputAdmissions">All canonical input dispositions in activation order.</param>
     /// <param name="diagnostics">All canonical interpreter diagnostics in activation order.</param>
@@ -194,6 +201,8 @@ public sealed record DurableTaskSequentialProcessResult
     public DurableTaskSequentialProcessResult(
         ProcessActivationDisposition disposition,
         ProcessContinuationState state,
+        ProcessControlState control,
+        ProcessControlDecision? latestControlDecision = null,
         ImmutableArray<InteractionEnvelope> emissions = default,
         ImmutableArray<ProcessInputReceipt> inputAdmissions = default,
         ImmutableArray<DocumentValidationDiagnostic> diagnostics = default,
@@ -209,7 +218,23 @@ public sealed record DurableTaskSequentialProcessResult
         }
 
         State = state ?? throw new ArgumentNullException(nameof(state));
+        Control = control ?? throw new ArgumentNullException(nameof(control));
+        if (control.Definition != state.Definition
+            || control.ProcessInstanceId != state.Continuation.ProcessInstanceId
+            || control.CurrentAttempt.AttemptId != state.Continuation.ProcessAttemptId)
+        {
+            throw new ArgumentException(
+                "Lifecycle control and canonical continuation must identify the same definition, Process instance, and current attempt.",
+                nameof(control));
+        }
+        if (latestControlDecision is not null && !Equals(latestControlDecision.State, control))
+        {
+            throw new ArgumentException(
+                "The latest lifecycle-control decision must project the retained control state.",
+                nameof(latestControlDecision));
+        }
         Disposition = disposition;
+        LatestControlDecision = latestControlDecision;
         Emissions = emissions.IsDefault ? [] : emissions;
         InputAdmissions = inputAdmissions.IsDefault ? [] : inputAdmissions;
         Diagnostics = diagnostics.IsDefault ? [] : diagnostics;
@@ -222,6 +247,12 @@ public sealed record DurableTaskSequentialProcessResult
 
     /// <summary>Complete canonical Process continuation.</summary>
     public ProcessContinuationState State { get; }
+
+    /// <summary>Complete canonical lifecycle-control state and attempt lineage.</summary>
+    public ProcessControlState Control { get; }
+
+    /// <summary>Latest canonical control decision, retained as an operator-facing projection.</summary>
+    public ProcessControlDecision? LatestControlDecision { get; }
 
     /// <summary>All canonical interactions emitted in activation order.</summary>
     public ImmutableArray<InteractionEnvelope> Emissions { get; }
@@ -282,6 +313,24 @@ static class DurableTaskSequentialProcessIdentities
             state.Continuation.ProcessAttemptId.Value,
             state.CompletedActivationCount.ToString(System.Globalization.CultureInfo.InvariantCulture)));
     }
+
+    internal static ProcessSafePointId SafePoint(
+        ProcessContinuationState before,
+        ActivationId activation,
+        ExecutionNodeId node) => new("durable-task-safe-point:v1:sha256:" + Hash(
+        "safe-point",
+        before.Continuation.ProcessInstanceId.Value,
+        before.Continuation.ProcessAttemptId.Value,
+        activation.Value,
+        node.Value));
+
+    internal static ActivationId CancellationActivation(
+        ProcessContinuationState state,
+        ProcessControlCommandId? commandId) => new("durable-task-cancellation:v1:sha256:" + Hash(
+        "cancellation-activation",
+        state.Continuation.ProcessInstanceId.Value,
+        state.Continuation.ProcessAttemptId.Value,
+        commandId?.Value ?? "control-revision-unavailable"));
 
     static string Hash(string purpose, params string[] fields)
     {

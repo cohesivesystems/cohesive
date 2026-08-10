@@ -49,6 +49,7 @@ preserve the requested canonical semantics.
 | Process meaning | Canonical `ExecutionDefinitionDocument` and exact `CompiledProcessPlan` |
 | Definition compatibility | Canonical definition identity, revision, fingerprint and Process IR schema compatibility |
 | Finite decisions | Canonical Process interpreter semantics and normalized decision evidence |
+| Lifecycle control | Canonical `ProcessControlState`, `ProcessControlReferenceExecutor`, command receipts and intents |
 | Physical scheduling and replay | Exact Durable Task orchestration history for the selected target profile |
 | Aggregate state changes | The invoked canonical Transition and its authoritative entity adapter |
 | Relation and Query results | The invoked canonical definition and its selected evaluator |
@@ -66,6 +67,14 @@ pins the exact definition before physical execution. Orchestrator replay must no
 or resolve a mutable latest definition. Pure Process decisions execute deterministically inside the
 orchestrator; target or domain I/O crosses an attributable activity or external-event boundary and
 returns exact portable evidence to the interpreter.
+
+Lifecycle commands use one versioned Durable Task external-event stream, but the event and Scheduler instance are
+transport rather than control authority. The orchestration encloses each finite activation with canonical
+`BeginActivation` and `ReachSafePoint` observations and realizes only the resulting canonical intent. Native
+Scheduler suspend or terminate operations are not substituted for Pause or Terminate because doing so would lose
+the exact authorization, expectation, receipt, safe-point, attempt-lineage, and cleanup evidence. Provider event
+admission is therefore distinct from canonical command admission, which is observed through custom status or the
+final result.
 
 The adapter may optimize this shape only when the optimization retains source-node provenance and
 passes the same semantic conformance cases. Generated or hand-authored workflow code per Process is
@@ -208,8 +217,13 @@ for stable claim, attempt, dispatch, bounded retry, acknowledgement, reconciliat
 Because activities are at-least-once, automatic dispatch rejects bindings without target deduplication or natural
 idempotency evidence; SDK activity retry does not substitute for the canonical retry policy. Exact typed timeout,
 terminal-failure, or escalation evidence that this slice cannot author fails the orchestration closed while retaining
-the canonical operation status and recovery intent. Differential tests cover canonical decisions and evidence; a pinned Scheduler
-emulator proves completion, bound Request activity dispatch and Reply admission, cross-instance and self-Signal
+the canonical operation status and recovery intent. Root Inspect, Pause, Continue, RestartAttempt, Cancel, and
+Terminate commands are transported through one polymorphic event contract and evaluated by the canonical control
+executor. Every ordinary activation carries canonical begin/safe-point evidence; active host work drains before a
+deferred action, replacement attempts retain exact lineage, cooperative cancellation produces the canonical terminal
+activation, and termination retains its canonical terminal control result instead of invoking the similarly named
+physical Scheduler operation. Differential tests cover canonical decisions and evidence; a pinned Scheduler
+emulator proves the lifecycle command sequence and replay, completion, bound Request activity dispatch and Reply admission, cross-instance and self-Signal
 delivery, child sub-orchestration, recurrence Continue-as-new, authored failure, duplicate start admission, and
 worker restart at unbound Request, Timer, and AwaitMatch boundaries without re-invoking an activity already retained
 in Scheduler history, changing a canonical due instant, or admitting an interaction twice. `ProcessWaitState` and
@@ -220,8 +234,10 @@ priority, tie-break, winner, and input-disposition decisions.
 
 This is not promotion of the full planning profile. Authored timeout, terminal-failure, escalation, and cancellation
 execution paths for general Requests, domain-event/Reply emission, activation-local and non-Process Signal targets,
-external Signal adapters, root control and lifecycle semantics, observability, and the complete target qualification
-matrix remain outside the current slice. Higher-order execution retains
+external Signal adapters, lifecycle Signal qualification, general attempt-resource/affinity cleanup, exhaustive
+durable Request pause/retry/reconciliation races, observability, and the complete target qualification matrix remain
+outside the current slice. RestartAttempt and Terminate currently accept only `RetainEvidence`; stronger cleanup
+demands fail before canonical admission. Higher-order execution retains
 canonical branch selection and lineage, schedules bounded branch work concurrently, maps exact child terminal status
 through the authored Request contract, and enforces partition and recurrence bounds without truncation. Parent child
 `Propagate` and `Detach` policies are realized explicitly: propagated cancellation is delivered as an exact portable

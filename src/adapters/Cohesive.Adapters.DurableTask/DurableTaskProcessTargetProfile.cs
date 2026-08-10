@@ -127,8 +127,8 @@ public static class DurableTaskProcessTargetProfile
                 ["canonical-input-dispositions", "external-event"]),
             ComposedGuarantee(
                 ProcessInterpreterGuarantees.LifecycleControl,
-                "canonical-control-over-client-lifecycle",
-                ["canonical-control-receipts-and-safe-points", "client-lifecycle-operations"]),
+                "canonical-control-over-external-events",
+                ["canonical-control-state-receipts-intents", "external-event", "custom-status"]),
             ComposedGuarantee(
                 ProcessInterpreterGuarantees.DurableRequestRecovery,
                 "canonical-request-recovery",

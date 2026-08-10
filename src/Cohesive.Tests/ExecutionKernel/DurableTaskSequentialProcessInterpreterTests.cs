@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Threading.Channels;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Compilation;
@@ -265,6 +266,287 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     }
 
     [Fact]
+    public async Task LifecycleControl_PauseInspectReplayFenceAndContinueAreCanonicalAtTheDurableCut()
+    {
+        var dueAtUtc = StartedAtUtc.AddMinutes(5);
+        var plan = CompileTimerPlan(dueAtUtc, "process/durable-task-control-pause");
+        var start = Start(plan, "control", "instance/control-pause");
+        var now = StartedAtUtc;
+        var timer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var timerScheduled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var controls = Channel.CreateUnbounded<ProcessControlCommand>();
+        ConcurrentQueue<DurableTaskSequentialProcessResult> observations = [];
+
+        var execution = DurableTaskSequentialProcessInterpreter.RunAsync(
+            plan,
+            start,
+            EmptyDurableRequestBindingResolver.Instance,
+            UnexpectedOperation,
+            UnexpectedDurableOperation,
+            UnexpectedChildProcess,
+            UnexpectedReconciliation,
+            UnexpectedInteraction,
+            (delay, cancellationToken) =>
+            {
+                timerScheduled.TrySetResult();
+                return timer.Task;
+            },
+            () => now,
+            observations.Enqueue,
+            waitForControl: () => controls.Reader.ReadAsync().AsTask());
+
+        await timerScheduled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var running = await WaitForObservationAsync(
+            observations,
+            static result => result.Control.Mode == ProcessControlMode.Running
+                && result.Control.CurrentAttempt.Phase == ProcessControlExecutionPhase.AtSafePoint);
+
+        now = now.AddSeconds(1);
+        var pause = Pause(start, running.Control, "control/pause", now);
+        await controls.Writer.WriteAsync(pause);
+        var paused = await WaitForObservationAsync(
+            observations,
+            result => result.LatestControlDecision?.Receipt?.Command.Context.CommandId
+                    == pause.Context.CommandId
+                && result.Control.Mode == ProcessControlMode.Paused);
+
+        now = now.AddSeconds(1);
+        await controls.Writer.WriteAsync(pause);
+        var replayed = await WaitForObservationAsync(
+            observations,
+            result => result.LatestControlDecision?.Disposition == ProcessControlDecisionDisposition.Replayed
+                && result.LatestControlDecision.Receipt?.Command.Context.CommandId == pause.Context.CommandId);
+        Assert.Equal(Serialize(paused.Control), Serialize(replayed.Control));
+
+        now = now.AddSeconds(1);
+        var staleContinue = Continue(
+            start,
+            paused.Control,
+            "control/continue-stale",
+            now,
+            new(
+                new(paused.Control.ProcessInstanceId, paused.Control.CurrentAttempt.AttemptId),
+                running.Control.Revision));
+        await controls.Writer.WriteAsync(staleContinue);
+        var fenced = await WaitForObservationAsync(
+            observations,
+            result => result.LatestControlDecision?.Disposition
+                == ProcessControlDecisionDisposition.StaleRevision);
+        Assert.Equal(ProcessControlDiagnosticCodes.StaleRevision, Assert.Single(
+            fenced.LatestControlDecision!.Diagnostics).Code);
+        Assert.Equal(ProcessControlMode.Paused, fenced.Control.Mode);
+
+        now = now.AddSeconds(1);
+        var unauthorized = new ContinueProcessCommand(
+            ProcessControlCommand.CurrentSchemaVersion,
+            new(
+                new("control/continue-unauthorized"),
+                new("idempotency/control/continue-unauthorized"),
+                paused.Control.ProcessInstanceId,
+                new(
+                    "test-runner",
+                    new("authority/other", "tenant/cohesive"),
+                    "authorization/other"),
+                now,
+                Provenance()),
+            Expectation(paused.Control));
+        await controls.Writer.WriteAsync(unauthorized);
+        var unauthorizedResult = await WaitForObservationAsync(
+            observations,
+            result => result.LatestControlDecision?.Disposition
+                == ProcessControlDecisionDisposition.Unauthorized);
+        Assert.Equal(ProcessControlDiagnosticCodes.AuthorityMismatch, Assert.Single(
+            unauthorizedResult.LatestControlDecision!.Diagnostics).Code);
+        Assert.Equal(Serialize(paused.Control), Serialize(unauthorizedResult.Control));
+
+        now = now.AddSeconds(1);
+        var inspect = Inspect(start, paused.Control, "control/inspect", now);
+        await controls.Writer.WriteAsync(inspect);
+        var inspected = await WaitForObservationAsync(
+            observations,
+            result => result.LatestControlDecision?.Disposition
+                == ProcessControlDecisionDisposition.Inspected);
+        Assert.Equal(Serialize(paused.Control), Serialize(inspected.Control));
+
+        timer.SetResult();
+        await Task.Delay(25);
+        Assert.False(execution.IsCompleted);
+
+        now = dueAtUtc;
+        var @continue = Continue(start, paused.Control, "control/continue", now);
+        await controls.Writer.WriteAsync(@continue);
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(ProcessActivationDisposition.Completed, result.Disposition);
+        Assert.Equal(ProcessControlMode.Running, result.Control.Mode);
+        Assert.Equal(start.Receipt.Request.InitialContinuation, result.State.Continuation);
+    }
+
+    [Fact]
+    public async Task LifecycleControl_PauseDuringHostWorkDefersAndStopsAtTheExactSafePoint()
+    {
+        var transition = DefinitionReference("transition/control/active", '8');
+        var plan = Compile(
+            Definition(
+                "transition",
+                [
+                    new InvokeTransitionProcessNode(
+                        new("transition"),
+                        transition,
+                        Expr.Const("entity/1"),
+                        Expr.BoundValue(ProcessBindingIds.Input),
+                        new(Edge("edge/transition-cut", "cut"))),
+                    new DurableCutProcessNode(new("cut"), Edge("edge/cut-return", "return")),
+                    new ReturnProcessNode(new("return"), Expr.BoundValue(ProcessBindingIds.Input))
+                ]),
+            definitions:
+            [new(transition, ProcessDefinitionLinkKind.Transition, StringContract, StringContract)],
+            definitionId: "process/durable-task-control-active-pause");
+        var start = Start(plan, "active", "instance/control-active-pause");
+        var now = StartedAtUtc;
+        var activity = new TaskCompletionSource<ProcessOperationResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var controls = Channel.CreateUnbounded<ProcessControlCommand>();
+        ConcurrentQueue<DurableTaskSequentialProcessResult> observations = [];
+
+        var execution = DurableTaskSequentialProcessInterpreter.RunAsync(
+            plan,
+            start,
+            EmptyDurableRequestBindingResolver.Instance,
+            _ => activity.Task,
+            UnexpectedDurableOperation,
+            UnexpectedChildProcess,
+            UnexpectedReconciliation,
+            UnexpectedInteraction,
+            (delay, cancellationToken) => Task.CompletedTask,
+            () => now,
+            observations.Enqueue,
+            waitForControl: () => controls.Reader.ReadAsync().AsTask());
+
+        var active = await WaitForObservationAsync(
+            observations,
+            static result => result.Control.CurrentAttempt.Phase == ProcessControlExecutionPhase.InActivation);
+        now = now.AddSeconds(1);
+        var pause = Pause(start, active.Control, "control/pause-active", now);
+        await controls.Writer.WriteAsync(pause);
+        var deferred = await WaitForObservationAsync(
+            observations,
+            result => result.LatestControlDecision?.Receipt?.Command.Context.CommandId
+                    == pause.Context.CommandId
+                && result.LatestControlDecision.Disposition
+                    == ProcessControlDecisionDisposition.DeferredToSafePoint);
+        Assert.Equal(ProcessControlMode.PauseRequested, deferred.Control.Mode);
+        Assert.False(execution.IsCompleted);
+
+        now = now.AddSeconds(1);
+        activity.SetResult(ProcessOperationResult.Completed(StringValue("active")));
+        var paused = await WaitForObservationAsync(
+            observations,
+            static result => result.Control.Mode == ProcessControlMode.Paused
+                && result.Control.CurrentAttempt.Phase == ProcessControlExecutionPhase.AtSafePoint);
+        Assert.Equal(ProcessActivationDisposition.DurableCut, paused.Disposition);
+        Assert.False(execution.IsCompleted);
+
+        now = now.AddSeconds(1);
+        await controls.Writer.WriteAsync(Continue(start, paused.Control, "control/continue-active", now));
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(ProcessActivationDisposition.Completed, result.Disposition);
+        Assert.Equal(ProcessControlMode.Running, result.Control.Mode);
+    }
+
+    [Fact]
+    public async Task LifecycleControl_RestartAttemptReplacesCanonicalLineageAndAbandonsOldTimer()
+    {
+        var dueAtUtc = StartedAtUtc.AddMinutes(5);
+        var plan = Compile(
+            Definition(
+                "timer",
+                [
+                    new TimerProcessNode(
+                        new("timer"),
+                        Expr.Const(dueAtUtc),
+                        Edge("edge/timer-return", "return")),
+                    new ReturnProcessNode(new("return"), Expr.BoundValue(ProcessBindingIds.Input))
+                ],
+                ProcessRecoveryPolicy.RestartAttempt),
+            definitionId: "process/durable-task-control-restart");
+        var start = Start(plan, "restart", "instance/control-restart");
+        var now = StartedAtUtc;
+        var controls = Channel.CreateUnbounded<ProcessControlCommand>();
+        ConcurrentQueue<ScheduledTimer> timers = [];
+        ConcurrentQueue<DurableTaskSequentialProcessResult> observations = [];
+
+        var execution = DurableTaskSequentialProcessInterpreter.RunAsync(
+            plan,
+            start,
+            EmptyDurableRequestBindingResolver.Instance,
+            UnexpectedOperation,
+            UnexpectedDurableOperation,
+            UnexpectedChildProcess,
+            UnexpectedReconciliation,
+            UnexpectedInteraction,
+            (delay, cancellationToken) =>
+            {
+                var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                timers.Enqueue(new(delay, cancellationToken, completion));
+                return completion.Task;
+            },
+            () => now,
+            observations.Enqueue,
+            waitForControl: () => controls.Reader.ReadAsync().AsTask());
+
+        await WaitUntilAsync(() => timers.Count == 1);
+        var running = await WaitForObservationAsync(
+            observations,
+            static result => result.Control.CurrentAttempt.Phase == ProcessControlExecutionPhase.AtSafePoint);
+        now = now.AddSeconds(1);
+        var restart = Restart(start, running.Control, "control/restart", now, new("process-attempt/2"));
+        await controls.Writer.WriteAsync(restart);
+
+        var restarted = await WaitForObservationAsync(
+            observations,
+            result => result.LatestControlDecision?.Receipt?.Command.Context.CommandId
+                == restart.Context.CommandId);
+        Assert.Equal(ProcessControlDecisionDisposition.Applied, restarted.LatestControlDecision?.Disposition);
+        Assert.Equal(new ProcessAttemptId("process-attempt/2"), restarted.Control.CurrentAttempt.AttemptId);
+
+        await WaitUntilAsync(() => timers.Count == 2 || execution.IsCompleted);
+        Assert.False(
+            execution.IsCompleted,
+            execution.Exception?.GetBaseException().ToString() ?? "Restart execution completed before scheduling the replacement timer.");
+        Assert.True(timers.TryDequeue(out var abandoned));
+        Assert.True(abandoned.CancellationToken.IsCancellationRequested);
+        Assert.True(timers.TryDequeue(out var replacement));
+        Assert.Equal(TimeSpan.FromMinutes(5) - TimeSpan.FromSeconds(1), replacement.Delay);
+        now = dueAtUtc;
+        replacement.Completion.SetResult();
+
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(ProcessActivationDisposition.Completed, result.Disposition);
+        Assert.Equal(new ProcessAttemptId("process-attempt/2"), result.State.Continuation.ProcessAttemptId);
+        Assert.Equal(
+            [ProcessControlAttemptDisposition.Abandoned, ProcessControlAttemptDisposition.Current],
+            result.Control.Attempts.Select(static attempt => attempt.Disposition));
+        Assert.Equal(restart.Context.CommandId, result.Control.Attempts[0].Closure?.CommandId);
+    }
+
+    [Fact]
+    public async Task LifecycleControl_CancelAndTerminateRemainDistinctFromTransportCancellation()
+    {
+        var cancelled = await RunTerminalControlAsync(terminate: false);
+        Assert.Equal(ProcessControlMode.Cancelled, cancelled.Result.Control.Mode);
+        Assert.Equal(ProcessActivationDisposition.Cancelled, cancelled.Result.Disposition);
+        Assert.Equal(ExecutionTerminalOutcomeKind.Cancelled, cancelled.Result.State.Terminal.Kind);
+        Assert.True(cancelled.TimerCancellation.IsCancellationRequested);
+
+        var terminated = await RunTerminalControlAsync(terminate: true);
+        Assert.Equal(ProcessControlMode.Terminated, terminated.Result.Control.Mode);
+        Assert.Equal(ProcessActivationDisposition.DurableCut, terminated.Result.Disposition);
+        Assert.Equal(ExecutionTerminalOutcomeKind.None, terminated.Result.State.Terminal.Kind);
+        Assert.True(terminated.TimerCancellation.IsCancellationRequested);
+    }
+
+    [Fact]
     public async Task Timer_ForkWinnerCancelsThePhysicalProjectionOfTheClosedCanonicalWait()
     {
         var firstDueAtUtc = StartedAtUtc.AddMinutes(1);
@@ -281,6 +563,8 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         var resumed = start.ContinueFrom(new(
             forked.Disposition,
             forked.State,
+            ControlAfter(start, plan, initial, forked),
+            null,
             forked.Emissions,
             forked.InputAdmissions,
             forked.Diagnostics,
@@ -1619,6 +1903,11 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         var signalTarget = ProcessSignalTargetResult.Resolved(new ProcessTokenInteractionTarget(
             initial.Continuation,
             Assert.Single(initial.Tokens).Id));
+        ProcessControlCommand controlCommand = Pause(
+            start,
+            start.Receipt.CreateInitialState(),
+            "control/portable",
+            StartedAtUtc);
         var converter = DurableTaskProcessDataConverter.Create();
 
         var restoredStart = Assert.IsType<DurableTaskSequentialProcessStart>(
@@ -1629,10 +1918,143 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             converter.Deserialize(
                 converter.Serialize(signalTarget),
                 typeof(ProcessSignalTargetResult)));
+        var restoredControl = Assert.IsType<PauseProcessCommand>(
+            converter.Deserialize(
+                converter.Serialize(controlCommand),
+                typeof(ProcessControlCommand)));
 
         Assert.Equal(Serialize(start), Serialize(restoredStart));
         Assert.Equal(Serialize(result), Serialize(restoredResult));
         Assert.Equal(Serialize(signalTarget), Serialize(restoredSignalTarget));
+        Assert.Equal(Serialize(controlCommand), Serialize(restoredControl));
+    }
+
+    [DurableTaskSchedulerFact]
+    public async Task SchedulerEmulator_ProvesCanonicalLifecycleControlAndAttemptLineage()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("DURABLE_TASK_SCHEDULER_CONNECTION_STRING")
+            ?? throw new InvalidOperationException(
+                "The Durable Task Scheduler connection string disappeared after test discovery.");
+        var timerPlan = CompileInputTimerPlan(
+            "process/durable-task-scheduler-control",
+            ProcessRecoveryPolicy.ContinueAttempt);
+        var restartPlan = CompileInputTimerPlan(
+            "process/durable-task-scheduler-control-restart",
+            ProcessRecoveryPolicy.RestartAttempt);
+        var catalog = new DurableTaskSequentialProcessPlanCatalog([
+            Physical(timerPlan),
+            Physical(restartPlan)
+        ]);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        using var worker = SchedulerHost(connectionString, catalog, RejectingHost.Instance);
+        await worker.StartAsync(timeout.Token);
+        var client = worker.Services.GetRequiredService<DurableTaskClient>();
+        var dueAtUtc = DateTimeOffset.UtcNow.AddMinutes(2);
+
+        var controlledStart = Start(
+            timerPlan,
+            InstantValue(dueAtUtc),
+            "instance/scheduler-lifecycle-control");
+        var controlledSchedule = await client.ScheduleCohesiveProcessAsync(controlledStart, timeout.Token);
+        var running = await WaitForActiveWait(
+            client,
+            controlledSchedule.InstanceId,
+            ProcessWaitKind.Timer,
+            timeout.Token);
+
+        var pause = Pause(controlledStart, running.Control, "scheduler-control/pause", DateTimeOffset.UtcNow);
+        await client.RaiseCohesiveProcessControlAsync(controlledStart, pause, timeout.Token);
+        var paused = await WaitForControlStatus(
+            client,
+            controlledSchedule.InstanceId,
+            result => result.Control.Mode == ProcessControlMode.Paused
+                && result.LatestControlDecision?.Receipt?.Command.Context.CommandId == pause.Context.CommandId,
+            timeout.Token);
+
+        var inspect = Inspect(controlledStart, paused.Control, "scheduler-control/inspect", DateTimeOffset.UtcNow);
+        await client.RaiseCohesiveProcessControlAsync(controlledStart, inspect, timeout.Token);
+        _ = await WaitForControlStatus(
+            client,
+            controlledSchedule.InstanceId,
+            static result => result.LatestControlDecision?.Disposition
+                == ProcessControlDecisionDisposition.Inspected,
+            timeout.Token);
+
+        await client.RaiseCohesiveProcessControlAsync(controlledStart, pause, timeout.Token);
+        _ = await WaitForControlStatus(
+            client,
+            controlledSchedule.InstanceId,
+            static result => result.LatestControlDecision?.Disposition
+                == ProcessControlDecisionDisposition.Replayed,
+            timeout.Token);
+
+        var @continue = Continue(
+            controlledStart,
+            paused.Control,
+            "scheduler-control/continue",
+            DateTimeOffset.UtcNow);
+        await client.RaiseCohesiveProcessControlAsync(controlledStart, @continue, timeout.Token);
+        var continued = await WaitForControlStatus(
+            client,
+            controlledSchedule.InstanceId,
+            static result => result.Control.Mode == ProcessControlMode.Running
+                && result.Control.CurrentAttempt.Phase == ProcessControlExecutionPhase.AtSafePoint,
+            timeout.Token);
+        var cancel = new CancelProcessCommand(
+            ProcessControlCommand.CurrentSchemaVersion,
+            ControlContext(controlledStart, "scheduler-control/cancel", DateTimeOffset.UtcNow),
+            Expectation(continued.Control),
+            new("scheduler.cancel"));
+        await client.RaiseCohesiveProcessControlAsync(controlledStart, cancel, timeout.Token);
+        var cancelledInstance = await client.WaitForInstanceCompletionAsync(
+            controlledSchedule.InstanceId,
+            getInputsAndOutputs: true,
+            timeout.Token);
+        var cancelled = Assert.IsType<DurableTaskSequentialProcessResult>(
+            cancelledInstance.ReadOutputAs<DurableTaskSequentialProcessResult>());
+        Assert.Equal(ProcessControlMode.Cancelled, cancelled.Control.Mode);
+        Assert.Equal(ProcessActivationDisposition.Cancelled, cancelled.Disposition);
+
+        var restartStart = Start(
+            restartPlan,
+            InstantValue(dueAtUtc),
+            "instance/scheduler-lifecycle-restart");
+        var restartSchedule = await client.ScheduleCohesiveProcessAsync(restartStart, timeout.Token);
+        var restartRunning = await WaitForActiveWait(
+            client,
+            restartSchedule.InstanceId,
+            ProcessWaitKind.Timer,
+            timeout.Token);
+        var restart = Restart(
+            restartStart,
+            restartRunning.Control,
+            "scheduler-control/restart",
+            DateTimeOffset.UtcNow,
+            new("process-attempt/2"));
+        await client.RaiseCohesiveProcessControlAsync(restartStart, restart, timeout.Token);
+        var replacement = await WaitForControlStatus(
+            client,
+            restartSchedule.InstanceId,
+            static result => result.Control.CurrentAttempt.AttemptId == new ProcessAttemptId("process-attempt/2")
+                && result.Control.CurrentAttempt.Phase == ProcessControlExecutionPhase.AtSafePoint,
+            timeout.Token);
+        var terminate = new TerminateProcessCommand(
+            ProcessControlCommand.CurrentSchemaVersion,
+            ControlContext(restartStart, "scheduler-control/terminate", DateTimeOffset.UtcNow),
+            Expectation(replacement.Control),
+            new("scheduler.terminate"),
+            ProcessAttemptCleanupRequirement.RetainEvidence);
+        await client.RaiseCohesiveProcessControlAsync(restartStart, terminate, timeout.Token);
+        var terminatedInstance = await client.WaitForInstanceCompletionAsync(
+            restartSchedule.InstanceId,
+            getInputsAndOutputs: true,
+            timeout.Token);
+        var terminated = Assert.IsType<DurableTaskSequentialProcessResult>(
+            terminatedInstance.ReadOutputAs<DurableTaskSequentialProcessResult>());
+        Assert.Equal(ProcessControlMode.Terminated, terminated.Control.Mode);
+        Assert.Equal(
+            [ProcessControlAttemptDisposition.Abandoned, ProcessControlAttemptDisposition.Terminated],
+            terminated.Control.Attempts.Select(static attempt => attempt.Disposition));
     }
 
     [DurableTaskSchedulerFact]
@@ -2132,6 +2554,35 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             + $"failure: {retained?.FailureDetails}.");
     }
 
+    static async Task<DurableTaskSequentialProcessResult> WaitForControlStatus(
+        DurableTaskClient client,
+        string instanceId,
+        Func<DurableTaskSequentialProcessResult, bool> predicate,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 200; attempt++)
+        {
+            var instance = await client.GetInstanceAsync(
+                instanceId,
+                getInputsAndOutputs: true,
+                cancellationToken);
+            var status = instance?.ReadCustomStatusAs<DurableTaskSequentialProcessResult>();
+            if (status is not null && predicate(status))
+            {
+                return status;
+            }
+            await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken);
+        }
+        var retained = await client.GetInstanceAsync(
+            instanceId,
+            getInputsAndOutputs: true,
+            cancellationToken);
+        throw new InvalidOperationException(
+            $"Durable Task instance '{instanceId}' did not expose the expected canonical control status. "
+            + $"Runtime status: {retained?.RuntimeStatus}; custom status: {retained?.SerializedCustomStatus}; "
+            + $"failure: {retained?.FailureDetails}.");
+    }
+
     static Task<DurableTaskSequentialProcessResult> Run(
         CompiledProcessPlan plan,
         DurableTaskSequentialProcessStart start,
@@ -2377,7 +2828,9 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             ]),
         definitionId: definitionId);
 
-    static CompiledProcessPlan CompileInputTimerPlan() => Compile(
+    static CompiledProcessPlan CompileInputTimerPlan(
+        string definitionId = "process/durable-task-scheduler-timer",
+        ProcessRecoveryPolicy recoveryPolicy = ProcessRecoveryPolicy.ContinueAttempt) => Compile(
         Definition(
             InstantContract,
             "timer",
@@ -2387,8 +2840,9 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
                     Expr.BoundValue(ProcessBindingIds.Input),
                     Edge("edge/timer-return", "return")),
                 new ReturnProcessNode(new("return"), Expr.Const("done"))
-            ]),
-        definitionId: "process/durable-task-scheduler-timer");
+            ],
+            recoveryPolicy),
+        definitionId: definitionId);
 
     static CompiledProcessPlan CompileForkTimerPlan(
         DateTimeOffset firstDueAtUtc,
@@ -2996,22 +3450,24 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
 
     static CanonicalProcessDefinition Definition(
         string entry,
-        ImmutableArray<ProcessNode> nodes) => new(
+        ImmutableArray<ProcessNode> nodes,
+        ProcessRecoveryPolicy recoveryPolicy = ProcessRecoveryPolicy.ContinueAttempt) => new(
         StringContract,
         StringContract,
         new(entry),
         nodes,
-        ProcessRecoveryPolicy.ContinueAttempt);
+        recoveryPolicy);
 
     static CanonicalProcessDefinition Definition(
         ValueContract input,
         string entry,
-        ImmutableArray<ProcessNode> nodes) => new(
+        ImmutableArray<ProcessNode> nodes,
+        ProcessRecoveryPolicy recoveryPolicy = ProcessRecoveryPolicy.ContinueAttempt) => new(
         input,
         StringContract,
         new(entry),
         nodes,
-        ProcessRecoveryPolicy.ContinueAttempt);
+        recoveryPolicy);
 
     static DurableTaskSequentialProcessStart Start(
         CompiledProcessPlan plan,
@@ -3063,6 +3519,160 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         observedAtUtc ?? start.Receipt.AcceptedAtUtc,
         start.ActivationContext,
         inputs);
+
+    static ProcessControlState ControlAfter(
+        DurableTaskSequentialProcessStart start,
+        CompiledProcessPlan plan,
+        ProcessContinuationState before,
+        ProcessActivationDecision decision)
+    {
+        var contracts = plan.ValidationContext.InteractionContracts;
+        if (contracts is null)
+        {
+            var validation = InteractionContractCatalog.TryCreate([], out contracts);
+            Assert.True(validation.IsValid, Format(validation.Diagnostics));
+        }
+        var executor = new ProcessControlReferenceExecutor(Assert.IsType<InteractionContractCatalog>(contracts));
+        var initial = start.Receipt.CreateInitialState();
+        var activationId = DurableTaskSequentialProcessIdentities.Activation(before);
+        var begun = executor.BeginActivation(
+            initial,
+            new(
+                new(new(initial.ProcessInstanceId, initial.CurrentAttempt.AttemptId), initial.Revision),
+                activationId,
+                start.Receipt.AcceptedAtUtc));
+        var node = decision.Evidence.SafePointNode
+            ?? (decision.Evidence.Trace.IsEmpty ? plan.Definition.Entry : decision.Evidence.Trace[^1].Node);
+        return executor.ReachSafePoint(
+            begun.State,
+            new(
+                DurableTaskSequentialProcessIdentities.SafePoint(before, activationId, node),
+                new(
+                    new(begun.State.ProcessInstanceId, begun.State.CurrentAttempt.AttemptId),
+                    begun.State.Revision),
+                activationId,
+                node,
+                start.Receipt.AcceptedAtUtc)).State;
+    }
+
+    static ProcessControlExpectation Expectation(ProcessControlState state) => new(
+        new(state.ProcessInstanceId, state.CurrentAttempt.AttemptId),
+        state.Revision);
+
+    static ProcessControlCommandContext ControlContext(
+        DurableTaskSequentialProcessStart start,
+        string id,
+        DateTimeOffset issuedAtUtc) => new(
+        new(id),
+        new($"idempotency/{id}"),
+        start.Receipt.Request.InitialContinuation.ProcessInstanceId,
+        start.Receipt.Request.Context.Authorization,
+        issuedAtUtc,
+        Provenance());
+
+    static PauseProcessCommand Pause(
+        DurableTaskSequentialProcessStart start,
+        ProcessControlState state,
+        string id,
+        DateTimeOffset issuedAtUtc) => new(
+        ProcessControlCommand.CurrentSchemaVersion,
+        ControlContext(start, id, issuedAtUtc),
+        Expectation(state));
+
+    static InspectProcessCommand Inspect(
+        DurableTaskSequentialProcessStart start,
+        ProcessControlState state,
+        string id,
+        DateTimeOffset issuedAtUtc) => new(
+        ProcessControlCommand.CurrentSchemaVersion,
+        ControlContext(start, id, issuedAtUtc),
+        Expectation(state));
+
+    static ContinueProcessCommand Continue(
+        DurableTaskSequentialProcessStart start,
+        ProcessControlState state,
+        string id,
+        DateTimeOffset issuedAtUtc,
+        ProcessControlExpectation? expectation = null) => new(
+        ProcessControlCommand.CurrentSchemaVersion,
+        ControlContext(start, id, issuedAtUtc),
+        expectation ?? Expectation(state));
+
+    static RestartProcessAttemptCommand Restart(
+        DurableTaskSequentialProcessStart start,
+        ProcessControlState state,
+        string id,
+        DateTimeOffset issuedAtUtc,
+        ProcessAttemptId replacementAttempt) => new(
+        ProcessControlCommand.CurrentSchemaVersion,
+        ControlContext(start, id, issuedAtUtc),
+        Expectation(state),
+        new(
+            replacementAttempt,
+            ProcessAttemptCleanupRequirement.RetainEvidence,
+            new("operator.restart")));
+
+    static async Task<DurableTaskSequentialProcessResult> WaitForObservationAsync(
+        ConcurrentQueue<DurableTaskSequentialProcessResult> observations,
+        Func<DurableTaskSequentialProcessResult, bool> predicate)
+    {
+        await WaitUntilAsync(() => observations.Any(predicate));
+        return observations.Last(predicate);
+    }
+
+    static async Task<(DurableTaskSequentialProcessResult Result, CancellationToken TimerCancellation)>
+        RunTerminalControlAsync(bool terminate)
+    {
+        var plan = CompileTimerPlan(
+            StartedAtUtc.AddMinutes(5),
+            terminate ? "process/durable-task-control-terminate" : "process/durable-task-control-cancel");
+        var start = Start(
+            plan,
+            "terminal-control",
+            terminate ? "instance/control-terminate" : "instance/control-cancel");
+        var now = StartedAtUtc;
+        var controls = Channel.CreateUnbounded<ProcessControlCommand>();
+        ConcurrentQueue<DurableTaskSequentialProcessResult> observations = [];
+        var scheduled = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var never = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var execution = DurableTaskSequentialProcessInterpreter.RunAsync(
+            plan,
+            start,
+            EmptyDurableRequestBindingResolver.Instance,
+            UnexpectedOperation,
+            UnexpectedDurableOperation,
+            UnexpectedChildProcess,
+            UnexpectedReconciliation,
+            UnexpectedInteraction,
+            (delay, cancellationToken) =>
+            {
+                scheduled.TrySetResult(cancellationToken);
+                return never.Task;
+            },
+            () => now,
+            observations.Enqueue,
+            waitForControl: () => controls.Reader.ReadAsync().AsTask());
+
+        var timerCancellation = await scheduled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var running = await WaitForObservationAsync(
+            observations,
+            static result => result.Control.CurrentAttempt.Phase == ProcessControlExecutionPhase.AtSafePoint);
+        now = now.AddSeconds(1);
+        ProcessControlCommand command = terminate
+            ? new TerminateProcessCommand(
+                ProcessControlCommand.CurrentSchemaVersion,
+                ControlContext(start, "control/terminate", now),
+                Expectation(running.Control),
+                new("operator.terminate"),
+                ProcessAttemptCleanupRequirement.RetainEvidence)
+            : new CancelProcessCommand(
+                ProcessControlCommand.CurrentSchemaVersion,
+                ControlContext(start, "control/cancel", now),
+                Expectation(running.Control),
+                new("operator.cancel"));
+        await controls.Writer.WriteAsync(command);
+        return (await execution.WaitAsync(TimeSpan.FromSeconds(5)), timerCancellation);
+    }
 
     static ProcessEdge Edge(string id, string target) => new(new(id), new(target));
 
