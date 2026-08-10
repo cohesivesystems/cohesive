@@ -197,8 +197,8 @@ This decision remains accepted direction for Durable Task execution. As of 2026-
 `Cohesive.Processes` implements the target-neutral requirement inventory, capability evidence, exhaustive
 disposition ledger, structured matching diagnostics, and reference interpreter. `Cohesive.Adapters.DurableTask`
 implements historical monitoring, the planning profile, and a generic executable slice for Transition,
-Relation/Query, Request, Choice, Match, Fork, Join, child Process, bounded partition, bounded recurrence, Durable Cut,
-Return, and Fail constructs. It resolves only exact
+Relation/Query, Request, Choice, Match, Fork, Join, Timer, child Process, bounded partition, bounded recurrence,
+Durable Cut, Return, and Fail constructs. It resolves only exact
 definition identity/revision/fingerprint tuples from an immutable worker deployment catalog and uses standalone SDK
 activities for bounded host I/O. Bound Requests reuse the canonical `DurableOperationReferenceExecutor` and ledger
 for stable claim, attempt, dispatch, bounded retry, acknowledgement, reconciliation, and Reply-admission semantics.
@@ -207,12 +207,14 @@ idempotency evidence; SDK activity retry does not substitute for the canonical r
 terminal-failure, or escalation evidence that this slice cannot author fails the orchestration closed while retaining
 the canonical operation status and recovery intent. Differential tests cover canonical decisions and evidence; a pinned Scheduler
 emulator proves completion, bound Request activity dispatch and Reply admission, child sub-orchestration, recurrence
-Continue-as-new, authored failure, duplicate start admission, and worker restart at an unbound Request boundary
-without re-invoking an activity already retained in Scheduler history.
+Continue-as-new, authored failure, duplicate start admission, and worker restart at unbound Request and Timer
+boundaries without re-invoking an activity already retained in Scheduler history or changing the canonical due
+instant. `ProcessTimerState.DueAtUtc` remains semantic authority; Durable Task timers are replayable physical
+projections and are cancelled when their canonical waits close.
 
 This is not promotion of the full planning profile. Authored timeout, terminal-failure, escalation, and cancellation
-execution paths for general Requests, waits and timers, signals, root control and lifecycle semantics, observability,
-and the complete target qualification matrix remain outside the current slice. Higher-order execution retains
+execution paths for general Requests, AwaitMatch and its timer clauses, signals, root control and lifecycle semantics,
+observability, and the complete target qualification matrix remain outside the current slice. Higher-order execution retains
 canonical branch selection and lineage, schedules bounded branch work concurrently, maps exact child terminal status
 through the authored Request contract, and enforces partition and recurrence bounds without truncation. Parent child
 `Propagate` and `Detach` policies are realized explicitly: propagated cancellation is delivered as an exact portable

@@ -17,6 +17,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
 {
     static readonly DateTimeOffset StartedAtUtc = new(2026, 8, 9, 12, 0, 0, TimeSpan.Zero);
     static readonly ValueContract StringContract = new(new ScalarTypeRef(ScalarTypeKind.String));
+    static readonly ValueContract InstantContract = new(new ScalarTypeRef(ScalarTypeKind.Instant));
     static readonly ValueContract StringCollectionContract = new(
         new ScalarTypeRef(ScalarTypeKind.String),
         cardinality: FieldCardinality.Many);
@@ -149,6 +150,192 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         Assert.Equal(
             new[] { Serialize(first.Evidence), Serialize(second.Evidence) },
             actual.Evidence.Select(Serialize));
+    }
+
+    [Fact]
+    public async Task Timer_UsesThePersistedCanonicalDeadlineAndResumesWhenTheDurableTimerFires()
+    {
+        var dueAtUtc = StartedAtUtc.AddMinutes(5);
+        var plan = CompileTimerPlan(dueAtUtc, "process/durable-task-timer");
+        var start = Start(plan, "timer", "instance/timer");
+        var now = StartedAtUtc;
+        var timer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var scheduled = new TaskCompletionSource<TimeSpan>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var observed = new TaskCompletionSource<DurableTaskSequentialProcessResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var execution = DurableTaskSequentialProcessInterpreter.RunAsync(
+            plan,
+            start,
+            EmptyDurableRequestBindingResolver.Instance,
+            UnexpectedOperation,
+            UnexpectedDurableOperation,
+            UnexpectedChildProcess,
+            UnexpectedReconciliation,
+            UnexpectedInteraction,
+            (delay, cancellationToken) =>
+            {
+                Assert.False(cancellationToken.IsCancellationRequested);
+                scheduled.SetResult(delay);
+                return timer.Task;
+            },
+            () => now,
+            result => observed.TrySetResult(result));
+
+        Assert.Equal(TimeSpan.FromMinutes(5), await scheduled.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.False(execution.IsCompleted);
+        var wait = Assert.Single((await observed.Task.WaitAsync(TimeSpan.FromSeconds(5))).State.Waits);
+        Assert.Equal(ProcessWaitKind.Timer, wait.Kind);
+        Assert.Equal(dueAtUtc, Assert.Single(wait.Timers).DueAtUtc);
+
+        now = dueAtUtc;
+        timer.SetResult();
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var initial = ProcessReferenceInterpreter.Create(plan, start.Receipt);
+        var registered = ProcessReferenceInterpreter.Activate(
+            plan,
+            initial,
+            Activation(initial, ProcessActivationCause.Start, start),
+            RejectingHost.Instance);
+        var expected = ProcessReferenceInterpreter.Activate(
+            plan,
+            registered.State,
+            Activation(registered.State, ProcessActivationCause.Timer, start, dueAtUtc),
+            RejectingHost.Instance);
+        Assert.Equal(ProcessActivationDisposition.Completed, result.Disposition);
+        Assert.Equal(Serialize(expected.State), Serialize(result.State));
+        Assert.Equal(
+            [Serialize(registered.Evidence), Serialize(expected.Evidence)],
+            result.Evidence.Select(Serialize));
+    }
+
+    [Fact]
+    public async Task Timer_EarlyPhysicalWakeRemainsQuiescentAndReschedulesTheSameCanonicalWait()
+    {
+        var dueAtUtc = StartedAtUtc.AddMinutes(5);
+        var plan = CompileTimerPlan(dueAtUtc, "process/durable-task-timer-early");
+        var now = StartedAtUtc;
+        ConcurrentQueue<ScheduledTimer> scheduled = [];
+
+        var execution = DurableTaskSequentialProcessInterpreter.RunAsync(
+            plan,
+            Start(plan, "timer", "instance/timer-early"),
+            EmptyDurableRequestBindingResolver.Instance,
+            UnexpectedOperation,
+            UnexpectedDurableOperation,
+            UnexpectedChildProcess,
+            UnexpectedReconciliation,
+            UnexpectedInteraction,
+            (delay, cancellationToken) =>
+            {
+                var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                scheduled.Enqueue(new(delay, cancellationToken, completion));
+                return completion.Task;
+            },
+            () => now);
+
+        await WaitUntilAsync(() => scheduled.Count == 1);
+        Assert.True(scheduled.TryDequeue(out var early));
+        Assert.Equal(TimeSpan.FromMinutes(5), early.Delay);
+        early.Completion.SetResult();
+
+        await WaitUntilAsync(() => scheduled.Count == 1);
+        Assert.True(scheduled.TryDequeue(out var due));
+        Assert.Equal(TimeSpan.FromMinutes(5), due.Delay);
+        Assert.False(due.CancellationToken.IsCancellationRequested);
+        Assert.False(execution.IsCompleted);
+
+        now = dueAtUtc;
+        due.Completion.SetResult();
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(ProcessActivationDisposition.Completed, result.Disposition);
+        Assert.Equal(3, result.State.CompletedActivationCount);
+        Assert.Equal(
+            [
+                ProcessActivationCause.Start,
+                ProcessActivationCause.Timer,
+                ProcessActivationCause.Timer
+            ],
+            result.Evidence.Select(static evidence => evidence.Cause));
+        Assert.Single(
+            result.Evidence.SelectMany(static evidence => evidence.Trace),
+            static trace => trace.Kind == ProcessTraceEventKind.WaitResolved);
+    }
+
+    [Fact]
+    public async Task Timer_ForkWinnerCancelsThePhysicalProjectionOfTheClosedCanonicalWait()
+    {
+        var firstDueAtUtc = StartedAtUtc.AddMinutes(1);
+        var secondDueAtUtc = StartedAtUtc.AddMinutes(2);
+        var plan = CompileForkTimerPlan(firstDueAtUtc, secondDueAtUtc);
+        var start = Start(plan, "timer-fork", "instance/timer-fork");
+        var initial = ProcessReferenceInterpreter.Create(plan, start.Receipt);
+        var forked = ProcessReferenceInterpreter.Activate(
+            plan,
+            initial,
+            Activation(initial, ProcessActivationCause.Start, start),
+            RejectingHost.Instance);
+        Assert.Equal(ProcessActivationDisposition.DurableCut, forked.Disposition);
+        var resumed = start.ContinueFrom(new(
+            forked.Disposition,
+            forked.State,
+            forked.Emissions,
+            forked.InputAdmissions,
+            forked.Diagnostics,
+            [forked.Evidence]));
+        var now = StartedAtUtc;
+        var continueAsNewCount = 0;
+        ConcurrentQueue<ScheduledTimer> scheduled = [];
+
+        var execution = DurableTaskSequentialProcessInterpreter.RunAsync(
+            plan,
+            resumed,
+            EmptyDurableRequestBindingResolver.Instance,
+            UnexpectedOperation,
+            UnexpectedDurableOperation,
+            UnexpectedChildProcess,
+            UnexpectedReconciliation,
+            UnexpectedInteraction,
+            (delay, cancellationToken) =>
+            {
+                if (delay == TimeSpan.Zero)
+                {
+                    return Task.CompletedTask;
+                }
+                var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                scheduled.Enqueue(new(delay, cancellationToken, completion));
+                return completion.Task;
+            },
+            () => now,
+            continueAsNew: next =>
+            {
+                Interlocked.Increment(ref continueAsNewCount);
+                return Task.CompletedTask;
+            });
+
+        await WaitUntilAsync(() => scheduled.Count == 2);
+        var timers = scheduled.OrderBy(static timer => timer.Delay).ToArray();
+        Assert.Equal(
+            [TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(2)],
+            timers.Select(static timer => timer.Delay));
+
+        now = firstDueAtUtc;
+        timers[0].Completion.SetResult();
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(ProcessActivationDisposition.Completed, result.Disposition);
+        Assert.Equal(0, continueAsNewCount);
+        Assert.False(timers[0].CancellationToken.IsCancellationRequested);
+        Assert.True(timers[1].CancellationToken.IsCancellationRequested);
+        var timerWaits = result.State.Waits.Where(static wait => wait.Kind == ProcessWaitKind.Timer).ToArray();
+        Assert.Equal(2, timerWaits.Length);
+        Assert.All(timerWaits, static wait => Assert.False(wait.Active));
+        Assert.Single(
+            result.Evidence.SelectMany(static evidence => evidence.Trace),
+            static trace => trace.Kind == ProcessTraceEventKind.WaitResolved
+                && trace.Node.Value.StartsWith("timer/", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -868,23 +1055,39 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     }
 
     [Fact]
-    public void PlanCatalog_RejectsConstructsOutsideTheExecutableSequentialSlice()
+    public void PlanCatalog_AdmitsTimerButRejectsAwaitMatchOutsideTheExecutableSequentialSlice()
     {
-        var timerPlan = Compile(Definition(
-            "timer",
+        var timerPlan = CompileTimerPlan(
+            StartedAtUtc.AddMinutes(1),
+            "process/durable-task-catalog-timer");
+        var timerCatalog = new DurableTaskSequentialProcessPlanCatalog([Physical(timerPlan)]);
+
+        Assert.Equal(1, timerCatalog.Count);
+
+        var awaitMatchPlan = Compile(Definition(
+            "await",
             [
-                new TimerProcessNode(
-                    new("timer"),
-                    Expr.Const(ObservationValue.FromDateTimeOffset(StartedAtUtc.AddMinutes(1))),
-                    Edge("edge/timer-return", "return")),
+                new AwaitMatchProcessNode(
+                    new("await"),
+                    ProcessAwaitArbitration.ExclusivePriorityThenClauseId,
+                    [new ProcessAwaitTimerClause(
+                        new("clause/timer"),
+                        Expr.Const(ObservationValue.FromDateTimeOffset(StartedAtUtc.AddMinutes(1))),
+                        0,
+                        new(Edge("edge/timer-return", "return")))],
+                    ProcessAwaitInputDisposition.Observe,
+                    ProcessAwaitInputDisposition.Reject,
+                    ProcessAwaitInputDisposition.ReusePriorDisposition,
+                    ProcessAwaitMissingTargetDisposition.DeadLetter,
+                    TimeSpan.FromDays(1)),
                 new ReturnProcessNode(new("return"), Expr.Const("done"))
-            ]));
-        var physical = Physical(timerPlan);
+            ]),
+            definitionId: "process/durable-task-catalog-await-match");
 
         var exception = Assert.Throws<ArgumentException>(() =>
-            new DurableTaskSequentialProcessPlanCatalog([physical]));
+            new DurableTaskSequentialProcessPlanCatalog([Physical(awaitMatchPlan)]));
 
-        Assert.Contains("timer:timer", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("await:awaitMatch", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -957,6 +1160,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         var childFixture = CompileChildParentPlan();
         var forkChildFixture = CompileSchedulerForkChildPlan();
         var recurrencePlan = CompileRecurrencePlan();
+        var timerPlan = CompileInputTimerPlan();
         var catalog = new DurableTaskSequentialProcessPlanCatalog([
             Physical(completedPlan),
             Physical(failedPlan),
@@ -967,7 +1171,8 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             Physical(forkChildFixture.Parent),
             Physical(forkChildFixture.FastChild),
             Physical(forkChildFixture.SlowChild),
-            Physical(recurrencePlan)
+            Physical(recurrencePlan),
+            Physical(timerPlan)
         ], new BindingResolver(durableBinding, childFixture.Binding, forkChildFixture.Binding));
         var operations = new CountingEchoHost();
         var durableOperations = new CountingDurableOperationAdapter(durableBinding.Request);
@@ -1080,6 +1285,20 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         var recurrenceDuplicate = await firstClient.ScheduleCohesiveProcessAsync(recurrenceStart, timeout.Token);
         Assert.True(recurrenceDuplicate.Replayed);
 
+        var timerDueAtUtc = DateTimeOffset.UtcNow.AddSeconds(5);
+        var timerStart = Start(
+            timerPlan,
+            InstantValue(timerDueAtUtc),
+            "instance/scheduler-timer-restart");
+        var timerSchedule = await firstClient.ScheduleCohesiveProcessAsync(timerStart, timeout.Token);
+        var timerWaiting = await WaitForActiveTimer(
+            firstClient,
+            timerSchedule.InstanceId,
+            timeout.Token);
+        Assert.Equal(
+            timerDueAtUtc,
+            Assert.Single(Assert.Single(timerWaiting.State.Waits).Timers).DueAtUtc);
+
         var restartStart = Start(restartPlan, "restart", "instance/restart");
         var restartSchedule = await firstClient.ScheduleCohesiveProcessAsync(restartStart, timeout.Token);
         var waiting = await WaitForOutstandingRequest(
@@ -1127,6 +1346,21 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             recoveredResult.Evidence,
             item => Assert.Equal(restartPlan.DefinitionReference, item.Definition));
         Assert.Single(operations.Transitions);
+
+        var timerRecovered = await recoveredClient.WaitForInstanceCompletionAsync(
+            timerSchedule.InstanceId,
+            getInputsAndOutputs: true,
+            timeout.Token);
+        Assert.Equal(OrchestrationRuntimeStatus.Completed, timerRecovered.RuntimeStatus);
+        var timerResult = Assert.IsType<DurableTaskSequentialProcessResult>(
+            timerRecovered.ReadOutputAs<DurableTaskSequentialProcessResult>());
+        Assert.Equal(ProcessActivationDisposition.Completed, timerResult.Disposition);
+        var timerWait = Assert.Single(timerResult.State.Waits);
+        Assert.False(timerWait.Active);
+        Assert.Equal(timerDueAtUtc, Assert.Single(timerWait.Timers).DueAtUtc);
+        Assert.Equal(
+            [ProcessActivationCause.Start, ProcessActivationCause.Timer],
+            timerResult.Evidence.Select(static evidence => evidence.Cause));
 
         var failedStart = Start(failedPlan, "failed", "instance/failed");
         var failedSchedule = await recoveredClient.ScheduleCohesiveProcessAsync(failedStart, timeout.Token);
@@ -1186,6 +1420,35 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             cancellationToken);
         throw new InvalidOperationException(
             $"Durable Task instance '{instanceId}' did not expose a canonical outstanding Request. "
+            + $"Runtime status: {retained?.RuntimeStatus}; custom status: {retained?.SerializedCustomStatus}; "
+            + $"failure: {retained?.FailureDetails}.");
+    }
+
+    static async Task<DurableTaskSequentialProcessResult> WaitForActiveTimer(
+        DurableTaskClient client,
+        string instanceId,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 200; attempt++)
+        {
+            var instance = await client.GetInstanceAsync(
+                instanceId,
+                getInputsAndOutputs: true,
+                cancellationToken);
+            var status = instance?.ReadCustomStatusAs<DurableTaskSequentialProcessResult>();
+            if (status is not null && status.State.Waits.Any(static wait =>
+                    wait.Active && wait.Kind == ProcessWaitKind.Timer))
+            {
+                return status;
+            }
+            await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken);
+        }
+        var retained = await client.GetInstanceAsync(
+            instanceId,
+            getInputsAndOutputs: true,
+            cancellationToken);
+        throw new InvalidOperationException(
+            $"Durable Task instance '{instanceId}' did not expose a canonical active Timer. "
             + $"Runtime status: {retained?.RuntimeStatus}; custom status: {retained?.SerializedCustomStatus}; "
             + $"failure: {retained?.FailureDetails}.");
     }
@@ -1422,6 +1685,70 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
                 new FailProcessNode(new("stalled"), Expr.Const("stalled"))
             ]),
         definitionId: "process/durable-task-recurrence");
+
+    static CompiledProcessPlan CompileTimerPlan(DateTimeOffset dueAtUtc, string definitionId) => Compile(
+        Definition(
+            "timer",
+            [
+                new TimerProcessNode(
+                    new("timer"),
+                    Expr.Const(ObservationValue.FromDateTimeOffset(dueAtUtc)),
+                    Edge("edge/timer-return", "return")),
+                new ReturnProcessNode(new("return"), Expr.Const("done"))
+            ]),
+        definitionId: definitionId);
+
+    static CompiledProcessPlan CompileInputTimerPlan() => Compile(
+        Definition(
+            InstantContract,
+            "timer",
+            [
+                new TimerProcessNode(
+                    new("timer"),
+                    Expr.BoundValue(ProcessBindingIds.Input),
+                    Edge("edge/timer-return", "return")),
+                new ReturnProcessNode(new("return"), Expr.Const("done"))
+            ]),
+        definitionId: "process/durable-task-scheduler-timer");
+
+    static CompiledProcessPlan CompileForkTimerPlan(
+        DateTimeOffset firstDueAtUtc,
+        DateTimeOffset secondDueAtUtc) => Compile(
+        Definition(
+            "fork",
+            [
+                new ForkProcessNode(
+                    new("fork"),
+                    [
+                        new(new("branch/a"), Edge("edge/fork-a", "timer/a")),
+                        new(new("branch/b"), Edge("edge/fork-b", "cut/b"))
+                    ],
+                    new("join")),
+                new TimerProcessNode(
+                    new("timer/a"),
+                    Expr.Const(ObservationValue.FromDateTimeOffset(firstDueAtUtc)),
+                    Edge("edge/timer-a-join", "join")),
+                new DurableCutProcessNode(
+                    new("cut/b"),
+                    Edge("edge/cut-b-timer", "timer/b")),
+                new TimerProcessNode(
+                    new("timer/b"),
+                    Expr.Const(ObservationValue.FromDateTimeOffset(secondDueAtUtc)),
+                    Edge("edge/timer-b-join", "join")),
+                new JoinProcessNode(
+                    new("join"),
+                    new("fork"),
+                    new(
+                        ProcessJoinMode.Any,
+                        requiredCount: 0,
+                        ProcessJoinFailurePolicy.FailFast,
+                        ProcessJoinCancellationPolicy.CancelRemaining,
+                        ProcessJoinCompletionOrder.Unobservable,
+                        ProcessJoinTieBreak.BranchIdentity),
+                    Edge("edge/join-return", "return")),
+                new ReturnProcessNode(new("return"), Expr.Const("done"))
+            ]),
+        definitionId: "process/durable-task-fork-timer");
 
     static RequestProcessNode ForkRequest(
         string id,
@@ -1915,6 +2242,9 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     static PortableValue StringValue(string value) =>
         PortableValue.Concrete(StringContract, ObservationValue.FromString(value));
 
+    static PortableValue InstantValue(DateTimeOffset value) =>
+        PortableValue.Concrete(InstantContract, ObservationValue.FromDateTimeOffset(value));
+
     static PortableValue CollectionValue(params string[] values) => PortableValue.Concrete(
         StringCollectionContract,
         ObservationValue.FromImmutableArray(
@@ -2037,6 +2367,11 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     sealed record PendingChild(
         ProcessChildRequestTarget Target,
         TaskCompletionSource<DurableTaskDurableOperationAttemptResult> Completion);
+
+    sealed record ScheduledTimer(
+        TimeSpan Delay,
+        CancellationToken CancellationToken,
+        TaskCompletionSource Completion);
 
     sealed record SchedulerForkChildFixture(
         CompiledProcessPlan Parent,
