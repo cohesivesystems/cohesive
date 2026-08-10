@@ -29,7 +29,7 @@ public sealed class ProcessAuthorityRetirementTests
     }
 
     [Fact]
-    public void ShippedDurableTaskAssembly_IsMonitoringOnly()
+    public void ShippedDurableTaskAssembly_DoesNotRestoreRetiredCallbackAuthority()
     {
         var assembly = typeof(DurableTaskProcessExecutionRepository).Assembly;
         string[] retiredTypes =
@@ -45,6 +45,12 @@ public sealed class ProcessAuthorityRetirementTests
         Assert.Contains(
             assembly.GetExportedTypes(),
             static type => type == typeof(DurableTaskProcessExecutionRepository));
+        Assert.Contains(
+            assembly.GetExportedTypes(),
+            static type => type == typeof(DurableTaskSequentialProcessOrchestrator));
+        Assert.Contains(
+            assembly.GetExportedTypes(),
+            static type => type == typeof(DurableTaskSequentialProcessPlanCatalog));
     }
 
     [Fact]

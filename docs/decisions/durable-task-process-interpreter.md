@@ -141,9 +141,10 @@ tests until the target-neutral collector and Durable Task profile state its disp
 
 The executable target-neutral inventory, profile, realization ledger, and structured diagnostics are implemented in
 `Cohesive.Processes.Compilation`. Construct kinds are projected from the canonical persisted-union metadata instead
-of another enum. `Cohesive.Adapters.DurableTask` now publishes the versioned planning profile and compiles successful
-exhaustive reports into deterministic physical plans that retain the exact canonical plan. These artifacts do not
-admit execution; the generic Durable Task interpreter and its conformance evidence remain subsequent work.
+of another enum. `Cohesive.Adapters.DurableTask` publishes the versioned planning profile and compiles successful
+exhaustive reports into deterministic physical plans that retain the exact canonical plan. The initial executable
+slice performs a second admission check against its narrower construct closure before adding an exact plan to the
+worker catalog; a successful full-profile planning report alone never implies executable support.
 
 ## Conformance and promotion
 
@@ -194,9 +195,17 @@ a native realization.
 
 This decision remains accepted direction for Durable Task execution. As of 2026-08-09,
 `Cohesive.Processes` implements the target-neutral requirement inventory, capability evidence, exhaustive
-disposition ledger, and structured matching diagnostics. `Cohesive.Adapters.DurableTask` implements historical
-monitoring plus a planning-only target profile and physical realization compiler. It still exposes no Process
-execution admission or host; the interpreter, conformance suite, and ARI adoption remain tracked from ARI-285.
+disposition ledger, structured matching diagnostics, and reference interpreter. `Cohesive.Adapters.DurableTask`
+implements historical monitoring, the planning profile, and an initial generic executable slice for sequential
+Transition, Relation/Query, Request, Choice, Match, Durable Cut, Return, and Fail constructs. It resolves only exact
+definition identity/revision/fingerprint tuples from an immutable worker deployment catalog and uses standalone SDK
+activities for bounded host I/O. Differential tests cover canonical decisions and evidence; a pinned Scheduler
+emulator proves completion, authored failure, duplicate start admission, and worker restart at a Request boundary
+without re-invoking an activity already retained in Scheduler history.
+
+This is not promotion of the full planning profile. Request dispatch and recovery, waits and timers, signals,
+fork/join, child Processes, control and lifecycle semantics, observability, and the complete crash/replay conformance
+matrix remain tracked by ARI-290 through ARI-293. Unsupported node kinds fail catalog construction before execution.
 
 Target facts should be revalidated against the official
 [Durable Task documentation](https://learn.microsoft.com/azure/durable-task/),

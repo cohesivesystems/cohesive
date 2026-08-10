@@ -231,9 +231,10 @@ reason the process is waiting or terminal.
 ### Current implementation anchor
 
 Processes, the reference interpreter, native durable runtime, durable-operation contracts, and distribution
-semantics implement substantial subsets of this lifecycle. Durable Task execution is accepted future direction;
-the current package provides historical monitoring only. Advanced control, durable signal arbitration,
-parallelism, compensation, migration, and every target adapter claim must be checked against the
+semantics implement substantial subsets of this lifecycle. The Durable Task adapter now executes its initial
+exact-plan sequential closure in addition to historical monitoring; its broader capability plan remains future
+direction. Advanced request recovery, control, durable signal arbitration, parallelism, compensation, migration,
+and every target adapter claim must be checked against the
 [Execution Kernel compatibility inventory](../EXECUTION_KERNEL_COMPATIBILITY.md) and the accepted
 [Durable Task interpreter decision](../decisions/durable-task-process-interpreter.md).
 
