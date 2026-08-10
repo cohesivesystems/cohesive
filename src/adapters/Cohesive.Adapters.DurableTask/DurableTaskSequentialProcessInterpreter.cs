@@ -53,14 +53,33 @@ static class DurableTaskSequentialProcessInterpreter
             ? []
             : resumed.DurableOperations.ToDictionary(static operation => operation.State.OperationId);
         Dictionary<EmissionId, PendingDurableOperation> pendingOperations = [];
-        Dictionary<ProcessWaitRegistrationId, PendingProcessTimer> pendingTimers = [];
+        Dictionary<(ProcessWaitRegistrationId Wait, ExecutionNodeId Clause), PendingProcessTimer> pendingTimers = [];
         Task<ProcessActivationInput>? pendingInteraction = null;
         Task<ProcessChildCancellationIntent>? pendingChildCancellation = null;
         HashSet<string> dispatchedChildCancellations = new(StringComparer.Ordinal);
         ProcessCancellationIntent? cancellation = null;
+        var planAcceptsAwaitMatchInteractions = plan.Definition.Nodes
+            .OfType<AwaitMatchProcessNode>()
+            .Any(static node => node.Clauses.Any(static clause => clause is ProcessAwaitInteractionClause));
+        if (planAcceptsAwaitMatchInteractions)
+        {
+            pendingInteraction = BeginInteractionWait();
+        }
 
         while (true)
         {
+            if (inputs.IsEmpty
+                && cancellation is null
+                && pendingInteraction?.IsCompleted == true)
+            {
+                inputs = [await pendingInteraction.ConfigureAwait(true)];
+                pendingInteraction = null;
+                if (cause != ProcessActivationCause.Start)
+                {
+                    cause = ProcessActivationCause.Interaction;
+                    observedAtUtc = RequireUtc(getCurrentUtc());
+                }
+            }
             var activation = new ProcessActivation(
                 DurableTaskSequentialProcessIdentities.Activation(state),
                 cause,
@@ -102,7 +121,8 @@ static class DurableTaskSequentialProcessInterpreter
                 case ProcessActivationDisposition.Rejected:
                     if (pendingOperations.Count == 0
                         && pendingTimers.Count == 0
-                        && state.OutstandingRequests.IsEmpty)
+                        && state.OutstandingRequests.IsEmpty
+                        && !HasExternalInteractionSource())
                     {
                         return result;
                     }
@@ -123,6 +143,7 @@ static class DurableTaskSequentialProcessInterpreter
                     switch (plan.GetNode(safePoint))
                     {
                         case TimerProcessNode:
+                        case AwaitMatchProcessNode:
                             if (state.Tokens.Any(static token =>
                                     token.Disposition == ExecutionTokenDisposition.Ready))
                             {
@@ -207,7 +228,9 @@ static class DurableTaskSequentialProcessInterpreter
                                 throw new InvalidOperationException(
                                     "Continue-as-new cannot discard incomplete durable Request tasks.");
                             }
-                            if (pendingTimers.Count == 0 && continueAsNew is not null)
+                            if (pendingTimers.Count == 0
+                                && pendingInteraction?.IsCompleted != true
+                                && continueAsNew is not null)
                             {
                                 await continueAsNew(start.ContinueFrom(result)).ConfigureAwait(true);
                                 return result;
@@ -246,11 +269,9 @@ static class DurableTaskSequentialProcessInterpreter
         {
             while (true)
             {
-                var bound = pendingOperations.Keys.ToHashSet();
-                var hasExternalRequest = state.OutstandingRequests.Any(request => !bound.Contains(request.Emission));
-                if (hasExternalRequest && pendingInteraction is null)
+                if (HasExternalInteractionSource() && pendingInteraction is null)
                 {
-                    pendingInteraction = waitForInteraction();
+                    pendingInteraction = BeginInteractionWait();
                 }
                 if (pendingOperations.Count == 0
                     && waitForChildCancellation is not null
@@ -265,7 +286,8 @@ static class DurableTaskSequentialProcessInterpreter
                         .OrderBy(static pair => pair.Key.Value, StringComparer.Ordinal)
                         .Select(static pair => (Task)pair.Value.Execution),
                     .. pendingTimers
-                        .OrderBy(static pair => pair.Key.Value, StringComparer.Ordinal)
+                        .OrderBy(static pair => pair.Key.Wait.Value, StringComparer.Ordinal)
+                        .ThenBy(static pair => pair.Key.Clause.Value, StringComparer.Ordinal)
                         .Select(static pair => pair.Value.Execution)
                 ];
                 if (pendingInteraction is not null)
@@ -283,28 +305,36 @@ static class DurableTaskSequentialProcessInterpreter
                 }
 
                 var completed = await Task.WhenAny(candidates).ConfigureAwait(true);
-                if (ReferenceEquals(completed, pendingInteraction))
+                var completedTimer = pendingTimers.Any(candidate =>
+                    ReferenceEquals(candidate.Value.Execution, completed));
+                if (ReferenceEquals(completed, pendingInteraction) || completedTimer)
                 {
-                    var input = await pendingInteraction!.ConfigureAwait(true);
-                    pendingInteraction = null;
-                    return NextProcessStimulus.For(input);
+                    ProcessActivationInput? input = null;
+                    if (pendingInteraction?.IsCompleted == true)
+                    {
+                        input = await pendingInteraction.ConfigureAwait(true);
+                        pendingInteraction = null;
+                    }
+
+                    foreach (var timer in pendingTimers
+                                 .Where(static candidate => candidate.Value.Execution.IsCompleted)
+                                 .OrderBy(static candidate => candidate.Key.Wait.Value, StringComparer.Ordinal)
+                                 .ThenBy(static candidate => candidate.Key.Clause.Value, StringComparer.Ordinal)
+                                 .ToArray())
+                    {
+                        await timer.Value.Execution.ConfigureAwait(true);
+                        pendingTimers.Remove(timer.Key);
+                        timer.Value.Cancellation.Dispose();
+                    }
+                    return input is null
+                        ? NextProcessStimulus.ForTimer()
+                        : NextProcessStimulus.For(input);
                 }
                 if (ReferenceEquals(completed, pendingChildCancellation))
                 {
                     var intent = await pendingChildCancellation!.ConfigureAwait(true);
                     pendingChildCancellation = null;
                     return NextProcessStimulus.For(ToCancellation(intent));
-                }
-
-                var completedTimer = pendingTimers
-                    .OrderBy(static candidate => candidate.Key.Value, StringComparer.Ordinal)
-                    .FirstOrDefault(candidate => ReferenceEquals(candidate.Value.Execution, completed));
-                if (completedTimer.Value is not null)
-                {
-                    await completedTimer.Value.Execution.ConfigureAwait(true);
-                    pendingTimers.Remove(completedTimer.Key);
-                    completedTimer.Value.Cancellation.Dispose();
-                    return NextProcessStimulus.ForTimer();
                 }
 
                 var pair = pendingOperations
@@ -357,10 +387,25 @@ static class DurableTaskSequentialProcessInterpreter
 
         void SynchronizeTimers()
         {
-            var active = state.Waits
-                .Where(static wait => wait.Active && wait.Kind == ProcessWaitKind.Timer)
-                .ToDictionary(static wait => wait.RegistrationId);
-            foreach (var obsolete in pendingTimers.Keys.Where(key => !active.ContainsKey(key)).ToArray())
+            Dictionary<(ProcessWaitRegistrationId Wait, ExecutionNodeId Clause), ProcessTimerState> active = [];
+            foreach (var wait in state.Waits.Where(static wait =>
+                         wait.Active && wait.Kind is ProcessWaitKind.Timer or ProcessWaitKind.AwaitMatch))
+            {
+                foreach (var timer in wait.Timers)
+                {
+                    var key = (wait.RegistrationId, timer.Clause);
+                    if (!active.TryAdd(key, timer))
+                    {
+                        throw new InvalidOperationException(
+                            $"Canonical wait '{wait.RegistrationId.Value}' repeats timer clause '{timer.Clause.Value}'.");
+                    }
+                }
+            }
+            foreach (var obsolete in pendingTimers.Keys
+                         .Where(key => !active.ContainsKey(key))
+                         .OrderBy(static key => key.Wait.Value, StringComparer.Ordinal)
+                         .ThenBy(static key => key.Clause.Value, StringComparer.Ordinal)
+                         .ToArray())
             {
                 var pending = pendingTimers[obsolete];
                 pendingTimers.Remove(obsolete);
@@ -375,13 +420,15 @@ static class DurableTaskSequentialProcessInterpreter
             }
 
             var currentUtc = RequireUtc(getCurrentUtc());
-            foreach (var wait in active.Values.OrderBy(static wait => wait.RegistrationId.Value, StringComparer.Ordinal))
+            foreach (var candidate in active
+                         .OrderBy(static candidate => candidate.Key.Wait.Value, StringComparer.Ordinal)
+                         .ThenBy(static candidate => candidate.Key.Clause.Value, StringComparer.Ordinal))
             {
-                if (pendingTimers.ContainsKey(wait.RegistrationId))
+                if (pendingTimers.ContainsKey(candidate.Key))
                 {
                     continue;
                 }
-                var timer = wait.Timers.Single();
+                var timer = candidate.Value;
                 var delay = timer.DueAtUtc - currentUtc;
                 if (delay < TimeSpan.Zero)
                 {
@@ -391,10 +438,28 @@ static class DurableTaskSequentialProcessInterpreter
                 var execution = createTimer(delay, cancellationSource.Token)
                     ?? throw new InvalidOperationException("The Durable Task timer delegate returned null.");
                 pendingTimers.Add(
-                    wait.RegistrationId,
+                    candidate.Key,
                     new(cancellationSource, execution));
             }
         }
+
+        bool HasExternalInteractionSource()
+        {
+            if (state.OutstandingRequests.Any(request => !pendingOperations.ContainsKey(request.Emission)))
+            {
+                return true;
+            }
+
+            return state.Waits.Any(wait =>
+                wait.Active
+                && wait.Kind == ProcessWaitKind.AwaitMatch
+                && plan.GetNode(wait.Node) is AwaitMatchProcessNode awaitMatch
+                && awaitMatch.Clauses.Any(static clause => clause is ProcessAwaitInteractionClause));
+        }
+
+        Task<ProcessActivationInput> BeginInteractionWait() =>
+            waitForInteraction()
+            ?? throw new InvalidOperationException("The Durable Task interaction-wait delegate returned null.");
 
         async Task AwaitPropagatedChildClosuresAsync()
         {
@@ -436,18 +501,18 @@ static class DurableTaskSequentialProcessInterpreter
 
         void Apply(NextProcessStimulus stimulus)
         {
-            if (stimulus.TimerElapsed)
-            {
-                inputs = [];
-                cancellation = null;
-                cause = ProcessActivationCause.Timer;
-                return;
-            }
             if (stimulus.Input is not null)
             {
                 inputs = [stimulus.Input];
                 cancellation = null;
                 cause = ProcessActivationCause.Interaction;
+                return;
+            }
+            if (stimulus.TimerElapsed)
+            {
+                inputs = [];
+                cancellation = null;
+                cause = ProcessActivationCause.Timer;
                 return;
             }
             inputs = [];
