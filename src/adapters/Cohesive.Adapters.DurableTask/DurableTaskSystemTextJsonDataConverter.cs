@@ -1,9 +1,7 @@
-using System.Collections;
-using System.Runtime.CompilerServices;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Cohesive.Domain;
 using Cohesive.Transitions.Authoring;
 using Cohesive.Transitions.Model;
 using DurableTask.Core.Serializing;
@@ -15,6 +13,9 @@ namespace Cohesive.Adapters.DurableTask;
 /// </summary>
 public sealed class DurableTaskSystemTextJsonDataConverter : JsonDataConverter
 {
+    internal const string TypedValueTypePropertyName = "$type";
+    internal const string TypedValuePropertyName = "$value";
+
     readonly JsonSerializerOptions compactOptions;
     readonly JsonSerializerOptions formattedOptions;
 
@@ -74,7 +75,7 @@ public sealed class DurableTaskSystemTextJsonDataConverter : JsonDataConverter
         return JsonSerializer.Deserialize(data, objectType, compactOptions);
     }
 
-    static bool TryExtractTypedValuePayload(string data, out string payloadJson)
+    internal static bool TryExtractTypedValuePayload(string data, out string payloadJson)
     {
         payloadJson = string.Empty;
 
@@ -82,10 +83,10 @@ public sealed class DurableTaskSystemTextJsonDataConverter : JsonDataConverter
         if (document.RootElement.ValueKind is not JsonValueKind.Object)
             return false;
 
-        if (!document.RootElement.TryGetProperty(DurableTaskObjectJsonConverter.TypePropertyName, out _))
+        if (!document.RootElement.TryGetProperty(TypedValueTypePropertyName, out _))
             return false;
 
-        if (!document.RootElement.TryGetProperty(DurableTaskObjectJsonConverter.ValuePropertyName, out var valueProperty))
+        if (!document.RootElement.TryGetProperty(TypedValuePropertyName, out var valueProperty))
             return false;
 
         payloadJson = valueProperty.GetRawText();
@@ -109,8 +110,6 @@ public sealed class DurableTaskSystemTextJsonDataConverter : JsonDataConverter
 
     sealed class DurableTaskObjectJsonConverter : JsonConverter<object>
     {
-        internal const string TypePropertyName = "$type";
-        internal const string ValuePropertyName = "$value";
         const string ValuesPropertyName = "$values";
 
         public override object? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
@@ -134,8 +133,8 @@ public sealed class DurableTaskSystemTextJsonDataConverter : JsonDataConverter
 
             var (normalizedValue, normalizedType) = NormalizePayload(value);
             writer.WriteStartObject();
-            writer.WriteString(TypePropertyName, GetTypeIdentifier(normalizedType));
-            writer.WritePropertyName(ValuePropertyName);
+            writer.WriteString(TypedValueTypePropertyName, GetTypeIdentifier(normalizedType));
+            writer.WritePropertyName(TypedValuePropertyName);
 
             if (normalizedType == typeof(object))
             {
@@ -269,12 +268,13 @@ public sealed class DurableTaskSystemTextJsonDataConverter : JsonDataConverter
             if (element.ValueKind is not JsonValueKind.Object)
                 return false;
 
-            if (!element.TryGetProperty(TypePropertyName, out var typeProperty) || typeProperty.ValueKind is not JsonValueKind.String)
+            if (!element.TryGetProperty(TypedValueTypePropertyName, out var typeProperty)
+                || typeProperty.ValueKind is not JsonValueKind.String)
                 return false;
 
             payloadType = ResolvePayloadType(typeProperty.GetString()!);
 
-            if (element.TryGetProperty(ValuePropertyName, out var valueProperty))
+            if (element.TryGetProperty(TypedValuePropertyName, out var valueProperty))
             {
                 payloadJson = valueProperty.GetRawText();
                 return true;
@@ -298,7 +298,7 @@ public sealed class DurableTaskSystemTextJsonDataConverter : JsonDataConverter
                 writer.WriteStartObject();
                 foreach (var property in element.EnumerateObject())
                 {
-                    if (string.Equals(property.Name, TypePropertyName, StringComparison.Ordinal))
+                    if (string.Equals(property.Name, TypedValueTypePropertyName, StringComparison.Ordinal))
                         continue;
 
                     property.WriteTo(writer);
