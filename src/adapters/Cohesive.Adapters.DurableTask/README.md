@@ -1,13 +1,13 @@
 # Cohesive.Adapters.DurableTask
 
 Azure Durable Task integration for historical Process monitoring, realization planning, and an executable
-sequential profile over the standalone Microsoft Durable Task SDK.
+bounded Process profile over the standalone Microsoft Durable Task SDK.
 
 The former adapter executed callback-bearing Process definitions through a single-cursor checkpoint. ARI-170
 retired that path because it could not preserve canonical Process semantics. The replacement keeps the exact
 `CompiledProcessPlan` and `ProcessReferenceInterpreter` as semantic authority. A generic Durable Task orchestration
-now executes the admitted sequential slice; bounded activities invoke canonical Transition and Relation/Query host
-operations, while Durable Task owns physical scheduling, history, and replay.
+now executes the admitted bounded slice; activities invoke canonical Transition, Relation/Query, and Request host
+operations, sub-orchestrations execute child Processes, and Durable Task owns physical scheduling, history, and replay.
 
 The accepted execution direction is a parallel durable interpreter that consumes an exact `CompiledProcessPlan`
 and uses Azure Durable Task Scheduler as physical execution evidence. It is not required to implement
@@ -26,14 +26,14 @@ dotnet add package Cohesive.Adapters.DurableTask
 - You need to query task-hub records created by the retired adapter during migration.
 - You need an `IProcessExecutionRepository` monitoring projection over an existing Durable Task hub.
 - You need to inspect whether an exact `CompiledProcessPlan` has a complete intended Durable Task realization.
-- You need to execute an exact sequential Process containing Transition, Relation/Query, Request, Choice, Match,
-  Durable Cut, Return, and Fail constructs.
+- You need to execute an exact Process containing Transition, Relation/Query, Request, Choice, Match, bounded
+  Fork/Join, child Process, bounded partition, bounded recurrence, Durable Cut, Return, and Fail constructs.
 
-The executable profile is intentionally narrower than the complete planning profile. Timers, signals, fork/join,
-child Processes, controls, and complete operational lifecycle semantics remain outside this slice and are rejected
-when the worker catalog is built. Request dispatch, bounded retry, reconciliation, acknowledgement, and Reply
-admission are implemented; typed timeout, terminal-failure, and escalation paths fail closed with their canonical
-operation ledger because this slice does not fabricate the authored recovery outcome.
+The executable profile remains narrower than the complete planning profile. Timers, signals, general external waits,
+root lifecycle control, and complete operational lifecycle semantics remain outside this slice and are rejected when
+the worker catalog is built. Request dispatch, bounded retry, reconciliation, acknowledgement, and Reply admission
+are implemented; typed timeout, terminal-failure, and escalation paths fail closed with their canonical operation
+ledger because this slice does not fabricate the authored recovery outcome.
 
 ## Monitoring boundary
 
@@ -74,7 +74,7 @@ The resulting plan retains the exact `CompiledProcessPlan`; it contains no gener
 workflow. Successful plans may be deployed through the immutable exact-reference catalog below, but the catalog
 performs the additional executable-slice check before worker startup.
 
-## Sequential execution
+## Process execution
 
 Compile every deployed definition, retain its exact physical plan, and register one canonical host for bounded I/O.
 To dispatch Requests automatically, also supply deterministic exact binding and adapter resolvers:
@@ -105,7 +105,8 @@ both native Storage and Durable Task interpretations, rather than target-specifi
 The worker catalog is a deployment projection, not a mutable definition registry. Each lookup requires the full
 definition identity, revision, and fingerprint from the canonical `ProcessStartReceipt`; workers must reconstruct
 an equivalent immutable catalog and deterministic Request bindings after restart. The package registers the same
-portable JSON converter for worker and client payloads.
+portable JSON converter for worker and client payloads. The initial public SDK names retain `Sequential` for source
+compatibility, but catalog admission now includes the bounded higher-order constructs listed above.
 
 Schedule the admitted start evidence with the client extension:
 
@@ -134,14 +135,28 @@ failure evidence feeds the canonical retry policy, and thrown adapter exceptions
 (conservatively ambiguous by default). Claim leases are renewed with durable timers while activity I/O is in
 flight. Ambiguous outcomes invoke the exact adapter reconciliation path before retry or admission.
 
+Fork branches retain canonical tokens and lineage while bound Requests are scheduled concurrently. The canonical
+Join alone selects winning branches and applies its authored cancellation policy. A child invocation becomes a
+sub-orchestration with the interpreter-derived child instance and attempt; its terminal status is mapped through the
+authored child outcome mapping rather than through physical task success or failure. `Propagate` sends the portable
+`ProcessChildCancellationIntent` to the exact child instance and the parent waits for that child to close;
+`Detach` deliberately stops awaiting the child. A late result from either policy is admitted through the Request's
+late-result rule and cannot advance the already-closed parent wait.
+
+`ForEachPartition` uses the canonical retained work inventory and enforces maximum items, starts per activation, and
+parallelism before scheduling sub-orchestrations. It does not truncate excess work. `RepeatAcrossActivation` and
+Fork/Durable Cut boundaries use Durable Task Continue-as-new with the complete canonical result at the cut. The
+resume carrier is target-owned derived evidence: it retains definition, continuation, recurrence, operation, and
+activation lineage and cannot replace the exact compiled plan.
+
 If the semantic deadline wins, or canonical policy requires a typed terminal outcome or escalation that this slice
 cannot author, the orchestration fails closed with `DurableTaskDurableOperationRecoveryRequiredException`. Its
 custom status contains the full canonical operation ledger and exact recovery intent when one exists. The runtime
 does not turn worker cancellation into semantic cancellation or invent timeout/escalation values.
 
-`Return` completes the orchestration. An authored `Fail` produces canonical failure evidence and a failed physical
-orchestration. A canonical Durable Cut closes one finite activation and creates a zero-duration durable timer before
-the next activation, preserving the activation boundary in Durable Task history.
+`Return` completes the orchestration. An authored root `Fail` produces canonical failure evidence and a failed
+physical orchestration; child failure remains a semantic child result for its parent. A canonical Durable Cut closes
+one finite activation and resumes with exact continuation evidence, using Continue-as-new in the SDK realization.
 
 ## Validation
 
@@ -160,11 +175,12 @@ eng/test-durable-task-integration.sh
 ```
 
 The script pins the emulator image by digest. Emulator coverage proves successful completion, bound Request
-activity dispatch and Reply admission, authored failure, duplicate start admission, and worker restart while an
-unbound Request is waiting. The restart assertion also verifies that
-the Transition activity already retained in Scheduler history is not invoked again. Deterministic conformance tests
-cover bound Request success, bounded retry, reconciliation, deadline and escalation fail-closed behavior, and crash
-cuts before dispatch, after dispatch, after acknowledgement, and before Reply admission.
+activity dispatch and Reply admission, child sub-orchestration, recurrence history rollover, authored failure,
+duplicate start admission, and worker restart while an unbound Request is waiting. The restart assertion also
+verifies that the Transition activity already retained in Scheduler history is not invoked again. Deterministic
+conformance tests additionally cover concurrent fork Requests, Join selection, child lineage and cancellation,
+partition bounds, recurrence bounds, bounded retry, reconciliation, deadline and escalation fail-closed behavior,
+and crash cuts before dispatch, after dispatch, after acknowledgement, and before Reply admission.
 
 ## Capability boundary
 

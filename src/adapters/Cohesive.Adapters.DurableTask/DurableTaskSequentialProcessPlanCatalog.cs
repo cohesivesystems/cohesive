@@ -5,7 +5,7 @@ using Cohesive.Processes.IR;
 
 namespace Cohesive.Adapters.DurableTask;
 
-/// <summary>Immutable exact-reference catalog of precompiled Process plans admitted for sequential execution.</summary>
+/// <summary>Immutable exact-reference catalog of precompiled Process plans admitted for bounded execution.</summary>
 /// <remarks>
 /// This catalog is a worker deployment projection, not definition authority. Every entry retains its canonical
 /// document and compiled plan, and lookup requires the complete definition identity, revision, and fingerprint.
@@ -23,7 +23,7 @@ public sealed class DurableTaskSequentialProcessPlanCatalog
     /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="plans"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
-    /// An entry is null, repeats an exact reference, or includes constructs outside the sequential executable slice.
+    /// An entry is null, repeats an exact reference, or includes constructs outside the bounded executable slice.
     /// </exception>
     public DurableTaskSequentialProcessPlanCatalog(
         IEnumerable<DurableTaskProcessRealizationPlan> plans,
@@ -80,7 +80,7 @@ public sealed class DurableTaskSequentialProcessPlanCatalog
         return plans.TryGetValue(definition, out var plan)
             ? plan
             : throw new KeyNotFoundException(
-                $"No sequential Durable Task Process plan is deployed for exact definition "
+                $"No Durable Task Process plan is deployed for exact definition "
                 + $"'{definition.DefinitionId.Value}' revision '{definition.RevisionId.Value}' fingerprint "
                 + $"'{definition.Fingerprint.Value}'.");
     }
@@ -99,7 +99,12 @@ static class DurableTaskSequentialProcessEligibility
                 or RequestProcessNode
                 or ChoiceProcessNode
                 or MatchProcessNode
+                or ForkProcessNode
+                or JoinProcessNode
                 or DurableCutProcessNode
+                or InvokeProcessProcessNode
+                or ForEachPartitionProcessNode
+                or RepeatAcrossActivationProcessNode
                 or ReturnProcessNode
                 or FailProcessNode))
             {
@@ -110,7 +115,7 @@ static class DurableTaskSequentialProcessEligibility
         if (unsupported.Count > 0)
         {
             throw new ArgumentException(
-                "The initial sequential Durable Task interpreter cannot execute: "
+                "The Durable Task Process interpreter cannot execute: "
                 + string.Join(", ", unsupported),
                 nameof(plan));
         }
