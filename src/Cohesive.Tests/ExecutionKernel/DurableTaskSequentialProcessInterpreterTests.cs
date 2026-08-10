@@ -6,6 +6,7 @@ using Cohesive.Model.Serialization;
 using Cohesive.Processes.Compilation;
 using Cohesive.Processes.Execution;
 using Cohesive.Processes.IR;
+using Cohesive.Processes.Runtime;
 using Microsoft.DurableTask.Client;
 using Microsoft.DurableTask.Client.AzureManaged;
 using Microsoft.DurableTask.Worker;
@@ -2096,6 +2097,15 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             controlledSchedule.InstanceId,
             ProcessWaitKind.Timer,
             timeout.Token);
+        IProcessExecutionRepository executionRepository = new DurableTaskProcessExecutionRepository(client);
+        var observed = await executionRepository.GetAsync(
+            OperationContext.Create(cancellationToken: timeout.Token),
+            controlledSchedule.InstanceId);
+        Assert.NotNull(observed);
+        Assert.Equal(ProcessExecutionStatus.Waiting, observed.Status);
+        Assert.Equal(Serialize(running), Serialize(observed.RuntimeStatus));
+        Assert.Null(observed.Parameters);
+        Assert.Null(observed.Output);
 
         var pause = Pause(controlledStart, running, "scheduler-control/pause", DateTimeOffset.UtcNow);
         await client.RaiseCohesiveProcessControlAsync(controlledStart, pause, timeout.Token);
@@ -2137,6 +2147,14 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             cancelledInstance.ReadOutputAs<DurableTaskSequentialProcessResult>());
         Assert.Equal(ProcessControlMode.Cancelled, cancelled.Control.Mode);
         Assert.Equal(ProcessActivationDisposition.Cancelled, cancelled.Disposition);
+        var cancelledObservation = await executionRepository.GetAsync(
+            OperationContext.Create(cancellationToken: timeout.Token),
+            controlledSchedule.InstanceId);
+        Assert.NotNull(cancelledObservation);
+        Assert.Equal(ProcessExecutionStatus.Cancelled, cancelledObservation.Status);
+        Assert.Equal(
+            ExecutionTerminalOutcomeKind.Cancelled,
+            cancelledObservation.RuntimeStatus?.TerminalOutcome.Kind);
 
         var restartStart = Start(
             restartPlan,
