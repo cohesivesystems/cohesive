@@ -75,23 +75,13 @@ public sealed class DurableTaskProcessExecutionRepository :
             : GetCurrentAsync(context, processId);
     }
 
-    /// <summary>Returns a current Process execution by trusted authority scope and logical Process identity.</summary>
-    /// <param name="context">Operation context that supplies cancellation for the query.</param>
-    /// <param name="authorityScope">Exact trusted authority and optional tenant that isolate the physical execution.</param>
-    /// <param name="processInstanceId">Canonical logical Process instance identity.</param>
-    /// <returns>The retained execution record, or <see langword="null"/> when no matching execution is retained.</returns>
+    /// <inheritdoc />
     /// <remarks>
     /// This overload deterministically derives the authority-scoped physical orchestration ID and performs one exact
     /// task-hub lookup. It does not scan orchestration pages or rely on Scheduler dashboard tag filtering. The overload
     /// is available only for the current standalone-client repository; the migration-only Core reader has a different
     /// historical identity contract.
     /// </remarks>
-    /// <exception cref="ArgumentNullException">
-    /// <paramref name="context"/> or <paramref name="authorityScope"/> is <see langword="null"/>.
-    /// </exception>
-    /// <exception cref="ArgumentException"><paramref name="processInstanceId"/> is the default identity.</exception>
-    /// <exception cref="InvalidOperationException">This repository was constructed as the historical Core reader.</exception>
-    /// <exception cref="OperationCanceledException">Cancellation is requested through <paramref name="context"/>.</exception>
     public ValueTask<ProcessExecutionRecord?> GetAsync(
         OperationContext context,
         InteractionAuthorityScope authorityScope,
@@ -100,6 +90,11 @@ public sealed class DurableTaskProcessExecutionRepository :
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(authorityScope);
         context.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(processInstanceId.Value))
+        {
+            throw new ArgumentException("A logical Process read requires an initialized instance identity.", nameof(processInstanceId));
+        }
+
         if (currentClient is null)
         {
             throw new InvalidOperationException(
@@ -153,7 +148,10 @@ public sealed class DurableTaskProcessExecutionRepository :
         ArgumentNullException.ThrowIfNull(authorityScope);
         context.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(processInstanceId.Value))
+        {
             throw new ArgumentException("A logical Process trace read requires an initialized instance identity.", nameof(processInstanceId));
+        }
+
         if (currentClient is null)
         {
             throw new NotSupportedException(
@@ -199,7 +197,9 @@ public sealed class DurableTaskProcessExecutionRepository :
             getInputsAndOutputs: true,
             context.CancellationToken).ConfigureAwait(false);
         if (metadata is null || !IsCurrentProcess(metadata))
+        {
             return ProcessExecutionTraceReadResult.NotFound();
+        }
 
         var execution = MapCurrent(metadata);
         if (!DurableTaskProcessStatus.IsTerminal(metadata.RuntimeStatus))
@@ -213,7 +213,10 @@ public sealed class DurableTaskProcessExecutionRepository :
             return ProcessExecutionTraceReadResult.InProgress();
         }
         if (string.IsNullOrWhiteSpace(metadata.SerializedOutput))
+        {
             return ProcessExecutionTraceReadResult.TerminalArtifactUnavailable();
+        }
+
         if (metadata.RuntimeStatus != ModernOrchestrationStatus.Completed)
         {
             throw InvalidCurrentEvidence(

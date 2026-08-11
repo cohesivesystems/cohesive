@@ -25,6 +25,32 @@ public interface IProcessExecutionRepository
     ValueTask<ProcessExecutionRecord?> GetAsync(OperationContext context, string processId);
 
     /// <summary>
+    /// Returns a process execution by trusted authority scope and logical Process identity when it is still retained
+    /// by the backing engine.
+    /// </summary>
+    /// <param name="context">Operation context that supplies cancellation for the query.</param>
+    /// <param name="authorityScope">Exact trusted authority and optional tenant isolating the execution.</param>
+    /// <param name="processInstanceId">Canonical logical Process instance identity.</param>
+    /// <returns>The retained execution record, or <see langword="null"/> when no matching execution is retained.</returns>
+    /// <remarks>
+    /// Application-facing reads use this logical address. Implementations may derive a provider-specific physical
+    /// key, but callers must not supply one or rely on its representation.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="context"/> or <paramref name="authorityScope"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="processInstanceId"/> is the default identity.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// Logical lookup is unsupported by a migration-only repository, or retained execution metadata is malformed or
+    /// contradictory.
+    /// </exception>
+    /// <exception cref="OperationCanceledException">Cancellation is requested through <paramref name="context"/>.</exception>
+    ValueTask<ProcessExecutionRecord?> GetAsync(
+        OperationContext context,
+        InteractionAuthorityScope authorityScope,
+        ProcessInstanceId processInstanceId);
+
+    /// <summary>
     /// Queries retained process executions using the backing engine's native execution index.
     /// </summary>
     /// <param name="context">Operation context that supplies cancellation for the query.</param>

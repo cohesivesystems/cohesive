@@ -134,6 +134,11 @@ Use the common projections:
   actionable diagnostics; and
 - `ExecutionTelemetry` plus Storage telemetry bridges for low-cardinality operational signals.
 
+Use `IProcessExecutionRepository` for provider-neutral safe status acquisition. Application-facing reads supply a
+trusted `InteractionAuthorityScope` plus canonical `ProcessInstanceId`; physical keys are reserved for explicit
+engine administration. A pending admission can retain its exact definition before canonical status exists, and that
+gap must not be filled from provider lifecycle state.
+
 Use `IProcessExecutionTraceRepository` when a runtime must retrieve retained Process traces separately from status.
 Its explicit read state distinguishes an active execution from a missing execution or a terminal execution without
 a canonical artifact. Available records expose a missing-prefix count; only zero proves complete activation coverage.
@@ -150,11 +155,13 @@ API, CLI, tests, and documentation serialize the same artifacts through
 redact according to the declared disclosure contract; it must not translate the artifact into an
 independent diagnostics type.
 
-For ASP.NET, `MapProcessExecutionExplainApi` derives one GET endpoint from
-`ExecutionControlApiCatalog.Explain`. The route supplies only `processInstanceId`; a required server-side resolver
-supplies the authority scope, and a required authorization-policy resolver projects the catalog requirement. The
-adapter writes the artifact's canonical bytes and uses the catalog's existing opaque problem results. It does not
-deserialize caller-authored command authorization, issuance, or provenance evidence.
+For ASP.NET, `MapProcessExecutionInspectApi` and `MapProcessExecutionExplainApi` derive GET endpoints from the exact
+`ExecutionControlApiCatalog` handles. Each route supplies only `processInstanceId`; their shared required server-side
+resolver supplies the authority scope, and a required authorization-policy resolver projects the catalog
+requirement. Inspect returns the retained canonical status in the existing `ExecutionControlResult`; missing and
+pending-without-status observations remain the same opaque not-found result. Explain writes the artifact's canonical
+bytes and uses the catalog's existing opaque problem variants. Neither endpoint deserializes caller-authored command
+authorization, issuance, or provenance evidence.
 
 ## Executable examples
 
@@ -262,6 +269,11 @@ canonical formatted projection.
 projects the same catalog handle through ASP.NET. It proves that the request carries no command body, the repository
 receives the server-resolved logical address, authorization metadata cannot be omitted, and the response body equals
 the canonical explain bytes exactly.
+
+[`ProcessExecutionInspectApiEndpointRouteBuilderExtensionsTests`](../src/Cohesive.Tests/Api/ProcessExecutionInspectApiEndpointRouteBuilderExtensionsTests.cs)
+proves the companion status projection uses the same trusted logical address, returns the retained canonical status
+inside the declared `Inspected` result, conceals missing and pending-without-status observations identically, and
+rejects conflicting Process affinity.
 
 Documentation should link this source or show the same serializer call. It should not copy the
 artifact into a documentation-only DTO.

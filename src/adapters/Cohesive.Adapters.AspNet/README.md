@@ -109,19 +109,27 @@ app.MapRelationQueryApiDefinition(definition, new RelationQueryApiEndpointOption
 The required result mapper receives the complete canonical outcome, including rows, aggregations, requirement gaps,
 diagnostics, and provenance, and remains responsible for the endpoint's HTTP status policy.
 
-## Canonical Process explanation
+## Canonical Process observation reads
 
-`MapProcessExecutionExplainApi` projects the existing route-neutral `ExecutionControlApiCatalog.Explain` handle as
-an HTTP GET without adding an API-specific explanation DTO. The route carries only the logical Process identity.
-The required authority-scope resolver must derive authority and tenant from authenticated server-side identity and
-scope evidence; it must not copy them from caller data. The required authorization-policy resolver maps the
-catalog's semantic authorization requirement to ASP.NET authorization metadata.
+`MapProcessExecutionInspectApi` and `MapProcessExecutionExplainApi` project the existing route-neutral
+`ExecutionControlApiCatalog` handles as HTTP GETs without adding status or explanation DTOs. Each route carries only
+the logical Process identity. Their shared `ProcessExecutionAuthorityScopeResolver` must derive authority and tenant
+from authenticated server-side identity and scope evidence; it must not copy them from caller data. The required
+authorization-policy resolver maps each catalog semantic authorization requirement to ASP.NET authorization
+metadata.
 
 ```csharp
 using Cohesive.Adapters.AspNet.Processes;
 using Cohesive.Api.Execution;
 
 var executionControl = ExecutionControlApiCatalog.Create();
+
+app.MapProcessExecutionInspectApi(
+    executionControl.Inspect,
+    "/api/processes/{processInstanceId}",
+    (operationContext, httpContext, processInstanceId) =>
+        ResolveAuthorizedProcessScope(operationContext, httpContext, processInstanceId),
+    (operation, requirement) => ResolveAuthorizationPolicy(requirement));
 
 app.MapProcessExecutionExplainApi(
     executionControl.Explain,
@@ -131,10 +139,14 @@ app.MapProcessExecutionExplainApi(
     (operation, requirement) => ResolveAuthorizationPolicy(requirement));
 ```
 
-The adapter resolves `IProcessExecutionExplainRepository` from request services, performs the provider-neutral
-logical read, returns missing or malformed targets through the catalog's opaque `ExecutionApiProblem` variants, and
-writes the successful `ExecutionExplainArtifact` as exact canonical bytes from `ExecutionExplainJsonSerializer`.
-Conflicting runtime or trace affinity fails closed. The original catalog remains route-neutral and unchanged.
+The inspect binding resolves `IProcessExecutionRepository`, performs its provider-neutral logical read, and returns
+only a retained canonical `ExecutionStatus` inside the catalog's existing `ExecutionControlResult` with exact
+`Inspected` disposition. Missing executions and pending admissions without canonical status produce the same opaque
+not-found problem; provider lifecycle values are never promoted into semantic status. The explain binding resolves
+`IProcessExecutionExplainRepository` and writes the successful `ExecutionExplainArtifact` as exact canonical bytes
+from `ExecutionExplainJsonSerializer`. Missing or malformed explanation targets use the catalog's opaque problem
+variants. Conflicting status, runtime, or trace affinity fails closed. The original catalog remains route-neutral and
+unchanged.
 
 ## Related Packages
 

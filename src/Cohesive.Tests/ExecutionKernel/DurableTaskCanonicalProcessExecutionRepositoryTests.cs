@@ -137,7 +137,7 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
             OrchestrationRuntimeStatus.Running,
             tags: DurableTaskProcessTags.Create(fixture.Start.Receipt));
         var client = new FakeDurableTaskClient([metadata]);
-        var repository = new DurableTaskProcessExecutionRepository(client);
+        IProcessExecutionRepository repository = new DurableTaskProcessExecutionRepository(client);
 
         var record = await repository.GetAsync(
             OperationContext.Create(),
