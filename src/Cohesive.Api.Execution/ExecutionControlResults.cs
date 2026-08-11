@@ -4,7 +4,7 @@ using System.Text.Json.Serialization;
 using Cohesive.Execution;
 using Cohesive.Processes.Runtime;
 
-namespace Cohesive.Api;
+namespace Cohesive.Api.Execution;
 
 /// <summary>Stable non-sensitive problem codes emitted by execution API boundary adapters.</summary>
 public static class ExecutionApiProblemCodes

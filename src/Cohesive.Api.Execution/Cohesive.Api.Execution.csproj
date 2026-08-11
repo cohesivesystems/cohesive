@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Description>Canonical execution-control API declarations and reference integration for Cohesive execution semantics.</Description>
+    <PackageTags>cohesive;semantic;api;execution;processes;orchestration</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cohesive.Api\Cohesive.Api.csproj" />
+    <ProjectReference Include="..\Cohesive.Processes\Cohesive.Processes.csproj" />
+    <ProjectReference Include="..\Cohesive.Storage\Cohesive.Storage.csproj" />
+    <ProjectReference Include="..\Cohesive\Cohesive.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -142,6 +142,7 @@ The reusable toolchain is developed primarily through the `Cohesive.*` libraries
 - `src/Cohesive.Presentation`: a UI/presentation layer language that is compiled/projected onto concrete UI rendering systems like React/Blazor/Angular, etc.
 - `src/Cohesive.AI`: semantic AI, inference, training, vectors, numerics, and text-oriented components.
 - `src/Cohesive.Api`: API declaration language that can generate OpenAPI/GraphQL/gRPC/etc.
+- `src/Cohesive.Api.Execution`: optional execution-control API composition over generic API and canonical execution contracts.
 - `src/Cohesive.Storage`: generic storage abstractions.
 - `src/frontend/*`: TypeScript incarnations of Cohesive.Presentation as well as IR projection and rendering modules for React, component libraries, styling libraries, etc.
 - `src/Cohesive.Adapters.*`: adapters to external infrastructure.

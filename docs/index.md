@@ -4,7 +4,7 @@ status: accepted
 authority: cohesive.documentation-index
 owners: [cohesive-core]
 applies_to: [cohesive]
-last_verified: 2026-08-03
+last_verified: 2026-08-11
 supersedes: []
 ---
 
@@ -110,6 +110,7 @@ tests, and eventually a repository-wide maturity matrix.
 | Decision | Status | Scope |
 | --- | --- | --- |
 | [Durable Task as a parallel Process interpreter](decisions/durable-task-process-interpreter.md) | Accepted; sequential execution and durable Request recovery slice implemented | Canonical Process authority, target capability inventory, Durable Task interpretation, conformance and alternatives |
+| [Execution-control API package boundary](decisions/execution-control-api-package-boundary.md) | Implemented | Generic API dependency direction, execution API composition, and transport ownership |
 
 ## Package documentation
 
@@ -120,6 +121,7 @@ The principal package entry points are:
 - [Transitions](../src/Cohesive.Transitions/README.md)
 - [Processes](../src/Cohesive.Processes/README.md)
 - [API](../src/Cohesive.Api/README.md)
+- [Execution-control API](../src/Cohesive.Api.Execution/README.md)
 - [Presentation](../src/Cohesive.Presentation/README.md)
 - [Storage](../src/Cohesive.Storage/README.md)
 - [AI](../src/Cohesive.AI/README.md)

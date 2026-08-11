@@ -148,7 +148,7 @@ public sealed class ExecutionApiInvocationContext
 /// Linearizable in-memory binding of the canonical transport-neutral execution-control API.
 /// </summary>
 /// <remarks>
-/// This adapter is a reference integration and test realization, not a durable production store. Each admitted
+/// This adapter is the package's reference integration and test realization, not a durable production store. Each admitted
 /// operation is linearized under the addressed resource lock. Start registry insertion is atomic across instance,
 /// command, and idempotency indexes. Canonical reducers remain the sole owners of replay, optimistic-fence, and
 /// lifecycle semantics. When an authoritative limit-update dispatcher is configured, <c>updateLimits</c> bypasses
