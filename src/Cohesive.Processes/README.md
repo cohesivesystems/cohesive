@@ -162,9 +162,13 @@ diagnostics.
 
 `IProcessExecutionTraceRepository` is the opt-in runtime boundary for reading retained payload-safe traces without
 adding them to ordinary execution status or listing records. Its result distinguishes not found, in-progress,
-available, and terminal-without-artifact executions. An available `ProcessExecutionTraceRecord` carries an explicit
-missing-prefix count, so pre-retention gaps cannot be mistaken for complete trace coverage. The repository envelope
-does not replace `NormalizedExecutionTrace`; it describes provider availability and coverage of that shared artifact.
+available, and terminal-without-artifact executions. Application reads use trusted authority scope plus logical
+Process identity; physical-key reads remain an engine-administration path. An available result carries the versioned
+portable `ProcessExecutionTraceArtifact`, whose explicit missing-prefix count prevents pre-retention gaps from being
+mistaken for complete coverage. `ProcessExecutionTraceJsonSerializer` emits and verifies its strict canonical wire.
+Neither the artifact nor its JSON contains the physical repository key. The availability envelope and collection
+artifact do not replace `NormalizedExecutionTrace`; they describe acquisition state and coverage of those shared
+per-activation authorities.
 
 `IProcessExecutionRepository` is the provider-neutral boundary for current safe status acquisition. Application and
 API reads use its logical address formed by a server-resolved `InteractionAuthorityScope` and canonical

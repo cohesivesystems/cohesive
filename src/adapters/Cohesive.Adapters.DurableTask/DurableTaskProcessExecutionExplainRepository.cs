@@ -5,7 +5,6 @@ using Cohesive.Model.Serialization;
 using Cohesive.Processes.Compilation;
 using Cohesive.Processes.Execution;
 using Cohesive.Processes.IR;
-using Cohesive.Processes.Runtime;
 
 namespace Cohesive.Adapters.DurableTask;
 
@@ -62,7 +61,9 @@ public sealed class DurableTaskProcessExecutionExplainRepository : IProcessExecu
         var traceRead = await executions.GetTracesAsync(context, processId).ConfigureAwait(false);
         var execution = await executions.GetAsync(context, processId).ConfigureAwait(false);
         if (execution is null)
+        {
             return null;
+        }
 
         if (execution.IsTerminal
             && traceRead.State is ProcessExecutionTraceReadState.NotFound
@@ -75,8 +76,8 @@ public sealed class DurableTaskProcessExecutionExplainRepository : IProcessExecu
         var definition = execution.Definition
             ?? throw InvalidEvidence(processId, "does not retain its exact canonical definition reference");
         var plan = plans.GetExact(definition);
-        var trace = SelectCurrentAttemptTrace(processId, execution.RuntimeStatus, traceRead.Record);
-        var diagnostics = ProjectTraceDiagnostics(processId, execution, traceRead);
+        var trace = SelectCurrentAttemptTrace(processId, execution.RuntimeStatus, traceRead.Artifact);
+        var diagnostics = ProjectTraceDiagnostics(execution, traceRead);
         var projection = ProcessExecutionExplainProjector.ProjectArtifacts(
             plan.CanonicalPlan,
             trace,
@@ -122,7 +123,9 @@ public sealed class DurableTaskProcessExecutionExplainRepository : IProcessExecu
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(authorityScope);
         if (string.IsNullOrWhiteSpace(processInstanceId.Value))
+        {
             throw new ArgumentException("A logical Process explain read requires an initialized instance identity.", nameof(processInstanceId));
+        }
 
         return GetExplainAsync(
             context,
@@ -135,7 +138,10 @@ public sealed class DurableTaskProcessExecutionExplainRepository : IProcessExecu
         ProcessExecutionTraceReadResult traceRead)
     {
         if (!string.Equals(execution.ProcessId, processId, StringComparison.Ordinal))
+        {
             throw InvalidEvidence(processId, $"returned execution key '{execution.ProcessId}'");
+        }
+
         if (execution.RuntimeStatus is { } status
             && execution.Definition is { } definition
             && status.Definition != definition)
@@ -143,7 +149,7 @@ public sealed class DurableTaskProcessExecutionExplainRepository : IProcessExecu
             throw InvalidEvidence(processId, "has conflicting execution-record and runtime-status definitions");
         }
 
-        if (traceRead.Record is not { } traceRecord)
+        if (traceRead.Artifact is not { } traceArtifact)
         {
             if (execution.IsTerminal
                 && traceRead.State is ProcessExecutionTraceReadState.NotFound
@@ -160,32 +166,48 @@ public sealed class DurableTaskProcessExecutionExplainRepository : IProcessExecu
         }
 
         if (!execution.IsTerminal)
+        {
             throw InvalidEvidence(processId, "has a terminal trace result while its execution record is nonterminal");
-        if (!string.Equals(traceRecord.ProcessId, processId, StringComparison.Ordinal))
-            throw InvalidEvidence(processId, $"returned trace repository key '{traceRecord.ProcessId}'");
-        if (execution.Definition != traceRecord.Definition)
+        }
+
+        if (execution.Definition != traceArtifact.Definition)
+        {
             throw InvalidEvidence(processId, "has conflicting execution-record and trace definitions");
+        }
+
         if (execution.RuntimeStatus is not { } runtimeStatus)
+        {
             throw InvalidEvidence(processId, "has terminal traces without canonical runtime status");
-        if (runtimeStatus.ProcessInstanceId != traceRecord.ProcessInstanceId)
+        }
+
+        if (runtimeStatus.ProcessInstanceId != traceArtifact.ProcessInstanceId)
+        {
             throw InvalidEvidence(processId, "has conflicting runtime-status and trace logical instances");
+        }
     }
 
     static NormalizedExecutionTrace? SelectCurrentAttemptTrace(
         string processId,
         ExecutionStatus? runtimeStatus,
-        ProcessExecutionTraceRecord? traceRecord)
+        ProcessExecutionTraceArtifact? traceArtifact)
     {
-        if (traceRecord is null || traceRecord.Traces.IsDefaultOrEmpty)
+        if (traceArtifact is null || traceArtifact.Traces.IsDefaultOrEmpty)
+        {
             return null;
+        }
+
         if (runtimeStatus is null)
+        {
             throw InvalidEvidence(processId, "has retained traces without canonical runtime status");
+        }
 
         NormalizedExecutionTrace? selected = null;
-        foreach (var trace in traceRecord.Traces)
+        foreach (var trace in traceArtifact.Traces)
         {
             if (trace.Continuation?.ProcessAttemptId == runtimeStatus.CurrentAttemptId)
+            {
                 selected = trace;
+            }
         }
         return selected ?? throw InvalidEvidence(
             processId,
@@ -224,17 +246,19 @@ public sealed class DurableTaskProcessExecutionExplainRepository : IProcessExecu
             1 + (decision.Evidence is null ? 0 : 1) + decision.AuxiliaryEvidence.Length);
         references.Add(target.Id.Value);
         if (decision.Evidence is { } evidence)
+        {
             references.Add(evidence.Value);
+        }
+
         references.AddRange(decision.AuxiliaryEvidence.Select(static item => item.Value));
         return references.MoveToImmutable();
     }
 
     static ImmutableArray<DocumentValidationDiagnostic> ProjectTraceDiagnostics(
-        string processId,
         ProcessExecutionRecord execution,
         ProcessExecutionTraceReadResult traceRead)
     {
-        if (traceRead.Record is { MissingTracePrefixCount: > 0 } record)
+        if (traceRead.Artifact is { MissingTracePrefixCount: > 0 } artifact)
         {
             return
             [
@@ -244,11 +268,11 @@ public sealed class DurableTaskProcessExecutionExplainRepository : IProcessExecu
                     "The retained normalized trace suffix does not cover the complete activation-evidence inventory.",
                     Evidence: new(
                         stage: ExecutionExplainStageNames.ExecutionTrace,
-                        subject: processId,
+                        subject: artifact.ProcessInstanceId.Value,
                         relatedLocations:
                         [
-                            $"definition:{DefinitionIdentity(record.Definition)}",
-                            $"instance:{record.ProcessInstanceId.Value}"
+                            $"definition:{DefinitionIdentity(artifact.Definition)}",
+                            $"instance:{artifact.ProcessInstanceId.Value}"
                         ],
                         resolutionOptions:
                         [
@@ -256,7 +280,7 @@ public sealed class DurableTaskProcessExecutionExplainRepository : IProcessExecu
                             "Run a new execution after normalized trace retention was enabled."
                         ],
                         expected: "missingTracePrefixCount=0",
-                        observed: $"missingTracePrefixCount={record.MissingTracePrefixCount}"))
+                        observed: $"missingTracePrefixCount={artifact.MissingTracePrefixCount}"))
             ];
         }
         if (traceRead.State == ProcessExecutionTraceReadState.TerminalArtifactUnavailable)
@@ -269,7 +293,9 @@ public sealed class DurableTaskProcessExecutionExplainRepository : IProcessExecu
                     "The terminal execution has no canonical result artifact from which normalized traces can be read.",
                     Evidence: new(
                         stage: ExecutionExplainStageNames.ExecutionTrace,
-                        subject: processId,
+                        subject: execution.RuntimeStatus?.ProcessInstanceId.Value
+                            ?? execution.Definition?.DefinitionId.Value
+                            ?? "retained-process-execution",
                         relatedLocations: execution.Definition is { } definition
                             ? [$"definition:{DefinitionIdentity(definition)}"]
                             : [],

@@ -2352,7 +2352,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             OperationContext.Create(cancellationToken: timeout.Token),
             scheduled.InstanceId);
         Assert.Equal(ProcessExecutionTraceReadState.Available, completedTraceRead.State);
-        var completedTraces = Assert.IsType<ProcessExecutionTraceRecord>(completedTraceRead.Record);
+        var completedTraces = Assert.IsType<ProcessExecutionTraceArtifact>(completedTraceRead.Artifact);
         Assert.True(completedTraces.IsComplete);
         Assert.NotEmpty(completedTraces.Traces);
         var completedExplanation = await new DurableTaskProcessExecutionExplainRepository(

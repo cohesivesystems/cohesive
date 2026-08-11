@@ -182,20 +182,30 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
         var available = await completedRepository.GetTracesAsync(
             OperationContext.Create(),
             completed.Fixture.PhysicalInstanceId);
+        var logicalAvailable = await completedRepository.GetTracesAsync(
+            OperationContext.Create(),
+            completed.Fixture.Scope,
+            completed.Fixture.LogicalInstanceId);
 
         Assert.Equal(ProcessExecutionTraceReadState.Available, available.State);
-        var record = Assert.IsType<ProcessExecutionTraceRecord>(available.Record);
-        Assert.True(record.IsComplete);
-        Assert.Equal(0, record.MissingTracePrefixCount);
-        Assert.Equal(completed.Result.Evidence.Length, record.ActivationEvidenceCount);
+        var artifact = Assert.IsType<ProcessExecutionTraceArtifact>(available.Artifact);
+        Assert.True(artifact.IsComplete);
+        Assert.Equal(ProcessExecutionTraceArtifact.CurrentSchemaVersion, artifact.SchemaVersion);
+        Assert.Equal(0, artifact.MissingTracePrefixCount);
+        Assert.Equal(completed.Result.Evidence.Length, artifact.ActivationEvidenceCount);
         Assert.Equal(
             completed.Result.Traces.Select(static trace => ExecutionTraceJsonSerializer.Serialize(trace)),
-            record.Traces.Select(static trace => ExecutionTraceJsonSerializer.Serialize(trace)));
-        Assert.Equal(1, completedClient.GetCount);
+            artifact.Traces.Select(static trace => ExecutionTraceJsonSerializer.Serialize(trace)));
+        Assert.Equal(
+            ProcessExecutionTraceJsonSerializer.Serialize(artifact),
+            ProcessExecutionTraceJsonSerializer.Serialize(
+                Assert.IsType<ProcessExecutionTraceArtifact>(logicalAvailable.Artifact)));
+        Assert.Equal(2, completedClient.GetCount);
         Assert.Equal(0, completedClient.QueryCount);
         var serializedRecord = completed.Fixture.Converter.Serialize(available);
         Assert.DoesNotContain(PrivateInput, serializedRecord, StringComparison.Ordinal);
         Assert.DoesNotContain(PrivateOutput, serializedRecord, StringComparison.Ordinal);
+        Assert.DoesNotContain(completed.Fixture.PhysicalInstanceId, serializedRecord, StringComparison.Ordinal);
 
         var activeFixture = CreateFixture();
         var active = await new DurableTaskProcessExecutionRepository(new FakeDurableTaskClient([
@@ -249,11 +259,14 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
             completed.Fixture.Scope,
             completed.Fixture.LogicalInstanceId);
 
-        var record = Assert.IsType<ProcessExecutionTraceRecord>(read.Record);
-        Assert.False(record.IsComplete);
-        Assert.Empty(record.Traces);
-        Assert.Equal(result.Evidence.Length, record.MissingTracePrefixCount);
-        Assert.Equal(completed.Fixture.PhysicalInstanceId, record.ProcessId);
+        var artifact = Assert.IsType<ProcessExecutionTraceArtifact>(read.Artifact);
+        Assert.False(artifact.IsComplete);
+        Assert.Empty(artifact.Traces);
+        Assert.Equal(result.Evidence.Length, artifact.MissingTracePrefixCount);
+        Assert.DoesNotContain(
+            completed.Fixture.PhysicalInstanceId,
+            ProcessExecutionTraceJsonSerializer.Serialize(artifact),
+            StringComparison.Ordinal);
         Assert.Equal(completed.Fixture.PhysicalInstanceId, client.LastGetInstanceId);
         Assert.Equal(1, client.GetCount);
         Assert.Equal(0, client.QueryCount);
@@ -366,6 +379,7 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
         var serialized = ExecutionExplainJsonSerializer.Serialize(artifact);
         Assert.DoesNotContain(PrivateInput, serialized, StringComparison.Ordinal);
         Assert.DoesNotContain(PrivateOutput, serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain(completed.Fixture.PhysicalInstanceId, serialized, StringComparison.Ordinal);
         Assert.Equal(completed.Fixture.PhysicalInstanceId, client.LastGetInstanceId);
         Assert.Equal(2, client.GetCount);
         Assert.Equal(0, client.QueryCount);
@@ -456,6 +470,10 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
         Assert.Equal(
             $"missingTracePrefixCount={result.Evidence.Length}",
             coverage.Evidence?.Observed);
+        Assert.DoesNotContain(
+            completed.Fixture.PhysicalInstanceId,
+            ExecutionExplainJsonSerializer.Serialize(legacyArtifact),
+            StringComparison.Ordinal);
 
         var unavailableRepository = new DurableTaskProcessExecutionExplainRepository(
             new(new FakeDurableTaskClient([
@@ -476,6 +494,10 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
             unavailable.Diagnostics,
             static diagnostic =>
                 diagnostic.Code == DurableTaskProcessExecutionExplainRepository.TraceArtifactUnavailableDiagnosticCode);
+        Assert.DoesNotContain(
+            completed.Fixture.PhysicalInstanceId,
+            ExecutionExplainJsonSerializer.Serialize(unavailable),
+            StringComparison.Ordinal);
     }
 
     [Fact]

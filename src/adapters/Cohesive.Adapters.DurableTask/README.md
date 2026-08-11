@@ -56,7 +56,7 @@ ProcessExecutionTraceReadResult traceRead = await currentRepository.GetTracesAsy
     trustedAuthorityScope,
     logicalProcessInstanceId);
 
-if (traceRead.Record is { IsComplete: true } complete)
+if (traceRead.Artifact is { IsComplete: true } complete)
 {
     foreach (NormalizedExecutionTrace trace in complete.Traces)
     {
@@ -111,12 +111,14 @@ silently creating a trace gap. Traces remain outside custom status, and Schedule
 evidence rather than a source from which missing semantic traces may be fabricated. Results written before trace
 retention can therefore contain canonical activation evidence without a corresponding normalized trace prefix.
 
-The same current repository implements `IProcessExecutionTraceRepository` as a separate opt-in read. It performs one
-exact task-hub lookup, validates start, custom-status, terminal-result, and trace affinity, and returns only the
-normalized traces plus coverage evidence. `NotFound`, `InProgress`, `Available`, and
-`TerminalArtifactUnavailable` are distinct outcomes. Available records report the exact count of earliest activation
-evidence entries without a trace; only a zero missing-prefix count is complete. Trace artifacts are available after a
-canonical terminal result exists—this boundary does not stream live event traces or enlarge custom status.
+The same current repository implements `IProcessExecutionTraceRepository` as a separate opt-in physical or trusted
+logical read. It performs one exact task-hub lookup, validates start, custom-status, terminal-result, and trace
+affinity, and then returns only the versioned portable `ProcessExecutionTraceArtifact` plus acquisition disposition.
+The physical task-hub key never enters the artifact. `NotFound`, `InProgress`, `Available`, and
+`TerminalArtifactUnavailable` are distinct outcomes. Available artifacts report the exact count of earliest
+activation-evidence entries without a trace; only a zero missing-prefix count is complete. Trace artifacts are
+available after a canonical terminal result exists—this boundary does not stream live event traces or enlarge custom
+status.
 
 `DurableTaskProcessExecutionExplainRepository` composes that same current repository with the immutable exact plan
 catalog. It returns the shared `ExecutionExplainArtifact`, never a Scheduler-specific diagnostics DTO. Static
