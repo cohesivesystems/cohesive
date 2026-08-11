@@ -1120,9 +1120,10 @@ internal sealed class TransitionAuthoringContext<TEntity, TInput, TOutcome>
         var expected = observation.Fields.ToDictionary(static field => field.Name, StringComparer.Ordinal);
         foreach (var field in projected.Fields)
         {
+            var projectedOccurrence = NormalizeCollectionOccurrence(field);
             if (!expected.TryGetValue(field.Name, out var target)
-                || field.Type != target.Type
-                || field.Cardinality != target.Cardinality
+                || projectedOccurrence.Type != target.Type
+                || projectedOccurrence.Cardinality != target.Cardinality
                 || field.Presence != target.Presence
                 || field.Nullability != target.Nullability)
             {
@@ -1132,6 +1133,11 @@ internal sealed class TransitionAuthoringContext<TEntity, TInput, TOutcome>
 
         return true;
     }
+
+    static (TypeRef Type, FieldCardinality Cardinality) NormalizeCollectionOccurrence(ObjectFieldTypeDef field) =>
+        field is { Type: ArrayTypeRef array, Cardinality: FieldCardinality.Single }
+            ? (array.ElementType, FieldCardinality.Many)
+            : (field.Type, field.Cardinality);
 
     public FieldPath FieldPath<TValue>(Expression<Func<TEntity, Field<TValue>>> field) =>
         Cohesive.Model.FieldPath.FromField(translator.TranslateFieldTarget(field));

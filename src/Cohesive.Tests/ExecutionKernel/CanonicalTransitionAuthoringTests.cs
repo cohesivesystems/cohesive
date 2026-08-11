@@ -263,6 +263,67 @@ public sealed class CanonicalTransitionAuthoringTests
     }
 
     [Fact]
+    public void SubjectCreation_NormalizesTypedCollectionOccurrenceAndPreservesExactCardinality()
+    {
+        var authored = TransitionAuthoring.Create<CollectionReviewEntity, CollectionReviewCreationInput, string>(
+            CollectionReviewEntity.Instance.Definition.Shape,
+            AuxiliaryMetadata(new("transition/review/create-collection"), new("review/create-collection/body")),
+            transition => transition
+                .CreatesFrom(
+                    new("review/create-collection/initialize"),
+                    input => new CollectionReviewInitialState(input.Status, input.Tags))
+                .Return(
+                    new("review/create-collection/outcome"),
+                    TransitionOutcomeDisposition.Applied,
+                    "created"));
+
+        Assert.True(authored.IsValid, Format(authored.Validation));
+        var canonical = ExecutionDefinitionJsonSerializer.GetCanonicalBytes(authored.Document);
+        var roundTrip = TransitionDefinitionDocuments.TryDeserialize(
+            Encoding.UTF8.GetString(canonical),
+            out var restoredDocument,
+            out var restoredDefinition);
+        Assert.True(roundTrip.IsValid, Format(roundTrip));
+        Assert.Equal(authored.Document, restoredDocument);
+        Assert.Equal(authored.Definition, restoredDefinition);
+
+        var compilation = TransitionStaticCompiler.Compile(restoredDocument!);
+        Assert.True(compilation.IsSuccessful, Format(compilation.Validation));
+        var plan = Assert.IsType<CompiledTransitionPlan>(compilation.Plan);
+        var created = TransitionReferenceInterpreter.DecideCreation(
+            plan,
+            new("review/create-collection/activation"),
+            Object(
+                authored.Definition.Input,
+                (nameof(CollectionReviewCreationInput.Status), ObservationValue.FromString("pending")),
+                (nameof(CollectionReviewCreationInput.Tags), ObservationValue.FromArray([
+                    ObservationValue.FromString("semantic"),
+                    ObservationValue.FromString("training")
+                ]))));
+
+        Assert.Equal(TransitionDecisionKind.Applied, created.Kind);
+        var initial = Assert.IsType<PortableValue>(created.Evidence.InitialObservation);
+        var fields = Assert.IsType<ObservationValue>(initial.Value).Fields!;
+        Assert.Equal(
+            ["semantic", "training"],
+            fields[nameof(CollectionReviewEntity.Tags)].EnumerateArray().Select(static value => value.GetString()));
+
+        var exception = Assert.Throws<TransitionExpressionTranslationException>(() =>
+            TransitionAuthoring.Create<CollectionReviewEntity, CollectionReviewCreationInput, string>(
+                CollectionReviewEntity.Instance.Definition.Shape,
+                AuxiliaryMetadata(new("transition/review/create-wrong-cardinality"), new("review/create-wrong-cardinality/body")),
+                transition => transition
+                    .CreatesFrom(
+                        new("review/create-wrong-cardinality/initialize"),
+                        input => new WrongCardinalityReviewInitialState(input.Status, input.Tags[0]))
+                    .Return(
+                        new("review/create-wrong-cardinality/outcome"),
+                        TransitionOutcomeDisposition.Applied,
+                        "created")));
+        Assert.Contains("project exactly", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SubjectCreation_RejectsProjectionThatDoesNotMatchAuthoritativeObservation()
     {
         var exception = Assert.Throws<TransitionExpressionTranslationException>(() =>
@@ -929,7 +990,26 @@ public sealed class CanonicalTransitionAuthoringTests
 
     sealed record ReviewInitialState(string Status, bool Eligible);
 
+    sealed record CollectionReviewCreationInput(string Status, IReadOnlyList<string> Tags);
+
+    sealed record CollectionReviewInitialState(string Status, IReadOnlyList<string> Tags);
+
+    sealed record WrongCardinalityReviewInitialState(string Status, string Tags);
+
     sealed record IncompleteReviewInitialState(string Status);
+
+    sealed class CollectionReviewEntity : Entity<CollectionReviewEntity>
+    {
+        public CollectionReviewEntity()
+        {
+            Status = MutableField<string>(nameof(Status));
+            Tags = MutableField<IReadOnlyList<string>>(nameof(Tags));
+        }
+
+        public Field<string> Status { get; }
+
+        public Field<IReadOnlyList<string>> Tags { get; }
+    }
 
     sealed record OptionalDecisionInput(
         [property: JsonPropertyName("decision")] string? Decision);
