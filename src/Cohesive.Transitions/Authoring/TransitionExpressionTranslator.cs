@@ -112,6 +112,15 @@ internal sealed class TransitionExpressionTranslator<TEntity, TParameters> where
         }
     }
 
+    public Expr TranslateInput<TValue>(Expression<Func<TParameters, TValue>> expression)
+    {
+        ArgumentNullException.ThrowIfNull(expression);
+        return Translate(
+            StripConvert(expression.Body),
+            Expression.Parameter(typeof(TEntity), "entity"),
+            expression.Parameters[0]);
+    }
+
     public string TranslateFieldTarget<TValue>(Expression<Func<TEntity, Field<TValue>>> fieldExpression)
     {
         ArgumentNullException.ThrowIfNull(fieldExpression);

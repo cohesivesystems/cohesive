@@ -104,6 +104,12 @@ public static class TransitionDefinitionValidator
             ValidateContract(definition.Observation, "/observation");
             ValidateContract(definition.Outcome, "/outcome");
 
+            if (definition.SubjectCreation is { } creation)
+            {
+                RegisterNodeId(creation.Id, "/subjectCreation/id");
+                ValidateExpression(creation.InitialObservation, "/subjectCreation/initialObservation");
+            }
+
             for (var index = 0; index < definition.Preconditions.Length; index++)
             {
                 var location = $"/preconditions/{index}";

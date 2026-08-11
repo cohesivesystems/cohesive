@@ -287,7 +287,10 @@ public enum TransitionTraceEventKind
     DerivedFieldRecomputed = 8,
 
     /// <summary>A post-update invariant was evaluated.</summary>
-    InvariantEvaluated = 9
+    InvariantEvaluated = 9,
+
+    /// <summary>A complete initial aggregate observation was derived for an absent subject.</summary>
+    SubjectInitialized = 10
 }
 
 /// <summary>One event in deterministic semantic execution order.</summary>
@@ -430,6 +433,13 @@ public sealed class TransitionExecutionEvidence
     public ImmutableArray<ExecutionNodeId> EmittedIntents =>
         [.. Trace.Where(static item => item.Kind == TransitionTraceEventKind.EmissionProduced)
             .Select(static item => item.Node)];
+
+    /// <summary>
+    /// Complete initial aggregate observation retained by absent-subject creation, otherwise <see langword="null"/>.
+    /// </summary>
+    public PortableValue? InitialObservation => Trace
+        .FirstOrDefault(static item => item.Kind == TransitionTraceEventKind.SubjectInitialized)
+        ?.After;
 
     static ImmutableArray<T> Distinct<T>(IEnumerable<T> values)
         where T : notnull

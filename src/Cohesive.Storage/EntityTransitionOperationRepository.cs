@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json.Serialization;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Execution;
@@ -19,6 +20,9 @@ public static class EntityTransitionOperationDiagnosticCodes
 
     /// <summary>The entity concurrency fence no longer identifies the authoritative aggregate state.</summary>
     public const string ConcurrencyConflict = "storage.entityTransition.operation.concurrency.conflict";
+
+    /// <summary>The authoritative subject presence contradicts the Transition's declared subject condition.</summary>
+    public const string SubjectStateConflict = "storage.entityTransition.operation.subject.stateConflict";
 }
 
 /// <summary>Native atomic Transition operation behavior supported by an entity repository.</summary>
@@ -46,6 +50,16 @@ public enum EntityTransitionEmissionPublicationAuthority
     /// The entity receipt is durable handoff evidence; the invoking Process outbox is the sole publication authority.
     /// </summary>
     ProcessOutbox = 1
+}
+
+/// <summary>Authoritative subject-state condition required by one Transition operation commit.</summary>
+public enum EntityTransitionSubjectCondition
+{
+    /// <summary>The subject must exist and match the supplied optimistic-concurrency token.</summary>
+    MustExist = 0,
+
+    /// <summary>The subject must be absent when initial entity state and the operation receipt commit.</summary>
+    MustBeAbsent = 1
 }
 
 /// <summary>Exact replay lookup identity for one Process-invoked Transition operation.</summary>
@@ -102,16 +116,18 @@ public sealed record EntityTransitionOperationCommit
 {
     /// <summary>Creates a validated atomic Transition operation commit intent.</summary>
     /// <param name="request">Exact replay lookup identity.</param>
-    /// <param name="write">Candidate entity state and required optimistic-concurrency fence.</param>
+    /// <param name="write">Candidate entity state and the concurrency fence required by the subject condition.</param>
     /// <param name="decisionKind">Committable terminal Transition decision category.</param>
     /// <param name="result">Typed outcome and canonical handoff envelopes.</param>
     /// <param name="guaranteeDemands">Semantic commit guarantees derived by the Transition interpreter.</param>
     /// <param name="evidence">Ordered execution provenance for the Transition decision.</param>
+    /// <param name="subjectCondition">Required authoritative subject state at the atomic boundary.</param>
     /// <exception cref="ArgumentNullException">Any reference argument is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
-    /// The write omits a concurrency fence, does not address <paramref name="request"/>'s subject, the decision is
-    /// not committable, the result is not successful, the evidence does not identify the exact Transition and
-    /// activation, or canonical envelope provenance does not identify the exact Process operation and Transition.
+    /// The write contradicts the subject condition or does not address <paramref name="request"/>'s subject, the
+    /// decision is not committable, the result is not successful, the evidence does not identify the exact
+    /// Transition and activation, or canonical envelope provenance does not identify the exact Process operation
+    /// and Transition.
     /// </exception>
     public EntityTransitionOperationCommit(
         EntityTransitionOperationRequest request,
@@ -119,7 +135,8 @@ public sealed record EntityTransitionOperationCommit
         TransitionDecisionKind decisionKind,
         ProcessOperationResult result,
         TransitionGuaranteeDemands guaranteeDemands,
-        TransitionExecutionEvidence evidence)
+        TransitionExecutionEvidence evidence,
+        EntityTransitionSubjectCondition subjectCondition = EntityTransitionSubjectCondition.MustExist)
     {
         Request = request ?? throw new ArgumentNullException(nameof(request));
         Write = write ?? throw new ArgumentNullException(nameof(write));
@@ -127,10 +144,25 @@ public sealed record EntityTransitionOperationCommit
         GuaranteeDemands = guaranteeDemands ?? throw new ArgumentNullException(nameof(guaranteeDemands));
         Evidence = evidence ?? throw new ArgumentNullException(nameof(evidence));
 
-        if (write.ExpectedConcurrencyToken is null)
+        if (!Enum.IsDefined(subjectCondition))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(subjectCondition),
+                subjectCondition,
+                "Unsupported entity Transition subject condition.");
+        }
+        if (subjectCondition == EntityTransitionSubjectCondition.MustExist
+            && write.ExpectedConcurrencyToken is null)
         {
             throw new ArgumentException(
-                "A Process Transition operation commit requires an entity concurrency fence.",
+                "An existing-subject Process Transition commit requires an entity concurrency fence.",
+                nameof(write));
+        }
+        if (subjectCondition == EntityTransitionSubjectCondition.MustBeAbsent
+            && write.ExpectedConcurrencyToken is not null)
+        {
+            throw new ArgumentException(
+                "An absent-subject Process Transition commit cannot carry an existing-entity concurrency fence.",
                 nameof(write));
         }
         if (!string.Equals(
@@ -151,6 +183,20 @@ public sealed record EntityTransitionOperationCommit
             throw new ArgumentException(
                 $"Transition decision '{decisionKind}' cannot be retained as a successful entity operation.",
                 nameof(decisionKind));
+        }
+        if (subjectCondition == EntityTransitionSubjectCondition.MustBeAbsent
+            && decisionKind != TransitionDecisionKind.Applied)
+        {
+            throw new ArgumentException(
+                "An absent-subject entity commit requires an Applied Transition decision.",
+                nameof(decisionKind));
+        }
+        if (subjectCondition == EntityTransitionSubjectCondition.MustBeAbsent
+            && (!guaranteeDemands.CommitRequired || evidence.InitialObservation is null))
+        {
+            throw new ArgumentException(
+                "An absent-subject entity commit requires canonical initial-observation evidence and a commit demand.",
+                nameof(evidence));
         }
         if (!result.IsSuccessful)
         {
@@ -182,6 +228,7 @@ public sealed record EntityTransitionOperationCommit
         }
 
         ValidateEmissions(request, result, evidence, outcomeTrace.Node);
+        SubjectCondition = subjectCondition;
         DecisionKind = decisionKind;
         PublicationAuthority = EntityTransitionEmissionPublicationAuthority.ProcessOutbox;
         Fingerprint = EntityTransitionOperationFingerprints.Commit(this);
@@ -190,8 +237,12 @@ public sealed record EntityTransitionOperationCommit
     /// <summary>Exact replay lookup identity.</summary>
     public EntityTransitionOperationRequest Request { get; }
 
-    /// <summary>Candidate entity state and required optimistic-concurrency fence.</summary>
+    /// <summary>Candidate entity state and the concurrency fence required by <see cref="SubjectCondition"/>.</summary>
     public EntityWriteRequest Write { get; }
+
+    /// <summary>Required authoritative subject state at the atomic boundary.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public EntityTransitionSubjectCondition SubjectCondition { get; }
 
     /// <summary>Committable terminal Transition decision category.</summary>
     public TransitionDecisionKind DecisionKind { get; }
@@ -330,7 +381,10 @@ public enum EntityTransitionOperationDisposition
     ConcurrencyConflict = 4,
 
     /// <summary>The operation occurrence identity is retained with different canonical content.</summary>
-    IdentityConflict = 5
+    IdentityConflict = 5,
+
+    /// <summary>The authoritative subject presence contradicts the Transition's declared subject condition.</summary>
+    SubjectStateConflict = 6
 }
 
 /// <summary>Closed receipt or structured rejection from an entity Transition operation.</summary>
@@ -393,7 +447,8 @@ public sealed record EntityTransitionOperationResult
     {
         if (disposition is not (EntityTransitionOperationDisposition.CapabilityInsufficient
             or EntityTransitionOperationDisposition.ConcurrencyConflict
-            or EntityTransitionOperationDisposition.IdentityConflict))
+            or EntityTransitionOperationDisposition.IdentityConflict
+            or EntityTransitionOperationDisposition.SubjectStateConflict))
         {
             throw new ArgumentOutOfRangeException(nameof(disposition), disposition, "Disposition is not a rejection.");
         }
@@ -427,7 +482,7 @@ public interface IEntityTransitionOperationRepository : IEntityRepository
     /// <summary>Atomically commits candidate entity state and one replayable operation receipt.</summary>
     /// <param name="context">Operation context, time, and cancellation.</param>
     /// <param name="commit">Complete deterministic atomic commit intent.</param>
-    /// <returns>Committed, replayed, stale-concurrency, or identity-conflict evidence.</returns>
+    /// <returns>Committed, replayed, subject-state, stale-concurrency, or identity-conflict evidence.</returns>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="context"/> or <paramref name="commit"/> is <see langword="null"/>.
     /// </exception>
@@ -532,6 +587,11 @@ public static class EntityTransitionOperationRepositoryExtensions
             EntityTransitionOperationDisposition.ConcurrencyConflict,
             Error(EntityTransitionOperationDiagnosticCodes.ConcurrencyConflict, message, "/write/expectedConcurrencyToken"));
 
+    internal static EntityTransitionOperationResult SubjectStateConflict(string message) =>
+        EntityTransitionOperationResult.Rejected(
+            EntityTransitionOperationDisposition.SubjectStateConflict,
+            Error(EntityTransitionOperationDiagnosticCodes.SubjectStateConflict, message, "/write/subjectCondition"));
+
     static EntityTransitionOperationResult CapabilityFailure(IEntityRepository repository) =>
         EntityTransitionOperationResult.Rejected(
             EntityTransitionOperationDisposition.CapabilityInsufficient,
@@ -557,6 +617,9 @@ static class EntityTransitionOperationFingerprints
         ProcessStorageContentFingerprints.Value(new CommitContent(
             commit.Request,
             commit.Write,
+            commit.SubjectCondition == EntityTransitionSubjectCondition.MustExist
+                ? null
+                : commit.SubjectCondition,
             commit.DecisionKind,
             commit.Result,
             commit.GuaranteeDemands,
@@ -572,6 +635,8 @@ static class EntityTransitionOperationFingerprints
     sealed record CommitContent(
         EntityTransitionOperationRequest Request,
         EntityWriteRequest Write,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        EntityTransitionSubjectCondition? SubjectCondition,
         TransitionDecisionKind DecisionKind,
         ProcessOperationResult Result,
         TransitionGuaranteeDemands GuaranteeDemands,

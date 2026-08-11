@@ -72,7 +72,10 @@ public enum TransitionExpressionSiteKind
     MachineRejection = 11,
 
     /// <summary>A linked Cohesive.Machines target-configuration predicate.</summary>
-    MachineTargetConfiguration = 12
+    MachineTargetConfiguration = 12,
+
+    /// <summary>A pure input-derived complete observation for an absent subject.</summary>
+    SubjectInitializer = 13
 }
 
 /// <summary>Why an aggregate observation can influence Transition semantics.</summary>
@@ -309,6 +312,22 @@ public abstract class TransitionSemanticRequirement
 
     /// <summary>Path-sensitive occurrences retaining node, expression, condition, and source provenance.</summary>
     public ImmutableArray<TransitionRequirementOccurrence> Occurrences { get; }
+}
+
+/// <summary>The Transition requires atomic initialization of an authoritatively absent subject.</summary>
+public sealed class TransitionSubjectCreationRequirement : TransitionSemanticRequirement
+{
+    /// <summary>Creates an unconditional absent-subject creation requirement.</summary>
+    /// <param name="condition">Definition-owned creation condition.</param>
+    /// <param name="invocationStrength">Requirement strength relative to the invocation domain.</param>
+    /// <param name="occurrences">Initialization expression provenance.</param>
+    internal TransitionSubjectCreationRequirement(
+        TransitionConditionRef condition,
+        TransitionRequirementStrength invocationStrength,
+        ImmutableArray<TransitionRequirementOccurrence> occurrences)
+        : base(condition, invocationStrength, occurrences)
+    {
+    }
 }
 
 /// <summary>A sparse aggregate observation required by Transition evaluation.</summary>

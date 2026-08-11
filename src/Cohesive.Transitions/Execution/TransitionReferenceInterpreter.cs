@@ -45,6 +45,9 @@ public static class TransitionExecutionDiagnosticCodes
 
     /// <summary>Fresh commit-time evidence explicitly reported an actual observation read as indeterminate.</summary>
     public const string CommitObservationUnknown = "transitions.execution.commitObservation.unknown";
+
+    /// <summary>The supplied subject state does not match the Transition's present-versus-absent semantics.</summary>
+    public const string SubjectStateInvalid = "transitions.execution.subject.stateInvalid";
 }
 
 /// <summary>
@@ -70,7 +73,30 @@ public static class TransitionReferenceInterpreter
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(activation);
-        return new Engine(plan, activation).Run();
+        return new Engine(plan, activation, subjectAbsent: false).Run();
+    }
+
+    /// <summary>Decides one activation for an authoritatively absent aggregate subject.</summary>
+    /// <param name="plan">Successfully compiled exact creation Transition plan.</param>
+    /// <param name="activationId">Caller-supplied stable activation identity.</param>
+    /// <param name="input">Typed invocation input used to derive the complete initial observation.</param>
+    /// <returns>A complete deterministic decision retaining initial-observation evidence.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="plan"/> or <paramref name="input"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="activationId"/> is default.</exception>
+    public static TransitionDecision DecideCreation(
+        CompiledTransitionPlan plan,
+        ActivationId activationId,
+        PortableValue input)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(input);
+        return new Engine(
+            plan,
+            new(
+                activationId,
+                input,
+                TransitionObservationFrame.Sparse([])),
+            subjectAbsent: true).Run();
     }
 
     /// <summary>Decides an activation from one complete coherent aggregate state.</summary>
@@ -127,6 +153,7 @@ public static class TransitionReferenceInterpreter
     {
         readonly CompiledTransitionPlan plan;
         readonly TransitionActivation activation;
+        readonly bool subjectAbsent;
         readonly PortableExpressionReferenceEvaluator evaluator = new(
             TransitionExpressionLanguage.Capabilities,
             interpreterName: "Transition reference interpreter");
@@ -140,11 +167,17 @@ public static class TransitionReferenceInterpreter
         readonly List<TransitionMachineMovement> movements = [];
         readonly Dictionary<FieldPath, ValueContract> observationContracts = [];
         readonly Dictionary<string, ValueContract> inputContracts = new(StringComparer.Ordinal);
+        TransitionObservationFrame observation;
 
-        public Engine(CompiledTransitionPlan plan, TransitionActivation activation)
+        public Engine(
+            CompiledTransitionPlan plan,
+            TransitionActivation activation,
+            bool subjectAbsent)
         {
             this.plan = plan;
             this.activation = activation;
+            this.subjectAbsent = subjectAbsent;
+            observation = activation.Observation;
         }
 
         public TransitionDecision Run()
@@ -156,6 +189,8 @@ public static class TransitionReferenceInterpreter
                     return Failure(TransitionDecisionKind.InfrastructureFailure, activationFailure);
 
                 bindings[TransitionBindingIds.Input] = PortableExpressionValue.FromPortable(activation.Input);
+                if (subjectAbsent)
+                    InitializeSubject();
 
                 foreach (var precondition in plan.Definition.Preconditions)
                 {
@@ -231,7 +266,8 @@ public static class TransitionReferenceInterpreter
                 }
                 if (kind == TransitionDecisionKind.Applied
                     && changed.IsDefaultOrEmpty
-                    && movements.Count == 0)
+                    && movements.Count == 0
+                    && !subjectAbsent)
                     kind = TransitionDecisionKind.NoChange;
 
                 return Complete(
@@ -270,6 +306,23 @@ public static class TransitionReferenceInterpreter
                         node: null,
                         stage: "referenceInterpretation"));
             }
+        }
+
+        void InitializeSubject()
+        {
+            var creation = plan.Definition.SubjectCreation
+                ?? throw new InvalidOperationException("Creation execution requires canonical subject-creation semantics.");
+            var initial = EvaluateTyped(
+                creation.InitialObservation,
+                plan.Definition.Observation,
+                creation.Id,
+                candidateState: false,
+                bindings);
+            observation = TransitionObservationFrame.Full(initial);
+            AddTrace(
+                TransitionTraceEventKind.SubjectInitialized,
+                creation.Id,
+                after: initial);
         }
 
         Terminal? ExecuteSequence(
@@ -971,7 +1024,7 @@ public static class TransitionReferenceInterpreter
             TransitionObservationAccess access,
             ExecutionNodeId node)
         {
-            if (!TryResolveFrame(activation.Observation, access, out var portable))
+            if (!TryResolveFrame(observation, access, out var portable))
             {
                 throw Infrastructure(
                     TransitionExecutionDiagnosticCodes.ObservationUnavailable,
@@ -1037,15 +1090,17 @@ public static class TransitionReferenceInterpreter
             ImmutableArray<TransitionEmissionIntent> retainedEmissions,
             ImmutableArray<TransitionMachineMovement> retainedMovements)
         {
-            var commitRequired = !retainedPatches.IsDefaultOrEmpty
+            var subjectCreationCommitted = subjectAbsent && kind == TransitionDecisionKind.Applied;
+            var commitRequired = subjectCreationCommitted
+                || !retainedPatches.IsDefaultOrEmpty
                 || !retainedEmissions.IsDefaultOrEmpty
                 || !retainedMovements.IsDefaultOrEmpty;
             var demands = new TransitionGuaranteeDemands(
                 commitRequired,
                 atomicPatchAndEmissions: commitRequired
-                    && !retainedPatches.IsDefaultOrEmpty
+                    && (subjectCreationCommitted || !retainedPatches.IsDefaultOrEmpty)
                     && !retainedEmissions.IsDefaultOrEmpty,
-                commitRequired ? [.. observedReadOrder] : []);
+                commitRequired && !subjectAbsent ? [.. observedReadOrder] : []);
 
             if (commitRequired && activation.CommitObservation is not null)
             {
@@ -1136,6 +1191,17 @@ public static class TransitionReferenceInterpreter
 
         DocumentValidationDiagnostic? ValidateActivation()
         {
+            if (subjectAbsent != (plan.Definition.SubjectCreation is not null))
+            {
+                return Diagnostic(
+                    TransitionExecutionDiagnosticCodes.SubjectStateInvalid,
+                    subjectAbsent
+                        ? "The Transition requires an existing aggregate subject and cannot initialize an absent subject."
+                        : "The Transition requires an absent aggregate subject and cannot run against existing state.",
+                    node: plan.Definition.SubjectCreation?.Id,
+                    stage: "activationValidation",
+                    location: "/activation/subject");
+            }
             if (activation.Input.Contract != plan.Definition.Input)
             {
                 return Diagnostic(
@@ -1148,7 +1214,21 @@ public static class TransitionReferenceInterpreter
             if (!inputValidation.IsValid)
                 return inputValidation.Diagnostics[0];
 
-            var observationFailure = ValidateFrame(activation.Observation, "observation");
+            if (subjectAbsent)
+            {
+                if (activation.CommitObservation is not null)
+                {
+                    return Diagnostic(
+                        TransitionExecutionDiagnosticCodes.SubjectStateInvalid,
+                        "An absent-subject creation activation cannot supply existing commit observation evidence.",
+                        node: plan.Definition.SubjectCreation?.Id,
+                        stage: "activationValidation",
+                        location: "/activation/commitObservation");
+                }
+                return null;
+            }
+
+            var observationFailure = ValidateFrame(observation, "observation");
             if (observationFailure is not null)
                 return observationFailure;
             return activation.CommitObservation is null

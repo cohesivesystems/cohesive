@@ -273,7 +273,7 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
     /// <summary>Atomically commits candidate entity state and one Process Transition operation receipt.</summary>
     /// <param name="context">Operation context, time, and cancellation.</param>
     /// <param name="commit">Complete deterministic atomic commit intent.</param>
-    /// <returns>Committed, replayed, stale-concurrency, or identity-conflict evidence.</returns>
+    /// <returns>Committed, replayed, subject-state, stale-concurrency, or identity-conflict evidence.</returns>
     /// <exception cref="ArgumentNullException">Any argument is <see langword="null"/>.</exception>
     /// <exception cref="InvalidOperationException">
     /// The candidate entity does not belong to this repository or cannot resolve a partition key.
@@ -307,12 +307,20 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
             {
                 var partitionKey = GetPartitionKey(context, commit.Write.Entity);
                 var key = CreateKey(commit.Write.Entity.Id, partitionKey);
-                var expected = commit.Write.ExpectedConcurrencyToken!.Value;
-                if (!snapshotsByKey.TryGetValue(key, out var current)
-                    || current.ConcurrencyToken != expected)
+                var expected = commit.Write.ExpectedConcurrencyToken.GetValueOrDefault();
+                if (commit.SubjectCondition == EntityTransitionSubjectCondition.MustBeAbsent
+                    && partitionKeysByObservationId.ContainsKey(commit.Write.Entity.Id))
+                {
+                    result = EntityTransitionOperationRepositoryExtensions.SubjectStateConflict(
+                        $"Entity '{EntityType}:{commit.Write.Entity.Id}' must be absent for this Transition operation.");
+                }
+                else if (commit.SubjectCondition == EntityTransitionSubjectCondition.MustExist
+                    && (!snapshotsByKey.TryGetValue(key, out var current)
+                        || current.ConcurrencyToken != expected))
                 {
                     result = EntityTransitionOperationRepositoryExtensions.ConcurrencyConflict(
-                        $"Entity '{EntityType}:{commit.Write.Entity.Id}' no longer matches concurrency fence '{expected.Value}'.");
+                        $"Entity '{EntityType}:{commit.Write.Entity.Id}' no longer matches concurrency fence "
+                        + $"'{expected.Value}'.");
                 }
                 else
                 {
