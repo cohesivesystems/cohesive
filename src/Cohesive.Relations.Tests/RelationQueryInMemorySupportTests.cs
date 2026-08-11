@@ -8,7 +8,7 @@ namespace Cohesive.Relations.Tests;
 public sealed class RelationQueryInMemorySupportTests
 {
     [Fact]
-    public void DefaultProfileAdvertisesCollectionElementAccessOnlyForCurrentItemReads()
+    public void DefaultProfileAdvertisesNestedFieldsAndCollectionElementsForCurrentItemReads()
     {
         var structuralCapabilities = RelationQueryInMemoryInterpreter.DefaultTargetProfile.Capabilities
             .Select(static evidence => evidence.Capability)
@@ -21,6 +21,13 @@ public sealed class RelationQueryInMemorySupportTests
             {
                 Role: RelationQueryStructuralCapabilityRole.CurrentItemRead,
                 PathKind: RelationQueryStructuralPathKind.CollectionElement
+            });
+        Assert.Contains(
+            structuralCapabilities,
+            static capability => capability is
+            {
+                Role: RelationQueryStructuralCapabilityRole.CurrentItemRead,
+                PathKind: RelationQueryStructuralPathKind.NestedField
             });
         Assert.DoesNotContain(
             structuralCapabilities,

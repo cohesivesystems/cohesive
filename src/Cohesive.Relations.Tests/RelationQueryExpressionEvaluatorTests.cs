@@ -104,6 +104,52 @@ public sealed class RelationQueryExpressionEvaluatorTests
     }
 
     [Fact]
+    public void Evaluate_SelectPreservesSameItemCorrelationForNestedCurrentItemReads()
+    {
+        var source = ObservationValue.FromArray(
+        [
+            Object(
+                ("Id", ObservationValue.FromString("first")),
+                ("Decision", Object(
+                    ("Chosen", ObservationValue.FromBool(false)),
+                    ("Rank", ObservationValue.FromInt64(2))))),
+            Object(
+                ("Id", ObservationValue.FromString("second")),
+                ("Decision", Object(
+                    ("Chosen", ObservationValue.FromBool(true)),
+                    ("Rank", ObservationValue.FromInt64(1)))))
+        ]);
+        var select = Expr.Call(
+            ExprFunctionNames.Select,
+            Expr.Const(source),
+            Expr.Call(
+                ExprFunctionNames.Object,
+                Expr.Const("Id"),
+                Expr.Field("item.Id"),
+                Expr.Const("Chosen"),
+                Expr.Field("item.Decision.Chosen"),
+                Expr.Const("Rank"),
+                Expr.Field("item.Decision.Rank")));
+
+        var results = evaluator.Evaluate(select, new RelationQueryExpressionContext()).EnumerateArray().ToArray();
+
+        Assert.Collection(
+            results,
+            first =>
+            {
+                Assert.Equal("first", first.Fields!["Id"].GetString());
+                Assert.False(first.Fields["Chosen"].Bool);
+                Assert.Equal(2, first.Fields["Rank"].Int64);
+            },
+            second =>
+            {
+                Assert.Equal("second", second.Fields!["Id"].GetString());
+                Assert.True(second.Fields["Chosen"].Bool);
+                Assert.Equal(1, second.Fields["Rank"].Int64);
+            });
+    }
+
+    [Fact]
     public void Evaluate_LogicalAndConditionalExpressionsAreStrictAndShortCircuit()
     {
         var context = new RelationQueryExpressionContext();
