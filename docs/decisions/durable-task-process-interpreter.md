@@ -147,14 +147,15 @@ every inventory item.
 An inventory item absent from the disposition ledger is an error. An unknown canonical node kind is
 an error. An adapter cannot claim conformance merely because its recognizer never emitted a
 requirement. Adding a canonical node kind or guarantee must therefore fail inventory-completeness
-tests until the target-neutral collector and Durable Task profile state its disposition.
+profile construction and tests until the target-neutral collector and Durable Task profile state its disposition.
 
-The executable target-neutral inventory, profile, realization ledger, and structured diagnostics are implemented in
+The target-neutral inventory, profile, realization ledger, and structured diagnostics are implemented in
 `Cohesive.Processes.Compilation`. Construct kinds are projected from the canonical persisted-union metadata instead
-of another enum. `Cohesive.Adapters.DurableTask` publishes the versioned planning profile and compiles successful
-exhaustive reports into deterministic physical plans that retain the exact canonical plan. The initial executable
-slice performs a second admission check against its narrower construct closure before adding an exact plan to the
-worker catalog; a successful full-profile planning report alone never implies executable support.
+of another enum. `Cohesive.Adapters.DurableTask` publishes separate versioned planning and executable profiles. Both
+must exactly cover the canonical construct and guarantee catalogs. The executable profile explicitly marks
+domain-event emission, Reply discharge, and whole-definition multi-resource atomicity unavailable, and only plans
+compiled successfully against that profile may enter the worker catalog. There is no independent CLR-type
+recognizer whose omissions can shrink the qualified protocol.
 
 ## Conformance and promotion
 
@@ -203,10 +204,10 @@ a native realization.
 
 ## Implementation status and provenance
 
-This decision remains accepted direction for Durable Task execution. As of 2026-08-10,
+This decision remains accepted direction for Durable Task execution. As of 2026-08-11,
 `Cohesive.Processes` implements the target-neutral requirement inventory, capability evidence, exhaustive
 disposition ledger, structured matching diagnostics, and reference interpreter. `Cohesive.Adapters.DurableTask`
-implements historical monitoring, the planning profile, and a generic executable slice for Transition,
+implements historical monitoring, complete planning and executable profiles, and a generic executable slice for Transition,
 Relation/Query, Request, Signal send to a Process token, Choice, Match, Fork, Join, AwaitMatch, Timer, child Process,
 bounded partition, bounded recurrence, Durable Cut, Return, and Fail constructs. It resolves only exact
 definition identity/revision/fingerprint tuples from an immutable worker deployment catalog and uses standalone SDK

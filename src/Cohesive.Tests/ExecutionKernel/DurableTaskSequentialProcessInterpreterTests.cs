@@ -2009,7 +2009,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     }
 
     [Fact]
-    public void PlanCatalog_AdmitsTimerAwaitMatchAndSignalButRejectsEmitEventOutsideTheExecutableSlice()
+    public void ExecutableQualification_AdmitsTimerAwaitMatchAndSignalButRejectsEmitEvent()
     {
         var timerPlan = CompileTimerPlan(
             StartedAtUtc.AddMinutes(1),
@@ -2041,10 +2041,16 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             Catalog(eventDocument),
             definitionId: "process/durable-task-catalog-emit-event");
 
-        var exception = Assert.Throws<ArgumentException>(() =>
-            new DurableTaskSequentialProcessPlanCatalog([Physical(emitPlan)]));
+        var rejected = DurableTaskProcessRealizationCompiler.CompileExecutable(emitPlan);
 
-        Assert.Contains("emit:emitEvent", exception.Message, StringComparison.Ordinal);
+        Assert.False(rejected.IsSuccessful);
+        Assert.Null(rejected.Plan);
+        var diagnostic = Assert.Single(
+            rejected.Realization.Diagnostics,
+            static candidate =>
+                candidate.Code == ProcessInterpreterRealizationDiagnosticCodes.RequirementUnavailable
+                && candidate.Requirement == ProcessInterpreterRequirementKey.ForConstruct(ProcessWireNames.EmitEventNode));
+        Assert.Equal(new ExecutionNodeId("emit"), Assert.Single(diagnostic.Nodes));
     }
 
     [Fact]
@@ -3664,7 +3670,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
 
     static DurableTaskProcessRealizationPlan Physical(CompiledProcessPlan plan)
     {
-        var result = DurableTaskProcessRealizationCompiler.Compile(plan);
+        var result = DurableTaskProcessRealizationCompiler.CompileExecutable(plan);
         Assert.True(result.IsSuccessful, Format(result.Realization.Diagnostics));
         return Assert.IsType<DurableTaskProcessRealizationPlan>(result.Plan);
     }

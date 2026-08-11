@@ -37,7 +37,7 @@ public sealed record DurableTaskProcessRequirementRealization
 /// <remarks>
 /// This value does not contain an independently authored Durable Task workflow. The canonical plan remains semantic
 /// authority; the requirement realizations are target-owned physical evidence consumed by the generic
-/// interpreter. Creating this plan proves planning feasibility only and does not by itself admit worker execution.
+/// interpreter. A plan admits worker execution only when its realization carries the exact executable profile.
 /// </remarks>
 public sealed class DurableTaskProcessRealizationPlan
 {
@@ -89,7 +89,7 @@ public sealed class DurableTaskProcessRealizationPlan
     public ImmutableArray<DurableTaskProcessRequirementRealization> Requirements { get; }
 }
 
-/// <summary>Result of attempting to plan one exact canonical Process for Durable Task.</summary>
+/// <summary>Result of compiling one exact canonical Process against a Durable Task capability profile.</summary>
 public sealed class DurableTaskProcessPlanningResult
 {
     internal DurableTaskProcessPlanningResult(
@@ -106,11 +106,11 @@ public sealed class DurableTaskProcessPlanningResult
     /// <summary>Deterministic physical plan, or null when any demanded semantic is unavailable or invalid.</summary>
     public DurableTaskProcessRealizationPlan? Plan { get; }
 
-    /// <summary>Whether planning produced a complete physical realization plan.</summary>
+    /// <summary>Whether compilation produced a complete physical realization plan.</summary>
     public bool IsSuccessful => Plan is not null;
 }
 
-/// <summary>Compiles exact canonical Process plans into non-executing Durable Task realization plans.</summary>
+/// <summary>Compiles exact canonical Process plans against Durable Task planning or executable profiles.</summary>
 public static class DurableTaskProcessRealizationCompiler
 {
     /// <summary>
@@ -121,11 +121,26 @@ public static class DurableTaskProcessRealizationCompiler
     /// <returns>A realization report and, when semantically feasible, a deterministic physical plan.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="plan"/> is <see langword="null"/>.</exception>
     public static DurableTaskProcessPlanningResult Compile(CompiledProcessPlan plan)
+        => Compile(plan, DurableTaskProcessTargetProfile.Planning);
+
+    /// <summary>
+    /// Matches the exact plan to the versioned, bounded executable profile and produces a physical plan only when
+    /// every demanded semantic has conformance-backed executable evidence.
+    /// </summary>
+    /// <param name="plan">Successfully compiled canonical Process plan.</param>
+    /// <returns>An executable realization report and, when supported, a deployable physical plan.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="plan"/> is <see langword="null"/>.</exception>
+    public static DurableTaskProcessPlanningResult CompileExecutable(CompiledProcessPlan plan)
+        => Compile(plan, DurableTaskProcessTargetProfile.Executable);
+
+    static DurableTaskProcessPlanningResult Compile(
+        CompiledProcessPlan plan,
+        ProcessInterpreterCapabilityProfile targetProfile)
     {
         ArgumentNullException.ThrowIfNull(plan);
         var realization = ProcessInterpreterRealizationCompiler.Compile(
             plan,
-            DurableTaskProcessTargetProfile.Planning);
+            targetProfile);
         var physicalPlan = realization.IsRealizable
             ? new DurableTaskProcessRealizationPlan(plan, realization)
             : null;

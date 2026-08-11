@@ -370,7 +370,7 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
         Assert.Contains(
             $"boundary:{DurableTaskProcessTargetProfile.PayloadBoundary.Value}",
             constrainedPayload.RelatedSubjects);
-        Assert.Contains(DurableTaskProcessTargetProfile.PlanningProfileId.Value, constrainedPayload.SourceReferences);
+        Assert.Contains(DurableTaskProcessTargetProfile.ExecutableProfileId.Value, constrainedPayload.SourceReferences);
         Assert.DoesNotContain(
             artifact.Diagnostics,
             static diagnostic => diagnostic.Code is
@@ -886,7 +886,7 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
 
     static DurableTaskProcessRealizationPlan Physical(CompiledProcessPlan plan)
     {
-        var result = DurableTaskProcessRealizationCompiler.Compile(plan);
+        var result = DurableTaskProcessRealizationCompiler.CompileExecutable(plan);
         Assert.True(
             result.IsSuccessful,
             string.Join("; ", result.Realization.Diagnostics.Select(static diagnostic => diagnostic.Message)));

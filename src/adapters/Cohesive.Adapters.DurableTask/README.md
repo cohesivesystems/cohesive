@@ -175,17 +175,30 @@ unavailable semantics produce structured diagnostics and no physical plan. In pa
 multi-resource atomicity demand is rejected.
 
 The resulting plan retains the exact `CompiledProcessPlan`; it contains no generated or hand-authored Durable Task
-workflow. Successful plans may be deployed through the immutable exact-reference catalog below, but the catalog
-performs the additional executable-slice check before worker startup.
+workflow. A planning-profile plan is design evidence and cannot be deployed through the worker catalog.
+
+`DurableTaskProcessTargetProfile.Executable` is a separate, versioned profile for the bounded conformance-tested
+runtime. It also disposes the complete canonical construct and guarantee catalogs, but marks domain-event emission,
+Reply discharge, and whole-definition multi-resource atomicity unavailable. Adding a canonical construct or
+guarantee without an executable disposition fails profile construction and the inventory-completeness test;
+omission cannot imply support.
 
 ## Process execution
 
-Compile every deployed definition, retain its exact physical plan, and register one canonical host for bounded I/O.
-To dispatch Requests automatically, also supply deterministic exact binding and adapter resolvers:
+Qualify every deployed definition against the executable profile, retain its exact physical plan, and register one
+canonical host for bounded I/O. Unsupported requirements produce source-attributed realization diagnostics before a
+plan can enter the catalog. To dispatch Requests automatically, also supply deterministic exact binding and adapter
+resolvers:
 
 ```csharp
-DurableTaskProcessRealizationPlan physicalPlan =
-    DurableTaskProcessRealizationCompiler.Compile(compiledProcessPlan).Plan!;
+DurableTaskProcessPlanningResult executable =
+    DurableTaskProcessRealizationCompiler.CompileExecutable(compiledProcessPlan);
+if (!executable.IsSuccessful)
+{
+    // Present executable.Realization.Diagnostics; nothing can enter the worker catalog.
+}
+
+DurableTaskProcessRealizationPlan physicalPlan = executable.Plan!;
 var catalog = new DurableTaskSequentialProcessPlanCatalog(
     [physicalPlan],
     new ApplicationDurableRequestBindingResolver());
@@ -206,11 +219,12 @@ fail-closed defaults only when the application has not supplied them. `IDurableR
 `IDurableOperationAdapterResolver`, and `IDurableOperationExceptionClassifier` are shared execution ports used by
 both native Storage and Durable Task interpretations, rather than target-specific copies.
 
-The worker catalog is a deployment projection, not a mutable definition registry. Each lookup requires the full
+The worker catalog is a deployment projection, not a mutable definition registry. It admits only plans carrying the
+exact executable profile identity; planning evidence cannot authorize execution. Each lookup requires the full
 definition identity, revision, and fingerprint from the canonical `ProcessStartReceipt`; workers must reconstruct
 an equivalent immutable catalog and deterministic Request bindings after restart. The package registers the same
 portable JSON converter for worker and client payloads. The initial public SDK names retain `Sequential` for source
-compatibility, but catalog admission now includes the bounded higher-order constructs listed above.
+compatibility, but executable qualification includes the bounded higher-order constructs listed above.
 
 Schedule the admitted start evidence with the client extension:
 

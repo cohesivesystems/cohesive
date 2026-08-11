@@ -1,7 +1,5 @@
 using System.Collections.Immutable;
 using Cohesive.Execution;
-using Cohesive.Processes.Compilation;
-using Cohesive.Processes.IR;
 
 namespace Cohesive.Adapters.DurableTask;
 
@@ -15,7 +13,7 @@ public sealed class DurableTaskSequentialProcessPlanCatalog
 {
     readonly ImmutableDictionary<ExecutionDefinitionReference, DurableTaskProcessRealizationPlan> plans;
 
-    /// <summary>Creates an immutable catalog from completely planned canonical Processes.</summary>
+    /// <summary>Creates an immutable catalog from executable-qualified canonical Processes.</summary>
     /// <param name="plans">Exact Durable Task realization plans deployed to this worker.</param>
     /// <param name="bindingResolver">
     /// Deterministic exact Request binding resolver used during orchestration replay. The default leaves Requests
@@ -23,7 +21,8 @@ public sealed class DurableTaskSequentialProcessPlanCatalog
     /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="plans"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
-    /// An entry is null, repeats an exact reference, or includes constructs outside the bounded executable slice.
+    /// An entry is null, repeats an exact reference, has a conflicting fingerprint, or was not compiled against the
+    /// exact executable profile.
     /// </exception>
     public DurableTaskSequentialProcessPlanCatalog(
         IEnumerable<DurableTaskProcessRealizationPlan> plans,
@@ -40,7 +39,15 @@ public sealed class DurableTaskSequentialProcessPlanCatalog
                 throw new ArgumentException("A Process plan catalog cannot contain null entries.", nameof(plans));
             }
 
-            DurableTaskSequentialProcessEligibility.Require(plan);
+            if (plan.Realization.TargetProfile.Id != DurableTaskProcessTargetProfile.ExecutableProfileId)
+            {
+                throw new ArgumentException(
+                    $"Process definition '{plan.Definition.DefinitionId.Value}' was planned with profile "
+                    + $"'{plan.Realization.TargetProfile.Id.Value}'. Worker admission requires executable profile "
+                    + $"'{DurableTaskProcessTargetProfile.ExecutableProfileId.Value}'; compile it with "
+                    + $"{nameof(DurableTaskProcessRealizationCompiler)}.{nameof(DurableTaskProcessRealizationCompiler.CompileExecutable)}.",
+                    nameof(plans));
+            }
             var revisionKey = (plan.Definition.DefinitionId, plan.Definition.RevisionId);
             if (revisions.TryGetValue(revisionKey, out var retained)
                 && retained.Fingerprint != plan.Definition.Fingerprint)
@@ -83,44 +90,5 @@ public sealed class DurableTaskSequentialProcessPlanCatalog
                 $"No Durable Task Process plan is deployed for exact definition "
                 + $"'{definition.DefinitionId.Value}' revision '{definition.RevisionId.Value}' fingerprint "
                 + $"'{definition.Fingerprint.Value}'.");
-    }
-}
-
-static class DurableTaskSequentialProcessEligibility
-{
-    internal static void Require(DurableTaskProcessRealizationPlan plan)
-    {
-        ArgumentNullException.ThrowIfNull(plan);
-        List<string> unsupported = [];
-        foreach (var node in plan.CanonicalPlan.Definition.Nodes)
-        {
-            if (node is not (InvokeTransitionProcessNode
-                or EvaluateRelationProcessNode
-                or RequestProcessNode
-                or SendSignalProcessNode
-                or ChoiceProcessNode
-                or MatchProcessNode
-                or ForkProcessNode
-                or JoinProcessNode
-                or AwaitMatchProcessNode
-                or TimerProcessNode
-                or DurableCutProcessNode
-                or InvokeProcessProcessNode
-                or ForEachPartitionProcessNode
-                or RepeatAcrossActivationProcessNode
-                or ReturnProcessNode
-                or FailProcessNode))
-            {
-                unsupported.Add($"{node.Id.Value}:{ProcessNodeConstructCatalog.GetRequirement(node).Name}");
-            }
-        }
-
-        if (unsupported.Count > 0)
-        {
-            throw new ArgumentException(
-                "The Durable Task Process interpreter cannot execute: "
-                + string.Join(", ", unsupported),
-                nameof(plan));
-        }
     }
 }

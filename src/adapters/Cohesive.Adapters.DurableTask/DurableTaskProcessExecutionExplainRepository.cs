@@ -24,16 +24,6 @@ public sealed class DurableTaskProcessExecutionExplainRepository : IProcessExecu
     /// <summary>Stable explain-evidence kind for one exact Process realization-ledger disposition.</summary>
     public const string RealizationEvidenceKind = "process.interpreter.realization";
 
-    static readonly ExecutionInterpreterProfileReference InterpreterProfile = new(
-        DurableTaskProcessTargetProfile.Target.Value,
-        DurableTaskProcessTargetProfile.PlanningProfileId.Value,
-        new([ExecutionDefinitionDocument.CurrentSchemaVersion]),
-        [ProcessDefinitionDocuments.Kind],
-        new(
-            new("Cohesive.Adapters.DurableTask", "v1"),
-            new("Cohesive.Adapters.DurableTask/DurableTaskProcessTargetProfile"),
-            DocumentOrigin.System));
-
     readonly DurableTaskProcessExecutionRepository executions;
     readonly DurableTaskSequentialProcessPlanCatalog plans;
 
@@ -82,7 +72,7 @@ public sealed class DurableTaskProcessExecutionExplainRepository : IProcessExecu
             plan.CanonicalPlan,
             trace,
             execution.RuntimeStatus,
-            InterpreterProfile,
+            InterpreterProfile(plan),
             ProjectRealizationEvidence(plan),
             diagnostics);
         if (!projection.IsSuccessful)
@@ -98,6 +88,16 @@ public sealed class DurableTaskProcessExecutionExplainRepository : IProcessExecu
 
         return projection.Artifact;
     }
+
+    static ExecutionInterpreterProfileReference InterpreterProfile(DurableTaskProcessRealizationPlan plan) => new(
+        plan.Realization.TargetProfile.Target.Value,
+        plan.Realization.TargetProfile.Id.Value,
+        new([ExecutionDefinitionDocument.CurrentSchemaVersion]),
+        [ProcessDefinitionDocuments.Kind],
+        new(
+            new("Cohesive.Adapters.DurableTask", "v1"),
+            new("Cohesive.Adapters.DurableTask/DurableTaskProcessTargetProfile"),
+            DocumentOrigin.System));
 
     /// <summary>Returns a canonical explanation by trusted authority scope and logical Process identity.</summary>
     /// <param name="context">Operation context that supplies cancellation for the read.</param>
