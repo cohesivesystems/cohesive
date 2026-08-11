@@ -47,6 +47,24 @@ public sealed class DurableTaskAzureStorageSettingsTests
     }
 
     [Fact]
+    public void AzureStorageOrchestrationService_ConstructsWithResolvedProviderAndCoreVersions()
+    {
+        var sp = CreateServiceProvider(new Dictionary<string, AzureBlobStorageOptions>(StringComparer.OrdinalIgnoreCase)
+        {
+            [AzureBlobStorageOptions.DefaultName] = new() { ConnectionString = "UseDevelopmentStorage=true" }
+        });
+        var settings = new AzureStorageOrchestrationServiceSettings();
+        settings.ConfigureDurableTaskAzureStorage(sp, new DurableTaskAzureStorageSettings
+        {
+            TaskHubName = "sample-training-dev"
+        });
+
+        var service = new AzureStorageOrchestrationService(settings);
+
+        Assert.NotNull(service);
+    }
+
+    [Fact]
     public void ConfigureDurableTaskAzureStorage_ReportsMissingAzureStorageProfile()
     {
         var sp = CreateServiceProvider(new Dictionary<string, AzureBlobStorageOptions>(StringComparer.OrdinalIgnoreCase)

@@ -7,7 +7,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Azure.DurableTask.AzureStorage" Version="2.8.1" />
+    <!-- Keep the Azure Storage provider aligned with the Core interface version below. -->
+    <PackageReference Include="Microsoft.Azure.DurableTask.AzureStorage" Version="2.9.1" />
     <PackageReference Include="Microsoft.Azure.DurableTask.Core" Version="3.9.0" />
     <PackageReference Include="Microsoft.DurableTask.Client.AzureManaged" Version="1.25.0" />
     <PackageReference Include="Microsoft.DurableTask.Worker.AzureManaged" Version="1.25.0" />
