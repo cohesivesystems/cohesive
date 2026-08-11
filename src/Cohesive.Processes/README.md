@@ -166,14 +166,18 @@ available, and terminal-without-artifact executions. An available `ProcessExecut
 missing-prefix count, so pre-retention gaps cannot be mistaken for complete trace coverage. The repository envelope
 does not replace `NormalizedExecutionTrace`; it describes provider availability and coverage of that shared artifact.
 
+`IProcessExecutionRepository` is the provider-neutral boundary for current safe status acquisition. Application and
+API reads use its logical address formed by a server-resolved `InteractionAuthorityScope` and canonical
+`ProcessInstanceId`; engine administration may use the separate exact physical-key overload. A retained pending
+admission may have an exact definition but no `ExecutionStatus`, and consumers must not manufacture one from a
+provider lifecycle value.
+
 `IProcessExecutionExplainRepository` is the asynchronous runtime boundary for composing retained observations into
 the existing `ExecutionExplainArtifact`. Pending and active executions may yield partial lifecycle artifacts without
 trace evidence; a missing execution yields no artifact. The repository does not authorize another explain DTO or
 re-execution path. `ProcessExecutionRecord.Definition` retains the exact canonical identity independently of optional
-runtime status so admission-window observations can still resolve their deployed definition. Application and API
-reads use the provider-neutral logical address formed by a server-resolved `InteractionAuthorityScope` and canonical
-`ProcessInstanceId`; engine administration may use the separate exact physical-key overload. An untrusted request
-must never choose the authority or tenant supplied to the logical read.
+runtime status so admission-window observations can still resolve their deployed definition. An untrusted request
+must never choose the authority or tenant supplied to either logical read.
 
 ## Interpreter capability realization
 

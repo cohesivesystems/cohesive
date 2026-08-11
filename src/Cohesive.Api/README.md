@@ -55,9 +55,10 @@ var output = ExecutionExplainJsonSerializer.Serialize(
 The catalog deliberately supplies no HTTP route or console formatting. A transport adapter binds the typed
 operation handle, and presentation remains outside the execution semantic authorities. `ApiEndpoint.WithHttp`
 projects a handle without redeclaring its semantic identity, contracts, policies, results, or authority references.
-For the conventional Process explanation HTTP projection, use
-`Cohesive.Adapters.AspNet.Processes.MapProcessExecutionExplainApi` rather than accepting a client-authored command
-context or translating the returned artifact.
+For conventional Process observation HTTP projections, use
+`Cohesive.Adapters.AspNet.Processes.MapProcessExecutionInspectApi` and `MapProcessExecutionExplainApi`. Both accept
+only the logical Process identity from the route and require a trusted server-side authority-scope resolver; neither
+deserializes the authorization, issuance, or provenance fields of a client-authored `InspectProcessCommand`.
 
 ## Related Packages
 

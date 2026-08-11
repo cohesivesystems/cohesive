@@ -9,7 +9,7 @@ using Microsoft.AspNetCore.Routing.Patterns;
 
 namespace Cohesive.Adapters.AspNet.Processes;
 
-/// <summary>Resolves the trusted authority address for one HTTP Process explanation read.</summary>
+/// <summary>Resolves the trusted authority address for one HTTP Process observation read.</summary>
 /// <remarks>
 /// Implementations derive this value from authenticated server-side identity, authorization, and scope evidence.
 /// They must not accept authority or tenant values from an untrusted request payload.
@@ -18,13 +18,13 @@ namespace Cohesive.Adapters.AspNet.Processes;
 /// <param name="httpContext">Current authorized ASP.NET request.</param>
 /// <param name="processInstanceId">Logical Process identity projected from the declared route value.</param>
 /// <returns>The exact trusted authority and optional tenant isolating the Process execution.</returns>
-public delegate InteractionAuthorityScope ProcessExecutionExplainAuthorityScopeResolver(
+public delegate InteractionAuthorityScope ProcessExecutionAuthorityScopeResolver(
     OperationContext operationContext,
     HttpContext httpContext,
     ProcessInstanceId processInstanceId);
 
-/// <summary>ASP.NET binding for canonical Process execution explanations.</summary>
-public static class ProcessExecutionExplainApiEndpointRouteBuilderExtensions
+/// <summary>ASP.NET bindings for canonical Process execution observations.</summary>
+public static partial class ProcessExecutionReadApiEndpointRouteBuilderExtensions
 {
     /// <summary>Conventional route parameter that carries the logical Process instance identity.</summary>
     public const string ProcessInstanceIdRouteParameter = "processInstanceId";
@@ -66,7 +66,7 @@ public static class ProcessExecutionExplainApiEndpointRouteBuilderExtensions
         this IEndpointRouteBuilder endpoints,
         ApiEndpoint endpoint,
         string route,
-        ProcessExecutionExplainAuthorityScopeResolver authorityScopeResolver,
+        ProcessExecutionAuthorityScopeResolver authorityScopeResolver,
         AspNetAuthorizationPolicyResolver authorizationPolicyResolver,
         Action<RouteHandlerBuilder, ApiOperation>? configure = null)
     {
@@ -92,14 +92,14 @@ public static class ProcessExecutionExplainApiEndpointRouteBuilderExtensions
             body: null));
         return endpoints.MapApiEndpoint(
             projected,
-            CreateHandler(projected.Operation, authorityScopeResolver),
+            CreateExplainHandler(projected.Operation, authorityScopeResolver),
             configure,
             authorizationPolicyResolver);
     }
 
-    static Delegate CreateHandler(
+    static Delegate CreateExplainHandler(
         ApiOperation operation,
-        ProcessExecutionExplainAuthorityScopeResolver authorityScopeResolver) =>
+        ProcessExecutionAuthorityScopeResolver authorityScopeResolver) =>
         async (
             OperationContext operationContext,
             HttpContext httpContext,
@@ -122,7 +122,7 @@ public static class ProcessExecutionExplainApiEndpointRouteBuilderExtensions
                     httpContext,
                     processInstanceId)
                 ?? throw new InvalidOperationException(
-                    "The Process explain authority-scope resolver returned no trusted address.");
+                    "The Process observation authority-scope resolver returned no trusted address.");
             var artifact = await repository.GetExplainAsync(
                     operationContext,
                     authorityScope,
@@ -207,7 +207,7 @@ public static class ProcessExecutionExplainApiEndpointRouteBuilderExtensions
             if (match is not null)
             {
                 throw new InvalidOperationException(
-                    $"Execution explain operation '{operation.Id}' declares multiple '{kind}' results.");
+                    $"Execution observation operation '{operation.Id}' declares multiple '{kind}' results.");
             }
 
             match = candidate;
@@ -216,7 +216,7 @@ public static class ProcessExecutionExplainApiEndpointRouteBuilderExtensions
         if (match?.Http is null)
         {
             throw new InvalidOperationException(
-                $"Execution explain operation '{operation.Id}' has no HTTP '{kind}' result projection.");
+                $"Execution observation operation '{operation.Id}' has no HTTP '{kind}' result projection.");
         }
 
         return match;
@@ -272,7 +272,7 @@ public static class ProcessExecutionExplainApiEndpointRouteBuilderExtensions
         }
         catch (RoutePatternException error)
         {
-            throw new ArgumentException("The Process explain HTTP route is malformed.", nameof(route), error);
+            throw new ArgumentException("The Process observation HTTP route is malformed.", nameof(route), error);
         }
 
         if (!pattern.Parameters.Any(static parameter =>
@@ -282,7 +282,7 @@ public static class ProcessExecutionExplainApiEndpointRouteBuilderExtensions
                     StringComparison.Ordinal)))
         {
             throw new ArgumentException(
-                $"The Process explain HTTP route must contain '{{{ProcessInstanceIdRouteParameter}}}'.",
+                $"The Process observation HTTP route must contain '{{{ProcessInstanceIdRouteParameter}}}'.",
                 nameof(route));
         }
     }

@@ -13,18 +13,19 @@ using Microsoft.AspNetCore.Routing;
 
 namespace Cohesive.Tests.Api;
 
-public sealed class ProcessExecutionExplainApiEndpointRouteBuilderExtensionsTests
+public sealed class ProcessExecutionInspectApiEndpointRouteBuilderExtensionsTests
 {
-    const string ExplainRoute = "/execution-control/processes/{processInstanceId}/explain";
-    const string ExplainPolicy = "cohesive.execution.explain";
+    const string InspectRoute = "/execution-control/processes/{processInstanceId}";
+    const string InspectPolicy = "cohesive.execution.inspect";
 
     [Fact]
-    public async Task MapProcessExecutionExplainApi_UsesTrustedLogicalAddressAndReturnsCanonicalJson()
+    public async Task MapProcessExecutionInspectApi_UsesTrustedLogicalAddressAndReturnsCanonicalStatus()
     {
         var fixture = ProcessControlTestFixture.Create();
-        var state = fixture.State();
-        var artifact = Artifact(state);
-        var repository = new RecordingExplainRepository(artifact);
+        var status = ExecutionStatusProjector.Project(
+            fixture.State(),
+            ExecutionRuntimeStatusDetails.Unknown);
+        var repository = new RecordingExecutionRepository(_ => Record(status));
         var operationContext = OperationContext.Create();
         var authorityScope = new InteractionAuthorityScope("authority/trusted", "tenant/trusted");
         OperationContext? resolvedContext = null;
@@ -33,12 +34,12 @@ public sealed class ProcessExecutionExplainApiEndpointRouteBuilderExtensionsTest
         var catalog = ExecutionControlApiCatalog.Create();
         var builder = WebApplication.CreateSlimBuilder();
         builder.Services.AddSingleton(operationContext);
-        builder.Services.AddSingleton<IProcessExecutionExplainRepository>(repository);
+        builder.Services.AddSingleton<IProcessExecutionRepository>(repository);
         await using var app = builder.Build();
 
-        app.MapProcessExecutionExplainApi(
-            catalog.Explain,
-            ExplainRoute,
+        app.MapProcessExecutionInspectApi(
+            catalog.Inspect,
+            InspectRoute,
             (context, httpContext, processInstanceId) =>
             {
                 resolvedContext = context;
@@ -48,52 +49,70 @@ public sealed class ProcessExecutionExplainApiEndpointRouteBuilderExtensionsTest
             },
             ResolvePolicy);
         var endpoint = GetRouteEndpoint(app);
-        var response = await InvokeAsync(app, endpoint, state.ProcessInstanceId.Value, "not-json");
+        var response = await InvokeAsync(app, endpoint, status.ProcessInstanceId.Value, "not-json");
 
         Assert.Equal(StatusCodes.Status200OK, response.StatusCode);
         Assert.Equal("application/json", response.ContentType);
+        Assert.DoesNotContain("physical/private", Encoding.UTF8.GetString(response.Body), StringComparison.Ordinal);
+        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var result = JsonSerializer.Deserialize<ExecutionControlResult>(response.Body, jsonOptions);
+        Assert.NotNull(result);
+        Assert.Equal(ProcessControlDecisionDisposition.Inspected, result.Disposition);
         Assert.Equal(
-            ExecutionExplainJsonSerializer.GetCanonicalBytes(artifact),
-            response.Body);
+            JsonSerializer.Serialize(status, jsonOptions),
+            JsonSerializer.Serialize(result.Status, jsonOptions));
+        Assert.Null(result.Receipt);
+        Assert.Empty(result.DiagnosticCodes);
         Assert.Same(operationContext, resolvedContext);
         Assert.Same(response.HttpContext, resolvedHttpContext);
-        Assert.Equal(state.ProcessInstanceId, resolvedInstance);
+        Assert.Equal(status.ProcessInstanceId, resolvedInstance);
         Assert.Same(operationContext, repository.OperationContext);
         Assert.Equal(authorityScope, repository.AuthorityScope);
-        Assert.Equal(state.ProcessInstanceId, repository.ProcessInstanceId);
+        Assert.Equal(status.ProcessInstanceId, repository.ProcessInstanceId);
         Assert.Equal(0, repository.PhysicalReadCount);
 
         var operation = Assert.Single(endpoint.Metadata.GetOrderedMetadata<ApiOperation>());
         Assert.Equal(typeof(InspectProcessCommand), operation.RequestType);
-        Assert.Equal(typeof(ExecutionExplainArtifact), operation.ResponseType);
+        Assert.Equal(typeof(ExecutionControlResult), operation.ResponseType);
         Assert.Equal(HttpMethods.Get, operation.Http?.Method);
         Assert.Null(operation.Http?.Body);
         Assert.Equal(
             ProcessExecutionReadApiEndpointRouteBuilderExtensions.ProcessInstanceIdRouteParameter,
             Assert.Single(operation.Http!.Parameters).Name);
         Assert.Same(
-            catalog.Explain.Operation.AuthorizationRequirements[0],
+            catalog.Inspect.Operation.AuthorizationRequirements[0],
             Assert.Single(operation.AuthorizationRequirements));
         Assert.Equal(
-            ExplainPolicy,
+            InspectPolicy,
             Assert.Single(endpoint.Metadata.GetOrderedMetadata<IAuthorizeData>()).Policy);
-        Assert.Equal(catalog.Explain.Operation.SemanticReferences, operation.SemanticReferences);
-        Assert.Null(catalog.Explain.Operation.Http);
+        Assert.Equal(catalog.Inspect.Operation.SemanticReferences, operation.SemanticReferences);
+        Assert.Null(catalog.Inspect.Operation.Http);
     }
 
     [Fact]
-    public async Task MapProcessExecutionExplainApi_MissingAndMalformedTargetsReturnOpaqueDeclaredProblems()
+    public async Task MapProcessExecutionInspectApi_ConcealsMissingPendingAndMalformedTargets()
     {
-        var repository = new RecordingExplainRepository(artifact: null);
+        var fixture = ProcessControlTestFixture.Create();
+        var pending = new ProcessExecutionRecord(
+            "physical/pending",
+            "process/pending",
+            ProcessExecutionStatus.Pending,
+            StartedAtUtc: null,
+            UpdatedAtUtc: null,
+            CompletedAtUtc: null,
+            RuntimeStatus: null,
+            Definition: fixture.State().Definition);
+        var repository = new RecordingExecutionRepository(processInstanceId =>
+            processInstanceId.Value == "process/pending" ? pending : null);
         var catalog = ExecutionControlApiCatalog.Create();
         var builder = WebApplication.CreateSlimBuilder();
         builder.Services.AddSingleton(OperationContext.Create());
-        builder.Services.AddSingleton<IProcessExecutionExplainRepository>(repository);
+        builder.Services.AddSingleton<IProcessExecutionRepository>(repository);
         await using var app = builder.Build();
         var resolverCalls = 0;
-        app.MapProcessExecutionExplainApi(
-            catalog.Explain,
-            ExplainRoute,
+        app.MapProcessExecutionInspectApi(
+            catalog.Inspect,
+            InspectRoute,
             (_, _, _) =>
             {
                 resolverCalls++;
@@ -103,30 +122,36 @@ public sealed class ProcessExecutionExplainApiEndpointRouteBuilderExtensionsTest
         var endpoint = GetRouteEndpoint(app);
 
         var missing = await InvokeAsync(app, endpoint, "process/not-present");
+        var pendingResponse = await InvokeAsync(app, endpoint, "process/pending");
         var malformed = await InvokeAsync(app, endpoint, processInstanceId: null);
 
         Assert.Equal(StatusCodes.Status404NotFound, missing.StatusCode);
         Assert.Equal(ExecutionApiProblemCodes.NotFound, ProblemCode(missing.Body));
         Assert.DoesNotContain("process/not-present", Encoding.UTF8.GetString(missing.Body), StringComparison.Ordinal);
-        Assert.Equal(StatusCodes.Status400BadRequest, malformed.StatusCode);
-        Assert.Equal(ExecutionApiProblemCodes.InvalidRequest, ProblemCode(malformed.Body));
-        Assert.Equal(1, resolverCalls);
-        Assert.Equal(1, repository.LogicalReadCount);
+        Assert.Equal(StatusCodes.Status404NotFound, pendingResponse.StatusCode);
+        Assert.Equal(ExecutionApiProblemCodes.NotFound, ProblemCode(pendingResponse.Body));
+        Assert.Equal(StatusCodes.Status404NotFound, malformed.StatusCode);
+        Assert.Equal(ExecutionApiProblemCodes.NotFound, ProblemCode(malformed.Body));
+        Assert.Equal(2, resolverCalls);
+        Assert.Equal(2, repository.LogicalReadCount);
     }
 
     [Fact]
-    public async Task MapProcessExecutionExplainApi_ConflictingArtifactAffinityFailsClosed()
+    public async Task MapProcessExecutionInspectApi_ConflictingStatusAffinityFailsClosed()
     {
         var fixture = ProcessControlTestFixture.Create();
-        var repository = new RecordingExplainRepository(Artifact(fixture.State()));
+        var status = ExecutionStatusProjector.Project(
+            fixture.State(),
+            ExecutionRuntimeStatusDetails.Unknown);
+        var repository = new RecordingExecutionRepository(_ => Record(status));
         var catalog = ExecutionControlApiCatalog.Create();
         var builder = WebApplication.CreateSlimBuilder();
         builder.Services.AddSingleton(OperationContext.Create());
-        builder.Services.AddSingleton<IProcessExecutionExplainRepository>(repository);
+        builder.Services.AddSingleton<IProcessExecutionRepository>(repository);
         await using var app = builder.Build();
-        app.MapProcessExecutionExplainApi(
-            catalog.Explain,
-            ExplainRoute,
+        app.MapProcessExecutionInspectApi(
+            catalog.Inspect,
+            InspectRoute,
             static (_, _, _) => new("authority/trusted", "tenant/trusted"),
             ResolvePolicy);
         var endpoint = GetRouteEndpoint(app);
@@ -138,57 +163,39 @@ public sealed class ProcessExecutionExplainApiEndpointRouteBuilderExtensionsTest
     }
 
     [Fact]
-    public void MapProcessExecutionExplainApi_RejectsNoncanonicalContractAndMissingRouteAddress()
+    public void MapProcessExecutionInspectApi_RejectsNoncanonicalContractAndMissingRouteAddress()
     {
         var catalog = ExecutionControlApiCatalog.Create();
         var builder = WebApplication.CreateSlimBuilder();
         var app = builder.Build();
 
         var contractError = Assert.Throws<InvalidOperationException>(() =>
-            app.MapProcessExecutionExplainApi(
-                catalog.Inspect,
-                ExplainRoute,
+            app.MapProcessExecutionInspectApi(
+                catalog.Explain,
+                InspectRoute,
                 static (_, _, _) => new("authority/trusted"),
                 ResolvePolicy));
         var routeError = Assert.Throws<ArgumentException>(() =>
-            app.MapProcessExecutionExplainApi(
-                catalog.Explain,
-                "/execution-control/processes/explain",
+            app.MapProcessExecutionInspectApi(
+                catalog.Inspect,
+                "/execution-control/processes",
                 static (_, _, _) => new("authority/trusted"),
                 ResolvePolicy));
 
-        Assert.Contains("not the canonical execution-control explain contract", contractError.Message, StringComparison.Ordinal);
+        Assert.Contains("not the canonical execution-control inspect contract", contractError.Message, StringComparison.Ordinal);
         Assert.Contains("processInstanceId", routeError.Message, StringComparison.Ordinal);
         Assert.Empty(((IEndpointRouteBuilder)app).DataSources.SelectMany(static source => source.Endpoints));
     }
 
-    static ExecutionExplainArtifact Artifact(ProcessControlState state)
-    {
-        var provenance = ProcessControlTestFixture.Provenance();
-        var kind = new ExecutionDefinitionKind("tests.process");
-        var schema = ExecutionDefinitionDocument.CurrentSchemaVersion;
-        var status = ExecutionStatusProjector.Project(state, ExecutionRuntimeStatusDetails.Unknown);
-        var interpreter = new ExecutionInterpreterProfileReference(
-            "tests.process.interpreter",
-            "v1",
-            new([schema]),
-            [kind],
-            provenance);
-        return new(
-            ExecutionExplainArtifact.CurrentSchemaVersion,
-            new(kind, schema, state.Definition, provenance, ExecutionSourceMap.Empty),
-            interpreter,
-            [
-                new(
-                    ExecutionExplainStageNames.Definition,
-                    kind.Value,
-                    state.Definition.DefinitionId.Value,
-                    ExecutionExplainEvidenceAuthority.Declared,
-                    "Available",
-                    sourceReferences: [provenance.Source.Reference])
-            ],
-            runtimeStatus: status);
-    }
+    static ProcessExecutionRecord Record(ExecutionStatus status) => new(
+        "physical/private",
+        status.Definition.DefinitionId.Value,
+        ProcessExecutionStatus.Waiting,
+        status.CreatedAtUtc,
+        status.UpdatedAtUtc,
+        CompletedAtUtc: null,
+        RuntimeStatus: status,
+        Definition: status.Definition);
 
     static RouteEndpoint GetRouteEndpoint(WebApplication app) =>
         Assert.Single(((IEndpointRouteBuilder)app)
@@ -234,11 +241,11 @@ public sealed class ProcessExecutionExplainApiEndpointRouteBuilderExtensionsTest
 
     static string ResolvePolicy(ApiOperation operation, ApiAuthorizationRequirement requirement)
     {
-        Assert.Equal(ExecutionExplainWireNames.Explain, operation.Name);
+        Assert.Equal(ExecutionControlWireNames.Inspect, operation.Name);
         Assert.Equal(
-            ExecutionControlApiWireNames.AuthorizationRequirement(ExecutionExplainWireNames.Explain),
+            ExecutionControlApiWireNames.AuthorizationRequirement(ExecutionControlWireNames.Inspect),
             requirement.Id);
-        return ExplainPolicy;
+        return InspectPolicy;
     }
 
     sealed record CapturedResponse(
@@ -247,8 +254,9 @@ public sealed class ProcessExecutionExplainApiEndpointRouteBuilderExtensionsTest
         byte[] Body,
         HttpContext HttpContext);
 
-    sealed class RecordingExplainRepository(ExecutionExplainArtifact? artifact)
-        : IProcessExecutionExplainRepository
+    sealed class RecordingExecutionRepository(
+        Func<ProcessInstanceId, ProcessExecutionRecord?> read)
+        : IProcessExecutionRepository
     {
         public OperationContext? OperationContext { get; private set; }
 
@@ -260,7 +268,7 @@ public sealed class ProcessExecutionExplainApiEndpointRouteBuilderExtensionsTest
 
         public int PhysicalReadCount { get; private set; }
 
-        public ValueTask<ExecutionExplainArtifact?> GetExplainAsync(
+        public ValueTask<ProcessExecutionRecord?> GetAsync(
             OperationContext context,
             InteractionAuthorityScope authorityScope,
             ProcessInstanceId processInstanceId)
@@ -269,15 +277,20 @@ public sealed class ProcessExecutionExplainApiEndpointRouteBuilderExtensionsTest
             AuthorityScope = authorityScope;
             ProcessInstanceId = processInstanceId;
             LogicalReadCount++;
-            return ValueTask.FromResult(artifact);
+            return ValueTask.FromResult(read(processInstanceId));
         }
 
-        public ValueTask<ExecutionExplainArtifact?> GetExplainAsync(
+        public ValueTask<ProcessExecutionRecord?> GetAsync(
             OperationContext context,
             string processId)
         {
             PhysicalReadCount++;
-            throw new InvalidOperationException("The HTTP explain binding must not use a physical Process key.");
+            throw new InvalidOperationException("The HTTP inspect binding must not use a physical Process key.");
         }
+
+        public ValueTask<ProcessExecutionQueryResult> QueryAsync(
+            OperationContext context,
+            ProcessExecutionQuery query) =>
+            throw new InvalidOperationException("The HTTP inspect binding must not query Process pages.");
     }
 }
