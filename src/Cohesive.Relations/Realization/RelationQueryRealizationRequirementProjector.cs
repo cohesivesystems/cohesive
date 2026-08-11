@@ -1588,8 +1588,11 @@ public static class RelationQueryRealizationRequirementProjector
                 segments = [.. segments.Skip(1)];
                 var hasNestedCollection = segments.Any(static segment => segment.Kind == SegmentKind.Element);
                 var relativeFieldCount = segments.Count(static segment => segment.Kind == SegmentKind.Field);
-                return hasNestedCollection || relativeFieldCount > 1
-                    ? RelationQueryStructuralPathKind.NestedCollectionElement
+                if (hasNestedCollection)
+                    return RelationQueryStructuralPathKind.NestedCollectionElement;
+
+                return relativeFieldCount > 1
+                    ? RelationQueryStructuralPathKind.NestedField
                     : RelationQueryStructuralPathKind.CollectionElement;
             }
             if (segments.IsDefaultOrEmpty)

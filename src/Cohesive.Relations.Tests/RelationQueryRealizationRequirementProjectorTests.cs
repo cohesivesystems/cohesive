@@ -581,7 +581,7 @@ public sealed class RelationQueryRealizationRequirementProjectorTests
             static requirement => requirement.Origin?.FieldPath?.ToString() == "item.Address.City"
                 && requirement.Capability is StructuralRelationQueryCapability
                 {
-                    PathKind: RelationQueryStructuralPathKind.NestedCollectionElement
+                    PathKind: RelationQueryStructuralPathKind.NestedField
                 });
         Assert.All(
             elementReads,
