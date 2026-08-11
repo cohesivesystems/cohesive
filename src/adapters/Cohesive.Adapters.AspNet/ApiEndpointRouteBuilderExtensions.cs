@@ -1,8 +1,9 @@
+using Cohesive.Api;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 
-namespace Cohesive.Api;
+namespace Cohesive.Adapters.AspNet;
 
 /// <summary>
 /// Resolves one transport-neutral API authorization requirement to an ASP.NET authorization policy name.
@@ -211,7 +212,7 @@ public static class ApiEndpointRouteBuilderExtensions
         string endpointName)
     {
         builder.WithName(Guard.RequireNotNullOrWhiteSpace(endpointName));
-        builder.WithTags([..operation.Tags]);
+        builder.WithTags([.. operation.Tags]);
         builder.WithSummary(operation.Summary ?? BuildDefaultSummary(operation, http));
 
         if (!string.IsNullOrWhiteSpace(operation.Description))
@@ -252,7 +253,7 @@ public static class ApiEndpointRouteBuilderExtensions
         if (operation.TransitionReference is { } transitionReference)
             builder.WithMetadata(transitionReference);
     }
-    
+
     static string BuildDefaultSummary(ApiOperation operation, HttpBinding http)
     {
         if (operation.Entity is { } entity)

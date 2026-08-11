@@ -1,11 +1,36 @@
 using System.Xml.Linq;
+using Cohesive.Adapters.AspNet;
 using Cohesive.Api;
 using Cohesive.Api.Execution;
 
 namespace Cohesive.Tests.Api;
 
-public sealed class ExecutionApiPackageBoundaryTests
+public sealed class ApiPackageBoundaryTests
 {
+    [Fact]
+    public void GenericApiAssembly_DoesNotReferenceAspNet()
+    {
+        var assembly = typeof(ApiDefinition).Assembly;
+        var references = assembly.GetReferencedAssemblies();
+
+        Assert.DoesNotContain(
+            references,
+            static reference => reference.Name?.StartsWith("Microsoft.AspNetCore", StringComparison.Ordinal) is true);
+        Assert.DoesNotContain(
+            assembly.GetExportedTypes(),
+            static type => type.Namespace?.StartsWith("Microsoft.AspNetCore", StringComparison.Ordinal) is true);
+    }
+
+    [Fact]
+    public void GenericApiProject_DoesNotDeclareFrameworkReferences()
+    {
+        var root = RepositoryRoot();
+        var apiProject = Path.Combine(root, "src", "Cohesive.Api", "Cohesive.Api.csproj");
+        var document = XDocument.Load(apiProject);
+
+        Assert.Empty(document.Descendants("FrameworkReference"));
+    }
+
     [Fact]
     public void GenericApiAssembly_DoesNotReferenceProcesses()
     {
@@ -49,6 +74,16 @@ public sealed class ExecutionApiPackageBoundaryTests
             static reference => string.Equals(reference.Name, "Cohesive.Storage", StringComparison.Ordinal));
         Assert.Same(assembly, typeof(ExecutionControlResult).Assembly);
         Assert.Same(assembly, typeof(InMemoryExecutionControlApiAdapter).Assembly);
+    }
+
+    [Fact]
+    public void AspNetAdapterAssembly_OwnsMinimalApiProjection()
+    {
+        var assembly = typeof(ApiEndpointRouteBuilderExtensions).Assembly;
+
+        Assert.Equal("Cohesive.Adapters.AspNet", assembly.GetName().Name);
+        Assert.Same(assembly, typeof(AspNetAuthorizationPolicyResolver).Assembly);
+        Assert.NotSame(typeof(ApiDefinition).Assembly, assembly);
     }
 
     static IReadOnlySet<string> ProjectReferenceClosure(string rootProject)

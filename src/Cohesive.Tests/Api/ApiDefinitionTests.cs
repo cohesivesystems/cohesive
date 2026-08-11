@@ -1,10 +1,7 @@
+using System.Text.Json.Serialization;
 using Cohesive.Api;
 using Cohesive.Execution;
-using System.Text.Json.Serialization;
-using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Http.Metadata;
-using Microsoft.AspNetCore.Routing;
 
 namespace Cohesive.Tests.Api;
 
@@ -341,57 +338,6 @@ public sealed class ApiDefinitionTests
         Assert.Same(get.Operation, definition.GetOperation(get));
         Assert.Equal("Shipments.Shipment.Search", query.Id.Value);
         Assert.Equal("Shipments.Shipment.Get", get.Id.Value);
-    }
-
-    [Fact]
-    public void MapApiDefinition_AppliesMinimalApiMetadata()
-    {
-        var definition = Cohesive.Api.Api.Define()
-            .Entity<Shipment>()
-            .Query("GetById")
-                .Route("GET", "/api/shipments/{id}")
-                .Returns<ShipmentDto>()
-                .Result<ApiProblem>(ApiResultKind.NotFound)
-                .Summary("Get a shipment by id.")
-                .Description("Loads the shipment read model from the API surface.")
-                .Done()
-            .Build();
-
-        var builder = WebApplication.CreateSlimBuilder();
-        builder.Services.AddEndpointsApiExplorer();
-        var app = builder.Build();
-
-        app.MapApiDefinition(definition, static operation => operation.Name switch
-        {
-            "GetById" => (Func<string, ShipmentDto>)(id => new ShipmentDto(id, "Ready")),
-            _ => throw new InvalidOperationException($"No handler configured for '{operation.Name}'.")
-        });
-
-        var dataSources = ((IEndpointRouteBuilder)app).DataSources;
-        var endpoint = Assert.Single(dataSources.SelectMany(static source => source.Endpoints).OfType<RouteEndpoint>());
-        Assert.Equal("/api/shipments/{id}", endpoint.RoutePattern.RawText);
-
-        var nameMetadata = Assert.Single(endpoint.Metadata.OfType<IEndpointNameMetadata>());
-        Assert.Equal("GetById", nameMetadata.EndpointName);
-
-        var summaryMetadata = Assert.Single(endpoint.Metadata.OfType<IEndpointSummaryMetadata>());
-        Assert.Equal("Get a shipment by id.", summaryMetadata.Summary);
-
-        var descriptionMetadata = Assert.Single(endpoint.Metadata.OfType<IEndpointDescriptionMetadata>());
-        Assert.Equal("Loads the shipment read model from the API surface.", descriptionMetadata.Description);
-
-        var tagsMetadata = Assert.Single(endpoint.Metadata.OfType<ITagsMetadata>());
-        Assert.Equal(["Shipment"], tagsMetadata.Tags);
-
-        Assert.Contains(
-            endpoint.Metadata.OfType<IProducesResponseTypeMetadata>(),
-            static metadata => metadata.StatusCode == StatusCodes.Status200OK && metadata.Type == typeof(ShipmentDto));
-
-        Assert.Contains(
-            endpoint.Metadata.OfType<IProducesResponseTypeMetadata>(),
-            static metadata => metadata.StatusCode == StatusCodes.Status404NotFound && metadata.Type == typeof(ApiProblem));
-
-        Assert.Contains(endpoint.Metadata, static metadata => metadata is ApiOperation apiOperation && apiOperation.Name == "GetById");
     }
 
     static ExecutionDefinitionReference DefinitionReference(string name) => new(

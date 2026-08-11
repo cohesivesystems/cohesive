@@ -37,6 +37,39 @@ app.MapEntityApiDefinition(api.Build(), new EntityApiEndpointOptions
         Results.Ok(ToResource(snapshot)))));
 ```
 
+## Generic semantic API projection
+
+The root `Cohesive.Adapters.AspNet` namespace owns the direct Minimal API interpretation of `ApiDefinition` and
+`ApiEndpoint`. Mapping preserves each original `ApiOperation`, `HttpBinding`, authorization requirement, scope
+policy, and semantic reference as endpoint metadata. Definitions are mapped in stable declaration order, and the
+optional callback can attach additional ASP.NET metadata without changing semantic authority.
+
+```csharp
+using Cohesive.Adapters.AspNet;
+using Cohesive.Api;
+
+var definition = Api.Define("Shipping")
+    .Query("Health")
+        .Route("GET", "/health")
+        .Returns<HealthResponse>()
+        .Done()
+    .Build();
+
+app.MapApiDefinition(
+    definition,
+    operation => operation.Name switch
+    {
+        "Health" => () => Results.Ok(new HealthResponse("ready")),
+        _ => throw new InvalidOperationException($"No handler is bound for '{operation.Id}'.")
+    });
+```
+
+For secured operations, supply an `AspNetAuthorizationPolicyResolver`. Mapping fails closed before registering any
+route when a definition contains an authorization requirement without a valid ASP.NET policy projection.
+
+This surface previously lived in the `Cohesive.Api` assembly and namespace. Existing ASP.NET hosts must reference
+this adapter and add `using Cohesive.Adapters.AspNet;`; no compatibility shim remains in the host-neutral package.
+
 ## Canonical relation/query evaluation
 
 Relation/query endpoints author a new `RelationQueryEvaluation` for each HTTP request and delegate the complete
