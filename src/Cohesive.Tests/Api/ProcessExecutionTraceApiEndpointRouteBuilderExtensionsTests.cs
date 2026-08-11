@@ -80,6 +80,25 @@ public sealed class ProcessExecutionTraceApiEndpointRouteBuilderExtensionsTests
     }
 
     [Fact]
+    public void MapProcessExecutionTracesApi_AcceptsCanonicalSemanticReferencesIndependentOfDeclarationOrder()
+    {
+        var endpoint = TraceEndpointWithKernelReferenceDeclaredFirst();
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Services.AddSingleton(OperationContext.Create());
+        builder.Services.AddSingleton<IProcessExecutionTraceRepository>(
+            new RecordingTraceRepository(_ => ProcessExecutionTraceReadResult.NotFound()));
+        using var app = builder.Build();
+
+        var mapped = app.MapProcessExecutionTracesApi(
+            endpoint,
+            TraceRoute,
+            static (_, _, _) => new("authority/trusted", "tenant/trusted"),
+            ResolvePolicy);
+
+        Assert.NotNull(mapped);
+    }
+
+    [Fact]
     public async Task MapProcessExecutionTracesApi_MapsEveryUnavailableStateToDeclaredOpaqueProblem()
     {
         var repository = new RecordingTraceRepository(processInstanceId => processInstanceId.Value switch
@@ -192,6 +211,28 @@ public sealed class ProcessExecutionTraceApiEndpointRouteBuilderExtensionsTests
         state.ProcessInstanceId,
         missingTracePrefixCount: 1,
         traces: []);
+
+    static ApiEndpoint TraceEndpointWithKernelReferenceDeclaredFirst() =>
+        Cohesive.Api.Api.Define(ExecutionControlApiWireNames.SemanticAuthority)
+            .Query(ProcessExecutionTraceWireNames.Read)
+            .Requirement(new(
+                ExecutionControlApiWireNames.AuthorizationRequirement(ProcessExecutionTraceWireNames.Read)))
+            .SemanticReference(new(
+                ProcessExecutionTraceWireNames.SemanticAuthority,
+                ProcessExecutionTraceArtifact.CurrentSchemaVersion,
+                ProcessExecutionTraceWireNames.QueryPath))
+            .SemanticReference(new(
+                ExecutionControlApiWireNames.SemanticAuthority,
+                ExecutionControlApiCatalog.CurrentSchemaVersion,
+                ExecutionControlApiWireNames.OperationPath(ProcessExecutionTraceWireNames.Read)))
+            .Accepts<InspectProcessCommand>()
+            .Returns<ProcessExecutionTraceArtifact>()
+            .Result<ExecutionApiProblem>(ApiResultKind.Conflict)
+            .Result<ExecutionApiProblem>(ApiResultKind.PreconditionFailed)
+            .Result<ExecutionApiProblem>(ApiResultKind.Forbidden)
+            .Result<ExecutionApiProblem>(ApiResultKind.NotFound)
+            .Result<ExecutionApiProblem>(ApiResultKind.ValidationFailed)
+            .Build();
 
     static RouteEndpoint GetRouteEndpoint(WebApplication app) =>
         Assert.Single(((IEndpointRouteBuilder)app)

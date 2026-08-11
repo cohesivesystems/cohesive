@@ -90,18 +90,27 @@ public static partial class ProcessExecutionReadApiEndpointRouteBuilderExtension
             return false;
         }
 
-        var api = operation.SemanticReferences[0];
-        var kernel = operation.SemanticReferences[1];
-        return string.Equals(
-                api.Authority,
+        return HasSingleSemanticReference(
+                operation,
                 ExecutionControlApiWireNames.SemanticAuthority,
-                StringComparison.Ordinal)
-            && api.SchemaVersion == ExecutionControlApiCatalog.CurrentSchemaVersion
-            && api.Path == ExecutionControlApiWireNames.OperationPath(action)
-            && string.Equals(kernel.Authority, kernelAuthority, StringComparison.Ordinal)
-            && kernel.SchemaVersion == kernelSchemaVersion
-            && kernel.Path == kernelPath;
+                ExecutionControlApiCatalog.CurrentSchemaVersion,
+                ExecutionControlApiWireNames.OperationPath(action))
+            && HasSingleSemanticReference(
+                operation,
+                kernelAuthority,
+                kernelSchemaVersion,
+                kernelPath);
     }
+
+    static bool HasSingleSemanticReference(
+        ApiOperation operation,
+        string authority,
+        ExecutionIrSchemaVersion schemaVersion,
+        ExecutionSemanticPath path) =>
+        operation.SemanticReferences.Count(reference =>
+            string.Equals(reference.Authority, authority, StringComparison.Ordinal)
+            && reference.SchemaVersion == schemaVersion
+            && reference.Path == path) == 1;
 
     static bool HasProblemResult(ApiOperation operation, ApiResultKind kind) =>
         operation.Results.Count(result => result.Kind == kind
