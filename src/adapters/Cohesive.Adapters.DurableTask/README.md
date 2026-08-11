@@ -7,8 +7,8 @@ The former adapter executed callback-bearing Process definitions through a singl
 retired that path because it could not preserve canonical Process semantics. The replacement keeps the exact
 `CompiledProcessPlan` and `ProcessReferenceInterpreter` as semantic authority. A generic Durable Task orchestration
 now executes the admitted bounded slice; activities invoke canonical Transition, Relation/Query, and Request host
-operations and resolve Signal targets, sub-orchestrations execute child Processes, and Durable Task owns physical
-scheduling, history, and replay.
+operations, publish canonical domain events, and resolve Signal targets, sub-orchestrations execute child Processes,
+and Durable Task owns physical scheduling, history, and replay.
 
 The accepted execution direction is a parallel durable interpreter that consumes an exact `CompiledProcessPlan`
 and uses Azure Durable Task Scheduler as physical execution evidence. It is not required to implement
@@ -27,15 +27,17 @@ dotnet add package Cohesive.Adapters.DurableTask
 - You need to query task-hub records created by the retired adapter during migration.
 - You need an `IProcessExecutionRepository` monitoring projection over an existing Durable Task hub.
 - You need to inspect whether an exact `CompiledProcessPlan` has a complete intended Durable Task realization.
-- You need to execute an exact Process containing Transition, Relation/Query, Request, Choice, Match, bounded
-  Fork/Join, AwaitMatch, Timer, Signal send to a Process token, child Process, bounded partition, bounded recurrence,
-  Durable Cut, Return, and Fail constructs.
+- You need to execute an exact Process containing Transition, Relation/Query, Request, durable after-origin
+  domain-event emission, Choice, Match, bounded Fork/Join, AwaitMatch, Timer, Signal send to a Process token, child
+  Process, bounded partition, bounded recurrence, Durable Cut, Return, and Fail constructs.
 
-The executable profile remains narrower than the complete planning profile. Domain-event and Reply emission nodes,
-non-Process Signal targets, activation-local Signal delivery, lifecycle Signal qualification, and complete provider
-cleanup/recovery semantics remain outside this slice and fail closed. Request dispatch, bounded retry, reconciliation,
-acknowledgement, and Reply admission are implemented; typed timeout, terminal-failure, and escalation paths fail
-closed with their canonical operation ledger because this slice does not fabricate the authored recovery outcome.
+The executable profile remains narrower than the complete planning profile. Reply emission nodes, non-Process Signal
+targets, activation-local Signal delivery, lifecycle Signal qualification, atomic-with-origin event publication, and
+complete provider cleanup/recovery semantics remain outside this slice and fail closed. Domain-event publication
+requires durable after-origin visibility and a target that deduplicates the exact contract by the canonical scoped
+key. Request dispatch, bounded retry, reconciliation, acknowledgement, and Reply admission are implemented; typed
+timeout, terminal-failure, and escalation paths fail closed with their canonical operation ledger because this slice
+does not fabricate the authored recovery outcome.
 
 ## Monitoring boundary
 
@@ -178,10 +180,11 @@ The resulting plan retains the exact `CompiledProcessPlan`; it contains no gener
 workflow. A planning-profile plan is design evidence and cannot be deployed through the worker catalog.
 
 `DurableTaskProcessTargetProfile.Executable` is a separate, versioned profile for the bounded conformance-tested
-runtime. It also disposes the complete canonical construct and guarantee catalogs, but marks domain-event emission,
-Reply discharge, and whole-definition multi-resource atomicity unavailable. Adding a canonical construct or
-guarantee without an executable disposition fails profile construction and the inventory-completeness test;
-omission cannot imply support.
+runtime. It also disposes the complete canonical construct and guarantee catalogs. Its v2 profile realizes
+domain-event emission only inside the declared durable after-origin, target-deduplicated publication boundary, while
+Reply discharge and whole-definition multi-resource atomicity remain unavailable. Adding a canonical construct or
+guarantee without an executable disposition fails profile construction and the inventory-completeness test; omission
+cannot imply support.
 
 ## Process execution
 
@@ -201,7 +204,8 @@ if (!executable.IsSuccessful)
 DurableTaskProcessRealizationPlan physicalPlan = executable.Plan!;
 var catalog = new DurableTaskSequentialProcessPlanCatalog(
     [physicalPlan],
-    new ApplicationDurableRequestBindingResolver());
+    new ApplicationDurableRequestBindingResolver(),
+    new ApplicationDomainEventPublisherResolver());
 
 services.AddSingleton<IProcessReferenceHost, ApplicationProcessHost>();
 services.AddSingleton<IDurableOperationAdapterResolver, ApplicationDurableOperationAdapterResolver>();
@@ -213,6 +217,21 @@ services.AddDurableTaskWorker(worker =>
 });
 services.AddDurableTaskClient(client => client.UseDurableTaskScheduler(connectionString));
 ```
+
+`IDomainEventPublisherResolver` is deployment policy keyed by the exact `DomainEventContractReference`. Every
+resolved `IDomainEventPublisher` declares the exact contracts for which its target durably suppresses redelivery by
+`DomainEventPublicationDeduplicationKey`. The key combines authority scope, exact contract identity, revision,
+fingerprint, and the canonical envelope idempotency key. Plans containing direct `EmitEventProcessNode` contracts
+fail catalog admission when that guarantee is missing. Domain events produced dynamically by a host Transition are
+resolved and rejected before publication I/O.
+
+The orchestrator schedules `DurableTaskDomainEventPublicationActivity` with the unchanged canonical
+`DomainEventEnvelope`; Durable Task activity scheduling provides the after-origin boundary. Activity execution may be
+repeated after an ambiguous failure, so the publisher's target-deduplication declaration is mandatory rather than an
+optimization. `DurableTaskDomainEventPublication` retains the exact emission identity, scoped key, envelope content
+fingerprint, UTC acknowledgement time, and optional bounded target receipt. That evidence survives replay and
+Continue-as-new. This profile does not claim physical exactly-once delivery, atomic-with-origin publication, an
+adapter-owned retry policy, or ordering beyond the canonical envelope requirements that the publisher must honor.
 
 Register application resolvers before `AddCohesiveSequentialProcesses`; the worker method installs empty,
 fail-closed defaults only when the application has not supplied them. `IDurableRequestBindingResolver`,
@@ -331,8 +350,8 @@ retains canonical early-delivery evidence. Active timer clauses become physical 
 identity. When an external input and one or more timers are ready in the same deterministic wake, they are presented
 together at one canonical activation time; `ProcessReferenceInterpreter` alone applies guards, priority,
 clause-identity tie-break, winner selection, and early, late, stale, duplicate, or missing-target policy. This admits
-canonical `ProcessActivationInput` evidence for external inputs and addressed Signals. Domain-event and Reply
-emission nodes remain outside this executable slice.
+canonical `ProcessActivationInput` evidence for external inputs and addressed Signals. Reply emission nodes remain
+outside this executable slice.
 
 `SendSignalProcessNode` target evaluation stays inside the canonical reference interpreter. When materialization is
 required, a replayable activity asks the registered `IProcessReferenceHost` for the existing closed

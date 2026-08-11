@@ -97,7 +97,7 @@ construct. `Composed` combines Durable Task facilities with canonical interprete
 | `InvokeTransitionProcessNode` | Exact linked definition, subject, input, outcome, transition receipt and emissions | Activity-bound Transition adapter; feed the exact decision and receipt back into canonical interpretation | Composed |
 | `EvaluateRelationProcessNode` | Exact linked Relation/Query, input, completeness, result and occurrence replay | Activity-bound evaluator with canonical result and occurrence evidence | Composed |
 | `RequestProcessNode` | Typed obligation, terminal outcomes, stable emission identity, recovery and Reply admission | Activity dispatch plus canonical durable Request state and outcome arbitration | Composed |
-| `EmitEventProcessNode` | Typed envelope, producer occurrence, ordering and publication obligation | Canonical outbox/publication activity with stable idempotency identity | Composed |
+| `EmitEventProcessNode` | Typed envelope, producer occurrence, ordering and publication obligation | Unchanged canonical envelope through a durable after-origin activity; target deduplication by authority, exact contract, and canonical idempotency identity | Constrained |
 | `SendSignalProcessNode` | Typed target, envelope, correlation and delivery policy | Durable Task event or adapter dispatch plus canonical Signal evidence | Composed |
 | `ChoiceProcessNode` | Ordered predicates, selection policy, coverage and fallback | Deterministic canonical evaluation inside the orchestrator | Native |
 | `MatchProcessNode` | Typed patterns, ordered selection, coverage and fallback | Deterministic canonical evaluation inside the orchestrator | Native |
@@ -152,10 +152,11 @@ profile construction and tests until the target-neutral collector and Durable Ta
 The target-neutral inventory, profile, realization ledger, and structured diagnostics are implemented in
 `Cohesive.Processes.Compilation`. Construct kinds are projected from the canonical persisted-union metadata instead
 of another enum. `Cohesive.Adapters.DurableTask` publishes separate versioned planning and executable profiles. Both
-must exactly cover the canonical construct and guarantee catalogs. The executable profile explicitly marks
-domain-event emission, Reply discharge, and whole-definition multi-resource atomicity unavailable, and only plans
-compiled successfully against that profile may enter the worker catalog. There is no independent CLR-type
-recognizer whose omissions can shrink the qualified protocol.
+must exactly cover the canonical construct and guarantee catalogs. Executable profile v2 constrains domain-event
+emission to durable after-origin visibility through an activity and an exact-contract publisher that guarantees
+target deduplication by the canonical scoped publication key. Reply discharge and whole-definition multi-resource
+atomicity remain unavailable. Only plans compiled successfully against that profile may enter the worker catalog.
+There is no independent CLR-type recognizer whose omissions can shrink the qualified protocol.
 
 ## Conformance and promotion
 
@@ -289,8 +290,9 @@ status, explain, and retained-trace execution-control API bindings are available
 trace streaming, richer dashboard presentation, and history-event normalization remain ARI-292 follow-up work.
 
 This is not promotion of the full planning profile. Authored timeout, terminal-failure, escalation, and cancellation
-execution paths for general Requests, domain-event/Reply emission, activation-local and non-Process Signal targets,
-external Signal adapters, lifecycle Signal qualification, general attempt-resource/affinity cleanup, exhaustive
+execution paths for general Requests, Reply emission, atomic-with-origin event publication, activation-local and
+non-Process Signal targets, external Signal adapters, lifecycle Signal qualification, general attempt-resource/
+affinity cleanup, exhaustive
 durable Request pause/retry/reconciliation races, complete observability, and the complete target qualification
 matrix remain outside the current slice. RestartAttempt and Terminate currently accept only `RetainEvidence`; stronger cleanup
 demands fail before canonical admission. Higher-order execution retains
