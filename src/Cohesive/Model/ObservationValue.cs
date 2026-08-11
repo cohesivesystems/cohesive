@@ -480,6 +480,13 @@ public readonly struct ObservationValue(
     /// <summary>
     /// Converts an arbitrary CLR value into an <see cref="ObservationValue"/>.
     /// </summary>
+    /// <remarks>
+    /// <see cref="float"/> values use their shortest round-trip single-precision decimal representation so their
+    /// projection agrees with the portable Decimal contract inferred for the CLR type. <see cref="double"/> values
+    /// retain the Double observation kind, while <see cref="decimal"/> values retain the Decimal kind.
+    /// </remarks>
+    /// <param name="value">CLR value to project, or <see langword="null"/> for an explicit null observation.</param>
+    /// <returns>The recursively projected portable observation value.</returns>
     /// <exception cref="NotSupportedException"></exception>
     /// <exception cref="InvalidOperationException"></exception>
     /// <exception cref="JsonException"></exception>
@@ -608,7 +615,7 @@ public readonly struct ObservationValue(
                 observed = FromDouble(i);
                 return true;
             case float f:
-                observed = FromDouble(f);
+                observed = FromSingle(f);
                 return true;
             case double d:
                 observed = FromDouble(d);
@@ -650,6 +657,23 @@ public readonly struct ObservationValue(
 
         observed = default;
         return false;
+    }
+
+    static ObservationValue FromSingle(float value)
+    {
+        // Preserve the float's own shortest round-trip value. Widening first would expose binary noise that can
+        // contradict the Decimal contract authored for the same CLR type.
+        if (float.IsFinite(value)
+            && decimal.TryParse(
+                value.ToString("R", CultureInfo.InvariantCulture),
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out var canonical))
+        {
+            return FromDecimal(canonical);
+        }
+
+        return FromDouble(value);
     }
 
     static bool TryProjectJsonConvertedValue(object value, out ObservationValue observed)
