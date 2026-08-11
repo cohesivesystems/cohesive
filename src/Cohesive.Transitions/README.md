@@ -134,9 +134,11 @@ persisted callback.
 
 An optional root `CreatesFrom` declaration makes subject absence part of the fingerprinted Transition
 semantics. Its input-only expression must construct a complete object whose fields exactly match the
-authoritative entity observation shape. Omitting `CreatesFrom` preserves the ordinary requirement that the
-subject already exist. Creation does not introduce a separate Process node: `InvokeTransitionProcessNode`
-continues to invoke the exact Transition reference.
+authoritative entity observation shape. CLR array and enumerable occurrences are compared using the
+entity model's element-type plus `Many` cardinality representation; element type, presence, nullability,
+and cardinality must still match exactly. Omitting `CreatesFrom` preserves the ordinary requirement that
+the subject already exist. Creation does not introduce a separate Process node:
+`InvokeTransitionProcessNode` continues to invoke the exact Transition reference.
 
 ### Persist, compile, and activate
 
