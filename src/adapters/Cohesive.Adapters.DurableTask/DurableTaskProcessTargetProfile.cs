@@ -22,13 +22,19 @@ public static class DurableTaskProcessTargetProfile
 
     /// <summary>Stable identity of the bounded, conformance-tested executable profile.</summary>
     public static ProcessInterpreterCapabilityProfileId ExecutableProfileId { get; } = new(
-        "cohesive.adapters.durable-task.scheduler/executable-v1");
+        "cohesive.adapters.durable-task.scheduler/executable-v2");
 
     /// <summary>
     /// Boundary requiring every externally visible effect to supply stable idempotency or authored reconciliation.
     /// </summary>
     public static ProcessInterpreterOperatingBoundaryId ExternalEffectDeliveryBoundary { get; } = new(
         "durable-task/boundary/external-effect-idempotency-or-reconciliation/v1");
+
+    /// <summary>
+    /// Boundary requiring durable after-origin event visibility and target deduplication by the canonical scoped key.
+    /// </summary>
+    public static ProcessInterpreterOperatingBoundaryId DomainEventPublicationBoundary { get; } = new(
+        "durable-task/boundary/domain-event-after-origin-target-deduplication/v1");
 
     /// <summary>Boundary requiring finite fan-out, recurrence, concurrency, capacity, and history growth.</summary>
     public static ProcessInterpreterOperatingBoundaryId FiniteWorkBoundary { get; } = new(
@@ -193,7 +199,11 @@ public static class DurableTaskProcessTargetProfile
                 ProcessWireNames.RequestNode,
                 "canonical-request-protocol",
                 ["sequential-interpreter", "durable-operation-reference-executor", "external-event"]),
-            ExecutableUnavailableConstruct(ProcessWireNames.EmitEventNode, "domain-event-publication"),
+            ExecutableConstrainedConstruct(
+                ProcessWireNames.EmitEventNode,
+                "target-deduplicated-domain-event-activity",
+                ["domain-event-publication-activity", "canonical-envelope-and-idempotency-key"],
+                [DomainEventPublicationBoundary]),
             ExecutableComposedConstruct(
                 ProcessWireNames.SendSignalNode,
                 "canonical-process-signal",

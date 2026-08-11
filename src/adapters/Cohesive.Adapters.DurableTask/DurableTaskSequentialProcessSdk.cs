@@ -86,6 +86,7 @@ public static class DurableTaskSequentialProcessWorkerBuilderExtensions
             tasks.AddOrchestrator(new DurableTaskSequentialProcessOrchestrator(catalog));
             tasks.AddActivity<DurableTaskProcessHostOperationActivity>();
             tasks.AddActivity<DurableTaskProcessSignalTargetActivity>();
+            tasks.AddActivity<DurableTaskDomainEventPublicationActivity>();
             tasks.AddActivity<DurableTaskDurableOperationActivity>();
             tasks.AddActivity<DurableTaskDurableOperationReconciliationActivity>();
         });
@@ -157,7 +158,10 @@ public sealed class DurableTaskSequentialProcessOrchestrator
                 resolution),
             signal => DeliverSignal(context, signal),
             () => context.WaitForExternalEvent<ProcessControlCommand>(
-                DurableTaskSequentialProcessNames.ControlEvent)).ConfigureAwait(true);
+                DurableTaskSequentialProcessNames.ControlEvent),
+            domainEvent => context.CallActivityAsync<DurableTaskDomainEventPublication>(
+                DurableTaskSequentialProcessNames.DomainEventPublicationActivity,
+                domainEvent)).ConfigureAwait(true);
 
         var blockedOperation = result.DurableOperations.FirstOrDefault(static operation =>
             operation.State.Status is not DurableOperationStatus.Dispositioned);
@@ -454,6 +458,34 @@ public sealed class DurableTaskProcessSignalTargetActivity
         var result = host.ResolveSignalTarget(input)
             ?? throw new InvalidOperationException("The Process host returned null Signal-target evidence.");
         return Task.FromResult(result);
+    }
+}
+
+/// <summary>Activity boundary for target-deduplicated canonical domain-event publication.</summary>
+[DurableTask(DurableTaskSequentialProcessNames.DomainEventPublicationActivity)]
+public sealed class DurableTaskDomainEventPublicationActivity
+    : TaskActivity<DomainEventPublicationInvocation, DurableTaskDomainEventPublication>
+{
+    readonly DurableTaskSequentialProcessPlanCatalog catalog;
+
+    /// <summary>Creates a publication activity over exact worker deployment policy.</summary>
+    /// <param name="catalog">Worker catalog containing deterministic publisher resolution.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="catalog"/> is <see langword="null"/>.</exception>
+    public DurableTaskDomainEventPublicationActivity(DurableTaskSequentialProcessPlanCatalog catalog) =>
+        this.catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
+
+    /// <inheritdoc />
+    public override async Task<DurableTaskDomainEventPublication> RunAsync(
+        TaskActivityContext context,
+        DomainEventPublicationInvocation input)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(input);
+        var publisher = catalog.ResolveDomainEventPublisher(input.DomainEvent.Contract);
+        var operationContext = OperationContext.Create();
+        var acknowledgement = await publisher.PublishAsync(operationContext, input).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("The domain-event publisher returned null acknowledgement evidence.");
+        return DurableTaskDomainEventPublication.From(input, operationContext.UtcNow, acknowledgement);
     }
 }
 

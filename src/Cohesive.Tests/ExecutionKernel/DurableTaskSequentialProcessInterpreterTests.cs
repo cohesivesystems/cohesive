@@ -2009,7 +2009,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     }
 
     [Fact]
-    public void ExecutableQualification_AdmitsTimerAwaitMatchAndSignalButRejectsEmitEvent()
+    public void ExecutableQualification_AdmitsEmitEventOnlyWithAnExactTargetDeduplicatingPublisher()
     {
         var timerPlan = CompileTimerPlan(
             StartedAtUtc.AddMinutes(1),
@@ -2041,16 +2041,172 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             Catalog(eventDocument),
             definitionId: "process/durable-task-catalog-emit-event");
 
-        var rejected = DurableTaskProcessRealizationCompiler.CompileExecutable(emitPlan);
+        var realization = DurableTaskProcessRealizationCompiler.CompileExecutable(emitPlan);
 
-        Assert.False(rejected.IsSuccessful);
-        Assert.Null(rejected.Plan);
-        var diagnostic = Assert.Single(
-            rejected.Realization.Diagnostics,
-            static candidate =>
-                candidate.Code == ProcessInterpreterRealizationDiagnosticCodes.RequirementUnavailable
-                && candidate.Requirement == ProcessInterpreterRequirementKey.ForConstruct(ProcessWireNames.EmitEventNode));
-        Assert.Equal(new ExecutionNodeId("emit"), Assert.Single(diagnostic.Nodes));
+        Assert.True(realization.IsSuccessful, Format(realization.Realization.Diagnostics));
+        var physical = Assert.IsType<DurableTaskProcessRealizationPlan>(realization.Plan);
+        var missing = Assert.Throws<ArgumentException>(() =>
+            new DurableTaskSequentialProcessPlanCatalog([physical]));
+        Assert.Contains("No target-deduplicating domain-event publisher", missing.Message, StringComparison.Ordinal);
+        Assert.Contains(eventContract.Definition.Fingerprint.Value, missing.Message, StringComparison.Ordinal);
+
+        var mismatchedPublisher = new CountingDomainEventPublisher(
+            new(DefinitionReference("interaction/event/durable-task-catalog-other", 'e')));
+        var mismatched = Assert.Throws<ArgumentException>(() =>
+            new DurableTaskSequentialProcessPlanCatalog(
+                [physical],
+                domainEventPublisherResolver: new DomainEventPublisherResolver(mismatchedPublisher)));
+        Assert.Contains("does not declare target deduplication", mismatched.Message, StringComparison.Ordinal);
+
+        var publisher = new CountingDomainEventPublisher(eventContract);
+        var catalog = new DurableTaskSequentialProcessPlanCatalog(
+            [physical],
+            domainEventPublisherResolver: new DomainEventPublisherResolver(publisher));
+
+        Assert.Equal(1, catalog.Count);
+        Assert.Empty(publisher.Invocations);
+    }
+
+    [Fact]
+    public async Task EmitEvent_PublishesTheExactCanonicalEnvelopeAndRetainsPortableAcknowledgement()
+    {
+        var eventDocument = InteractionDocument(
+            "interaction/event/durable-task-publication",
+            new DomainEventContractDefinition(new(StringContract, new("publication-event/v1"))));
+        DomainEventContractReference eventContract = new(Reference(eventDocument));
+        var plan = Compile(Definition(
+            "emit",
+            [
+                new EmitEventProcessNode(
+                    new("emit"),
+                    eventContract,
+                    Expr.Const("event"),
+                    Edge("edge/emit-return", "return")),
+                new ReturnProcessNode(new("return"), Expr.Const("done"))
+            ]),
+            Catalog(eventDocument),
+            definitionId: "process/durable-task-domain-event-publication");
+        var start = Start(plan, "publish", "instance/domain-event-publication");
+        List<DomainEventPublicationInvocation> invocations = [];
+
+        var result = await DurableTaskSequentialProcessInterpreter.RunAsync(
+            plan,
+            start,
+            EmptyDurableRequestBindingResolver.Instance,
+            UnexpectedOperation,
+            UnexpectedDurableOperation,
+            UnexpectedChildProcess,
+            UnexpectedReconciliation,
+            UnexpectedInteraction,
+            TestDurableTimer,
+            () => StartedAtUtc,
+            publishDomainEvent: invocation =>
+            {
+                invocations.Add(invocation);
+                return Task.FromResult(DurableTaskDomainEventPublication.From(
+                    invocation,
+                    StartedAtUtc.AddSeconds(1),
+                    new(StringValue("publisher-receipt/1"))));
+            });
+
+        Assert.Equal(ProcessActivationDisposition.Completed, result.Disposition);
+        var canonical = Assert.IsType<DomainEventEnvelope>(Assert.Single(result.Emissions));
+        var invocation = Assert.Single(invocations);
+        Assert.Same(canonical, invocation.DomainEvent);
+        Assert.Equal(eventContract, invocation.DomainEvent.Contract);
+        Assert.Equal(DomainEventPublicationDeduplicationKey.From(canonical), invocation.DeduplicationKey);
+        var publication = Assert.Single(result.DomainEventPublications);
+        Assert.Equal(canonical.Context.EmissionId, publication.EmissionId);
+        Assert.Equal(invocation.DeduplicationKey, publication.DeduplicationKey);
+        Assert.Equal(
+            InteractionEnvelopeJsonSerializer.ComputeContentFingerprint(canonical),
+            publication.ContentFingerprint);
+        Assert.Equal(StringValue("publisher-receipt/1"), publication.Acknowledgement.Evidence);
+
+        var converter = DurableTaskProcessDataConverter.Create();
+        var restored = Assert.IsType<DurableTaskSequentialProcessResult>(converter.Deserialize(
+            converter.Serialize(result),
+            typeof(DurableTaskSequentialProcessResult)));
+        Assert.Equal(Serialize(result), Serialize(restored));
+        Assert.Single(restored.DomainEventPublications);
+    }
+
+    [Fact]
+    public async Task EmitEvent_PublicationEvidenceSurvivesContinueAsNewWithoutRepublishing()
+    {
+        var eventDocument = InteractionDocument(
+            "interaction/event/durable-task-publication-rollover",
+            new DomainEventContractDefinition(new(StringContract, new("publication-rollover/v1"))));
+        DomainEventContractReference eventContract = new(Reference(eventDocument));
+        var plan = Compile(Definition(
+            "emit",
+            [
+                new EmitEventProcessNode(
+                    new("emit"),
+                    eventContract,
+                    Expr.Const("event"),
+                    Edge("edge/emit-cut", "cut")),
+                new DurableCutProcessNode(new("cut"), Edge("edge/cut-return", "return")),
+                new ReturnProcessNode(new("return"), Expr.Const("done"))
+            ]),
+            Catalog(eventDocument),
+            definitionId: "process/durable-task-domain-event-publication-rollover");
+        var start = Start(plan, "publish", "instance/domain-event-publication-rollover");
+        DurableTaskSequentialProcessStart? continued = null;
+        var publications = 0;
+
+        Task<DurableTaskDomainEventPublication> Publish(DomainEventPublicationInvocation invocation)
+        {
+            publications++;
+            return Task.FromResult(DurableTaskDomainEventPublication.From(
+                invocation,
+                StartedAtUtc.AddSeconds(1),
+                new(StringValue("publisher-receipt/rollover"))));
+        }
+
+        var beforeRollover = await DurableTaskSequentialProcessInterpreter.RunAsync(
+            plan,
+            start,
+            EmptyDurableRequestBindingResolver.Instance,
+            UnexpectedOperation,
+            UnexpectedDurableOperation,
+            UnexpectedChildProcess,
+            UnexpectedReconciliation,
+            UnexpectedInteraction,
+            TestDurableTimer,
+            () => StartedAtUtc,
+            continueAsNew: next =>
+            {
+                continued = next;
+                return Task.CompletedTask;
+            },
+            publishDomainEvent: Publish);
+
+        Assert.Equal(ProcessActivationDisposition.DurableCut, beforeRollover.Disposition);
+        Assert.Equal(1, publications);
+        Assert.Single(beforeRollover.DomainEventPublications);
+        var nextStart = Assert.IsType<DurableTaskSequentialProcessStart>(continued);
+        Assert.Equal(Serialize(beforeRollover), Serialize(nextStart.Resume!.Result));
+
+        var completed = await DurableTaskSequentialProcessInterpreter.RunAsync(
+            plan,
+            nextStart,
+            EmptyDurableRequestBindingResolver.Instance,
+            UnexpectedOperation,
+            UnexpectedDurableOperation,
+            UnexpectedChildProcess,
+            UnexpectedReconciliation,
+            UnexpectedInteraction,
+            TestDurableTimer,
+            () => StartedAtUtc.AddSeconds(2),
+            publishDomainEvent: Publish);
+
+        Assert.Equal(ProcessActivationDisposition.Completed, completed.Disposition);
+        Assert.Equal(1, publications);
+        Assert.Single(completed.DomainEventPublications);
+        Assert.Equal(
+            Serialize(beforeRollover.DomainEventPublications[0]),
+            Serialize(completed.DomainEventPublications[0]));
     }
 
     [Fact]
@@ -2313,6 +2469,10 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             "process/durable-task-scheduler-signal",
             receiveTwice: false);
         var selfSignalFixture = CompileSelfSignalFixture("process/durable-task-scheduler-self-signal");
+        var eventPlan = CompileDomainEventPlan(
+            "process/durable-task-scheduler-domain-event",
+            out var eventContract);
+        var eventPublisher = new CountingDomainEventPublisher(eventContract);
         var catalog = new DurableTaskSequentialProcessPlanCatalog([
             Physical(completedPlan),
             Physical(failedPlan),
@@ -2328,8 +2488,11 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             Physical(awaitMatchFixture.Plan),
             Physical(signalFixture.Sender),
             Physical(signalFixture.Receiver),
-            Physical(selfSignalFixture.Plan)
-        ], new BindingResolver(durableBinding, childFixture.Binding, forkChildFixture.Binding));
+            Physical(selfSignalFixture.Plan),
+            Physical(eventPlan)
+        ],
+        new BindingResolver(durableBinding, childFixture.Binding, forkChildFixture.Binding),
+        new DomainEventPublisherResolver(eventPublisher));
         var operations = new CountingEchoHost();
         var durableOperations = new CountingDurableOperationAdapter(durableBinding.Request);
 
@@ -2373,6 +2536,28 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         var duplicate = await firstClient.ScheduleCohesiveProcessAsync(completedStart, timeout.Token);
         Assert.True(duplicate.Replayed);
         Assert.Equal(scheduled.InstanceId, duplicate.InstanceId);
+
+        var eventStart = Start(eventPlan, "event", "instance/scheduler-domain-event");
+        var eventSchedule = await firstClient.ScheduleCohesiveProcessAsync(eventStart, timeout.Token);
+        var eventCompleted = await firstClient.WaitForInstanceCompletionAsync(
+            eventSchedule.InstanceId,
+            getInputsAndOutputs: true,
+            timeout.Token);
+        Assert.True(
+            eventCompleted.RuntimeStatus == OrchestrationRuntimeStatus.Completed,
+            eventCompleted.FailureDetails?.ToString());
+        var eventResult = Assert.IsType<DurableTaskSequentialProcessResult>(
+            eventCompleted.ReadOutputAs<DurableTaskSequentialProcessResult>());
+        var publishedEvent = Assert.IsType<DomainEventEnvelope>(Assert.Single(eventResult.Emissions));
+        var publication = Assert.Single(eventResult.DomainEventPublications);
+        var publisherInvocation = Assert.Single(eventPublisher.Invocations);
+        Assert.Equal(
+            InteractionEnvelopeJsonSerializer.GetCanonicalBytes(publishedEvent),
+            InteractionEnvelopeJsonSerializer.GetCanonicalBytes(publisherInvocation.DomainEvent));
+        Assert.Equal(publisherInvocation.DeduplicationKey, publication.DeduplicationKey);
+        var eventReplay = await firstClient.ScheduleCohesiveProcessAsync(eventStart, timeout.Token);
+        Assert.True(eventReplay.Replayed);
+        Assert.Single(eventPublisher.Invocations);
 
         var signalReceiverStart = Start(
             signalFixture.Receiver,
@@ -3297,6 +3482,29 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         return new(plan, signalContract);
     }
 
+    static CompiledProcessPlan CompileDomainEventPlan(
+        string definitionId,
+        out DomainEventContractReference eventContract)
+    {
+        var eventDocument = InteractionDocument(
+            $"interaction/event/{definitionId}",
+            new DomainEventContractDefinition(new(StringContract, new("domain-event/v1"))));
+        eventContract = new(Reference(eventDocument));
+        return Compile(
+            Definition(
+                "emit",
+                [
+                    new EmitEventProcessNode(
+                        new("emit"),
+                        eventContract,
+                        Expr.BoundValue(ProcessBindingIds.Input),
+                        Edge("edge/emit-return", "return")),
+                    new ReturnProcessNode(new("return"), Expr.Const("published"))
+                ]),
+            Catalog(eventDocument),
+            definitionId: definitionId);
+    }
+
     static CompiledProcessPlan CompileAwaitMatchTimerPlan(DateTimeOffset dueAtUtc) => Compile(
         Definition(
             "await",
@@ -4188,6 +4396,34 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             ArgumentNullException.ThrowIfNull(request);
             resolved = bindings.SingleOrDefault(binding => request.Contract == binding.Request);
             return resolved is not null;
+        }
+    }
+
+    sealed class DomainEventPublisherResolver(IDomainEventPublisher publisher) : IDomainEventPublisherResolver
+    {
+        public bool TryResolve(DomainEventContractReference contract, out IDomainEventPublisher? resolved)
+        {
+            ArgumentNullException.ThrowIfNull(contract);
+            resolved = publisher;
+            return true;
+        }
+    }
+
+    sealed class CountingDomainEventPublisher(DomainEventContractReference contract) : IDomainEventPublisher
+    {
+        readonly ConcurrentQueue<DomainEventPublicationInvocation> invocations = [];
+
+        public DomainEventPublisherCapabilities Capabilities { get; } = new([contract]);
+
+        internal IReadOnlyCollection<DomainEventPublicationInvocation> Invocations => invocations.ToArray();
+
+        public ValueTask<DomainEventPublicationAcknowledgement> PublishAsync(
+            OperationContext context,
+            DomainEventPublicationInvocation invocation)
+        {
+            context.ThrowIfCancellationRequested();
+            invocations.Enqueue(invocation);
+            return ValueTask.FromResult(new DomainEventPublicationAcknowledgement(StringValue("published")));
         }
     }
 

@@ -26,7 +26,8 @@ static class DurableTaskSequentialProcessInterpreter
         Func<Task<ProcessChildCancellationIntent>>? waitForChildCancellation = null,
         Func<ProcessSignalTargetResolution, Task<ProcessSignalTargetResult>>? resolveSignalTarget = null,
         Func<SignalEnvelope, Task>? deliverSignal = null,
-        Func<Task<ProcessControlCommand>>? waitForControl = null)
+        Func<Task<ProcessControlCommand>>? waitForControl = null,
+        Func<DomainEventPublicationInvocation, Task<DurableTaskDomainEventPublication>>? publishDomainEvent = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(start);
@@ -48,6 +49,18 @@ static class DurableTaskSequentialProcessInterpreter
             ArgumentNullException.ThrowIfNull(resolveSignalTarget);
             ArgumentNullException.ThrowIfNull(deliverSignal);
         }
+        var planDirectlyEmitsDomainEvents = plan.Definition.Nodes.Any(static node => node is EmitEventProcessNode);
+        if (planDirectlyEmitsDomainEvents)
+        {
+            ArgumentNullException.ThrowIfNull(publishDomainEvent);
+            if (start.ActivationContext.Delivery.Durability != InteractionDurabilityDemand.Durable
+                || start.ActivationContext.Delivery.Visibility != InteractionVisibilityDemand.AfterOriginCommit)
+            {
+                throw new ArgumentException(
+                    "Durable Task domain-event publication requires durable after-origin-commit delivery.",
+                    nameof(start));
+            }
+        }
 
         var resumed = start.Resume?.Result;
         var state = resumed?.State ?? ProcessReferenceInterpreter.Create(plan, start.Receipt);
@@ -63,6 +76,11 @@ static class DurableTaskSequentialProcessInterpreter
         List<DocumentValidationDiagnostic> diagnostics = resumed is null ? [] : [.. resumed.Diagnostics];
         List<ProcessExecutionEvidence> evidence = resumed is null ? [] : [.. resumed.Evidence];
         List<NormalizedExecutionTrace> traces = resumed is null ? [] : [.. resumed.Traces];
+        List<DurableTaskDomainEventPublication> domainEventPublications = resumed is null
+            ? []
+            : [.. resumed.DomainEventPublications];
+        Dictionary<EmissionId, DurableTaskDomainEventPublication> domainEventPublicationsByEmission =
+            domainEventPublications.ToDictionary(static publication => publication.EmissionId);
         Dictionary<EmissionId, DurableTaskDurableOperationResult> durableOperations = resumed is null
             ? []
             : resumed.DurableOperations.ToDictionary(static operation => operation.State.OperationId);
@@ -177,13 +195,7 @@ static class DurableTaskSequentialProcessInterpreter
             diagnostics.AddRange(decision.Diagnostics);
             evidence.Add(decision.Evidence);
             traces.Add(trace);
-            foreach (var signal in decision.Emissions.OfType<SignalEnvelope>())
-            {
-                var dispatcher = deliverSignal
-                    ?? throw new InvalidOperationException(
-                        "A canonical host operation emitted a Signal without a Durable Task delivery projection.");
-                await dispatcher(signal).ConfigureAwait(true);
-            }
+            await DispatchImmediateEmissionsAsync(decision.Emissions).ConfigureAwait(true);
 
             var safePointNode = ResolveSafePointNode(plan, decision);
             latestControlDecision = controlExecutor.ReachSafePoint(
@@ -217,7 +229,8 @@ static class DurableTaskSequentialProcessInterpreter
                 [.. durableOperations.Values.OrderBy(
                     static operation => operation.State.OperationId.Value,
                     StringComparer.Ordinal)],
-                [.. traces]);
+                [.. traces],
+                [.. domainEventPublications]);
             await SynchronizeChildLifecycleAsync().ConfigureAwait(true);
             SynchronizeTimers();
             result = CurrentResult(decision.Disposition);
@@ -393,7 +406,59 @@ static class DurableTaskSequentialProcessInterpreter
             [.. durableOperations.Values.OrderBy(
                 static operation => operation.State.OperationId.Value,
                 StringComparer.Ordinal)],
-            [.. traces]);
+            [.. traces],
+            [.. domainEventPublications]);
+
+        async Task DispatchImmediateEmissionsAsync(ImmutableArray<InteractionEnvelope> immediate)
+        {
+            foreach (var envelope in immediate)
+            {
+                switch (envelope)
+                {
+                    case DomainEventEnvelope domainEvent:
+                        if (domainEventPublicationsByEmission.TryGetValue(
+                                domainEvent.Context.EmissionId,
+                                out var retained))
+                        {
+                            if (retained.DeduplicationKey != DomainEventPublicationDeduplicationKey.From(domainEvent)
+                                || retained.ContentFingerprint
+                                    != InteractionEnvelopeJsonSerializer.ComputeContentFingerprint(domainEvent))
+                            {
+                                throw new InvalidOperationException(
+                                    $"Domain event '{domainEvent.Context.EmissionId.Value}' conflicts with retained publication evidence.");
+                            }
+                            break;
+                        }
+
+                        var publisher = publishDomainEvent
+                            ?? throw new InvalidOperationException(
+                                "A canonical host operation emitted a domain event without a Durable Task publication projection.");
+                        var invocation = DomainEventPublicationInvocation.From(domainEvent);
+                        var publication = await publisher(invocation).ConfigureAwait(true)
+                            ?? throw new InvalidOperationException(
+                                "The Durable Task domain-event publication delegate returned null evidence.");
+                        if (publication.EmissionId != domainEvent.Context.EmissionId
+                            || publication.DeduplicationKey != invocation.DeduplicationKey
+                            || publication.ContentFingerprint
+                                != InteractionEnvelopeJsonSerializer.ComputeContentFingerprint(domainEvent))
+                        {
+                            throw new InvalidOperationException(
+                                $"Domain-event publication evidence does not match emission "
+                                + $"'{domainEvent.Context.EmissionId.Value}'.");
+                        }
+                        domainEventPublications.Add(publication);
+                        domainEventPublicationsByEmission.Add(publication.EmissionId, publication);
+                        break;
+
+                    case SignalEnvelope signal:
+                        var dispatcher = deliverSignal
+                            ?? throw new InvalidOperationException(
+                                "A canonical host operation emitted a Signal without a Durable Task delivery projection.");
+                        await dispatcher(signal).ConfigureAwait(true);
+                        break;
+                }
+            }
+        }
 
         async Task DrainCompletedControlCommandsAsync()
         {
@@ -548,6 +613,7 @@ static class DurableTaskSequentialProcessInterpreter
                     diagnostics.AddRange(cancellationDecision.Diagnostics);
                     evidence.Add(cancellationDecision.Evidence);
                     traces.Add(cancellationTrace);
+                    await DispatchImmediateEmissionsAsync(cancellationDecision.Emissions).ConfigureAwait(true);
                     return;
 
                 case ProcessTerminationIntent termination:

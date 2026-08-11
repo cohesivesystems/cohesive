@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using Cohesive.Execution;
+using Cohesive.Processes.IR;
 
 namespace Cohesive.Adapters.DurableTask;
 
@@ -12,6 +13,7 @@ namespace Cohesive.Adapters.DurableTask;
 public sealed class DurableTaskSequentialProcessPlanCatalog
 {
     readonly ImmutableDictionary<ExecutionDefinitionReference, DurableTaskProcessRealizationPlan> plans;
+    readonly IDomainEventPublisherResolver domainEventPublisherResolver;
 
     /// <summary>Creates an immutable catalog from executable-qualified canonical Processes.</summary>
     /// <param name="plans">Exact Durable Task realization plans deployed to this worker.</param>
@@ -19,16 +21,23 @@ public sealed class DurableTaskSequentialProcessPlanCatalog
     /// Deterministic exact Request binding resolver used during orchestration replay. The default leaves Requests
     /// as external interactions instead of automatically dispatching them.
     /// </param>
+    /// <param name="domainEventPublisherResolver">
+    /// Deterministic exact domain-event publisher resolver. Plans that directly emit an event require a publisher
+    /// whose capabilities declare target deduplication for that exact contract.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="plans"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
     /// An entry is null, repeats an exact reference, has a conflicting fingerprint, or was not compiled against the
-    /// exact executable profile.
+    /// exact executable profile; or a directly emitted event lacks an exact target-deduplicating publisher.
     /// </exception>
     public DurableTaskSequentialProcessPlanCatalog(
         IEnumerable<DurableTaskProcessRealizationPlan> plans,
-        IDurableRequestBindingResolver? bindingResolver = null)
+        IDurableRequestBindingResolver? bindingResolver = null,
+        IDomainEventPublisherResolver? domainEventPublisherResolver = null)
     {
         ArgumentNullException.ThrowIfNull(plans);
+        this.domainEventPublisherResolver = domainEventPublisherResolver
+            ?? EmptyDomainEventPublisherResolver.Instance;
         var builder = ImmutableDictionary.CreateBuilder<ExecutionDefinitionReference, DurableTaskProcessRealizationPlan>();
         Dictionary<(ExecutionDefinitionId Definition, ExecutionRevisionId Revision), ExecutionDefinitionReference>
             revisions = [];
@@ -47,6 +56,10 @@ public sealed class DurableTaskSequentialProcessPlanCatalog
                     + $"'{DurableTaskProcessTargetProfile.ExecutableProfileId.Value}'; compile it with "
                     + $"{nameof(DurableTaskProcessRealizationCompiler)}.{nameof(DurableTaskProcessRealizationCompiler.CompileExecutable)}.",
                     nameof(plans));
+            }
+            foreach (var domainEvent in plan.CanonicalPlan.Definition.Nodes.OfType<EmitEventProcessNode>())
+            {
+                _ = ResolveDomainEventPublisher(domainEvent.Contract, nameof(plans));
             }
             var revisionKey = (plan.Definition.DefinitionId, plan.Definition.RevisionId);
             if (revisions.TryGetValue(revisionKey, out var retained)
@@ -75,6 +88,51 @@ public sealed class DurableTaskSequentialProcessPlanCatalog
     public int Count => plans.Count;
 
     internal IDurableRequestBindingResolver BindingResolver { get; }
+
+    internal IDomainEventPublisher ResolveDomainEventPublisher(
+        DomainEventContractReference contract,
+        string? parameterName = null)
+    {
+        ArgumentNullException.ThrowIfNull(contract);
+        if (!domainEventPublisherResolver.TryResolve(contract, out var publisher) || publisher is null)
+        {
+            var message = $"No target-deduplicating domain-event publisher is registered for exact contract "
+                + $"'{Describe(contract)}'.";
+            if (parameterName is not null)
+            {
+                throw new ArgumentException(message, parameterName);
+            }
+            throw new InvalidOperationException(message);
+        }
+
+        var capabilities = publisher.Capabilities;
+        if (capabilities is null)
+        {
+            var message =
+                $"Domain-event publisher for exact contract '{Describe(contract)}' returned null capabilities.";
+            if (parameterName is not null)
+            {
+                throw new ArgumentException(message, parameterName);
+            }
+            throw new InvalidOperationException(message);
+        }
+        if (!capabilities.Supports(contract))
+        {
+            var message = $"Domain-event publisher for exact contract '{Describe(contract)}' does not declare "
+                + "target deduplication for that contract.";
+            if (parameterName is not null)
+            {
+                throw new ArgumentException(message, parameterName);
+            }
+            throw new InvalidOperationException(message);
+        }
+
+        return publisher;
+
+        static string Describe(DomainEventContractReference candidate) =>
+            $"{candidate.Definition.DefinitionId.Value}@{candidate.Definition.RevisionId.Value}#"
+            + candidate.Definition.Fingerprint.Value;
+    }
 
     /// <summary>Resolves the precompiled plan matching one complete canonical definition reference.</summary>
     /// <param name="definition">Exact definition identity, revision, and fingerprint.</param>

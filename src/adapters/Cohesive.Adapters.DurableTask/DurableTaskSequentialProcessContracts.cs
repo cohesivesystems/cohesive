@@ -20,6 +20,9 @@ public static class DurableTaskSequentialProcessNames
     /// <summary>Activity that resolves one exact canonical Signal target.</summary>
     public const string SignalTargetResolutionActivity = "Cohesive.Processes.SignalTargetResolution.v1";
 
+    /// <summary>Activity that publishes one exact target-deduplicated canonical domain event.</summary>
+    public const string DomainEventPublicationActivity = "Cohesive.Processes.DomainEventPublication.v1";
+
     /// <summary>Activity that dispatches one fenced canonical durable Request attempt.</summary>
     public const string DurableOperationActivity = "Cohesive.Processes.DurableOperation.v1";
 
@@ -182,6 +185,79 @@ public sealed record DurableTaskProcessHostOperation
         new(DurableTaskProcessHostOperationKind.RelationQuery, relationQuery: evaluation);
 }
 
+/// <summary>Durable Task acknowledgement of one exact canonical domain-event publication.</summary>
+public sealed record DurableTaskDomainEventPublication
+{
+    /// <summary>Creates one attributable publication acknowledgement.</summary>
+    /// <param name="emissionId">Canonical logical emission identity.</param>
+    /// <param name="deduplicationKey">Stable target-deduplication key supplied to the publisher.</param>
+    /// <param name="contentFingerprint">Fingerprint of the exact published canonical envelope.</param>
+    /// <param name="publishedAtUtc">UTC time at which the publication activity observed acknowledgement.</param>
+    /// <param name="acknowledgement">Bounded publisher-supplied acknowledgement evidence.</param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="deduplicationKey"/>, <paramref name="contentFingerprint"/>, or
+    /// <paramref name="acknowledgement"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="emissionId"/> or <paramref name="contentFingerprint"/> is default, or
+    /// <paramref name="publishedAtUtc"/> is not UTC.
+    /// </exception>
+    [JsonConstructor]
+    public DurableTaskDomainEventPublication(
+        EmissionId emissionId,
+        DomainEventPublicationDeduplicationKey deduplicationKey,
+        InteractionEnvelopeContentFingerprint contentFingerprint,
+        DateTimeOffset publishedAtUtc,
+        DomainEventPublicationAcknowledgement acknowledgement)
+    {
+        if (string.IsNullOrWhiteSpace(emissionId.Value))
+        {
+            throw new ArgumentException("Domain-event publication requires an emission identity.", nameof(emissionId));
+        }
+        if (string.IsNullOrWhiteSpace(contentFingerprint.Value))
+        {
+            throw new ArgumentException(
+                "Domain-event publication requires an envelope content fingerprint.",
+                nameof(contentFingerprint));
+        }
+        if (publishedAtUtc.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException("Domain-event publication time must use the UTC offset.", nameof(publishedAtUtc));
+        }
+
+        EmissionId = emissionId;
+        DeduplicationKey = Guard.RequireNotNull(deduplicationKey);
+        ContentFingerprint = contentFingerprint;
+        PublishedAtUtc = publishedAtUtc;
+        Acknowledgement = Guard.RequireNotNull(acknowledgement);
+    }
+
+    /// <summary>Canonical logical emission identity.</summary>
+    public EmissionId EmissionId { get; }
+
+    /// <summary>Stable target-deduplication key supplied to the publisher.</summary>
+    public DomainEventPublicationDeduplicationKey DeduplicationKey { get; }
+
+    /// <summary>Fingerprint of the exact published canonical envelope.</summary>
+    public InteractionEnvelopeContentFingerprint ContentFingerprint { get; }
+
+    /// <summary>UTC time at which the publication activity observed acknowledgement.</summary>
+    public DateTimeOffset PublishedAtUtc { get; }
+
+    /// <summary>Bounded publisher-supplied acknowledgement evidence.</summary>
+    public DomainEventPublicationAcknowledgement Acknowledgement { get; }
+
+    internal static DurableTaskDomainEventPublication From(
+        DomainEventPublicationInvocation invocation,
+        DateTimeOffset publishedAtUtc,
+        DomainEventPublicationAcknowledgement acknowledgement) => new(
+        invocation.DomainEvent.Context.EmissionId,
+        invocation.DeduplicationKey,
+        InteractionEnvelopeJsonSerializer.ComputeContentFingerprint(invocation.DomainEvent),
+        publishedAtUtc,
+        acknowledgement);
+}
+
 /// <summary>Canonical semantic result and accumulated evidence from a Durable Task execution.</summary>
 public sealed record DurableTaskSequentialProcessResult
 {
@@ -196,6 +272,9 @@ public sealed record DurableTaskSequentialProcessResult
     /// <param name="evidence">Canonical evidence for every completed finite activation.</param>
     /// <param name="durableOperations">Canonical durable Request ledgers in logical operation identity order.</param>
     /// <param name="traces">Payload-safe normalized traces for activations executed after trace retention began.</param>
+    /// <param name="domainEventPublications">
+    /// Target acknowledgements for exact canonical domain events in logical emission order.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="state"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="disposition"/> is unspecified.</exception>
     [JsonConstructor]
@@ -209,7 +288,8 @@ public sealed record DurableTaskSequentialProcessResult
         ImmutableArray<DocumentValidationDiagnostic> diagnostics = default,
         ImmutableArray<ProcessExecutionEvidence> evidence = default,
         ImmutableArray<DurableTaskDurableOperationResult> durableOperations = default,
-        ImmutableArray<NormalizedExecutionTrace> traces = default)
+        ImmutableArray<NormalizedExecutionTrace> traces = default,
+        ImmutableArray<DurableTaskDomainEventPublication> domainEventPublications = default)
     {
         if (!Enum.IsDefined(disposition) || disposition == ProcessActivationDisposition.Unspecified)
         {
@@ -244,6 +324,8 @@ public sealed record DurableTaskSequentialProcessResult
         Traces = traces.IsDefault ? [] : traces;
         ValidateTraces(Traces, Evidence, state, control);
         DurableOperations = durableOperations.IsDefault ? [] : durableOperations;
+        DomainEventPublications = domainEventPublications.IsDefault ? [] : domainEventPublications;
+        ValidateDomainEventPublications(Emissions, DomainEventPublications);
     }
 
     /// <summary>Latest canonical activation disposition.</summary>
@@ -281,6 +363,55 @@ public sealed record DurableTaskSequentialProcessResult
 
     /// <summary>Canonical durable Request results and complete ledgers in logical operation identity order.</summary>
     public ImmutableArray<DurableTaskDurableOperationResult> DurableOperations { get; }
+
+    /// <summary>Target acknowledgements for exact canonical domain events in logical emission order.</summary>
+    public ImmutableArray<DurableTaskDomainEventPublication> DomainEventPublications { get; }
+
+    static void ValidateDomainEventPublications(
+        ImmutableArray<InteractionEnvelope> emissions,
+        ImmutableArray<DurableTaskDomainEventPublication> publications)
+    {
+        if (publications.Any(static publication => publication is null))
+        {
+            throw new ArgumentException(
+                "Domain-event publication acknowledgements cannot contain null entries.",
+                nameof(publications));
+        }
+
+        var domainEventEmissions = emissions.OfType<DomainEventEnvelope>().ToImmutableArray();
+        var domainEvents = domainEventEmissions.ToDictionary(static domainEvent => domainEvent.Context.EmissionId);
+        var byEmission = publications
+            .GroupBy(static publication => publication.EmissionId)
+            .ToDictionary(static group => group.Key);
+        var expectedOrder = domainEventEmissions
+            .Select(static domainEvent => domainEvent.Context.EmissionId)
+            .Where(byEmission.ContainsKey);
+        if (!expectedOrder.SequenceEqual(publications.Select(static publication => publication.EmissionId)))
+        {
+            throw new ArgumentException(
+                "Domain-event publication acknowledgements must retain canonical emission order.",
+                nameof(publications));
+        }
+        foreach (var (emissionId, matches) in byEmission)
+        {
+            if (matches.Count() != 1 || !domainEvents.TryGetValue(emissionId, out var domainEvent))
+            {
+                throw new ArgumentException(
+                    $"Domain-event publication '{emissionId.Value}' requires one matching canonical emission.",
+                    nameof(publications));
+            }
+
+            var publication = matches.Single();
+            if (publication.DeduplicationKey != DomainEventPublicationDeduplicationKey.From(domainEvent)
+                || publication.ContentFingerprint
+                    != InteractionEnvelopeJsonSerializer.ComputeContentFingerprint(domainEvent))
+            {
+                throw new ArgumentException(
+                    $"Domain-event publication '{publication.EmissionId.Value}' does not match its canonical envelope.",
+                    nameof(publications));
+            }
+        }
+    }
 
     static void ValidateTraces(
         ImmutableArray<NormalizedExecutionTrace> traces,

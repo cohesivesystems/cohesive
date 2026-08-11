@@ -79,10 +79,10 @@ public sealed class DurableTaskProcessRealizationPlanningTests
             ProcessWireNames.DurableCutNode,
             ProcessWireNames.InvokeProcessNode,
             ProcessWireNames.RepeatAcrossActivationNode);
-        AssertDisposition(actual, CapabilityRealizationKind.Constrained, ProcessWireNames.ForEachPartitionNode);
-        AssertDisposition(actual, CapabilityRealizationKind.Unavailable,
+        AssertDisposition(actual, CapabilityRealizationKind.Constrained,
             ProcessWireNames.EmitEventNode,
-            ProcessWireNames.ReplyNode);
+            ProcessWireNames.ForEachPartitionNode);
+        AssertDisposition(actual, CapabilityRealizationKind.Unavailable, ProcessWireNames.ReplyNode);
 
         AssertGuaranteeDisposition(actual, CapabilityRealizationKind.Composed,
             ProcessInterpreterGuarantees.ExactDefinitionPinning,
@@ -188,15 +188,33 @@ public sealed class DurableTaskProcessRealizationPlanningTests
     }
 
     [Fact]
-    public void ExecutableCompiler_RejectsExplicitlyUnavailableConstructsWithSourceEvidence()
+    public void ExecutableCompiler_RejectsExplicitlyUnavailableReplyWithSourceEvidence()
     {
-        var emit = EmitEventPlan();
         var reply = ReplyPlan();
 
-        Assert.True(DurableTaskProcessRealizationCompiler.Compile(emit).IsSuccessful);
         Assert.True(DurableTaskProcessRealizationCompiler.Compile(reply).IsSuccessful);
-        AssertExecutableUnavailable(emit, ProcessWireNames.EmitEventNode, new("emit"));
         AssertExecutableUnavailable(reply, ProcessWireNames.ReplyNode, new("reply"));
+    }
+
+    [Fact]
+    public void ExecutableCompiler_RealizesEmitEventInsideTheDeclaredPublicationBoundary()
+    {
+        var result = DurableTaskProcessRealizationCompiler.CompileExecutable(EmitEventPlan());
+
+        Assert.True(result.IsSuccessful, Format(result.Realization.Diagnostics));
+        Assert.NotNull(result.Plan);
+        var decision = Assert.Single(
+            result.Realization.Decisions,
+            static candidate => candidate.Requirement
+                == ProcessInterpreterRequirementKey.ForConstruct(ProcessWireNames.EmitEventNode));
+        Assert.Equal(CapabilityRealizationKind.Constrained, decision.Realization);
+        Assert.Contains(
+            DurableTaskProcessTargetProfile.DomainEventPublicationBoundary,
+            decision.OperatingBoundaries);
+        Assert.DoesNotContain(
+            result.Realization.Diagnostics,
+            static candidate => candidate.Code
+                == ProcessInterpreterRealizationDiagnosticCodes.RequirementUnavailable);
     }
 
     [Fact]
