@@ -14,7 +14,7 @@ public static class ProcessExecutionApiEndpointRouteBuilderExtensions
 {
     // ReSharper disable once ClassNeverInstantiated.Local
     record ProcessExecutionApiEndpoints();
-    
+
     /// <summary>
     /// Maps an API operation that queries process executions using <see cref="IProcessExecutionRepository"/>.
     /// </summary>

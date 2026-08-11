@@ -2,6 +2,9 @@
 
 Semantic API declaration primitives for describing operations, endpoints, pagination, scope policies, and generated API artifacts.
 
+This package is host-neutral. HTTP bindings describe portable API intent; they do not reference ASP.NET Core or map
+runtime routes. Concrete host projection belongs to an adapter.
+
 ## Install
 
 ```bash
@@ -39,6 +42,20 @@ var api = Api.Define("Shipping")
 The canonical Process execution-control catalog intentionally lives in `Cohesive.Api.Execution`. That optional
 composition package binds these generic declarations to `Cohesive.Processes` contracts without making every
 `Cohesive.Api` consumer acquire the Process language and runtime.
+
+## ASP.NET projection
+
+ASP.NET endpoint mapping lives in `Cohesive.Adapters.AspNet`. Hosts add that package and import its namespace:
+
+```csharp
+using Cohesive.Adapters.AspNet;
+
+app.MapApiDefinition(api, operation => CreateHandler(operation));
+```
+
+`MapApiDefinition`, `MapApiEndpoint`, and `AspNetAuthorizationPolicyResolver` previously lived in the
+`Cohesive.Api` assembly and namespace. They moved without a forwarding shim so this package can remain independent
+of `Microsoft.AspNetCore.App`.
 
 ## Related Packages
 

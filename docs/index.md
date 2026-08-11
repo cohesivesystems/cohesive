@@ -111,6 +111,7 @@ tests, and eventually a repository-wide maturity matrix.
 | --- | --- | --- |
 | [Durable Task as a parallel Process interpreter](decisions/durable-task-process-interpreter.md) | Accepted; sequential execution and durable Request recovery slice implemented | Canonical Process authority, target capability inventory, Durable Task interpretation, conformance and alternatives |
 | [Execution-control API package boundary](decisions/execution-control-api-package-boundary.md) | Implemented | Generic API dependency direction, execution API composition, and transport ownership |
+| [ASP.NET API adapter boundary](decisions/aspnet-api-adapter-boundary.md) | Implemented | Portable API authority, Minimal API projection ownership, and package dependency direction |
 
 ## Package documentation
 

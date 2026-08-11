@@ -1,3 +1,4 @@
+using Cohesive.Adapters.AspNet;
 using Cohesive.Api;
 using Cohesive.Execution;
 using Microsoft.AspNetCore.Authentication;
@@ -5,14 +6,107 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authorization.Policy;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Metadata;
 using Microsoft.AspNetCore.Routing;
-using Microsoft.Extensions.DependencyInjection;
 
-namespace Cohesive.Tests.Api;
+namespace Cohesive.Tests.Adapters.AspNet;
 
 public sealed class ApiEndpointRouteBuilderExtensionsTests
 {
     const string InspectPolicy = "cohesive.execution.inspect";
+
+    [Fact]
+    public void MapApiDefinition_ProjectsRoutesMethodsMetadataAndCustomConfigurationInDefinitionOrder()
+    {
+        var definition = Cohesive.Api.Api.Define("Shipping")
+            .Entity<Shipment>()
+            .Query("GetById")
+                .Route("GET", "/api/shipments/{id}")
+                .Returns<ShipmentDto>()
+                .Result<ApiProblem>(ApiResultKind.NotFound)
+                .Summary("Get a shipment by id.")
+                .Description("Loads the shipment read model from the API surface.")
+                .Done()
+            .Command("Dispatch")
+                .Route("POST", "/api/shipments/{id}/dispatch")
+                .Accepts<DispatchShipmentRequest>()
+                .Returns<ShipmentDto>()
+                .Done()
+            .Build();
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Services.AddEndpointsApiExplorer();
+        var app = builder.Build();
+        var configuredOperations = new List<ApiOperation>();
+
+        var builders = app.MapApiDefinition(
+            definition,
+            static operation => operation.Name switch
+            {
+                "GetById" => (Func<string, ShipmentDto>)(id => new ShipmentDto(id, "Ready")),
+                "Dispatch" => (Func<string, DispatchShipmentRequest, ShipmentDto>)((id, _) =>
+                    new ShipmentDto(id, "Dispatched")),
+                _ => throw new InvalidOperationException($"No handler configured for '{operation.Name}'.")
+            },
+            (routeBuilder, operation) =>
+            {
+                configuredOperations.Add(operation);
+                routeBuilder.WithMetadata(new ProjectionMarker(operation.Id));
+            });
+
+        var endpoints = ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(static source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .ToArray();
+        Assert.Equal(2, builders.Count);
+        Assert.Equal(definition.Operations, configuredOperations);
+        Assert.Equal(["/api/shipments/{id}", "/api/shipments/{id}/dispatch"],
+            endpoints.Select(static endpoint => endpoint.RoutePattern.RawText));
+        Assert.Equal(["GET"], endpoints[0].Metadata.GetMetadata<IHttpMethodMetadata>()!.HttpMethods);
+        Assert.Equal(["POST"], endpoints[1].Metadata.GetMetadata<IHttpMethodMetadata>()!.HttpMethods);
+
+        var get = endpoints[0];
+        Assert.Equal("GetById", get.Metadata.GetMetadata<IEndpointNameMetadata>()!.EndpointName);
+        Assert.Equal("Get a shipment by id.", get.Metadata.GetMetadata<IEndpointSummaryMetadata>()!.Summary);
+        Assert.Equal(
+            "Loads the shipment read model from the API surface.",
+            get.Metadata.GetMetadata<IEndpointDescriptionMetadata>()!.Description);
+        Assert.Equal(["Shipment"], get.Metadata.GetMetadata<ITagsMetadata>()!.Tags);
+        Assert.Contains(
+            get.Metadata.GetOrderedMetadata<IProducesResponseTypeMetadata>(),
+            static metadata => metadata.StatusCode == StatusCodes.Status200OK && metadata.Type == typeof(ShipmentDto));
+        Assert.Contains(
+            get.Metadata.GetOrderedMetadata<IProducesResponseTypeMetadata>(),
+            static metadata => metadata.StatusCode == StatusCodes.Status404NotFound && metadata.Type == typeof(ApiProblem));
+
+        for (var i = 0; i < endpoints.Length; i++)
+        {
+            Assert.Same(definition.Operations[i], endpoints[i].Metadata.GetMetadata<ApiOperation>());
+            Assert.Same(definition.Operations[i].Http, endpoints[i].Metadata.GetMetadata<HttpBinding>());
+            Assert.Equal(definition.Operations[i].Id, endpoints[i].Metadata.GetMetadata<ProjectionMarker>()!.OperationId);
+        }
+
+        var accepts = endpoints[1].Metadata.GetOrderedMetadata<IAcceptsMetadata>();
+        Assert.NotEmpty(accepts);
+        Assert.All(accepts, static metadata =>
+        {
+            Assert.Equal(typeof(DispatchShipmentRequest), metadata.RequestType);
+            Assert.Equal(["application/json"], metadata.ContentTypes);
+        });
+    }
+
+    [Fact]
+    public void CanonicalApiDefinition_DuplicateEndpointIdsFailBeforeAspNetProjection()
+    {
+        var endpoint = Cohesive.Api.Api.Define("Shipping")
+            .Query("GetById")
+                .Route("GET", "/api/shipments/{id}")
+                .Returns<ShipmentDto>()
+                .Build();
+
+        var error = Assert.Throws<InvalidOperationException>(() => ApiDefinition.From(endpoint, endpoint));
+
+        Assert.Contains("duplicate endpoint id 'Shipping.GetById'", error.Message, StringComparison.Ordinal);
+    }
 
     [Fact]
     public void MapApiEndpoint_RouteLessOperation_FailsWithProjectionDiagnostic()
@@ -225,7 +319,17 @@ public sealed class ApiEndpointRouteBuilderExtensionsTests
                 .Route("GET", "/executions/{instance}")
                 .Returns<string>()
                 .Requirement(new("execution.inspect"))
-                .Build();
+            .Build();
+
+    sealed record Shipment(string Id);
+
+    sealed record ShipmentDto(string Id, string Status);
+
+    sealed record ApiProblem(string Code, string Message);
+
+    sealed record DispatchShipmentRequest(string Reason);
+
+    sealed record ProjectionMarker(ApiEndpointId OperationId);
 
     static string ResolvePolicy(ApiOperation operation, ApiAuthorizationRequirement requirement)
     {
