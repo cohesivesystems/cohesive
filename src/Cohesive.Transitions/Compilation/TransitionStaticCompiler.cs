@@ -170,6 +170,7 @@ public static class TransitionStaticCompiler
         {
             var rootScope = CreateRootScope();
             var stateScope = CreateStateScope();
+            AnalyzeSubjectCreation();
             AnalyzeComputedFields(stateScope);
 
             var live = CompileAdmission(rootScope, conditions.True);
@@ -229,6 +230,32 @@ public static class TransitionStaticCompiler
                 [TransitionBindingIds.Input] = [],
                 [TransitionBindingIds.Observation] = [new(TransitionObservationAccess.Whole, conditions.True)]
             });
+
+        ScopeState CreateSubjectCreationScope() => new(
+            [new(TransitionBindingIds.Input, inputContract)],
+            parameters,
+            new Dictionary<ValueBindingId, ImmutableArray<ObservationDependency>>
+            {
+                [TransitionBindingIds.Input] = []
+            });
+
+        void AnalyzeSubjectCreation()
+        {
+            if (definition.SubjectCreation is not { } creation)
+                return;
+
+            _ = AnalyzeSite(
+                creation.Id,
+                TransitionExpressionSiteKind.SubjectInitializer,
+                creation.InitialObservation,
+                CreateSubjectCreationScope(),
+                Exact(observationContract),
+                "/definition/subjectCreation/initialObservation",
+                conditions.True,
+                TransitionObservationInfluence.None,
+                retainObservationFacts: false,
+                implicitBinding: TransitionBindingIds.Input);
+        }
 
         ScopeState CreateStateScope() => new(
             [new(TransitionBindingIds.Observation, observationContract)],
@@ -1071,7 +1098,8 @@ public static class TransitionStaticCompiler
             TransitionObservationInfluence influence,
             bool retainObservationFacts = true,
             bool candidateStateReads = false,
-            string? conditionAtomScope = null)
+            string? conditionAtomScope = null,
+            ValueBindingId? implicitBinding = null)
         {
             if (ContainsGroupedAggregate(expression))
             {
@@ -1091,7 +1119,7 @@ public static class TransitionStaticCompiler
             var result = ExprAnalyzer.Analyze(new(
                 siteId,
                 expression,
-                scope.ToExprScope(),
+                scope.ToExprScope(implicitBinding),
                 expectation,
                 CapabilityProfile,
                 location));
@@ -1896,6 +1924,22 @@ public static class TransitionStaticCompiler
             var emissionCommit = conditions.And(emissionCondition, emissionTerminalDomain);
             var commitCondition = conditions.Or(appliedCommit, emissionCommit);
             List<TransitionSemanticRequirement> requirements = [];
+            if (definition.SubjectCreation is { } creation)
+            {
+                var site = sites.Single(candidate =>
+                    candidate.Node == creation.Id
+                    && candidate.Kind == TransitionExpressionSiteKind.SubjectInitializer);
+                requirements.Add(new TransitionSubjectCreationRequirement(
+                    ToRef(conditions.True),
+                    TransitionRequirementStrength.Must,
+                    [new(
+                        creation.Id,
+                        ToRef(conditions.True),
+                        "/definition/subjectCreation",
+                        site.Analysis.Site.Id,
+                        sourceReferences: SourcesFor("/definition/subjectCreation"))]));
+            }
+
             foreach (var group in facts
                          .Where(fact => conditions.IsSatisfiable(fact.Condition))
                          .GroupBy(static fact => fact.Key)
@@ -1936,6 +1980,13 @@ public static class TransitionStaticCompiler
 
                 if (group.Key.Kind == FactKind.ObservationRead)
                 {
+                    if (definition.SubjectCreation is not null)
+                    {
+                        // Creation expressions read only the initializer-derived candidate. Authoritative absence,
+                        // not pre-existing field acquisition or freshness, is the external storage requirement.
+                        continue;
+                    }
+
                     var commitValidation = BuildCommitValidation(groupFacts, commitCondition);
                     requirements.Add(new TransitionObservationRequirement(
                         group.Key.ObservationAccess!,
@@ -2401,6 +2452,7 @@ public static class TransitionStaticCompiler
             TransitionExpressionSiteKind.MachineSourceConfiguration => "machineSource",
             TransitionExpressionSiteKind.MachineRejection => "machineRejection",
             TransitionExpressionSiteKind.MachineTargetConfiguration => "machineTarget",
+            TransitionExpressionSiteKind.SubjectInitializer => "subjectInitializer",
             _ => "unknown"
         };
 

@@ -117,6 +117,11 @@ state or publish an interaction. `ProcessReferenceInterpreter` advances an immut
 and returns exact host-operation and interaction evidence. Infrastructure interpreters may realize
 the same plan differently only when their declared profile preserves its semantics.
 
+For entity initialization, author one ordinary Transition with root `CreatesFrom` semantics and invoke it through
+the existing Process Transition node. `DecideCreation` derives and retains a complete version-zero observation;
+the Storage adapter validates the portable entity definition and atomically enforces authoritative absence with
+the operation receipt. Update-only Transitions continue to require an existing observation and concurrency fence.
+
 ### 5. Commit durable evidence
 
 For long-running work, `ProcessDurableRuntime` composes a compiled Process plan with

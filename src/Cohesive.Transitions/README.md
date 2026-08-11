@@ -32,7 +32,8 @@ definitions now own shape and invariant semantics only; transitions are exact ca
 
 ## Canonical C# Authoring
 
-The C# frontend accepts a finite, typed syntax for inputs, observations, admission rules, lexical
+The C# frontend accepts a finite, typed syntax for inputs, observations, absent-subject initialization,
+admission rules, lexical
 locals, ordered `Choice` and exact `Match` branches, algebraic sparse updates, interaction emissions,
 Machine movements, candidate-state invariants, and typed outcomes. Every definition, revision,
 body, rule, branch, binding, update, emission, movement, and outcome receives an explicit stable
@@ -130,6 +131,12 @@ observation, and visible lexical-local values and may use only operations repres
 `Expr` IR. Captured state, arbitrary method calls, loops, mutation, reflection, and other unrestricted
 CLR computation cause `TransitionExpressionTranslationException`; they are never hidden in a
 persisted callback.
+
+An optional root `CreatesFrom` declaration makes subject absence part of the fingerprinted Transition
+semantics. Its input-only expression must construct a complete object whose fields exactly match the
+authoritative entity observation shape. Omitting `CreatesFrom` preserves the ordinary requirement that the
+subject already exist. Creation does not introduce a separate Process node: `InvokeTransitionProcessNode`
+continues to invoke the exact Transition reference.
 
 ### Persist, compile, and activate
 
@@ -237,6 +244,8 @@ compiled canonical Transition plan. Its public entry points are:
 - `Decide(plan, activation)` for an explicit `TransitionActivation` and observation frames.
 - `DecideFullState(...)` for one concrete coherent aggregate state and optional fresh commit state.
 - `DecideSparse(...)` for exact finite `TransitionObservationEntry` values and optional fresh commit entries.
+- `DecideCreation(...)` for a Transition that explicitly derives complete initial state from input while the
+  authoritative subject is absent.
 
 Full-state and sparse evaluation are adapters over the same execution core. A sparse frame distinguishes an
 unobserved access, represented by no entry, from an observed `Absent`, `Null`, `Unknown`, or `Failed` value.
@@ -248,6 +257,10 @@ commit its result. `TransitionDecision` instead returns the typed outcome, evalu
 intents, actual Machine movements, guarantee demands, conflicts, diagnostics, and a single ordered
 `TransitionExecutionEvidence` trace. Storage or process integrations acquire observations and interpret those
 returned values through their own capability-checked commit boundary.
+
+Creation interpretation retains the complete initial observation as `SubjectInitialized` execution evidence and
+requires an `Applied` decision to commit the subject. Calling an existing-subject entry point for a creation
+Transition, or `DecideCreation` for an update-only Transition, fails with structured subject-state evidence.
 
 Commit observations are optional caller-supplied fresh evidence. When a decision requires commit, freshness is
 checked only for observations actually read by the selected execution path. A changed value produces a
@@ -286,6 +299,7 @@ Transition expressions use the shared, non-generic `Cohesive.Model.Expr` IR and 
 requirements analyzer. The transition model supplies a different scope for each semantic site:
 
 - Admission predicates see entity state and declared transition inputs and must produce a Boolean.
+- Subject initializers see only declared transition input and must produce the complete entity observation.
 - Sparse patch expressions see entity state and transition inputs and must satisfy the target field contract.
 - Computed fields see entity state without transition inputs and must satisfy their field contract.
 - Entity invariants see resulting entity state without transition inputs and must produce a

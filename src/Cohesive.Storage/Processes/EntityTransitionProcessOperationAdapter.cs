@@ -4,6 +4,7 @@ using Cohesive.Relations.Model;
 using Cohesive.Transitions.Compilation;
 using Cohesive.Transitions.Execution;
 using Cohesive.Transitions.IR;
+using Cohesive.Transitions.Model;
 
 namespace Cohesive.Storage.Processes;
 
@@ -21,6 +22,12 @@ public static class ProcessTransitionOperationAdapterDiagnosticCodes
 
     /// <summary>No authoritative entity state exists for the resolved subject.</summary>
     public const string SubjectMissing = "storage.processes.transitionAdapter.subject.missing";
+
+    /// <summary>An authoritative entity already exists for a Transition that requires subject absence.</summary>
+    public const string SubjectPresent = "storage.processes.transitionAdapter.subject.present";
+
+    /// <summary>The initialized subject violates the authoritative entity definition.</summary>
+    public const string SubjectInitializationInvalid = "storage.processes.transitionAdapter.subject.initializationInvalid";
 
     /// <summary>The Transition did not produce a committable typed decision.</summary>
     public const string DecisionNotCommittable = "storage.processes.transitionAdapter.decision.notCommittable";
@@ -201,7 +208,8 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
                 subject.EntityId.Value,
                 EntityReadOptions.Full)
             .ConfigureAwait(false);
-        if (snapshot is null)
+        var createsSubject = binding.Plan.Definition.SubjectCreation is not null;
+        if (snapshot is null && !createsSubject)
         {
             // A matching entity commit may have raced the first lookup and a later delete. Prefer its durable
             // handoff evidence over reporting the now-absent subject.
@@ -215,14 +223,32 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
                 $"No authoritative entity exists for subject '{subject.EntityId.Value}'.",
                 "/invocation/subject/entityId");
         }
+        if (snapshot is not null && createsSubject)
+        {
+            // Prefer exact handoff evidence if the same operation won a race after the first lookup.
+            lookup = await binding.Repository.TryGetTransitionOperation(context, request).ConfigureAwait(false);
+            if (lookup.Disposition != EntityTransitionOperationDisposition.NotFound)
+            {
+                return Result(lookup);
+            }
+            return Failure(
+                ProcessTransitionOperationAdapterDiagnosticCodes.SubjectPresent,
+                $"Authoritative entity '{subject.EntityId.Value}' already exists for a creation Transition.",
+                "/invocation/subject/entityId");
+        }
 
-        var decision = TransitionReferenceInterpreter.DecideFullState(
-            binding.Plan,
-            invocation.Activation,
-            invocation.Input,
-            PortableValue.Concrete(
-                binding.Plan.Definition.Observation,
-                ObservationValue.FromObject(snapshot.Entity.Fields)));
+        var decision = createsSubject
+            ? TransitionReferenceInterpreter.DecideCreation(
+                binding.Plan,
+                invocation.Activation,
+                invocation.Input)
+            : TransitionReferenceInterpreter.DecideFullState(
+                binding.Plan,
+                invocation.Activation,
+                invocation.Input,
+                PortableValue.Concrete(
+                    binding.Plan.Definition.Observation,
+                    ObservationValue.FromObject(snapshot!.Entity.Fields)));
         if (decision.Kind is not (TransitionDecisionKind.Applied
             or TransitionDecisionKind.NoChange
             or TransitionDecisionKind.AdmissionRejected
@@ -249,25 +275,73 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
             return ProcessOperationResult.Failed(lowering.Diagnostics[0]);
         }
 
+        var result = ProcessOperationResult.Completed(decision.Outcome, envelopes);
+        if (createsSubject && decision.Kind != TransitionDecisionKind.Applied)
+        {
+            // A rejected creation is pure: no subject exists to mutate, and the enclosing Process commit retains
+            // the deterministic result and any Process-owned envelope handoff.
+            return result;
+        }
+
+        ObservationValue baseState;
+        if (createsSubject)
+        {
+            var initial = decision.Evidence.InitialObservation;
+            if (initial is null
+                || initial.State != PortableValueState.Concrete
+                || initial.Value is not { } initialValue
+                || initialValue.Fields is null)
+            {
+                return Failure(
+                    ProcessTransitionOperationAdapterDiagnosticCodes.DecisionNotCommittable,
+                    "A successful creation Transition did not retain a concrete complete initial observation.",
+                    "/decision/evidence/initialObservation");
+            }
+            baseState = initialValue;
+        }
+        else
+        {
+            baseState = ObservationValue.FromObject(snapshot!.Entity.Fields);
+        }
+
         var projected = TransitionStateProjector.Apply(
-            ObservationValue.FromObject(snapshot.Entity.Fields),
+            baseState,
             decision);
         var candidate = new Observation(
-            snapshot.Entity.ShapeId,
-            snapshot.Entity.Id,
+            createsSubject ? new(binding.Repository.EntityType) : snapshot!.Entity.ShapeId,
+            subject.EntityId.Value,
             projected.Fields!,
-            decision.Kind == TransitionDecisionKind.Applied
-                ? checked(snapshot.Entity.Version + 1)
-                : snapshot.Entity.Version,
-            snapshot.Entity.Lineage);
-        var result = ProcessOperationResult.Completed(decision.Outcome, envelopes);
+            createsSubject
+                ? 0
+                : decision.Kind == TransitionDecisionKind.Applied
+                    ? checked(snapshot!.Entity.Version + 1)
+                    : snapshot!.Entity.Version,
+            createsSubject ? null : snapshot!.Entity.Lineage);
+        if (createsSubject)
+        {
+            try
+            {
+                binding.Repository.EntityDefinition.ValidateState(new(candidate));
+            }
+            catch (SemanticRuleViolationException exception)
+            {
+                return Failure(
+                    ProcessTransitionOperationAdapterDiagnosticCodes.SubjectInitializationInvalid,
+                    exception.Message,
+                    "/decision/evidence/initialObservation");
+            }
+        }
+
         var commit = new EntityTransitionOperationCommit(
             request,
-            new(candidate, snapshot.ConcurrencyToken),
+            new(candidate, createsSubject ? null : snapshot!.ConcurrencyToken),
             decision.Kind,
             result,
             decision.GuaranteeDemands,
-            decision.Evidence);
+            decision.Evidence,
+            createsSubject
+                ? EntityTransitionSubjectCondition.MustBeAbsent
+                : EntityTransitionSubjectCondition.MustExist);
         var committed = await binding.Repository.CommitTransitionOperation(context, commit).ConfigureAwait(false);
         return Result(committed);
     }

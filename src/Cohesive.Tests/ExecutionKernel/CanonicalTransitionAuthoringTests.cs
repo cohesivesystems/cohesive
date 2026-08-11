@@ -188,6 +188,139 @@ public sealed class CanonicalTransitionAuthoringTests
     }
 
     [Fact]
+    public void SubjectCreation_IsCanonicalInputDerivedAndRequiresAbsentExecution()
+    {
+        var authored = TransitionAuthoring.Create<ReviewEntity, ReviewCreationInput, string>(
+            ReviewEntity.Instance.Definition.Shape,
+            AuxiliaryMetadata(new("transition/review/create"), new("review/create/body")),
+            transition => transition
+                .CreatesFrom(
+                    new("review/create/initialize"),
+                    input => new ReviewInitialState(input.Status, input.Eligible))
+                .Invariant(
+                    new("review/create/invariant/status"),
+                    entity => entity.Status != "")
+                .Return(
+                    new("review/create/outcome"),
+                    TransitionOutcomeDisposition.Applied,
+                    "created"));
+
+        Assert.True(authored.IsValid, Format(authored.Validation));
+        var creation = Assert.IsType<TransitionSubjectCreation>(authored.Definition.SubjectCreation);
+        Assert.Equal("review/create/initialize", creation.Id.Value);
+        Assert.Contains(
+            authored.Document.Metadata.SourceMap.Entries,
+            static entry => entry.SemanticPath?.ToString() == "/subjectCreation");
+
+        var canonical = ExecutionDefinitionJsonSerializer.GetCanonicalBytes(authored.Document);
+        var roundTrip = TransitionDefinitionDocuments.TryDeserialize(
+            Encoding.UTF8.GetString(canonical),
+            out var restoredDocument,
+            out var restoredDefinition);
+        Assert.True(roundTrip.IsValid, Format(roundTrip));
+        Assert.Equal(authored.Document, restoredDocument);
+        Assert.Equal(authored.Definition, restoredDefinition);
+
+        var compilation = TransitionStaticCompiler.Compile(restoredDocument!);
+        Assert.True(compilation.IsSuccessful, Format(compilation.Validation));
+        var plan = Assert.IsType<CompiledTransitionPlan>(compilation.Plan);
+        Assert.Single(plan.Analysis.GetRequirements<TransitionSubjectCreationRequirement>());
+        Assert.Empty(plan.Analysis.GetRequirements<TransitionObservationRequirement>());
+        Assert.Contains(
+            plan.Analysis.ExpressionSites,
+            static site => site.Kind == TransitionExpressionSiteKind.SubjectInitializer);
+        var input = Object(
+            authored.Definition.Input,
+            (nameof(ReviewCreationInput.Status), ObservationValue.FromString("pending")),
+            (nameof(ReviewCreationInput.Eligible), ObservationValue.FromBool(true)));
+
+        var created = TransitionReferenceInterpreter.DecideCreation(
+            plan,
+            new("review/create/activation"),
+            input);
+
+        Assert.Equal(TransitionDecisionKind.Applied, created.Kind);
+        Assert.True(created.GuaranteeDemands.CommitRequired);
+        Assert.Empty(created.GuaranteeDemands.ConcurrencyObservations);
+        Assert.Equal("created", created.Outcome?.Value?.String);
+        var initial = Assert.IsType<PortableValue>(created.Evidence.InitialObservation);
+        var initialValue = Assert.IsType<ObservationValue>(initial.Value);
+        Assert.Equal("pending", initialValue.Fields![nameof(ReviewEntity.Status)].GetString());
+        Assert.True(initialValue.Fields[nameof(ReviewEntity.Eligible)].GetBoolean());
+        Assert.Equal(
+            TransitionTraceEventKind.SubjectInitialized,
+            created.Evidence.Trace[0].Kind);
+
+        var againstExisting = TransitionReferenceInterpreter.DecideFullState(
+            plan,
+            new("review/create/existing"),
+            input,
+            initial);
+        Assert.Equal(TransitionDecisionKind.InfrastructureFailure, againstExisting.Kind);
+        Assert.Contains(
+            againstExisting.Diagnostics,
+            static diagnostic => diagnostic.Code == TransitionExecutionDiagnosticCodes.SubjectStateInvalid);
+    }
+
+    [Fact]
+    public void SubjectCreation_RejectsProjectionThatDoesNotMatchAuthoritativeObservation()
+    {
+        var exception = Assert.Throws<TransitionExpressionTranslationException>(() =>
+            TransitionAuthoring.Create<ReviewEntity, ReviewCreationInput, string>(
+                ReviewEntity.Instance.Definition.Shape,
+                AuxiliaryMetadata(new("transition/review/create-invalid"), new("review/create-invalid/body")),
+                transition => transition
+                    .CreatesFrom(
+                        new("review/create-invalid/initialize"),
+                        input => new IncompleteReviewInitialState(input.Status))
+                    .Return(
+                        new("review/create-invalid/outcome"),
+                        TransitionOutcomeDisposition.Applied,
+                        "created")));
+
+        Assert.Contains("project exactly the entity observation fields", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SubjectCreation_CompilerRejectsInitializerObservationAccess()
+    {
+        var observation = ValueContract.FromShape(ReviewEntity.Instance.Definition.Shape);
+        var definition = new TransitionDefinition(
+            new(new ObjectTypeRef(
+            [
+                new(nameof(ReviewCreationInput.Status), new ScalarTypeRef(ScalarTypeKind.String)),
+                new(nameof(ReviewCreationInput.Eligible), new ScalarTypeRef(ScalarTypeKind.Bool))
+            ])),
+            observation,
+            StringContract,
+            [],
+            new(
+                new("review/create-observation/body"),
+                [
+                    new OutcomeTransitionNode(
+                        new("review/create-observation/outcome"),
+                        TransitionOutcomeDisposition.Applied,
+                        Expr.Const("created"))
+                ]),
+            subjectCreation: new(
+                new("review/create-observation/initialize"),
+                Expr.BoundValue(TransitionBindingIds.Observation)));
+        var document = TransitionDefinitionDocuments.Create(
+            new("transition/review/create-observation"),
+            new("revision/1"),
+            definition,
+            Provenance());
+
+        var compilation = TransitionStaticCompiler.Compile(document);
+
+        Assert.False(compilation.IsSuccessful);
+        Assert.Contains(
+            compilation.Validation.Diagnostics,
+            static diagnostic => diagnostic.Location
+                == "/definition/subjectCreation/initialObservation");
+    }
+
+    [Fact]
     public void TypedAuthoring_SourceMapCoversEveryRepresentativeConstructAndMapsValidationDiagnostics()
     {
         var authored = CreateAuthoredTransition();
@@ -791,6 +924,12 @@ public sealed class CanonicalTransitionAuthoringTests
     }
 
     sealed record ReviewInput(bool Approved, string Decision);
+
+    sealed record ReviewCreationInput(string Status, bool Eligible);
+
+    sealed record ReviewInitialState(string Status, bool Eligible);
+
+    sealed record IncompleteReviewInitialState(string Status);
 
     sealed record OptionalDecisionInput(
         [property: JsonPropertyName("decision")] string? Decision);

@@ -82,6 +82,14 @@ the exact entity handoff, and restarts against the same activation-local observa
 then admits the Transition result, occurrence receipt, continuation, and canonical envelopes in one commit. Entity
 receipts are durable handoff evidence; the Process outbox remains the sole publication authority.
 
+A Transition with canonical subject-creation semantics uses the same adapter and Process occurrence. The adapter
+requires authoritative absence, derives and validates the complete version-zero state against the repository's
+entity definition, and commits that state plus the exact operation receipt atomically under `MustBeAbsent`. A
+present subject or a subject created after the initial read fails without replacement. Exact retries replay the
+retained receipt; changed operation content conflicts. Update-only Transitions retain `MustExist` plus optimistic
+concurrency, and a missing subject remains a structured rejection. Transition emissions cross the entity boundary
+only as receipt handoff evidence—the Process outbox remains publication authority.
+
 Durable Request advancement persists claim and dispatch evidence before adapter I/O, reloads and reacquires the
 aggregate before accepting returned evidence, and persists acknowledgement separately from target admission. A
 crash after dispatch can repeat only the same fenced invocation and stable target idempotency identity when the

@@ -2,9 +2,8 @@ using System.Runtime.CompilerServices;
 using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Transitions.Compilation;
-using Cohesive.Transitions.Model;
 
-namespace Cohesive.Transitions.Authoring;
+namespace Cohesive.Transitions.Model;
 
 /// <summary>
 /// Internal entity-state interpreter for computed fields, declarative constraints, and invariants.

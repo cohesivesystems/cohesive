@@ -200,6 +200,22 @@ public sealed record EntityDefinition
         return new(observation);
     }
 
+    /// <summary>
+    /// Validates an existing state against the complete portable entity definition, including field contracts,
+    /// computed fields, declarative constraints, and entity invariants.
+    /// </summary>
+    /// <param name="state">Entity state to validate without mutation.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="state"/> is <see langword="null"/>.</exception>
+    /// <exception cref="SemanticRuleViolationException">
+    /// The state violates its shape, field, computed-field, constraint, or invariant semantics.
+    /// </exception>
+    public void ValidateState(EntityState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        var validated = CreateState(state.Observation);
+        new EntityStateInterpreter(this).ValidateState(state.EntityId.Value, validated);
+    }
+
     void ValidateStateValues(IReadOnlyDictionary<string, ObservationValue> values)
     {
         var validationPlan = StateValidationPlanByEntityDefinition.GetValue(

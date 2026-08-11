@@ -633,10 +633,42 @@ public sealed class TransitionBuilder<TEntity, TInput, TOutcome>
 {
     readonly List<TransitionAdmissionRule> preconditions = [];
     readonly List<TransitionInvariant> invariants = [];
+    TransitionSubjectCreation? subjectCreation;
 
     internal TransitionBuilder(TransitionAuthoringContext<TEntity, TInput, TOutcome> context)
         : base(context, new(parent: null))
     {
+    }
+
+    /// <summary>Declares that this Transition initializes an authoritatively absent subject.</summary>
+    /// <typeparam name="TState">Typed object shape projected into the complete initial aggregate observation.</typeparam>
+    /// <param name="id">Stable initialization identity.</param>
+    /// <param name="initialObservation">Pure expression deriving complete initial state from typed input.</param>
+    /// <param name="sourceFile">Compiler-supplied source file used only for source attribution.</param>
+    /// <param name="sourceLine">Compiler-supplied source line used only for source attribution.</param>
+    /// <param name="sourceMember">Compiler-supplied source member used only for source attribution.</param>
+    /// <returns>This Transition builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="initialObservation"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">Subject creation was already declared.</exception>
+    /// <exception cref="TransitionExpressionTranslationException">
+    /// <paramref name="initialObservation"/> is outside the portable Transition expression subset.
+    /// </exception>
+    public TransitionBuilder<TEntity, TInput, TOutcome> CreatesFrom<TState>(
+        ExecutionNodeId id,
+        Expression<Func<TInput, TState>> initialObservation,
+        [CallerFilePath] string sourceFile = "",
+        [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "")
+    {
+        ArgumentNullException.ThrowIfNull(initialObservation);
+        if (subjectCreation is not null)
+            throw new InvalidOperationException("A canonical Transition can declare subject creation only once.");
+
+        subjectCreation = new(id, Context.TranslateInitialObservation(initialObservation));
+        Context.Register(
+            subjectCreation,
+            Context.Source(sourceFile, sourceLine, sourceMember, $"Subject creation '{id.Value}'"));
+        return this;
     }
 
     /// <summary>Adds one ordered admission rule with a typed rejection outcome.</summary>
@@ -700,7 +732,8 @@ public sealed class TransitionBuilder<TEntity, TInput, TOutcome>
         Context.OutcomeContract,
         [.. preconditions],
         BuildSequence(bodyId, rootSource),
-        [.. invariants]);
+        [.. invariants],
+        subjectCreation);
 }
 
 /// <summary>Authors ordered predicate cases and explicit completeness for one canonical Choice.</summary>
@@ -1015,6 +1048,27 @@ internal sealed class TransitionAuthoringContext<TEntity, TInput, TOutcome>
 
     public Expr Translate(Expression<Func<TEntity, bool>> expression) => translator.Translate(expression);
 
+    public Expr TranslateInitialObservation<TState>(Expression<Func<TInput, TState>> expression)
+    {
+        ArgumentNullException.ThrowIfNull(expression);
+        if (Contract<TState>().Type is not ObjectTypeRef projected
+            || ObservationContract.Type is not ObjectTypeRef observation
+            || !HaveEquivalentFields(projected, observation))
+        {
+            throw new TransitionExpressionTranslationException(
+                $"Subject initializer result type '{typeof(TState).Name}' must project exactly the entity observation fields.");
+        }
+
+        var translated = translator.TranslateInput(expression);
+        if (translated is not CallExpr { Function: ExprFunctionNames.Object } objectCreation)
+        {
+            throw new TransitionExpressionTranslationException(
+                "Subject initializers must construct a complete object from Transition input.");
+        }
+
+        return objectCreation with { ReturnType = ObservationContract.Type };
+    }
+
     public Expr Constant<TValue>(TValue value) => Expr.Const(ObservationValue.FromObject(value));
 
     public PortableValue Pattern<TValue>(TValue value, ValueContract contract)
@@ -1058,6 +1112,27 @@ internal sealed class TransitionAuthoringContext<TEntity, TInput, TOutcome>
         }
     }
 
+    static bool HaveEquivalentFields(ObjectTypeRef projected, ObjectTypeRef observation)
+    {
+        if (projected.Fields.Length != observation.Fields.Length)
+            return false;
+
+        var expected = observation.Fields.ToDictionary(static field => field.Name, StringComparer.Ordinal);
+        foreach (var field in projected.Fields)
+        {
+            if (!expected.TryGetValue(field.Name, out var target)
+                || field.Type != target.Type
+                || field.Cardinality != target.Cardinality
+                || field.Presence != target.Presence
+                || field.Nullability != target.Nullability)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     public FieldPath FieldPath<TValue>(Expression<Func<TEntity, Field<TValue>>> field) =>
         Cohesive.Model.FieldPath.FromField(translator.TranslateFieldTarget(field));
 
@@ -1092,6 +1167,9 @@ internal sealed class TransitionAuthoringContext<TEntity, TInput, TOutcome>
     public ExecutionSourceMap BuildSourceMap(IR.TransitionDefinition definition)
     {
         List<ExecutionSourceProvenance> entries = [];
+        if (definition.SubjectCreation is not null)
+            Add(entries, definition.SubjectCreation, ["subjectCreation"]);
+
         for (var index = 0; index < definition.Preconditions.Length; index++)
         {
             Add(entries, definition.Preconditions[index], ["preconditions", Index(index)]);
