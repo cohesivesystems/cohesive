@@ -24,6 +24,7 @@ The [Execution Kernel adoption and migration guide](docs/EXECUTION_KERNEL_GUIDE.
 | `Cohesive.Processes.Distribution` | Optional portable worker pools, durable competing-consumer claims, capacity, leases, fencing, and recovery for canonical Process work. |
 | `Cohesive.Presentation` | Backend-declared presentation IR for navigation, views, actions, forms, and flows. |
 | `Cohesive.Api` | Semantic API declarations and endpoint metadata. |
+| `Cohesive.Api.Execution` | Optional execution-control API catalog, safe result projections, and in-memory reference integration. |
 | `Cohesive.Storage` | Entity repository, durable Process state, materialization, Control, and storage adapter contracts. |
 | `Cohesive.AI` | Inference, training, text, vector, ontology, and model registry contracts. |
 | `Cohesive.Identity` | Identity context and scope resolution helpers. |

@@ -5,7 +5,7 @@ using ProcessStartResult = Cohesive.Execution.ProcessStartResult;
 
 namespace Cohesive.Api.Execution;
 
-/// <summary>Stable wire coordinates owned by the execution-control API catalog.</summary>
+/// <summary>Stable transport-neutral wire coordinates owned by the execution-control API catalog.</summary>
 public static class ExecutionControlApiWireNames
 {
     /// <summary>Authority that owns the transport-neutral API declaration.</summary>

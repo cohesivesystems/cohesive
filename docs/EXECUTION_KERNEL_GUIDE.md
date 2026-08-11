@@ -4,7 +4,7 @@ status: implemented
 authority: cohesive.execution-kernel.adoption
 owners: [cohesive-core]
 applies_to: [cohesive-execution-kernel]
-last_verified: 2026-08-03
+last_verified: 2026-08-11
 supersedes: []
 ---
 
@@ -27,7 +27,7 @@ Cohesive does not require one runtime or an all-at-once application rewrite.
 | --- | --- | --- |
 | Decide one bounded entity-state change | `Cohesive.Transitions` | Storage commit and interaction publication bindings |
 | Coordinate several semantic operations | `Cohesive.Processes` | `Cohesive.Storage.Processes` for durable attempts and recovery |
-| Expose lifecycle control and diagnostics | `Cohesive.Api` | HTTP, CLI, generated-client, or presentation adapters |
+| Expose lifecycle control and diagnostics | `Cohesive.Api.Execution` | HTTP, CLI, generated-client, or presentation adapters |
 | Synchronize a relation-derived index | `Cohesive.Relations` and `Cohesive.Storage.Materialization` | Cosmos/Postgres sources, Elastic targets, Control, and durable Processes |
 | Model a long-running business workflow | Transitions plus Processes | Durable Requests, waits, signals, external adapters, and human-task projections |
 
@@ -72,7 +72,8 @@ catalogs.
 | [`Cohesive.Processes`](../src/Cohesive.Processes/README.md) | Canonical Process IR, typed authoring, finite control flow, waits, requests, signals, retries, compensation requirements, continuation semantics, compilation, and reference interpretation | The internal meaning of invoked Transitions or Relations; physical checkpoint storage |
 | [`Cohesive.Storage`](../src/Cohesive.Storage/README.md) | Durable Process aggregate contracts, atomic store ports, materialization definitions and plans, generation lifecycle, source/target ports, progress, routing, and execution evidence | A parallel query language, Transition model, or Process model |
 | `Cohesive.Control` in `Cohesive.Storage` | Typed feedback-loop compilation and materialization operating-point state under workload and adapter limits | Process lifecycle authority or an adapter-specific throttle API |
-| [`Cohesive.Api`](../src/Cohesive.Api/README.md) | Route-neutral operation catalogs and exact bindings to canonical definitions, commands, status, and explain artifacts | Execution behavior or a second diagnostics schema |
+| [`Cohesive.Api`](../src/Cohesive.Api/README.md) | Generic route-neutral operation, endpoint, authorization, result, and semantic-reference declarations | Process execution contracts, execution behavior, or a second diagnostics schema |
+| [`Cohesive.Api.Execution`](../src/Cohesive.Api.Execution/README.md) | Optional route-neutral execution-control catalog and safe bindings to canonical commands, status, trace, and explain artifacts | Process meaning, execution behavior, or transport-specific routes |
 | `Cohesive.Host` | Application and CLI hosting mechanics that bind typed operations and render canonical projections | Semantic execution definitions or lifecycle policy |
 | `Cohesive.Adapters.*` | Attributable target capabilities, constraints, concrete bindings, physical I/O, and target-specific evidence | Portable semantics or silent guarantee weakening |
 
@@ -157,6 +158,11 @@ API, CLI, tests, and documentation serialize the same artifacts through `Executi
 `ExecutionTraceJsonSerializer`, and `ProcessExecutionTraceJsonSerializer`. A transport may format or
 redact according to the declared disclosure contract; it must not translate the artifact into an
 independent diagnostics type.
+
+Install `Cohesive.Api.Execution` when exposing the canonical execution-control surface. The package composes generic
+`Cohesive.Api` declarations with `Cohesive.Processes` contracts; generic API consumers do not acquire the Process
+runtime. Existing execution-control consumers migrate by adding that package and importing
+`Cohesive.Api.Execution`. The v4 catalog schema and canonical wire contracts are unchanged.
 
 For ASP.NET, `MapProcessExecutionInspectApi`, `MapProcessExecutionExplainApi`, and
 `MapProcessExecutionTracesApi` derive GET endpoints from the exact `ExecutionControlApiCatalog` handles. Each route

@@ -160,5 +160,6 @@ states map to the catalog's opaque not-found, conflict, and precondition-failed 
 ## Related Packages
 
 - `Cohesive.Api` for semantic API declarations.
+- `Cohesive.Api.Execution` for the canonical execution-control catalog and safe result projections.
 - `Cohesive.Identity` for identity context and scope resolution.
 - `Cohesive.Processes`, `Cohesive.Relations`, and `Cohesive.Storage` for the runtime surfaces exposed by endpoints.

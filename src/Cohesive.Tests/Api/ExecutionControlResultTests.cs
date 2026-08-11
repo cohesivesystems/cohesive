@@ -1,8 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Cohesive.Api;
+using Cohesive.Api.Execution;
 using Cohesive.Execution;
-using Cohesive.Model.Serialization;
 using Cohesive.Tests.ExecutionKernel;
 
 namespace Cohesive.Tests.Api;

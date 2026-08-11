@@ -28,6 +28,7 @@
     <ProjectReference Include="..\Cohesive\Cohesive.csproj" />
     <ProjectReference Include="..\Cohesive.Presentation\Cohesive.Presentation.csproj" />
     <ProjectReference Include="..\Cohesive.Api\Cohesive.Api.csproj" />
+    <ProjectReference Include="..\Cohesive.Api.Execution\Cohesive.Api.Execution.csproj" />
     <ProjectReference Include="..\Cohesive.Transitions\Cohesive.Transitions.csproj" />
     <ProjectReference Include="..\Cohesive.Relations\Cohesive.Relations.csproj" />
     <ProjectReference Include="..\Cohesive.Relations.TestFixtures\Cohesive.Relations.TestFixtures.csproj" />

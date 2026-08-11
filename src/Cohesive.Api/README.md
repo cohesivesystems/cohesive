@@ -34,37 +34,16 @@ var api = Api.Define("Shipping")
     .Build();
 ```
 
-## Execution control and diagnostics
+## Optional execution control
 
-`ExecutionControlApiCatalog.Create()` declares the shared route-neutral Process surface used by HTTP, CLI,
-generated-client, and in-memory bindings. Its `explain` and `traces` queries accept the same trusted, read-only
-`InspectProcessCommand` address as status inspection. They return the canonical `ExecutionExplainArtifact` and
-`ProcessExecutionTraceArtifact` respectively; an adapter must not translate either artifact into another model.
-
-CLI and documentation projections can render the exact response as human-readable JSON while APIs and tests use
-the same value directly:
-
-```csharp
-var catalog = ExecutionControlApiCatalog.Create();
-var operation = catalog.Definition.GetOperation(catalog.Explain);
-var output = ExecutionExplainJsonSerializer.Serialize(
-    artifact,
-    PortableDocumentJsonFormatting.Indented);
-```
-
-The catalog deliberately supplies no HTTP route or console formatting. A transport adapter binds the typed
-operation handle, and presentation remains outside the execution semantic authorities. `ApiEndpoint.WithHttp`
-projects a handle without redeclaring its semantic identity, contracts, policies, results, or authority references.
-For conventional Process observation HTTP projections, use
-`Cohesive.Adapters.AspNet.Processes.MapProcessExecutionInspectApi`, `MapProcessExecutionExplainApi`, and
-`MapProcessExecutionTracesApi`. All three accept only the logical Process identity from the route and require a
-trusted server-side authority-scope resolver; none deserializes the authorization, issuance, or provenance fields of
-a client-authored `InspectProcessCommand`. The retained-trace operation maps every repository availability state
-through the catalog's declared result inventory and writes available artifacts as exact canonical bytes.
+The canonical Process execution-control catalog intentionally lives in `Cohesive.Api.Execution`. That optional
+composition package binds these generic declarations to `Cohesive.Processes` contracts without making every
+`Cohesive.Api` consumer acquire the Process language and runtime.
 
 ## Related Packages
 
 - [Execution Kernel adoption and migration guide](../../docs/EXECUTION_KERNEL_GUIDE.md) for the common status, trace, explain, and telemetry projection contract.
+- `Cohesive.Api.Execution` for the canonical route-neutral Process execution-control catalog and reference integration.
 - `Cohesive.Adapters.AspNet` for ASP.NET endpoint projection.
 - `Cohesive.Adapters.OpenApi` for OpenAPI emission.
 - `Cohesive.Adapters.GraphQL` for GraphQL schema emission.
