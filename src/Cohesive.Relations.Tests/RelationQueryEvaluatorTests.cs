@@ -88,6 +88,38 @@ public sealed class RelationQueryEvaluatorTests
     }
 
     [Fact]
+    public async Task CreateSuppliedOnly_accepts_nested_single_value_under_its_compiled_decimal_contract()
+    {
+        var author = RelationQuery.Expression();
+        var inputs = author.Source<FloatScoreInput>();
+        var outputs = author.Project(
+            inputs,
+            (FloatScoreInput input) => new FloatScoreOutput
+            {
+                Id = input.Id,
+                Score = input.Signals.Score
+            });
+        var relation = outputs.BuildRelation(static output => output.Id);
+        var evaluation = author.Evaluate(relation, new("tests/supplied-single-value"))
+            .Supply(
+                [new FloatScoreInput
+                {
+                    Id = "score-1",
+                    Signals = new() { Score = 0.98f }
+                }],
+                static input => input.Id)
+            .Build();
+
+        var outcome = await RelationQueryEvaluator.CreateSuppliedOnly().EvaluateAsync(evaluation);
+
+        Assert.True(
+            outcome.IsSuccessful,
+            string.Join(Environment.NewLine, outcome.PhysicalExecution?.Diagnostics.Select(static diagnostic => diagnostic.Message) ?? []));
+        var row = Assert.Single(Assert.IsType<RelationQueryExecutionResult>(outcome.Result).Relation!.Rows);
+        Assert.Equal(0.98m, row.Value.GetProperty(nameof(FloatScoreOutput.Score)).GetDecimal());
+    }
+
+    [Fact]
     public async Task EvaluateAsync_RelationHydratesSuppliedLoadThroughCustomerSource()
     {
         var evaluation = RelationEvaluation("tests/relation-success", "customer-1");
@@ -650,6 +682,25 @@ public sealed class RelationQueryEvaluatorTests
         (LoadCustomerRelationFixture.CustomerTypePath, ObservationValue.FromString(type)));
 
     sealed record LoadRoot(string Id, string CustomerId);
+
+    sealed class FloatScoreInput
+    {
+        public required string Id { get; init; }
+
+        public required FloatScoreSignals Signals { get; init; }
+    }
+
+    sealed class FloatScoreSignals
+    {
+        public float Score { get; init; }
+    }
+
+    sealed class FloatScoreOutput
+    {
+        public required string Id { get; init; }
+
+        public float Score { get; init; }
+    }
 
     sealed class ExpressionLoad
     {

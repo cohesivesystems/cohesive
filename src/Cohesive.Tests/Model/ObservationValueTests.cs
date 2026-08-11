@@ -59,6 +59,35 @@ public sealed class ObservationValueTests
     }
 
     [Fact]
+    public void FromObject_Single_UsesItsCanonicalSinglePrecisionDecimal()
+    {
+        var direct = ObservationValue.FromObject(0.98f);
+        var nested = ObservationValue.FromObject(new NumericInput
+        {
+            Score = 0.98f
+        }).GetProperty(nameof(NumericInput.Score));
+        var contract = new ValueContract(new ScalarTypeRef(ScalarTypeKind.Decimal));
+
+        Assert.Equal(ObservationValueKind.Decimal, direct.Kind);
+        Assert.Equal(0.98m, direct.GetDecimal());
+        Assert.Equal(direct, nested);
+        Assert.True(contract.IsSatisfiedByConstant(direct));
+    }
+
+    [Fact]
+    public void FromObject_DoubleAndDecimal_RetainTheirExplicitNumericKinds()
+    {
+        var floatingPoint = ObservationValue.FromObject(0.98d);
+        var exactDecimal = ObservationValue.FromObject(0.98m);
+        var contract = new ValueContract(new ScalarTypeRef(ScalarTypeKind.Decimal));
+
+        Assert.Equal(ObservationValueKind.Double, floatingPoint.Kind);
+        Assert.Equal(ObservationValueKind.Decimal, exactDecimal.Kind);
+        Assert.True(contract.IsSatisfiedByConstant(floatingPoint));
+        Assert.True(contract.IsSatisfiedByConstant(exactDecimal));
+    }
+
+    [Fact]
     public void FromObject_JsonDocument_ProjectsRootElement()
     {
         using var document = JsonDocument.Parse("{\"x\":12,\"nested\":{\"ok\":true}}");
@@ -777,6 +806,11 @@ public sealed class ObservationValueTests
         public int Value { get; init; }
 
         public string Name { get; init; } = string.Empty;
+    }
+
+    sealed class NumericInput
+    {
+        public float? Score { get; init; }
     }
 
     sealed class SimplePayload
