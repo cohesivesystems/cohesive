@@ -111,12 +111,12 @@ diagnostics, and provenance, and remains responsible for the endpoint's HTTP sta
 
 ## Canonical Process observation reads
 
-`MapProcessExecutionInspectApi` and `MapProcessExecutionExplainApi` project the existing route-neutral
-`ExecutionControlApiCatalog` handles as HTTP GETs without adding status or explanation DTOs. Each route carries only
-the logical Process identity. Their shared `ProcessExecutionAuthorityScopeResolver` must derive authority and tenant
-from authenticated server-side identity and scope evidence; it must not copy them from caller data. The required
-authorization-policy resolver maps each catalog semantic authorization requirement to ASP.NET authorization
-metadata.
+`MapProcessExecutionInspectApi`, `MapProcessExecutionExplainApi`, and `MapProcessExecutionTracesApi` project the
+existing route-neutral `ExecutionControlApiCatalog` handles as HTTP GETs without adding status, explanation, or trace
+DTOs. Each route carries only the logical Process identity. Their shared `ProcessExecutionAuthorityScopeResolver`
+must derive authority and tenant from authenticated server-side identity and scope evidence; it must not copy them
+from caller data. The required authorization-policy resolver maps each catalog semantic authorization requirement to
+ASP.NET authorization metadata.
 
 ```csharp
 using Cohesive.Adapters.AspNet.Processes;
@@ -137,6 +137,13 @@ app.MapProcessExecutionExplainApi(
     (operationContext, httpContext, processInstanceId) =>
         ResolveAuthorizedProcessScope(operationContext, httpContext, processInstanceId),
     (operation, requirement) => ResolveAuthorizationPolicy(requirement));
+
+app.MapProcessExecutionTracesApi(
+    executionControl.Traces,
+    "/api/processes/{processInstanceId}/traces",
+    (operationContext, httpContext, processInstanceId) =>
+        ResolveAuthorizedProcessScope(operationContext, httpContext, processInstanceId),
+    (operation, requirement) => ResolveAuthorizationPolicy(requirement));
 ```
 
 The inspect binding resolves `IProcessExecutionRepository`, performs its provider-neutral logical read, and returns
@@ -146,7 +153,9 @@ not-found problem; provider lifecycle values are never promoted into semantic st
 `IProcessExecutionExplainRepository` and writes the successful `ExecutionExplainArtifact` as exact canonical bytes
 from `ExecutionExplainJsonSerializer`. Missing or malformed explanation targets use the catalog's opaque problem
 variants. Conflicting status, runtime, or trace affinity fails closed. The original catalog remains route-neutral and
-unchanged.
+unchanged. The trace binding resolves `IProcessExecutionTraceRepository`; available artifacts are written as exact
+canonical bytes from `ProcessExecutionTraceJsonSerializer`, while missing, active, and terminal-without-artifact
+states map to the catalog's opaque not-found, conflict, and precondition-failed results.
 
 ## Related Packages
 

@@ -1,10 +1,10 @@
+using System.Text.Json.Serialization;
 using Cohesive.Adapters.TypeScript;
 using Cohesive.Api;
 using Cohesive.Api.CodeGen;
 using Cohesive.Api.Execution;
 using Cohesive.CodeGen;
 using Cohesive.Execution;
-using System.Text.Json.Serialization;
 
 namespace Cohesive.Tests.CodeGen;
 
@@ -72,6 +72,7 @@ public sealed class TypeScriptApiClientEmitterTests
             catalog.Start,
             catalog.Inspect,
             catalog.Explain,
+            catalog.Traces,
             catalog.Signal,
             catalog.Pause,
             catalog.Continue,
@@ -94,6 +95,7 @@ public sealed class TypeScriptApiClientEmitterTests
         Assert.Contains("export type ExecutionControlApiOperationKey =", first, StringComparison.Ordinal);
         Assert.Contains("'start'", first, StringComparison.Ordinal);
         Assert.Contains("'explain'", first, StringComparison.Ordinal);
+        Assert.Contains("'traces'", first, StringComparison.Ordinal);
         Assert.Contains("'updateLimits'", first, StringComparison.Ordinal);
         Assert.Contains("export const executionControlApiOperationIds = {", first, StringComparison.Ordinal);
         Assert.Contains("} as const satisfies Record<ExecutionControlApiOperationKey, string>;", first, StringComparison.Ordinal);
@@ -101,7 +103,7 @@ public sealed class TypeScriptApiClientEmitterTests
         Assert.Contains("export const executionControlApiEndpointIds = {} as const satisfies Record<ExecutionControlApiEndpointKey, string>;", first, StringComparison.Ordinal);
         Assert.Contains("export const executionControlApiOperationMetadata = {", first, StringComparison.Ordinal);
         Assert.Contains("} as const satisfies Record<ExecutionControlApiOperationKey, unknown>;", first, StringComparison.Ordinal);
-        Assert.Equal(10, CountOccurrences(first, "    http: null,"));
+        Assert.Equal(11, CountOccurrences(first, "    http: null,"));
         Assert.DoesNotContain("export function ", first, StringComparison.Ordinal);
 
         var metadataOffset = first.IndexOf(

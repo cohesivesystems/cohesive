@@ -5,7 +5,6 @@ using Cohesive.Processes.Runtime;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
-using Microsoft.AspNetCore.Routing.Patterns;
 
 namespace Cohesive.Adapters.AspNet.Processes;
 
@@ -138,32 +137,11 @@ public static partial class ProcessExecutionReadApiEndpointRouteBuilderExtension
 
             EnsureArtifactAffinity(artifact, processInstanceId);
             var success = GetHttpResult(operation, ApiResultKind.Success);
-            return new CanonicalExplainJsonResult(
+            return new CanonicalProcessExecutionJsonResult(
                 ExecutionExplainJsonSerializer.GetCanonicalBytes(artifact),
                 success.Http!.StatusCode,
                 success.Http.ContentType ?? "application/json");
         };
-
-    static bool TryReadProcessInstanceId(
-        HttpContext httpContext,
-        out ProcessInstanceId processInstanceId)
-    {
-        processInstanceId = default;
-        if (!httpContext.Request.RouteValues.TryGetValue(ProcessInstanceIdRouteParameter, out var value)
-            || value is null)
-        {
-            return false;
-        }
-
-        var text = value.ToString();
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return false;
-        }
-
-        processInstanceId = new(text.Trim());
-        return true;
-    }
 
     static void EnsureArtifactAffinity(
         ExecutionExplainArtifact artifact,
@@ -184,126 +162,20 @@ public static partial class ProcessExecutionReadApiEndpointRouteBuilderExtension
         }
     }
 
-    static IResult Problem(ApiOperation operation, ApiResultKind kind, string code)
-    {
-        var result = GetHttpResult(operation, kind);
-        return Results.Json(
-            new ExecutionApiProblem(code),
-            options: null,
-            contentType: result.Http!.ContentType ?? "application/json",
-            statusCode: result.Http.StatusCode);
-    }
-
-    static ApiResultDefinition GetHttpResult(ApiOperation operation, ApiResultKind kind)
-    {
-        ApiResultDefinition? match = null;
-        for (var i = 0; i < operation.Results.Count; i++)
-        {
-            var candidate = operation.Results[i];
-            if (candidate.Kind != kind)
-            {
-                continue;
-            }
-            if (match is not null)
-            {
-                throw new InvalidOperationException(
-                    $"Execution observation operation '{operation.Id}' declares multiple '{kind}' results.");
-            }
-
-            match = candidate;
-        }
-
-        if (match?.Http is null)
-        {
-            throw new InvalidOperationException(
-                $"Execution observation operation '{operation.Id}' has no HTTP '{kind}' result projection.");
-        }
-
-        return match;
-    }
-
     static void EnsureCanonicalExplainContract(ApiOperation operation)
     {
-        var hasApiReference = operation.SemanticReferences.Any(static reference =>
-            string.Equals(
-                reference.Authority,
-                ExecutionControlApiWireNames.SemanticAuthority,
-                StringComparison.Ordinal)
-            && reference.SchemaVersion == ExecutionControlApiCatalog.CurrentSchemaVersion
-            && reference.Path == ExecutionControlApiWireNames.OperationPath(ExecutionExplainWireNames.Explain));
-        var hasKernelReference = operation.SemanticReferences.Any(static reference =>
-            string.Equals(
-                reference.Authority,
+        if (!HasCanonicalObservationContract(
+                operation,
+                ExecutionExplainWireNames.Explain,
+                typeof(ExecutionExplainArtifact),
                 ExecutionExplainWireNames.SemanticAuthority,
-                StringComparison.Ordinal)
-            && reference.SchemaVersion == ExecutionExplainArtifact.CurrentSchemaVersion
-            && reference.Path == ExecutionExplainWireNames.QueryPath);
-        var hasAuthorization = operation.AuthorizationRequirements.Count == 1
-            && string.Equals(
-                operation.AuthorizationRequirements[0].Id,
-                ExecutionControlApiWireNames.AuthorizationRequirement(ExecutionExplainWireNames.Explain),
-                StringComparison.Ordinal);
-        if (!string.Equals(operation.Name, ExecutionExplainWireNames.Explain, StringComparison.Ordinal)
-            || operation.Kind != ApiOperationKind.Query
-            || operation.RequestType != typeof(InspectProcessCommand)
-            || operation.PrimaryResult.Kind != ApiResultKind.Success
-            || operation.PrimaryResult.BodyType != typeof(ExecutionExplainArtifact)
-            || !hasApiReference
-            || !hasKernelReference
-            || !hasAuthorization
+                ExecutionExplainArtifact.CurrentSchemaVersion,
+                ExecutionExplainWireNames.QueryPath)
             || !HasProblemResult(operation, ApiResultKind.NotFound)
             || !HasProblemResult(operation, ApiResultKind.ValidationFailed))
         {
             throw new InvalidOperationException(
                 $"API endpoint '{operation.Id}' is not the canonical execution-control explain contract.");
-        }
-    }
-
-    static bool HasProblemResult(ApiOperation operation, ApiResultKind kind) =>
-        operation.Results.Count(result => result.Kind == kind
-            && result.BodyType == typeof(ExecutionApiProblem)) == 1;
-
-    static void EnsureProcessInstanceRoute(string route)
-    {
-        RoutePattern pattern;
-        try
-        {
-            pattern = RoutePatternFactory.Parse(route);
-        }
-        catch (RoutePatternException error)
-        {
-            throw new ArgumentException("The Process observation HTTP route is malformed.", nameof(route), error);
-        }
-
-        if (!pattern.Parameters.Any(static parameter =>
-                string.Equals(
-                    parameter.Name,
-                    ProcessInstanceIdRouteParameter,
-                    StringComparison.Ordinal)))
-        {
-            throw new ArgumentException(
-                $"The Process observation HTTP route must contain '{{{ProcessInstanceIdRouteParameter}}}'.",
-                nameof(route));
-        }
-    }
-
-    sealed class CanonicalExplainJsonResult(
-        byte[] content,
-        int statusCode,
-        string contentType) : IResult
-    {
-        readonly byte[] content = content ?? throw new ArgumentNullException(nameof(content));
-        readonly string contentType = Guard.RequireNotNullOrWhiteSpace(contentType);
-
-        public async Task ExecuteAsync(HttpContext httpContext)
-        {
-            ArgumentNullException.ThrowIfNull(httpContext);
-            httpContext.Response.StatusCode = statusCode;
-            httpContext.Response.ContentType = contentType;
-            httpContext.Response.ContentLength = content.Length;
-            await httpContext.Response.Body
-                .WriteAsync(content, httpContext.RequestAborted)
-                .ConfigureAwait(false);
         }
     }
 }

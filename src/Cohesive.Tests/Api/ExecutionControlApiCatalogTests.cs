@@ -2,6 +2,7 @@ using Cohesive.Api;
 using Cohesive.Api.Execution;
 using Cohesive.Control;
 using Cohesive.Execution;
+using Cohesive.Processes.Runtime;
 
 namespace Cohesive.Tests.Api;
 
@@ -16,6 +17,7 @@ public sealed class ExecutionControlApiCatalogTests
             catalog.Start,
             catalog.Inspect,
             catalog.Explain,
+            catalog.Traces,
             catalog.Signal,
             catalog.Pause,
             catalog.Continue,
@@ -25,14 +27,15 @@ public sealed class ExecutionControlApiCatalogTests
             catalog.UpdateLimits
         ];
 
-        Assert.Equal(10, catalog.Definition.Operations.Count);
-        Assert.Equal("cohesive-execution-control-api/v3", ExecutionControlApiCatalog.CurrentSchemaVersion.Value);
+        Assert.Equal(11, catalog.Definition.Operations.Count);
+        Assert.Equal("cohesive-execution-control-api/v4", ExecutionControlApiCatalog.CurrentSchemaVersion.Value);
         Assert.Equal(endpoints, catalog.Definition.Endpoints);
         Assert.Equal(
             [
                 ProcessStartWireNames.Start,
                 ExecutionControlWireNames.Inspect,
                 ExecutionExplainWireNames.Explain,
+                ProcessExecutionTraceWireNames.Read,
                 ExecutionControlWireNames.Signal,
                 ExecutionControlWireNames.Pause,
                 ExecutionControlWireNames.Continue,
@@ -45,6 +48,7 @@ public sealed class ExecutionControlApiCatalogTests
         Assert.Equal(
             [
                 typeof(ProcessStartRequest),
+                typeof(InspectProcessCommand),
                 typeof(InspectProcessCommand),
                 typeof(InspectProcessCommand),
                 typeof(SignalProcessCommand),
@@ -85,6 +89,25 @@ public sealed class ExecutionControlApiCatalogTests
             httpProjection.Results,
             static result => result.Kind == ApiResultKind.Accepted);
         Assert.Equal(202, accepted.Http?.StatusCode);
+
+        Assert.Equal(
+            ApiResultKind.Success,
+            catalog.GetTraceResult(ProcessExecutionTraceReadState.Available).Kind);
+        Assert.Equal(
+            ApiResultKind.NotFound,
+            catalog.GetTraceResult(ProcessExecutionTraceReadState.NotFound).Kind);
+        Assert.Equal(
+            ApiResultKind.Conflict,
+            catalog.GetTraceResult(ProcessExecutionTraceReadState.InProgress).Kind);
+        Assert.Equal(
+            ApiResultKind.PreconditionFailed,
+            catalog.GetTraceResult(ProcessExecutionTraceReadState.TerminalArtifactUnavailable).Kind);
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            catalog.GetTraceResult(ProcessExecutionTraceReadState.Unspecified));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ExecutionApiProblemCodes.ForTraceReadState(ProcessExecutionTraceReadState.Available));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ExecutionApiProblemCodes.ForTraceReadState(ProcessExecutionTraceReadState.Unspecified));
     }
 
     [Fact]
@@ -109,12 +132,15 @@ public sealed class ExecutionControlApiCatalogTests
                 {
                     var isStart = operation.Name == ProcessStartWireNames.Start;
                     var isExplain = operation.Name == ExecutionExplainWireNames.Explain;
+                    var isTraces = operation.Name == ProcessExecutionTraceWireNames.Read;
                     var isLimitUpdate = operation.Name == ControlLimitUpdateWireNames.UpdateLimits;
                     Assert.Equal(
                         isStart
                             ? ProcessStartWireNames.SemanticAuthority
                             : isExplain
                                 ? ExecutionExplainWireNames.SemanticAuthority
+                            : isTraces
+                                ? ProcessExecutionTraceWireNames.SemanticAuthority
                             : isLimitUpdate
                                 ? ControlLimitUpdateWireNames.SemanticAuthority
                                 : ExecutionControlWireNames.SemanticAuthority,
@@ -124,6 +150,8 @@ public sealed class ExecutionControlApiCatalogTests
                             ? ProcessStartRequest.CurrentSchemaVersion
                             : isExplain
                                 ? ExecutionExplainArtifact.CurrentSchemaVersion
+                            : isTraces
+                                ? ProcessExecutionTraceArtifact.CurrentSchemaVersion
                             : isLimitUpdate
                                 ? ControlLoopDefinition.CurrentSchemaVersion
                                 : ProcessControlCommand.CurrentSchemaVersion,
@@ -132,6 +160,8 @@ public sealed class ExecutionControlApiCatalogTests
                         ? ProcessStartWireNames.RequestPath
                         : isExplain
                             ? ExecutionExplainWireNames.QueryPath
+                        : isTraces
+                            ? ProcessExecutionTraceWireNames.QueryPath
                         : isLimitUpdate
                             ? ControlLimitUpdateWireNames.CommandPath
                             : ExecutionControlWireNames.CommandPath(operation.Name);

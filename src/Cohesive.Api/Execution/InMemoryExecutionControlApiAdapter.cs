@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using Cohesive.Control;
 using Cohesive.Execution;
+using Cohesive.Processes.Runtime;
 
 namespace Cohesive.Api.Execution;
 
@@ -164,6 +165,7 @@ public sealed class InMemoryExecutionControlApiAdapter
     readonly Func<ProcessControlState, ExecutionRuntimeStatusDetails?>? runtimeStatus;
     readonly Func<ProcessControlState, ExecutionTerminalOutcome?>? terminalOutcome;
     readonly Func<InspectProcessCommand, ExecutionExplainArtifact?>? explain;
+    readonly Func<InspectProcessCommand, ProcessExecutionTraceReadResult>? traces;
     readonly ExecutionControlLimitUpdateDispatcher? limitUpdateDispatcher;
     readonly Dictionary<ProcessKey, ProcessEntry> processes = [];
     readonly Dictionary<StartCommandKey, ProcessStartReceipt> startsByCommand = [];
@@ -182,6 +184,9 @@ public sealed class InMemoryExecutionControlApiAdapter
     /// Optional authoritative asynchronous dispatcher. When supplied, callers MUST use <see cref="DispatchAsync"/>
     /// for <c>updateLimits</c>; the local Control registry is not consulted.
     /// </param>
+    /// <param name="traces">
+    /// Optional canonical retained-trace projection over a trusted read-only Process inspection request.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="contracts"/> is <see langword="null"/>.</exception>
     public InMemoryExecutionControlApiAdapter(
         InteractionContractCatalog contracts,
@@ -189,7 +194,8 @@ public sealed class InMemoryExecutionControlApiAdapter
         Func<ProcessControlState, ExecutionRuntimeStatusDetails?>? runtimeStatus = null,
         Func<ProcessControlState, ExecutionTerminalOutcome?>? terminalOutcome = null,
         Func<InspectProcessCommand, ExecutionExplainArtifact?>? explain = null,
-        ExecutionControlLimitUpdateDispatcher? limitUpdateDispatcher = null)
+        ExecutionControlLimitUpdateDispatcher? limitUpdateDispatcher = null,
+        Func<InspectProcessCommand, ProcessExecutionTraceReadResult>? traces = null)
     {
         ArgumentNullException.ThrowIfNull(contracts);
         this.catalog = catalog ?? ExecutionControlApiCatalog.Create();
@@ -197,6 +203,7 @@ public sealed class InMemoryExecutionControlApiAdapter
         this.runtimeStatus = runtimeStatus;
         this.terminalOutcome = terminalOutcome;
         this.explain = explain;
+        this.traces = traces;
         this.limitUpdateDispatcher = limitUpdateDispatcher;
     }
 
@@ -258,6 +265,31 @@ public sealed class InMemoryExecutionControlApiAdapter
                     "The explanation projection returned evidence for another Process instance or attempt.");
             }
             return Result(endpoint, ApiResultKind.Success, artifact);
+        }
+
+        if (ReferenceEquals(endpoint, catalog.Traces))
+        {
+            if (request is not InspectProcessCommand inspect)
+                return TypeMismatch(endpoint);
+            var canonical = (InspectProcessCommand)Rebind(inspect, invocation, prior: null);
+            var read = traces?.Invoke(canonical) ?? ProcessExecutionTraceReadResult.NotFound();
+            var result = catalog.GetTraceResult(read.State);
+            if (read.State != ProcessExecutionTraceReadState.Available)
+            {
+                return new(
+                    endpoint,
+                    result,
+                    new ExecutionApiProblem(ExecutionApiProblemCodes.ForTraceReadState(read.State)));
+            }
+
+            var artifact = read.Artifact!;
+            if (artifact.ProcessInstanceId != canonical.Context.ProcessInstanceId)
+            {
+                throw new InvalidOperationException(
+                    "The retained-trace projection returned evidence for another Process instance.");
+            }
+
+            return new(endpoint, result, artifact);
         }
 
         if (ReferenceEquals(endpoint, catalog.UpdateLimits))
@@ -729,6 +761,7 @@ public sealed class InMemoryExecutionControlApiAdapter
         if (!ReferenceEquals(endpoint, catalog.Start)
             && !ReferenceEquals(endpoint, catalog.Inspect)
             && !ReferenceEquals(endpoint, catalog.Explain)
+            && !ReferenceEquals(endpoint, catalog.Traces)
             && !ReferenceEquals(endpoint, catalog.Signal)
             && !ReferenceEquals(endpoint, catalog.Pause)
             && !ReferenceEquals(endpoint, catalog.Continue)

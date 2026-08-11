@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.Text.Json.Serialization;
 using Cohesive.Execution;
+using Cohesive.Processes.Runtime;
 
 namespace Cohesive.Api;
 
@@ -19,6 +20,29 @@ public static class ExecutionApiProblemCodes
 
     /// <summary>The projected transport address is absent or malformed.</summary>
     public const string InvalidRequest = "execution.api.invalidRequest";
+
+    /// <summary>The Process is retained but has not produced terminal canonical trace evidence.</summary>
+    public const string TraceInProgress = "execution.api.traceInProgress";
+
+    /// <summary>The Process is terminal but no canonical retained-trace artifact is available.</summary>
+    public const string TraceArtifactUnavailable = "execution.api.traceArtifactUnavailable";
+
+    /// <summary>Gets the safe problem code for a non-available retained-trace repository state.</summary>
+    /// <param name="state">Explicit non-available trace-read disposition.</param>
+    /// <returns>The stable non-sensitive API problem code for the disposition.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="state"/> is unspecified, available, or unsupported.
+    /// </exception>
+    public static string ForTraceReadState(ProcessExecutionTraceReadState state) => state switch
+    {
+        ProcessExecutionTraceReadState.NotFound => NotFound,
+        ProcessExecutionTraceReadState.InProgress => TraceInProgress,
+        ProcessExecutionTraceReadState.TerminalArtifactUnavailable => TraceArtifactUnavailable,
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(state),
+            state,
+            "An available or unspecified trace-read state has no API problem code.")
+    };
 }
 
 /// <summary>A non-sensitive API boundary failure that intentionally omits target and runtime state.</summary>

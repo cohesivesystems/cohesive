@@ -1,5 +1,7 @@
 using Cohesive.Control;
 using Cohesive.Execution;
+using Cohesive.Processes.Runtime;
+using ProcessStartResult = Cohesive.Execution.ProcessStartResult;
 
 namespace Cohesive.Api.Execution;
 
@@ -18,6 +20,7 @@ public static class ExecutionControlApiWireNames
         ProcessStartWireNames.Start
             or ExecutionControlWireNames.Inspect
             or ExecutionExplainWireNames.Explain
+            or ProcessExecutionTraceWireNames.Read
             or ExecutionControlWireNames.Signal
             or ExecutionControlWireNames.Pause
             or ExecutionControlWireNames.Continue
@@ -47,13 +50,14 @@ public sealed class ExecutionControlApiCatalog
 {
     /// <summary>Current semantic schema version of the execution-control API declaration.</summary>
     public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } =
-        new("cohesive-execution-control-api/v3");
+        new("cohesive-execution-control-api/v4");
 
     ExecutionControlApiCatalog(
         ApiDefinition definition,
         ApiEndpoint start,
         ApiEndpoint inspect,
         ApiEndpoint explain,
+        ApiEndpoint traces,
         ApiEndpoint signal,
         ApiEndpoint pause,
         ApiEndpoint continueProcess,
@@ -66,6 +70,7 @@ public sealed class ExecutionControlApiCatalog
         Start = start;
         Inspect = inspect;
         Explain = explain;
+        Traces = traces;
         Signal = signal;
         Pause = pause;
         Continue = continueProcess;
@@ -86,6 +91,9 @@ public sealed class ExecutionControlApiCatalog
 
     /// <summary>Read-only canonical execution explanation endpoint.</summary>
     public ApiEndpoint Explain { get; }
+
+    /// <summary>Read-only retained canonical Process trace endpoint.</summary>
+    public ApiEndpoint Traces { get; }
 
     /// <summary>Canonical Signal-admission endpoint.</summary>
     public ApiEndpoint Signal { get; }
@@ -146,6 +154,21 @@ public sealed class ExecutionControlApiCatalog
                 ExecutionExplainWireNames.QueryPath)
             .Accepts<InspectProcessCommand>()
             .Returns<ExecutionExplainArtifact>()
+            .Result<ExecutionApiProblem>(ApiResultKind.Forbidden)
+            .Result<ExecutionApiProblem>(ApiResultKind.NotFound)
+            .Result<ExecutionApiProblem>(ApiResultKind.ValidationFailed)
+            .Build();
+
+        var traces = Describe(
+                builder.Query(ProcessExecutionTraceWireNames.Read),
+                ProcessExecutionTraceWireNames.Read,
+                ProcessExecutionTraceWireNames.SemanticAuthority,
+                ProcessExecutionTraceArtifact.CurrentSchemaVersion,
+                ProcessExecutionTraceWireNames.QueryPath)
+            .Accepts<InspectProcessCommand>()
+            .Returns<ProcessExecutionTraceArtifact>()
+            .Result<ExecutionApiProblem>(ApiResultKind.Conflict)
+            .Result<ExecutionApiProblem>(ApiResultKind.PreconditionFailed)
             .Result<ExecutionApiProblem>(ApiResultKind.Forbidden)
             .Result<ExecutionApiProblem>(ApiResultKind.NotFound)
             .Result<ExecutionApiProblem>(ApiResultKind.ValidationFailed)
@@ -220,6 +243,7 @@ public sealed class ExecutionControlApiCatalog
             start,
             inspect,
             explain,
+            traces,
             signal,
             pause,
             continueProcess,
@@ -228,6 +252,30 @@ public sealed class ExecutionControlApiCatalog
             terminate,
             updateLimits);
     }
+
+    /// <summary>Gets the declared retained-trace API result for one repository availability state.</summary>
+    /// <param name="state">Explicit provider-neutral retained-trace read disposition.</param>
+    /// <returns>The exact result definition owned by <see cref="Traces"/> for that disposition.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="state"/> is unspecified or unsupported.</exception>
+    public ApiResultDefinition GetTraceResult(ProcessExecutionTraceReadState state) =>
+        GetResult(Traces, TraceResultKind(state));
+
+    /// <summary>Gets the semantic API result kind for one retained-trace repository availability state.</summary>
+    /// <param name="state">Explicit provider-neutral retained-trace read disposition.</param>
+    /// <returns>The stable route-neutral API result category.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="state"/> is unspecified or unsupported.</exception>
+    public static ApiResultKind TraceResultKind(ProcessExecutionTraceReadState state) =>
+        state switch
+        {
+            ProcessExecutionTraceReadState.Available => ApiResultKind.Success,
+            ProcessExecutionTraceReadState.NotFound => ApiResultKind.NotFound,
+            ProcessExecutionTraceReadState.InProgress => ApiResultKind.Conflict,
+            ProcessExecutionTraceReadState.TerminalArtifactUnavailable => ApiResultKind.PreconditionFailed,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(state),
+                state,
+                "Unsupported Process execution-trace read state.")
+        };
 
     /// <summary>Gets the unique semantic result variant of one operation by result kind.</summary>
     /// <param name="endpoint">Typed endpoint handle owned by this catalog.</param>

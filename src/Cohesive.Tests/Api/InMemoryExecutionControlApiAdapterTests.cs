@@ -6,6 +6,7 @@ using Cohesive.Execution;
 using Cohesive.Host.Cli;
 using Cohesive.Host.Cli.Testing;
 using Cohesive.Model.Serialization;
+using Cohesive.Processes.Runtime;
 using Cohesive.Storage.Materialization;
 using Cohesive.Tests.ExecutionKernel;
 using Cohesive.Tests.Storage;
@@ -225,6 +226,84 @@ public sealed class InMemoryExecutionControlApiAdapterTests
                 grantedRequirements: []));
         Assert.Equal(ApiResultKind.Forbidden, denied.Result.Kind);
         Assert.IsType<ExecutionApiProblem>(denied.Body);
+    }
+
+    [Fact]
+    public void Traces_ReturnsPortableArtifactAndRebindsTrustedServerEvidence()
+    {
+        var fixture = ProcessControlTestFixture.Create();
+        var catalog = ExecutionControlApiCatalog.Create();
+        var initial = fixture.State();
+        var artifact = new ProcessExecutionTraceArtifact(
+            ProcessExecutionTraceArtifact.CurrentSchemaVersion,
+            initial.Definition,
+            initial.ProcessInstanceId,
+            missingTracePrefixCount: 1,
+            traces: []);
+        InspectProcessCommand? received = null;
+        var adapter = new InMemoryExecutionControlApiAdapter(
+            fixture.Catalog,
+            catalog,
+            traces: command =>
+            {
+                received = command;
+                return ProcessExecutionTraceReadResult.Available(artifact);
+            });
+        var request = new InspectProcessCommand(
+            ProcessControlCommand.CurrentSchemaVersion,
+            ClientContext(initial.ProcessInstanceId, "traces/1"),
+            Expectation(initial, initial.Revision));
+
+        var response = Dispatch<ProcessExecutionTraceArtifact>(
+            adapter,
+            catalog.Traces,
+            request,
+            Invocation(catalog, BaselineUtc.AddSeconds(1), BaselineUtc.AddSeconds(2)));
+
+        Assert.Same(artifact, response);
+        Assert.Equal(TrustedAuthorization().AuthorityScope, received!.Context.Authorization.AuthorityScope);
+        Assert.Equal(TrustedProvenance(), received.Context.Provenance);
+    }
+
+    [Theory]
+    [InlineData(ProcessExecutionTraceReadState.NotFound, ApiResultKind.NotFound, ExecutionApiProblemCodes.NotFound)]
+    [InlineData(ProcessExecutionTraceReadState.InProgress, ApiResultKind.Conflict, ExecutionApiProblemCodes.TraceInProgress)]
+    [InlineData(
+        ProcessExecutionTraceReadState.TerminalArtifactUnavailable,
+        ApiResultKind.PreconditionFailed,
+        ExecutionApiProblemCodes.TraceArtifactUnavailable)]
+    public void Traces_MapsUnavailableRepositoryStatesToDeclaredProblems(
+        ProcessExecutionTraceReadState state,
+        ApiResultKind expectedKind,
+        string expectedCode)
+    {
+        var fixture = ProcessControlTestFixture.Create();
+        var catalog = ExecutionControlApiCatalog.Create();
+        var initial = fixture.State();
+        var adapter = new InMemoryExecutionControlApiAdapter(
+            fixture.Catalog,
+            catalog,
+            traces: _ => state switch
+            {
+                ProcessExecutionTraceReadState.NotFound => ProcessExecutionTraceReadResult.NotFound(),
+                ProcessExecutionTraceReadState.InProgress => ProcessExecutionTraceReadResult.InProgress(),
+                ProcessExecutionTraceReadState.TerminalArtifactUnavailable =>
+                    ProcessExecutionTraceReadResult.TerminalArtifactUnavailable(),
+                _ => throw new ArgumentOutOfRangeException(nameof(state), state, null)
+            });
+        var request = new InspectProcessCommand(
+            ProcessControlCommand.CurrentSchemaVersion,
+            ClientContext(initial.ProcessInstanceId, $"traces/{state}"),
+            expectation: null);
+
+        var response = adapter.Dispatch(
+            catalog.Traces,
+            request,
+            Invocation(catalog, BaselineUtc.AddSeconds(1), BaselineUtc.AddSeconds(2)));
+        var problem = Assert.IsType<ExecutionApiProblem>(response.Body);
+
+        Assert.Equal(expectedKind, response.Result.Kind);
+        Assert.Equal(expectedCode, problem.Code);
     }
 
     [Fact]

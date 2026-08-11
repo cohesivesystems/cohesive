@@ -284,8 +284,8 @@ window. Current logical-ID lookup accepts trusted authority scope plus `ProcessI
 opaque physical ID used at scheduling, and performs one exact lookup. Scheduler tags support dashboard discovery, but
 the pinned .NET `OrchestrationQuery` has no tag predicate; Cohesive therefore does not emulate a tag index by scanning
 task-hub pages. Canonical trace retention, terminal retrieval, and runtime explain composition are implemented;
-execution-control API binding, live trace streaming, richer dashboard presentation, and history-event normalization remain ARI-292
-follow-up work.
+status, explain, and retained-trace execution-control API bindings are available. Lifecycle mutation bindings, live
+trace streaming, richer dashboard presentation, and history-event normalization remain ARI-292 follow-up work.
 
 This is not promotion of the full planning profile. Authored timeout, terminal-failure, escalation, and cancellation
 execution paths for general Requests, domain-event/Reply emission, activation-local and non-Process Signal targets,

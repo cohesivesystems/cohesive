@@ -143,12 +143,14 @@ partial or conflicting Cohesive tag set fails closed. Normalized trace retention
 activations, and terminal trace retrieval is available through the current standalone-client repository. The
 migration-only Core reader explicitly does not fabricate canonical traces from historical provider records.
 Canonical runtime explain composition is available through the current repository and exact deployed plan catalog.
-The provider-neutral execution and explain boundaries support trusted authority-scope/logical-identity reads for
-application surfaces and separate physical-key reads for engine administration. ASP.NET inspect and explain bindings
-perform only logical reads without accepting caller-authored authority evidence. Inspect returns the retained
-canonical custom-status projection; a valid pending admission without custom status remains unavailable rather than
-being inferred from Scheduler lifecycle. Lifecycle mutation bindings, live trace streaming, richer dashboard
-presentation, and history-event normalization remain follow-up work.
+The provider-neutral execution, explain, and retained-trace boundaries support trusted
+authority-scope/logical-identity reads for application surfaces and separate physical-key reads for engine
+administration. ASP.NET inspect, explain, and retained-trace bindings perform only logical reads without accepting
+caller-authored authority evidence. Inspect returns the retained canonical custom-status projection; a valid pending
+admission without custom status remains unavailable rather than being inferred from Scheduler lifecycle. The trace
+binding writes exact portable artifact bytes and maps every repository availability state through the route-neutral
+catalog. Lifecycle mutation bindings, live trace streaming, richer dashboard presentation, and history-event
+normalization remain follow-up work.
 
 ## Realization planning
 
