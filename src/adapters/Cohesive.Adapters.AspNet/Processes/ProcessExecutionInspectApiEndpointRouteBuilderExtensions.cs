@@ -139,33 +139,13 @@ public static partial class ProcessExecutionReadApiEndpointRouteBuilderExtension
 
     static void EnsureCanonicalInspectContract(ApiOperation operation)
     {
-        var hasApiReference = operation.SemanticReferences.Any(static reference =>
-            string.Equals(
-                reference.Authority,
-                ExecutionControlApiWireNames.SemanticAuthority,
-                StringComparison.Ordinal)
-            && reference.SchemaVersion == ExecutionControlApiCatalog.CurrentSchemaVersion
-            && reference.Path == ExecutionControlApiWireNames.OperationPath(ExecutionControlWireNames.Inspect));
-        var hasKernelReference = operation.SemanticReferences.Any(static reference =>
-            string.Equals(
-                reference.Authority,
+        if (!HasCanonicalObservationContract(
+                operation,
+                ExecutionControlWireNames.Inspect,
+                typeof(ExecutionControlResult),
                 ExecutionControlWireNames.SemanticAuthority,
-                StringComparison.Ordinal)
-            && reference.SchemaVersion == ProcessControlCommand.CurrentSchemaVersion
-            && reference.Path == ExecutionControlWireNames.CommandPath(ExecutionControlWireNames.Inspect));
-        var hasAuthorization = operation.AuthorizationRequirements.Count == 1
-            && string.Equals(
-                operation.AuthorizationRequirements[0].Id,
-                ExecutionControlApiWireNames.AuthorizationRequirement(ExecutionControlWireNames.Inspect),
-                StringComparison.Ordinal);
-        if (!string.Equals(operation.Name, ExecutionControlWireNames.Inspect, StringComparison.Ordinal)
-            || operation.Kind != ApiOperationKind.Query
-            || operation.RequestType != typeof(InspectProcessCommand)
-            || operation.PrimaryResult.Kind != ApiResultKind.Success
-            || operation.PrimaryResult.BodyType != typeof(ExecutionControlResult)
-            || !hasApiReference
-            || !hasKernelReference
-            || !hasAuthorization
+                ProcessControlCommand.CurrentSchemaVersion,
+                ExecutionControlWireNames.CommandPath(ExecutionControlWireNames.Inspect))
             || !HasResult<ExecutionControlResult>(operation, ApiResultKind.PreconditionFailed)
             || !HasResult<ExecutionControlResult>(operation, ApiResultKind.Conflict)
             || !HasResult<ExecutionControlResult>(operation, ApiResultKind.ValidationFailed)

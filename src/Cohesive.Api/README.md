@@ -37,9 +37,9 @@ var api = Api.Define("Shipping")
 ## Execution control and diagnostics
 
 `ExecutionControlApiCatalog.Create()` declares the shared route-neutral Process surface used by HTTP, CLI,
-generated-client, and in-memory bindings. Its `explain` query accepts the same trusted, read-only
-`InspectProcessCommand` address as status inspection and returns the canonical `ExecutionExplainArtifact`; an
-adapter must not translate that artifact into a second diagnostics model.
+generated-client, and in-memory bindings. Its `explain` and `traces` queries accept the same trusted, read-only
+`InspectProcessCommand` address as status inspection. They return the canonical `ExecutionExplainArtifact` and
+`ProcessExecutionTraceArtifact` respectively; an adapter must not translate either artifact into another model.
 
 CLI and documentation projections can render the exact response as human-readable JSON while APIs and tests use
 the same value directly:
@@ -56,9 +56,11 @@ The catalog deliberately supplies no HTTP route or console formatting. A transpo
 operation handle, and presentation remains outside the execution semantic authorities. `ApiEndpoint.WithHttp`
 projects a handle without redeclaring its semantic identity, contracts, policies, results, or authority references.
 For conventional Process observation HTTP projections, use
-`Cohesive.Adapters.AspNet.Processes.MapProcessExecutionInspectApi` and `MapProcessExecutionExplainApi`. Both accept
-only the logical Process identity from the route and require a trusted server-side authority-scope resolver; neither
-deserializes the authorization, issuance, or provenance fields of a client-authored `InspectProcessCommand`.
+`Cohesive.Adapters.AspNet.Processes.MapProcessExecutionInspectApi`, `MapProcessExecutionExplainApi`, and
+`MapProcessExecutionTracesApi`. All three accept only the logical Process identity from the route and require a
+trusted server-side authority-scope resolver; none deserializes the authorization, issuance, or provenance fields of
+a client-authored `InspectProcessCommand`. The retained-trace operation maps every repository availability state
+through the catalog's declared result inventory and writes available artifacts as exact canonical bytes.
 
 ## Related Packages
 

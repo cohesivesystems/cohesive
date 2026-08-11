@@ -158,13 +158,15 @@ API, CLI, tests, and documentation serialize the same artifacts through `Executi
 redact according to the declared disclosure contract; it must not translate the artifact into an
 independent diagnostics type.
 
-For ASP.NET, `MapProcessExecutionInspectApi` and `MapProcessExecutionExplainApi` derive GET endpoints from the exact
-`ExecutionControlApiCatalog` handles. Each route supplies only `processInstanceId`; their shared required server-side
-resolver supplies the authority scope, and a required authorization-policy resolver projects the catalog
-requirement. Inspect returns the retained canonical status in the existing `ExecutionControlResult`; missing and
-pending-without-status observations remain the same opaque not-found result. Explain writes the artifact's canonical
-bytes and uses the catalog's existing opaque problem variants. Neither endpoint deserializes caller-authored command
-authorization, issuance, or provenance evidence.
+For ASP.NET, `MapProcessExecutionInspectApi`, `MapProcessExecutionExplainApi`, and
+`MapProcessExecutionTracesApi` derive GET endpoints from the exact `ExecutionControlApiCatalog` handles. Each route
+supplies only `processInstanceId`; their shared required server-side resolver supplies the authority scope, and a
+required authorization-policy resolver projects the catalog requirement. Inspect returns the retained canonical
+status in the existing `ExecutionControlResult`; missing and pending-without-status observations remain the same
+opaque not-found result. Explain and retained traces write their artifacts' canonical bytes. Trace read states map
+to declared success, not-found, conflict, or precondition-failed variants without exposing physical identity or
+provider history. None of these endpoints deserializes caller-authored command authorization, issuance, or
+provenance evidence.
 
 ## Executable examples
 
