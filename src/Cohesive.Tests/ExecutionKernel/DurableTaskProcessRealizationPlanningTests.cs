@@ -15,18 +15,7 @@ public sealed class DurableTaskProcessRealizationPlanningTests
     public void PlanningProfile_ExplicitlyDisposesEveryDeclaredConstructAndGuarantee()
     {
         var profile = DurableTaskProcessTargetProfile.Planning;
-        var actual = profile.Evidence.ToDictionary(static evidence => evidence.Requirement);
-        var expectedRequirements = ProcessNodeConstructCatalog.DeclaredRequirements
-            .Concat(ProcessInterpreterGuarantees.All)
-            .OrderBy(static requirement => requirement.Category)
-            .ThenBy(static requirement => requirement.Name, StringComparer.Ordinal);
-
-        Assert.Equal(DurableTaskProcessTargetProfile.Target, profile.Target);
-        Assert.Equal(DurableTaskProcessTargetProfile.PlanningProfileId, profile.Id);
-        Assert.Equal(expectedRequirements, actual.Keys
-            .OrderBy(static requirement => requirement.Category)
-            .ThenBy(static requirement => requirement.Name, StringComparer.Ordinal));
-        Assert.Equal(profile.Evidence.Length, profile.Evidence.Select(static evidence => evidence.Id).Distinct().Count());
+        var actual = AssertCompleteProfile(profile, DurableTaskProcessTargetProfile.PlanningProfileId);
 
         AssertDisposition(actual, CapabilityRealizationKind.Native,
             ProcessWireNames.ChoiceNode,
@@ -48,6 +37,52 @@ public sealed class DurableTaskProcessRealizationPlanningTests
             ProcessWireNames.InvokeProcessNode,
             ProcessWireNames.RepeatAcrossActivationNode);
         AssertDisposition(actual, CapabilityRealizationKind.Constrained, ProcessWireNames.ForEachPartitionNode);
+
+        AssertGuaranteeDisposition(actual, CapabilityRealizationKind.Composed,
+            ProcessInterpreterGuarantees.ExactDefinitionPinning,
+            ProcessInterpreterGuarantees.StableExecutionIdentity,
+            ProcessInterpreterGuarantees.DeterministicReplay,
+            ProcessInterpreterGuarantees.InputAdmissionAndDisposition,
+            ProcessInterpreterGuarantees.LifecycleControl,
+            ProcessInterpreterGuarantees.DurableRequestRecovery,
+            ProcessInterpreterGuarantees.ForkJoinChildLineage,
+            ProcessInterpreterGuarantees.DefinitionAndWorkerEvolution,
+            ProcessInterpreterGuarantees.StatusTraceAndExplain);
+        AssertGuaranteeDisposition(actual, CapabilityRealizationKind.Constrained,
+            ProcessInterpreterGuarantees.ExternalEffectDelivery,
+            ProcessInterpreterGuarantees.BoundedWorkAndRecurrence,
+            ProcessInterpreterGuarantees.SensitiveAndOversizedPayloads);
+        AssertGuaranteeDisposition(actual, CapabilityRealizationKind.Unavailable,
+            ProcessInterpreterGuarantees.WholeDefinitionAtomicity);
+    }
+
+    [Fact]
+    public void ExecutableProfile_ExplicitlyDisposesEveryDeclaredConstructAndGuarantee()
+    {
+        var profile = DurableTaskProcessTargetProfile.Executable;
+        var actual = AssertCompleteProfile(profile, DurableTaskProcessTargetProfile.ExecutableProfileId);
+
+        AssertDisposition(actual, CapabilityRealizationKind.Native,
+            ProcessWireNames.ChoiceNode,
+            ProcessWireNames.MatchNode,
+            ProcessWireNames.ReturnNode,
+            ProcessWireNames.FailNode);
+        AssertDisposition(actual, CapabilityRealizationKind.Composed,
+            ProcessWireNames.InvokeTransitionNode,
+            ProcessWireNames.EvaluateRelationNode,
+            ProcessWireNames.RequestNode,
+            ProcessWireNames.SendSignalNode,
+            ProcessWireNames.ForkNode,
+            ProcessWireNames.JoinNode,
+            ProcessWireNames.AwaitMatchNode,
+            ProcessWireNames.TimerNode,
+            ProcessWireNames.DurableCutNode,
+            ProcessWireNames.InvokeProcessNode,
+            ProcessWireNames.RepeatAcrossActivationNode);
+        AssertDisposition(actual, CapabilityRealizationKind.Constrained, ProcessWireNames.ForEachPartitionNode);
+        AssertDisposition(actual, CapabilityRealizationKind.Unavailable,
+            ProcessWireNames.EmitEventNode,
+            ProcessWireNames.ReplyNode);
 
         AssertGuaranteeDisposition(actual, CapabilityRealizationKind.Composed,
             ProcessInterpreterGuarantees.ExactDefinitionPinning,
@@ -152,6 +187,82 @@ public sealed class DurableTaskProcessRealizationPlanningTests
         Assert.NotEmpty(request.Decision.AuxiliaryEvidence);
     }
 
+    [Fact]
+    public void ExecutableCompiler_RejectsExplicitlyUnavailableConstructsWithSourceEvidence()
+    {
+        var emit = EmitEventPlan();
+        var reply = ReplyPlan();
+
+        Assert.True(DurableTaskProcessRealizationCompiler.Compile(emit).IsSuccessful);
+        Assert.True(DurableTaskProcessRealizationCompiler.Compile(reply).IsSuccessful);
+        AssertExecutableUnavailable(emit, ProcessWireNames.EmitEventNode, new("emit"));
+        AssertExecutableUnavailable(reply, ProcessWireNames.ReplyNode, new("reply"));
+    }
+
+    [Fact]
+    public void PlanCatalog_AdmitsOnlyExecutableProfileRealizations()
+    {
+        var canonical = ReturnPlan();
+        var planning = DurableTaskProcessRealizationCompiler.Compile(canonical);
+        var executable = DurableTaskProcessRealizationCompiler.CompileExecutable(canonical);
+
+        var exception = Assert.Throws<ArgumentException>(() =>
+            new DurableTaskSequentialProcessPlanCatalog(
+                [Assert.IsType<DurableTaskProcessRealizationPlan>(planning.Plan)]));
+        Assert.Contains(DurableTaskProcessTargetProfile.PlanningProfileId.Value, exception.Message, StringComparison.Ordinal);
+        Assert.Contains(DurableTaskProcessTargetProfile.ExecutableProfileId.Value, exception.Message, StringComparison.Ordinal);
+
+        var catalog = new DurableTaskSequentialProcessPlanCatalog(
+            [Assert.IsType<DurableTaskProcessRealizationPlan>(executable.Plan)]);
+        Assert.Equal(1, catalog.Count);
+    }
+
+    static IReadOnlyDictionary<ProcessInterpreterRequirementKey, ProcessInterpreterCapabilityEvidence>
+        AssertCompleteProfile(
+            ProcessInterpreterCapabilityProfile profile,
+            ProcessInterpreterCapabilityProfileId expectedId)
+    {
+        var actual = profile.Evidence.ToDictionary(static evidence => evidence.Requirement);
+        var expectedRequirements = ProcessNodeConstructCatalog.DeclaredRequirements
+            .Concat(ProcessInterpreterGuarantees.All)
+            .OrderBy(static requirement => requirement.Category)
+            .ThenBy(static requirement => requirement.Name, StringComparer.Ordinal);
+
+        Assert.Equal(DurableTaskProcessTargetProfile.Target, profile.Target);
+        Assert.Equal(expectedId, profile.Id);
+        Assert.Equal(expectedRequirements, actual.Keys
+            .OrderBy(static requirement => requirement.Category)
+            .ThenBy(static requirement => requirement.Name, StringComparer.Ordinal));
+        Assert.Equal(profile.Evidence.Length, profile.Evidence.Select(static evidence => evidence.Id).Distinct().Count());
+        return actual;
+    }
+
+    static void AssertExecutableUnavailable(
+        CompiledProcessPlan plan,
+        string wireName,
+        ExecutionNodeId sourceNode)
+    {
+        var key = ProcessInterpreterRequirementKey.ForConstruct(wireName);
+        var result = DurableTaskProcessRealizationCompiler.CompileExecutable(plan);
+
+        Assert.False(result.IsSuccessful);
+        Assert.Null(result.Plan);
+        Assert.Equal(ProcessInterpreterRealizationStatus.NotRealizable, result.Realization.Status);
+        var decision = Assert.Single(
+            result.Realization.Decisions,
+            candidate => candidate.Requirement == key);
+        Assert.Equal(CapabilityRealizationKind.Unavailable, decision.Realization);
+        Assert.NotNull(decision.Evidence);
+        var diagnostic = Assert.Single(
+            result.Realization.Diagnostics,
+            candidate => candidate.Code == ProcessInterpreterRealizationDiagnosticCodes.RequirementUnavailable
+                && candidate.Requirement == key);
+        Assert.Equal(sourceNode, Assert.Single(diagnostic.Nodes));
+        Assert.DoesNotContain(
+            result.Realization.Diagnostics,
+            candidate => candidate.Code == ProcessInterpreterRealizationDiagnosticCodes.RequirementMissing);
+    }
+
     static void AssertDisposition(
         IReadOnlyDictionary<ProcessInterpreterRequirementKey, ProcessInterpreterCapabilityEvidence> actual,
         CapabilityRealizationKind expected,
@@ -225,6 +336,76 @@ public sealed class DurableTaskProcessRealizationPlanningTests
                 ],
                 ProcessRecoveryPolicy.ContinueAttempt),
             Catalog(requestDocument));
+    }
+
+    static CompiledProcessPlan EmitEventPlan()
+    {
+        var eventDocument = InteractionContractDocuments.Create(
+            new("interaction/event/durable-task-realization-planning-tests"),
+            new("revision/1"),
+            new DomainEventContractDefinition(new(StringContract, new("event/v1"))),
+            Provenance());
+        return Compile(
+            new CanonicalProcessDefinition(
+                StringContract,
+                StringContract,
+                new("emit"),
+                [
+                    new EmitEventProcessNode(
+                        new("emit"),
+                        new(Reference(eventDocument)),
+                        Expr.Const("event"),
+                        new(new("edge/emit-return"), new("return"))),
+                    new ReturnProcessNode(new("return"), Expr.Const("done"))
+                ],
+                ProcessRecoveryPolicy.ContinueAttempt),
+            Catalog(eventDocument));
+    }
+
+    static CompiledProcessPlan ReplyPlan()
+    {
+        var requestDocument = RequestDocument();
+        RequestContractReference request = new(Reference(requestDocument));
+        var replyDocument = InteractionContractDocuments.Create(
+            new("interaction/reply/durable-task-realization-planning-tests"),
+            new("revision/1"),
+            new ReplyContractDefinition(request, new("accepted")),
+            Provenance());
+        RequestObligationBindingId obligation = new("request.obligation");
+        return Compile(
+            new CanonicalProcessDefinition(
+                StringContract,
+                StringContract,
+                new("await"),
+                [
+                    new AwaitMatchProcessNode(
+                        new("await"),
+                        ProcessAwaitArbitration.ExclusivePriorityThenClauseId,
+                        [
+                            new ProcessAwaitInteractionClause(
+                                new("await/request"),
+                                request,
+                                new(new("request.payload"), StringContract),
+                                new(obligation),
+                                guard: null,
+                                priority: 0,
+                                new(new ProcessEdge(new("edge/await-reply"), new("reply"))))
+                        ],
+                        ProcessAwaitInputDisposition.Observe,
+                        ProcessAwaitInputDisposition.Reject,
+                        ProcessAwaitInputDisposition.ReusePriorDisposition,
+                        ProcessAwaitMissingTargetDisposition.DeadLetter,
+                        TimeSpan.FromDays(7)),
+                    new ReplyProcessNode(
+                        new("reply"),
+                        new(Reference(replyDocument)),
+                        obligation,
+                        Expr.Const("accepted"),
+                        new(new("edge/reply-return"), new("return"))),
+                    new ReturnProcessNode(new("return"), Expr.Const("done"))
+                ],
+                ProcessRecoveryPolicy.ContinueAttempt),
+            Catalog(requestDocument, replyDocument));
     }
 
     static CompiledProcessPlan Compile(
