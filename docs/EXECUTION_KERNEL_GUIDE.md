@@ -141,7 +141,10 @@ gap must not be filled from provider lifecycle state.
 
 Use `IProcessExecutionTraceRepository` when a runtime must retrieve retained Process traces separately from status.
 Its explicit read state distinguishes an active execution from a missing execution or a terminal execution without
-a canonical artifact. Available records expose a missing-prefix count; only zero proves complete activation coverage.
+a canonical artifact. Application-facing reads use trusted authority scope plus logical Process identity; physical
+keys remain an engine-administration address and never enter the result artifact. Available
+`ProcessExecutionTraceArtifact` values are versioned, contain an explicit missing-prefix count, and serialize through
+`ProcessExecutionTraceJsonSerializer`; only zero missing-prefix coverage proves a complete activation inventory.
 
 Use `IProcessExecutionExplainRepository` to compose retained runtime observations into the existing canonical
 `ExecutionExplainArtifact`. The repository may return a partial artifact for pending or active execution, but it must
@@ -150,8 +153,8 @@ not invent unavailable trace or realization evidence. Exact definition identity 
 the repository with a trusted `InteractionAuthorityScope` plus canonical `ProcessInstanceId`; physical execution
 keys remain an explicit engine-administration path.
 
-API, CLI, tests, and documentation serialize the same artifacts through
-`ExecutionExplainJsonSerializer` and `ExecutionTraceJsonSerializer`. A transport may format or
+API, CLI, tests, and documentation serialize the same artifacts through `ExecutionExplainJsonSerializer`,
+`ExecutionTraceJsonSerializer`, and `ProcessExecutionTraceJsonSerializer`. A transport may format or
 redact according to the declared disclosure contract; it must not translate the artifact into an
 independent diagnostics type.
 

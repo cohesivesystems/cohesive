@@ -230,7 +230,7 @@ public sealed class DurableTaskProcessExecutionRepository :
         ValidateResultAffinity(metadata, result, runtimeStatus);
         var missingTracePrefixCount = result.Evidence.Length - result.Traces.Length;
         return ProcessExecutionTraceReadResult.Available(new(
-            metadata.InstanceId,
+            ProcessExecutionTraceArtifact.CurrentSchemaVersion,
             result.State.Definition,
             result.State.Continuation.ProcessInstanceId,
             missingTracePrefixCount,
