@@ -69,6 +69,11 @@ canonical domain-event contract and envelope explicitly provide that meaning.
 outcome links with structured diagnostics; envelope admission requires the linked catalog rather than trusting a
 wire discriminator in isolation.
 
+For C#-authored domain events, `InteractionContractAuthoring.CreateDomainEvent<TPayload>` derives the portable
+payload contract from `TPayload` and returns one typed handle containing the canonical document, exact event
+reference, and validation diagnostics. The durable event identity, contract revision, payload-schema revision, and
+provenance remain explicit inputs: CLR names are authoring details and never become durable authority by convention.
+
 ## Canonical durable Request execution
 
 The durable-operation reference protocol interprets an ARI-160 `RequestEnvelope` without creating a second
