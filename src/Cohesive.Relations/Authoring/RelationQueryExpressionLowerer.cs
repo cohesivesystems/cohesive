@@ -6,6 +6,7 @@ using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using Cohesive.Model.Authoring;
 using Cohesive.Model.Expressions;
 using Cohesive.Relations.IR;
 
@@ -102,6 +103,7 @@ public sealed class RelationQueryExpressionLowerer
     readonly Func<Type, TypeRef> literalTypeResolver;
     readonly RelationQueryExpressionAuthoring? expectedParameterOwner;
     static readonly RelationQueryClrAuthoringContext DefaultLiteralTypeContext = new();
+    static readonly IClrTypeRefMapper DefaultLiteralTypeMapper = new DefaultClrTypeRefMapper();
     static readonly ConcurrentDictionary<PropertyInfo, bool> NonNullProperties = [];
     static readonly ConcurrentDictionary<PropertyInfo, bool> NonNullSequenceElementProperties = [];
 
@@ -1981,14 +1983,17 @@ public sealed class RelationQueryExpressionLowerer
         TypeRef literalType;
         try
         {
-            literalType = literalTypeResolver(Nullable.GetUnderlyingType(clrType) ?? clrType);
+            var effectiveClrType = Nullable.GetUnderlyingType(clrType) ?? clrType;
+            literalType = effectiveClrType.IsEnum
+                ? DefaultLiteralTypeMapper.Map(effectiveClrType, null)
+                : literalTypeResolver(effectiveClrType);
         }
         catch (InvalidOperationException)
         {
             return new ConstantExpr(value);
         }
 
-        if (literalType is not ScalarTypeRef
+        if (literalType is not (ScalarTypeRef or EnumTypeRef)
             || value.Kind is not (ObservationValueKind.Null or ObservationValueKind.Undefined)
                 && !new ValueContract(literalType).IsSatisfiedByConstant(value))
         {
@@ -2066,6 +2071,9 @@ public sealed class RelationQueryExpressionLowerer
             case Uri uri when value.GetType() == typeof(Uri):
                 observed = ObservationValue.FromString(uri.ToString());
                 return true;
+            case Enum enumeration when TryGetUnambiguousEnumMember(enumeration, out var member):
+                observed = ObservationValue.FromString(member);
+                return true;
             case Enum:
                 observed = default;
                 return false;
@@ -2073,6 +2081,29 @@ public sealed class RelationQueryExpressionLowerer
                 observed = default;
                 return false;
         }
+    }
+
+    static bool TryGetUnambiguousEnumMember(Enum value, out string member)
+    {
+        var enumType = value.GetType();
+        var names = Enum.GetNames(enumType);
+        var values = Enum.GetValues(enumType);
+        string? selected = null;
+        for (var index = 0; index < values.Length; index++)
+        {
+            if (!value.Equals(values.GetValue(index)))
+                continue;
+            if (selected is not null)
+            {
+                member = string.Empty;
+                return false;
+            }
+
+            selected = names[index];
+        }
+
+        member = selected ?? string.Empty;
+        return selected is not null;
     }
 
     bool TryTranslateParameterMarker(

@@ -563,10 +563,12 @@ references, and suggested alternatives; arbitrary captured getters are never eva
 
 The translator accepts sequence syntax only where its CLR behavior identifies the canonical behavior exactly:
 `Select(...).ToArray()` is an eager, order-preserving projection and predicate-free `LongCount()` has the
-canonical Int64 count domain. A convention-inferred nullable CLR member, whose semantic field has required
-presence, may be read inside a branch guarded by `HasValue`; `??` over the same kind of member lowers to an
-explicit canonical conditional. Imported mappings remain fail-closed until they can supply equivalent per-path
-presence evidence. Unguarded nullable navigation, Int32-returning `Count`/`Length`, unmaterialized lazy
+canonical Int64 count domain. An exact named enum member lowers to a portable typed enum literal; unnamed
+flag combinations and ambiguous enum aliases remain unsupported. A convention-inferred nullable CLR member,
+whose semantic field has required presence, may be read inside a branch guarded by `HasValue`; `??` over the
+same kind of member lowers to an explicit canonical conditional. Imported mappings remain fail-closed until
+they can supply equivalent per-path presence evidence. Unguarded nullable navigation, Int32-returning
+`Count`/`Length`, unmaterialized lazy
 `Select`, custom constructors or
 setters, and collection equality whose CLR contract differs from canonical equality still fail closed. Author
 the intended behavior through `author.Structural` when one of those distinctions matters.

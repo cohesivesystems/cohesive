@@ -267,6 +267,46 @@ public sealed class RelationQueryExpressionLowererTests
     }
 
     [Fact]
+    public void DefinedEnumMemberLiteral_LowersWithItsPortableEnumType()
+    {
+        var author = RelationQuery.Expression();
+        var source = author.Source<NormalizationSource>();
+        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        Expression<Func<NormalizationSource, NormalizationSourceKind>> literal = _ =>
+            NormalizationSourceKind.HumanFeedback;
+        Expression<Func<NormalizationSource, NormalizationSourceFlags>> unnamedCombination = _ =>
+            NormalizationSourceFlags.Imported | NormalizationSourceFlags.Generated;
+        Expression<Func<NormalizationSource, AmbiguousNormalizationSourceKind>> ambiguousAlias = _ =>
+            AmbiguousNormalizationSourceKind.SchemaMapping;
+
+        var lowered = lowerer.LowerValue(
+            literal,
+            [source.Binding],
+            sourceReference: "literal/enum-member").RequireValue();
+        var unsupported = lowerer.LowerValue(
+            unnamedCombination,
+            [source.Binding],
+            sourceReference: "literal/unnamed-enum-combination");
+        var ambiguous = lowerer.LowerValue(
+            ambiguousAlias,
+            [source.Binding],
+            sourceReference: "literal/ambiguous-enum-alias");
+
+        var enumLiteral = Assert.IsType<LiteralExpr>(lowered.Value);
+        var enumType = Assert.IsType<EnumTypeRef>(enumLiteral.Type);
+        Assert.Equal(nameof(NormalizationSourceKind), enumType.Name);
+        Assert.Equal(
+            ObservationValue.FromString(nameof(NormalizationSourceKind.HumanFeedback)),
+            enumLiteral.Value);
+        Assert.Equal(
+            RelationQueryExpressionDiagnosticCodes.LiteralUnsupported,
+            Assert.Single(unsupported.Diagnostics).Code);
+        Assert.Equal(
+            RelationQueryExpressionDiagnosticCodes.LiteralUnsupported,
+            Assert.Single(ambiguous.Diagnostics).Code);
+    }
+
+    [Fact]
     public void AggregateNumericLiteralTypes_SurviveCanonicalJsonNormalization()
     {
         var author = RelationQuery.Expression();
@@ -975,6 +1015,26 @@ public sealed class RelationQueryExpressionLowererTests
         public long CandidateCount { get; init; }
 
         public string? ModelVersion { get; init; }
+    }
+
+    enum NormalizationSourceKind
+    {
+        SchemaMapping,
+        HumanFeedback,
+        Synthetic
+    }
+
+    [Flags]
+    enum NormalizationSourceFlags
+    {
+        Imported = 1,
+        Generated = 2
+    }
+
+    enum AmbiguousNormalizationSourceKind
+    {
+        SchemaMapping = 1,
+        ImportedMapping = 1
     }
 
     enum LoadStatus
