@@ -97,6 +97,34 @@ public sealed class RelationQueryExpressionAuthoringTests
     }
 
     [Fact]
+    public void EagerCollectionProjectionAndInt64Count_AuthorThroughTheFluentSurface()
+    {
+        var author = RelationQuery.Expression();
+        var loads = author.Source<Load>();
+        var documents = author.Project(
+            loads,
+            load => new LoadStopsDto
+            {
+                Id = load.Id,
+                Stops = load.Stops
+                    .Select(stop => new StopDto { Location = stop.Location })
+                    .ToArray(),
+                StopCount = load.Stops.LongCount()
+            });
+
+        var relation = documents.BuildRelation(document => document.Id);
+
+        Assert.True(relation.Validation.IsValid, Format(relation.Validation));
+        var projection = Assert.Single(relation.Definition.Body.Nodes.OfType<ProjectQueryNode>());
+        Assert.Contains(
+            projection.Assignments.SelectMany(assignment => Descendants(assignment.Value)).OfType<CallExpr>(),
+            call => call.Function == ExprFunctionNames.Select);
+        Assert.Contains(
+            projection.Assignments.SelectMany(assignment => Descendants(assignment.Value)).OfType<CallExpr>(),
+            call => call.Function == ExprFunctionNames.Count);
+    }
+
+    [Fact]
     public void PipelineShorthands_AreCanonicallyEquivalentToExpandedJoinedAuthoring()
     {
         Expression<Func<Load, Customer, LoadSearchDto>> projection =
@@ -1114,6 +1142,20 @@ public sealed class RelationQueryExpressionAuthoringTests
 
         [JsonPropertyName("status")]
         public string Status { get; init; } = string.Empty;
+    }
+
+    sealed class LoadStopsDto
+    {
+        public string Id { get; init; } = string.Empty;
+
+        public StopDto[] Stops { get; init; } = [];
+
+        public long StopCount { get; init; }
+    }
+
+    sealed class StopDto
+    {
+        public string Location { get; init; } = string.Empty;
     }
 
     sealed class LoadSearchDto

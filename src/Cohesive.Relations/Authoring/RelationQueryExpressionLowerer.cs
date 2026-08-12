@@ -309,7 +309,11 @@ public sealed class RelationQueryExpressionLowerer
             owner ??= structuralOwner;
             parameters.Add(
                 expression.Parameters[index],
-                ParameterTarget.ForBinding(binding.Id, binding.ClrType, binding.MemberPathResolver));
+                ParameterTarget.ForBinding(
+                    binding.Id,
+                    binding.ClrType,
+                    binding.MemberPathResolver,
+                    binding.UsesImportedMapping));
         }
 
         return new(parameters, activeCurrentItem: null);
@@ -329,10 +333,11 @@ public sealed class RelationQueryExpressionLowerer
             ParameterExpression parameter => TranslateParameter(parameter, scope, sourceReference, expressionPath),
             UnaryExpression unary => TranslateUnary(unary, scope, sourceReference, expressionPath),
             BinaryExpression binary => TranslateBinary(binary, scope, sourceReference, expressionPath),
-            ConditionalExpression conditional => new ConditionalExpr(
-                Translate(conditional.Test, scope, sourceReference, expressionPath + "/test"),
-                Translate(conditional.IfTrue, scope, sourceReference, expressionPath + "/ifTrue"),
-                Translate(conditional.IfFalse, scope, sourceReference, expressionPath + "/ifFalse")),
+            ConditionalExpression conditional => TranslateConditional(
+                conditional,
+                scope,
+                sourceReference,
+                expressionPath),
             MethodCallExpression call => TranslateCall(call, scope, sourceReference, expressionPath),
             NewExpression or MemberInitExpression => TranslateObject(current, scope, sourceReference, expressionPath),
             NewArrayExpression array => TranslateArray(array, scope, sourceReference, expressionPath),
@@ -390,6 +395,24 @@ public sealed class RelationQueryExpressionLowerer
         if (TryTranslateParameterMarker(member, sourceReference, expressionPath, out var parameter))
             return parameter;
 
+        if (TryGetNullableHasValueOperand(member, out var nullableOperand))
+        {
+            if (!TryGetGuardableMemberAccess(nullableOperand, scope, out _))
+            {
+                throw Fail(
+                    RelationQueryExpressionDiagnosticCodes.NodeUnsupported,
+                    "Nullable HasValue can be lowered only for a required convention-inferred CLR field.",
+                    expressionPath,
+                    sourceReference,
+                    symbol: Display(member.Member),
+                    suggestion: "Use a convention-inferred nullable field with required presence, or author explicit presence and null semantics structurally.");
+            }
+
+            return Expr.Ne(
+                TranslateMember(nullableOperand, scope, sourceReference, expressionPath + "/operand"),
+                Expr.Null());
+        }
+
         if (IsCollectionCountMember(member))
         {
             throw Fail(
@@ -412,7 +435,19 @@ public sealed class RelationQueryExpressionLowerer
             throw CapturedOrUnsupportedMember(member, expressionPath, sourceReference);
         }
 
-        ValidateMemberNavigation(members, expressionPath, sourceReference);
+        members = NormalizeGuardedNullableValueMembers(
+            rootParameter,
+            target,
+            members,
+            scope,
+            expressionPath,
+            sourceReference);
+        ValidateMemberNavigation(
+            rootParameter,
+            members,
+            scope,
+            expressionPath,
+            sourceReference);
 
         if (target.Kind == ParameterTargetKind.CurrentItem
             && ReferenceEquals(rootParameter, scope.ActiveCurrentItem)
@@ -448,6 +483,21 @@ public sealed class RelationQueryExpressionLowerer
                 suggestion: "Restructure the query so the value is projected before entering the nested sequence scope."),
             _ => throw new UnreachableException()
         };
+    }
+
+    Expr TranslateConditional(
+        ConditionalExpression conditional,
+        RootScope scope,
+        string sourceReference,
+        string expressionPath)
+    {
+        var test = Translate(conditional.Test, scope, sourceReference, expressionPath + "/test");
+        var ifTrueScope = ApplyConditionFacts(conditional.Test, whenTrue: true, scope);
+        var ifFalseScope = ApplyConditionFacts(conditional.Test, whenTrue: false, scope);
+        return new ConditionalExpr(
+            test,
+            Translate(conditional.IfTrue, ifTrueScope, sourceReference, expressionPath + "/ifTrue"),
+            Translate(conditional.IfFalse, ifFalseScope, sourceReference, expressionPath + "/ifFalse"));
     }
 
     Expr TranslateUnary(
@@ -511,6 +561,16 @@ public sealed class RelationQueryExpressionLowerer
     {
         if (binary.NodeType == ExpressionType.Coalesce)
             return TranslateExactCoalesce(binary, scope, sourceReference, expressionPath);
+
+        if (TryTranslateGuardableNullComparison(
+                binary,
+                scope,
+                sourceReference,
+                expressionPath,
+                out var guardableNullComparison))
+        {
+            return guardableNullComparison;
+        }
 
         if (binary.IsLifted || binary.IsLiftedToNull)
         {
@@ -584,7 +644,13 @@ public sealed class RelationQueryExpressionLowerer
         };
 
         var left = Translate(binary.Left, scope, sourceReference, expressionPath + "/left");
-        var right = Translate(binary.Right, scope, sourceReference, expressionPath + "/right");
+        var rightScope = binary.NodeType switch
+        {
+            ExpressionType.AndAlso => ApplyConditionFacts(binary.Left, whenTrue: true, scope),
+            ExpressionType.OrElse => ApplyConditionFacts(binary.Left, whenTrue: false, scope),
+            _ => scope
+        };
+        var right = Translate(binary.Right, rightScope, sourceReference, expressionPath + "/right");
         ValidateExactBinaryDomain(binary, expressionPath, sourceReference);
 
         return new BinaryExpr(
@@ -605,6 +671,25 @@ public sealed class RelationQueryExpressionLowerer
             return Translate(right, scope, sourceReference, expressionPath + "/right");
         if (right is ConstantExpression { Value: null } && binary.Conversion is null)
             return Translate(left, scope, sourceReference, expressionPath + "/left");
+
+        if (binary.Conversion is null
+            && left is MemberExpression nullableMember
+            && TryGetGuardableMemberAccess(nullableMember, scope, out var access))
+        {
+            var leftValue = TranslateMember(
+                nullableMember,
+                scope,
+                sourceReference,
+                expressionPath + "/left");
+            return new ConditionalExpr(
+                Expr.Ne(leftValue, Expr.Null()),
+                TranslateMember(
+                    nullableMember,
+                    scope.WithKnownNonNull(access),
+                    sourceReference,
+                    expressionPath + "/left"),
+                Translate(right, scope, sourceReference, expressionPath + "/right"));
+        }
 
         throw Fail(
             RelationQueryExpressionDiagnosticCodes.OperatorUnsupported,
@@ -724,6 +809,17 @@ public sealed class RelationQueryExpressionLowerer
                 Translate(candidate, scope, sourceReference, expressionPath + "/candidate"));
         }
 
+        if (TryGetEagerSelectMaterialization(call, out var select))
+        {
+            return TranslateScopedSequenceFunction(
+                select,
+                ExprFunctionNames.Select,
+                requireSelector: true,
+                scope,
+                sourceReference,
+                expressionPath + "/select");
+        }
+
         if (IsSequenceMethod(call, nameof(Enumerable.Any)))
             return TranslateScopedSequenceFunction(call, ExprFunctionNames.Any, requireSelector: true, scope, sourceReference, expressionPath);
         if (IsSequenceMethod(call, nameof(Enumerable.All)))
@@ -755,6 +851,27 @@ public sealed class RelationQueryExpressionLowerer
                 sourceReference,
                 symbol: Display(call.Method),
                 suggestion: "Author canonical count through the structural builder or an aggregate Count target typed as Int64.");
+        }
+        if (IsSequenceMethod(call, nameof(Enumerable.LongCount)))
+        {
+            if (call.Arguments.Count != 1)
+            {
+                throw Fail(
+                    RelationQueryExpressionDiagnosticCodes.MethodUnsupported,
+                    "Only predicate-free LongCount has the exact semantics of canonical count.",
+                    expressionPath,
+                    sourceReference,
+                    symbol: Display(call.Method),
+                    suggestion: "Filter the semantic sequence first, then call LongCount() without a predicate.");
+            }
+
+            return TranslateScopedSequenceFunction(
+                call,
+                ExprFunctionNames.Count,
+                requireSelector: false,
+                scope,
+                sourceReference,
+                expressionPath);
         }
 
         throw Fail(
@@ -844,7 +961,9 @@ public sealed class RelationQueryExpressionLowerer
         var nestedScope = scope.WithCurrentItem(
             selector.Parameters[0],
             itemIsProvablyNonNull,
-            itemMemberPathResolver);
+            itemMemberPathResolver,
+            ResolveSequenceProvenance(UnwrapSequenceView(call.Arguments[0]), scope)
+                .Target?.UsesImportedMapping == true);
         var loweredSelector = Translate(
             selector.Body,
             nestedScope,
@@ -1422,6 +1541,14 @@ public sealed class RelationQueryExpressionLowerer
                 BindingFlags.Instance | BindingFlags.NonPublic)
                 ?? throw new UnreachableException();
             overwrittenFields.Add(field);
+        }
+
+        if (initializer.Type.IsValueType && initializer.NewExpression.Constructor is null)
+        {
+            var instanceFields = initializer.Type.GetFields(
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (instanceFields.Length > 0 && instanceFields.All(overwrittenFields.Contains))
+                return;
         }
 
         var reason = "Constructor metadata is unavailable.";
@@ -2036,6 +2163,34 @@ public sealed class RelationQueryExpressionLowerer
         && (type.Name.Contains("DisplayClass", StringComparison.Ordinal)
             || type.Name.StartsWith("<>", StringComparison.Ordinal));
 
+    bool TryTranslateGuardableNullComparison(
+        BinaryExpression binary,
+        RootScope scope,
+        string sourceReference,
+        string expressionPath,
+        out Expr expression)
+    {
+        expression = null!;
+        if (binary.NodeType is not (ExpressionType.Equal or ExpressionType.NotEqual))
+            return false;
+        if (binary.Method is not null && binary.Method.DeclaringType != typeof(string))
+            return false;
+
+        var left = StripExactConversions(binary.Left, sourceReference, expressionPath + "/left");
+        var right = StripExactConversions(binary.Right, sourceReference, expressionPath + "/right");
+        var member = left is ConstantExpression { Value: null } ? right as MemberExpression
+            : right is ConstantExpression { Value: null } ? left as MemberExpression
+            : null;
+        if (member is null || !TryGetGuardableMemberAccess(member, scope, out _))
+            return false;
+
+        var value = TranslateMember(member, scope, sourceReference, expressionPath + "/member");
+        expression = binary.NodeType == ExpressionType.Equal
+            ? Expr.Eq(value, Expr.Null())
+            : Expr.Ne(value, Expr.Null());
+        return true;
+    }
+
     static Expression StripExactConversions(
         Expression expression,
         string sourceReference,
@@ -2084,7 +2239,7 @@ public sealed class RelationQueryExpressionLowerer
                 binary.Left.Type == binary.Right.Type
                 && IsExactEqualityType(binary.Left.Type)
                 && (binary.Left.Type != typeof(string)
-                    || IsProvablyNonNullString(binary.Left) && IsProvablyNonNullString(binary.Right)),
+                    || IsProvablyNonNullString(binary.Left) || IsProvablyNonNullString(binary.Right)),
             ExpressionType.GreaterThan
                 or ExpressionType.GreaterThanOrEqual
                 or ExpressionType.LessThan
@@ -2364,8 +2519,185 @@ public sealed class RelationQueryExpressionLowerer
             : new(null, IsAmbiguous: true);
     }
 
-    static void ValidateMemberNavigation(
+    ImmutableArray<PropertyInfo> NormalizeGuardedNullableValueMembers(
+        ParameterExpression root,
+        ParameterTarget target,
         ImmutableArray<PropertyInfo> members,
+        RootScope scope,
+        string expressionPath,
+        string sourceReference)
+    {
+        var normalized = ImmutableArray.CreateBuilder<PropertyInfo>(members.Length);
+        for (var index = 0; index < members.Length; index++)
+        {
+            var property = members[index];
+            if (!IsNullableValueProperty(property))
+            {
+                normalized.Add(property);
+                continue;
+            }
+
+            var guardedPath = normalized.ToImmutable();
+            if (guardedPath.IsDefaultOrEmpty
+                || target.UsesImportedMapping
+                || !scope.IsKnownNonNull(root, guardedPath))
+            {
+                throw Fail(
+                    RelationQueryExpressionDiagnosticCodes.NodeUnsupported,
+                    "Nullable Value is safe only within control flow guarded by HasValue or an exact non-null test.",
+                    $"{expressionPath}/members/{index}",
+                    sourceReference,
+                    symbol: Display(property),
+                    suggestion: "Guard the required CLR-backed nullable field with HasValue before reading Value.");
+            }
+        }
+
+        return normalized.ToImmutable();
+    }
+
+    RootScope ApplyConditionFacts(
+        Expression condition,
+        bool whenTrue,
+        RootScope scope)
+    {
+        var current = StripConditionConversions(condition);
+        if (current is UnaryExpression { NodeType: ExpressionType.Not } unary)
+            return ApplyConditionFacts(unary.Operand, !whenTrue, scope);
+
+        if (current is MemberExpression hasValue
+            && TryGetNullableHasValueOperand(hasValue, out var nullableOperand)
+            && whenTrue
+            && TryGetGuardableMemberAccess(nullableOperand, scope, out var nullableAccess))
+        {
+            return scope.WithKnownNonNull(nullableAccess);
+        }
+
+        if (current is BinaryExpression binary)
+        {
+            if (binary.NodeType == ExpressionType.AndAlso && whenTrue)
+            {
+                var withLeft = ApplyConditionFacts(binary.Left, whenTrue: true, scope);
+                return ApplyConditionFacts(binary.Right, whenTrue: true, withLeft);
+            }
+            if (binary.NodeType == ExpressionType.OrElse && !whenTrue)
+            {
+                var withLeft = ApplyConditionFacts(binary.Left, whenTrue: false, scope);
+                return ApplyConditionFacts(binary.Right, whenTrue: false, withLeft);
+            }
+            if (TryGetNullComparedMember(binary, out var member)
+                && TryGetGuardableMemberAccess(member, scope, out var access))
+            {
+                var provesNonNull = binary.NodeType switch
+                {
+                    ExpressionType.NotEqual => whenTrue,
+                    ExpressionType.Equal => !whenTrue,
+                    _ => false
+                };
+                if (provesNonNull)
+                    return scope.WithKnownNonNull(access);
+            }
+        }
+
+        return scope;
+    }
+
+    static bool TryGetNullableHasValueOperand(
+        MemberExpression member,
+        out MemberExpression operand)
+    {
+        if (member.Expression is MemberExpression candidate
+            && string.Equals(member.Member.Name, nameof(Nullable<int>.HasValue), StringComparison.Ordinal)
+            && member.Member.DeclaringType is { IsGenericType: true } declaringType
+            && declaringType.GetGenericTypeDefinition() == typeof(Nullable<>))
+        {
+            operand = candidate;
+            return true;
+        }
+
+        operand = null!;
+        return false;
+    }
+
+    static bool IsNullableValueProperty(PropertyInfo property) =>
+        string.Equals(property.Name, nameof(Nullable<int>.Value), StringComparison.Ordinal)
+        && property.DeclaringType is { IsGenericType: true } declaringType
+        && declaringType.GetGenericTypeDefinition() == typeof(Nullable<>);
+
+    bool TryGetGuardableMemberAccess(
+        MemberExpression member,
+        RootScope scope,
+        out GuardedMemberAccess access)
+    {
+        access = default;
+        // Convention-inferred CLR shapes make property presence required. An imported mapping may make the
+        // same CLR path optional, and the current resolver does not expose enough per-path evidence to prove
+        // that a CLR null test is equivalent to a canonical null test, so imported paths remain fail-closed.
+        if (!TryReadMemberChain(member, out var root, out var members)
+            || root is not ParameterExpression parameter
+            || !scope.Parameters.TryGetValue(parameter, out var target)
+            || target.UsesImportedMapping
+            || members.Any(IsNullableValueProperty)
+            || !IsDeclaredNullable(members[^1]))
+        {
+            return false;
+        }
+
+        for (var index = 0; index < members.Length - 1; index++)
+        {
+            if (IsDeclaredNullable(members[index]))
+                return false;
+        }
+
+        access = new(parameter, members);
+        return true;
+    }
+
+    static bool TryGetNullComparedMember(
+        BinaryExpression binary,
+        out MemberExpression member)
+    {
+        member = null!;
+        if (binary.NodeType is not (ExpressionType.Equal or ExpressionType.NotEqual))
+            return false;
+        if (binary.Method is not null && binary.Method.DeclaringType != typeof(string))
+            return false;
+
+        var left = StripConditionConversions(binary.Left);
+        var right = StripConditionConversions(binary.Right);
+        var candidate = left is ConstantExpression { Value: null } ? right as MemberExpression
+            : right is ConstantExpression { Value: null } ? left as MemberExpression
+            : null;
+        if (candidate is null)
+            return false;
+
+        member = candidate;
+        return true;
+    }
+
+    static Expression StripConditionConversions(Expression expression)
+    {
+        var current = expression;
+        while (current is UnaryExpression unary
+               && unary.NodeType is ExpressionType.Convert or ExpressionType.ConvertChecked or ExpressionType.TypeAs
+               && IsExactErasableConversion(unary.Operand.Type, unary.Type))
+        {
+            current = unary.Operand;
+        }
+        return current;
+    }
+
+    static bool IsDeclaredNullable(PropertyInfo property) =>
+        Nullable.GetUnderlyingType(property.PropertyType) is not null
+        || !property.PropertyType.IsValueType
+        && !NonNullProperties.GetOrAdd(
+            property,
+            static candidate => new NullabilityInfoContext().Create(candidate).ReadState
+                == NullabilityState.NotNull);
+
+    static void ValidateMemberNavigation(
+        ParameterExpression root,
+        ImmutableArray<PropertyInfo> members,
+        RootScope scope,
         string expressionPath,
         string sourceReference)
     {
@@ -2379,6 +2711,9 @@ public sealed class RelationQueryExpressionLowerer
                                         static candidate => new NullabilityInfoContext().Create(candidate).ReadState
                                             == NullabilityState.NotNull);
             if (!nullableValue && !nullableReference)
+                continue;
+
+            if (scope.IsKnownNonNull(root, members[..(index + 1)]))
                 continue;
 
             throw Fail(
@@ -2673,6 +3008,24 @@ public sealed class RelationQueryExpressionLowerer
         && call.Method.DeclaringType is { } declaringType
         && (declaringType == typeof(Enumerable) || declaringType == typeof(Queryable));
 
+    static bool TryGetEagerSelectMaterialization(
+        MethodCallExpression call,
+        out MethodCallExpression select)
+    {
+        if (call.Method.DeclaringType == typeof(Enumerable)
+            && string.Equals(call.Method.Name, nameof(Enumerable.ToArray), StringComparison.Ordinal)
+            && call.Arguments.Count == 1
+            && call.Arguments[0] is MethodCallExpression candidate
+            && IsSequenceMethod(candidate, nameof(Enumerable.Select)))
+        {
+            select = candidate;
+            return true;
+        }
+
+        select = null!;
+        return false;
+    }
+
     static bool TryGetSequenceElementType(Type sequenceType, out Type elementType)
     {
         if (sequenceType == typeof(string) || sequenceType == typeof(byte[]))
@@ -2811,30 +3164,39 @@ public sealed class RelationQueryExpressionLowerer
         ValueBindingId Binding,
         Type RootType,
         bool IsProvablyNonNull,
-        RelationQueryExpressionMemberPathResolver? MemberPathResolver)
+        RelationQueryExpressionMemberPathResolver? MemberPathResolver,
+        bool UsesImportedMapping)
     {
         public static ParameterTarget ForBinding(
             ValueBindingId binding,
             Type rootType,
-            RelationQueryExpressionMemberPathResolver? memberPathResolver) =>
+            RelationQueryExpressionMemberPathResolver? memberPathResolver,
+            bool usesImportedMapping) =>
             new(
                 ParameterTargetKind.Binding,
                 binding,
                 rootType,
                 IsProvablyNonNull: true,
-                MemberPathResolver: memberPathResolver);
+                MemberPathResolver: memberPathResolver,
+                UsesImportedMapping: usesImportedMapping);
 
         public static ParameterTarget ForCurrentItem(
             Type rootType,
             bool isProvablyNonNull,
-            RelationQueryExpressionMemberPathResolver? memberPathResolver) =>
+            RelationQueryExpressionMemberPathResolver? memberPathResolver,
+            bool usesImportedMapping) =>
             new(
                 ParameterTargetKind.CurrentItem,
                 default,
                 rootType,
                 isProvablyNonNull,
-                memberPathResolver);
+                memberPathResolver,
+                usesImportedMapping);
     }
+
+    readonly record struct GuardedMemberAccess(
+        ParameterExpression Root,
+        ImmutableArray<PropertyInfo> Members);
 
     readonly record struct SequenceProvenance(
         ParameterTarget? Target,
@@ -2844,20 +3206,37 @@ public sealed class RelationQueryExpressionLowerer
     {
         public RootScope(
             Dictionary<ParameterExpression, ParameterTarget> parameters,
-            ParameterExpression? activeCurrentItem)
+            ParameterExpression? activeCurrentItem,
+            ImmutableArray<GuardedMemberAccess> knownNonNull = default)
         {
             Parameters = parameters;
             ActiveCurrentItem = activeCurrentItem;
+            KnownNonNull = knownNonNull.IsDefault ? [] : knownNonNull;
         }
 
         public Dictionary<ParameterExpression, ParameterTarget> Parameters { get; }
 
         public ParameterExpression? ActiveCurrentItem { get; }
 
+        ImmutableArray<GuardedMemberAccess> KnownNonNull { get; }
+
+        public bool IsKnownNonNull(
+            ParameterExpression root,
+            IReadOnlyList<PropertyInfo> members) =>
+            KnownNonNull.Any(access =>
+                ReferenceEquals(access.Root, root)
+                && access.Members.SequenceEqual(members));
+
+        public RootScope WithKnownNonNull(GuardedMemberAccess access) =>
+            IsKnownNonNull(access.Root, access.Members)
+                ? this
+                : new(Parameters, ActiveCurrentItem, KnownNonNull.Add(access));
+
         public RootScope WithCurrentItem(
             ParameterExpression parameter,
             bool isProvablyNonNull,
-            RelationQueryExpressionMemberPathResolver? memberPathResolver)
+            RelationQueryExpressionMemberPathResolver? memberPathResolver,
+            bool usesImportedMapping)
         {
             Dictionary<ParameterExpression, ParameterTarget> nested =
                 new(Parameters, ReferenceEqualityComparer.Instance)
@@ -2865,9 +3244,10 @@ public sealed class RelationQueryExpressionLowerer
                     [parameter] = ParameterTarget.ForCurrentItem(
                         parameter.Type,
                         isProvablyNonNull,
-                        memberPathResolver)
+                        memberPathResolver,
+                        usesImportedMapping)
                 };
-            return new(nested, parameter);
+            return new(nested, parameter, KnownNonNull);
         }
     }
 

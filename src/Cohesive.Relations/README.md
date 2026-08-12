@@ -561,10 +561,15 @@ and only receive values in the evaluation. Captured application state is rejecte
 `RelationQueryExpressionAuthoringException` containing stable diagnostics, expression paths, source
 references, and suggested alternatives; arbitrary captured getters are never evaluated.
 
-The translator fails closed when ordinary C# syntax would imply semantics the canonical catalog does not
-promise. Examples include navigation through a nullable receiver, Int32-returning `Count`/`Length`, lazy
-`Select`, custom constructors or setters, and collection equality whose CLR contract differs from canonical
-equality. Author the intended behavior through `author.Structural` when one of those distinctions matters.
+The translator accepts sequence syntax only where its CLR behavior identifies the canonical behavior exactly:
+`Select(...).ToArray()` is an eager, order-preserving projection and predicate-free `LongCount()` has the
+canonical Int64 count domain. A convention-inferred nullable CLR member, whose semantic field has required
+presence, may be read inside a branch guarded by `HasValue`; `??` over the same kind of member lowers to an
+explicit canonical conditional. Imported mappings remain fail-closed until they can supply equivalent per-path
+presence evidence. Unguarded nullable navigation, Int32-returning `Count`/`Length`, unmaterialized lazy
+`Select`, custom constructors or
+setters, and collection equality whose CLR contract differs from canonical equality still fail closed. Author
+the intended behavior through `author.Structural` when one of those distinctions matters.
 
 Keyed ordering, distinctness, grouping, and relation identity require a fixed carrier-independent scalar
 domain. Raw `DateOnly`, `DateTime`, `DateTimeOffset`, `ObservationValue`, and dynamic JSON carriers are
