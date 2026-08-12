@@ -30,6 +30,7 @@ expectations.
 | What is the economic and adoption case for adding a semantic layer? | [Why use Cohesive blocks?](WHY_COHESIVE.md) | Adoption decision guide |
 | What counts as canonical semantics, and what is only a producer or interpretation? | [Semantic model](concepts/semantic-model.md) | Normative conceptual contract |
 | How do the Cohesive languages divide responsibility and compose? | [Language family](architecture/language-family.md) | Architectural ownership map |
+| How should implementation quality be judged when desirable properties conflict? | [Code quality and optimization](quality/code-quality.md) | Normative decision model |
 | What does the architecture look like in complete application scenarios? | [Golden verticals](use-cases/golden-verticals.md) | End-to-end examples and intended evidence |
 | How are semantic and target claims tested? | [Conformance](quality/conformance.md) | Verification strategy |
 | Which Execution Kernel behavior exists today? | [Execution Kernel compatibility](EXECUTION_KERNEL_COMPATIBILITY.md) | Implementation compatibility inventory |
