@@ -367,6 +367,9 @@ public sealed class RelationQueryExpressionLowererTests
         var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
         Expression<Func<Load, string>> exact = sourceLoad => (string?)null ?? sourceLoad.Status;
         Expression<Func<Load, string>> presenceDependent = sourceLoad => sourceLoad.Status ?? "unknown";
+        var normalization = author.Source<NormalizationSource>();
+        Expression<Func<NormalizationSource, string>> requiredNullable = source =>
+            source.Metadata.CorrelationId ?? "unknown";
 
         var lowered = lowerer.LowerValue(
             exact,
@@ -376,10 +379,18 @@ public sealed class RelationQueryExpressionLowererTests
             presenceDependent,
             [load.Binding],
             sourceReference: "projection/presence-coalesce");
+        var loweredRequiredNullable = lowerer.LowerValue(
+            requiredNullable,
+            [normalization.Binding],
+            sourceReference: "projection/required-nullable-coalesce").RequireValue();
 
         Assert.Equal(
             FieldPath.FromField("load_status"),
             Assert.IsType<FieldExpr>(lowered.Value).Path);
+        var requiredNullableConditional = Assert.IsType<ConditionalExpr>(loweredRequiredNullable.Value);
+        Assert.Equal(
+            FieldPath.Parse($"{nameof(NormalizationSource.Metadata)}.{nameof(NormalizationMetadata.CorrelationId)}"),
+            Assert.IsType<FieldExpr>(requiredNullableConditional.IfTrue).Path);
         var diagnostic = Assert.Single(unsupported.Diagnostics);
         Assert.Equal(RelationQueryExpressionDiagnosticCodes.OperatorUnsupported, diagnostic.Code);
         Assert.Contains("presence/null test", diagnostic.Message, StringComparison.Ordinal);
@@ -417,14 +428,129 @@ public sealed class RelationQueryExpressionLowererTests
     }
 
     [Fact]
+    public void EagerSelectMaterializationAndLongCount_LowerToCanonicalSequenceFunctions()
+    {
+        var author = RelationQuery.Expression();
+        var source = author.Source<NormalizationSource>();
+        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        Expression<Func<NormalizationSource, NormalizationOutput>> projection = input => new()
+        {
+            Candidates = input.Candidates
+                .Select(candidate => new NormalizationCandidateOutput
+                {
+                    Id = candidate.Id,
+                    Selected = candidate.Id == input.SelectedCandidateId
+                })
+                .ToArray(),
+            CandidateCount = input.Candidates.LongCount()
+        };
+
+        var lowered = lowerer.LowerProjection(
+            projection,
+            [source.Binding],
+            "normalization/eager-sequence").RequireValue();
+
+        var candidates = Assert.Single(
+            lowered.Assignments,
+            assignment => assignment.Target == FieldPath.FromField(nameof(NormalizationOutput.Candidates)));
+        var select = Assert.IsType<CallExpr>(candidates.Value);
+        Assert.Equal(ExprFunctionNames.Select, select.Function);
+        Assert.Equal(2, select.Arguments.Length);
+        Assert.Equal(
+            FieldPath.FromField(nameof(NormalizationSource.Candidates)),
+            Assert.IsType<FieldExpr>(select.Arguments[0]).Path);
+        Assert.Equal(
+            ExprFunctionNames.Object,
+            Assert.IsType<CallExpr>(select.Arguments[1]).Function);
+
+        var candidateCount = Assert.Single(
+            lowered.Assignments,
+            assignment => assignment.Target == FieldPath.FromField(nameof(NormalizationOutput.CandidateCount)));
+        var count = Assert.IsType<CallExpr>(candidateCount.Value);
+        Assert.Equal(ExprFunctionNames.Count, count.Function);
+        Assert.Single(count.Arguments);
+    }
+
+    [Fact]
+    public void GuardedNullableValue_LowersOnlyInsideTheProvenNonNullBranch()
+    {
+        var author = RelationQuery.Expression();
+        var source = author.Source<NormalizationSource>();
+        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        Expression<Func<NormalizationSource, NormalizationOutput>> guarded = input => new()
+        {
+            Candidates = new NormalizationCandidateOutput[] { },
+            CandidateCount = input.Candidates.LongCount(),
+            Signals = input.Signals.HasValue
+                ? new NormalizationSignals
+                {
+                    CandidateCount = input.Signals!.Value.CandidateCount != 0
+                        ? input.Signals.Value.CandidateCount
+                        : input.Candidates.LongCount(),
+                    ModelVersion = input.Signals.Value.ModelVersion
+                }
+                : new NormalizationSignals
+                {
+                    CandidateCount = input.Candidates.LongCount(),
+                    ModelVersion = null
+                }
+        };
+        Expression<Func<NormalizationSource, long>> unguarded = input =>
+            input.Signals!.Value.CandidateCount;
+
+        var lowered = lowerer.LowerProjection(
+            guarded,
+            [source.Binding],
+            "normalization/guarded-nullable").RequireValue();
+        var unsupported = lowerer.LowerValue(
+            unguarded,
+            [source.Binding],
+            "normalization/unguarded-nullable");
+
+        var signals = Assert.Single(
+            lowered.Assignments,
+            assignment => assignment.Target == FieldPath.FromField(nameof(NormalizationOutput.Signals)));
+        var conditional = Assert.IsType<ConditionalExpr>(signals.Value);
+        var hasValue = Assert.IsType<BinaryExpr>(conditional.Test);
+        Assert.Equal(BinaryOperator.Ne, hasValue.Operator);
+        Assert.Equal(
+            FieldPath.FromField(nameof(NormalizationSource.Signals)),
+            Assert.IsType<FieldExpr>(hasValue.Left).Path);
+        Assert.Equal(
+            RelationQueryExpressionDiagnosticCodes.NodeUnsupported,
+            Assert.Single(unsupported.Diagnostics).Code);
+    }
+
+    [Fact]
+    public void LazySelectWithoutExplicitMaterialization_RemainsRejected()
+    {
+        var author = RelationQuery.Expression();
+        var source = author.Source<NormalizationSource>();
+        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        Expression<Func<NormalizationSource, IEnumerable<string>>> lazy = input =>
+            input.Candidates.Select(candidate => candidate.Id);
+
+        var result = lowerer.LowerValue(
+            lazy,
+            [source.Binding],
+            "normalization/lazy-select");
+
+        var diagnostic = Assert.Single(result.Diagnostics);
+        Assert.Equal(RelationQueryExpressionDiagnosticCodes.MethodUnsupported, diagnostic.Code);
+        Assert.Contains("lazy", diagnostic.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void NullableReceiverAndNonCanonicalMembershipEquality_FailClosed()
     {
         var author = RelationQuery.Expression();
         var nullable = author.Source<NullableLoad>();
+        var customEquality = author.Source<CustomEqualitySource>();
         var load = author.Source<Load>(LoadShape);
         var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
         Expression<Func<NullableLoad, bool>> nullableReceiver = source => source.Customer!.Name == "Acme";
         Expression<Func<NullableLoad, bool>> nullableScalarReceiver = source => source.Customer!.Age == 0;
+        Expression<Func<CustomEqualitySource, bool>> overloadedNull = source => source.Value != null;
         Expression<Func<Load, bool>> temporalMembership = source =>
             source.Instants.Contains(source.OccurredAt);
 
@@ -436,6 +562,10 @@ public sealed class RelationQueryExpressionLowererTests
             nullableScalarReceiver,
             [nullable.Binding],
             "inexact/nullable-scalar-receiver");
+        var overloadedNullResult = lowerer.LowerValue(
+            overloadedNull,
+            [customEquality.Binding],
+            "inexact/overloaded-null-comparison");
         var membershipResult = lowerer.LowerValue(
             temporalMembership,
             [load.Binding],
@@ -447,6 +577,9 @@ public sealed class RelationQueryExpressionLowererTests
         Assert.Equal(
             RelationQueryExpressionDiagnosticCodes.NodeUnsupported,
             Assert.Single(scalarReceiverResult.Diagnostics).Code);
+        Assert.Equal(
+            RelationQueryExpressionDiagnosticCodes.OperatorUnsupported,
+            Assert.Single(overloadedNullResult.Diagnostics).Code);
         Assert.Equal(
             RelationQueryExpressionDiagnosticCodes.MethodUnsupported,
             Assert.Single(membershipResult.Diagnostics).Code);
@@ -778,6 +911,70 @@ public sealed class RelationQueryExpressionLowererTests
         public string Name { get; init; } = string.Empty;
 
         public int Age { get; init; }
+    }
+
+    sealed class CustomEqualitySource
+    {
+        public CustomEqualityValue? Value { get; init; }
+    }
+
+    sealed class CustomEqualityValue
+    {
+        public string Id { get; init; } = string.Empty;
+
+        public static bool operator ==(CustomEqualityValue? left, CustomEqualityValue? right) =>
+            ReferenceEquals(left, right);
+
+        public static bool operator !=(CustomEqualityValue? left, CustomEqualityValue? right) =>
+            !ReferenceEquals(left, right);
+
+        public override bool Equals(object? obj) => ReferenceEquals(this, obj);
+
+        public override int GetHashCode() => base.GetHashCode();
+    }
+
+    sealed class NormalizationSource
+    {
+        public NormalizationCandidate[] Candidates { get; init; } = [];
+
+        public string? SelectedCandidateId { get; init; }
+
+        public NormalizationSignals? Signals { get; init; }
+
+        public NormalizationMetadata Metadata { get; init; } = new();
+    }
+
+    sealed class NormalizationMetadata
+    {
+        public string? CorrelationId { get; init; }
+    }
+
+    sealed class NormalizationCandidate
+    {
+        public string Id { get; init; } = string.Empty;
+    }
+
+    sealed class NormalizationOutput
+    {
+        public NormalizationCandidateOutput[] Candidates { get; init; } = [];
+
+        public long CandidateCount { get; init; }
+
+        public NormalizationSignals? Signals { get; init; }
+    }
+
+    sealed class NormalizationCandidateOutput
+    {
+        public string Id { get; init; } = string.Empty;
+
+        public bool Selected { get; init; }
+    }
+
+    readonly record struct NormalizationSignals
+    {
+        public long CandidateCount { get; init; }
+
+        public string? ModelVersion { get; init; }
     }
 
     enum LoadStatus
