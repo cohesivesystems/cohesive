@@ -1,4 +1,5 @@
 using Cohesive.Execution;
+using Cohesive.Model.Authoring;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.IR;
@@ -36,8 +37,9 @@ public sealed class CanonicalRelationAuthoringTests
         Assert.Equal("relation/tests/typed", relation.Reference.DefinitionId.Value);
         Assert.Equal("7", relation.Reference.RevisionId.Value);
         Assert.Equal(relation.Document.DefinitionFingerprint.Value, relation.Reference.Fingerprint.Value);
-        Assert.Equal(input.Binding.Type, relation.InputContract.Type);
-        Assert.Equal(output.Binding.Type, relation.ResultContract.Type);
+        var typeMapper = new DefaultClrTypeRefMapper();
+        Assert.Equal(typeMapper.Map(typeof(SourceValue), null), relation.InputContract.Type);
+        Assert.Equal(typeMapper.Map(typeof(ResultValue), null), relation.ResultContract.Type);
         Assert.Equal(
             author.ShapeDocuments.Select(static document => document.Graph.Id),
             relation.ShapeDocuments.Select(static document => document.Graph.Id));

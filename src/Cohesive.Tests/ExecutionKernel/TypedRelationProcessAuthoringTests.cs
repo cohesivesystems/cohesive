@@ -1,6 +1,7 @@
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Authoring;
+using Cohesive.Processes.Compilation;
 using Cohesive.Processes.IR;
 using Cohesive.Relations.Authoring;
 
@@ -32,6 +33,10 @@ public sealed class TypedRelationProcessAuthoringTests
         Assert.Equal(GeneratedTypedRelationCatalog.Normalize.Reference, link.Definition);
         Assert.Equal(GeneratedTypedRelationCatalog.Normalize.InputContract, link.Input);
         Assert.Equal(GeneratedTypedRelationCatalog.Normalize.ResultContract, link.Result);
+
+        var compilation = typed.Compile(new ProcessDefinitionValidationContext(definitions: [link]));
+        Assert.True(compilation.IsSuccessful, Format(compilation.Validation));
+        Assert.IsType<CompiledProcessPlan>(compilation.Plan);
     }
 
     static ProcessAuthoringMetadata Metadata() => new(

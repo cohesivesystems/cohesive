@@ -45,7 +45,10 @@ var relation = author.CreateRelation(
 `authored` is the validated producer result for the canonical, persistable relation definition. `relation` is an
 immutable typed projection for an exactly-one rooted Relation revision. It retains the canonical document and its
 captured shape/relationship evidence—not expressions or callbacks—and proves its CLR input and result types against
-the canonical root and output shapes. Relations with optional, many, or set cardinality continue to use their
+the canonical root and output shapes. Its invocation and result `ValueContract`s use the portable structural CLR
+projection shared by Process authoring and runtime value conversion; graph-qualified named binding types remain in
+the Relation document and captured shape evidence rather than leaking into cross-language invocation contracts.
+Relations with optional, many, or set cardinality continue to use their
 explicit result semantics rather than being represented by this singular handle. From there, add only the capability
 your application needs:
 
