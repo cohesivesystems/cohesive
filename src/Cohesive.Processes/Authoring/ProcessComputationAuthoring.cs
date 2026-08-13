@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 using Cohesive.Execution;
 using Cohesive.Processes.IR;
+using Cohesive.Relations.Authoring;
 
 namespace Cohesive.Processes.Authoring;
 
@@ -61,6 +62,26 @@ public sealed class ProcessContext
         string outputRole = "result") =>
         throw SyntaxOnly();
 
+    /// <summary>Declares evaluation of a typed exact Relation and binds its singular result.</summary>
+    /// <typeparam name="TInput">CLR type of the rooted Relation input.</typeparam>
+    /// <typeparam name="TResult">CLR type of the singular Relation result.</typeparam>
+    /// <param name="relation">Typed exact canonical Relation revision.</param>
+    /// <param name="input">Pure typed Relation input fused into the canonical evaluation node.</param>
+    /// <param name="id">Optional explicit canonical node identity.</param>
+    /// <param name="nextRole">Stable semantic role of the successful continuation edge.</param>
+    /// <param name="outputRole">Stable semantic role of the Relation result binding.</param>
+    /// <returns>A syntax-only awaitable whose result represents the Relation output.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessAwaitable<TResult> Query<TInput, TResult>(
+        Relation<TInput, TResult> relation,
+        TInput input,
+        ExecutionNodeId? id = null,
+        string nextRole = "next",
+        string outputRole = "result")
+        where TInput : notnull
+        where TResult : notnull =>
+        throw SyntaxOnly();
+
     /// <summary>
     /// Declares an entity read represented by an exact Relation or Query definition and binds its result.
     /// </summary>
@@ -82,6 +103,30 @@ public sealed class ProcessContext
         ExecutionNodeId? id = null,
         string nextRole = "next",
         string outputRole = "result") =>
+        throw SyntaxOnly();
+
+    /// <summary>Declares an entity read represented by a typed exact Relation and binds its singular result.</summary>
+    /// <remarks>
+    /// This is an authoring alias for canonical Relation evaluation. It does not introduce a separate entity-read
+    /// execution model.
+    /// </remarks>
+    /// <typeparam name="TInput">CLR type of the rooted Relation input.</typeparam>
+    /// <typeparam name="TResult">CLR type of the singular Relation result.</typeparam>
+    /// <param name="relation">Typed exact canonical Relation revision.</param>
+    /// <param name="input">Pure typed Relation input fused into the canonical evaluation node.</param>
+    /// <param name="id">Optional explicit canonical node identity.</param>
+    /// <param name="nextRole">Stable semantic role of the successful continuation edge.</param>
+    /// <param name="outputRole">Stable semantic role of the read result binding.</param>
+    /// <returns>A syntax-only awaitable whose result represents the Relation output.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessAwaitable<TResult> Read<TInput, TResult>(
+        Relation<TInput, TResult> relation,
+        TInput input,
+        ExecutionNodeId? id = null,
+        string nextRole = "next",
+        string outputRole = "result")
+        where TInput : notnull
+        where TResult : notnull =>
         throw SyntaxOnly();
 
     /// <summary>Declares invocation of an exact aggregate Transition and binds its outcome.</summary>

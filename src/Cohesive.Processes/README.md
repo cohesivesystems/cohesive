@@ -51,6 +51,20 @@ documentation invariant test prevents the README from drifting from that executa
 factory accepts `ProcessAuthoringMetadata` and returns a typed handle containing the canonical execution-definition
 document and validation result. The annotated `Run` method is never invoked.
 
+When a Relation is authored through the typed expression frontend, pass its canonical handle directly. C# infers
+both the input and singular result types, while generation lowers the handle's exact reference to the same canonical
+evaluation node used by the raw overload:
+
+```csharp
+var row = await process.Query(CustomerRelations.ById, input);
+var read = await process.Read(CustomerRelations.ById, input);
+```
+
+The Relation document remains authoritative for semantics and fingerprinting. The handle carries only typed
+projections and captured dependency evidence; `CreateProcessDefinitionLink()` derives validation evidence from that
+same handle. Raw `ExecutionDefinitionReference` overloads remain available for imported definitions and advanced
+lowering code.
+
 The same syntax supports typed Transition results, Requests/effects, entity reads represented by Relations,
 `if`/`else`, exact `switch`, explicit Choice/Match policies, durable waits, tuple-valued Fork/Join, bounded admission,
 child Processes, partition work, and recurrence. Use the executable
