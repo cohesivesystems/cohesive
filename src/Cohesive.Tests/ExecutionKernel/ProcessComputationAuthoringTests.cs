@@ -805,6 +805,34 @@ public sealed class ProcessComputationAuthoringTests
     }
 
     [Fact]
+    public void TypedChildProtocolInvocation_IsByteEquivalentToRawExactReferenceAuthoring()
+    {
+        var metadata = new ProcessAuthoringMetadata(
+            new("process/tests/typed-child-parent"),
+            new("1"),
+            ProcessRecoveryPolicy.ContinueAttempt,
+            new(
+                new("tests.process-computation", "1"),
+                new("tests/ari-367/typed-child-parent"),
+                DocumentOrigin.User));
+        var typed = GeneratedTypedChildInvocationProcess.Define(metadata);
+        var raw = GeneratedRawProtocolChildInvocationProcess.Define(metadata);
+
+        Assert.True(typed.IsValid, Format(typed.Validation));
+        Assert.True(raw.IsValid, Format(raw.Validation));
+        Assert.Equal(raw.Definition, typed.Definition);
+        Assert.Equal(raw.Document.Metadata.Fingerprint, typed.Document.Metadata.Fingerprint);
+        Assert.Equal(
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(raw.Document),
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(typed.Document));
+
+        var invocation = Assert.Single(typed.Definition.Nodes.OfType<InvokeProcessProcessNode>());
+        Assert.Equal(GeneratedTypedChildInvocationProtocol.Protocol.Process.Reference, invocation.Process);
+        Assert.Equal(GeneratedTypedChildInvocationProtocol.Protocol.Request, invocation.Contract);
+        Assert.Equal(GeneratedTypedChildInvocationProtocol.Protocol.OutcomeMapping, invocation.OutcomeMapping);
+    }
+
+    [Fact]
     public void CompensationComputation_PreservesTheCanonicalChildPurposeAndDurabilityProtocol()
     {
         var generated = GeneratedCompensationProcess.Define(CompensationMetadata());
@@ -2209,6 +2237,95 @@ public static partial class GeneratedChildInvocationProcess
             ExecutionDefinitionFingerprinter.Algorithm,
             ExecutionDefinitionFingerprinter.Canonicalization,
             new string(fingerprint, 64)));
+}
+
+/// <summary>Canonical child and derived typed invocation protocol used by typed/raw differential authoring tests.</summary>
+public static class GeneratedTypedChildInvocationProtocol
+{
+    /// <summary>Exact canonical child Process.</summary>
+    public static Process<string, string> Child { get; } = ProcessAuthoring.Create<string, string>(
+        new(
+            new("process/tests/typed-invoked-child"),
+            new("1"),
+            new("return"),
+            ProcessRecoveryPolicy.ContinueAttempt,
+            Provenance("child")),
+        process => process.Return(new("return"), process.Input.Value));
+
+    /// <summary>Typed exact Request/Reply protocol derived from <see cref="Child"/>.</summary>
+    public static ProcessInvocationProtocol<string, string> Protocol { get; } = Child.InvocationProtocol(
+        new("request/tests/typed-invoked-child"),
+        new("1"),
+        ProcessInvocationResponsePolicy.ReconciledJoin(TimeSpan.FromDays(30)),
+        Provenance("protocol"));
+
+    static ExecutionProvenance Provenance(string role) => new(
+        new("tests.process-computation", "1"),
+        new($"tests/ari-367/typed-invocation/{role}"),
+        DocumentOrigin.Generated);
+}
+
+/// <summary>Representative typed child invocation with total semantic handlers.</summary>
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class GeneratedTypedChildInvocationProcess
+{
+    static async ProcessTask<string> Run(ProcessContext process, string input)
+    {
+        await process.InvokeProcess(
+            protocol: GeneratedTypedChildInvocationProtocol.Protocol,
+            input: input,
+            purpose: ProcessChildPurpose.Work,
+            cancellation: ProcessChildCancellationPolicy.Propagate,
+            completed: Completed,
+            failed: Failed,
+            cancelled: Cancelled,
+            terminated: Terminated,
+            id: new("invoke-child"));
+        return input;
+
+        async ProcessTask Completed(string result) { }
+        async ProcessTask Failed(string result) { }
+        async ProcessTask Cancelled(string result) { }
+        async ProcessTask Terminated(string result) { }
+    }
+}
+
+/// <summary>Raw exact-reference equivalent of <see cref="GeneratedTypedChildInvocationProcess"/>.</summary>
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class GeneratedRawProtocolChildInvocationProcess
+{
+    static async ProcessTask<string> Run(ProcessContext process, string input)
+    {
+        await process.InvokeProcess(
+            process: GeneratedTypedChildInvocationProtocol.Protocol.Process.Reference,
+            contract: GeneratedTypedChildInvocationProtocol.Protocol.Request,
+            outcomeMapping: GeneratedTypedChildInvocationProtocol.Protocol.OutcomeMapping,
+            input: input,
+            purpose: ProcessChildPurpose.Work,
+            cancellation: ProcessChildCancellationPolicy.Propagate,
+            outcomes:
+            [
+                process.Outcome<string>(
+                    GeneratedTypedChildInvocationProtocol.Protocol.OutcomeMapping.Completed,
+                    Completed),
+                process.Outcome<string>(
+                    GeneratedTypedChildInvocationProtocol.Protocol.OutcomeMapping.Failed,
+                    Failed),
+                process.Outcome<string>(
+                    GeneratedTypedChildInvocationProtocol.Protocol.OutcomeMapping.Cancelled,
+                    Cancelled),
+                process.Outcome<string>(
+                    GeneratedTypedChildInvocationProtocol.Protocol.OutcomeMapping.Terminated,
+                    Terminated)
+            ],
+            id: new("invoke-child"));
+        return input;
+
+        async ProcessTask Completed(string result) { }
+        async ProcessTask Failed(string result) { }
+        async ProcessTask Cancelled(string result) { }
+        async ProcessTask Terminated(string result) { }
+    }
 }
 
 /// <summary>Representative generated child Process invocation authored as compensation work.</summary>

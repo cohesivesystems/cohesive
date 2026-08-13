@@ -1212,6 +1212,196 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
     }
 
     [Fact]
+    public void Generator_LowersTypedChildProtocolAndSemanticHandlersToExistingCanonicalNode()
+    {
+        var source = """
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+                     using Cohesive.Processes.IR;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class TypedChildProcess
+                     {
+                         private static ProcessInvocationProtocol<string, Result> Protocol => null!;
+
+                         private static async ProcessTask<Result> Run(ProcessContext process, string input)
+                         {
+                             await process.InvokeProcess(
+                                 protocol: Protocol,
+                                 input: input,
+                                 purpose: ProcessChildPurpose.Work,
+                                 cancellation: ProcessChildCancellationPolicy.Propagate,
+                                 completed: Completed,
+                                 failed: Failed,
+                                 cancelled: Cancelled,
+                                 terminated: Terminated,
+                                 id: new("invoke-child"));
+                             return new Result(input);
+
+                             async ProcessTask Completed(Result result) { }
+                             async ProcessTask Failed(Result result) { }
+                             async ProcessTask Cancelled(Result result) { }
+                             async ProcessTask Terminated(Result result) { }
+                         }
+                     }
+
+                     public sealed record Result(string Value);
+                     """;
+
+        var compilation = CreateCompilation(source);
+        Assert.DoesNotContain(
+            compilation.GetDiagnostics(),
+            static diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+        var runResult = RunGenerator(compilation, out var outputCompilation);
+        Assert.Empty(runResult.Results.SelectMany(static result => result.Diagnostics));
+        Assert.DoesNotContain(
+            outputCompilation.GetDiagnostics(),
+            static diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+        var generated = Assert.Single(runResult.Results.SelectMany(static result => result.GeneratedSources))
+            .SourceText
+            .ToString();
+        Assert.Contains("__builder.InvokeProcess", generated);
+        Assert.Equal(1, Count(generated, "var __protocol_"));
+        Assert.Equal(1, Count(generated, "(Protocol)"));
+        Assert.Contains(".Process.Reference", generated);
+        Assert.Contains(".Request", generated);
+        Assert.Contains(".OutcomeMapping.Completed", generated);
+        Assert.Contains(".OutcomeMapping.Terminated", generated);
+        Assert.DoesNotContain("Completed(", generated);
+    }
+
+    [Fact]
+    public void Generator_RejectsDuplicateTypedChildSemanticHandlers()
+    {
+        var source = """
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+                     using Cohesive.Processes.IR;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class TypedChildProcess
+                     {
+                         private static ProcessInvocationProtocol<string, string> Protocol => null!;
+
+                         private static async ProcessTask<string> Run(ProcessContext process, string input)
+                         {
+                             async ProcessTask Completed(string result) { }
+                             async ProcessTask Failed(string result) { }
+                             async ProcessTask Cancelled(string result) { }
+                             await process.InvokeProcess(
+                                 Protocol,
+                                 input,
+                                 ProcessChildPurpose.Work,
+                                 ProcessChildCancellationPolicy.Propagate,
+                                 Completed,
+                                 Failed,
+                                 Cancelled,
+                                 Cancelled);
+                             return input;
+                         }
+                     }
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out var outputCompilation);
+        Assert.DoesNotContain(
+            outputCompilation.GetDiagnostics(),
+            static diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.Contains("unique local", diagnostic.GetMessage());
+    }
+
+    [Fact]
+    public void CSharpRejectsTypedChildProtocolInputMismatch()
+    {
+        var source = """
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+                     using Cohesive.Processes.IR;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class TypedChildProcess
+                     {
+                         private static ProcessInvocationProtocol<Input, string> Protocol => null!;
+
+                         private static async ProcessTask<string> Run(ProcessContext process, string input)
+                         {
+                             async ProcessTask Branch(string result) { }
+                             await process.InvokeProcess(
+                                 Protocol,
+                                 input,
+                                 ProcessChildPurpose.Work,
+                                 ProcessChildCancellationPolicy.Propagate,
+                                 Branch,
+                                 Branch,
+                                 Branch,
+                                 Branch);
+                             return input;
+                         }
+                     }
+
+                     public sealed record Input(string Value);
+                     """;
+
+        var compilation = CreateCompilation(source);
+        RunGenerator(compilation, out var outputCompilation);
+
+        Assert.Contains(
+            outputCompilation.GetDiagnostics(),
+            static diagnostic => diagnostic.Id == "CS0411"
+                || diagnostic.Id == "CS1503");
+    }
+
+    [Fact]
+    public void CSharpRequiresEveryTypedChildSemanticHandler()
+    {
+        var source = """
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+                     using Cohesive.Processes.IR;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class TypedChildProcess
+                     {
+                         private static ProcessInvocationProtocol<string, string> Protocol => null!;
+
+                         private static async ProcessTask<string> Run(ProcessContext process, string input)
+                         {
+                             async ProcessTask Completed(string result) { }
+                             async ProcessTask Failed(string result) { }
+                             async ProcessTask Cancelled(string result) { }
+                             await process.InvokeProcess(
+                                 protocol: Protocol,
+                                 input: input,
+                                 purpose: ProcessChildPurpose.Work,
+                                 cancellation: ProcessChildCancellationPolicy.Propagate,
+                                 completed: Completed,
+                                 failed: Failed,
+                                 cancelled: Cancelled);
+                             return input;
+                         }
+                     }
+                     """;
+
+        var compilation = CreateCompilation(source);
+
+        Assert.Contains(
+            compilation.GetDiagnostics(),
+            static diagnostic => diagnostic.Id == "CS7036");
+    }
+
+    [Fact]
     public void Generator_RejectsPartitionProjectionMethodGroupAtItsSource()
     {
         var source = """
