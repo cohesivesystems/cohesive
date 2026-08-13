@@ -4,7 +4,7 @@ status: accepted
 authority: cohesive.documentation-index
 owners: [cohesive-core]
 applies_to: [cohesive]
-last_verified: 2026-08-11
+last_verified: 2026-08-12
 supersedes: []
 ---
 
@@ -67,6 +67,14 @@ implicit conversion or duplicated case list.
 
 Private specifications in Notion or another access-controlled system are acceptable during R&D,
 including as working normative specifications, when all of the following are true:
+
+The current cross-cutting working specifications are:
+
+| Specification | Authority | Owner |
+| --- | --- | --- |
+| [Cohesive Building Block Tenets](https://app.notion.com/p/3aa8cf7881f981a1a7f6fec5e6a099ed) | Normative architectural guidance | `cohesive-core` |
+| [Cohesive Agentic Development](https://app.notion.com/p/39d8cf7881f980aba97af97452caa073) | Working agentic-development architecture | `cohesive-core` |
+| [Cohesive Change Model Specification](https://app.notion.com/p/3aa8cf7881f981bdaa4dd87a75eddcb5) | Working change-design foundation; shared IR provisional | `cohesive-core` |
 
 - the repository records a stable title or identifier, owner, authority status, and link;
 - the repository contains enough of the contract's purpose, scope, invariants, and non-goals for a

@@ -49,6 +49,16 @@ For a nontrivial change, identify the semantic authority, invariants, explicit c
 
 Before completing a nontrivial change, audit semantic preservation, authority, abstractions, types, performance, verification, and explainability. Report material tradeoffs and intentionally deferred improvements. Metrics such as cyclomatic complexity, coverage, allocations, dependency count, or line count are evidence that may prompt investigation; they are not standalone definitions of quality.
 
+### Agentic Authoring and Evolution Protocol
+
+Cohesive is designed for agent-first production and evolution, human-centered expression and review, and human-governed acceptance. Agents and tools should produce semantic models through authoritative, inspectable interfaces and human-legible authoring projections rather than make opaque generated output authoritative.
+
+When adding or changing a semantic construct, determine how an agent can inspect, author or patch, validate, explain, compare, and reconcile it with source intent. Preserve stable identity, exact revisions, deterministic serialization and fingerprints, provenance, source maps, structured diagnostics, and bounded context retrieval where the owning layer can support them. A construct available only through handwritten host-language code is incomplete unless that limitation is explicit and temporary.
+
+In C#, prefer typed expression-based fluent builders as the human-reviewable authoring projection when they faithfully cover the semantics. Builders are producers, not semantic authorities. Given fixed authoring input, referenced contracts, producer/compiler version, convention profile, and explicit configuration, lowering must be deterministic. No callback, closure, ambient service, reflection behavior, or arbitrary host-language executable dependency may survive into canonical IR. Validation, compilation, and interpretation consume the materialized IR, and representative fluent/direct-IR equivalence should be tested where practical.
+
+Preserve evolution latitude while the complete Change IR is still being distilled. Prefer immutable, comparable revisions and explicit domain-owned operations over destructive in-place mutation or a speculative universal patch framework. Do not conflate intent, semantic change, realization, deployment, and runtime observation. Treat OpenSpec and other specification formats as attributable producers of intent, drafts, and proposed changes through adapters; they do not become parallel executable authorities.
+
 ### Portable Semantic IR and Multiple Interpretations
 
 Cohesive semantic IRs are portable, durable system models rather than temporary compiler data structures. An IR may be authored through a host-language DSL, inferred by an engine such as ARI, imported from another representation, or produced by tooling. These are producers of the IR, not independent sources of semantic truth. Once materialized, the IR should be explicitly persisted, versioned, managed, and available for inspection.

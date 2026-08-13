@@ -4,7 +4,7 @@ status: accepted
 authority: cohesive.language-family
 owners: [cohesive-core]
 applies_to: [cohesive]
-last_verified: 2026-08-03
+last_verified: 2026-08-12
 supersedes: []
 ---
 
@@ -116,6 +116,27 @@ the same canonical model:
 - inference systems may use drafts, candidates, confidence, and review evidence; and
 - compilers and interpreters may consume normalized IR directly.
 
+The normal workflow is agent-first production with human-centered review, not manual construction
+of normalized IR. Agents should usually work through the repository's preferred legible authoring
+projection or through structured semantic patches. For C# projects, typed expression-based fluent
+builders are the preferred current projection where they faithfully cover the semantic surface.
+They provide generated contracts, domain vocabulary, navigation, refactoring, and source review;
+they remain producers of canonical IR rather than authorities alongside it.
+
+Every authoring projection must lower completely and deterministically. For fixed authoring input,
+referenced semantic contracts, producer/compiler version, convention profile, and explicit
+configuration, lowering should yield semantically identical normalized IR, stable identities,
+canonical serialization, and the same fingerprint. No callback, closure, ambient service,
+reflection object, or arbitrary host-language behavior may survive lowering as durable meaning.
+Unsupported constructs produce source-attributed diagnostics. Compilers, validators, and
+interpreters consume the persisted result without depending on the original host projection.
+
+Direct IR construction remains first-class for agents, importers, inference systems, migrations,
+graphical editors, and producers without a host-language frontend. Fluent-authored and directly
+authored models with the same meaning should share normalization and conformance fixtures. Tooling
+should present both source changes and semantic changes and retain bidirectional source maps where
+the producer can supply them.
+
 The language design must support validation, verification, and comprehension across these
 projections. If a projection omits information, it must make the omission clear and preserve links
 to the source authority. No projection becomes a second model merely because it is more convenient
@@ -124,6 +145,12 @@ for one audience.
 The language family must also describe systems through change, not only at rest. Revisions,
 proposals, semantic diffs, affected consumers, migrations, rollout policy, runtime observations, and
 feedback should compose with the languages that own the changed meaning.
+
+Specifications are sources of intent, rationale, requirements, acceptance criteria, and unresolved
+questions. They do not automatically become executable authority. OpenSpec and other specification
+formats should integrate through producer-neutral adapters that create attributable drafts or
+change proposals, link specification elements to semantic nodes and evidence, and support
+reconciliation between requested, accepted, implemented, deployed, and observed states.
 
 ## Language responsibilities
 
@@ -412,10 +439,15 @@ When adding a language construct, compiler, or adapter, ask:
 7. How will people validate the intended meaning?
 8. How will interpreters verify that realizations preserve it?
 9. How will people and agents comprehend the definition, change, and evidence?
-10. What provenance connects derived results to the source node?
-11. How will a future change be compared, migrated, deployed, and observed?
-12. What is the explicit escape hatch when a target has additional capability?
-13. Which golden vertical demonstrates that the construct composes with adjacent languages?
+10. How can an agent inspect, author or patch, validate, and explain the construct through an
+    authoritative interface?
+11. Does its authoring projection lower completely and deterministically to canonical IR?
+12. What provenance connects derived results to the source node and originating specification?
+13. How will a future change be compared, reconciled, migrated, deployed, and observed?
+14. Does the design preserve stable identity and exact revisions without prematurely fixing a
+    universal change mechanism?
+15. What is the explicit escape hatch when a target has additional capability?
+16. Which golden vertical demonstrates that the construct composes with adjacent languages?
 
 ## Implementation status
 

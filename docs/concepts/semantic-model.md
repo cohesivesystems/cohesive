@@ -4,7 +4,7 @@ status: accepted
 authority: cohesive.semantic-model
 owners: [cohesive-core]
 applies_to: [cohesive, relations, transitions, processes, presentation, api, ai]
-last_verified: 2026-08-03
+last_verified: 2026-08-12
 supersedes: []
 ---
 
@@ -244,6 +244,13 @@ human review surface may be a focused projection, diagram, scenario, semantic di
 derived from IR. Any such projection must identify omissions and retain links to the exact source
 nodes so that readability does not create another authority.
 
+Agents and tools are expected to produce and evolve most materialized IR, but agent-first production
+does not imply direct normalized-IR editing as the default workflow. Agents should ordinarily use a
+human-legible authoring projection when the repository provides one. In C#, typed expression-based
+fluent builders are preferred where they preserve the complete semantics because they give people
+domain-oriented source, generated contracts, navigation, refactoring, and an effective review
+surface. Direct IR, structured semantic patches, importers, and inference remain valid producers.
+
 A producer surface should:
 
 - produce canonical IR rather than retain executable callbacks as authority;
@@ -252,6 +259,17 @@ A producer surface should:
 - avoid silently capturing ambient runtime behavior;
 - expose the lowered result for inspection; and
 - permit other producers to create semantically equivalent IR without using that host language.
+
+A lowering boundary should additionally guarantee that fixed authoring input, referenced semantic
+contracts, producer/compiler version, convention profile, and explicit configuration produce
+semantically identical normalized IR, stable identities, canonical serialization, and the same
+fingerprint. Arbitrary delegates, callbacks, closures, ambient services, reflection state, random or
+time-derived values, and machine-local ordering must not survive as canonical meaning. Validation
+and interpretation consume the materialized IR rather than replay the authoring program.
+
+Representative fluent and direct-IR authoring should lower to the same normalized fixtures and
+fingerprints. Source maps should connect authoring locations to stable IR nodes, and review tooling
+should distinguish a textual source diff from its semantic effect.
 
 Host-language types may project into canonical shapes, but reflection metadata access should be
 centralized and cached. If generated artifacts are the appropriate projection, extend the code
@@ -402,6 +420,31 @@ full lifecycle; a definition is not complete merely because it compiled once. A 
 should be representable as a durable relation between a known base revision and a candidate
 revision, with intent, provenance, validation evidence, impact, and unresolved decisions kept
 explicit where the owning language can express them.
+
+The complete shared change model remains subject to design and evidence from multiple semantic
+domains. Until a stable common algebra emerges, Cohesive preserves **evolution latitude** rather
+than forcing every language through a speculative universal patch framework. Semantic definitions
+should retain stable identity, immutable exact revisions, deterministic comparison, provenance,
+source relationships, and attributable interpretation decisions. APIs should avoid destructive
+in-place mutation or representations that make prior meaning unrecoverable.
+
+Intent, semantic change, and realization remain distinct:
+
+- **Intent** describes a requested outcome, rationale, requirements, acceptance criteria, and
+  unresolved questions.
+- **Semantic change** relates exact base and candidate revisions and describes how accepted meaning
+  differs.
+- **Realization** implements, migrates, deploys, or executes accepted meaning on concrete targets.
+
+A source edit, specification diff, domain event, migration, and runtime observation may provide
+evidence about change, but none is automatically the semantic change itself. Requested, proposed,
+accepted, implemented, deployed, and observed states must not be silently conflated.
+
+External specifications such as OpenSpec, Markdown, Notion pages, or issues attach through
+producer-neutral importers or adapters. They should retain stable references from requirements and
+acceptance criteria to draft or accepted semantic nodes and verification evidence. Imported content
+produces attributable intent, a draft, or a proposed change; it does not silently mutate accepted IR
+or become a second executable authority.
 
 Revision comparison should classify changes by their effect on:
 
