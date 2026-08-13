@@ -62,6 +62,23 @@ for business-shaped branching, Request outcomes, durable waits, bounded parallel
 recurrence. Those executable definitions remain the source of truth; this smaller excerpt illustrates the typed-wait
 shape in isolation.
 
+When one Process invokes another, derive the closed Request/Reply protocol from the typed child handle:
+
+```csharp
+var childProtocol = ChildProcess.Define(metadata).InvocationProtocol(
+    new("request/customer-normalization"),
+    new("1"),
+    ProcessInvocationResponsePolicy.ReconciledJoin(TimeSpan.FromDays(30)),
+    provenance);
+```
+
+The child Process remains authoritative for its exact definition reference and portable input/result contracts.
+The invocation protocol owns the Request identity, response policy, terminal mapping, and generated Request/Reply
+documents. Schema revisions, outcome identities, and the Reply identity prefix have deterministic defaults and can
+be supplied explicitly when they are part of an established compatibility contract. Only a valid child using
+`ContinueAttempt` recovery can author this protocol, matching the exact-attempt join semantics enforced during
+Process linking.
+
 Typed durable races bind a closed source-only result family and consume it with an immediately following exhaustive
 type switch:
 
