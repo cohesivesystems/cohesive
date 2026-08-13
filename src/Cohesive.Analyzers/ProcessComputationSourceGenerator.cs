@@ -4035,10 +4035,21 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 return false;
             }
 
+            if (IsTypedCanonicalRelation(relation.Parameter?.Type))
+                relationReference = $"{relationReference}.Reference";
+
             builderStatements.Add(
                 $"__builder.EvaluateRelation(id: {awaited.Identity.Variable}, relation: {relationReference}, input: {inputValue}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {awaited.Identity.Variable}, role: {nextRole}, target: {successor}, {SourceArguments(awaited.Source, method.Name)}), output: {awaited.OutputVariable}, {SourceArguments(awaited.Source, method.Name)}), {SourceArguments(awaited.Source, method.Name)});");
             return true;
         }
+
+        static bool IsTypedCanonicalRelation(ITypeSymbol? type) =>
+            type is INamedTypeSymbol
+            {
+                Name: "Relation",
+                Arity: 2
+            } named
+            && named.ContainingNamespace.ToDisplayString() == "Cohesive.Relations.Authoring";
 
         bool TryEmitTransition(AwaitFlow awaited, string successor)
         {

@@ -34,11 +34,20 @@ var loadDtos = author.Project(
         Status = load.Status
     });
 
-var relation = loadDtos.BuildRelation(dto => dto.Id);
+var authored = loadDtos.BuildRelation(dto => dto.Id);
+var relation = author.CreateRelation(
+    authored,
+    loads,
+    loadDtos,
+    new ExecutionRevisionId("1"));
 ```
 
-`relation` is a validated producer result for the canonical, persistable relation definition. From there, add only
-the capability your application needs:
+`authored` is the validated producer result for the canonical, persistable relation definition. `relation` is an
+immutable typed projection for an exactly-one rooted Relation revision. It retains the canonical document and its
+captured shape/relationship evidence—not expressions or callbacks—and proves its CLR input and result types against
+the canonical root and output shapes. Relations with optional, many, or set cardinality continue to use their
+explicit result semantics rather than being represented by this singular handle. From there, add only the capability
+your application needs:
 
 1. [Map a Load, then enrich it with Customer and Equipment](docs/GETTING_STARTED.md).
 2. [Invoke and execute the definition in memory or through an adapter](docs/EXECUTION_AND_ADAPTERS.md).
