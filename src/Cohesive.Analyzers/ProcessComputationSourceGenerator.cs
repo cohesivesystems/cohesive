@@ -436,7 +436,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             SyntaxList<StatementSyntax> statements,
             ImmutableArray<string> structuralPath,
             out FlowBlock block,
-            bool ignoreTerminalBreak = false)
+            bool ignoreTerminalBreak = false,
+            bool allowTrailingBareReturn = false)
         {
             List<FlowStatement> flows = [];
             var terminalObserved = false;
@@ -576,6 +577,20 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         terminalObserved = true;
                         break;
 
+                    case ReturnStatementSyntax returned:
+                        if (!allowTrailingBareReturn)
+                        {
+                            return Failure(
+                                returned,
+                                "a bare return is supported only as the trailing statement of an untyped local ProcessTask branch",
+                                out block);
+                        }
+
+                        // Falling through and an explicit trailing return are the same untyped branch completion.
+                        // Retain no IR node so syntax normalization cannot change the canonical Process definition.
+                        terminalObserved = true;
+                        break;
+
                     case IfStatementSyntax conditional:
                         if (!TryParseIf(conditional, structuralPath, out var branch))
                         {
@@ -632,7 +647,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     default:
                         return Failure(
                             statement,
-                            "only pure local declarations, awaited Process operations, fork/join, if/else, exact switch, nested blocks, and return are supported",
+                            "only pure local declarations, awaited Process operations, fork/join, if/else, exact switch, nested blocks, and supported Process return forms are supported",
                             out block);
                 }
             }
@@ -921,7 +936,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 if (!TryParse(
                         localFunction.Body!.Statements,
                         structuralPath.Add(requestIdentity.PathSegment).Add(outcomeIdentity.PathSegment),
-                        out var body))
+                        out var body,
+                        allowTrailingBareReturn: true))
                 {
                     return false;
                 }
@@ -1011,7 +1027,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             if (!TryParse(
                     failedFunction.Body!.Statements,
                     structuralPath.Add(identity.PathSegment).Add($"failed-{failedMethod.Name}"),
-                    out var failedBody))
+                    out var failedBody,
+                    allowTrailingBareReturn: true))
             {
                 return false;
             }
@@ -1145,11 +1162,13 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             if (!TryParse(
                     exhaustedFunction.Body!.Statements,
                     structuralPath.Add(identity.PathSegment).Add($"exhausted-{exhaustedMethod.Name}"),
-                    out var exhaustedBody)
+                    out var exhaustedBody,
+                    allowTrailingBareReturn: true)
                 || !TryParse(
                     stalledFunction.Body!.Statements,
                     structuralPath.Add(identity.PathSegment).Add($"stalled-{stalledMethod.Name}"),
-                    out var stalledBody))
+                    out var stalledBody,
+                    allowTrailingBareReturn: true))
             {
                 return false;
             }
@@ -1282,7 +1301,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 if (!TryParse(
                         localFunction.Body!.Statements,
                         structuralPath.Add(awaitIdentity.PathSegment).Add(clauseIdentity.PathSegment),
-                        out var body))
+                        out var body,
+                        allowTrailingBareReturn: true))
                 {
                     return false;
                 }
@@ -1851,7 +1871,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 if (!TryParse(
                         localFunction.Body.Statements,
                         structuralPath.Add(forkIdentity.PathSegment).Add(branchIdentity.PathSegment),
-                        out var branchBody))
+                        out var branchBody,
+                        allowTrailingBareReturn: branchResultType is null))
                 {
                     return false;
                 }
@@ -2116,7 +2137,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 if (!TryParse(
                         localFunction.Body!.Statements,
                         structuralPath.Add(identity.PathSegment).Add(armIdentity.PathSegment),
-                        out var body))
+                        out var body,
+                        allowTrailingBareReturn: true))
                 {
                     return false;
                 }
@@ -2166,7 +2188,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             if (!TryParse(
                     localFunction.Body!.Statements,
                     structuralPath.Add(identity.PathSegment),
-                    out var body))
+                    out var body,
+                    allowTrailingBareReturn: true))
             {
                 return false;
             }
