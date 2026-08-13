@@ -513,6 +513,7 @@ public sealed class ProcessComputationAuthoringTests
         var returned = Node("return-0");
         var metadata = DecisionMetadata().WithEntry(choice);
         var generated = GeneratedDecisionProcess.Define(metadata);
+        var syntaxNormalized = GeneratedDecisionProcessWithTrailingBranchReturn.Define(metadata);
         var lowLevel = ProcessAuthoring.Create<DecisionProcessInput, string>(
             metadata,
             process =>
@@ -555,12 +556,18 @@ public sealed class ProcessComputationAuthoringTests
             });
 
         Assert.True(generated.IsValid, Format(generated.Validation));
+        Assert.True(syntaxNormalized.IsValid, Format(syntaxNormalized.Validation));
         Assert.True(lowLevel.IsValid, Format(lowLevel.Validation));
         Assert.Equal(lowLevel.Definition, generated.Definition);
         Assert.Equal(lowLevel.Document.Metadata.Fingerprint, generated.Document.Metadata.Fingerprint);
         Assert.Equal(
             ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(lowLevel.Document),
             ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(generated.Document));
+        Assert.Equal(generated.Definition, syntaxNormalized.Definition);
+        Assert.Equal(generated.Document.Metadata.Fingerprint, syntaxNormalized.Document.Metadata.Fingerprint);
+        Assert.Equal(
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(generated.Document),
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(syntaxNormalized.Document));
         Assert.Equal(
             CaseSelection.OrderedFirstMatch,
             Assert.Single(generated.Definition.Nodes.OfType<ChoiceProcessNode>()).Selection);
@@ -2429,6 +2436,56 @@ public static partial class GeneratedDecisionProcess
             fallback: Other,
             id: new("decision/category"));
         return input.State;
+    }
+}
+
+/// <summary>
+/// Semantically equivalent decision computation after a syntax transform moves local functions below the terminal
+/// return and makes one untyped branch's fallthrough explicit.
+/// </summary>
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class GeneratedDecisionProcessWithTrailingBranchReturn
+{
+    static async ProcessTask<string> Run(ProcessContext process, DecisionProcessInput input)
+    {
+        await process.Choice(
+            selection: CaseSelection.OrderedFirstMatch,
+            completeness: BranchCompleteness.Fallback,
+            cases:
+            [
+                process.When(input.Category == "fast", Fast, id: new("decision/category/fast"))
+            ],
+            fallback: Other,
+            id: new("decision/category"));
+        return input.State;
+
+        async ProcessTask Wait()
+        {
+            await process.Timer(input.DueAt, id: new("decision/timer"));
+            return;
+        }
+
+        async ProcessTask Continue()
+        {
+        }
+
+        async ProcessTask Fast()
+        {
+            await process.Match(
+                value: input.State,
+                selection: CaseSelection.OrderedFirstMatch,
+                completeness: BranchCompleteness.Fallback,
+                cases:
+                [
+                    process.Case("wait", Wait)
+                ],
+                fallback: Continue,
+                id: new("decision/state"));
+        }
+
+        async ProcessTask Other()
+        {
+        }
     }
 }
 

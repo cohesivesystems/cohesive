@@ -1623,6 +1623,51 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
         Assert.Equal(21, diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1);
     }
 
+    [Fact]
+    public void Generator_RejectsExecutableFlowAfterTrailingBareBranchReturn()
+    {
+        var source = """
+                     using System;
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class InvalidTrailingReturnProcess
+                     {
+                         private static async ProcessTask<string> Run(ProcessContext process, string input)
+                         {
+                             async ProcessTask Selected()
+                             {
+                                 await process.Timer(DateTimeOffset.UnixEpoch);
+                                 return;
+                                 await process.Timer(DateTimeOffset.UnixEpoch.AddMinutes(1));
+                             }
+                             async ProcessTask Fallback()
+                             {
+                             }
+                             await process.Choice(
+                                 selection: CaseSelection.OrderedFirstMatch,
+                                 completeness: BranchCompleteness.Fallback,
+                                 cases: [process.When(input == "selected", Selected)],
+                                 fallback: Fallback,
+                                 id: new("decision/category"));
+                             return input;
+                         }
+                     }
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.Contains("statements after an unconditional return are not supported", diagnostic.GetMessage());
+        Assert.Equal(16, diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1);
+    }
+
     static GeneratorDriverRunResult RunGenerator(
         CSharpCompilation compilation,
         out Compilation outputCompilation)
