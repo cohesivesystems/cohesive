@@ -65,6 +65,19 @@ projections and captured dependency evidence; `CreateProcessDefinitionLink()` de
 same handle. Raw `ExecutionDefinitionReference` overloads remain available for imported definitions and advanced
 lowering code.
 
+The same direct syntax accepts a typed canonical hosted Query when the call includes acquisition policy outside a
+portable logical graph:
+
+```csharp
+var source = await process.Read(EventSourceQueries.SchemaMapping, start);
+```
+
+The hosted-Query document—not the Process call site or its runtime handler—owns the invocation/result contracts,
+implementation identity and version, exact definition dependencies, portable configuration, and fingerprint.
+Generation still emits the unchanged canonical `EvaluateRelationProcessNode`, and
+`CreateProcessDefinitionLink()` derives validation evidence from that one authority. Runtime registration is a
+separate interpretation of the exact hosted-Query document.
+
 The same syntax supports typed Transition results, Requests/effects, entity reads represented by Relations,
 `if`/`else`, exact `switch`, explicit Choice/Match policies, durable waits, tuple-valued Fork/Join, bounded admission,
 child Processes, partition work, and recurrence. Use the executable

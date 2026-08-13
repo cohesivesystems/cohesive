@@ -82,6 +82,26 @@ public sealed class ProcessContext
         where TResult : notnull =>
         throw SyntaxOnly();
 
+    /// <summary>Declares evaluation of a typed exact hosted Query and binds its singular result.</summary>
+    /// <typeparam name="TInput">CLR type of the hosted Query invocation input.</typeparam>
+    /// <typeparam name="TResult">CLR type of the hosted Query singular result.</typeparam>
+    /// <param name="query">Typed exact canonical hosted-Query definition.</param>
+    /// <param name="input">Pure typed invocation input fused into the canonical evaluation node.</param>
+    /// <param name="id">Optional explicit canonical node identity.</param>
+    /// <param name="nextRole">Stable semantic role of the successful continuation edge.</param>
+    /// <param name="outputRole">Stable semantic role of the hosted-Query result binding.</param>
+    /// <returns>A syntax-only awaitable whose result represents the hosted-Query output.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessAwaitable<TResult> Query<TInput, TResult>(
+        HostedQuery<TInput, TResult> query,
+        TInput input,
+        ExecutionNodeId? id = null,
+        string nextRole = "next",
+        string outputRole = "result")
+        where TInput : notnull
+        where TResult : notnull =>
+        throw SyntaxOnly();
+
     /// <summary>
     /// Declares an entity read represented by an exact Relation or Query definition and binds its result.
     /// </summary>
@@ -121,6 +141,30 @@ public sealed class ProcessContext
     /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
     public ProcessAwaitable<TResult> Read<TInput, TResult>(
         Relation<TInput, TResult> relation,
+        TInput input,
+        ExecutionNodeId? id = null,
+        string nextRole = "next",
+        string outputRole = "result")
+        where TInput : notnull
+        where TResult : notnull =>
+        throw SyntaxOnly();
+
+    /// <summary>Declares an entity read represented by a typed exact hosted Query and binds its singular result.</summary>
+    /// <remarks>
+    /// This is an authoring alias for canonical Relation/Query evaluation. It does not introduce a separate
+    /// entity-read execution model.
+    /// </remarks>
+    /// <typeparam name="TInput">CLR type of the hosted Query invocation input.</typeparam>
+    /// <typeparam name="TResult">CLR type of the hosted Query singular result.</typeparam>
+    /// <param name="query">Typed exact canonical hosted-Query definition.</param>
+    /// <param name="input">Pure typed invocation input fused into the canonical evaluation node.</param>
+    /// <param name="id">Optional explicit canonical node identity.</param>
+    /// <param name="nextRole">Stable semantic role of the successful continuation edge.</param>
+    /// <param name="outputRole">Stable semantic role of the read result binding.</param>
+    /// <returns>A syntax-only awaitable whose result represents the hosted-Query output.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessAwaitable<TResult> Read<TInput, TResult>(
+        HostedQuery<TInput, TResult> query,
         TInput input,
         ExecutionNodeId? id = null,
         string nextRole = "next",
